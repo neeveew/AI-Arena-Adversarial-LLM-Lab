@@ -1832,7 +1832,7 @@ public partial class MainWindow : Window
         var isActive = agent.Active;
         var isCurrent = isActive && string.Equals(agent.Id, currentAgentId, StringComparison.OrdinalIgnoreCase);
         var isWorkingStatus = IsAgentWorkingStatus(agent.Status);
-        var isRunning = isActive && (isWorkingStatus || (isCurrent && _arenaBusy));
+        var isRunning = isActive && isWorkingStatus;
         var showActivitySweep = isRunning;
         var speakerLabel = DisplayStatusValue(agent.Id);
         var activityLabel = isRunning ? "thinking" : isCurrent ? "current" : isActive ? "waiting" : "inactive";
