@@ -1,0 +1,8 @@
+AI Arena 0.2.0-beta
+
+Changes:
+- Started the beta release line with AI Arena app and installer branding.
+- Added optional Playwright UI smoke tests for the local dashboard.
+- Added Ruff as an optional development dependency for fast Python lint checks.
+- Added a release sanity script that runs dependency indexing, lint, tests, build, artifact checks, and a packaged app smoke launch.
+- Updated user-facing model settings from LM Studio-specific wording to Model Provider / OpenAI-compatible wording while preserving existing compatibility endpoints.

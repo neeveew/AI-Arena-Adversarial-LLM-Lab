@@ -1,0 +1,9 @@
+AI Arena 0.2.1-beta
+
+Changes:
+- Added the native WPF beta app surface with polished transcript cards, theme-aware UI, and draggable dialogs.
+- Added generated/context token stats, friendlier provider errors, and clearer error transcript pills.
+- Added per-role model selection for Alpha, Beta, Gamma, and Narrator with shared default fallback.
+- Added model-requested internet approval flow, source scope controls, and direct URL fetch support.
+- Added role-blind participant prompting so agents see their own persona but not other agents' hidden roles.
+- Added a user guide covering the app purpose, controls, settings, and troubleshooting.

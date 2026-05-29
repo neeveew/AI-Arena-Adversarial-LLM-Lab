@@ -1,0 +1,26 @@
+namespace AIArena.Wpf.Models;
+
+public sealed record TranscriptMessage(
+    int Turn,
+    string Speaker,
+    string SpeakerId,
+    double CreatedAt,
+    string Model,
+    int LatencyMs,
+    int PromptTokens,
+    int CompletionTokens,
+    int TotalTokens,
+    string Status,
+    bool Pinned,
+    string Kind,
+    string Text,
+    string Reasoning,
+    string InternetRequester,
+    string InternetTool,
+    string InternetQuery,
+    string InternetUrl,
+    string InternetReason,
+    string InternetSummary,
+    string InternetCheckedAt,
+    bool InternetCached,
+    IReadOnlyList<string> InternetSources);

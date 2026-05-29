@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AIArena.Core/AIArena.Core.csproj" />
+    <Project Path="src/AIArena.Tests/AIArena.Tests.csproj" />
+  </Folder>
+</Solution>
