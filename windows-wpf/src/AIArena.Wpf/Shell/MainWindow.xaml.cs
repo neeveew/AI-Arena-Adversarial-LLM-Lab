@@ -1992,7 +1992,7 @@ public partial class MainWindow : Window
         var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         text.Children.Add(new TextBlock
         {
-            Text = $"Narrator - {DisplayStatusValue(status)}",
+            Text = $"Narrator - {DisplayInlineStatus(status)}",
             Foreground = Brushes.White,
             FontWeight = FontWeights.SemiBold,
             FontSize = 12,
@@ -2032,6 +2032,11 @@ public partial class MainWindow : Window
         cardLayer.Children.Add(grid);
         card.Child = cardLayer;
         return card;
+    }
+
+    private static string DisplayInlineStatus(string status)
+    {
+        return string.IsNullOrWhiteSpace(status) ? "-" : status.Trim().ToLowerInvariant();
     }
 
     private static bool IsAgentWorkingStatus(string status)
