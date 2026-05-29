@@ -52,6 +52,7 @@ public partial class MainWindow : Window
     private readonly List<Button> _transcriptActionButtons = [];
     private readonly List<CheckBox> _lockControls = [];
     private readonly Dictionary<string, string> _roleModels = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ModelPreloadResult> _lastPreloadResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _arenaOperationLock = new(1, 1);
     private IReadOnlyList<string> _advertisedModels = [];
     private IReadOnlyList<TranscriptMessage> _lastRenderedMessages = [];
@@ -1955,7 +1956,7 @@ public partial class MainWindow : Window
             Padding = new Thickness(0),
             Margin = new Thickness(6, 0, 0, 0),
             FontSize = 13,
-            Background = ResourceBrush("NarratorAccentBrush"),
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.5),
             BorderBrush = accent,
             Foreground = Brushes.White,
             ToolTip = "Narrate now"
@@ -1968,7 +1969,7 @@ public partial class MainWindow : Window
             Background = isRunning
                 ? BlendBrush(ResourceBrush("InputBrush"), accent, 0.18)
                 : ResourceBrush("InputBrush"),
-            BorderBrush = BlendBrush(ResourceBrush("DisabledBorderBrush"), accent, 0.65),
+            BorderBrush = BlendBrush(ResourceBrush("DisabledBorderBrush"), accent, 0.58),
             BorderThickness = new Thickness(0, 1, 0, 1),
             Padding = new Thickness(14, 8, 10, 8),
             Margin = new Thickness(0, -1, 0, 0),
@@ -2217,6 +2218,12 @@ public partial class MainWindow : Window
             PreloadModelsItems.Children.Clear();
 
             var results = await _modelPreloadService.PreloadAsync(ProviderBaseUrlText.Text.Trim(), models);
+            _lastPreloadResults.Clear();
+            foreach (var result in results)
+            {
+                _lastPreloadResults[result.Model] = result;
+            }
+
             var failures = results.Count(result => result.IsFailure);
             PreloadModelsStatusText.Foreground = failures > 0
                 ? ResourceBrush("DangerTextBrush")
@@ -2227,7 +2234,8 @@ public partial class MainWindow : Window
                 ? "Model preload finished with warnings. See preload telemetry."
                 : "Selected models preloaded or already available.";
 
-            await RefreshAdvertisedModelsAsync();
+            await RefreshAdvertisedModelsAsync(force: true);
+            UpdateModelStateLabels();
         });
     }
 
@@ -2350,7 +2358,7 @@ public partial class MainWindow : Window
                 snapshot.Engine.Agents[index].Active = index < activeParticipants;
             }
 
-            await _coreSessionStore.SaveSnapshotAsync(snapshot, _activeSession.Id);
+            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
             await _eventLogStore.AppendAsync(_activeSession.Id, "native_settings_applied", new
             {
                 snapshot.Configs["shared"].BaseUrl,
@@ -2491,7 +2499,7 @@ public partial class MainWindow : Window
                 agent.PrivateNotes.Clear();
             }
 
-            await _coreSessionStore.SaveSnapshotAsync(snapshot, _activeSession.Id);
+            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
             await _eventLogStore.AppendAsync(_activeSession.Id, "native_arena_reset", new { session = _activeSession.Id });
             RefreshActiveSession("Arena reset.");
         });
@@ -2652,7 +2660,7 @@ public partial class MainWindow : Window
             var message = _transcriptService.CreateOperatorMessage(text, snapshot.Engine.TurnCount + 1);
             snapshot.Engine.Messages.Add(message);
             snapshot.Engine.TurnCount = message.Turn;
-            await _coreSessionStore.SaveSnapshotAsync(snapshot, _activeSession.Id);
+            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
             await _eventLogStore.AppendAsync(_activeSession.Id, "native_operator_turn_added", new { message.Turn, message.Text });
             OperatorTurnText.Clear();
             RefreshActiveSession("Operator turn added.");
@@ -2847,7 +2855,7 @@ public partial class MainWindow : Window
             }
 
             snapshot.Engine.LastError = result.Ok ? "" : result.Error;
-            await _coreSessionStore.SaveSnapshotAsync(snapshot, _activeSession.Id);
+            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
             await _eventLogStore.AppendAsync(
                 _activeSession.Id,
                 result.Ok ? "native_internet_request_approved" : "native_internet_request_approval_failed",
@@ -2942,7 +2950,7 @@ public partial class MainWindow : Window
                 return false;
             }
 
-            await _coreSessionStore.SaveSnapshotAsync(snapshot, _activeSession.Id);
+            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
             await _eventLogStore.AppendAsync(_activeSession.Id, "native_internet_request_rejected", new { original.Turn, request.Tool, request.Query, request.Url });
             RefreshActiveSession($"Rejected internet request at turn {approvalMessage.Turn}.");
             return true;
@@ -2957,7 +2965,7 @@ public partial class MainWindow : Window
         }
 
         snapshot.Engine.LastError = result.Ok ? "" : result.Error;
-        await _coreSessionStore.SaveSnapshotAsync(snapshot, _activeSession.Id);
+        await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
         await _eventLogStore.AppendAsync(
             _activeSession.Id,
             result.Ok ? "native_internet_request_approved" : "native_internet_request_approval_failed",
@@ -3087,7 +3095,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        await _coreSessionStore.SaveSnapshotAsync(snapshot, _activeSession.Id);
+        await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
         RefreshActiveSession(successStatus);
     }
 
@@ -3340,7 +3348,7 @@ public partial class MainWindow : Window
             }
 
             ScenarioTemplateStore.Apply(template, snapshot);
-            await _coreSessionStore.SaveSnapshotAsync(snapshot, _activeSession.Id);
+            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
             await _eventLogStore.AppendAsync(_activeSession.Id, "native_scenario_template_applied", new { template.Id, template.Name });
             RefreshActiveSession($"Applied template: {template.Name}.");
             ScenarioTemplateStatus.Text = $"Applied template: {template.Name}.";
@@ -3462,6 +3470,28 @@ public partial class MainWindow : Window
         {
             control.IsEnabled = true;
         }
+    }
+
+    private async Task SaveSnapshotWithFeedbackAsync(AIArena.Core.Models.ArenaSnapshot snapshot, string sessionId)
+    {
+        SetSaveStatus("Saving...", ResourceBrush("MutedTextBrush"));
+        try
+        {
+            await _coreSessionStore.SaveSnapshotAsync(snapshot, sessionId);
+            SetSaveStatus($"Saved {DateTime.Now:h:mm tt}", ResourceBrush("AlphaAccentBrush"));
+        }
+        catch (Exception ex)
+        {
+            SetSaveStatus($"Save failed: {ex.Message}", ResourceBrush("DangerTextBrush"));
+            throw;
+        }
+    }
+
+    private void SetSaveStatus(string text, Brush brush)
+    {
+        SaveStatusText.Text = text;
+        SaveStatusText.Foreground = brush;
+        SaveStatusText.ToolTip = text;
     }
 
     private async Task RunArenaBusyAsync(string status, Func<Task> action)
@@ -3813,7 +3843,7 @@ public partial class MainWindow : Window
             }
 
             latest.MatchLocks[NormalizeMatchLockKey(key)] = true;
-            await _coreSessionStore.SaveSnapshotAsync(latest, _activeSession.Id);
+            await SaveSnapshotWithFeedbackAsync(latest, _activeSession.Id);
             var normalizedKey = NormalizeMatchLockKey(key);
             await _eventLogStore.AppendAsync(_activeSession.Id, "native_match_text_edited", new
             {
@@ -4567,7 +4597,7 @@ public partial class MainWindow : Window
                 SaveRoleModelConfig(snapshot.Configs, "delta", RoleModel("delta"), updatedShared);
                 SaveRoleModelConfig(snapshot.Configs, "narrator", RoleModel("narrator"), updatedShared);
 
-                await _coreSessionStore.SaveSnapshotAsync(snapshot, _activeSession.Id);
+                await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
                 await _eventLogStore.AppendAsync(_activeSession.Id, "native_model_routing_applied", new
                 {
                     updatedShared.BaseUrl,
@@ -4588,7 +4618,7 @@ public partial class MainWindow : Window
             ProviderTestStatus.Text = successStatus;
             if (refreshModels)
             {
-                await RefreshAdvertisedModelsAsync();
+                await RefreshAdvertisedModelsAsync(force: true);
             }
 
             _ = RefreshProviderReachabilityAsync(force: true);
@@ -4606,7 +4636,7 @@ public partial class MainWindow : Window
         if (visible)
         {
             _modelRefreshTimer.Start();
-            _ = RefreshAdvertisedModelsAsync();
+            _ = RefreshAdvertisedModelsAsync(force: true);
         }
         else
         {
@@ -4683,8 +4713,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task RefreshAdvertisedModelsAsync()
+    private async Task RefreshAdvertisedModelsAsync(bool force = false)
     {
+        if (!force && AppSettingsPanel.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+
         if (_isRefreshingModels)
         {
             return;
@@ -4716,6 +4751,8 @@ public partial class MainWindow : Window
                     {
                         UpdateModelComboItems(comboBox);
                     }
+
+                    UpdateModelStateLabels();
                 }
                 finally
                 {
@@ -4725,6 +4762,7 @@ public partial class MainWindow : Window
             else
             {
                 ProviderModelsStatus.Text = $"Model list unavailable: {result.Error}";
+                UpdateModelStateLabels();
             }
         }
         finally
@@ -4784,6 +4822,76 @@ public partial class MainWindow : Window
             $"Gamma: {DisplayParticipantModel(RoleModel("gamma"), defaultModel)}",
             $"Delta: {DisplayParticipantModel(RoleModel("delta"), defaultModel)}",
             $"Narrator: {DisplayParticipantModel(RoleModel("narrator"), defaultModel)}");
+        UpdateModelStateLabels();
+    }
+
+    private void UpdateModelStateLabels()
+    {
+        UpdateDefaultModelStateLabel();
+        UpdateRoleModelStateLabel("alpha", AlphaModelStatusText);
+        UpdateRoleModelStateLabel("beta", BetaModelStatusText);
+        UpdateRoleModelStateLabel("gamma", GammaModelStatusText);
+        UpdateRoleModelStateLabel("delta", DeltaModelStatusText);
+        UpdateRoleModelStateLabel("narrator", NarratorModelStatusText);
+    }
+
+    private void UpdateDefaultModelStateLabel()
+    {
+        var model = ProviderModelText.Text.Trim();
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            SetModelState(DefaultModelStatusText, "not selected", ResourceBrush("MutedTextBrush"));
+            return;
+        }
+
+        SetModelState(DefaultModelStatusText, ModelStateLabel(model), ModelStateBrush(model));
+    }
+
+    private void UpdateRoleModelStateLabel(string key, TextBlock target)
+    {
+        var model = RoleModel(key);
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            SetModelState(target, "inherits default", ResourceBrush("MutedTextBrush"));
+            return;
+        }
+
+        SetModelState(target, ModelStateLabel(model), ModelStateBrush(model));
+    }
+
+    private string ModelStateLabel(string model)
+    {
+        if (_lastPreloadResults.TryGetValue(model, out var preload) && preload.IsFailure)
+        {
+            return "failed preload";
+        }
+
+        if (_advertisedModels.Count == 0)
+        {
+            return "selected";
+        }
+
+        return _advertisedModels.Contains(model, StringComparer.OrdinalIgnoreCase)
+            ? "selected"
+            : "unavailable";
+    }
+
+    private Brush ModelStateBrush(string model)
+    {
+        var label = ModelStateLabel(model);
+        return label switch
+        {
+            "failed preload" or "unavailable" => ResourceBrush("DangerTextBrush"),
+            "selected" => ResourceBrush("AlphaAccentBrush"),
+            _ => ResourceBrush("MutedTextBrush")
+        };
+    }
+
+    private static void SetModelState(TextBlock target, string text, Brush brush)
+    {
+        target.Text = text;
+        target.Foreground = brush;
+        target.ToolTip = text;
     }
 
     private void SaveRoleModelDrafts()

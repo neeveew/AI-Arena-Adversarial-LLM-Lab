@@ -1425,6 +1425,7 @@
                     <TextBlock Text="System Status" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,12,0" />
                     <TextBlock Text="Provider" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,6,0" />
                     <TextBlock Text="{Binding Text, ElementName=TopProviderValue}" Foreground="{DynamicResource PrimaryBorderBrush}" FontWeight="SemiBold" Margin="0,0,18,0" />
+                    <TextBlock x:Name="SaveStatusText" Text="Saved" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,18,0" />
                     <TextBlock Text="Internet and model settings live in App Settings" Foreground="{DynamicResource MutedTextBrush}" />
                 </StackPanel>
                 <TextBlock Grid.Column="1" Text="modern-gui-shell" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
@@ -1499,18 +1500,34 @@
                                   LostKeyboardFocus="ProviderBaseUrlText_Commit"
                                   KeyDown="ProviderBaseUrlText_KeyDown" />
                         <TextBlock Text="Default model" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
-                        <ComboBox x:Name="ProviderModelText"
-                                  IsEditable="True"
-                                  IsTextSearchEnabled="False"
-                                  SelectionChanged="ProviderModelText_SelectionChanged"
-                                  LostKeyboardFocus="ProviderModelText_Commit"
-                                  KeyDown="ProviderModelText_KeyDown"
-                                  Background="{DynamicResource InputBrush}"
-                                  Foreground="White"
-                                  BorderBrush="{DynamicResource ControlBorderBrush}"
-                                  Padding="8"
-                                  Margin="0,0,0,8"
-                                  ToolTip="Pick an advertised provider model or type one manually." />
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="116" />
+                            </Grid.ColumnDefinitions>
+                            <ComboBox x:Name="ProviderModelText"
+                                      Grid.Column="0"
+                                      IsEditable="True"
+                                      IsTextSearchEnabled="False"
+                                      SelectionChanged="ProviderModelText_SelectionChanged"
+                                      LostKeyboardFocus="ProviderModelText_Commit"
+                                      KeyDown="ProviderModelText_KeyDown"
+                                      Background="{DynamicResource InputBrush}"
+                                      Foreground="White"
+                                      BorderBrush="{DynamicResource ControlBorderBrush}"
+                                      Padding="8"
+                                      ToolTip="Pick an advertised provider model or type one manually." />
+                            <TextBlock x:Name="DefaultModelStatusText"
+                                       Grid.Column="2"
+                                       Text="not selected"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       FontSize="11"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Right"
+                                       TextWrapping="Wrap" />
+                        </Grid>
 
                         <TextBlock Text="Participant models" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,2,0,6" />
                         <Grid Margin="0,0,0,8">
@@ -1518,6 +1535,8 @@
                                 <ColumnDefinition Width="96" />
                                 <ColumnDefinition Width="8" />
                                 <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="116" />
                             </Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -1545,6 +1564,7 @@
                                       BorderBrush="{DynamicResource ControlBorderBrush}"
                                       Padding="8"
                                       ToolTip="Pick an advertised provider model, type one manually, or leave blank to use default." />
+                            <TextBlock x:Name="AlphaModelStatusText" Grid.Row="0" Grid.Column="4" Text="inherits default" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" TextAlignment="Right" TextWrapping="Wrap" />
                             <TextBlock Grid.Row="2" Text="Beta" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
                             <ComboBox x:Name="BetaRoleModelText"
                                       Grid.Row="2"
@@ -1560,6 +1580,7 @@
                                       BorderBrush="{DynamicResource ControlBorderBrush}"
                                       Padding="8"
                                       ToolTip="Pick an advertised provider model, type one manually, or leave blank to use default." />
+                            <TextBlock x:Name="BetaModelStatusText" Grid.Row="2" Grid.Column="4" Text="inherits default" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" TextAlignment="Right" TextWrapping="Wrap" />
                             <TextBlock Grid.Row="4" Text="Gamma" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
                             <ComboBox x:Name="GammaRoleModelText"
                                       Grid.Row="4"
@@ -1575,6 +1596,7 @@
                                       BorderBrush="{DynamicResource ControlBorderBrush}"
                                       Padding="8"
                                       ToolTip="Pick an advertised provider model, type one manually, or leave blank to use default." />
+                            <TextBlock x:Name="GammaModelStatusText" Grid.Row="4" Grid.Column="4" Text="inherits default" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" TextAlignment="Right" TextWrapping="Wrap" />
                             <TextBlock Grid.Row="6" Text="Delta" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
                             <ComboBox x:Name="DeltaRoleModelText"
                                       Grid.Row="6"
@@ -1590,6 +1612,7 @@
                                       BorderBrush="{DynamicResource ControlBorderBrush}"
                                       Padding="8"
                                       ToolTip="Pick an advertised provider model, type one manually, or leave blank to use default." />
+                            <TextBlock x:Name="DeltaModelStatusText" Grid.Row="6" Grid.Column="4" Text="inherits default" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" TextAlignment="Right" TextWrapping="Wrap" />
                             <TextBlock Grid.Row="8" Text="Narrator" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
                             <ComboBox x:Name="NarratorRoleModelText"
                                       Grid.Row="8"
@@ -1605,6 +1628,7 @@
                                       BorderBrush="{DynamicResource ControlBorderBrush}"
                                       Padding="8"
                                       ToolTip="Pick an advertised provider model, type one manually, or leave blank to use default." />
+                            <TextBlock x:Name="NarratorModelStatusText" Grid.Row="8" Grid.Column="4" Text="inherits default" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" TextAlignment="Right" TextWrapping="Wrap" />
                         </Grid>
                         <TextBlock Text="Model summary" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
                         <TextBlock x:Name="RoleModelSummaryText"
