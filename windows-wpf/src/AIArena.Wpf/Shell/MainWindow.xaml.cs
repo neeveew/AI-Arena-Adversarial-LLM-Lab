@@ -1816,7 +1816,10 @@ public partial class MainWindow : Window
     {
         var isActive = agent.Active;
         var isCurrent = isActive && string.Equals(agent.Id, currentAgentId, StringComparison.OrdinalIgnoreCase);
-        var isRunning = isCurrent && _arenaBusy;
+        var isWorkingStatus = !agent.Status.Equals("waiting", StringComparison.OrdinalIgnoreCase)
+            && !agent.Status.Equals("inactive", StringComparison.OrdinalIgnoreCase);
+        var isRunning = isCurrent && (_arenaBusy || isWorkingStatus);
+        var showActivitySweep = isActive && (isCurrent || isWorkingStatus);
         var speakerLabel = DisplayStatusValue(agent.Id);
         var activityLabel = isRunning ? "thinking" : isCurrent ? "current" : isActive ? "waiting" : "inactive";
         var playButton = new Button
@@ -1851,8 +1854,15 @@ public partial class MainWindow : Window
             BorderBrush = BlendBrush(ResourceBrush("DisabledBorderBrush"), accent, isActive ? 0.75 : 0.16),
             BorderThickness = new Thickness(0, 1, 0, 1),
             Padding = new Thickness(14, 8, 10, 8),
-            Margin = new Thickness(0, -1, 0, 0)
+            Margin = new Thickness(0, -1, 0, 0),
+            ClipToBounds = true
         };
+
+        var cardLayer = new Grid();
+        if (showActivitySweep)
+        {
+            cardLayer.Children.Add(CreateAgentActivitySweep(accent, isRunning));
+        }
 
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -1902,7 +1912,8 @@ public partial class MainWindow : Window
         Grid.SetColumn(playButton, 2);
         grid.Children.Add(playButton);
 
-        card.Child = grid;
+        cardLayer.Children.Add(grid);
+        card.Child = cardLayer;
         if (!isActive)
         {
             card.Opacity = 0.62;
@@ -1910,6 +1921,39 @@ public partial class MainWindow : Window
         }
 
         return card;
+    }
+
+    private Border CreateAgentActivitySweep(Brush accent, bool isRunning)
+    {
+        var accentColor = BrushColor(accent, Colors.DeepSkyBlue);
+        var sweep = new Border
+        {
+            Width = 86,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            IsHitTestVisible = false,
+            Opacity = isRunning ? 0.92 : 0.56,
+            Background = new LinearGradientBrush(
+                new GradientStopCollection
+                {
+                    new(Colors.Transparent, 0),
+                    new(Color.FromArgb(isRunning ? (byte)74 : (byte)38, accentColor.R, accentColor.G, accentColor.B), 0.48),
+                    new(Colors.Transparent, 1)
+                },
+                new Point(0, 0.5),
+                new Point(1, 0.5))
+        };
+
+        var translate = new TranslateTransform(-110, 0);
+        sweep.RenderTransform = translate;
+        var animation = new DoubleAnimationUsingKeyFrames
+        {
+            RepeatBehavior = RepeatBehavior.Forever
+        };
+        animation.KeyFrames.Add(new LinearDoubleKeyFrame(-110, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+        animation.KeyFrames.Add(new LinearDoubleKeyFrame(230, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(isRunning ? 1350 : 1900))));
+        animation.KeyFrames.Add(new DiscreteDoubleKeyFrame(230, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(isRunning ? 2050 : 3000))));
+        translate.BeginAnimation(TranslateTransform.XProperty, animation);
+        return sweep;
     }
 
     private Border CreateCard(string title, string body, Brush background, Brush accent, UIElement? extraContent)
