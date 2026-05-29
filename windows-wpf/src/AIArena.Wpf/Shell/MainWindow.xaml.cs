@@ -1816,10 +1816,9 @@ public partial class MainWindow : Window
     {
         var isActive = agent.Active;
         var isCurrent = isActive && string.Equals(agent.Id, currentAgentId, StringComparison.OrdinalIgnoreCase);
-        var isWorkingStatus = !agent.Status.Equals("waiting", StringComparison.OrdinalIgnoreCase)
-            && !agent.Status.Equals("inactive", StringComparison.OrdinalIgnoreCase);
-        var isRunning = isCurrent && (_arenaBusy || isWorkingStatus);
-        var showActivitySweep = isActive && (isCurrent || isWorkingStatus);
+        var isWorkingStatus = IsAgentWorkingStatus(agent.Status);
+        var isRunning = isActive && (isWorkingStatus || (isCurrent && _arenaBusy));
+        var showActivitySweep = isRunning;
         var speakerLabel = DisplayStatusValue(agent.Id);
         var activityLabel = isRunning ? "thinking" : isCurrent ? "current" : isActive ? "waiting" : "inactive";
         var playButton = new Button
@@ -1921,6 +1920,12 @@ public partial class MainWindow : Window
         }
 
         return card;
+    }
+
+    private static bool IsAgentWorkingStatus(string status)
+    {
+        var normalized = status.Trim().ToLowerInvariant();
+        return normalized is "thinking" or "generating" or "running" or "working" or "busy";
     }
 
     private Border CreateAgentActivitySweep(Brush accent, bool isRunning)

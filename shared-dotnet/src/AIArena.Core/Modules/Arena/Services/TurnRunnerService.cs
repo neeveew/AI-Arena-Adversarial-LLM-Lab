@@ -135,15 +135,16 @@ public sealed class TurnRunnerService
         string eventPrefix,
         CancellationToken cancellationToken)
     {
-        await _eventLogStore.AppendAsync(sessionId, $"{eventPrefix}_started", new { speaker = plan.AgentId, model = plan.Config!.Model }, cancellationToken);
-
-        var result = await CompleteWithFallbackAsync(sessionId, plan, BuildPrompt(snapshot, plan, allowInternetTool: true), $"{eventPrefix}_fallback_to_default", cancellationToken);
         var agent = snapshot.Engine.Agents.FirstOrDefault(item => string.Equals(item.Id, plan.AgentId, StringComparison.OrdinalIgnoreCase));
         if (agent is null)
         {
             return OneTurnResult.Failed($"No agent found for {plan.AgentId}.");
         }
 
+        await MarkAgentThinkingAsync(snapshot, sessionId, agent, cancellationToken);
+        await _eventLogStore.AppendAsync(sessionId, $"{eventPrefix}_started", new { speaker = plan.AgentId, model = plan.Config!.Model }, cancellationToken);
+
+        var result = await CompleteWithFallbackAsync(sessionId, plan, BuildPrompt(snapshot, plan, allowInternetTool: true), $"{eventPrefix}_fallback_to_default", cancellationToken);
         if (result.Ok && InternetToolContract.TryParseRequest(result.Text, out var toolRequest, out _))
         {
             var requestedByAgent = WithRequester(toolRequest, plan.AgentId);
@@ -215,12 +216,14 @@ public sealed class TurnRunnerService
     {
         await _eventLogStore.AppendAsync(sessionId, "native_retry_message_started", new { turn = original.Turn, speaker = plan.AgentId, model = plan.Config!.Model }, cancellationToken);
 
-        var result = await CompleteWithFallbackAsync(sessionId, plan, BuildPrompt(snapshot, plan, original.Turn, allowInternetTool: false), "native_retry_fallback_to_default", cancellationToken);
         var agent = snapshot.Engine.Agents.FirstOrDefault(item => string.Equals(item.Id, plan.AgentId, StringComparison.OrdinalIgnoreCase));
         if (agent is null)
         {
             return OneTurnResult.Failed($"No agent found for {plan.AgentId}.");
         }
+
+        await MarkAgentThinkingAsync(snapshot, sessionId, agent, cancellationToken);
+        var result = await CompleteWithFallbackAsync(sessionId, plan, BuildPrompt(snapshot, plan, original.Turn, allowInternetTool: false), "native_retry_fallback_to_default", cancellationToken);
         result = await RepairEmptyContentAsync(sessionId, snapshot, plan, result, "native_retry_message", cancellationToken);
 
         var text = result.Ok
@@ -254,6 +257,13 @@ public sealed class TurnRunnerService
             },
             cancellationToken);
         return OneTurnResult.Completed(plan, replacement, result);
+    }
+
+    private async Task MarkAgentThinkingAsync(ArenaSnapshot snapshot, string sessionId, DialogueAgent agent, CancellationToken cancellationToken)
+    {
+        agent.Status = "thinking";
+        snapshot.Engine.LastError = "";
+        await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
     }
 
     private IReadOnlyList<ModelChatMessage> BuildPrompt(ArenaSnapshot snapshot, OneTurnPlan plan, int? beforeTurn = null, bool allowInternetTool = true)

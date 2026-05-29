@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Management;
 
 namespace AIArena.Wpf.Services;
@@ -90,7 +91,7 @@ public sealed class SystemTelemetryService
             using var process = new Process();
             process.StartInfo = new ProcessStartInfo
             {
-                FileName = "nvidia-smi",
+                FileName = ResolveNvidiaSmiPath(),
                 Arguments = "--query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits",
                 CreateNoWindow = true,
                 RedirectStandardError = true,
@@ -99,12 +100,29 @@ public sealed class SystemTelemetryService
             };
 
             process.Start();
-            if (!process.WaitForExit(1200) || process.ExitCode != 0)
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(3000))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                    // Best effort only; telemetry should never disturb the UI.
+                }
+
+                return null;
+            }
+
+            _ = errorTask.GetAwaiter().GetResult();
+            if (process.ExitCode != 0)
             {
                 return null;
             }
 
-            var lines = process.StandardOutput.ReadToEnd()
+            var lines = outputTask.GetAwaiter().GetResult()
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
             if (lines.Length == 0)
             {
@@ -141,6 +159,15 @@ public sealed class SystemTelemetryService
         {
             return null;
         }
+    }
+
+    private static string ResolveNvidiaSmiPath()
+    {
+        var systemPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            "System32",
+            "nvidia-smi.exe");
+        return File.Exists(systemPath) ? systemPath : "nvidia-smi";
     }
 
     private GpuSnapshot SampleWindowsGpuCounters()
