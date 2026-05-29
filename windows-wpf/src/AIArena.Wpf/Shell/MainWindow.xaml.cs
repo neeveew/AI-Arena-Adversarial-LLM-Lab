@@ -889,19 +889,28 @@ public partial class MainWindow : Window
         if (snapshot.Agents.Count == 0)
         {
             CastPreviewItems.Children.Add(CreateEmptyStateCard("Cast", "No active cast is available for this session yet.", ResourceBrush("MutedTextBrush")));
-            return;
+        }
+        else
+        {
+            foreach (var agent in snapshot.Agents)
+            {
+                CastPreviewItems.Children.Add(CreateLockCard(
+                    agent.Id,
+                    $"{agent.Id}: {agent.Name}",
+                    string.IsNullOrWhiteSpace(agent.Persona) ? "(no persona)" : agent.Persona,
+                    BlendBrush(ResourceBrush("CardBrush"), AccentForSpeaker(agent.Id), 0.16),
+                    AccentForSpeaker(agent.Id),
+                    agent.Locked));
+            }
         }
 
-        foreach (var agent in snapshot.Agents)
-        {
-            CastPreviewItems.Children.Add(CreateLockCard(
-                agent.Id,
-                $"{agent.Id}: {agent.Name}",
-                string.IsNullOrWhiteSpace(agent.Persona) ? "(no persona)" : agent.Persona,
-                BlendBrush(ResourceBrush("CardBrush"), AccentForSpeaker(agent.Id), 0.16),
-                AccentForSpeaker(agent.Id),
-                agent.Locked));
-        }
+        CastPreviewItems.Children.Add(CreateLockCard(
+            "narrator",
+            "narrator: Narrator",
+            string.IsNullOrWhiteSpace(snapshot.NarratorPersona) ? "(no narrator persona)" : snapshot.NarratorPersona,
+            BlendBrush(ResourceBrush("CardBrush"), ResourceBrush("NarratorAccentBrush"), 0.16),
+            ResourceBrush("NarratorAccentBrush"),
+            snapshot.NarratorLocked));
     }
 
     private void PopulateNews(IReadOnlyList<TranscriptMessage> messages)
@@ -4445,6 +4454,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        CommitSelectedComboBoxItem(ProviderModelText);
         await PersistModelRoutingAsync("Default model saved.");
     }
 
@@ -4471,6 +4481,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        CommitSelectedComboBoxItem(comboBox);
         SaveRoleModelDraft(comboBox);
         await PersistModelRoutingAsync($"{DisplayLockKey(comboBox.Tag?.ToString() ?? "")} model saved.");
     }
@@ -4785,6 +4796,14 @@ public partial class MainWindow : Window
         if (comboBox.Tag is string key)
         {
             _roleModels[key] = comboBox.Text.Trim();
+        }
+    }
+
+    private static void CommitSelectedComboBoxItem(ComboBox comboBox)
+    {
+        if (comboBox.SelectedItem is string selected)
+        {
+            comboBox.Text = selected;
         }
     }
 
