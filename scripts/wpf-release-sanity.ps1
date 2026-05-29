@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.3.0-beta"
+    [string]$Version = "0.3.1-beta"
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,6 +34,9 @@ if ($scriptText -notmatch ('#define MyAppVersion "' + [regex]::Escape($Version) 
 }
 if ($scriptText -notmatch ('#define MyReleaseDir "\.\.\\\.\.\\dist\\AI Arena - ' + [regex]::Escape($Version) + '"')) {
     throw "Installer release directory no longer points at dist/AI Arena - $Version."
+}
+if ($scriptText -notmatch ('OutputDir=\.\.\\\.\.\\dist\\installer\\AI Arena - \{#MyAppVersion\}')) {
+    throw "Installer output directory no longer points at the versioned installer folder."
 }
 if ($scriptText -notmatch 'AppId=\{\{E2F12C8E-9B8C-45C3-B9A1-A8F8E1725F61\}') {
     throw "Installer AppId drifted; stable AI Arena upgrade identity may be broken."
