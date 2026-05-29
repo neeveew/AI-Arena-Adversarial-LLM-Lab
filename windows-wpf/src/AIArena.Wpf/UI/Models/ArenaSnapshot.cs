@@ -17,6 +17,8 @@ public sealed record ArenaSnapshot(
     string GammaModel,
     string DeltaModel,
     string NarratorModel,
+    string NarratorStatus,
+    string NarratorPersona,
     string ProviderBaseUrl,
     int ProviderTimeout,
     double ProviderTemperature,

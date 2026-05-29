@@ -48,6 +48,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _providerHealthTimer;
     private readonly DispatcherTimer _telemetryTimer;
     private readonly List<Button> _agentTurnButtons = [];
+    private readonly List<Button> _narratorActionButtons = [];
     private readonly List<Button> _transcriptActionButtons = [];
     private readonly List<CheckBox> _lockControls = [];
     private readonly Dictionary<string, string> _roleModels = new(StringComparer.OrdinalIgnoreCase);
@@ -436,6 +437,7 @@ public partial class MainWindow : Window
         AgentItems.Children.Clear();
         NewsItems.Children.Clear();
         _agentTurnButtons.Clear();
+        _narratorActionButtons.Clear();
         TranscriptItems.Children.Add(CreateCard("Transcript", message, ResourceBrush("CardBrush"), ResourceBrush("AlphaAccentBrush")));
         AgentItems.Children.Add(CreateAgentStatusCard("Alpha", "waiting", ResourceBrush("AlphaAccentBrush")));
         AgentItems.Children.Add(CreateAgentStatusCard("Beta", "waiting", ResourceBrush("BetaAccentBrush")));
@@ -846,6 +848,8 @@ public partial class MainWindow : Window
         var agents = snapshot.Agents;
         var currentAgentId = CurrentTurnAgent(snapshot)?.Id;
         AgentItems.Children.Clear();
+        _agentTurnButtons.Clear();
+        _narratorActionButtons.Clear();
 
         if (agents.Count == 0)
         {
@@ -857,6 +861,8 @@ public partial class MainWindow : Window
         {
             AgentItems.Children.Add(CreateAgentCard(agent, currentAgentId));
         }
+
+        AgentItems.Children.Add(CreateNarratorCard(snapshot));
     }
 
     private void PopulateCustomMatch(ArenaSnapshot snapshot)
@@ -1919,6 +1925,103 @@ public partial class MainWindow : Window
             card.ToolTip = "Inactive: increase Active participants in App Settings to include this agent.";
         }
 
+        return card;
+    }
+
+    private Border CreateNarratorCard(ArenaSnapshot snapshot)
+    {
+        var accent = ResourceBrush("NarratorAccentBrush");
+        var isRunning = IsAgentWorkingStatus(snapshot.NarratorStatus);
+        var modelText = string.IsNullOrWhiteSpace(snapshot.NarratorModel) ? "model not set" : snapshot.NarratorModel;
+        var status = string.IsNullOrWhiteSpace(snapshot.NarratorStatus) ? "idle" : snapshot.NarratorStatus;
+        var buttonEnabled = !_arenaBusy || _autoChatCancellation is not null;
+        var playButton = new Button
+        {
+            Content = "▶",
+            IsEnabled = buttonEnabled,
+            Width = 30,
+            MinWidth = 30,
+            Height = 28,
+            MinHeight = 28,
+            Padding = new Thickness(0),
+            Margin = new Thickness(6, 0, 0, 0),
+            FontSize = 13,
+            Background = ResourceBrush("NarratorAccentBrush"),
+            BorderBrush = accent,
+            Foreground = Brushes.White,
+            ToolTip = "Narrate now"
+        };
+        playButton.Click += NarrateNowButton_Click;
+        _narratorActionButtons.Add(playButton);
+
+        var card = new Border
+        {
+            Background = isRunning
+                ? BlendBrush(ResourceBrush("InputBrush"), accent, 0.18)
+                : ResourceBrush("InputBrush"),
+            BorderBrush = BlendBrush(ResourceBrush("DisabledBorderBrush"), accent, 0.65),
+            BorderThickness = new Thickness(0, 1, 0, 1),
+            Padding = new Thickness(14, 8, 10, 8),
+            Margin = new Thickness(0, -1, 0, 0),
+            ClipToBounds = true,
+            ToolTip = string.IsNullOrWhiteSpace(snapshot.NarratorPersona)
+                ? "Narrator"
+                : snapshot.NarratorPersona
+        };
+
+        var cardLayer = new Grid();
+        if (isRunning)
+        {
+            cardLayer.Children.Add(CreateAgentActivitySweep(accent, isRunning: true));
+        }
+
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        text.Children.Add(new TextBlock
+        {
+            Text = $"Narrator - {DisplayStatusValue(status)}",
+            Foreground = Brushes.White,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 12,
+            LineHeight = 15,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            ToolTip = "Narrator"
+        });
+        text.Children.Add(new TextBlock
+        {
+            Text = modelText,
+            Foreground = isRunning ? accent : ResourceBrush("MutedTextBrush"),
+            FontSize = 11,
+            LineHeight = 14,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            ToolTip = modelText
+        });
+        Grid.SetColumn(text, 0);
+        grid.Children.Add(text);
+
+        var activityDot = new Border
+        {
+            Width = isRunning ? 8 : 6,
+            Height = isRunning ? 8 : 6,
+            CornerRadius = new CornerRadius(4),
+            Background = accent,
+            Opacity = isRunning ? 1.0 : 0.45,
+            Margin = new Thickness(8, 0, 4, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = status
+        };
+        Grid.SetColumn(activityDot, 1);
+        grid.Children.Add(activityDot);
+
+        Grid.SetColumn(playButton, 2);
+        grid.Children.Add(playButton);
+
+        cardLayer.Children.Add(grid);
+        card.Child = cardLayer;
         return card;
     }
 
@@ -3470,6 +3573,10 @@ public partial class MainWindow : Window
         foreach (var button in _agentTurnButtons)
         {
             button.IsEnabled = !busy;
+        }
+        foreach (var button in _narratorActionButtons)
+        {
+            button.IsEnabled = !busy || autoChatRunning;
         }
         foreach (var button in _transcriptActionButtons)
         {
