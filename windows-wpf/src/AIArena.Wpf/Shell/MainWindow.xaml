@@ -690,24 +690,6 @@
                         </StackPanel>
                     </Border>
                 </Grid>
-                <Border Grid.Row="3"
-                        Background="{DynamicResource InputBrush}"
-                        BorderBrush="{DynamicResource DisabledBorderBrush}"
-                        BorderThickness="1"
-                        CornerRadius="8"
-                        Padding="12">
-                    <StackPanel>
-                        <TextBlock Text="System Status" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" />
-                        <TextBlock Text="LLM Gateway" Foreground="{DynamicResource MutedTextBrush}" Margin="0,12,0,0" />
-                        <TextBlock Text="{Binding Text, ElementName=TopProviderValue}" Foreground="{DynamicResource PrimaryBorderBrush}" FontWeight="SemiBold" />
-                        <CheckBox x:Name="FollowChatCheckBox"
-                                  Content="Auto-scroll"
-                                  Style="{StaticResource ToggleSwitchCheckBox}"
-                                  Foreground="{DynamicResource MutedTextBrush}"
-                                  IsChecked="True"
-                                  Margin="0,16,0,0" />
-                    </StackPanel>
-                </Border>
             </Grid>
         </Border>
 
@@ -1426,6 +1408,13 @@
                     <TextBlock Text="Provider" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,6,0" />
                     <TextBlock Text="{Binding Text, ElementName=TopProviderValue}" Foreground="{DynamicResource PrimaryBorderBrush}" FontWeight="SemiBold" Margin="0,0,18,0" />
                     <TextBlock x:Name="SaveStatusText" Text="Saved" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,18,0" />
+                    <CheckBox x:Name="FollowChatCheckBox"
+                              Content="Auto-scroll"
+                              Style="{StaticResource ToggleSwitchCheckBox}"
+                              Foreground="{DynamicResource MutedTextBrush}"
+                              IsChecked="True"
+                              VerticalAlignment="Center"
+                              Margin="0,0,18,0" />
                     <TextBlock Text="Internet and model settings live in App Settings" Foreground="{DynamicResource MutedTextBrush}" />
                 </StackPanel>
                 <TextBlock Grid.Column="1" Text="modern-gui-shell" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
