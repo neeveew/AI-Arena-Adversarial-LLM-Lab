@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <Resource Include="Assets\ai-arena-icon.ico" />
+    <Resource Include="Assets\ai-arena-emblem-transparent.png" />
     <Resource Include="Assets\Avatars\robot_heads_48.png" />
     <Resource Include="Assets\Avatars\robot_heads_48.json" />
     <Resource Include="Assets\Avatars\system_avatar.png" />

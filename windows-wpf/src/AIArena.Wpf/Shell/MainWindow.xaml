@@ -595,12 +595,15 @@
                 </Grid.RowDefinitions>
                 <Grid>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="48" />
+                        <ColumnDefinition Width="56" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <Image Source="/Assets/ai-arena-icon.png"
-                           Width="40"
-                           Height="40"
+                    <Image Source="/Assets/ai-arena-emblem-transparent.png"
+                           Width="48"
+                           Height="48"
+                           Opacity="0.92"
+                           Stretch="Uniform"
+                           RenderOptions.BitmapScalingMode="HighQuality"
                            VerticalAlignment="Center" />
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
                         <TextBlock Text="AI Arena" Foreground="White" FontSize="18" FontWeight="SemiBold" />
