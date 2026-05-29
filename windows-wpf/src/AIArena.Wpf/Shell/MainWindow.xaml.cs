@@ -4366,14 +4366,6 @@ public partial class MainWindow : Window
         UpdateNavigationTheme();
     }
 
-    private void NewsNavButton_Click(object sender, RoutedEventArgs e)
-    {
-        TranscriptPanel.Visibility = Visibility.Collapsed;
-        CustomMatchPanel.Visibility = Visibility.Collapsed;
-        NewsPanel.Visibility = Visibility.Visible;
-        UpdateNavigationTheme();
-    }
-
     private void TranscriptFilter_Changed(object sender, RoutedEventArgs e)
     {
         if (_isRenderingSnapshot || TranscriptItems is null)
@@ -4393,11 +4385,8 @@ public partial class MainWindow : Window
     {
         var arenaActive = TranscriptPanel.Visibility == Visibility.Visible;
         var customActive = CustomMatchPanel.Visibility == Visibility.Visible;
-        var newsActive = NewsPanel.Visibility == Visibility.Visible;
         ApplyNavigationButtonState(ArenaNavButton, arenaActive);
         ApplyNavigationButtonState(CustomMatchNavButton, customActive);
-        ApplyNavigationButtonState(NewsNavButton, newsActive);
-        ApplyNavigationButtonState(ExportNavButton, false);
     }
 
     private void ApplyNavigationButtonState(Button button, bool active)
