@@ -2713,7 +2713,7 @@ public partial class MainWindow : Window
         {
             LoadStatus.Text = "No active session to export.";
             ArenaRunStatus.Text = LoadStatus.Text;
-            ExportStatusText.Text = "Export unavailable: no active session.";
+            SetExportStatus("Export unavailable", LoadStatus.Text);
             return;
         }
 
@@ -2727,7 +2727,7 @@ public partial class MainWindow : Window
         {
             LoadStatus.Text = "No transcript messages to export.";
             ArenaRunStatus.Text = LoadStatus.Text;
-            ExportStatusText.Text = "Export skipped: no transcript messages.";
+            SetExportStatus("No transcript to export", LoadStatus.Text);
             return;
         }
 
@@ -2752,14 +2752,20 @@ public partial class MainWindow : Window
             var scope = visibleMessages.Length > 0 ? "visible" : "all";
             LoadStatus.Text = $"Exported {messages.Length} {scope} transcript message(s) to {fileName}.";
             ArenaRunStatus.Text = LoadStatus.Text;
-            ExportStatusText.Text = $"Last export: {fileName} -> {dialog.FileName}";
+            SetExportStatus($"Exported {messages.Length} message(s)", dialog.FileName);
         }
         catch (Exception ex)
         {
             LoadStatus.Text = $"Export failed: {ex.Message}";
             ArenaRunStatus.Text = LoadStatus.Text;
-            ExportStatusText.Text = LoadStatus.Text;
+            SetExportStatus("Export failed", LoadStatus.Text);
         }
+    }
+
+    private void SetExportStatus(string text, string tooltip)
+    {
+        ExportStatusText.Text = text;
+        ExportStatusText.ToolTip = tooltip;
     }
 
     private string BuildTranscriptExport(IReadOnlyList<TranscriptMessage> messages)

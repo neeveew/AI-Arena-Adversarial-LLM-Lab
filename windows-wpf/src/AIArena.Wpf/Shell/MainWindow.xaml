@@ -1390,63 +1390,61 @@
                 BorderThickness="0,1,0,0">
             <Grid Margin="18,0">
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="System Status" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,12,0" />
                     <TextBlock Text="Provider" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,6,0" />
-                    <TextBlock Text="{Binding Text, ElementName=TopProviderValue}" Foreground="{DynamicResource PrimaryBorderBrush}" FontWeight="SemiBold" Margin="0,0,18,0" />
-                    <StackPanel VerticalAlignment="Center" Margin="0,0,18,0">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE73E;"
-                                       FontFamily="Segoe MDL2 Assets"
-                                       Foreground="{DynamicResource AlphaAccentBrush}"
-                                       FontSize="11"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,5,0" />
-                            <TextBlock x:Name="SaveStatusText"
-                                       Text="Saved"
-                                       Foreground="{DynamicResource MutedTextBrush}"
-                                       FontSize="11"
-                                       VerticalAlignment="Center" />
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,1,0,0">
-                            <Button x:Name="ExportTranscriptBottomButton"
-                                    Click="ExportTranscriptButton_Click"
-                                    Width="18"
-                                    Height="16"
-                                    Padding="0"
-                                    Background="Transparent"
-                                    BorderBrush="{DynamicResource DisabledBorderBrush}"
-                                    Foreground="{DynamicResource MutedTextBrush}"
-                                    ToolTip="Export transcript">
-                                <TextBlock Text="&#xE8E5;"
-                                           FontFamily="Segoe MDL2 Assets"
-                                           FontSize="10"
-                                           HorizontalAlignment="Center"
-                                           VerticalAlignment="Center" />
-                            </Button>
-                            <TextBlock x:Name="ExportStatusText"
-                                       Text="Export transcript"
-                                       Foreground="{DynamicResource MutedTextBrush}"
-                                       FontSize="10"
-                                       Margin="5,0,0,0"
-                                       MaxWidth="230"
-                                       TextTrimming="CharacterEllipsis"
-                                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
-                        </StackPanel>
-                    </StackPanel>
+                    <TextBlock Text="{Binding Text, ElementName=TopProviderValue}" Foreground="{DynamicResource PrimaryBorderBrush}" FontWeight="SemiBold" Margin="0,0,14,0" />
+                    <Border Width="1" Height="14" Background="{DynamicResource DisabledBorderBrush}" Margin="0,0,14,0" />
+                    <TextBlock Text="&#xE73E;"
+                               FontFamily="Segoe MDL2 Assets"
+                               Foreground="{DynamicResource AlphaAccentBrush}"
+                               FontSize="11"
+                               VerticalAlignment="Center"
+                               Margin="0,0,5,0" />
+                    <TextBlock x:Name="SaveStatusText"
+                               Text="Saved"
+                               Foreground="{DynamicResource MutedTextBrush}"
+                               FontSize="11"
+                               VerticalAlignment="Center" />
+                </StackPanel>
+                <TextBlock x:Name="ExportStatusText"
+                           Grid.Column="1"
+                           Text=""
+                           Foreground="{DynamicResource MutedTextBrush}"
+                           FontSize="11"
+                           Margin="20,0"
+                           VerticalAlignment="Center"
+                           TextAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="ExportTranscriptBottomButton"
+                            Click="ExportTranscriptButton_Click"
+                            Width="26"
+                            Height="24"
+                            Padding="0"
+                            Background="Transparent"
+                            BorderBrush="{DynamicResource DisabledBorderBrush}"
+                            Foreground="{DynamicResource MutedTextBrush}"
+                            ToolTip="Export transcript">
+                        <TextBlock Text="&#xE8E5;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="12"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" />
+                    </Button>
                     <CheckBox x:Name="FollowChatCheckBox"
                               Content="Auto-scroll"
                               Style="{StaticResource ToggleSwitchCheckBox}"
                               Foreground="{DynamicResource MutedTextBrush}"
                               IsChecked="True"
                               VerticalAlignment="Center"
-                              Margin="0,0,18,0" />
-                    <TextBlock Text="Internet and model settings live in App Settings" Foreground="{DynamicResource MutedTextBrush}" />
+                              Margin="14,0,18,0" />
+                    <TextBlock Text="modern-gui-shell" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
                 </StackPanel>
-                <TextBlock Grid.Column="1" Text="modern-gui-shell" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
             </Grid>
         </Border>
 
