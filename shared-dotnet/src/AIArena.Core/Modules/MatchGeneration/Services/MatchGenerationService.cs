@@ -70,7 +70,7 @@ public sealed class MatchGenerationService
             return MatchGenerationResult.Failed(result.Error);
         }
 
-        if (!TryParseGeneratedMatch(result.Text, RequiredAgentIds(snapshot), out var generated, out var error))
+        if (!TryParseGeneratedMatch(result.Text, RequiredAgentIds(snapshot), "AI choice", "ai-choice", out var generated, out var error))
         {
             snapshot.Engine.LastError = error;
             await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
@@ -87,6 +87,52 @@ public sealed class MatchGenerationService
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
         await _eventLogStore.AppendAsync(sessionId, "native_ai_choice_match_generated", new { generated.Label, generated.Style, locks = snapshot.MatchLocks }, cancellationToken);
         return MatchGenerationResult.Completed(generated.Label, "ai-choice", generated.Style);
+    }
+
+    public async Task<MatchGenerationResult> GenerateMetaScenarioAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
+        if (snapshot is null)
+        {
+            return MatchGenerationResult.Failed($"No snapshot found for session {sessionId}.");
+        }
+
+        var config = ResolveProviderConfig(snapshot, "narrator", out var fallbackConfig);
+        if (config is null)
+        {
+            return MatchGenerationResult.Failed("No provider config for narrator.");
+        }
+
+        var prompt = BuildMetaScenarioPrompt(snapshot);
+        var result = await _modelClient.CompleteChatAsync(config, prompt, cancellationToken);
+        if (!result.Ok && fallbackConfig is not null)
+        {
+            result = await _modelClient.CompleteChatAsync(fallbackConfig, prompt, cancellationToken);
+        }
+        if (!result.Ok)
+        {
+            snapshot.Engine.LastError = result.Error;
+            await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
+            return MatchGenerationResult.Failed(result.Error);
+        }
+
+        if (!TryParseGeneratedMatch(result.Text, RequiredAgentIds(snapshot), "Meta scenario", "meta-scenario", out var generated, out var error))
+        {
+            snapshot.Engine.LastError = error;
+            await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
+            return MatchGenerationResult.Failed(error);
+        }
+
+        ApplyGeneratedMatch(snapshot, generated, clearTranscript: false);
+        snapshot.MatchType = NormalizeStyle(generated.Style);
+        snapshot.ScenarioGenerator.Style = snapshot.MatchType;
+        snapshot.ScenarioGenerator.Seed = "meta-scenario";
+        snapshot.PersonaRandomizer.Style = snapshot.MatchType is "technical" ? "technical" : snapshot.MatchType is "adversarial" ? "adversarial" : "balanced";
+        snapshot.PersonaRandomizer.Seed = "meta-scenario";
+
+        await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
+        await _eventLogStore.AppendAsync(sessionId, "native_meta_scenario_generated", new { generated.Label, generated.Style, locks = snapshot.MatchLocks }, cancellationToken);
+        return MatchGenerationResult.Completed(generated.Label, "meta-scenario", generated.Style);
     }
 
     public async Task ToggleLockAsync(string sessionId, string key, bool locked, CancellationToken cancellationToken = default)
@@ -193,7 +239,40 @@ public sealed class MatchGenerationService
         ];
     }
 
-    private static bool TryParseGeneratedMatch(string text, IReadOnlyList<string> requiredAgentIds, out GeneratedMatch generated, out string error)
+    private static IReadOnlyList<ModelChatMessage> BuildMetaScenarioPrompt(ArenaSnapshot snapshot)
+    {
+        var agents = string.Join(Environment.NewLine, snapshot.Engine.Agents.Select(agent => $"- {agent.Id}: {agent.Name}: {agent.Persona}"));
+        var locked = snapshot.MatchLocks
+            .Where(item => item.Value)
+            .Select(item => item.Key)
+            .OrderBy(item => item)
+            .ToArray();
+        return
+        [
+            new ModelChatMessage(
+                "system",
+                "You generate AI Arena meta-scenario setup JSON. Return only valid JSON. No markdown. The setup must describe the arena simulation clearly to the LLM participants without becoming theatrical roleplay."),
+            new ModelChatMessage(
+                "user",
+                string.Join(
+                    Environment.NewLine,
+                    "Create a meta scenario for an adversarial LLM arena.",
+                    "The participants should understand they are role-bound agents inside a structured simulation.",
+                    "The goal is to stress-test reasoning, assumptions, disagreement, synthesis, constraint handling, and narrator diagnostics.",
+                    "Make the scenario concrete, tense, and testable. Avoid generic sci-fi framing.",
+                    "The global instruction must explain the simulation rules: distinct roles, public debate, turn order, narrator observation, evidence discipline, and productive disagreement.",
+                    "The narrator must track discourse quality without joining as Alpha, Beta, Gamma, or Delta.",
+                    "Give every participant a sharp cognitive role that fits the meta simulation.",
+                    $"Current match type: {snapshot.MatchType}",
+                    $"Locked fields that must be respected by the app after generation: {(locked.Length == 0 ? "none" : string.Join(", ", locked))}",
+                    $"Current topic: {snapshot.Engine.Steering.Topic}",
+                    $"Current cast:{Environment.NewLine}{agents}",
+                    "Return this JSON shape:",
+                    $"{{\"label\":\"short label\",\"style\":\"balanced|adversarial|research|technical|philosophical\",\"scenario\":{{\"topic\":\"...\",\"global\":\"...\",\"narrator_brief\":\"...\"}},\"personas\":[{PersonaJsonShape(snapshot)},{{\"agent_id\":\"narrator\",\"role\":\"Narrator\",\"persona\":\"...\"}}]}}"))
+        ];
+    }
+
+    private static bool TryParseGeneratedMatch(string text, IReadOnlyList<string> requiredAgentIds, string label, string fallbackSeed, out GeneratedMatch generated, out string error)
     {
         generated = GeneratedMatch.Empty;
         error = "";
@@ -213,9 +292,9 @@ public sealed class MatchGenerationService
                     .ToArray()
                 : [];
             var style = NormalizeStyle(root.GetStringOrDefault("style", "balanced"));
-            parsedPersonas = EnsureRequiredPersonas(parsedPersonas, style, "ai-choice", requiredAgentIds);
+            parsedPersonas = EnsureRequiredPersonas(parsedPersonas, style, fallbackSeed, requiredAgentIds);
             generated = new GeneratedMatch(
-                root.GetStringOrDefault("label", "AI choice match"),
+                root.GetStringOrDefault("label", $"{label} match"),
                 style,
                 scenario.GetStringOrDefault("topic", ""),
                 scenario.GetStringOrDefault("global", ""),
@@ -223,7 +302,7 @@ public sealed class MatchGenerationService
                 parsedPersonas);
             if (string.IsNullOrWhiteSpace(generated.Topic) || string.IsNullOrWhiteSpace(generated.Global))
             {
-                error = "AI choice JSON missing scenario or personas.";
+                error = $"{label} JSON missing scenario or personas.";
                 return false;
             }
 
@@ -231,7 +310,7 @@ public sealed class MatchGenerationService
         }
         catch (JsonException ex)
         {
-            error = $"AI choice returned invalid JSON: {ex.Message}";
+            error = $"{label} returned invalid JSON: {ex.Message}";
             return false;
         }
     }

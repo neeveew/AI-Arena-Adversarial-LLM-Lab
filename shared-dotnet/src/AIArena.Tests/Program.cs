@@ -31,6 +31,7 @@ var tests = new (string Name, Action Test)[]
     ("saves restores and deletes native checkpoints", SaveRestoreDeleteNativeCheckpoints),
     ("writes timestamped event log entries", WriteTimestampedEventLogEntries),
     ("generates random seed match respecting locks", GenerateRandomSeedMatchRespectingLocks),
+    ("generates meta scenario respecting locks", GenerateMetaScenarioRespectingLocks),
     ("adds narrator message to transcript", AddNarratorMessageToTranscript),
     ("curates news into transcript when internet is enabled", CurateNewsIntoTranscriptWhenInternetEnabled),
     ("curated news plans focused search query", CuratedNewsPlansFocusedSearchQuery),
@@ -496,6 +497,49 @@ static void GenerateRandomSeedMatchRespectingLocks()
     Require(loaded.Engine.Messages.Count == 1, "transcript was not preserved");
     Require(loaded.Engine.TurnCount == 1, "turn count changed during match generation");
     Require(File.ReadAllText(log.EventPath()).Contains("native_random_seed_match_generated"), "random seed event was not logged");
+    Directory.Delete(root, recursive: true);
+}
+
+static void GenerateMetaScenarioRespectingLocks()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    snapshot.MatchLocks["alpha"] = true;
+    var alphaPersona = snapshot.Engine.Agents[0].Persona;
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+
+    const string generatedJson = """
+    {
+      "label": "Simulation pressure lab",
+      "style": "adversarial",
+      "scenario": {
+        "topic": "A self-auditing arena tests whether role-bound LLM agents can expose weak assumptions before consensus forms.",
+        "global": "You are participants in AI Arena, a structured adversarial simulation. Keep distinct roles, debate publicly, respect turn order, make uncertainty visible, and let the narrator evaluate discourse quality without joining the debate.",
+        "narrator_brief": "Track role drift, unsupported claims, consensus pressure, and whether disagreement produces better constraints."
+      },
+      "personas": [
+        {"agent_id": "alpha", "role": "Protocol Skeptic", "persona": "Protocol Skeptic. Test whether the simulation rules hide bad assumptions."},
+        {"agent_id": "beta", "role": "Constraint Builder", "persona": "Constraint Builder. Convert vague claims into enforceable checks."},
+        {"agent_id": "gamma", "role": "Synthesis Auditor", "persona": "Synthesis Auditor. Detect premature agreement and demand sharper tradeoffs."},
+        {"agent_id": "narrator", "role": "Discourse Monitor", "persona": "Discourse Monitor. Observe the arena quality without joining as an agent."}
+      ]
+    }
+    """;
+    var client = new FakeModelProviderClient(generatedJson, "meta reasoning");
+    var service = new MatchGenerationService(client, store, log);
+
+    var result = service.GenerateMetaScenarioAsync("default").GetAwaiter().GetResult();
+    Require(result.Ok, $"meta scenario failed: {result.Error}");
+    var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+    Require(loaded.MatchType == "adversarial", "meta scenario style was not applied");
+    Require(loaded.Engine.Steering.Global.Contains("structured adversarial simulation", StringComparison.OrdinalIgnoreCase), "meta scenario global did not apply");
+    Require(loaded.Engine.Agents[0].Persona == alphaPersona, "locked alpha persona changed");
+    Require(loaded.Engine.Agents[1].Name.Contains("Constraint Builder", StringComparison.Ordinal), "unlocked beta role was not applied");
+    Require(loaded.Engine.Messages.Count == 1, "transcript was not preserved");
+    Require(client.Requests.Single().Any(message => message.Content.Contains("meta scenario", StringComparison.OrdinalIgnoreCase)), "meta scenario prompt was not sent");
+    Require(File.ReadAllText(log.EventPath()).Contains("native_meta_scenario_generated"), "meta scenario event was not logged");
     Directory.Delete(root, recursive: true);
 }
 

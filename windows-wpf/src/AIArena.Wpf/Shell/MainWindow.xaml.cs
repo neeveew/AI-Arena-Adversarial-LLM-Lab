@@ -2851,6 +2851,36 @@ public partial class MainWindow : Window
         }, allowDuringAutoChat: true);
     }
 
+    private async void YoloScenarioButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeSession is null)
+        {
+            LoadStatus.Text = "No active session.";
+            return;
+        }
+
+        var confirm = ConfirmDialog.Show(
+            this,
+            _theme,
+            "YOLO Meta Scenario",
+            "Ask the narrator model to generate a full meta scenario for the arena simulation?\n\nLocked fields and the current transcript will be preserved.",
+            "Generate",
+            tone: ConfirmDialogTone.Normal);
+        if (!confirm)
+        {
+            return;
+        }
+
+        await RunArenaBusyAsync("Generating YOLO meta scenario...", YoloScenarioButton, async () =>
+        {
+            var result = await _matchGeneration.GenerateMetaScenarioAsync(_activeSession.Id);
+            var status = result.Ok
+                ? $"YOLO meta scenario generated: {result.Label}"
+                : $"YOLO meta scenario failed: {result.Error}";
+            RefreshActiveSession(status);
+        }, allowDuringAutoChat: true);
+    }
+
     private async void NarrateNowButton_Click(object sender, RoutedEventArgs e)
     {
         if (_activeSession is null)
@@ -3867,6 +3897,7 @@ public partial class MainWindow : Window
         ResetButton.IsEnabled = !busy;
         RandomSeedButton.IsEnabled = !busy || autoChatRunning;
         AiChoiceButton.IsEnabled = !busy || autoChatRunning;
+        YoloScenarioButton.IsEnabled = !busy || autoChatRunning;
         NarrateNowButton.IsEnabled = !busy || autoChatRunning;
         CurateNewsButton.IsEnabled = !busy || autoChatRunning;
         StopButton.IsEnabled = stopEnabled;

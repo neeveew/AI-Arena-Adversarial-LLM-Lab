@@ -1227,7 +1227,16 @@
                                     Background="{DynamicResource AssistBrush}"
                                     BorderBrush="{DynamicResource AssistBorderBrush}"
                                     FontSize="11"
-                                    Padding="11,6" />
+                                    Padding="11,6"
+                                    Margin="0,0,6,0" />
+                            <Button x:Name="YoloScenarioButton"
+                                    Content="YOLO"
+                                    Click="YoloScenarioButton_Click"
+                                    Background="{DynamicResource AssistBrush}"
+                                    BorderBrush="{DynamicResource BetaAccentBrush}"
+                                    FontSize="11"
+                                    Padding="11,6"
+                                    ToolTip="Generate a full meta scenario for the arena simulation" />
                         </StackPanel>
                     </Border>
                 </Grid>
