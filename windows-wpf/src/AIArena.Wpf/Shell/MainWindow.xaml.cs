@@ -660,7 +660,7 @@ public partial class MainWindow : Window
         TopCurrentTurnValue.Foreground = current is null ? ResourceBrush("TextBrush") : AccentForSpeaker(current.Id);
         TopTurnsValue.Text = snapshot.TurnCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-        TopBarStatus.ToolTip = $"Session: {snapshot.SessionId}\nModel: {snapshot.ProviderModel}";
+        TopBarStatus.ToolTip = $"Session: {snapshot.SessionId}\nModel: {CurrentTurnModel(snapshot, current)}";
         UpdateSettingsProviderStatus(snapshot);
     }
 
@@ -1189,7 +1189,7 @@ public partial class MainWindow : Window
             setup.Children.Add(CreateSetupChip("Match", DisplayStatusValue(snapshot.MatchType), ResourceBrush("TextBrush")));
             setup.Children.Add(CreateSetupChip("Agents", $"{activeAgents.Length} + narrator", ResourceBrush("PrimaryBorderBrush")));
             setup.Children.Add(CreateSetupChip("Turn", current is null ? "-" : DisplayStatusValue(current.Id), current is null ? ResourceBrush("MutedTextBrush") : AccentForSpeaker(current.Id)));
-            setup.Children.Add(CreateSetupChip("Model", ShortModelName(snapshot.ProviderModel), ResourceBrush("MutedTextBrush")));
+            setup.Children.Add(CreateSetupChip("Model", ShortModelName(CurrentTurnModel(snapshot, current)), ResourceBrush("MutedTextBrush")));
             panel.Children.Add(setup);
         }
 
@@ -1228,6 +1228,18 @@ public partial class MainWindow : Window
                 FontWeight = FontWeights.SemiBold
             }
         };
+    }
+
+    private static string CurrentTurnModel(ArenaSnapshot snapshot, AgentState? current)
+    {
+        if (!string.IsNullOrWhiteSpace(current?.Model))
+        {
+            return current.Model;
+        }
+
+        return !string.IsNullOrWhiteSpace(snapshot.ProviderModel)
+            ? snapshot.ProviderModel
+            : "-";
     }
 
     private Border CreateLockCard(string lockKey, string title, string body, Brush background, Brush accent, bool locked)
