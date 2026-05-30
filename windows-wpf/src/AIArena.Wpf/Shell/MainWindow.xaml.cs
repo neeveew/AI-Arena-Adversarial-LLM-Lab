@@ -74,6 +74,7 @@ public partial class MainWindow : Window
     private bool _isDraggingSearchPopup;
     private bool _turnCompareSuppressAutoSeed;
     private int? _timelineSelectedTurnFilter;
+    private string? _activeAgentPerformanceDetailId;
     private Point _searchPopupDragStart;
     private double _searchPopupDragStartHorizontalOffset;
     private double _searchPopupDragStartVerticalOffset;
@@ -429,6 +430,10 @@ public partial class MainWindow : Window
 
     private void PopulateAgentPerformance(ArenaSnapshot snapshot)
     {
+        var openDetailId = AgentPerformanceDetailPopup.IsOpen ? _activeAgentPerformanceDetailId : null;
+        FrameworkElement? refreshedDetailTarget = null;
+        AgentPerformanceStats? refreshedDetailStats = null;
+
         AgentPerformanceItems.Children.Clear();
         var participants = snapshot.Agents
             .Where(agent => agent.Active || snapshot.Messages.Any(message => message.SpeakerId.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)))
@@ -453,7 +458,14 @@ public partial class MainWindow : Window
 
         foreach (var item in stats)
         {
-            AgentPerformanceItems.Children.Add(CreateAgentPerformanceRow(item, maxTokens));
+            var row = CreateAgentPerformanceRow(item, maxTokens);
+            AgentPerformanceItems.Children.Add(row);
+            if (!string.IsNullOrWhiteSpace(openDetailId)
+                && item.AgentId.Equals(openDetailId, StringComparison.OrdinalIgnoreCase))
+            {
+                refreshedDetailTarget = row;
+                refreshedDetailStats = item;
+            }
         }
 
         if (AgentPerformanceItems.Children.Count == 0)
@@ -464,6 +476,18 @@ public partial class MainWindow : Window
                 Foreground = ResourceBrush("MutedTextBrush"),
                 TextWrapping = TextWrapping.Wrap
             });
+        }
+
+        if (!string.IsNullOrWhiteSpace(openDetailId))
+        {
+            if (refreshedDetailTarget is null || refreshedDetailStats is null)
+            {
+                CloseAgentPerformanceDetail();
+            }
+            else
+            {
+                RenderAgentPerformanceDetail(refreshedDetailStats, snapshot, refreshedDetailTarget, resetPopup: false);
+            }
         }
     }
 
@@ -647,10 +671,33 @@ public partial class MainWindow : Window
             return;
         }
 
+        RenderAgentPerformanceDetail(stats, _lastRenderedSnapshot, target, resetPopup: true);
+    }
+
+    private void RenderAgentPerformanceDetail(
+        AgentPerformanceStats stats,
+        ArenaSnapshot snapshot,
+        FrameworkElement target,
+        bool resetPopup)
+    {
+        if (resetPopup)
+        {
+            AgentPerformanceDetailPopup.IsOpen = false;
+        }
+
+        _activeAgentPerformanceDetailId = stats.AgentId;
         AgentPerformanceDetailContent.Children.Clear();
-        AgentPerformanceDetailContent.Children.Add(CreateAgentPerformanceDetail(stats, _lastRenderedSnapshot));
+        AgentPerformanceDetailContent.Children.Add(CreateAgentPerformanceDetail(stats, snapshot));
         AgentPerformanceDetailPopup.PlacementTarget = target;
         AgentPerformanceDetailPopup.IsOpen = true;
+    }
+
+    private void CloseAgentPerformanceDetail()
+    {
+        _activeAgentPerformanceDetailId = null;
+        AgentPerformanceDetailPopup.IsOpen = false;
+        AgentPerformanceDetailPopup.PlacementTarget = null;
+        AgentPerformanceDetailContent.Children.Clear();
     }
 
     private StackPanel CreateAgentPerformanceDetail(AgentPerformanceStats stats, ArenaSnapshot snapshot)
@@ -965,6 +1012,7 @@ public partial class MainWindow : Window
         TranscriptItems.Children.Clear();
         AgentItems.Children.Clear();
         NewsItems.Children.Clear();
+        CloseAgentPerformanceDetail();
         _lastRenderedSnapshot = null;
         _agentTurnButtons.Clear();
         _narratorActionButtons.Clear();
@@ -6073,7 +6121,7 @@ public partial class MainWindow : Window
 
     private void AgentPerformanceDetailCloseButton_Click(object sender, RoutedEventArgs e)
     {
-        AgentPerformanceDetailPopup.IsOpen = false;
+        CloseAgentPerformanceDetail();
     }
 
     private void TranscriptSearchDragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
