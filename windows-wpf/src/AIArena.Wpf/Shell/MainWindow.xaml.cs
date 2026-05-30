@@ -51,6 +51,7 @@ public partial class MainWindow : Window
     private readonly List<Button> _narratorActionButtons = [];
     private readonly List<Button> _transcriptActionButtons = [];
     private readonly List<CheckBox> _lockControls = [];
+    private readonly List<TranscriptMessage> _turnCompareSelection = [];
     private readonly Dictionary<string, string> _roleModels = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ModelPreloadResult> _lastPreloadResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _arenaOperationLock = new(1, 1);
@@ -71,6 +72,7 @@ public partial class MainWindow : Window
     private string _transcriptDashboardLayout = "";
     private Button? _breathingOperationButton;
     private bool _isDraggingSearchPopup;
+    private bool _turnCompareSuppressAutoSeed;
     private Point _searchPopupDragStart;
     private double _searchPopupDragStartHorizontalOffset;
     private double _searchPopupDragStartVerticalOffset;
@@ -178,6 +180,7 @@ public partial class MainWindow : Window
         SelectComboTag(SystemGlyphStylePicker, _wpfSettings.SystemEventGlyphs ? "glyph" : "fallback");
         SelectComboTag(TopStripModePicker, CurrentTopStripMode());
         CompactTranscriptCheckBox.IsChecked = _wpfSettings.CompactTranscriptMode;
+        TurnCompareCheckBox.IsChecked = _wpfSettings.TurnCompareMode;
         _isRenderingSnapshot = false;
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
         UpdateTelemetryTimerState();
@@ -264,6 +267,27 @@ public partial class MainWindow : Window
         }
 
         _wpfSettings.CompactTranscriptMode = CompactTranscriptCheckBox.IsChecked == true;
+        _wpfSettingsStore.Save(_wpfSettings);
+        if (_lastRenderedMessages.Count > 0)
+        {
+            PopulateTranscript(_lastRenderedMessages);
+        }
+    }
+
+    private void TurnCompareCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isRenderingSnapshot || TurnCompareCheckBox is null)
+        {
+            return;
+        }
+
+        _wpfSettings.TurnCompareMode = TurnCompareCheckBox.IsChecked == true;
+        if (!_wpfSettings.TurnCompareMode)
+        {
+            _turnCompareSelection.Clear();
+        }
+
+        _turnCompareSuppressAutoSeed = false;
         _wpfSettingsStore.Save(_wpfSettings);
         if (_lastRenderedMessages.Count > 0)
         {
@@ -746,6 +770,12 @@ public partial class MainWindow : Window
             .ToHashSet();
 
         var latestTurn = visibleMessages.Max(message => message.Turn);
+        if (_wpfSettings.TurnCompareMode)
+        {
+            EnsureTurnCompareSelection(visibleMessages);
+            TranscriptItems.Children.Add(CreateTurnComparePanel(visibleMessages));
+        }
+
         foreach (var message in visibleMessages.OrderByDescending(message => message.Turn))
         {
             TranscriptItems.Children.Add(CreateTranscriptCard(
@@ -908,6 +938,79 @@ public partial class MainWindow : Window
         {
             _telemetryTimer.Stop();
         }
+    }
+
+    private void EnsureTurnCompareSelection(IReadOnlyList<TranscriptMessage> visibleMessages)
+    {
+        var retained = _turnCompareSelection
+            .Where(selected => visibleMessages.Any(message => SameTranscriptMessage(message, selected)))
+            .Take(2)
+            .ToList();
+
+        if (!_turnCompareSuppressAutoSeed)
+        {
+            foreach (var message in visibleMessages
+                .Where(CanCompareTranscriptMessage)
+                .OrderByDescending(message => message.Turn)
+                .ThenByDescending(message => message.CreatedAt))
+            {
+                if (retained.Count >= 2)
+                {
+                    break;
+                }
+
+                if (!retained.Any(selected => SameTranscriptMessage(selected, message)))
+                {
+                    retained.Add(message);
+                }
+            }
+        }
+
+        _turnCompareSelection.Clear();
+        _turnCompareSelection.AddRange(retained);
+    }
+
+    private static bool CanCompareTranscriptMessage(TranscriptMessage message)
+    {
+        return message.Turn > 0 && !string.IsNullOrWhiteSpace(message.Text);
+    }
+
+    private static bool SameTranscriptMessage(TranscriptMessage left, TranscriptMessage right)
+    {
+        return left.Turn == right.Turn
+            && left.SpeakerId.Equals(right.SpeakerId, StringComparison.OrdinalIgnoreCase)
+            && Math.Abs(left.CreatedAt - right.CreatedAt) < 0.001;
+    }
+
+    private bool IsTurnSelectedForCompare(TranscriptMessage message)
+    {
+        return _turnCompareSelection.Any(selected => SameTranscriptMessage(selected, message));
+    }
+
+    private void ToggleTurnCompareMessage(TranscriptMessage message)
+    {
+        if (!CanCompareTranscriptMessage(message))
+        {
+            return;
+        }
+
+        _turnCompareSuppressAutoSeed = true;
+        var existing = _turnCompareSelection.FindIndex(selected => SameTranscriptMessage(selected, message));
+        if (existing >= 0)
+        {
+            _turnCompareSelection.RemoveAt(existing);
+        }
+        else
+        {
+            if (_turnCompareSelection.Count >= 2)
+            {
+                _turnCompareSelection.RemoveAt(0);
+            }
+
+            _turnCompareSelection.Add(message);
+        }
+
+        PopulateTranscript(_lastRenderedMessages);
     }
 
     private async Task UpdateSystemTelemetryAsync()
@@ -1540,6 +1643,15 @@ public partial class MainWindow : Window
         actions.Children.Add(ActionButton(message.Pinned ? "Unpin" : "Pin", async (_, _) => await TogglePinTranscriptMessageAsync(message), canMutate, TranscriptActionKind.Primary, "\uE718"));
         actions.Children.Add(ActionButton("Retry", async (_, _) => await RetryTranscriptMessageAsync(message), canMutate && retryable && IsAgentSpeaker(message.SpeakerId) && !isInternet, iconGlyph: "\uE72C"));
         actions.Children.Add(ActionButton("Delete", async (_, _) => await DeleteTranscriptMessageAsync(message), canMutate, TranscriptActionKind.Danger, "\uE74D"));
+        if (_wpfSettings.TurnCompareMode)
+        {
+            var selectedForCompare = IsTurnSelectedForCompare(message);
+            actions.Children.Add(ActionButton(
+                selectedForCompare ? "Drop compare" : "Compare",
+                (_, _) => ToggleTurnCompareMessage(message),
+                canMutate && CanCompareTranscriptMessage(message),
+                selectedForCompare ? TranscriptActionKind.Primary : TranscriptActionKind.Neutral));
+        }
         if (message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase) && message.Status.Equals("pending", StringComparison.OrdinalIgnoreCase))
         {
             actions.Children.Add(ActionButton("Approve Once", async (_, _) => await ApproveInternetRequestAsync(message), canMutate, TranscriptActionKind.Primary));
@@ -1570,6 +1682,229 @@ public partial class MainWindow : Window
         }
         extras.Children.Add(actions);
         return CreateTranscriptCardLayout(message, body, accent, isInternet, searchMatch, isLatest, isSystemEvent, extras);
+    }
+
+    private Border CreateTurnComparePanel(IReadOnlyList<TranscriptMessage> visibleMessages)
+    {
+        var selected = _turnCompareSelection.Take(2).ToArray();
+        var accent = ResourceBrush("BetaAccentBrush");
+        var panel = new StackPanel();
+
+        var header = new Grid { Margin = new Thickness(0, 0, 0, 10) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var titleStack = new StackPanel();
+        titleStack.Children.Add(new TextBlock
+        {
+            Text = "Turn Compare",
+            Foreground = ResourceBrush("TextBrush"),
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold
+        });
+        titleStack.Children.Add(new TextBlock
+        {
+            Text = selected.Length >= 2
+                ? CompareSummary(selected[0], selected[1])
+                : "Select two transcript cards to compare wording, model, tokens, context, and latency.",
+            Foreground = ResourceBrush("MutedTextBrush"),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 2, 0, 0)
+        });
+        Grid.SetColumn(titleStack, 0);
+        header.Children.Add(titleStack);
+
+        var actions = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        actions.Children.Add(ActionButton("Auto latest", (_, _) =>
+        {
+            _turnCompareSuppressAutoSeed = false;
+            _turnCompareSelection.Clear();
+            foreach (var message in visibleMessages
+                .Where(CanCompareTranscriptMessage)
+                .OrderByDescending(message => message.Turn)
+                .ThenByDescending(message => message.CreatedAt)
+                .Take(2))
+            {
+                _turnCompareSelection.Add(message);
+            }
+
+            PopulateTranscript(_lastRenderedMessages);
+        }, visibleMessages.Any(CanCompareTranscriptMessage)));
+        actions.Children.Add(ActionButton("Clear", (_, _) =>
+        {
+            _turnCompareSuppressAutoSeed = true;
+            _turnCompareSelection.Clear();
+            PopulateTranscript(_lastRenderedMessages);
+        }, _turnCompareSelection.Count > 0));
+        Grid.SetColumn(actions, 1);
+        header.Children.Add(actions);
+        panel.Children.Add(header);
+
+        if (selected.Length >= 2)
+        {
+            var metrics = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
+            metrics.Children.Add(CreateCompareMetric("Token delta", CompareDelta(selected[0].CompletionTokens, selected[1].CompletionTokens), ResourceBrush("PrimaryBorderBrush")));
+            metrics.Children.Add(CreateCompareMetric("Context delta", CompareDelta(selected[0].PromptTokens, selected[1].PromptTokens), ResourceBrush("GammaAccentBrush")));
+            metrics.Children.Add(CreateCompareMetric("Latency delta", CompareDurationDelta(selected[0].LatencyMs, selected[1].LatencyMs), ResourceBrush("AlphaAccentBrush")));
+            panel.Children.Add(metrics);
+        }
+
+        var grid = new UniformGrid { Columns = 2 };
+        grid.Children.Add(selected.Length > 0 ? CreateTurnCompareColumn(selected[0], "A") : CreateTurnComparePlaceholder("A"));
+        grid.Children.Add(selected.Length > 1 ? CreateTurnCompareColumn(selected[1], "B") : CreateTurnComparePlaceholder("B"));
+        panel.Children.Add(grid);
+
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("CardBrush"), accent, 0.09),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.48),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(12),
+            Margin = new Thickness(0, 0, 0, 12),
+            Child = panel
+        };
+    }
+
+    private Border CreateTurnCompareColumn(TranscriptMessage message, string slot)
+    {
+        var isInternet = message.Kind.Equals("internet", StringComparison.OrdinalIgnoreCase)
+            || message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase);
+        var isSystemEvent = IsSystemEvent(message, isInternet);
+        var accent = isSystemEvent
+            ? ResourceBrush(message.Status.Equals("error", StringComparison.OrdinalIgnoreCase) ? "DangerBorderBrush" : "AssistBorderBrush")
+            : (isInternet ? ResourceBrush("AssistBorderBrush") : AccentForSpeaker(message.SpeakerId));
+
+        var stack = new StackPanel();
+        var title = new WrapPanel { Margin = new Thickness(0, 0, 0, 7) };
+        title.Children.Add(CreateTranscriptStatPill(slot, isInternet));
+        title.Children.Add(new TextBlock
+        {
+            Text = $"Turn {message.Turn}: {TranscriptSpeakerTitle(message, isInternet, isSystemEvent)}",
+            Foreground = ResourceBrush("TextBrush"),
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        stack.Children.Add(title);
+
+        var meta = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
+        if (!string.IsNullOrWhiteSpace(message.Model))
+        {
+            meta.Children.Add(CreateTranscriptStatPill(message.Model, isInternet));
+        }
+        meta.Children.Add(CreateTranscriptStatPill(FormatGeneratedTokens(message), isInternet));
+        if (message.PromptTokens > 0)
+        {
+            meta.Children.Add(CreateTranscriptStatPill($"ctx: {FormatCompactNumber(message.PromptTokens)}", isInternet));
+        }
+        if (message.LatencyMs > 0)
+        {
+            meta.Children.Add(CreateTranscriptStatPill(FormatDuration(message.LatencyMs), isInternet));
+        }
+        meta.Children.Add(CreateTranscriptStatPill(DisplayTime(message.CreatedAt), isInternet));
+        stack.Children.Add(meta);
+
+        stack.Children.Add(new Border
+        {
+            Background = BlendBrush(ResourceBrush("TranscriptBodyBrush"), accent, 0.12),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.36),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10),
+            Child = new ScrollViewer
+            {
+                MaxHeight = _wpfSettings.CompactTranscriptMode ? 170 : 220,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Content = new TextBlock
+                {
+                    Text = string.IsNullOrWhiteSpace(message.Text) ? "(empty message)" : message.Text,
+                    Foreground = ResourceBrush("TextBrush"),
+                    FontSize = _wpfSettings.CompactTranscriptMode ? 12 : 13,
+                    LineHeight = _wpfSettings.CompactTranscriptMode ? 17 : 19,
+                    TextWrapping = TextWrapping.Wrap
+                }
+            }
+        });
+
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.08),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.42),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10),
+            Margin = slot == "A" ? new Thickness(0, 0, 6, 0) : new Thickness(6, 0, 0, 0),
+            Child = stack
+        };
+    }
+
+    private Border CreateTurnComparePlaceholder(string slot)
+    {
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock
+        {
+            Text = $"Slot {slot}",
+            Foreground = ResourceBrush("MutedTextBrush"),
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 6)
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = "Use Compare on any transcript card to fill this side.",
+            Foreground = ResourceBrush("MutedTextBrush"),
+            TextWrapping = TextWrapping.Wrap
+        });
+
+        return new Border
+        {
+            Background = ResourceBrush("InputBrush"),
+            BorderBrush = ResourceBrush("DisabledBorderBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10),
+            Margin = slot == "A" ? new Thickness(0, 0, 6, 0) : new Thickness(6, 0, 0, 0),
+            Child = stack
+        };
+    }
+
+    private Border CreateCompareMetric(string label, string value, Brush accent)
+    {
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.1),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.36),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(7, 3, 7, 3),
+            Margin = new Thickness(0, 0, 6, 0),
+            Child = new TextBlock
+            {
+                Text = $"{label}: {value}",
+                Foreground = accent,
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold
+            }
+        };
+    }
+
+    private static string CompareSummary(TranscriptMessage left, TranscriptMessage right)
+    {
+        return $"Comparing turn {left.Turn} ({left.Speaker}) with turn {right.Turn} ({right.Speaker}).";
+    }
+
+    private static string CompareDelta(int left, int right)
+    {
+        var delta = left - right;
+        return delta == 0 ? "0" : delta > 0 ? $"+{delta}" : delta.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static string CompareDurationDelta(int leftMs, int rightMs)
+    {
+        var delta = leftMs - rightMs;
+        return delta == 0 ? "0s" : delta > 0 ? $"+{FormatDuration(delta)}" : $"-{FormatDuration(Math.Abs(delta))}";
     }
 
     private IReadOnlyList<Border> CreateTranscriptStatPills(TranscriptMessage message, bool isInternet)
