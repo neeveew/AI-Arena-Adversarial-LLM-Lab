@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.3.11-beta"
+    [string]$Version = "0.3.12-beta"
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +12,7 @@ $installerDir = Join-Path $Root "dist/installer/AI Arena - $Version"
 $installer = Join-Path $installerDir "AI Arena Setup $Version.exe"
 $changes = Join-Path $installerDir "changes.txt"
 $releaseExe = Join-Path $releaseDir "AI Arena.exe"
+$dependencyIndexScript = Join-Path $Root "scripts/dependency-index.ps1"
 
 function Assert-PathExists {
     param([string]$Path, [string]$Label)
@@ -24,6 +25,9 @@ Assert-PathExists $innoScript "Inno script"
 Assert-PathExists $releaseExe "release executable"
 Assert-PathExists $installer "installer"
 Assert-PathExists $changes "installer changes file"
+Assert-PathExists $dependencyIndexScript "dependency index script"
+
+& $dependencyIndexScript -Check
 
 $scriptText = Get-Content -LiteralPath $innoScript -Raw
 if ($scriptText -notmatch '#define MyAppName "AI Arena"') {

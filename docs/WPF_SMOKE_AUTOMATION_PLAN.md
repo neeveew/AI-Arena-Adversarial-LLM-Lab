@@ -38,6 +38,6 @@ Before tagging a WPF beta:
 
 - `dotnet build` passes.
 - Shared .NET tests pass.
-- Dependency index check passes.
+- `.\scripts\dependency-index.ps1 -Check` passes.
 - WPF release sanity script passes.
 - One installed-app visual smoke pass is completed.

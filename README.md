@@ -33,8 +33,13 @@ dotnet build .\windows-wpf\src\AIArena.Wpf\AIArena.Wpf.csproj
 ```powershell
 .\windows-wpf\scripts\build-wpf-preview.ps1
 .\windows-wpf\scripts\build-wpf-release.ps1
+.\scripts\dependency-index.ps1 -Check
 .\scripts\wpf-release-sanity.ps1
 ```
+
+The generated dependency map lives at `docs/DEPENDENCY_INDEX.md`. Rebuild it with
+`.\scripts\dependency-index.ps1` after moving modules, services, project
+references, packages, or packaged resources.
 
 The app stores sessions and settings under `%LOCALAPPDATA%\AI Arena Alpha\data`
 for compatibility with existing local data.
