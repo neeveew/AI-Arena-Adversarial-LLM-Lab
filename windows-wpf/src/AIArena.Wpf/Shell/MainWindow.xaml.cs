@@ -542,9 +542,10 @@ public partial class MainWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
+        var displayTitle = FormatParticipantTitle(stats.AgentId, stats.Name, uppercaseRole: true);
         var title = new TextBlock
         {
-            Text = DisplayStatusValue(stats.Name),
+            Text = DisplayStatusValue(displayTitle),
             Foreground = ResourceBrush("TextBrush"),
             FontWeight = FontWeights.SemiBold,
             FontSize = 11,
@@ -651,7 +652,7 @@ public partial class MainWindow : Window
             CornerRadius = new CornerRadius(6),
             Padding = new Thickness(8, 6, 8, 6),
             Margin = new Thickness(0, 0, 0, 5),
-            ToolTip = alerts.Count == 0 ? $"{stats.Name}: no warnings" : $"{stats.Name}: {string.Join(", ", alerts)}",
+            ToolTip = alerts.Count == 0 ? $"{displayTitle}: no warnings" : $"{displayTitle}: {string.Join(", ", alerts)}",
             Cursor = Cursors.Hand,
             Child = grid
         };
@@ -711,11 +712,12 @@ public partial class MainWindow : Window
             .TakeLast(4)
             .Reverse()
             .ToArray();
+        var displayTitle = FormatParticipantTitle(stats.AgentId, stats.Name, uppercaseRole: true);
 
         var panel = new StackPanel();
         panel.Children.Add(new TextBlock
         {
-            Text = $"{stats.AgentId.ToUpperInvariant()}: {DisplayStatusValue(stats.Name)}",
+            Text = DisplayStatusValue(displayTitle),
             Foreground = accent,
             FontSize = 14,
             FontWeight = FontWeights.SemiBold,
@@ -1900,8 +1902,14 @@ public partial class MainWindow : Window
 
     private static string FormatCastPreviewTitle(string id, string name)
     {
+        return FormatParticipantTitle(id, name, uppercaseRole: false);
+    }
+
+    private static string FormatParticipantTitle(string id, string name, bool uppercaseRole)
+    {
         var role = DisplayLockKey(id);
         var cleaned = string.IsNullOrWhiteSpace(name) ? role : name.Trim();
+        var roleLabel = uppercaseRole ? role.ToUpperInvariant() : role;
         var duplicatePrefix = $"{role}:";
         if (cleaned.StartsWith(duplicatePrefix, StringComparison.OrdinalIgnoreCase))
         {
@@ -1909,8 +1917,8 @@ public partial class MainWindow : Window
         }
 
         return string.IsNullOrWhiteSpace(cleaned) || cleaned.Equals(role, StringComparison.OrdinalIgnoreCase)
-            ? role
-            : $"{role}: {cleaned}";
+            ? roleLabel
+            : $"{roleLabel}: {cleaned}";
     }
 
     private Style CreateLockToggleStyle()
@@ -2659,7 +2667,7 @@ public partial class MainWindow : Window
         var title = new StackPanel();
         title.Children.Add(new TextBlock
         {
-            Text = $"{agent.Id.ToUpperInvariant()}: {agent.Name}",
+            Text = FormatParticipantTitle(agent.Id, agent.Name, uppercaseRole: true),
             Foreground = accent,
             FontSize = 14,
             FontWeight = FontWeights.SemiBold,
