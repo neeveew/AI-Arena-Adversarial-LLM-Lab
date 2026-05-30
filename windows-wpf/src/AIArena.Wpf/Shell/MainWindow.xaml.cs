@@ -81,6 +81,7 @@ public partial class MainWindow : Window
     private readonly List<double> _vramTelemetryHistory = [];
     private readonly List<double> _ramTelemetryHistory = [];
     private Style? _lockToggleStyle;
+    private ArenaSnapshot? _lastRenderedSnapshot;
 
     private sealed record DiagnosticHistoryPoint(
         int Friction,
@@ -282,6 +283,7 @@ public partial class MainWindow : Window
     private void RenderSnapshot(ArenaSnapshot snapshot)
     {
         UpdateTopBarStatus(snapshot);
+        _lastRenderedSnapshot = snapshot;
         if (!_arenaBusy)
         {
             ArenaRunStatus.Text = snapshot.ProviderOnline ? "Ready." : "Provider offline. Check LM Studio or the provider base URL.";
@@ -633,6 +635,7 @@ public partial class MainWindow : Window
         TranscriptItems.Children.Clear();
         AgentItems.Children.Clear();
         NewsItems.Children.Clear();
+        _lastRenderedSnapshot = null;
         _agentTurnButtons.Clear();
         _narratorActionButtons.Clear();
         TranscriptItems.Children.Add(CreateCard("Transcript", message, ResourceBrush("CardBrush"), ResourceBrush("AlphaAccentBrush")));
@@ -702,10 +705,7 @@ public partial class MainWindow : Window
 
         if (messages.Count == 0)
         {
-            TranscriptItems.Children.Add(CreateEmptyStateCard(
-                "Arena is ready",
-                "Start with 1 TURN, AUTO CHAT, an agent turn, or write directly in Operator Turn.",
-                ResourceBrush("AlphaAccentBrush")));
+            TranscriptItems.Children.Add(CreateArenaReadyCard(_lastRenderedSnapshot));
             return;
         }
 
@@ -1161,6 +1161,60 @@ public partial class MainWindow : Window
         });
 
         return CreateCard(title, body, BlendBrush(ResourceBrush("CardBrush"), accent, 0.08), accent, panel);
+    }
+
+    private Border CreateArenaReadyCard(ArenaSnapshot? snapshot)
+    {
+        var accent = ResourceBrush("AlphaAccentBrush");
+        var panel = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
+
+        if (snapshot is not null)
+        {
+            var activeAgents = snapshot.Agents.Where(agent => agent.Active).ToArray();
+            var current = CurrentTurnAgent(snapshot);
+            var setup = new WrapPanel();
+            setup.Children.Add(CreateSetupChip("Match", DisplayStatusValue(snapshot.MatchType), ResourceBrush("TextBrush")));
+            setup.Children.Add(CreateSetupChip("Agents", $"{activeAgents.Length} + narrator", ResourceBrush("PrimaryBorderBrush")));
+            setup.Children.Add(CreateSetupChip("Turn", current is null ? "-" : DisplayStatusValue(current.Id), current is null ? ResourceBrush("MutedTextBrush") : AccentForSpeaker(current.Id)));
+            setup.Children.Add(CreateSetupChip("Model", ShortModelName(snapshot.ProviderModel), ResourceBrush("MutedTextBrush")));
+            panel.Children.Add(setup);
+        }
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Quiet state",
+            Foreground = ResourceBrush("MutedTextBrush"),
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 5, 0, 0)
+        });
+
+        return CreateCard(
+            "Arena is ready",
+            "Start with 1 TURN, AUTO CHAT, an agent turn, or write directly in Operator Turn.",
+            BlendBrush(ResourceBrush("CardBrush"), accent, 0.08),
+            accent,
+            panel);
+    }
+
+    private Border CreateSetupChip(string label, string value, Brush accent)
+    {
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.08),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.35),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(6, 2, 6, 2),
+            Margin = new Thickness(0, 0, 6, 4),
+            Child = new TextBlock
+            {
+                Text = $"{label}: {value}",
+                Foreground = accent,
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold
+            }
+        };
     }
 
     private Border CreateLockCard(string lockKey, string title, string body, Brush background, Brush accent, bool locked)
