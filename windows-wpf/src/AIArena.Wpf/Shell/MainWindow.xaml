@@ -1558,6 +1558,51 @@
                         <StackPanel x:Name="AgentPerformanceItems" />
                     </StackPanel>
                 </Border>
+                <Popup x:Name="AgentPerformanceDetailPopup"
+                       Placement="Left"
+                       HorizontalOffset="-8"
+                       StaysOpen="False"
+                       AllowsTransparency="True"
+                       PopupAnimation="Fade">
+                    <Border Width="360"
+                            MaxHeight="500"
+                            Background="{DynamicResource TopBarBrush}"
+                            BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="7"
+                            Padding="10">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="34" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Performance Detail"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontWeight="SemiBold"
+                                           FontSize="13"
+                                           VerticalAlignment="Center" />
+                                <Button x:Name="AgentPerformanceDetailCloseButton"
+                                        Grid.Column="1"
+                                        Content="X"
+                                        Click="AgentPerformanceDetailCloseButton_Click"
+                                        MinWidth="30"
+                                        MinHeight="28"
+                                        Padding="0"
+                                        ToolTip="Close performance detail" />
+                            </Grid>
+                            <ScrollViewer Grid.Row="1"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel x:Name="AgentPerformanceDetailContent" />
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+                </Popup>
 
                 <Border Style="{StaticResource Card}" Opacity="1" BorderBrush="{DynamicResource OperatorAccentBrush}">
                     <StackPanel>

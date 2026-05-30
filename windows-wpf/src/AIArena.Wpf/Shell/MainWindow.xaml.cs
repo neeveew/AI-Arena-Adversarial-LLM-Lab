@@ -619,7 +619,7 @@ public partial class MainWindow : Window
             alerts.Add($"last {FormatDuration(stats.LastLatencyMs)}");
         }
 
-        return new Border
+        var card = new Border
         {
             Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.08),
             BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.32),
@@ -628,8 +628,249 @@ public partial class MainWindow : Window
             Padding = new Thickness(8, 6, 8, 6),
             Margin = new Thickness(0, 0, 0, 5),
             ToolTip = alerts.Count == 0 ? $"{stats.Name}: no warnings" : $"{stats.Name}: {string.Join(", ", alerts)}",
+            Cursor = Cursors.Hand,
             Child = grid
         };
+        card.MouseLeftButtonUp += (_, e) =>
+        {
+            ShowAgentPerformanceDetail(stats, card);
+            e.Handled = true;
+        };
+
+        return card;
+    }
+
+    private void ShowAgentPerformanceDetail(AgentPerformanceStats stats, FrameworkElement target)
+    {
+        if (_lastRenderedSnapshot is null)
+        {
+            return;
+        }
+
+        AgentPerformanceDetailContent.Children.Clear();
+        AgentPerformanceDetailContent.Children.Add(CreateAgentPerformanceDetail(stats, _lastRenderedSnapshot));
+        AgentPerformanceDetailPopup.PlacementTarget = target;
+        AgentPerformanceDetailPopup.IsOpen = true;
+    }
+
+    private StackPanel CreateAgentPerformanceDetail(AgentPerformanceStats stats, ArenaSnapshot snapshot)
+    {
+        var accent = AccentForSpeaker(stats.AgentId);
+        var agent = FindPerformanceAgent(snapshot, stats.AgentId);
+        var notesCount = agent?.PrivateNotes.Count ?? 0;
+        var recentTurns = _lastRenderedMessages
+            .Where(message => message.SpeakerId.Equals(stats.AgentId, StringComparison.OrdinalIgnoreCase)
+                && !message.Kind.StartsWith("internet", StringComparison.OrdinalIgnoreCase))
+            .TakeLast(4)
+            .Reverse()
+            .ToArray();
+
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"{stats.AgentId.ToUpperInvariant()}: {DisplayStatusValue(stats.Name)}",
+            Foreground = accent,
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(stats.Model) ? "model not assigned" : stats.Model,
+            Foreground = ResourceBrush("MutedTextBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 2, 0, 8)
+        });
+
+        var metrics = new UniformGrid
+        {
+            Columns = 4,
+            Rows = 2,
+            Margin = new Thickness(0, 0, 0, 10)
+        };
+        metrics.Children.Add(CreateDetailMetric("Turns", stats.Calls.ToString(System.Globalization.CultureInfo.InvariantCulture), accent));
+        metrics.Children.Add(CreateDetailMetric("Tokens", FormatCompactNumber(stats.Tokens), ResourceBrush("PrimaryBorderBrush")));
+        metrics.Children.Add(CreateDetailMetric("Context", stats.Context > 0 ? FormatCompactNumber(stats.Context) : "-", ResourceBrush("GammaAccentBrush")));
+        metrics.Children.Add(CreateDetailMetric("Memory", notesCount.ToString(System.Globalization.CultureInfo.InvariantCulture), ResourceBrush("NarratorAccentBrush")));
+        metrics.Children.Add(CreateDetailMetric("Avg", stats.AverageLatencyMs > 0 ? FormatDuration(stats.AverageLatencyMs) : "-", ResourceBrush("AlphaAccentBrush")));
+        metrics.Children.Add(CreateDetailMetric("Last", stats.LastLatencyMs > 0 ? FormatDuration(stats.LastLatencyMs) : "-", ResourceBrush("AlphaAccentBrush")));
+        metrics.Children.Add(CreateDetailMetric("Fails", stats.Failures.ToString(System.Globalization.CultureInfo.InvariantCulture), stats.Failures > 0 ? ResourceBrush("DangerTextBrush") : ResourceBrush("MutedTextBrush")));
+        metrics.Children.Add(CreateDetailMetric("Web", stats.InternetRequests.ToString(System.Globalization.CultureInfo.InvariantCulture), stats.InternetRequests > 0 ? ResourceBrush("AssistBorderBrush") : ResourceBrush("MutedTextBrush")));
+        panel.Children.Add(metrics);
+
+        panel.Children.Add(new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.08),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.34),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(8),
+            Margin = new Thickness(0, 0, 0, 10),
+            Child = new MetricSparklineControl
+            {
+                Height = 44,
+                Mode = "bars",
+                Values = stats.Activity.Any() ? stats.Activity : [0d],
+                MaxValue = Math.Max(1, stats.Activity.DefaultIfEmpty(1).Max()),
+                AccentBrush = accent,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            }
+        });
+
+        panel.Children.Add(CreateDetailSection(
+            "Persona",
+            CompactPreview(agent?.Persona, 260, "No persona is assigned.")));
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Recent Turns",
+            Foreground = ResourceBrush("TextBrush"),
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 0, 6)
+        });
+
+        if (recentTurns.Length == 0)
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = "No transcript turns yet.",
+                Foreground = ResourceBrush("MutedTextBrush"),
+                FontStyle = FontStyles.Italic,
+                FontSize = 11
+            });
+        }
+        else
+        {
+            foreach (var message in recentTurns)
+            {
+                panel.Children.Add(CreateRecentPerformanceTurn(message, accent));
+            }
+        }
+
+        return panel;
+    }
+
+    private Border CreateDetailMetric(string label, string value, Brush accent)
+    {
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.09),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.3),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(6, 4, 6, 4),
+            Margin = new Thickness(0, 0, 5, 5),
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = label,
+                        Foreground = ResourceBrush("MutedTextBrush"),
+                        FontSize = 8
+                    },
+                    new TextBlock
+                    {
+                        Text = value,
+                        Foreground = accent,
+                        FontSize = 11,
+                        FontWeight = FontWeights.SemiBold,
+                        TextTrimming = TextTrimming.CharacterEllipsis
+                    }
+                }
+            }
+        };
+    }
+
+    private Border CreateDetailSection(string title, string body)
+    {
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock
+        {
+            Text = title,
+            Foreground = ResourceBrush("TextBrush"),
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 4)
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = body,
+            Foreground = ResourceBrush("MutedTextBrush"),
+            FontSize = 11,
+            LineHeight = 15,
+            TextWrapping = TextWrapping.Wrap
+        });
+
+        return new Border
+        {
+            Background = ResourceBrush("InputBrush"),
+            BorderBrush = ResourceBrush("DisabledBorderBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(8),
+            Margin = new Thickness(0, 0, 0, 10),
+            Child = stack
+        };
+    }
+
+    private Border CreateRecentPerformanceTurn(TranscriptMessage message, Brush accent)
+    {
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock
+        {
+            Text = $"Turn {message.Turn} - {FormatCompactNumber(message.CompletionTokens)} Tok - {FormatDuration(message.LatencyMs)}",
+            Foreground = accent,
+            FontSize = 10,
+            FontWeight = FontWeights.SemiBold
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = CompactPreview(message.Text, 170, "(empty response)"),
+            Foreground = ResourceBrush("TextBrush"),
+            FontSize = 11,
+            LineHeight = 15,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 3, 0, 0)
+        });
+
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.08),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.28),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(8),
+            Margin = new Thickness(0, 0, 0, 6),
+            Child = stack
+        };
+    }
+
+    private static AgentState? FindPerformanceAgent(ArenaSnapshot snapshot, string agentId)
+    {
+        return snapshot.Agents.FirstOrDefault(agent => agent.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase))
+            ?? (agentId.Equals("narrator", StringComparison.OrdinalIgnoreCase)
+                ? new AgentState(
+                    "narrator",
+                    "Narrator",
+                    snapshot.NarratorStatus,
+                    snapshot.NarratorPersona,
+                    snapshot.NarratorModel,
+                    true,
+                    snapshot.NarratorLocked,
+                    [])
+                : null);
+    }
+
+    private static string CompactPreview(string? text, int maxLength, string fallback)
+    {
+        var cleaned = string.IsNullOrWhiteSpace(text)
+            ? fallback
+            : string.Join(" ", text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return cleaned.Length <= maxLength ? cleaned : $"{cleaned[..maxLength]}...";
     }
 
     private Border CreateStatusPill(string text, Brush accent)
@@ -5828,6 +6069,11 @@ public partial class MainWindow : Window
         TranscriptSearchPopup.IsOpen = false;
         TranscriptSearchButton.Focus();
         e.Handled = true;
+    }
+
+    private void AgentPerformanceDetailCloseButton_Click(object sender, RoutedEventArgs e)
+    {
+        AgentPerformanceDetailPopup.IsOpen = false;
     }
 
     private void TranscriptSearchDragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
