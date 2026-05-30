@@ -698,33 +698,45 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <Grid x:Name="TopBarStatus"
-                      Height="28"
                       VerticalAlignment="Center"
                       ToolTipService.ShowDuration="60000">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="120" />
-                        <ColumnDefinition Width="18" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="92" />
-                        <ColumnDefinition Width="18" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="82" />
-                        <ColumnDefinition Width="18" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="52" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="Match:" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
-                    <TextBlock x:Name="TopMatchValue" Grid.Column="1" Text="-" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,0,0" />
-                    <TextBlock Grid.Column="2" Text="|" Foreground="{DynamicResource ControlBorderBrush}" VerticalAlignment="Center" HorizontalAlignment="Center" />
-                    <TextBlock Grid.Column="3" Text="Provider:" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
-                    <TextBlock x:Name="TopProviderValue" Grid.Column="4" Text="-" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,0,0" />
-                    <TextBlock Grid.Column="5" Text="|" Foreground="{DynamicResource ControlBorderBrush}" VerticalAlignment="Center" HorizontalAlignment="Center" />
-                    <TextBlock Grid.Column="6" Text="Current turn:" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
-                    <TextBlock x:Name="TopCurrentTurnValue" Grid.Column="7" Text="-" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,0,0" />
-                    <TextBlock Grid.Column="8" Text="|" Foreground="{DynamicResource ControlBorderBrush}" VerticalAlignment="Center" HorizontalAlignment="Center" />
-                    <TextBlock Grid.Column="9" Text="Turns:" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
-                    <TextBlock x:Name="TopTurnsValue" Grid.Column="10" Text="0" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,0,0" />
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid Height="24" VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="18" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="92" />
+                            <ColumnDefinition Width="18" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="82" />
+                            <ColumnDefinition Width="18" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="52" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Match:" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
+                        <TextBlock x:Name="TopMatchValue" Grid.Column="1" Text="-" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,0,0" />
+                        <TextBlock Grid.Column="2" Text="|" Foreground="{DynamicResource ControlBorderBrush}" VerticalAlignment="Center" HorizontalAlignment="Center" />
+                        <TextBlock Grid.Column="3" Text="Provider:" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
+                        <TextBlock x:Name="TopProviderValue" Grid.Column="4" Text="-" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,0,0" />
+                        <TextBlock Grid.Column="5" Text="|" Foreground="{DynamicResource ControlBorderBrush}" VerticalAlignment="Center" HorizontalAlignment="Center" />
+                        <TextBlock Grid.Column="6" Text="Current turn:" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
+                        <TextBlock x:Name="TopCurrentTurnValue" Grid.Column="7" Text="-" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,0,0" />
+                        <TextBlock Grid.Column="8" Text="|" Foreground="{DynamicResource ControlBorderBrush}" VerticalAlignment="Center" HorizontalAlignment="Center" />
+                        <TextBlock Grid.Column="9" Text="Turns:" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
+                        <TextBlock x:Name="TopTurnsValue" Grid.Column="10" Text="0" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,0,0" />
+                    </Grid>
+                    <TextBlock x:Name="ArenaRunStatus"
+                               Grid.Row="1"
+                               Text="Ready."
+                               Foreground="{DynamicResource MutedTextBrush}"
+                               FontSize="11"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
                 </Grid>
                 <Grid Grid.Column="1" Height="38" VerticalAlignment="Center">
                     <Grid.ColumnDefinitions>
@@ -1322,33 +1334,14 @@
             <StackPanel>
                 <Border Style="{StaticResource Card}" Opacity="1">
                     <StackPanel>
-                        <TextBlock Text="Arena Controls" Style="{StaticResource SectionTitle}" Margin="0,0,0,12" />
-                        <UniformGrid Columns="2" Margin="0,0,0,8">
-                            <Button x:Name="AutoChatButton" Content="AUTO CHAT" Click="AutoChatButton_Click" Background="{DynamicResource PrimaryBrush}" BorderBrush="{DynamicResource PrimaryBorderBrush}" FontSize="13" Padding="8,7" Margin="0,0,8,8" />
-                            <Button x:Name="OneTurnButton" Content="1 TURN" Click="OneTurnButton_Click" Background="{DynamicResource PrimaryBrush}" BorderBrush="{DynamicResource PrimaryBorderBrush}" FontSize="13" Padding="8,7" Margin="0,0,0,8" />
-                            <Button x:Name="StopButton" Content="PAUSE" Click="StopButton_Click" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource BetaAccentBrush}" Foreground="{DynamicResource BetaAccentBrush}" FontSize="13" Padding="8,7" Margin="0,0,8,8" IsEnabled="False" />
-                            <Button x:Name="ResetButton" Content="RESET" Click="ResetButton_Click" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DangerBorderBrush}" Foreground="{DynamicResource DangerTextBrush}" FontSize="13" Padding="8,7" Margin="0,0,0,8" />
-                        </UniformGrid>
-                        <Grid Height="46" ClipToBounds="True">
-                            <TextBlock x:Name="ArenaRunStatus"
-                                       Foreground="{DynamicResource MutedTextBrush}"
-                                       TextWrapping="Wrap"
-                                       TextTrimming="CharacterEllipsis"
-                                       VerticalAlignment="Top"
-                                       LineHeight="21"
-                                       MaxHeight="42"
-                                       Text="Ready."
-                                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
-                        </Grid>
-                    </StackPanel>
-                </Border>
-
-                <Border Style="{StaticResource QuietCard}">
-                    <StackPanel>
-                        <TextBlock Text="Narrator Actions" Style="{StaticResource SectionTitle}" Margin="0,0,0,12" />
+                        <TextBlock Text="Arena Controls" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
                         <UniformGrid Columns="2">
-                            <Button x:Name="NarrateNowButton" Content="NARRATE NOW" Click="NarrateNowButton_Click" Background="{DynamicResource AssistBrush}" BorderBrush="{DynamicResource AssistBorderBrush}" Margin="0,0,8,0" />
-                            <Button x:Name="CurateNewsButton" Content="CURATE NEWS" Click="CurateNewsButton_Click" Background="{DynamicResource AssistBrush}" BorderBrush="{DynamicResource AssistBorderBrush}" />
+                            <Button x:Name="AutoChatButton" Content="AUTO CHAT" Click="AutoChatButton_Click" Background="{DynamicResource PrimaryBrush}" BorderBrush="{DynamicResource PrimaryBorderBrush}" FontSize="12" Padding="8,6" Margin="0,0,8,8" />
+                            <Button x:Name="OneTurnButton" Content="1 TURN" Click="OneTurnButton_Click" Background="{DynamicResource PrimaryBrush}" BorderBrush="{DynamicResource PrimaryBorderBrush}" FontSize="12" Padding="8,6" Margin="0,0,0,8" />
+                            <Button x:Name="StopButton" Content="PAUSE" Click="StopButton_Click" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource BetaAccentBrush}" Foreground="{DynamicResource BetaAccentBrush}" FontSize="12" Padding="8,6" Margin="0,0,8,8" IsEnabled="False" />
+                            <Button x:Name="ResetButton" Content="RESET" Click="ResetButton_Click" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DangerBorderBrush}" Foreground="{DynamicResource DangerTextBrush}" FontSize="12" Padding="8,6" Margin="0,0,0,8" />
+                            <Button x:Name="NarrateNowButton" Content="NARRATE" Click="NarrateNowButton_Click" Background="{DynamicResource AssistBrush}" BorderBrush="{DynamicResource AssistBorderBrush}" FontSize="12" Padding="8,6" Margin="0,0,8,0" />
+                            <Button x:Name="CurateNewsButton" Content="NEWS" Click="CurateNewsButton_Click" Background="{DynamicResource AssistBrush}" BorderBrush="{DynamicResource AssistBorderBrush}" FontSize="12" Padding="8,6" />
                         </UniformGrid>
                     </StackPanel>
                 </Border>
