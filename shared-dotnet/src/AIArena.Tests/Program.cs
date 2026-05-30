@@ -40,6 +40,7 @@ var tests = new (string Name, Action Test)[]
     ("native prompt prioritizes operator cooperation", NativePromptPrioritizesOperatorCooperation),
     ("native prompt hides other personas", NativePromptHidesOtherPersonas),
     ("native prompt includes selected private notes", NativePromptIncludesSelectedPrivateNotes),
+    ("native turn updates selected private notes", NativeTurnUpdatesSelectedPrivateNotes),
     ("runs native one turn into snapshot transcript", RunNativeOneTurnIntoSnapshotTranscript),
     ("repairs empty native one turn content", RepairEmptyNativeOneTurnContent),
     ("runs native one turn with internet tool request", RunNativeOneTurnWithInternetToolRequest),
@@ -784,6 +785,25 @@ static void NativePromptIncludesSelectedPrivateNotes()
     Require(combinedPrompt.Contains("BETA_MEMORY_SHOULD_APPEAR"), "selected agent private note missing");
     Require(!combinedPrompt.Contains("ALPHA_MEMORY_SHOULD_NOT_APPEAR"), "other agent private note leaked into prompt");
     Require(!combinedPrompt.Contains("older beta note should be trimmed"), "private notes window was not respected");
+    Directory.Delete(root, recursive: true);
+}
+
+static void NativeTurnUpdatesSelectedPrivateNotes()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+    var client = new FakeModelProviderClient("Beta: Capture the agreed invariant as a reversible rollout guardrail with a 24 hour observation window.", "native reasoning");
+    var service = new TurnRunnerService(client, store, log);
+
+    var result = service.RunOneTurnAsync().GetAwaiter().GetResult();
+    Require(result.Ok, $"turn failed: {result.Error}");
+    var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+    Require(loaded.Engine.Agents[1].PrivateNotes.Count == 1, "selected agent memory note was not added");
+    Require(loaded.Engine.Agents[1].PrivateNotes[0].Contains("reversible rollout guardrail"), "memory note did not capture turn content");
+    Require(loaded.Engine.Agents[0].PrivateNotes.Count == 0, "non-selected agent memory was changed");
     Directory.Delete(root, recursive: true);
 }
 

@@ -6,6 +6,8 @@ namespace AIArena.Core.Services;
 
 public sealed class TurnRunnerService
 {
+    private const int MaxPrivateMemoryNotes = 60;
+
     private readonly IModelProviderClient _modelClient;
     private readonly SessionStore _sessionStore;
     private readonly EventLogStore _eventLogStore;
@@ -186,6 +188,11 @@ public sealed class TurnRunnerService
         var message = _transcriptService.CreateAssistantMessage(agent, text, result, snapshot.Engine.TurnCount + 1);
         snapshot.Engine.Messages.Add(message);
         snapshot.Engine.TurnCount = message.Turn;
+        if (result.Ok)
+        {
+            UpdatePrivateMemory(agent, message);
+        }
+
         if (advanceTurnIndex)
         {
             snapshot.Engine.TurnIndex = AdvanceTurnIndex(snapshot);
@@ -242,6 +249,11 @@ public sealed class TurnRunnerService
         }
 
         snapshot.Engine.Messages[index] = replacement;
+        if (result.Ok)
+        {
+            UpdatePrivateMemory(agent, replacement);
+        }
+
         agent.Status = result.Ok ? "spoke" : "error";
         snapshot.Engine.LastError = result.Ok ? "" : result.Error;
 
@@ -257,6 +269,81 @@ public sealed class TurnRunnerService
             },
             cancellationToken);
         return OneTurnResult.Completed(plan, replacement, result);
+    }
+
+    private static void UpdatePrivateMemory(DialogueAgent agent, DialogueMessage message)
+    {
+        var note = BuildPrivateMemoryNote(message);
+        if (string.IsNullOrWhiteSpace(note))
+        {
+            return;
+        }
+
+        agent.PrivateNotes.RemoveAll(existing =>
+            existing.StartsWith($"Turn {message.Turn}:", StringComparison.OrdinalIgnoreCase)
+            || existing.Equals(note, StringComparison.OrdinalIgnoreCase));
+        agent.PrivateNotes.Add(note);
+        if (agent.PrivateNotes.Count > MaxPrivateMemoryNotes)
+        {
+            agent.PrivateNotes.RemoveRange(0, agent.PrivateNotes.Count - MaxPrivateMemoryNotes);
+        }
+    }
+
+    private static string BuildPrivateMemoryNote(DialogueMessage message)
+    {
+        if (message.Status.Equals("error", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(message.Text)
+            || message.Text.StartsWith("Model call failed:", StringComparison.OrdinalIgnoreCase))
+        {
+            return "";
+        }
+
+        var text = NormalizeMemoryText(message.Text);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return "";
+        }
+
+        return $"Turn {message.Turn}: {TruncateAtWord(text, 240)}";
+    }
+
+    private static string NormalizeMemoryText(string text)
+    {
+        var lines = text
+            .Replace("**", "", StringComparison.Ordinal)
+            .Replace("__", "", StringComparison.Ordinal)
+            .Replace("`", "", StringComparison.Ordinal)
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(line => !line.StartsWith("#", StringComparison.Ordinal)
+                && !line.StartsWith(">", StringComparison.Ordinal)
+                && !line.StartsWith("---", StringComparison.Ordinal))
+            .Select(line => line.Trim('-', '*', ' ', '\t'))
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .ToArray();
+        var normalized = string.Join(" ", lines);
+        while (normalized.Contains("  ", StringComparison.Ordinal))
+        {
+            normalized = normalized.Replace("  ", " ", StringComparison.Ordinal);
+        }
+
+        var colon = normalized.IndexOf(':');
+        if (colon is > 0 and < 80)
+        {
+            normalized = normalized[(colon + 1)..].Trim();
+        }
+
+        return normalized;
+    }
+
+    private static string TruncateAtWord(string text, int maxLength)
+    {
+        if (text.Length <= maxLength)
+        {
+            return text;
+        }
+
+        var cut = text.LastIndexOf(' ', Math.Min(maxLength, text.Length - 1));
+        return (cut > 80 ? text[..cut] : text[..maxLength]).TrimEnd('.', ',', ';', ':', ' ') + "...";
     }
 
     private async Task MarkAgentThinkingAsync(ArenaSnapshot snapshot, string sessionId, DialogueAgent agent, CancellationToken cancellationToken)
