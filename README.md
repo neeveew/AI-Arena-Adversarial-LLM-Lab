@@ -28,6 +28,18 @@ The previous dashboard stack has been removed from the active source tree.
 dotnet build .\windows-wpf\src\AIArena.Wpf\AIArena.Wpf.csproj
 ```
 
+## User Guide
+
+The current user guide is maintained at `windows-wpf/docs/USER_GUIDE.md`.
+It covers installation, provider setup, transcript tools, Custom Match,
+memory notes, match quality timeline, agent performance popups, and licensing.
+
+## Licence
+
+AI Arena is distributed under the Shareable No-Derivatives Software Licence 1.0.
+You may share the software in its original, unmodified form. Modified
+redistribution requires written permission from Dominik Fiala.
+
 ## Release Helpers
 
 ```powershell

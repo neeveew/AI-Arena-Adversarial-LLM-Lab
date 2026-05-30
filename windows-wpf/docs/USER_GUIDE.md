@@ -1,179 +1,281 @@
 # AI Arena User Guide
 
-AI Arena is a native Windows app where multiple local or OpenAI-compatible language models take part in a structured conversation. The models can debate, collaborate, test ideas, or freely explore a topic while you guide the arena as the operator.
+AI Arena is a native Windows app for running structured conversations between multiple local or OpenAI-compatible language models. The models can debate, collaborate, test ideas, inspect tradeoffs, or free-roam around a topic while you guide the match as the operator.
 
-The app is designed for local experimentation with model behaviour. You can choose the cast, run one turn at a time, let the arena continue automatically, inject your own messages, ask for narration, curate outside context, and save checkpoints as the match evolves.
+The app is designed for local experimentation with model behavior. You can create a scenario, tune the cast, assign models per participant, run one turn at a time, let the match continue automatically, inject operator turns, ask the narrator to summarize, curate internet context, inspect diagnostics, and save or export the transcript.
 
-## Main Ideas
+## Quick Start
 
-- The arena has up to three active participants: Alpha, Beta, and Gamma.
-- Each participant has its own role/persona, but participants are not shown each other's hidden roles. They only see public transcript text.
-- The Narrator is separate from the participants. It can summarize or steer the public transcript without joining as Alpha, Beta, or Gamma.
-- The Operator is you. Operator turns can be added at any time, even while another operation is running.
+1. Install AI Arena from the versioned setup file.
+2. Start LM Studio or another OpenAI-compatible provider.
+3. Open Settings, then Model Provider.
+4. Set Provider base URL, usually `http://127.0.0.1:1234/v1` for LM Studio.
+5. Pick a Default model from the dropdown, or type one manually.
+6. Optionally assign different models to Alpha, Beta, Gamma, Delta, and Narrator.
+7. Press Test Provider.
+8. Open Custom Match and choose Random Seed, AI Choice, or YOLO.
+9. Return to Transcript and run 1 TURN or AUTO CHAT.
+
+## Main Concepts
+
+- Alpha, Beta, Gamma, and Delta are the participant agents.
+- The Narrator is separate from the agents. It can summarize, frame, or curate without becoming Alpha, Beta, Gamma, or Delta.
+- The Operator is you. Operator messages are public instructions injected into the transcript.
+- Each participant has its own persona and model assignment.
+- Agents see public transcript context, but their private persona and memory notes are handled separately.
 - Sessions are saved locally under your Windows user profile.
 
-## Top Bar
+## App Layout
 
-- Session: shows the currently loaded session.
-- Match: shows the current match style or mode.
-- Provider: shows whether the configured model provider is online or offline.
-- Model: shows the current shared/default model.
-- Turns: shows the number of transcript turns in the current session.
-- Theme: changes the app colour palette.
-- Settings icon: opens App Settings.
+The left rail contains the app identity, navigation, session overview, and live agent status. The live agent cards show the current/waiting/thinking/idle state and can run individual agent turns.
+
+The center area contains the active page:
+
+- Transcript: the arena conversation, diagnostics, filters, timeline, memory notes, and compare tools.
+- Custom Match: scenario preview, cast preview, locks, seed generation, and checkpoint/session tools.
+
+The right rail contains:
+
+- Arena Controls.
+- Agent Performance.
+- Operator Turn.
+
+The top rail contains match status, provider status, current turn, turn count, export, search, View menu, theme picker, and Settings.
+
+## Top Rail
+
+- Match: current match style.
+- Provider: online/offline provider state.
+- Current turn: next scheduled participant.
+- Turns: transcript turn count.
+- Search icon: opens a draggable transcript search popup. Escape closes it.
+- Export icon: exports the currently visible transcript messages to Markdown.
+- View menu: toggles Compact transcript, Turn compare, Quality timeline, Memory notes, and Auto-scroll.
+- Theme: changes the app palette.
+- Gear icon: opens Settings.
 
 ## Transcript
 
-The transcript shows the newest message at the top.
+The transcript renders newest-first. Each message card shows:
 
-Each card has:
+- Turn number.
+- Speaker and role.
+- Model name.
+- Latency and generated token count.
+- Context size.
+- Public message text.
+- Optional model reasoning.
+- Actions such as copy, retry, compare, pin, and delete.
 
-- A coloured accent showing who produced the turn.
-- A header with turn number, speaker, model, generated token count, context size, and useful status flags.
-- A body with the public message.
-- Buttons for Copy, Pin, Retry, and Delete.
+The transcript filter row can show or hide System, Agents, Narrator, and Operator messages. The turn dropdown filters by all turns or specific turn ranges.
 
-Generated and context stats mean:
+### Search
 
-- Generated: how long the model took and how many output tokens it produced.
-- Context: how many prompt/input tokens were sent to the model.
-- Error: shown only when something failed.
-- Pinned: shown when a card is pinned.
+Use the magnifying glass in the top rail. Search matches transcript text, speakers, models, and internet/source fields.
 
-Model reasoning appears in a collapsible section when the provider returns reasoning content.
+The popup is draggable by its top handle. The X button clears the search when text is present, or closes the popup when the search is empty.
+
+### Export
+
+Use the export icon in the top rail. Export writes a Markdown transcript containing turn metadata, speaker names, model names, token/context stats, latency, message text, reasoning, and internet metadata when available.
+
+If filters or timeline selection are active, export follows the currently visible transcript scope.
+
+### Compact Transcript
+
+Open View, then enable Compact transcript. This reduces card spacing and body height for smaller screens or dense review sessions.
+
+### Turn Compare
+
+Open View, then enable Turn compare. The app shows a compare panel above the transcript.
+
+Use Compare on transcript cards to select two turns. The compare panel shows token, context, and latency deltas, plus side-by-side content.
+
+### Match Quality Timeline
+
+Open View, then enable Quality timeline. The timeline scores recent match quality using the discourse diagnostics.
+
+Click a timeline bar to filter the transcript to that turn. Click the selected bar again, or Clear, to remove the filter.
+
+### Agent Memory Notes
+
+Open View, then enable Memory notes. Memory notes are private per-agent notes stored in the session snapshot and used by model context windows.
+
+The memory panel lets you refresh, edit, clear individual agent notes, or clear all notes. Notes can also update after successful agent turns.
+
+## Discourse Diagnostics
+
+The diagnostic strip appears above the transcript and tracks:
+
+- Friction.
+- Consensus.
+- Role drift.
+- Unsupported claims.
+- Evidence pressure.
+- Narrative heat.
+
+These diagnostics are visual aids. They help you notice whether the match is too harmonious, too cold, evidence-starved, drifting from roles, or producing unsupported claims.
+
+Diagnostic and telemetry work is designed to run only when the relevant visual panels are displayed.
 
 ## Arena Controls
 
-### Auto Chat
+- AUTO CHAT: runs repeated arena turns.
+- 1 TURN: runs one scheduled participant turn.
+- NARRATE: asks the narrator to add a public narrator turn.
+- PAUSE: stops Auto Chat or a stoppable operation.
+- RESET: clears the transcript/live turn state while preserving scenario, cast, settings, and checkpoints.
+- NEWS: curates a relevant outside item when internet is enabled.
 
-Runs repeated arena turns automatically using the active participant order. Auto Chat stops when you press Stop, when a provider error occurs, or when an internet approval request is waiting for your decision.
+Auto Chat stops when you press Pause, when a provider error occurs, or when an internet approval request is waiting for your decision.
 
-### 1 Turn
+## Agent Performance
 
-Runs exactly one turn for the next active participant.
+Agent Performance cards show each participant's activity:
 
-### Stop
+- Status.
+- Model.
+- Turn count.
+- Output tokens.
+- Average latency.
+- Context size.
+- Activity bars.
 
-Cancels Auto Chat or another stoppable arena operation.
-
-### Reset
-
-Clears the current transcript and live turn state. Scenario, cast, locks, provider settings, and checkpoints are preserved.
-
-## Assist
-
-### Narrate Now
-
-Asks the Narrator to add a concise public note about the current exchange.
-
-### Curate News
-
-Uses the configured internet/news settings to find one relevant outside item and inject it into the transcript when a suitable source is found.
-
-## Quick Match Generation
-
-### Random Seed
-
-Generates a deterministic scenario and cast from a seed. Locked fields are preserved.
-
-### AI Choice
-
-Asks the configured model to create a scenario and cast. Locked fields are preserved, and missing cast members are filled automatically.
+Click a performance card to open a compact detail popup. The popup shows persona preview, memory count, recent turns, latency, context, tokens, failures, web usage, and activity bars.
 
 ## Operator Turn
 
-Use Operator Turn to add your own public message to the transcript. This does not advance the participant order. You can inject operator messages at any time.
+Operator Turn injects your public message into the transcript. It does not advance the normal participant turn order.
 
-## Sessions
-
-- The session dropdown switches between saved sessions.
-- Create / Switch creates a new session or switches to an existing one with the typed name.
-- Delete Session removes the selected session after confirmation.
+Use this to clarify a topic, add constraints, correct the match, ask a question, or steer the agents without resetting the session.
 
 ## Custom Match
 
-Custom Match shows the current topic, global instruction, and cast.
+Custom Match controls the scenario and cast.
 
-Locks prevent Random Seed or AI Choice from changing selected parts:
+Scenario Preview includes:
 
-- Topic lock preserves the topic.
-- Global lock preserves the global instruction.
-- Agent locks preserve individual cast members.
+- Topic.
+- Global instruction.
 
-Checkpoints let you save, restore, or delete named versions of the current session state.
+Cast Preview includes:
 
-## News View
+- Alpha.
+- Beta.
+- Gamma.
+- Delta.
+- Narrator.
 
-The News view lists transcript-backed news and internet tool cards. It is useful for inspecting what outside context was fetched, why it was selected, and which sources were used.
+Each item can be edited and locked. Locked cards use a golden border and lock glyph. Locked content is preserved when generating new seeds.
 
-## App Settings
+### Random Seed
+
+Random Seed generates a deterministic scenario and cast. Locked topic, global instruction, or cast members are preserved.
+
+### AI Choice
+
+AI Choice asks the configured model to generate a scenario and cast. Locked fields are preserved, and missing cast members are filled automatically.
+
+### YOLO
+
+YOLO generates a more experimental scenario seed. It can touch the topic, global instruction, cast personas, and the way the simulation is described to the models, while respecting locks. The narrator is not treated as a normal YOLO cast target.
+
+### Seed Inspector
+
+The seed inspector shows the source, scenario seed, scenario style, persona seed, and persona style. Use it to understand what kind of generated setup you are running.
+
+## Sessions, Checkpoints, and Templates
+
+Sessions are saved locally. Use the session controls to create, switch, or delete sessions.
+
+Restore points save the current transcript, cast, locks, provider settings, and arena state. Use them before risky edits or long Auto Chat runs.
+
+Scenario templates save match framing, cast, locks, participants, and model assignments for reuse.
+
+## Settings
 
 Settings are grouped into collapsible sections.
 
-### Auto Chat
-
-- Cadence: controls how quickly Auto Chat runs repeated turns.
-
 ### Model Provider
 
-- Active participants: chooses whether 1, 2, or 3 agents participate in the arena.
-- Provider base URL: OpenAI-compatible endpoint, such as `http://127.0.0.1:1234/v1`.
-- Default model: shared model used globally unless a role has its own model.
-- Role model: optional model override for Alpha, Beta, Gamma, or Narrator.
-- Clear: removes the selected role override so it falls back to the default model.
-- Timeout: maximum time to wait for the provider.
-- Temperature: controls model randomness.
-- Max output: maximum generated tokens requested from the provider.
-- Test Provider: sends a small test completion to verify the provider.
+- Provider base URL: OpenAI-compatible endpoint.
+- Default model: model applied when selected.
+- Participant model dropdowns: assign Alpha, Beta, Gamma, Delta, and Narrator individually.
+- Manual entry: type a model name if it is not advertised by the provider.
+- Preload selected models: asks the provider to load selected models when supported.
+- Timeout: maximum provider wait time.
+- Temperature: generation randomness.
+- Max output: generated token limit.
+- Test Provider: sends a small test request.
 
-Advertised provider models refresh every 5 seconds while settings are open. You can also type a model name manually.
+The app refreshes advertised provider models while Settings is open.
+
+### Auto Chat
+
+Controls Auto Chat cadence and related run behavior.
+
+### Visuals
+
+Controls visual theme behavior, avatars, top strip mode, and related shell preferences.
 
 ### News / Internet
 
-- Use internet: enables internet tools.
-- Mode:
-  - Off: models cannot request internet.
-  - Manual: only operator/manual actions use internet.
-  - Model requested: models can request internet when allowed.
-  - Auto: reserved for more automated behaviour.
-- Source scope:
-  - Trusted sources only: limits tools to configured/trusted sources.
-  - Open web allowed: allows direct URL fetches and broader web access.
-- Allow participant requests: Alpha/Beta/Gamma may ask for internet.
-- Allow narrator requests: Narrator may ask for internet.
-- Require approval: internet requests pause as approval cards until you approve or reject them.
+- Use internet: enables internet tooling.
+- Mode: controls manual or model-requested internet behavior.
+- Source scope: trusted sources or open web.
+- Requester permissions: participants and narrator can be allowed or blocked.
+- Require approval: pauses model-requested internet as approval cards.
 - Max results: limits internet result count.
 
-When approval is required, the app shows an Internet Approval card with Approve Once, Reject, Copy URL, and Delete actions.
+When approval is required, the app shows an Internet Approval card with approve/reject actions.
 
-### Theme
+### Context Windows
 
-Changes the app colour palette. The selected theme is saved locally for the WPF app.
+Controls transcript, private, and memory note windows used by prompt construction. The current context summary helps confirm what will be sent to models.
 
 ### Help / About
 
-Shows a short application description and credits.
+Shows the app description, author, code credit, licence summary, and copyright notice.
+
+## Licensing
+
+AI Arena is distributed under the Shareable No-Derivatives Software Licence 1.0.
+
+Copyright (c) 2026 Dominik Fiala.
+
+You may share AI Arena freely in its original, unmodified form. You may use it privately. You may not distribute edited, modified, forked, patched, rebuilt, or derivative versions without written permission from Dominik Fiala.
+
+The installer shows the licence during setup and installs `LICENSE`, `NOTICE.md`, and this user guide beside the app.
 
 ## Provider Troubleshooting
 
-If LM Studio or another provider is closed, the app may show:
-
-`Provider unreachable at http://127.0.0.1:1234/v1. Start LM Studio server or check the base URL.`
+If LM Studio or another provider is closed, the app may show a provider unreachable message.
 
 Check:
 
 - LM Studio server is running.
-- The model is loaded.
+- A model is loaded.
 - The base URL and port are correct.
-- The endpoint exposes an OpenAI-compatible `/v1` API.
+- The provider exposes an OpenAI-compatible `/v1` API.
+- The chosen model name exactly matches the provider model list.
 
-If the model times out, reduce context size, use a smaller model, lower max output, or increase timeout.
+If a model times out:
+
+- Use a smaller model.
+- Reduce context window sizes.
+- Lower max output.
+- Increase timeout.
+- Stop Auto Chat and test with 1 TURN.
+
+If GPU telemetry is unavailable, the app can still run. Model execution depends on your provider, not on AI Arena being tied to a specific GPU vendor.
 
 ## Practical Tips
 
-- Use 1 Turn when testing a new setup.
-- Use Auto Chat after the cast and topic are behaving well.
-- Pin important turns before experimenting.
-- Save checkpoints before major match changes.
-- Keep internet approval on when testing model-requested browsing.
-- If a model starts repeating or acting as another participant, reset the match or retry the turn after adjusting the topic or cast.
+- Start with 1 TURN after changing models or settings.
+- Use Auto Chat once the cast behaves correctly.
+- Lock scenario or cast fields before trying Random Seed, AI Choice, or YOLO.
+- Keep internet approval enabled while testing model-requested browsing.
+- Use Memory notes to preserve durable agent-specific facts.
+- Use Quality timeline to spot drift or evidence weakness.
+- Use Agent Performance popups to inspect slow or noisy participants.
+- Save a restore point before a long run.

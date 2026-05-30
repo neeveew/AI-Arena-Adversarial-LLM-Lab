@@ -86,7 +86,7 @@ The preview executable is written to `..\dist\AI Arena WPF\AI Arena.exe`.
 ## Versioned Release Build
 
 ```powershell
-.\scripts\build-wpf-release.ps1 -Version "0.2.0-beta" -Changes "Internet transparency cards", "WPF approval flow"
+.\scripts\build-wpf-release.ps1 -Version "0.3.42-beta" -Changes "Updated user guide"
 ```
 
 The release executable and `changes.txt` are written to `..\dist\AI Arena - <version>\`.
