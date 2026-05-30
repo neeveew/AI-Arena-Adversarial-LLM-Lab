@@ -1202,6 +1202,7 @@
                         <TextBlock Text="Review scenario framing, cast personas, and lock what should survive random generation."
                                    Foreground="{DynamicResource MutedTextBrush}"
                                    TextWrapping="Wrap" />
+                        <WrapPanel x:Name="ScenarioSeedInspector" Margin="0,8,0,0" />
                     </StackPanel>
                     <Border Grid.Column="1"
                             Background="{DynamicResource InputBrush}"

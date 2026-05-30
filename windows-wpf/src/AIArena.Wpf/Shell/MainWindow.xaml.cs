@@ -1079,7 +1079,10 @@ public partial class MainWindow : Window
     {
         ScenarioPreviewItems.Children.Clear();
         CastPreviewItems.Children.Clear();
+        ScenarioSeedInspector.Children.Clear();
         _lockControls.Clear();
+
+        PopulateScenarioSeedInspector(snapshot);
 
         ScenarioPreviewItems.Children.Add(CreateLockCard(
             "topic",
@@ -1121,6 +1124,49 @@ public partial class MainWindow : Window
             BlendBrush(ResourceBrush("CardBrush"), ResourceBrush("NarratorAccentBrush"), 0.16),
             ResourceBrush("NarratorAccentBrush"),
             snapshot.NarratorLocked));
+    }
+
+    private void PopulateScenarioSeedInspector(ArenaSnapshot snapshot)
+    {
+        var scenarioSeed = DisplayStatusValue(snapshot.ScenarioGeneratorSeed);
+        var scenarioStyle = DisplayStatusValue(snapshot.ScenarioGeneratorStyle);
+        var personaSeed = DisplayStatusValue(snapshot.PersonaGeneratorSeed);
+        var personaStyle = DisplayStatusValue(snapshot.PersonaGeneratorStyle);
+        var source = ScenarioSeedSource(snapshot.ScenarioGeneratorSeed, snapshot.PersonaGeneratorStyle);
+
+        ScenarioSeedInspector.Children.Add(CreateSetupChip("Source", source, ResourceBrush("PrimaryBorderBrush")));
+        ScenarioSeedInspector.Children.Add(CreateSetupChip("Scenario", ShortSeedValue(scenarioSeed), ResourceBrush("TextBrush")));
+        ScenarioSeedInspector.Children.Add(CreateSetupChip("Style", scenarioStyle, ResourceBrush("MutedTextBrush")));
+        ScenarioSeedInspector.Children.Add(CreateSetupChip("Personas", ShortSeedValue(personaSeed), ResourceBrush("NarratorAccentBrush")));
+        ScenarioSeedInspector.Children.Add(CreateSetupChip("Persona style", personaStyle, ResourceBrush("MutedTextBrush")));
+    }
+
+    private static string ScenarioSeedSource(string scenarioSeed, string personaStyle)
+    {
+        if (scenarioSeed.StartsWith("YOLO-", StringComparison.OrdinalIgnoreCase)
+            || personaStyle.Equals("yolo", StringComparison.OrdinalIgnoreCase))
+        {
+            return "YOLO";
+        }
+
+        if (scenarioSeed.Equals("ai-choice", StringComparison.OrdinalIgnoreCase))
+        {
+            return "AI Choice";
+        }
+
+        return string.IsNullOrWhiteSpace(scenarioSeed) || scenarioSeed == "-"
+            ? "Manual"
+            : "Random";
+    }
+
+    private static string ShortSeedValue(string seed)
+    {
+        if (string.IsNullOrWhiteSpace(seed) || seed == "-")
+        {
+            return "-";
+        }
+
+        return seed.Length <= 18 ? seed : $"{seed[..15]}...";
     }
 
     private void PopulateNews(IReadOnlyList<TranscriptMessage> messages)
