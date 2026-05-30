@@ -1332,16 +1332,16 @@
                       VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
-                <Border Style="{StaticResource Card}" Opacity="1">
+                <Border Style="{StaticResource Card}" Opacity="1" Padding="10">
                     <StackPanel>
-                        <TextBlock Text="Arena Controls" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+                        <TextBlock Text="Arena Controls" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
                         <UniformGrid Columns="2">
-                            <Button x:Name="AutoChatButton" Content="AUTO CHAT" Click="AutoChatButton_Click" Background="{DynamicResource PrimaryBrush}" BorderBrush="{DynamicResource PrimaryBorderBrush}" FontSize="12" Padding="8,6" Margin="0,0,8,8" />
-                            <Button x:Name="OneTurnButton" Content="1 TURN" Click="OneTurnButton_Click" Background="{DynamicResource PrimaryBrush}" BorderBrush="{DynamicResource PrimaryBorderBrush}" FontSize="12" Padding="8,6" Margin="0,0,0,8" />
-                            <Button x:Name="StopButton" Content="PAUSE" Click="StopButton_Click" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource BetaAccentBrush}" Foreground="{DynamicResource BetaAccentBrush}" FontSize="12" Padding="8,6" Margin="0,0,8,8" IsEnabled="False" />
-                            <Button x:Name="ResetButton" Content="RESET" Click="ResetButton_Click" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DangerBorderBrush}" Foreground="{DynamicResource DangerTextBrush}" FontSize="12" Padding="8,6" Margin="0,0,0,8" />
-                            <Button x:Name="NarrateNowButton" Content="NARRATE" Click="NarrateNowButton_Click" Background="{DynamicResource AssistBrush}" BorderBrush="{DynamicResource AssistBorderBrush}" FontSize="12" Padding="8,6" Margin="0,0,8,0" />
-                            <Button x:Name="CurateNewsButton" Content="NEWS" Click="CurateNewsButton_Click" Background="{DynamicResource AssistBrush}" BorderBrush="{DynamicResource AssistBorderBrush}" FontSize="12" Padding="8,6" />
+                            <Button x:Name="AutoChatButton" Content="AUTO CHAT" Click="AutoChatButton_Click" Background="{DynamicResource PrimaryBrush}" BorderBrush="{DynamicResource PrimaryBorderBrush}" FontSize="11" Padding="7,5" Margin="0,0,7,7" />
+                            <Button x:Name="OneTurnButton" Content="1 TURN" Click="OneTurnButton_Click" Background="{DynamicResource PrimaryBrush}" BorderBrush="{DynamicResource PrimaryBorderBrush}" FontSize="11" Padding="7,5" Margin="0,0,0,7" />
+                            <Button x:Name="StopButton" Content="PAUSE" Click="StopButton_Click" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource BetaAccentBrush}" Foreground="{DynamicResource BetaAccentBrush}" FontSize="11" Padding="7,5" Margin="0,0,7,7" IsEnabled="False" />
+                            <Button x:Name="ResetButton" Content="RESET" Click="ResetButton_Click" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DangerBorderBrush}" Foreground="{DynamicResource DangerTextBrush}" FontSize="11" Padding="7,5" Margin="0,0,0,7" />
+                            <Button x:Name="NarrateNowButton" Content="NARRATE" Click="NarrateNowButton_Click" Background="{DynamicResource AssistBrush}" BorderBrush="{DynamicResource AssistBorderBrush}" FontSize="11" Padding="7,5" Margin="0,0,7,0" />
+                            <Button x:Name="CurateNewsButton" Content="NEWS" Click="CurateNewsButton_Click" Background="{DynamicResource AssistBrush}" BorderBrush="{DynamicResource AssistBorderBrush}" FontSize="11" Padding="7,5" />
                         </UniformGrid>
                     </StackPanel>
                 </Border>

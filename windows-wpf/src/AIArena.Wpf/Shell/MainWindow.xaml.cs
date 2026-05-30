@@ -471,6 +471,7 @@ public partial class MainWindow : Window
         var activityRow = new Grid();
         activityRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         activityRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var hasActivity = stats.Activity.Any(value => value > 0.001);
         var tokenTrack = new Grid
         {
             Height = 16,
@@ -491,24 +492,19 @@ public partial class MainWindow : Window
             Height = 4,
             CornerRadius = new CornerRadius(2),
             HorizontalAlignment = HorizontalAlignment.Left,
-            Opacity = 0.82,
-            Width = Math.Max(18, 106 * Math.Clamp(stats.Tokens / (double)maxTokens, 0.08, 1)),
+            Opacity = stats.Tokens <= 0 ? 0.28 : 0.82,
+            Width = stats.Tokens <= 0
+                ? 10
+                : Math.Max(18, 106 * Math.Clamp(stats.Tokens / (double)maxTokens, 0.08, 1)),
             VerticalAlignment = VerticalAlignment.Center
         });
         activityRow.Children.Add(tokenTrack);
 
-        var sparkline = new MetricSparklineControl
-        {
-            Width = 74,
-            Height = 16,
-            Mode = "bars",
-            Values = stats.Activity.Count == 0 ? [0d, 0d, 0d, 0d] : stats.Activity,
-            MaxValue = Math.Max(1, stats.Activity.DefaultIfEmpty(1).Max()),
-            AccentBrush = accent,
-            HorizontalAlignment = HorizontalAlignment.Right
-        };
-        Grid.SetColumn(sparkline, 1);
-        activityRow.Children.Add(sparkline);
+        FrameworkElement activityMarker = hasActivity
+            ? CreateActivitySparkline(stats, accent)
+            : CreateIdleActivityMarker(accent);
+        Grid.SetColumn(activityMarker, 1);
+        activityRow.Children.Add(activityMarker);
 
         Grid.SetRow(activityRow, 3);
         Grid.SetColumnSpan(activityRow, 2);
@@ -563,6 +559,47 @@ public partial class MainWindow : Window
                 FontWeight = FontWeights.SemiBold
             }
         };
+    }
+
+    private static MetricSparklineControl CreateActivitySparkline(AgentPerformanceStats stats, Brush accent)
+    {
+        return new MetricSparklineControl
+        {
+            Width = 74,
+            Height = 16,
+            Mode = "bars",
+            Values = stats.Activity,
+            MaxValue = Math.Max(1, stats.Activity.DefaultIfEmpty(1).Max()),
+            AccentBrush = accent,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+    }
+
+    private StackPanel CreateIdleActivityMarker(Brush accent)
+    {
+        var marker = new StackPanel
+        {
+            Width = 74,
+            Height = 16,
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Opacity = 0.48
+        };
+
+        for (var i = 0; i < 5; i++)
+        {
+            marker.Children.Add(new Border
+            {
+                Width = 4,
+                Height = 4,
+                CornerRadius = new CornerRadius(2),
+                Background = BlendBrush(ResourceBrush("CardBrush"), accent, 0.28),
+                Margin = new Thickness(i == 0 ? 34 : 4, 6, 0, 0)
+            });
+        }
+
+        return marker;
     }
 
     private StackPanel CreateStackedMetric(string label, string value, Brush accent)
