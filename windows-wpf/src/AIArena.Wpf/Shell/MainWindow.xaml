@@ -598,7 +598,7 @@
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="72" />
+            <RowDefinition Height="64" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
@@ -728,7 +728,7 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <Grid Height="24" VerticalAlignment="Center">
+                    <Grid Height="21" VerticalAlignment="Center">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="120" />
@@ -783,9 +783,10 @@
                     <Grid VerticalAlignment="Center" Margin="0,0,6,0">
                     <Button x:Name="TranscriptSearchButton"
                             Click="TranscriptSearchButton_Click"
-                            Width="34"
-                            MinWidth="34"
-                            Height="34"
+                            Width="30"
+                            MinWidth="30"
+                            Height="30"
+                            MinHeight="30"
                             Padding="0"
                             Background="Transparent"
                             BorderBrush="{DynamicResource DisabledBorderBrush}"
@@ -857,6 +858,7 @@
                             Click="ExportTranscriptButton_Click"
                             Width="30"
                             Height="30"
+                            MinHeight="30"
                             Padding="0"
                             Background="Transparent"
                             BorderBrush="{DynamicResource DisabledBorderBrush}"
@@ -878,15 +880,18 @@
                     <TextBlock Text="Theme" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0" />
                     <ComboBox x:Name="ThemePicker"
                               Width="140"
+                              MinHeight="34"
+                              Height="34"
                               SelectionChanged="ThemePicker_SelectionChanged"
                               DisplayMemberPath="Name"
                               SelectedValuePath="Id"
                               Margin="0,0,10,0" />
                     <Button x:Name="AppSettingsButton"
                             Click="AppSettingsButton_Click"
-                            Width="40"
-                            MinWidth="40"
-                            Height="40"
+                            Width="36"
+                            MinWidth="36"
+                            Height="36"
+                            MinHeight="36"
                             Padding="0"
                             Background="Transparent"
                             BorderBrush="Transparent"
@@ -898,7 +903,7 @@
                                 </Grid>
                             </ControlTemplate>
                         </Button.Template>
-                        <Viewbox Width="22" Height="22">
+                        <Viewbox Width="20" Height="20">
                             <Path x:Name="SettingsGearIcon"
                                   Fill="{DynamicResource TextBrush}"
                                   Stretch="Uniform"
