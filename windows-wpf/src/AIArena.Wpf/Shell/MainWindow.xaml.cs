@@ -844,7 +844,7 @@ public partial class MainWindow : Window
 
         var active = HasActiveTranscriptSearch();
         ClearTranscriptSearchButton.Opacity = active ? 1.0 : 0.45;
-        ClearTranscriptSearchButton.IsEnabled = active;
+        ClearTranscriptSearchButton.IsEnabled = true;
         TranscriptSearchText.BorderBrush = active
             ? ResourceBrush("PrimaryBorderBrush")
             : ResourceBrush("ControlBorderBrush");
@@ -4647,6 +4647,13 @@ public partial class MainWindow : Window
 
     private void ClearTranscriptSearchButton_Click(object sender, RoutedEventArgs e)
     {
+        if (string.IsNullOrWhiteSpace(TranscriptSearchText.Text))
+        {
+            TranscriptSearchPopup.IsOpen = false;
+            TranscriptSearchButton.Focus();
+            return;
+        }
+
         TranscriptSearchText.Clear();
         TranscriptSearchText.Focus();
     }
