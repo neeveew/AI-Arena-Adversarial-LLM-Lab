@@ -4659,7 +4659,6 @@ public partial class MainWindow : Window
         AllowParticipantInternetCheckBox.IsEnabled = !busy;
         AllowNarratorInternetCheckBox.IsEnabled = !busy;
         RequireInternetApprovalCheckBox.IsEnabled = !busy;
-        MemoryNotesCheckBox.IsEnabled = !busy;
         AutoChatCadencePicker.IsEnabled = !busy;
         AvatarStylePicker.IsEnabled = !busy;
         SystemGlyphStylePicker.IsEnabled = !busy;
