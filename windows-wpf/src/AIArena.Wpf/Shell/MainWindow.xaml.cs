@@ -335,6 +335,11 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ViewMenuButton_Click(object sender, RoutedEventArgs e)
+    {
+        ViewMenuPopup.IsOpen = !ViewMenuPopup.IsOpen;
+    }
+
     private async Task LoadSessionAsync(CoreSessionSummary session, bool force)
     {
         if (!force && session.LastModified == _activeSnapshotWriteUtc)
