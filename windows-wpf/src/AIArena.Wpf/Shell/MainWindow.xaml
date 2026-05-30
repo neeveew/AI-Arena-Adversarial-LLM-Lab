@@ -870,13 +870,22 @@
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center" />
                     </Button>
+                    <CheckBox x:Name="CompactTranscriptCheckBox"
+                              Content="Compact"
+                              Style="{StaticResource ToggleSwitchCheckBox}"
+                              Foreground="{DynamicResource MutedTextBrush}"
+                              Checked="CompactTranscriptCheckBox_Changed"
+                              Unchecked="CompactTranscriptCheckBox_Changed"
+                              VerticalAlignment="Center"
+                              Margin="10,0,14,0"
+                              ToolTip="Use denser transcript cards" />
                     <CheckBox x:Name="FollowChatCheckBox"
                               Content="Auto-scroll"
                               Style="{StaticResource ToggleSwitchCheckBox}"
                               Foreground="{DynamicResource MutedTextBrush}"
                               IsChecked="True"
                               VerticalAlignment="Center"
-                              Margin="10,0,14,0" />
+                              Margin="0,0,14,0" />
                     <TextBlock Text="Theme" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0" />
                     <ComboBox x:Name="ThemePicker"
                               Width="140"

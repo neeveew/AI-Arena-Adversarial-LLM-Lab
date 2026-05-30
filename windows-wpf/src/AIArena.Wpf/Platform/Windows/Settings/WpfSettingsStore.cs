@@ -48,6 +48,7 @@ public sealed class WpfSettings
     public string AvatarStyle { get; set; } = "pack";
     public bool ChampionAvatars { get; set; } = true;
     public bool SystemEventGlyphs { get; set; } = true;
+    public bool CompactTranscriptMode { get; set; }
     public string TopStripMode { get; set; } = "diagnostics";
     public bool ShowTranscriptDiagnostics { get; set; } = true;
 }

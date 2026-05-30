@@ -177,6 +177,7 @@ public partial class MainWindow : Window
         SelectComboTag(AvatarStylePicker, CurrentAvatarStyle());
         SelectComboTag(SystemGlyphStylePicker, _wpfSettings.SystemEventGlyphs ? "glyph" : "fallback");
         SelectComboTag(TopStripModePicker, CurrentTopStripMode());
+        CompactTranscriptCheckBox.IsChecked = _wpfSettings.CompactTranscriptMode;
         _isRenderingSnapshot = false;
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
         UpdateTelemetryTimerState();
@@ -252,6 +253,21 @@ public partial class MainWindow : Window
         if (latestSession.LastModified != _activeSnapshotWriteUtc)
         {
             await LoadSessionAsync(latestSession, force: true);
+        }
+    }
+
+    private void CompactTranscriptCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isRenderingSnapshot || CompactTranscriptCheckBox is null)
+        {
+            return;
+        }
+
+        _wpfSettings.CompactTranscriptMode = CompactTranscriptCheckBox.IsChecked == true;
+        _wpfSettingsStore.Save(_wpfSettings);
+        if (_lastRenderedMessages.Count > 0)
+        {
+            PopulateTranscript(_lastRenderedMessages);
         }
     }
 
@@ -1589,19 +1605,20 @@ public partial class MainWindow : Window
 
     private Border CreateTranscriptStatPill(string text, bool isInternet, bool isDanger = false)
     {
+        var compact = _wpfSettings.CompactTranscriptMode;
         return new Border
         {
             Background = isDanger ? ResourceBrush("DangerBrush") : BlendBrush(ResourceBrush("TranscriptBodyBrush"), ResourceBrush(isInternet ? "AssistBorderBrush" : "PrimaryBorderBrush"), 0.1),
             BorderBrush = isDanger ? ResourceBrush("DangerBorderBrush") : BlendBrush(ResourceBrush("ControlBorderBrush"), ResourceBrush(isInternet ? "AssistBorderBrush" : "PrimaryBorderBrush"), 0.38),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(6, 1, 6, 2),
-            Margin = new Thickness(0, 0, 6, 0),
+            Padding = compact ? new Thickness(5, 0, 5, 1) : new Thickness(6, 1, 6, 2),
+            Margin = new Thickness(0, 0, compact ? 4 : 6, 0),
             Child = new TextBlock
             {
                 Text = text,
                 Foreground = isDanger ? ResourceBrush("DangerTextBrush") : ResourceBrush("MutedTextBrush"),
-                FontSize = 12,
+                FontSize = compact ? 10 : 12,
                 FontWeight = FontWeights.SemiBold
             }
         };
@@ -1631,8 +1648,9 @@ public partial class MainWindow : Window
 
     private Border CreateTranscriptCardLayout(TranscriptMessage message, string body, Brush accent, bool isInternet, bool searchMatch, bool isLatest, bool isSystemEvent, UIElement? extraContent)
     {
+        var compact = _wpfSettings.CompactTranscriptMode;
         var isError = message.Status.Equals("error", StringComparison.OrdinalIgnoreCase);
-        var accentWeight = isLatest ? 0.32 : 0.18;
+        var accentWeight = isLatest ? (compact ? 0.28 : 0.32) : (compact ? 0.14 : 0.18);
         var normalBackground = BlendBrush(ResourceBrush("TranscriptBodyBrush"), accent, isError ? 0.16 : accentWeight);
         var hoverBackground = BlendBrush(ResourceBrush("TranscriptBodyBrush"), accent, isError ? 0.22 : accentWeight + 0.06);
         var normalBorder = isError
@@ -1645,8 +1663,8 @@ public partial class MainWindow : Window
             Background = normalBackground,
             BorderBrush = normalBorder,
             BorderThickness = new Thickness(searchMatch || isLatest || isError ? 2 : 1),
-            CornerRadius = new CornerRadius(8),
-            Margin = new Thickness(0, 0, 0, 12),
+            CornerRadius = new CornerRadius(compact ? 6 : 8),
+            Margin = new Thickness(0, 0, 0, compact ? 6 : 12),
             Opacity = isLatest || isError || isSystemEvent ? 1.0 : 0.88
         };
         border.MouseEnter += (_, _) =>
@@ -1661,7 +1679,7 @@ public partial class MainWindow : Window
         };
 
         var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(84) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(compact ? 46 : 84) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
         var rail = new Grid
@@ -1670,47 +1688,53 @@ public partial class MainWindow : Window
         };
         rail.Children.Add(new Border
         {
-            Width = isLatest ? 5 : 3,
+            Width = isLatest ? (compact ? 4 : 5) : (compact ? 2 : 3),
             Background = accent,
             HorizontalAlignment = HorizontalAlignment.Left,
-            CornerRadius = new CornerRadius(8, 0, 0, 8)
+            CornerRadius = new CornerRadius(compact ? 6 : 8, 0, 0, compact ? 6 : 8)
         });
         var railStack = new Grid
         {
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(8, 13, 6, 12)
+            Margin = compact ? new Thickness(6, 8, 4, 6) : new Thickness(8, 13, 6, 12)
         };
         railStack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        railStack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        if (!compact)
+        {
+            railStack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        }
         railStack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         var turnNumber = new TextBlock
         {
             Text = message.Turn.ToString(System.Globalization.CultureInfo.InvariantCulture),
             Foreground = Brushes.White,
-            FontSize = 20,
+            FontSize = compact ? 16 : 20,
             FontWeight = FontWeights.SemiBold,
             HorizontalAlignment = HorizontalAlignment.Center
         };
         Grid.SetRow(turnNumber, 0);
         railStack.Children.Add(turnNumber);
 
-        var avatar = CreateTranscriptAvatar(message, accent, isInternet, isSystemEvent);
-        avatar.Margin = new Thickness(0, 7, 0, 5);
-        avatar.HorizontalAlignment = HorizontalAlignment.Center;
-        Grid.SetRow(avatar, 1);
-        railStack.Children.Add(avatar);
+        if (!compact)
+        {
+            var avatar = CreateTranscriptAvatar(message, accent, isInternet, isSystemEvent);
+            avatar.Margin = new Thickness(0, 7, 0, 5);
+            avatar.HorizontalAlignment = HorizontalAlignment.Center;
+            Grid.SetRow(avatar, 1);
+            railStack.Children.Add(avatar);
+        }
 
         var railLabel = new TextBlock
         {
-            Text = TranscriptRailLabel(message, isInternet),
+            Text = compact ? CompactRailLabel(message, isInternet) : TranscriptRailLabel(message, isInternet),
             Foreground = accent,
-            FontSize = 10,
+            FontSize = compact ? 9 : 10,
             FontWeight = FontWeights.SemiBold,
             HorizontalAlignment = HorizontalAlignment.Center
         };
-        Grid.SetRow(railLabel, 2);
+        Grid.SetRow(railLabel, compact ? 1 : 2);
         railStack.Children.Add(railLabel);
 
         rail.Children.Add(railStack);
@@ -1728,8 +1752,8 @@ public partial class MainWindow : Window
             Background = BlendBrush(ResourceBrush("TranscriptHeaderBrush"), accent, isLatest ? 0.28 : isError ? 0.18 : 0.16),
             BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, isLatest ? 0.56 : 0.28),
             BorderThickness = new Thickness(0, 0, 0, 1),
-            Padding = new Thickness(14, 8, 14, 8),
-            CornerRadius = new CornerRadius(0, 8, 0, 0)
+            Padding = compact ? new Thickness(10, 5, 10, 5) : new Thickness(14, 8, 14, 8),
+            CornerRadius = new CornerRadius(0, compact ? 6 : 8, 0, 0)
         };
         header.Child = CreateTranscriptHeader(message, accent, isInternet, searchMatch, isLatest, isSystemEvent);
         Grid.SetRow(header, 0);
@@ -1737,15 +1761,15 @@ public partial class MainWindow : Window
 
         var bodyStack = new StackPanel
         {
-            Margin = new Thickness(14, 13, 14, 13)
+            Margin = compact ? new Thickness(10, 8, 10, 8) : new Thickness(14, 13, 14, 13)
         };
         var bodyBlock = new TextBlock
         {
             Text = body,
             Foreground = isError ? ResourceBrush("DangerTextBrush") : ResourceBrush("TextBrush"),
             TextWrapping = TextWrapping.Wrap,
-            FontSize = 15,
-            LineHeight = 22
+            FontSize = compact ? 13 : 15,
+            LineHeight = compact ? 18 : 22
         };
         if (isError)
         {
@@ -1874,6 +1898,23 @@ public partial class MainWindow : Window
         return message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase)
             ? "OPERATOR"
             : "AGENT";
+    }
+
+    private static string CompactRailLabel(TranscriptMessage message, bool isInternet)
+    {
+        if (IsSystemEvent(message, isInternet) || message.Kind.Equals("news", StringComparison.OrdinalIgnoreCase))
+        {
+            return "SYS";
+        }
+
+        if (message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase))
+        {
+            return "OP";
+        }
+
+        return string.IsNullOrWhiteSpace(message.SpeakerId)
+            ? "AI"
+            : message.SpeakerId[..Math.Min(3, message.SpeakerId.Length)].ToUpperInvariant();
     }
 
     private static string SpeakerGlyph(TranscriptMessage message, bool isInternet)
@@ -2059,6 +2100,8 @@ public partial class MainWindow : Window
     private Button ActionButton(string text, RoutedEventHandler? handler, bool enabled, TranscriptActionKind kind = TranscriptActionKind.Neutral, string? iconGlyph = null)
     {
         var iconMode = !string.IsNullOrWhiteSpace(iconGlyph);
+        var compact = _wpfSettings.CompactTranscriptMode;
+        var iconSize = compact ? 24 : 30;
         var background = ResourceBrush("InputBrush");
         var border = kind switch
         {
@@ -2085,7 +2128,7 @@ public partial class MainWindow : Window
                 {
                     Text = iconGlyph,
                     FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                    FontSize = 15,
+                    FontSize = compact ? 13 : 15,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center
                 }
@@ -2095,14 +2138,14 @@ public partial class MainWindow : Window
             Background = iconMode ? Brushes.Transparent : background,
             BorderBrush = iconMode ? Brushes.Transparent : border,
             Foreground = foreground,
-            FontSize = iconMode ? 15 : 13,
+            FontSize = iconMode ? (compact ? 13 : 15) : (compact ? 12 : 13),
             FontWeight = FontWeights.SemiBold,
-            MinWidth = iconMode ? 30 : 0,
-            MinHeight = iconMode ? 30 : 32,
-            Width = iconMode ? 30 : double.NaN,
-            Height = iconMode ? 30 : double.NaN,
-            Padding = iconMode ? new Thickness(0) : new Thickness(10, 5, 10, 5),
-            Margin = iconMode ? new Thickness(0, 0, 5, 4) : new Thickness(0, 0, 8, 8),
+            MinWidth = iconMode ? iconSize : 0,
+            MinHeight = iconMode ? iconSize : (compact ? 26 : 32),
+            Width = iconMode ? iconSize : double.NaN,
+            Height = iconMode ? iconSize : double.NaN,
+            Padding = iconMode ? new Thickness(0) : compact ? new Thickness(8, 3, 8, 3) : new Thickness(10, 5, 10, 5),
+            Margin = iconMode ? new Thickness(0, 0, compact ? 3 : 5, compact ? 2 : 4) : new Thickness(0, 0, compact ? 5 : 8, compact ? 5 : 8),
             Opacity = enabled ? 1.0 : 0.55,
             ToolTip = text
         };
