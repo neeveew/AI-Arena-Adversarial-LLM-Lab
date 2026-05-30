@@ -776,9 +776,9 @@
                     </Button>
                     <Popup x:Name="TranscriptSearchPopup"
                            PlacementTarget="{Binding ElementName=TranscriptSearchButton}"
-                           Placement="Bottom"
-                           HorizontalOffset="-330"
-                           VerticalOffset="8"
+                           Placement="Left"
+                           HorizontalOffset="-8"
+                           VerticalOffset="-1"
                            StaysOpen="False"
                            AllowsTransparency="True">
                         <Border Background="{DynamicResource TopBarBrush}"
@@ -786,17 +786,38 @@
                                 BorderThickness="1"
                                 CornerRadius="6"
                                 Padding="8">
-                            <Grid Width="360" Height="36">
+                            <Grid Width="320">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="10" />
+                                    <RowDefinition Height="34" />
+                                </Grid.RowDefinitions>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="38" />
                                 </Grid.ColumnDefinitions>
+                                <Border x:Name="TranscriptSearchDragHandle"
+                                        Grid.ColumnSpan="2"
+                                        Height="8"
+                                        Background="Transparent"
+                                        Cursor="SizeAll"
+                                        MouseLeftButtonDown="TranscriptSearchDragHandle_MouseLeftButtonDown"
+                                        MouseMove="TranscriptSearchDragHandle_MouseMove"
+                                        MouseLeftButtonUp="TranscriptSearchDragHandle_MouseLeftButtonUp">
+                                    <Border Width="34"
+                                            Height="2"
+                                            CornerRadius="1"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"
+                                            Background="{DynamicResource DisabledBorderBrush}" />
+                                </Border>
                                 <TextBox x:Name="TranscriptSearchText"
+                                         Grid.Row="1"
                                          Style="{StaticResource SearchTextBox}"
                                          TextChanged="TranscriptFilter_Changed"
                                          KeyDown="TranscriptSearchText_KeyDown"
                                          ToolTip="Search transcript text, speakers, models, and sources" />
                                 <Button x:Name="ClearTranscriptSearchButton"
+                                        Grid.Row="1"
                                         Grid.Column="1"
                                         Content="X"
                                         Click="ClearTranscriptSearchButton_Click"

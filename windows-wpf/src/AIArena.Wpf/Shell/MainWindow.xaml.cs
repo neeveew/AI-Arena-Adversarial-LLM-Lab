@@ -70,6 +70,10 @@ public partial class MainWindow : Window
     private bool _telemetrySampleInFlight;
     private string _transcriptDashboardLayout = "";
     private Button? _breathingOperationButton;
+    private bool _isDraggingSearchPopup;
+    private Point _searchPopupDragStart;
+    private double _searchPopupDragStartHorizontalOffset;
+    private double _searchPopupDragStartVerticalOffset;
     private WpfSettings _wpfSettings = new();
     private ThemePalette _theme = ThemePalette.Resolve("system");
     private CancellationTokenSource? _autoChatCancellation;
@@ -4666,6 +4670,36 @@ public partial class MainWindow : Window
 
         TranscriptSearchPopup.IsOpen = false;
         TranscriptSearchButton.Focus();
+        e.Handled = true;
+    }
+
+    private void TranscriptSearchDragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _isDraggingSearchPopup = true;
+        _searchPopupDragStart = e.GetPosition(this);
+        _searchPopupDragStartHorizontalOffset = TranscriptSearchPopup.HorizontalOffset;
+        _searchPopupDragStartVerticalOffset = TranscriptSearchPopup.VerticalOffset;
+        TranscriptSearchDragHandle.CaptureMouse();
+        e.Handled = true;
+    }
+
+    private void TranscriptSearchDragHandle_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_isDraggingSearchPopup)
+        {
+            return;
+        }
+
+        var current = e.GetPosition(this);
+        TranscriptSearchPopup.HorizontalOffset = _searchPopupDragStartHorizontalOffset + current.X - _searchPopupDragStart.X;
+        TranscriptSearchPopup.VerticalOffset = _searchPopupDragStartVerticalOffset + current.Y - _searchPopupDragStart.Y;
+        e.Handled = true;
+    }
+
+    private void TranscriptSearchDragHandle_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        _isDraggingSearchPopup = false;
+        TranscriptSearchDragHandle.ReleaseMouseCapture();
         e.Handled = true;
     }
 
