@@ -1,10 +1,10 @@
 ; Inno Setup installer for the native WPF AI Arena build.
 
 #define MyAppName "AI Arena"
-#define MyAppVersion "0.3.19-beta"
+#define MyAppVersion "0.3.20-beta"
 #define MyAppPublisher "Dominik"
 #define MyAppExeName "AI Arena.exe"
-#define MyReleaseDir "..\..\dist\AI Arena - 0.3.19-beta"
+#define MyReleaseDir "..\..\dist\AI Arena - 0.3.20-beta"
 
 [Setup]
 AppId={{E2F12C8E-9B8C-45C3-B9A1-A8F8E1725F61}

@@ -844,6 +844,15 @@ public partial class MainWindow : Window
         TranscriptSearchText.BorderBrush = active
             ? ResourceBrush("PrimaryBorderBrush")
             : ResourceBrush("ControlBorderBrush");
+        if (TranscriptSearchButton is not null)
+        {
+            TranscriptSearchButton.BorderBrush = active
+                ? ResourceBrush("PrimaryBorderBrush")
+                : ResourceBrush("DisabledBorderBrush");
+            TranscriptSearchButton.Foreground = active
+                ? ResourceBrush("PrimaryBorderBrush")
+                : ResourceBrush("MutedTextBrush");
+        }
     }
 
     private bool HasActiveTranscriptSearch()
@@ -4635,6 +4644,29 @@ public partial class MainWindow : Window
     private void ClearTranscriptSearchButton_Click(object sender, RoutedEventArgs e)
     {
         TranscriptSearchText.Clear();
+        TranscriptSearchText.Focus();
+    }
+
+    private void TranscriptSearchButton_Click(object sender, RoutedEventArgs e)
+    {
+        TranscriptSearchPopup.IsOpen = true;
+        Dispatcher.BeginInvoke(() =>
+        {
+            TranscriptSearchText.Focus();
+            TranscriptSearchText.SelectAll();
+        }, DispatcherPriority.Background);
+    }
+
+    private void TranscriptSearchText_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape)
+        {
+            return;
+        }
+
+        TranscriptSearchPopup.IsOpen = false;
+        TranscriptSearchButton.Focus();
+        e.Handled = true;
     }
 
     private void UpdateNavigationTheme()

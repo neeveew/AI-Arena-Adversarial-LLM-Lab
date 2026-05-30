@@ -693,7 +693,7 @@
             <Grid Margin="18,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="360" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <Grid x:Name="TopBarStatus"
@@ -757,24 +757,57 @@
                                    VerticalAlignment="Center" />
                     </Grid>
                 </Grid>
-                <Grid Grid.Column="1" Height="38" VerticalAlignment="Center">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="38" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox x:Name="TranscriptSearchText"
-                             Style="{StaticResource SearchTextBox}"
-                             TextChanged="TranscriptFilter_Changed"
-                             ToolTip="Search transcript text, speakers, models, and sources" />
-                    <Button x:Name="ClearTranscriptSearchButton"
-                            Grid.Column="1"
-                            Content="X"
-                            Click="ClearTranscriptSearchButton_Click"
+                <Grid Grid.Column="1" VerticalAlignment="Center">
+                    <Button x:Name="TranscriptSearchButton"
+                            Click="TranscriptSearchButton_Click"
+                            Width="34"
                             MinWidth="34"
-                            MinHeight="34"
+                            Height="34"
                             Padding="0"
-                            Margin="6,0,0,0"
-                            ToolTip="Clear search" />
+                            Background="Transparent"
+                            BorderBrush="{DynamicResource DisabledBorderBrush}"
+                            Foreground="{DynamicResource MutedTextBrush}"
+                            ToolTip="Search transcripts">
+                        <TextBlock Text="&#xE721;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="13"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" />
+                    </Button>
+                    <Popup x:Name="TranscriptSearchPopup"
+                           PlacementTarget="{Binding ElementName=TranscriptSearchButton}"
+                           Placement="Bottom"
+                           HorizontalOffset="-330"
+                           VerticalOffset="8"
+                           StaysOpen="False"
+                           AllowsTransparency="True">
+                        <Border Background="{DynamicResource TopBarBrush}"
+                                BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="8">
+                            <Grid Width="360" Height="36">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="38" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="TranscriptSearchText"
+                                         Style="{StaticResource SearchTextBox}"
+                                         TextChanged="TranscriptFilter_Changed"
+                                         KeyDown="TranscriptSearchText_KeyDown"
+                                         ToolTip="Search transcript text, speakers, models, and sources" />
+                                <Button x:Name="ClearTranscriptSearchButton"
+                                        Grid.Column="1"
+                                        Content="X"
+                                        Click="ClearTranscriptSearchButton_Click"
+                                        MinWidth="34"
+                                        MinHeight="34"
+                                        Padding="0"
+                                        Margin="6,0,0,0"
+                                        ToolTip="Clear search" />
+                            </Grid>
+                        </Border>
+                    </Popup>
                 </Grid>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
                     <TextBlock x:Name="ExportStatusText"
