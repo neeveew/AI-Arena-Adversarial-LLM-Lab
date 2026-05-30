@@ -294,6 +294,12 @@ public sealed class TurnRunnerService
             active.Select(item => item.Id == plan.AgentId
                 ? $"- {item.Name} (you)"
                 : $"- {item.Name}"));
+        var privateNotes = string.Join(
+            Environment.NewLine,
+            (agent?.PrivateNotes ?? [])
+                .Where(note => !string.IsNullOrWhiteSpace(note))
+                .TakeLast(Math.Clamp(snapshot.Engine.NotesWindow, 0, 60))
+                .Select(note => $"- {note}"));
 
         return
         [
@@ -320,6 +326,7 @@ public sealed class TurnRunnerService
                     $"Topic: {topic}",
                     $"Global instruction: {global}",
                     $"Active participants:{Environment.NewLine}{cast}",
+                    string.IsNullOrWhiteSpace(privateNotes) ? "Your private memory notes: -" : $"Your private memory notes:{Environment.NewLine}{privateNotes}",
                     string.IsNullOrWhiteSpace(transcript) ? "Transcript: No public transcript yet." : $"Transcript:{Environment.NewLine}{transcript}",
                     string.IsNullOrWhiteSpace(latestOperatorRequest) ? "Latest Operator request: -" : $"Latest Operator request: {latestOperatorRequest}",
                     $"Write the next public turn for {plan.AgentName}."))

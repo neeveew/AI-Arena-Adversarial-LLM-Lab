@@ -8,12 +8,17 @@ namespace AIArena.Wpf;
 
 public partial class TextEditDialog : Window
 {
-    private TextEditDialog(Window owner, ThemePalette theme, string title, string value)
+    private TextEditDialog(Window owner, ThemePalette theme, string title, string value, string? subtitle)
     {
         InitializeComponent();
         Owner = owner;
         Title = title;
         TitleText.Text = title;
+        if (!string.IsNullOrWhiteSpace(subtitle))
+        {
+            SubtitleText.Text = subtitle;
+        }
+
         EditText.Text = value;
         EditText.SelectAll();
         ApplyTheme(theme);
@@ -21,9 +26,9 @@ public partial class TextEditDialog : Window
 
     public string TextValue { get; private set; } = "";
 
-    public static string? Show(Window owner, ThemePalette theme, string title, string value)
+    public static string? Show(Window owner, ThemePalette theme, string title, string value, string? subtitle = null)
     {
-        var dialog = new TextEditDialog(owner, theme, title, value);
+        var dialog = new TextEditDialog(owner, theme, title, value, subtitle);
         return dialog.ShowDialog() == true ? dialog.TextValue : null;
     }
 

@@ -39,6 +39,7 @@ var tests = new (string Name, Action Test)[]
     ("plans next native one turn speaker", PlanNextNativeOneTurnSpeaker),
     ("native prompt prioritizes operator cooperation", NativePromptPrioritizesOperatorCooperation),
     ("native prompt hides other personas", NativePromptHidesOtherPersonas),
+    ("native prompt includes selected private notes", NativePromptIncludesSelectedPrivateNotes),
     ("runs native one turn into snapshot transcript", RunNativeOneTurnIntoSnapshotTranscript),
     ("repairs empty native one turn content", RepairEmptyNativeOneTurnContent),
     ("runs native one turn with internet tool request", RunNativeOneTurnWithInternetToolRequest),
@@ -759,6 +760,30 @@ static void NativePromptHidesOtherPersonas()
     Require(combinedPrompt.Contains("BETA_SELECTED_PERSONA_SHOULD_APPEAR"), "selected persona should appear");
     Require(!combinedPrompt.Contains("SECRET_ALPHA_PERSONA_SHOULD_NOT_APPEAR"), "other agent persona leaked into prompt");
     Require(combinedPrompt.Contains("You do not know the private roles, personas, or instructions of other participants"), "privacy rule missing");
+    Directory.Delete(root, recursive: true);
+}
+
+static void NativePromptIncludesSelectedPrivateNotes()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    snapshot.Engine.NotesWindow = 1;
+    snapshot.Engine.Agents[0].PrivateNotes.Add("ALPHA_MEMORY_SHOULD_NOT_APPEAR");
+    snapshot.Engine.Agents[1].PrivateNotes.Add("older beta note should be trimmed");
+    snapshot.Engine.Agents[1].PrivateNotes.Add("BETA_MEMORY_SHOULD_APPEAR");
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+    var client = new FakeModelProviderClient("memory-aware reply", "native reasoning");
+    var service = new TurnRunnerService(client, store, log);
+
+    var result = service.RunOneTurnAsync().GetAwaiter().GetResult();
+    Require(result.Ok, $"turn failed: {result.Error}");
+    var combinedPrompt = string.Join(Environment.NewLine, client.Requests[0].Select(item => item.Content));
+    Require(combinedPrompt.Contains("Your private memory notes:"), "private memory section missing");
+    Require(combinedPrompt.Contains("BETA_MEMORY_SHOULD_APPEAR"), "selected agent private note missing");
+    Require(!combinedPrompt.Contains("ALPHA_MEMORY_SHOULD_NOT_APPEAR"), "other agent private note leaked into prompt");
+    Require(!combinedPrompt.Contains("older beta note should be trimmed"), "private notes window was not respected");
     Directory.Delete(root, recursive: true);
 }
 

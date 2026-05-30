@@ -888,6 +888,15 @@
                               VerticalAlignment="Center"
                               Margin="0,0,14,0"
                               ToolTip="Compare two transcript turns" />
+                    <CheckBox x:Name="MemoryNotesCheckBox"
+                              Content="Memory"
+                              Style="{StaticResource ToggleSwitchCheckBox}"
+                              Foreground="{DynamicResource MutedTextBrush}"
+                              Checked="MemoryNotesCheckBox_Changed"
+                              Unchecked="MemoryNotesCheckBox_Changed"
+                              VerticalAlignment="Center"
+                              Margin="0,0,14,0"
+                              ToolTip="Show agent memory notes" />
                     <CheckBox x:Name="FollowChatCheckBox"
                               Content="Auto-scroll"
                               Style="{StaticResource ToggleSwitchCheckBox}"

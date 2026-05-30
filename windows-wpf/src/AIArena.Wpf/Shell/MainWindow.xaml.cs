@@ -181,6 +181,7 @@ public partial class MainWindow : Window
         SelectComboTag(TopStripModePicker, CurrentTopStripMode());
         CompactTranscriptCheckBox.IsChecked = _wpfSettings.CompactTranscriptMode;
         TurnCompareCheckBox.IsChecked = _wpfSettings.TurnCompareMode;
+        MemoryNotesCheckBox.IsChecked = _wpfSettings.ShowAgentMemoryNotes;
         _isRenderingSnapshot = false;
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
         UpdateTelemetryTimerState();
@@ -290,6 +291,21 @@ public partial class MainWindow : Window
         _turnCompareSuppressAutoSeed = false;
         _wpfSettingsStore.Save(_wpfSettings);
         if (_lastRenderedMessages.Count > 0)
+        {
+            PopulateTranscript(_lastRenderedMessages);
+        }
+    }
+
+    private void MemoryNotesCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isRenderingSnapshot || MemoryNotesCheckBox is null)
+        {
+            return;
+        }
+
+        _wpfSettings.ShowAgentMemoryNotes = MemoryNotesCheckBox.IsChecked == true;
+        _wpfSettingsStore.Save(_wpfSettings);
+        if (_lastRenderedSnapshot is not null)
         {
             PopulateTranscript(_lastRenderedMessages);
         }
@@ -749,12 +765,22 @@ public partial class MainWindow : Window
 
         if (messages.Count == 0)
         {
+            if (_wpfSettings.ShowAgentMemoryNotes && _lastRenderedSnapshot is not null)
+            {
+                TranscriptItems.Children.Add(CreateAgentMemoryPanel(_lastRenderedSnapshot));
+            }
+
             TranscriptItems.Children.Add(CreateArenaReadyCard(_lastRenderedSnapshot));
             return;
         }
 
         if (visibleMessages.Length == 0)
         {
+            if (_wpfSettings.ShowAgentMemoryNotes && _lastRenderedSnapshot is not null)
+            {
+                TranscriptItems.Children.Add(CreateAgentMemoryPanel(_lastRenderedSnapshot));
+            }
+
             TranscriptItems.Children.Add(CreateEmptyStateCard(
                 "No transcript matches",
                 "Adjust the search text, turn preset, or speaker filters to widen the view.",
@@ -774,6 +800,10 @@ public partial class MainWindow : Window
         {
             EnsureTurnCompareSelection(visibleMessages);
             TranscriptItems.Children.Add(CreateTurnComparePanel(visibleMessages));
+        }
+        if (_wpfSettings.ShowAgentMemoryNotes && _lastRenderedSnapshot is not null)
+        {
+            TranscriptItems.Children.Add(CreateAgentMemoryPanel(_lastRenderedSnapshot));
         }
 
         foreach (var message in visibleMessages.OrderByDescending(message => message.Turn))
@@ -1905,6 +1935,268 @@ public partial class MainWindow : Window
     {
         var delta = leftMs - rightMs;
         return delta == 0 ? "0s" : delta > 0 ? $"+{FormatDuration(delta)}" : $"-{FormatDuration(Math.Abs(delta))}";
+    }
+
+    private Border CreateAgentMemoryPanel(ArenaSnapshot snapshot)
+    {
+        var accent = ResourceBrush("GammaAccentBrush");
+        var panel = new StackPanel();
+        var activeAgents = snapshot.Agents.Where(agent => agent.Active).ToArray();
+        var noteCount = snapshot.Agents.Sum(agent => agent.PrivateNotes.Count);
+
+        var header = new Grid { Margin = new Thickness(0, 0, 0, 10) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var titleStack = new StackPanel();
+        titleStack.Children.Add(new TextBlock
+        {
+            Text = "Agent Memory Notes",
+            Foreground = ResourceBrush("TextBrush"),
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold
+        });
+        titleStack.Children.Add(new TextBlock
+        {
+            Text = $"{noteCount} note(s) across {activeAgents.Length} active agent(s). Notes are written into the session snapshot and used by model context windows.",
+            Foreground = ResourceBrush("MutedTextBrush"),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 2, 0, 0)
+        });
+        Grid.SetColumn(titleStack, 0);
+        header.Children.Add(titleStack);
+
+        var actions = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        actions.Children.Add(ActionButton("Refresh", (_, _) => PopulateTranscript(_lastRenderedMessages), true));
+        actions.Children.Add(ActionButton("Clear all", async (_, _) => await ClearAllAgentMemoryNotesAsync(), noteCount > 0, TranscriptActionKind.Danger));
+        Grid.SetColumn(actions, 1);
+        header.Children.Add(actions);
+        panel.Children.Add(header);
+
+        var grid = new UniformGrid
+        {
+            Columns = _wpfSettings.CompactTranscriptMode ? 1 : 2
+        };
+        foreach (var agent in snapshot.Agents)
+        {
+            grid.Children.Add(CreateAgentMemoryCard(agent));
+        }
+
+        if (snapshot.Agents.Count == 0)
+        {
+            grid.Children.Add(CreateMemoryPlaceholder());
+        }
+
+        panel.Children.Add(grid);
+
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("CardBrush"), accent, 0.08),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.45),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(12),
+            Margin = new Thickness(0, 0, 0, 12),
+            Child = panel
+        };
+    }
+
+    private Border CreateAgentMemoryCard(AgentState agent)
+    {
+        var accent = AccentForSpeaker(agent.Id);
+        var stack = new StackPanel();
+
+        var header = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var title = new StackPanel();
+        title.Children.Add(new TextBlock
+        {
+            Text = $"{agent.Id.ToUpperInvariant()}: {agent.Name}",
+            Foreground = accent,
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        title.Children.Add(new TextBlock
+        {
+            Text = $"{ShortModelName(agent.Model)} - {agent.PrivateNotes.Count} note(s)",
+            Foreground = ResourceBrush("MutedTextBrush"),
+            FontSize = 11,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        Grid.SetColumn(title, 0);
+        header.Children.Add(title);
+
+        var actions = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        actions.Children.Add(ActionButton("Edit", async (_, _) => await EditAgentMemoryNotesAsync(agent), true, TranscriptActionKind.Primary));
+        actions.Children.Add(ActionButton("Clear", async (_, _) => await SaveAgentMemoryNotesAsync(agent.Id, []), agent.PrivateNotes.Count > 0, TranscriptActionKind.Danger));
+        Grid.SetColumn(actions, 1);
+        header.Children.Add(actions);
+        stack.Children.Add(header);
+
+        if (agent.PrivateNotes.Count == 0)
+        {
+            stack.Children.Add(new TextBlock
+            {
+                Text = "No private notes yet.",
+                Foreground = ResourceBrush("MutedTextBrush"),
+                FontSize = 12,
+                FontStyle = FontStyles.Italic
+            });
+        }
+        else
+        {
+            var list = new StackPanel();
+            foreach (var note in agent.PrivateNotes.Take(_wpfSettings.CompactTranscriptMode ? 4 : 6))
+            {
+                list.Children.Add(new TextBlock
+                {
+                    Text = "- " + note,
+                    Foreground = ResourceBrush("TextBrush"),
+                    FontSize = _wpfSettings.CompactTranscriptMode ? 12 : 13,
+                    LineHeight = _wpfSettings.CompactTranscriptMode ? 17 : 19,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 0, 4)
+                });
+            }
+
+            if (agent.PrivateNotes.Count > (_wpfSettings.CompactTranscriptMode ? 4 : 6))
+            {
+                list.Children.Add(new TextBlock
+                {
+                    Text = $"+ {agent.PrivateNotes.Count - (_wpfSettings.CompactTranscriptMode ? 4 : 6)} more",
+                    Foreground = ResourceBrush("MutedTextBrush"),
+                    FontSize = 11,
+                    FontWeight = FontWeights.SemiBold
+                });
+            }
+
+            stack.Children.Add(list);
+        }
+
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.08),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.4),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10),
+            Margin = new Thickness(0, 0, _wpfSettings.CompactTranscriptMode ? 0 : 8, 8),
+            MinHeight = _wpfSettings.CompactTranscriptMode ? 104 : 132,
+            Child = stack
+        };
+    }
+
+    private Border CreateMemoryPlaceholder()
+    {
+        return new Border
+        {
+            Background = ResourceBrush("InputBrush"),
+            BorderBrush = ResourceBrush("DisabledBorderBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10),
+            Child = new TextBlock
+            {
+                Text = "No agents are available in this session.",
+                Foreground = ResourceBrush("MutedTextBrush"),
+                TextWrapping = TextWrapping.Wrap
+            }
+        };
+    }
+
+    private async Task EditAgentMemoryNotesAsync(AgentState agent)
+    {
+        var edited = TextEditDialog.Show(
+            this,
+            _theme,
+            $"Edit {agent.Name} memory",
+            string.Join(Environment.NewLine, agent.PrivateNotes),
+            "One memory note per line. Empty lines are ignored.");
+        if (edited is null)
+        {
+            return;
+        }
+
+        await SaveAgentMemoryNotesAsync(agent.Id, NormalizeMemoryNotes(edited));
+    }
+
+    private async Task ClearAllAgentMemoryNotesAsync()
+    {
+        var confirm = ConfirmDialog.Show(
+            this,
+            _theme,
+            "Clear Memory Notes",
+            "Clear private memory notes for every agent in this session?",
+            "Clear",
+            tone: ConfirmDialogTone.Danger);
+        if (!confirm)
+        {
+            return;
+        }
+
+        await RunArenaBusyAsync("Clearing agent memory notes...", async () =>
+        {
+            if (_activeSession is null)
+            {
+                return;
+            }
+
+            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
+            if (snapshot is null)
+            {
+                return;
+            }
+
+            foreach (var agent in snapshot.Engine.Agents)
+            {
+                agent.PrivateNotes.Clear();
+            }
+
+            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
+            await _eventLogStore.AppendAsync(_activeSession.Id, "native_agent_memory_notes_cleared", new { AllAgents = true });
+            RefreshActiveSession("Cleared agent memory notes.");
+        });
+    }
+
+    private async Task SaveAgentMemoryNotesAsync(string agentId, IReadOnlyList<string> notes)
+    {
+        await RunArenaBusyAsync($"Saving {agentId} memory notes...", async () =>
+        {
+            if (_activeSession is null)
+            {
+                return;
+            }
+
+            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
+            var agent = snapshot?.Engine.Agents.FirstOrDefault(item => item.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase));
+            if (snapshot is null || agent is null)
+            {
+                ArenaRunStatus.Text = $"Agent {agentId} not found.";
+                return;
+            }
+
+            agent.PrivateNotes.Clear();
+            agent.PrivateNotes.AddRange(notes);
+
+            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
+            await _eventLogStore.AppendAsync(_activeSession.Id, "native_agent_memory_notes_saved", new { Agent = agentId, Count = notes.Count });
+            RefreshActiveSession($"Saved {DisplayStatusValue(agentId)} memory notes.");
+        });
+    }
+
+    private static IReadOnlyList<string> NormalizeMemoryNotes(string text)
+    {
+        return text
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(note => !string.IsNullOrWhiteSpace(note))
+            .Select(note => note.Length <= 400 ? note : note[..400])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(60)
+            .ToArray();
     }
 
     private IReadOnlyList<Border> CreateTranscriptStatPills(TranscriptMessage message, bool isInternet)
@@ -4367,6 +4659,7 @@ public partial class MainWindow : Window
         AllowParticipantInternetCheckBox.IsEnabled = !busy;
         AllowNarratorInternetCheckBox.IsEnabled = !busy;
         RequireInternetApprovalCheckBox.IsEnabled = !busy;
+        MemoryNotesCheckBox.IsEnabled = !busy;
         AutoChatCadencePicker.IsEnabled = !busy;
         AvatarStylePicker.IsEnabled = !busy;
         SystemGlyphStylePicker.IsEnabled = !busy;
