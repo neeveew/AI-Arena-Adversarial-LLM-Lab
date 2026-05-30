@@ -1203,24 +1203,32 @@
                             BorderBrush="{DynamicResource DisabledBorderBrush}"
                             BorderThickness="1"
                             CornerRadius="6"
-                            Padding="8"
+                            Padding="7"
                             Margin="18,0,0,0"
                             VerticalAlignment="Center">
-                        <UniformGrid Columns="2">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Generate"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       FontWeight="SemiBold"
+                                       FontSize="11"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,10,0" />
                             <Button x:Name="RandomSeedButton"
                                     Content="RANDOM SEED"
                                     Click="RandomSeedButton_Click"
                                     Background="{DynamicResource PrimaryBrush}"
                                     BorderBrush="{DynamicResource PrimaryBorderBrush}"
-                                    Padding="12,7"
-                                    Margin="0,0,8,0" />
+                                    FontSize="11"
+                                    Padding="11,6"
+                                    Margin="0,0,6,0" />
                             <Button x:Name="AiChoiceButton"
                                     Content="AI CHOICE"
                                     Click="AiChoiceButton_Click"
                                     Background="{DynamicResource AssistBrush}"
                                     BorderBrush="{DynamicResource AssistBorderBrush}"
-                                    Padding="12,7" />
-                        </UniformGrid>
+                                    FontSize="11"
+                                    Padding="11,6" />
+                        </StackPanel>
                     </Border>
                 </Grid>
                 <ScrollViewer Grid.Row="1"
@@ -1228,7 +1236,7 @@
                               HorizontalScrollBarVisibility="Disabled">
                     <StackPanel>
                         <TextBlock Text="SCENARIO PREVIEW" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
-                        <StackPanel x:Name="ScenarioPreviewItems" Margin="0,0,0,18" />
+                        <UniformGrid x:Name="ScenarioPreviewItems" Columns="2" Margin="0,0,0,18" />
                         <TextBlock Text="CAST PREVIEW" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
                         <StackPanel x:Name="CastPreviewItems" Margin="0,0,0,18" />
                         <Grid Margin="0,0,0,18">

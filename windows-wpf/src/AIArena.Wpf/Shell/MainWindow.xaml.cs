@@ -1106,7 +1106,7 @@ public partial class MainWindow : Window
             {
                 CastPreviewItems.Children.Add(CreateLockCard(
                     agent.Id,
-                    $"{agent.Id}: {agent.Name}",
+                    FormatCastPreviewTitle(agent.Id, agent.Name),
                     string.IsNullOrWhiteSpace(agent.Persona) ? "(no persona)" : agent.Persona,
                     BlendBrush(ResourceBrush("CardBrush"), AccentForSpeaker(agent.Id), 0.16),
                     AccentForSpeaker(agent.Id),
@@ -1116,7 +1116,7 @@ public partial class MainWindow : Window
 
         CastPreviewItems.Children.Add(CreateLockCard(
             "narrator",
-            "narrator: Narrator",
+            "Narrator",
             string.IsNullOrWhiteSpace(snapshot.NarratorPersona) ? "(no narrator persona)" : snapshot.NarratorPersona,
             BlendBrush(ResourceBrush("CardBrush"), ResourceBrush("NarratorAccentBrush"), 0.16),
             ResourceBrush("NarratorAccentBrush"),
@@ -1232,16 +1232,17 @@ public partial class MainWindow : Window
 
     private Border CreateLockCard(string lockKey, string title, string body, Brush background, Brush accent, bool locked)
     {
+        var lockAccent = ResourceBrush("BetaAccentBrush");
+        var isCastCard = IsAgentSpeaker(lockKey) || NormalizeMatchLockKey(lockKey) == "narrator";
+        var cardAccent = locked ? lockAccent : accent;
         var lockBox = new CheckBox
         {
-            Content = locked ? "Locked" : "Unlocked",
-            Foreground = locked ? ResourceBrush("TextBrush") : ResourceBrush("MutedTextBrush"),
             IsChecked = locked,
             IsEnabled = !_arenaBusy,
             Tag = lockKey,
             Style = CreateLockToggleStyle(),
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(10, 0, 0, 0)
+            ToolTip = locked ? "Locked. Click to unlock." : "Unlocked. Click to lock."
         };
         lockBox.Checked += MatchLockChanged;
         lockBox.Unchecked += MatchLockChanged;
@@ -1252,68 +1253,118 @@ public partial class MainWindow : Window
             Content = "EDIT",
             Tag = lockKey,
             MinHeight = 28,
-            Padding = new Thickness(10, 3, 10, 3),
-            Margin = new Thickness(10, 0, 0, 0),
+            Padding = new Thickness(9, 3, 9, 3),
+            Margin = new Thickness(0, 0, 8, 0),
             Background = ResourceBrush("InputBrush"),
-            BorderBrush = accent,
+            BorderBrush = cardAccent,
             Foreground = ResourceBrush("TextBrush"),
+            FontSize = 11,
             FontWeight = FontWeights.SemiBold,
             ToolTip = "Edit this text and lock it"
         };
         editButton.Click += EditLockCardButton_Click;
 
-        var header = new Grid();
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        header.Children.Add(new TextBlock
+        var header = new DockPanel { LastChildFill = true };
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(14, 0, 0, 0)
+        };
+        actions.Children.Add(editButton);
+        actions.Children.Add(lockBox);
+        DockPanel.SetDock(actions, Dock.Right);
+        header.Children.Add(actions);
+
+        var titlePanel = new StackPanel { Orientation = Orientation.Horizontal };
+        titlePanel.Children.Add(new TextBlock
         {
             Text = title,
             Foreground = accent,
-            FontSize = 16,
+            FontSize = 14,
             FontWeight = FontWeights.SemiBold,
-            TextWrapping = TextWrapping.Wrap
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center
         });
-        Grid.SetColumn(editButton, 1);
-        header.Children.Add(editButton);
-        Grid.SetColumn(lockBox, 2);
-        header.Children.Add(lockBox);
-
-        var content = new Grid();
-        content.Margin = new Thickness(0, 10, 0, 0);
-        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(5) });
-        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        content.Children.Add(new Border
+        titlePanel.Children.Add(CreateLockMetaChip(DisplayLockKey(lockKey), accent));
+        if (locked)
         {
-            Background = accent,
-            CornerRadius = new CornerRadius(3),
-            Width = IsAgentSpeaker(lockKey) ? 8 : 5,
-            Margin = new Thickness(0, 2, 12, 2)
-        });
+            titlePanel.Children.Add(CreateLockMetaChip("Locked", lockAccent));
+        }
+        header.Children.Add(titlePanel);
+
         var text = new TextBlock
         {
             Text = body,
             Foreground = ResourceBrush("TextBrush"),
             TextWrapping = TextWrapping.Wrap,
-            LineHeight = 20
+            FontSize = 12,
+            LineHeight = 18,
+            Margin = new Thickness(0, 8, 0, 0)
         };
-        Grid.SetColumn(text, 1);
-        content.Children.Add(text);
 
         var stack = new StackPanel();
         stack.Children.Add(header);
-        stack.Children.Add(content);
+        stack.Children.Add(text);
+
+        var layout = new Grid();
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(7) });
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        layout.Children.Add(new Border
+        {
+            Background = cardAccent,
+            CornerRadius = new CornerRadius(4),
+            Margin = new Thickness(0, 1, 10, 1)
+        });
+        Grid.SetColumn(stack, 1);
+        layout.Children.Add(stack);
 
         return new Border
         {
-            Background = BlendBrush(background, accent, locked ? 0.2 : IsAgentSpeaker(lockKey) ? 0.12 : 0.07),
-            BorderBrush = locked ? ResourceBrush("BetaAccentBrush") : BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.32),
+            Background = BlendBrush(background, accent, locked ? 0.16 : isCastCard ? 0.1 : 0.05),
+            BorderBrush = locked ? lockAccent : BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.36),
             BorderThickness = locked ? new Thickness(2) : new Thickness(1),
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(12),
-            Margin = new Thickness(0, 0, 0, 10),
-            Child = stack
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(10),
+            Margin = new Thickness(0, 0, isCastCard ? 0 : 10, 10),
+            Child = layout
         };
+    }
+
+    private Border CreateLockMetaChip(string text, Brush accent)
+    {
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.08),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.36),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(5, 1, 5, 1),
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock
+            {
+                Text = text,
+                Foreground = accent,
+                FontSize = 10,
+                FontWeight = FontWeights.SemiBold
+            }
+        };
+    }
+
+    private static string FormatCastPreviewTitle(string id, string name)
+    {
+        var role = DisplayLockKey(id);
+        var cleaned = string.IsNullOrWhiteSpace(name) ? role : name.Trim();
+        var duplicatePrefix = $"{role}:";
+        if (cleaned.StartsWith(duplicatePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            cleaned = cleaned[duplicatePrefix.Length..].Trim();
+        }
+
+        return string.IsNullOrWhiteSpace(cleaned) || cleaned.Equals(role, StringComparison.OrdinalIgnoreCase)
+            ? role
+            : $"{role}: {cleaned}";
     }
 
     private Style CreateLockToggleStyle()
@@ -1327,27 +1378,18 @@ public partial class MainWindow : Window
         style.Setters.Add(new Setter(Control.ForegroundProperty, ResourceBrush("MutedTextBrush")));
         style.Setters.Add(new Setter(Control.FontWeightProperty, FontWeights.SemiBold));
         style.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 28d));
-        style.Setters.Add(new Setter(FrameworkElement.WidthProperty, 132d));
+        style.Setters.Add(new Setter(FrameworkElement.WidthProperty, 44d));
         style.Setters.Add(new Setter(FrameworkElement.CursorProperty, Cursors.Hand));
 
         var template = new ControlTemplate(typeof(CheckBox));
         var root = new FrameworkElementFactory(typeof(Grid));
-        root.SetValue(TextElement.ForegroundProperty, new TemplateBindingExtension(Control.ForegroundProperty));
-        root.AppendChild(GridColumnDefinition(1, GridUnitType.Star));
-        root.AppendChild(GridColumnDefinition(52, GridUnitType.Pixel));
-
-        var text = new FrameworkElementFactory(typeof(ContentPresenter));
-        text.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
-        text.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 10, 0));
-        text.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
-        root.AppendChild(text);
 
         var track = new FrameworkElementFactory(typeof(Border));
         track.Name = "LockTrack";
-        track.SetValue(Grid.ColumnProperty, 1);
-        track.SetValue(FrameworkElement.WidthProperty, 44d);
+        track.SetValue(FrameworkElement.WidthProperty, 42d);
         track.SetValue(FrameworkElement.HeightProperty, 22d);
-        track.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Right);
+        track.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        track.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
         track.SetValue(Border.BackgroundProperty, ResourceBrush("InputBrush"));
         track.SetValue(Border.BorderBrushProperty, ResourceBrush("ControlBorderBrush"));
         track.SetValue(Border.BorderThicknessProperty, new Thickness(1));
@@ -1377,13 +1419,13 @@ public partial class MainWindow : Window
 
         var checkedTrigger = new Trigger { Property = ToggleButton.IsCheckedProperty, Value = true };
         checkedTrigger.Setters.Add(new Setter(Control.ForegroundProperty, ResourceBrush("TextBrush")));
-        checkedTrigger.Setters.Add(new Setter(Border.BackgroundProperty, ResourceBrush("PrimaryBrush"), "LockTrack"));
+        checkedTrigger.Setters.Add(new Setter(Border.BackgroundProperty, BlendBrush(ResourceBrush("InputBrush"), ResourceBrush("BetaAccentBrush"), 0.16), "LockTrack"));
         checkedTrigger.Setters.Add(new Setter(Border.BorderBrushProperty, ResourceBrush("BetaAccentBrush"), "LockTrack"));
-        checkedTrigger.Setters.Add(new Setter(Border.BackgroundProperty, ResourceBrush("TextBrush"), "LockThumb"));
+        checkedTrigger.Setters.Add(new Setter(Border.BackgroundProperty, ResourceBrush("BetaAccentBrush"), "LockThumb"));
         checkedTrigger.Setters.Add(new Setter(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Right, "LockThumb"));
         checkedTrigger.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(0, 0, 3, 0), "LockThumb"));
         checkedTrigger.Setters.Add(new Setter(TextBlock.TextProperty, "\uE72E", "LockGlyph"));
-        checkedTrigger.Setters.Add(new Setter(TextBlock.ForegroundProperty, ResourceBrush("BetaAccentBrush"), "LockGlyph"));
+        checkedTrigger.Setters.Add(new Setter(TextBlock.ForegroundProperty, ResourceBrush("InputBrush"), "LockGlyph"));
         template.Triggers.Add(checkedTrigger);
 
         var hoverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
@@ -1398,13 +1440,6 @@ public partial class MainWindow : Window
         style.Setters.Add(new Setter(Control.TemplateProperty, template));
         _lockToggleStyle = style;
         return style;
-    }
-
-    private static FrameworkElementFactory GridColumnDefinition(double value, GridUnitType unit)
-    {
-        var definition = new FrameworkElementFactory(typeof(ColumnDefinition));
-        definition.SetValue(ColumnDefinition.WidthProperty, new GridLength(value, unit));
-        return definition;
     }
 
     private Border CreateTranscriptCard(TranscriptMessage message, bool retryable, bool searchMatch, bool isLatest)
