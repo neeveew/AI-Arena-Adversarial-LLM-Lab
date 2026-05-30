@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.3.43-beta"
+    [string]$Version = "0.3.44-beta"
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,6 +16,7 @@ $dependencyIndexScript = Join-Path $Root "scripts/dependency-index.ps1"
 $licenseFile = Join-Path $Root "LICENSE"
 $noticeFile = Join-Path $Root "NOTICE.md"
 $userGuideFile = Join-Path $Root "windows-wpf/docs/USER_GUIDE.md"
+$shortcutIconFile = Join-Path $Root "windows-wpf/src/AIArena.Wpf/Assets/ai-arena-icon.ico"
 
 function Assert-PathExists {
     param([string]$Path, [string]$Label)
@@ -32,6 +33,7 @@ Assert-PathExists $dependencyIndexScript "dependency index script"
 Assert-PathExists $licenseFile "licence file"
 Assert-PathExists $noticeFile "notice file"
 Assert-PathExists $userGuideFile "user guide"
+Assert-PathExists $shortcutIconFile "shortcut icon"
 
 & $dependencyIndexScript -Check
 
@@ -62,6 +64,15 @@ if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\NOTICE\.md"; DestDir: "\{app\}"'
 }
 if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\windows-wpf\\docs\\USER_GUIDE\.md"; DestDir: "\{app\}"') {
     throw "Installer no longer installs USER_GUIDE.md beside the app."
+}
+if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\windows-wpf\\src\\AIArena\.Wpf\\Assets\\ai-arena-icon\.ico"; DestDir: "\{app\}"') {
+    throw "Installer no longer installs the app icon beside the app."
+}
+if ($scriptText -notmatch 'Name: "\{userdesktop\}\\\{#MyAppName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
+    throw "Desktop shortcut no longer has an explicit icon."
+}
+if ($scriptText -notmatch 'Name: "\{group\}\\\{#MyAppName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
+    throw "Start Menu shortcut no longer has an explicit icon."
 }
 
 $licenseText = Get-Content -LiteralPath $licenseFile -Raw

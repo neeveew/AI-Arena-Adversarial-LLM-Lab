@@ -1,10 +1,11 @@
 ; Inno Setup installer for the native WPF AI Arena build.
 
 #define MyAppName "AI Arena"
-#define MyAppVersion "0.3.43-beta"
+#define MyAppVersion "0.3.44-beta"
 #define MyAppPublisher "Dominik Fiala"
 #define MyAppExeName "AI Arena.exe"
-#define MyReleaseDir "..\..\dist\AI Arena - 0.3.43-beta"
+#define MyAppIconName "ai-arena-icon.ico"
+#define MyReleaseDir "..\..\dist\AI Arena - 0.3.44-beta"
 
 [Setup]
 AppId={{E2F12C8E-9B8C-45C3-B9A1-A8F8E1725F61}
@@ -35,10 +36,11 @@ Source: "{#MyReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdi
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\windows-wpf\docs\USER_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\windows-wpf\src\AIArena.Wpf\Assets\ai-arena-icon.ico"; DestDir: "{app}"; DestName: "{#MyAppIconName}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconName}"
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
