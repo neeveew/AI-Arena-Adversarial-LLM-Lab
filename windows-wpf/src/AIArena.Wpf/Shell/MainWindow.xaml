@@ -1236,7 +1236,7 @@
                                     BorderBrush="{DynamicResource BetaAccentBrush}"
                                     FontSize="11"
                                     Padding="11,6"
-                                    ToolTip="Generate a full meta scenario for the arena simulation" />
+                                    ToolTip="Generate a local seeded meta setup for the arena simulation" />
                         </StackPanel>
                     </Border>
                 </Grid>

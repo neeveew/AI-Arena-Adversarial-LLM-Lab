@@ -31,7 +31,7 @@ var tests = new (string Name, Action Test)[]
     ("saves restores and deletes native checkpoints", SaveRestoreDeleteNativeCheckpoints),
     ("writes timestamped event log entries", WriteTimestampedEventLogEntries),
     ("generates random seed match respecting locks", GenerateRandomSeedMatchRespectingLocks),
-    ("generates meta scenario respecting locks", GenerateMetaScenarioRespectingLocks),
+    ("generates YOLO seed respecting locks", GenerateYoloSeedRespectingLocks),
     ("adds narrator message to transcript", AddNarratorMessageToTranscript),
     ("curates news into transcript when internet is enabled", CurateNewsIntoTranscriptWhenInternetEnabled),
     ("curated news plans focused search query", CuratedNewsPlansFocusedSearchQuery),
@@ -500,7 +500,7 @@ static void GenerateRandomSeedMatchRespectingLocks()
     Directory.Delete(root, recursive: true);
 }
 
-static void GenerateMetaScenarioRespectingLocks()
+static void GenerateYoloSeedRespectingLocks()
 {
     var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
     var store = new SessionStore(root);
@@ -510,36 +510,24 @@ static void GenerateMetaScenarioRespectingLocks()
     var alphaPersona = snapshot.Engine.Agents[0].Persona;
     store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
 
-    const string generatedJson = """
-    {
-      "label": "Simulation pressure lab",
-      "style": "adversarial",
-      "scenario": {
-        "topic": "A self-auditing arena tests whether role-bound LLM agents can expose weak assumptions before consensus forms.",
-        "global": "You are participants in AI Arena, a structured adversarial simulation. Keep distinct roles, debate publicly, respect turn order, make uncertainty visible, and let the narrator evaluate discourse quality without joining the debate.",
-        "narrator_brief": "Track role drift, unsupported claims, consensus pressure, and whether disagreement produces better constraints."
-      },
-      "personas": [
-        {"agent_id": "alpha", "role": "Protocol Skeptic", "persona": "Protocol Skeptic. Test whether the simulation rules hide bad assumptions."},
-        {"agent_id": "beta", "role": "Constraint Builder", "persona": "Constraint Builder. Convert vague claims into enforceable checks."},
-        {"agent_id": "gamma", "role": "Synthesis Auditor", "persona": "Synthesis Auditor. Detect premature agreement and demand sharper tradeoffs."},
-        {"agent_id": "narrator", "role": "Discourse Monitor", "persona": "Discourse Monitor. Observe the arena quality without joining as an agent."}
-      ]
-    }
-    """;
-    var client = new FakeModelProviderClient(generatedJson, "meta reasoning");
+    var client = new FakeModelProviderClient("should not be called", "unused reasoning");
     var service = new MatchGenerationService(client, store, log);
 
-    var result = service.GenerateMetaScenarioAsync("default").GetAwaiter().GetResult();
-    Require(result.Ok, $"meta scenario failed: {result.Error}");
+    var result = service.GenerateYoloSeedAsync("default").GetAwaiter().GetResult();
+    Require(result.Ok, $"YOLO seed failed: {result.Error}");
+    Require(result.Seed.StartsWith("YOLO-", StringComparison.Ordinal), "YOLO seed prefix mismatch");
     var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
-    Require(loaded.MatchType == "adversarial", "meta scenario style was not applied");
-    Require(loaded.Engine.Steering.Global.Contains("structured adversarial simulation", StringComparison.OrdinalIgnoreCase), "meta scenario global did not apply");
+    Require(!string.IsNullOrWhiteSpace(loaded.Engine.Steering.Topic), "YOLO topic was not generated");
+    Require(loaded.Engine.Steering.Global.Contains("AI Arena", StringComparison.OrdinalIgnoreCase), "YOLO global did not describe app operation");
+    Require(loaded.ScenarioGenerator.Seed == result.Seed, "YOLO scenario seed was not stored");
+    Require(loaded.PersonaRandomizer.Seed == result.Seed, "YOLO persona seed was not stored");
+    Require(loaded.PersonaRandomizer.Style == "yolo", "YOLO persona style was not stored");
     Require(loaded.Engine.Agents[0].Persona == alphaPersona, "locked alpha persona changed");
-    Require(loaded.Engine.Agents[1].Name.Contains("Constraint Builder", StringComparison.Ordinal), "unlocked beta role was not applied");
+    Require(loaded.Engine.Agents[1].Persona != "Pragmatic implementer.", "unlocked beta persona did not change");
+    Require(loaded.Engine.Narrator.Persona.Contains("AI Arena", StringComparison.OrdinalIgnoreCase), "YOLO narrator persona did not describe app operation");
     Require(loaded.Engine.Messages.Count == 1, "transcript was not preserved");
-    Require(client.Requests.Single().Any(message => message.Content.Contains("meta scenario", StringComparison.OrdinalIgnoreCase)), "meta scenario prompt was not sent");
-    Require(File.ReadAllText(log.EventPath()).Contains("native_meta_scenario_generated"), "meta scenario event was not logged");
+    Require(client.Requests.Count == 0, "YOLO seed should not call the model provider");
+    Require(File.ReadAllText(log.EventPath()).Contains("native_yolo_seed_match_generated"), "YOLO seed event was not logged");
     Directory.Delete(root, recursive: true);
 }
 

@@ -2862,8 +2862,8 @@ public partial class MainWindow : Window
         var confirm = ConfirmDialog.Show(
             this,
             _theme,
-            "YOLO Meta Scenario",
-            "Ask the narrator model to generate a full meta scenario for the arena simulation?\n\nLocked fields and the current transcript will be preserved.",
+            "YOLO Seed",
+            "Generate a local seeded meta setup for the arena simulation?\n\nLocked fields and the current transcript will be preserved.",
             "Generate",
             tone: ConfirmDialogTone.Normal);
         if (!confirm)
@@ -2871,12 +2871,12 @@ public partial class MainWindow : Window
             return;
         }
 
-        await RunArenaBusyAsync("Generating YOLO meta scenario...", YoloScenarioButton, async () =>
+        await RunArenaBusyAsync("Generating YOLO seed...", YoloScenarioButton, async () =>
         {
-            var result = await _matchGeneration.GenerateMetaScenarioAsync(_activeSession.Id);
+            var result = await _matchGeneration.GenerateYoloSeedAsync(_activeSession.Id);
             var status = result.Ok
-                ? $"YOLO meta scenario generated: {result.Label}"
-                : $"YOLO meta scenario failed: {result.Error}";
+                ? $"YOLO seed generated: {result.Label} - {result.Seed}"
+                : $"YOLO seed failed: {result.Error}";
             RefreshActiveSession(status);
         }, allowDuringAutoChat: true);
     }

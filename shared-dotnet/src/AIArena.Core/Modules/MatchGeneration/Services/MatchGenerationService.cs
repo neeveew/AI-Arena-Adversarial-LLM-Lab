@@ -89,7 +89,7 @@ public sealed class MatchGenerationService
         return MatchGenerationResult.Completed(generated.Label, "ai-choice", generated.Style);
     }
 
-    public async Task<MatchGenerationResult> GenerateMetaScenarioAsync(string sessionId, CancellationToken cancellationToken = default)
+    public async Task<MatchGenerationResult> GenerateYoloSeedAsync(string sessionId, CancellationToken cancellationToken = default)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
@@ -97,42 +97,18 @@ public sealed class MatchGenerationService
             return MatchGenerationResult.Failed($"No snapshot found for session {sessionId}.");
         }
 
-        var config = ResolveProviderConfig(snapshot, "narrator", out var fallbackConfig);
-        if (config is null)
-        {
-            return MatchGenerationResult.Failed("No provider config for narrator.");
-        }
-
-        var prompt = BuildMetaScenarioPrompt(snapshot);
-        var result = await _modelClient.CompleteChatAsync(config, prompt, cancellationToken);
-        if (!result.Ok && fallbackConfig is not null)
-        {
-            result = await _modelClient.CompleteChatAsync(fallbackConfig, prompt, cancellationToken);
-        }
-        if (!result.Ok)
-        {
-            snapshot.Engine.LastError = result.Error;
-            await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-            return MatchGenerationResult.Failed(result.Error);
-        }
-
-        if (!TryParseGeneratedMatch(result.Text, RequiredAgentIds(snapshot), "Meta scenario", "meta-scenario", out var generated, out var error))
-        {
-            snapshot.Engine.LastError = error;
-            await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-            return MatchGenerationResult.Failed(error);
-        }
-
+        var seed = $"yolo-{Guid.NewGuid():N}"[..13].ToUpperInvariant();
+        var style = RandomStyle(seed, snapshot.MatchType);
+        var generated = GenerateYoloMatch(style, seed, RequiredAgentIds(snapshot));
         ApplyGeneratedMatch(snapshot, generated, clearTranscript: false);
-        snapshot.MatchType = NormalizeStyle(generated.Style);
-        snapshot.ScenarioGenerator.Style = snapshot.MatchType;
-        snapshot.ScenarioGenerator.Seed = "meta-scenario";
-        snapshot.PersonaRandomizer.Style = snapshot.MatchType is "technical" ? "technical" : snapshot.MatchType is "adversarial" ? "adversarial" : "balanced";
-        snapshot.PersonaRandomizer.Seed = "meta-scenario";
+        snapshot.ScenarioGenerator.Style = style;
+        snapshot.ScenarioGenerator.Seed = seed;
+        snapshot.PersonaRandomizer.Style = "yolo";
+        snapshot.PersonaRandomizer.Seed = seed;
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-        await _eventLogStore.AppendAsync(sessionId, "native_meta_scenario_generated", new { generated.Label, generated.Style, locks = snapshot.MatchLocks }, cancellationToken);
-        return MatchGenerationResult.Completed(generated.Label, "meta-scenario", generated.Style);
+        await _eventLogStore.AppendAsync(sessionId, "native_yolo_seed_match_generated", new { seed, style, generated.Label, locks = snapshot.MatchLocks }, cancellationToken);
+        return MatchGenerationResult.Completed(generated.Label, seed, style);
     }
 
     public async Task ToggleLockAsync(string sessionId, string key, bool locked, CancellationToken cancellationToken = default)
@@ -168,6 +144,35 @@ public sealed class MatchGenerationService
             topic,
             global,
             $"Track how the participants handle {tension}. Highlight unresolved cruxes, evidence gaps, and the path toward {outcome}.",
+            personas);
+    }
+
+    private static GeneratedMatch GenerateYoloMatch(string style, string seed, IReadOnlyList<string> agentIds)
+    {
+        var rng = new Random(StableSeed($"ai-arena-yolo:{style}:{seed}:{string.Join(",", agentIds)}"));
+        var frame = Pick(rng, YoloTemplatePools.Frames);
+        var operation = Pick(rng, YoloTemplatePools.OperationRules);
+        var pressure = Pick(rng, YoloTemplatePools.DiagnosticsPressures);
+        var demand = Pick(rng, YoloTemplatePools.OutputDemands);
+        var topic = $"{frame.Topic}: {pressure.TopicPressure} and produce {demand.TopicOutcome}.";
+        var global = string.Join(
+            " ",
+            frame.GlobalFrame,
+            operation,
+            pressure.GlobalPressure,
+            demand.GlobalDemand,
+            "Do not fetch external news or live data unless the operator explicitly provides it.");
+        var personas = agentIds
+            .Where(id => id is "alpha" or "beta" or "gamma" or "delta")
+            .Select(id => GeneratedPersona.Yolo(style, seed, id, pressure.PersonaPressure))
+            .Append(GeneratedPersona.YoloNarrator(style, seed, pressure.NarratorPressure))
+            .ToArray();
+        return new GeneratedMatch(
+            $"YOLO {frame.Label}",
+            style,
+            topic,
+            global,
+            $"Watch how the arena handles {pressure.NarratorPressure}. Track role drift, unsupported claims, consensus pressure, and whether disagreement improves the final constraints.",
             personas);
     }
 
@@ -232,39 +237,6 @@ public sealed class MatchGenerationService
                     "Each participant must get a distinct role and persona. Do not reuse the current cast roles.",
                     "Make the roles visibly different, specific, and useful for the scenario.",
                     $"Current match type: {snapshot.MatchType}",
-                    $"Current topic: {snapshot.Engine.Steering.Topic}",
-                    $"Current cast:{Environment.NewLine}{agents}",
-                    "Return this JSON shape:",
-                    $"{{\"label\":\"short label\",\"style\":\"balanced|adversarial|research|technical|philosophical\",\"scenario\":{{\"topic\":\"...\",\"global\":\"...\",\"narrator_brief\":\"...\"}},\"personas\":[{PersonaJsonShape(snapshot)},{{\"agent_id\":\"narrator\",\"role\":\"Narrator\",\"persona\":\"...\"}}]}}"))
-        ];
-    }
-
-    private static IReadOnlyList<ModelChatMessage> BuildMetaScenarioPrompt(ArenaSnapshot snapshot)
-    {
-        var agents = string.Join(Environment.NewLine, snapshot.Engine.Agents.Select(agent => $"- {agent.Id}: {agent.Name}: {agent.Persona}"));
-        var locked = snapshot.MatchLocks
-            .Where(item => item.Value)
-            .Select(item => item.Key)
-            .OrderBy(item => item)
-            .ToArray();
-        return
-        [
-            new ModelChatMessage(
-                "system",
-                "You generate AI Arena meta-scenario setup JSON. Return only valid JSON. No markdown. The setup must describe the arena simulation clearly to the LLM participants without becoming theatrical roleplay."),
-            new ModelChatMessage(
-                "user",
-                string.Join(
-                    Environment.NewLine,
-                    "Create a meta scenario for an adversarial LLM arena.",
-                    "The participants should understand they are role-bound agents inside a structured simulation.",
-                    "The goal is to stress-test reasoning, assumptions, disagreement, synthesis, constraint handling, and narrator diagnostics.",
-                    "Make the scenario concrete, tense, and testable. Avoid generic sci-fi framing.",
-                    "The global instruction must explain the simulation rules: distinct roles, public debate, turn order, narrator observation, evidence discipline, and productive disagreement.",
-                    "The narrator must track discourse quality without joining as Alpha, Beta, Gamma, or Delta.",
-                    "Give every participant a sharp cognitive role that fits the meta simulation.",
-                    $"Current match type: {snapshot.MatchType}",
-                    $"Locked fields that must be respected by the app after generation: {(locked.Length == 0 ? "none" : string.Join(", ", locked))}",
                     $"Current topic: {snapshot.Engine.Steering.Topic}",
                     $"Current cast:{Environment.NewLine}{agents}",
                     "Return this JSON shape:",
@@ -400,7 +372,7 @@ public sealed class MatchGenerationService
         return locks.TryGetValue(key, out var locked) && locked;
     }
 
-    private static string Pick(Random rng, IReadOnlyList<string> values) => values[rng.Next(values.Count)];
+    private static T Pick<T>(Random rng, IReadOnlyList<T> values) => values[rng.Next(values.Count)];
 
     private static int StableSeed(string value)
     {
@@ -505,6 +477,32 @@ internal sealed record GeneratedPersona(string AgentId, string Role, string Pers
         return persona with { Role = role, Persona = $"{role}. Track the exchange without joining as Alpha, Beta, Gamma, or Delta. {persona.Persona}" };
     }
 
+    public static GeneratedPersona Yolo(string style, string seed, string agentId, string pressure)
+    {
+        var rng = new Random(MatchGenerationServiceSeed($"yolo-persona:{style}:{seed}:{agentId}"));
+        var pools = YoloTemplatePools.ForPersona(agentId, style);
+        var role = pools.Roles[rng.Next(pools.Roles.Length)];
+        var thinking = pools.Thinking[rng.Next(pools.Thinking.Length)];
+        var temperament = pools.Temperaments[rng.Next(pools.Temperaments.Length)];
+        var priority = pools.Priorities[rng.Next(pools.Priorities.Length)];
+        var blindSpot = pools.BlindSpots[rng.Next(pools.BlindSpots.Length)];
+        return new GeneratedPersona(
+            agentId,
+            role,
+            $"{role}. Arena function: {thinking}. Pressure focus: {pressure}. Temperament: {temperament}. Priority/bias: {priority}. Blind spot: {blindSpot}.");
+    }
+
+    public static GeneratedPersona YoloNarrator(string style, string seed, string pressure)
+    {
+        var rng = new Random(MatchGenerationServiceSeed($"yolo-narrator:{style}:{seed}"));
+        var roles = new[] { "Discourse monitor", "Arena systems observer", "Diagnostic narrator", "Simulation auditor" };
+        var role = roles[rng.Next(roles.Length)];
+        return new GeneratedPersona(
+            "narrator",
+            role,
+            $"{role}. Observe AI Arena as a turn-based adversarial lab. Do not join as Alpha, Beta, Gamma, or Delta. Track {pressure}, role drift, unsupported claims, evidence pressure, consensus collapse, narrative heat, and whether the exchange produces sharper constraints.");
+    }
+
     private static int MatchGenerationServiceSeed(string value)
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
@@ -552,6 +550,107 @@ internal sealed record TemplatePools(string[] Domains, string[] Tensions, string
 }
 
 internal sealed record PersonaPools(string[] Roles, string[] Thinking, string[] Temperaments, string[] Priorities, string[] BlindSpots);
+
+internal sealed record YoloFrame(string Label, string Topic, string GlobalFrame);
+
+internal sealed record YoloPressure(string TopicPressure, string GlobalPressure, string PersonaPressure, string NarratorPressure);
+
+internal sealed record YoloDemand(string TopicOutcome, string GlobalDemand);
+
+internal static class YoloTemplatePools
+{
+    public static readonly YoloFrame[] Frames =
+    [
+        new(
+            "arena stress test",
+            "AI Arena self-audit",
+            "You are operating inside AI Arena, a turn-based adversarial LLM lab. Each participant has a distinct role and should maintain it across turns while making disagreement useful."),
+        new(
+            "simulation harness",
+            "role-bound simulation harness",
+            "AI Arena is acting as a structured simulation harness for LLM reasoning. Treat the app as a controlled arena where roles, turn order, operator constraints, and narrator diagnostics shape the exchange."),
+        new(
+            "reasoning pressure chamber",
+            "reasoning pressure chamber",
+            "You are participants in AI Arena as a reasoning pressure chamber. The app tracks how role-bound agents expose assumptions, challenge claims, and converge only after the crux is visible."),
+        new(
+            "red-team lab",
+            "adversarial red-team lab",
+            "AI Arena is running a red-team style debate lab. The goal is not performance theatre; the goal is to turn friction into clearer constraints and better decisions.")
+    ];
+
+    public static readonly string[] OperationRules =
+    [
+        "Operator messages are public constraints. Answer within your role, respect the turn sequence, and make private uncertainty visible through careful public reasoning.",
+        "The narrator observes discourse quality but does not participate as an agent. Agents should preserve role boundaries and avoid collapsing into generic agreement.",
+        "Each turn should add a test, crux, constraint, or useful disagreement. Do not merely restate the previous speaker.",
+        "Treat the transcript as shared working memory. Refer to prior claims precisely, separate facts from assumptions, and mark unresolved questions."
+    ];
+
+    public static readonly YoloPressure[] DiagnosticsPressures =
+    [
+        new(
+            "premature consensus versus productive conflict",
+            "The arena is watching consensus pressure, friction quality, and whether disagreement improves the result instead of becoming noise.",
+            "resist premature consensus while keeping disagreement useful",
+            "premature consensus, productive conflict, and whether objections sharpen the next move"),
+        new(
+            "unsupported claims versus evidence discipline",
+            "The arena is watching unsupported claims, evidence pressure, and whether agents turn vague assertions into testable statements.",
+            "force claims into evidence-shaped tests",
+            "unsupported claims, evidence gaps, and whether claims become testable"),
+        new(
+            "role drift versus useful specialization",
+            "The arena is watching role drift, specialization, and whether agents keep distinct cognitive functions under pressure.",
+            "hold a distinct role without becoming rigid",
+            "role drift, specialization quality, and whether each role earns its place"),
+        new(
+            "narrative heat versus operational clarity",
+            "The arena is watching narrative heat, operational clarity, and whether compelling language hides weak constraints.",
+            "cool dramatic framing into operational checks",
+            "narrative heat, clarity, and whether strong language masks weak reasoning")
+    ];
+
+    public static readonly YoloDemand[] OutputDemands =
+    [
+        new("a crux map with next tests", "Aim to produce a crux map, explicit assumptions, and the next test that could change the conclusion."),
+        new("a constraint ledger with failure modes", "Aim to produce a constraint ledger, failure modes, and the smallest reversible next step."),
+        new("a decision frame with open uncertainties", "Aim to produce a decision frame that preserves uncertainty where it matters and names what would resolve it."),
+        new("a tradeoff map with action thresholds", "Aim to produce a tradeoff map, action thresholds, and the boundary between acceptable and unacceptable risk.")
+    ];
+
+    public static PersonaPools ForPersona(string agentId, string style)
+    {
+        return agentId switch
+        {
+            "alpha" => new(
+                ["Frame setter", "Opening theorist", "Principle architect", "Initial model builder"],
+                ["establishes the first useful frame and exposes its assumptions", "turns the arena brief into a concrete opening model", "names the principle that the others can test"],
+                ["clear and energetic", "structured but open to challenge", "decisive without forcing closure"],
+                ["make the first map useful enough to attack", "give the debate a concrete target", "state assumptions before they become hidden premises"],
+                ["may over-own the initial frame", "may confuse a clean model with a complete one", "may underweight later objections"]),
+            "beta" => new(
+                ["Adversarial operator", "Friction engineer", "Claim challenger", "Operational translator"],
+                ["turns broad claims into operational checks", "tests whether the frame survives implementation pressure", "finds where confidence exceeds evidence"],
+                ["direct and constructive", "skeptical but practical", "pressure-oriented without being theatrical"],
+                ["make weak claims testable", "force costs and tradeoffs into view", "translate insight into workable moves"],
+                ["may overcorrect toward objection", "may undervalue fragile but useful ideas", "may flatten nuance into checklists"]),
+            "gamma" => new(
+                ["Synthesis auditor", "Crux mapper", "Decision integrator", "Consensus examiner"],
+                ["tracks what disagreement has actually resolved", "separates synthesis from premature agreement", "maps the crux between competing claims"],
+                ["patient and integrative", "measured but persistent", "calm under contradictory evidence"],
+                ["preserve useful disagreement while moving forward", "name the unresolved crux", "turn friction into a better decision frame"],
+                ["may smooth over necessary conflict", "may delay commitment while mapping context", "may mistake balance for progress"]),
+            "delta" => new(
+                ["Boundary sentinel", "Failure-mode cartographer", "Constraint witness", "Limit tester"],
+                ["tests the edge cases where the arena setup breaks", "marks boundaries between useful risk and unsafe overreach", "keeps exception paths visible"],
+                ["calm and exacting", "protective but not obstructive", "precise under pressure"],
+                ["protect the decision from hidden failure modes", "make operating limits explicit", "keep boundary cases visible without derailing the exchange"],
+                ["may over-index on rare failures", "may slow convergence with boundary checks", "may underplay upside while guarding downside"]),
+            _ => TemplatePools.ForPersona(style)
+        };
+    }
+}
 
 internal static class JsonElementCoreExtensions
 {
