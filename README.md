@@ -3,7 +3,11 @@
 AI Arena is a native Windows WPF app backed by the shared .NET core library.
 The previous dashboard stack has been removed from the active source tree.
 
-![AI Arena screenshot](screenshot%2001.png)
+## Screenshots
+
+![AI Arena transcript view](screenshot-transcript.png)
+
+![AI Arena custom match view](screenshot-custom-match.png)
 
 ## Projects
 
