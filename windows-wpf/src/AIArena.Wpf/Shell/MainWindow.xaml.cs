@@ -73,6 +73,7 @@ public partial class MainWindow : Window
     private Button? _breathingOperationButton;
     private bool _isDraggingSearchPopup;
     private bool _turnCompareSuppressAutoSeed;
+    private int? _timelineSelectedTurnFilter;
     private Point _searchPopupDragStart;
     private double _searchPopupDragStartHorizontalOffset;
     private double _searchPopupDragStartVerticalOffset;
@@ -777,6 +778,11 @@ public partial class MainWindow : Window
         _lastRenderedMessages = messages;
         TranscriptItems.Children.Clear();
         _transcriptActionButtons.Clear();
+        if (_timelineSelectedTurnFilter is int selectedTurn
+            && messages.All(message => message.Turn != selectedTurn))
+        {
+            _timelineSelectedTurnFilter = null;
+        }
 
         var visibleMessages = FilterTranscriptMessages(messages).ToArray();
         UpdateTranscriptResultCount(visibleMessages.Length, messages.Count);
@@ -799,6 +805,10 @@ public partial class MainWindow : Window
 
         if (visibleMessages.Length == 0)
         {
+            if (_wpfSettings.ShowMatchQualityTimeline)
+            {
+                TranscriptItems.Children.Add(CreateMatchQualityTimelinePanel(messages));
+            }
             if (_wpfSettings.ShowAgentMemoryNotes && _lastRenderedSnapshot is not null)
             {
                 TranscriptItems.Children.Add(CreateAgentMemoryPanel(_lastRenderedSnapshot));
@@ -863,7 +873,7 @@ public partial class MainWindow : Window
     private IEnumerable<TranscriptMessage> ApplyTranscriptTurnFilter(IEnumerable<TranscriptMessage> messages)
     {
         var filter = (TranscriptTurnFilterPicker?.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "all";
-        return filter switch
+        var filtered = filter switch
         {
             "latest10" => messages.OrderByDescending(message => message.Turn).Take(10),
             "latest25" => messages.OrderByDescending(message => message.Turn).Take(25),
@@ -871,6 +881,9 @@ public partial class MainWindow : Window
             "pinned" => messages.Where(message => message.Pinned),
             _ => messages
         };
+        return _timelineSelectedTurnFilter is int turn
+            ? filtered.Where(message => message.Turn == turn)
+            : filtered;
     }
 
     private void UpdateTranscriptResultCount(int visibleCount, int totalCount)
@@ -882,6 +895,11 @@ public partial class MainWindow : Window
 
         var search = CurrentTranscriptSearch();
         var filter = (TranscriptTurnFilterPicker?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "All Turns";
+        if (_timelineSelectedTurnFilter is int turn)
+        {
+            filter = $"Turn {turn}";
+        }
+
         TranscriptResultCountText.Text = string.IsNullOrWhiteSpace(search)
             ? visibleCount == totalCount
                 ? $"{visibleCount} shown"
@@ -1995,8 +2013,11 @@ public partial class MainWindow : Window
         Grid.SetColumn(titleStack, 0);
         header.Children.Add(titleStack);
 
-        var current = points.LastOrDefault();
-        var previous = points.Count >= 2 ? points[^2] : null;
+        var current = _timelineSelectedTurnFilter is int turnFilter
+            ? points.LastOrDefault(point => point.Turn == turnFilter) ?? points.LastOrDefault()
+            : points.LastOrDefault();
+        var currentIndex = current is null ? -1 : points.ToList().FindIndex(point => ReferenceEquals(point, current) || point.Turn == current.Turn);
+        var previous = currentIndex > 0 ? points[currentIndex - 1] : points.Count >= 2 ? points[^2] : null;
         var scoreStack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Right };
         scoreStack.Children.Add(new TextBlock
         {
@@ -2014,6 +2035,11 @@ public partial class MainWindow : Window
             FontWeight = FontWeights.SemiBold,
             HorizontalAlignment = HorizontalAlignment.Right
         });
+        if (_timelineSelectedTurnFilter is not null)
+        {
+            scoreStack.Children.Add(CreateTimelineClearButton());
+        }
+
         Grid.SetColumn(scoreStack, 1);
         header.Children.Add(scoreStack);
         panel.Children.Add(header);
@@ -2064,17 +2090,24 @@ public partial class MainWindow : Window
         foreach (var point in points.TakeLast(_wpfSettings.CompactTranscriptMode ? 24 : 36))
         {
             var accent = QualityAccent(point.Quality);
+            var selected = _timelineSelectedTurnFilter == point.Turn;
             var height = Math.Max(7, Math.Round(point.Quality / 100d * 28));
             var bar = new Border
             {
-                Width = 8,
+                Width = selected ? 12 : 8,
                 Height = 32,
-                Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.08),
-                BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.25),
-                BorderThickness = new Thickness(1),
+                Background = BlendBrush(ResourceBrush("InputBrush"), accent, selected ? 0.2 : 0.08),
+                BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, selected ? 0.85 : 0.25),
+                BorderThickness = new Thickness(selected ? 2 : 1),
                 CornerRadius = new CornerRadius(3),
                 Margin = new Thickness(0, 0, 4, 4),
-                ToolTip = $"Turn {point.Turn} {point.Speaker}{Environment.NewLine}Quality: {point.Quality} ({QualityLabel(point.Quality)}){Environment.NewLine}Tokens: {FormatCompactNumber(point.Tokens)}"
+                Cursor = Cursors.Hand,
+                ToolTip = $"Turn {point.Turn} {point.Speaker}{Environment.NewLine}Quality: {point.Quality} ({QualityLabel(point.Quality)}){Environment.NewLine}Tokens: {FormatCompactNumber(point.Tokens)}{Environment.NewLine}{(selected ? "Click to clear this turn filter." : "Click to filter transcript to this turn.")}"
+            };
+            bar.MouseLeftButtonUp += (_, e) =>
+            {
+                ApplyTimelineTurnFilter(point.Turn);
+                e.Handled = true;
             };
             bar.Child = new Border
             {
@@ -2088,6 +2121,39 @@ public partial class MainWindow : Window
         }
 
         return bars;
+    }
+
+    private Button CreateTimelineClearButton()
+    {
+        var button = new Button
+        {
+            Content = "Clear turn",
+            Background = ResourceBrush("InputBrush"),
+            BorderBrush = ResourceBrush("ControlBorderBrush"),
+            Foreground = ResourceBrush("TextBrush"),
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            MinHeight = 26,
+            Padding = new Thickness(8, 3, 8, 3),
+            Margin = new Thickness(0, 6, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            ToolTip = "Return timeline and transcript to the selected turn preset"
+        };
+        button.Click += (_, _) => ClearTimelineTurnFilter();
+        return button;
+    }
+
+    private void ApplyTimelineTurnFilter(int turn)
+    {
+        _timelineSelectedTurnFilter = _timelineSelectedTurnFilter == turn ? null : turn;
+        PopulateTranscript(_lastRenderedMessages);
+        Dispatcher.BeginInvoke(() => TranscriptScrollViewer.ScrollToTop(), DispatcherPriority.Background);
+    }
+
+    private void ClearTimelineTurnFilter()
+    {
+        _timelineSelectedTurnFilter = null;
+        PopulateTranscript(_lastRenderedMessages);
     }
 
     private Border CreateQualityMetric(string label, string value, Brush accent)
