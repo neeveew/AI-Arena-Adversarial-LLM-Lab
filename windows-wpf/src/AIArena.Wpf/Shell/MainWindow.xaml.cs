@@ -94,6 +94,21 @@ public partial class MainWindow : Window
         IReadOnlyList<DiagnosticHistoryPoint> Points,
         int UnsupportedClaimsMax);
 
+    private sealed record AgentPerformanceStats(
+        string AgentId,
+        string Name,
+        string Status,
+        string Model,
+        int Calls,
+        int Tokens,
+        int Context,
+        int AverageLatencyMs,
+        int LastLatencyMs,
+        int Failures,
+        int EmptyResponses,
+        int InternetRequests,
+        IReadOnlyList<double> Activity);
+
     public MainWindow()
     {
         InitializeComponent();
@@ -324,30 +339,30 @@ public partial class MainWindow : Window
     private void PopulateAgentPerformance(ArenaSnapshot snapshot)
     {
         AgentPerformanceItems.Children.Clear();
-        var agentIds = snapshot.Agents
+        var participants = snapshot.Agents
             .Where(agent => agent.Active || snapshot.Messages.Any(message => message.SpeakerId.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)))
-            .Select(agent => agent.Id)
-            .Append("narrator")
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Append(new AgentState(
+                "narrator",
+                "Narrator",
+                snapshot.NarratorStatus,
+                snapshot.NarratorPersona,
+                snapshot.NarratorModel,
+                true,
+                snapshot.NarratorLocked,
+                []))
+            .GroupBy(agent => agent.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
             .ToArray();
 
-        foreach (var agentId in agentIds)
+        var stats = participants
+            .Select(agent => CreateAgentPerformanceStats(snapshot, agent))
+            .ToArray();
+
+        var maxTokens = Math.Max(1, stats.Select(item => item.Tokens).DefaultIfEmpty(0).Max());
+
+        foreach (var item in stats)
         {
-            var messages = snapshot.Messages
-                .Where(message => message.SpeakerId.Equals(agentId, StringComparison.OrdinalIgnoreCase)
-                    && !message.Kind.StartsWith("internet", StringComparison.OrdinalIgnoreCase))
-                .ToArray();
-            var internetRequests = snapshot.Messages.Count(message =>
-                message.InternetRequester.Equals(agentId, StringComparison.OrdinalIgnoreCase)
-                || (message.SpeakerId.Equals(agentId, StringComparison.OrdinalIgnoreCase)
-                    && (!string.IsNullOrWhiteSpace(message.InternetTool) || message.Kind.StartsWith("internet", StringComparison.OrdinalIgnoreCase))));
-
-            if (messages.Length == 0 && internetRequests == 0)
-            {
-                continue;
-            }
-
-            AgentPerformanceItems.Children.Add(CreateAgentPerformanceRow(agentId, messages, internetRequests));
+            AgentPerformanceItems.Children.Add(CreateAgentPerformanceRow(item, maxTokens));
         }
 
         if (AgentPerformanceItems.Children.Count == 0)
@@ -361,44 +376,161 @@ public partial class MainWindow : Window
         }
     }
 
-    private Border CreateAgentPerformanceRow(string agentId, IReadOnlyList<TranscriptMessage> messages, int internetRequests)
+    private AgentPerformanceStats CreateAgentPerformanceStats(ArenaSnapshot snapshot, AgentState agent)
     {
+        var messages = snapshot.Messages
+            .Where(message => message.SpeakerId.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)
+                && !message.Kind.StartsWith("internet", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var internetRequests = snapshot.Messages.Count(message =>
+            message.InternetRequester.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)
+            || (message.SpeakerId.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)
+                && (!string.IsNullOrWhiteSpace(message.InternetTool) || message.Kind.StartsWith("internet", StringComparison.OrdinalIgnoreCase))));
         var failures = messages.Count(message => message.Status.Equals("error", StringComparison.OrdinalIgnoreCase));
         var empty = messages.Count(message => string.IsNullOrWhiteSpace(message.Text) || message.Text.Contains("(empty model response)", StringComparison.OrdinalIgnoreCase));
         var latencies = messages.Where(message => message.LatencyMs > 0).Select(message => message.LatencyMs).ToArray();
-        var avgLatency = latencies.Length == 0 ? "-" : FormatDuration((int)latencies.Average());
         var tokens = messages.Sum(message => Math.Max(message.CompletionTokens, 0));
-        var accent = AccentForSpeaker(agentId);
+        var context = messages.Select(message => message.PromptTokens).DefaultIfEmpty(0).Max();
+        var lastLatency = messages.LastOrDefault(message => message.LatencyMs > 0)?.LatencyMs ?? 0;
+        var activity = messages
+            .TakeLast(12)
+            .Select(message => (double)Math.Max(1, Math.Max(message.CompletionTokens, message.TotalTokens)))
+            .ToArray();
 
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4) });
+        return new AgentPerformanceStats(
+            agent.Id,
+            string.IsNullOrWhiteSpace(agent.Name) ? DisplayStatusValue(agent.Id) : agent.Name,
+            DisplayInlineStatus(agent.Status),
+            agent.Model,
+            messages.Length,
+            tokens,
+            context,
+            latencies.Length == 0 ? 0 : (int)latencies.Average(),
+            lastLatency,
+            failures,
+            empty,
+            internetRequests,
+            activity);
+    }
+
+    private Border CreateAgentPerformanceRow(AgentPerformanceStats stats, int maxTokens)
+    {
+        var accent = AccentForSpeaker(stats.AgentId);
+        var grid = new Grid
+        {
+            Margin = new Thickness(0)
+        };
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.Children.Add(new Border
-        {
-            Background = accent,
-            CornerRadius = new CornerRadius(2),
-            Margin = new Thickness(0, 2, 8, 2)
-        });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var stack = new StackPanel();
-        Grid.SetColumn(stack, 1);
-        stack.Children.Add(new TextBlock
+        var title = new TextBlock
         {
-            Text = DisplayStatusValue(agentId),
+            Text = DisplayStatusValue(stats.Name),
             Foreground = ResourceBrush("TextBrush"),
             FontWeight = FontWeights.SemiBold,
-            TextTrimming = TextTrimming.CharacterEllipsis
-        });
+            FontSize = 12,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        grid.Children.Add(title);
 
-        var metrics = new WrapPanel { Margin = new Thickness(0, 3, 0, 0) };
-        metrics.Children.Add(CreateTinyMetric($"{messages.Count} calls", accent));
-        metrics.Children.Add(CreateTinyMetric(avgLatency, ResourceBrush("AlphaAccentBrush")));
-        metrics.Children.Add(CreateTinyMetric($"{FormatCompactNumber(tokens)} tok", ResourceBrush("PrimaryBorderBrush")));
-        metrics.Children.Add(CreateTinyMetric($"{failures} fail", failures > 0 ? ResourceBrush("DangerTextBrush") : ResourceBrush("MutedTextBrush")));
-        metrics.Children.Add(CreateTinyMetric($"{empty} empty", empty > 0 ? ResourceBrush("BetaAccentBrush") : ResourceBrush("MutedTextBrush")));
-        metrics.Children.Add(CreateTinyMetric($"{internetRequests} web", internetRequests > 0 ? ResourceBrush("AssistBorderBrush") : ResourceBrush("MutedTextBrush")));
-        stack.Children.Add(metrics);
-        grid.Children.Add(stack);
+        var statusPill = CreateStatusPill(stats.Status, accent);
+        Grid.SetColumn(statusPill, 1);
+        grid.Children.Add(statusPill);
+
+        var model = new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(stats.Model) ? "model not assigned" : ShortModelName(stats.Model),
+            Foreground = ResourceBrush("MutedTextBrush"),
+            FontSize = 10,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Margin = new Thickness(0, 2, 0, 6)
+        };
+        Grid.SetRow(model, 1);
+        Grid.SetColumnSpan(model, 2);
+        grid.Children.Add(model);
+
+        var metrics = new UniformGrid
+        {
+            Rows = 1,
+            Columns = 4,
+            Margin = new Thickness(0, 0, 0, 7)
+        };
+        metrics.Children.Add(CreateStackedMetric("Turns", stats.Calls.ToString(System.Globalization.CultureInfo.InvariantCulture), accent));
+        metrics.Children.Add(CreateStackedMetric("Tokens", FormatCompactNumber(stats.Tokens), ResourceBrush("PrimaryBorderBrush")));
+        metrics.Children.Add(CreateStackedMetric("Avg", stats.AverageLatencyMs > 0 ? FormatDuration(stats.AverageLatencyMs) : "-", ResourceBrush("AlphaAccentBrush")));
+        metrics.Children.Add(CreateStackedMetric("Ctx", stats.Context > 0 ? FormatCompactNumber(stats.Context) : "-", ResourceBrush("GammaAccentBrush")));
+        Grid.SetRow(metrics, 2);
+        Grid.SetColumnSpan(metrics, 2);
+        grid.Children.Add(metrics);
+
+        var activityRow = new Grid();
+        activityRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        activityRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var tokenTrack = new Grid
+        {
+            Height = 22,
+            Margin = new Thickness(0, 0, 10, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        tokenTrack.Children.Add(new Border
+        {
+            Background = BlendBrush(ResourceBrush("CardBrush"), accent, 0.14),
+            Height = 4,
+            CornerRadius = new CornerRadius(2),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Opacity = 0.9
+        });
+        tokenTrack.Children.Add(new Border
+        {
+            Background = accent,
+            Height = 4,
+            CornerRadius = new CornerRadius(2),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Opacity = 0.82,
+            Width = Math.Max(18, 106 * Math.Clamp(stats.Tokens / (double)maxTokens, 0.08, 1)),
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        activityRow.Children.Add(tokenTrack);
+
+        var sparkline = new MetricSparklineControl
+        {
+            Width = 82,
+            Height = 22,
+            Mode = "bars",
+            Values = stats.Activity.Count == 0 ? [0d, 0d, 0d, 0d] : stats.Activity,
+            MaxValue = Math.Max(1, stats.Activity.DefaultIfEmpty(1).Max()),
+            AccentBrush = accent,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        Grid.SetColumn(sparkline, 1);
+        activityRow.Children.Add(sparkline);
+
+        Grid.SetRow(activityRow, 3);
+        Grid.SetColumnSpan(activityRow, 2);
+        grid.Children.Add(activityRow);
+
+        var alerts = new List<string>();
+        if (stats.Failures > 0)
+        {
+            alerts.Add($"{stats.Failures} fail");
+        }
+        if (stats.EmptyResponses > 0)
+        {
+            alerts.Add($"{stats.EmptyResponses} empty");
+        }
+        if (stats.InternetRequests > 0)
+        {
+            alerts.Add($"{stats.InternetRequests} web");
+        }
+        if (stats.LastLatencyMs > 0)
+        {
+            alerts.Add($"last {FormatDuration(stats.LastLatencyMs)}");
+        }
 
         return new Border
         {
@@ -406,28 +538,55 @@ public partial class MainWindow : Window
             BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.32),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(8),
-            Margin = new Thickness(0, 0, 0, 6),
+            Padding = new Thickness(9, 8, 9, 8),
+            Margin = new Thickness(0, 0, 0, 7),
+            ToolTip = alerts.Count == 0 ? $"{stats.Name}: no warnings" : $"{stats.Name}: {string.Join(", ", alerts)}",
             Child = grid
         };
     }
 
-    private Border CreateTinyMetric(string text, Brush accent)
+    private Border CreateStatusPill(string text, Brush accent)
     {
         return new Border
         {
             Background = BlendBrush(ResourceBrush("CardBrush"), accent, 0.12),
-            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.5),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.45),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(5, 1, 5, 2),
-            Margin = new Thickness(0, 0, 4, 4),
+            Margin = new Thickness(6, 0, 0, 0),
             Child = new TextBlock
             {
                 Text = text,
                 Foreground = accent,
-                FontSize = 11,
+                FontSize = 10,
                 FontWeight = FontWeights.SemiBold
+            }
+        };
+    }
+
+    private StackPanel CreateStackedMetric(string label, string value, Brush accent)
+    {
+        return new StackPanel
+        {
+            Margin = new Thickness(0, 0, 6, 0),
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = label,
+                    Foreground = ResourceBrush("MutedTextBrush"),
+                    FontSize = 9,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                },
+                new TextBlock
+                {
+                    Text = value,
+                    Foreground = accent,
+                    FontSize = 11,
+                    FontWeight = FontWeights.SemiBold,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                }
             }
         };
     }
