@@ -50,6 +50,7 @@ public sealed class WpfSettings
     public bool SystemEventGlyphs { get; set; } = true;
     public bool CompactTranscriptMode { get; set; }
     public bool TurnCompareMode { get; set; }
+    public bool ShowMatchQualityTimeline { get; set; }
     public bool ShowAgentMemoryNotes { get; set; }
     public string TopStripMode { get; set; } = "diagnostics";
     public bool ShowTranscriptDiagnostics { get; set; } = true;
