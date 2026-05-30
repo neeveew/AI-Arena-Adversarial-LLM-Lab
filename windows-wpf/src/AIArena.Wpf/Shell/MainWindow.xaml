@@ -1346,9 +1346,9 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource QuietCard}">
+                <Border Style="{StaticResource QuietCard}" Padding="10">
                     <StackPanel>
-                        <TextBlock Text="Agent Performance" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+                        <TextBlock Text="Agent Performance" Style="{StaticResource SectionTitle}" Margin="0,0,0,6" />
                         <StackPanel x:Name="AgentPerformanceItems" />
                     </StackPanel>
                 </Border>

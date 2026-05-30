@@ -432,7 +432,7 @@ public partial class MainWindow : Window
             Text = DisplayStatusValue(stats.Name),
             Foreground = ResourceBrush("TextBrush"),
             FontWeight = FontWeights.SemiBold,
-            FontSize = 12,
+            FontSize = 11,
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -446,9 +446,9 @@ public partial class MainWindow : Window
         {
             Text = string.IsNullOrWhiteSpace(stats.Model) ? "model not assigned" : ShortModelName(stats.Model),
             Foreground = ResourceBrush("MutedTextBrush"),
-            FontSize = 10,
+            FontSize = 9,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            Margin = new Thickness(0, 2, 0, 6)
+            Margin = new Thickness(0, 1, 0, 4)
         };
         Grid.SetRow(model, 1);
         Grid.SetColumnSpan(model, 2);
@@ -458,7 +458,7 @@ public partial class MainWindow : Window
         {
             Rows = 1,
             Columns = 4,
-            Margin = new Thickness(0, 0, 0, 7)
+            Margin = new Thickness(0, 0, 0, 4)
         };
         metrics.Children.Add(CreateStackedMetric("Turns", stats.Calls.ToString(System.Globalization.CultureInfo.InvariantCulture), accent));
         metrics.Children.Add(CreateStackedMetric("Tokens", FormatCompactNumber(stats.Tokens), ResourceBrush("PrimaryBorderBrush")));
@@ -473,8 +473,8 @@ public partial class MainWindow : Window
         activityRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var tokenTrack = new Grid
         {
-            Height = 22,
-            Margin = new Thickness(0, 0, 10, 0),
+            Height = 16,
+            Margin = new Thickness(0, 0, 8, 0),
             VerticalAlignment = VerticalAlignment.Center
         };
         tokenTrack.Children.Add(new Border
@@ -499,8 +499,8 @@ public partial class MainWindow : Window
 
         var sparkline = new MetricSparklineControl
         {
-            Width = 82,
-            Height = 22,
+            Width = 74,
+            Height = 16,
             Mode = "bars",
             Values = stats.Activity.Count == 0 ? [0d, 0d, 0d, 0d] : stats.Activity,
             MaxValue = Math.Max(1, stats.Activity.DefaultIfEmpty(1).Max()),
@@ -538,8 +538,8 @@ public partial class MainWindow : Window
             BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.32),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(9, 8, 9, 8),
-            Margin = new Thickness(0, 0, 0, 7),
+            Padding = new Thickness(8, 6, 8, 6),
+            Margin = new Thickness(0, 0, 0, 5),
             ToolTip = alerts.Count == 0 ? $"{stats.Name}: no warnings" : $"{stats.Name}: {string.Join(", ", alerts)}",
             Child = grid
         };
@@ -553,13 +553,13 @@ public partial class MainWindow : Window
             BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.45),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(5, 1, 5, 2),
+            Padding = new Thickness(4, 0, 4, 1),
             Margin = new Thickness(6, 0, 0, 0),
             Child = new TextBlock
             {
                 Text = text,
                 Foreground = accent,
-                FontSize = 10,
+                FontSize = 9,
                 FontWeight = FontWeights.SemiBold
             }
         };
@@ -569,21 +569,21 @@ public partial class MainWindow : Window
     {
         return new StackPanel
         {
-            Margin = new Thickness(0, 0, 6, 0),
+            Margin = new Thickness(0, 0, 4, 0),
             Children =
             {
                 new TextBlock
                 {
                     Text = label,
                     Foreground = ResourceBrush("MutedTextBrush"),
-                    FontSize = 9,
+                    FontSize = 8,
                     TextTrimming = TextTrimming.CharacterEllipsis
                 },
                 new TextBlock
                 {
                     Text = value,
                     Foreground = accent,
-                    FontSize = 11,
+                    FontSize = 10,
                     FontWeight = FontWeights.SemiBold,
                     TextTrimming = TextTrimming.CharacterEllipsis
                 }
