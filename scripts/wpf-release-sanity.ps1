@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.3.40-beta"
+    [string]$Version = "0.3.41-beta"
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +13,8 @@ $installer = Join-Path $installerDir "AI Arena Setup $Version.exe"
 $changes = Join-Path $installerDir "changes.txt"
 $releaseExe = Join-Path $releaseDir "AI Arena.exe"
 $dependencyIndexScript = Join-Path $Root "scripts/dependency-index.ps1"
+$licenseFile = Join-Path $Root "LICENSE"
+$noticeFile = Join-Path $Root "NOTICE.md"
 
 function Assert-PathExists {
     param([string]$Path, [string]$Label)
@@ -26,6 +28,8 @@ Assert-PathExists $releaseExe "release executable"
 Assert-PathExists $installer "installer"
 Assert-PathExists $changes "installer changes file"
 Assert-PathExists $dependencyIndexScript "dependency index script"
+Assert-PathExists $licenseFile "licence file"
+Assert-PathExists $noticeFile "notice file"
 
 & $dependencyIndexScript -Check
 
@@ -44,6 +48,23 @@ if ($scriptText -notmatch ('OutputDir=\.\.\\\.\.\\dist\\installer\\AI Arena - \{
 }
 if ($scriptText -notmatch 'AppId=\{\{E2F12C8E-9B8C-45C3-B9A1-A8F8E1725F61\}') {
     throw "Installer AppId drifted; stable AI Arena upgrade identity may be broken."
+}
+if ($scriptText -notmatch 'LicenseFile=\.\.\\\.\.\\LICENSE') {
+    throw "Installer licence page drifted: expected LICENSE to be shown during setup."
+}
+if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\LICENSE"; DestDir: "\{app\}"') {
+    throw "Installer no longer installs LICENSE beside the app."
+}
+if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\NOTICE\.md"; DestDir: "\{app\}"') {
+    throw "Installer no longer installs NOTICE.md beside the app."
+}
+
+$licenseText = Get-Content -LiteralPath $licenseFile -Raw
+if ($licenseText -notmatch 'Shareable No-Derivatives Software Licence') {
+    throw "Root licence does not identify the expected no-derivatives licence."
+}
+if ($licenseText -notmatch 'Copyright © 2026 Dominik Fiala') {
+    throw "Root licence copyright notice drifted."
 }
 
 $looseInstallers = Get-ChildItem -LiteralPath (Join-Path $Root "dist/installer") -Filter "*.exe" -File -ErrorAction SilentlyContinue
