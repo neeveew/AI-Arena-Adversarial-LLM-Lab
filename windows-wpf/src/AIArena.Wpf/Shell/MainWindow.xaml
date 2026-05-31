@@ -1844,46 +1844,6 @@
                                        Margin="0,4,0,0"
                                        Text="Writes private memory notes; no public transcript turn." />
                         </Grid>
-                        <WrapPanel Margin="0,0,0,8">
-                            <TextBlock Text="Intent"
-                                       Foreground="{DynamicResource MutedTextBrush}"
-                                       FontSize="11"
-                                       FontWeight="SemiBold"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0" />
-                            <Button Content="Clarify"
-                                    Tag="clarify"
-                                    Click="OperatorQuickIntentButton_Click"
-                                    FontSize="10"
-                                    Padding="8,3"
-                                    MinHeight="26"
-                                    Margin="0,0,5,5"
-                                    ToolTip="Insert a clarification prompt" />
-                            <Button Content="Challenge"
-                                    Tag="challenge"
-                                    Click="OperatorQuickIntentButton_Click"
-                                    FontSize="10"
-                                    Padding="8,3"
-                                    MinHeight="26"
-                                    Margin="0,0,5,5"
-                                    ToolTip="Insert an adversarial challenge prompt" />
-                            <Button Content="Ground"
-                                    Tag="ground"
-                                    Click="OperatorQuickIntentButton_Click"
-                                    FontSize="10"
-                                    Padding="8,3"
-                                    MinHeight="26"
-                                    Margin="0,0,5,5"
-                                    ToolTip="Insert an evidence-grounding prompt" />
-                            <Button Content="Decide"
-                                    Tag="decide"
-                                    Click="OperatorQuickIntentButton_Click"
-                                    FontSize="10"
-                                    Padding="8,3"
-                                    MinHeight="26"
-                                    Margin="0,0,5,5"
-                                    ToolTip="Insert a decision checkpoint prompt" />
-                        </WrapPanel>
                         <Grid Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />

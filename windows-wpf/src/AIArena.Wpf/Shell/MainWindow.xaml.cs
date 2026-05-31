@@ -5145,16 +5145,6 @@ public partial class MainWindow : Window
         UpdateOperatorPrivateTargetSummary();
     }
 
-    private void OperatorQuickIntentButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button button || button.Tag is not string intent)
-        {
-            return;
-        }
-
-        InsertOperatorDraft(OperatorQuickIntentDraft(intent));
-    }
-
     private async void OperatorTurnText_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter || (Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control)
@@ -5337,43 +5327,6 @@ public partial class MainWindow : Window
             OperatorTurnText.Clear();
             RefreshActiveSession("Public operator turn added.");
         }, allowDuringAutoChat: true);
-    }
-
-    private void InsertOperatorDraft(string draft)
-    {
-        if (string.IsNullOrWhiteSpace(draft))
-        {
-            return;
-        }
-
-        var current = OperatorTurnText.Text?.TrimEnd() ?? "";
-        OperatorTurnText.Text = string.IsNullOrWhiteSpace(current)
-            ? draft
-            : current + Environment.NewLine + Environment.NewLine + draft;
-        OperatorTurnText.Focus();
-        OperatorTurnText.CaretIndex = OperatorTurnText.Text.Length;
-        UpdateOperatorTurnMeter();
-    }
-
-    private string OperatorQuickIntentDraft(string intent)
-    {
-        var route = _operatorRouteMode.ToLowerInvariant();
-        return (route, intent) switch
-        {
-            ("private", "clarify") => "For your private memory: before your next reply, clarify the key ambiguity, define the terms you rely on, and name the assumption that would change your answer.",
-            ("private", "challenge") => "For your private memory: challenge the strongest unsupported assumption, give one counterexample, and propose a safer constraint.",
-            ("private", "ground") => "For your private memory: separate facts, assumptions, and testable signals before making a claim.",
-            ("private", "decide") => "For your private memory: prepare a concrete next step, the unresolved risk, and the smallest reversible action.",
-            ("narrator", "clarify") => "Narrator, identify the main ambiguity in the current exchange and suggest the next clarifying question for the operator.",
-            ("narrator", "challenge") => "Narrator, identify the strongest unsupported assumption or role drift risk and suggest how to pressure-test it.",
-            ("narrator", "ground") => "Narrator, separate what is established, what is assumed, and what evidence would be needed next.",
-            ("narrator", "decide") => "Narrator, produce a compact decision checkpoint: agreed points, conflict, risk, and next operator move.",
-            (_, "clarify") => "Clarify the key ambiguity before continuing. Define terms, surface assumptions, and identify what would change the conclusion.",
-            (_, "challenge") => "Challenge the strongest unsupported assumption. Name the risk, give a counterexample, and propose a safer constraint.",
-            (_, "ground") => "Ground the next step in observable evidence. Separate facts, assumptions, and testable signals.",
-            (_, "decide") => "Decision checkpoint: summarize agreement, unresolved conflict, risk, and the next smallest operator move.",
-            _ => ""
-        };
     }
 
     private void UpdateOperatorPrivateTargetSummary()
