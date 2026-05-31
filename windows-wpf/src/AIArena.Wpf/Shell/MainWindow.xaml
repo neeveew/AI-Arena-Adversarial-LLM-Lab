@@ -1033,6 +1033,24 @@
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center" />
                     </Button>
+                    <Button x:Name="TopUserGuideButton"
+                            Click="OpenUserGuideButton_Click"
+                            Width="30"
+                            Height="30"
+                            MinHeight="30"
+                            Padding="0"
+                            Margin="6,0,0,0"
+                            Background="Transparent"
+                            BorderBrush="{DynamicResource DisabledBorderBrush}"
+                            Foreground="{DynamicResource MutedTextBrush}"
+                            FontWeight="SemiBold"
+                            ToolTip="Open user guide">
+                        <TextBlock Text="?"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" />
+                    </Button>
                     <Grid VerticalAlignment="Center" Margin="10,0,14,0">
                         <Button x:Name="ViewMenuButton"
                                 Content="View"
@@ -1934,7 +1952,7 @@
                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled">
                     <StackPanel>
-                <Expander x:Name="ModelProviderSettingsExpander" Header="Model Provider" Style="{StaticResource SettingsExpander}" IsExpanded="True">
+                <Expander x:Name="ModelProviderSettingsExpander" Header="Model Provider" Style="{StaticResource SettingsExpander}" IsExpanded="False">
                     <StackPanel Margin="0,8,0,0">
                         <TextBlock Text="Provider base URL" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
                         <TextBox x:Name="ProviderBaseUrlText"

@@ -139,6 +139,28 @@ public partial class MainWindow : Window
 
     private sealed record UserGuideSection(string Title, string Text);
 
+    private sealed record UserGuideWindowContext(
+        IReadOnlyList<UserGuideSection> Sections,
+        ListBox SectionList,
+        FlowDocumentScrollViewer GuideViewer);
+
+    private static readonly string[] ThemeResourceKeys =
+    [
+        "AppBackgroundBrush",
+        "TopBarBrush",
+        "PanelBrush",
+        "CardBrush",
+        "InputBrush",
+        "ControlBorderBrush",
+        "TextBrush",
+        "MutedTextBrush",
+        "PrimaryBorderBrush",
+        "DangerBorderBrush",
+        "DangerBrush",
+        "DangerTextBrush",
+        "DisabledBorderBrush"
+    ];
+
     public MainWindow()
     {
         InitializeComponent();
@@ -7049,6 +7071,7 @@ public partial class MainWindow : Window
         }
 
         UpdateNavigationTheme();
+        RefreshOpenUserGuideTheme();
         if (rerender && _activeSession is not null)
         {
             RefreshActiveSession($"Theme applied: {_theme.Name}");
@@ -7404,6 +7427,9 @@ public partial class MainWindow : Window
             Background = ResourceBrush("AppBackgroundBrush"),
             Foreground = ResourceBrush("TextBrush")
         };
+        CopyThemeResourcesTo(dialog);
+        dialog.SetResourceReference(Window.BackgroundProperty, "AppBackgroundBrush");
+        dialog.SetResourceReference(Window.ForegroundProperty, "TextBrush");
         _userGuideWindow = dialog;
         dialog.Closed += (_, _) => _userGuideWindow = null;
 
@@ -7414,6 +7440,8 @@ public partial class MainWindow : Window
             BorderThickness = new Thickness(1),
             Padding = new Thickness(8)
         };
+        chrome.SetResourceReference(Border.BackgroundProperty, "AppBackgroundBrush");
+        chrome.SetResourceReference(Border.BorderBrushProperty, "ControlBorderBrush");
         var chromeGrid = new Grid();
         chrome.Child = chromeGrid;
         var root = new DockPanel();
@@ -7439,24 +7467,26 @@ public partial class MainWindow : Window
             }
         };
         var heading = new StackPanel();
-        heading.Children.Add(new TextBlock
+        var titleText = new TextBlock
         {
             Text = "AI Arena User Guide",
             Foreground = ResourceBrush("TextBrush"),
             FontSize = 18,
             FontWeight = FontWeights.SemiBold
-        });
-        heading.Children.Add(new TextBlock
+        };
+        titleText.SetResourceReference(TextBlock.ForegroundProperty, "TextBrush");
+        heading.Children.Add(titleText);
+        var subtitleText = new TextBlock
         {
             Text = "Readable reference for setup, controls, diagnostics, and troubleshooting.",
             Foreground = ResourceBrush("MutedTextBrush"),
             FontSize = 12,
             Margin = new Thickness(0, 2, 0, 0)
-        });
+        };
+        subtitleText.SetResourceReference(TextBlock.ForegroundProperty, "MutedTextBrush");
+        heading.Children.Add(subtitleText);
         header.Children.Add(heading);
-        var headerCloseButton = CreateGuideButton("X");
-        headerCloseButton.Width = 36;
-        headerCloseButton.Margin = new Thickness(0);
+        var headerCloseButton = CreateGuideCloseButton();
         headerCloseButton.Click += (_, _) => dialog.Close();
         Grid.SetColumn(headerCloseButton, 1);
         header.Children.Add(headerCloseButton);
@@ -7512,6 +7542,9 @@ public partial class MainWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             SelectedIndex = 0
         };
+        sectionList.SetResourceReference(Control.BackgroundProperty, "InputBrush");
+        sectionList.SetResourceReference(Control.ForegroundProperty, "TextBrush");
+        sectionList.SetResourceReference(Control.BorderBrushProperty, "ControlBorderBrush");
         ScrollViewer.SetHorizontalScrollBarVisibility(sectionList, ScrollBarVisibility.Disabled);
         ScrollViewer.SetVerticalScrollBarVisibility(sectionList, ScrollBarVisibility.Auto);
         body.Children.Add(sectionList);
@@ -7523,6 +7556,7 @@ public partial class MainWindow : Window
             Padding = new Thickness(12),
             Document = BuildGuideDocument(sections.FirstOrDefault() ?? new UserGuideSection("Guide", guideText))
         };
+        guideViewer.SetResourceReference(Control.BackgroundProperty, "InputBrush");
         sectionList.SelectionChanged += (_, _) =>
         {
             if (sectionList.SelectedItem is UserGuideSection section)
@@ -7534,13 +7568,14 @@ public partial class MainWindow : Window
         body.Children.Add(guideViewer);
         root.Children.Add(body);
 
+        dialog.Tag = new UserGuideWindowContext(sections, sectionList, guideViewer);
         dialog.Content = chrome;
         dialog.Show();
     }
 
     private Button CreateGuideButton(string text)
     {
-        return new Button
+        var button = new Button
         {
             Content = text,
             MinWidth = 90,
@@ -7552,6 +7587,62 @@ public partial class MainWindow : Window
             Foreground = ResourceBrush("TextBrush"),
             FontWeight = FontWeights.SemiBold
         };
+        button.SetResourceReference(Control.BackgroundProperty, "InputBrush");
+        button.SetResourceReference(Control.BorderBrushProperty, "ControlBorderBrush");
+        button.SetResourceReference(Control.ForegroundProperty, "TextBrush");
+        return button;
+    }
+
+    private Button CreateGuideCloseButton()
+    {
+        var button = new Button
+        {
+            Content = "X",
+            Width = 30,
+            Height = 30,
+            MinWidth = 30,
+            MinHeight = 30,
+            Padding = new Thickness(0),
+            Margin = new Thickness(0),
+            Background = ResourceBrush("InputBrush"),
+            BorderBrush = ResourceBrush("DangerBorderBrush"),
+            Foreground = ResourceBrush("DangerTextBrush"),
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            ToolTip = "Close guide"
+        };
+        button.SetResourceReference(Control.BackgroundProperty, "InputBrush");
+        button.SetResourceReference(Control.BorderBrushProperty, "DangerBorderBrush");
+        button.SetResourceReference(Control.ForegroundProperty, "DangerTextBrush");
+        return button;
+    }
+
+    private void CopyThemeResourcesTo(FrameworkElement target)
+    {
+        foreach (var key in ThemeResourceKeys)
+        {
+            if (Resources.Contains(key))
+            {
+                target.Resources[key] = Resources[key];
+            }
+        }
+    }
+
+    private void RefreshOpenUserGuideTheme()
+    {
+        if (_userGuideWindow is not { IsVisible: true } dialog)
+        {
+            return;
+        }
+
+        CopyThemeResourcesTo(dialog);
+        if (dialog.Tag is UserGuideWindowContext context)
+        {
+            var section = context.SectionList.SelectedItem as UserGuideSection
+                ?? context.Sections.FirstOrDefault()
+                ?? new UserGuideSection("Guide", string.Empty);
+            context.GuideViewer.Document = BuildGuideDocument(section);
+        }
     }
 
     private FlowDocument BuildGuideDocument(UserGuideSection section)
