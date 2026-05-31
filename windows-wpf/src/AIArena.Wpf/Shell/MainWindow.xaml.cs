@@ -161,6 +161,14 @@ public partial class MainWindow : Window
         "DisabledBorderBrush"
     ];
 
+    private static readonly Type[] ThemeStyleKeys =
+    [
+        typeof(Button),
+        typeof(TextBox),
+        typeof(ComboBox),
+        typeof(CheckBox)
+    ];
+
     public MainWindow()
     {
         InitializeComponent();
@@ -7620,6 +7628,14 @@ public partial class MainWindow : Window
     private void CopyThemeResourcesTo(FrameworkElement target)
     {
         foreach (var key in ThemeResourceKeys)
+        {
+            if (Resources.Contains(key))
+            {
+                target.Resources[key] = Resources[key];
+            }
+        }
+
+        foreach (var key in ThemeStyleKeys)
         {
             if (Resources.Contains(key))
             {
