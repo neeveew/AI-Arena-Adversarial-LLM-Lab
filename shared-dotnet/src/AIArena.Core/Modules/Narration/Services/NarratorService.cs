@@ -38,6 +38,52 @@ public sealed class NarratorService
         return await RunNarratorAsync(sessionId, operatorRequest.Trim(), cancellationToken);
     }
 
+    public async Task<DecisionCardResult> GenerateDecisionCardAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
+        if (snapshot is null)
+        {
+            return DecisionCardResult.Failed($"No snapshot found for session {sessionId}.");
+        }
+
+        var config = ResolveProviderConfig(snapshot, "narrator", out var fallbackConfig);
+        if (config is null)
+        {
+            return DecisionCardResult.Failed("No provider config for narrator.");
+        }
+
+        snapshot.Engine.Narrator.Status = "thinking";
+        await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
+        await _eventLogStore.AppendAsync(sessionId, "native_decision_card_started", new { model = config.Model }, cancellationToken);
+
+        var result = await _modelClient.CompleteChatAsync(config, BuildDecisionCardPrompt(snapshot), cancellationToken);
+        if (!result.Ok && fallbackConfig is not null)
+        {
+            await _eventLogStore.AppendAsync(
+                sessionId,
+                "native_decision_card_fallback_to_default",
+                new { failedModel = config.Model, fallbackModel = fallbackConfig.Model, error = result.Error },
+                cancellationToken);
+            result = await _modelClient.CompleteChatAsync(fallbackConfig, BuildDecisionCardPrompt(snapshot), cancellationToken);
+        }
+
+        snapshot.Engine.DecisionCard.Text = result.Ok ? result.Text.Trim() : $"Decision card failed: {result.Error}";
+        snapshot.Engine.DecisionCard.UpdatedAt = DateTimeOffset.Now.ToUnixTimeSeconds();
+        snapshot.Engine.Narrator.Status = result.Ok ? "spoke" : "error";
+        snapshot.Engine.Narrator.LastError = result.Ok ? "" : result.Error;
+        snapshot.Engine.LastError = result.Ok ? "" : result.Error;
+
+        await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
+        await _eventLogStore.AppendAsync(
+            sessionId,
+            result.Ok ? "native_decision_card_completed" : "native_decision_card_failed",
+            new { result.Model, result.LatencyMs, error = result.Error },
+            cancellationToken);
+        return result.Ok
+            ? DecisionCardResult.Completed(snapshot.Engine.DecisionCard.Text)
+            : DecisionCardResult.Failed(result.Error, snapshot.Engine.DecisionCard.Text);
+    }
+
     private async Task<NarratorResult> RunNarratorAsync(string sessionId, string operatorRequest, CancellationToken cancellationToken)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
@@ -142,6 +188,36 @@ public sealed class NarratorService
         ];
     }
 
+    private static IReadOnlyList<ModelChatMessage> BuildDecisionCardPrompt(ArenaSnapshot snapshot)
+    {
+        var transcript = string.Join(
+            Environment.NewLine,
+            snapshot.Engine.Messages
+                .Where(item => item.Kind is "message" or "")
+                .OrderBy(item => item.Turn)
+                .TakeLast(Math.Clamp(snapshot.Engine.TranscriptWindow, 1, 60))
+                .Select(item => $"Turn {item.Turn} {item.Speaker}: {item.Text}"));
+        var topic = string.IsNullOrWhiteSpace(snapshot.Engine.Steering.Topic) ? "Open arena discussion" : snapshot.Engine.Steering.Topic;
+        return
+        [
+            new ModelChatMessage(
+                "system",
+                string.Join(
+                    Environment.NewLine,
+                    "You are the decision-card narrator for AI Arena.",
+                    "Produce a compact operator-facing decision card.",
+                    "Use exactly these headings: Agreed, Conflict, Risk, Next operator move.",
+                    "Use short bullet fragments. Do not claim certainty that is not supported by the transcript.")),
+            new ModelChatMessage(
+                "user",
+                string.Join(
+                    Environment.NewLine + Environment.NewLine,
+                    $"Topic: {topic}",
+                    string.IsNullOrWhiteSpace(transcript) ? "Transcript: No public transcript yet." : $"Transcript:{Environment.NewLine}{transcript}",
+                    "Write the decision card now."))
+        ];
+    }
+
     private static ModelProviderConfig? ResolveProviderConfig(ArenaSnapshot snapshot, string agentId, out ModelProviderConfig? fallbackConfig)
     {
         fallbackConfig = snapshot.Configs.TryGetValue("shared", out var shared) ? shared : null;
@@ -165,4 +241,10 @@ public sealed record NarratorResult(bool Ok, DialogueMessage? Message, string Er
 {
     public static NarratorResult Completed(DialogueMessage message) => new(true, message, "");
     public static NarratorResult Failed(string error, DialogueMessage? message = null) => new(false, message, error);
+}
+
+public sealed record DecisionCardResult(bool Ok, string Text, string Error)
+{
+    public static DecisionCardResult Completed(string text) => new(true, text, "");
+    public static DecisionCardResult Failed(string error, string text = "") => new(false, text, error);
 }

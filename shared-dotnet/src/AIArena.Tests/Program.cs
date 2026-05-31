@@ -34,6 +34,7 @@ var tests = new (string Name, Action Test)[]
     ("generates YOLO seed respecting locks", GenerateYoloSeedRespectingLocks),
     ("adds narrator message to transcript", AddNarratorMessageToTranscript),
     ("asks narrator with operator request", AskNarratorWithOperatorRequest),
+    ("generates narrator decision card", GenerateNarratorDecisionCard),
     ("curates news into transcript when internet is enabled", CurateNewsIntoTranscriptWhenInternetEnabled),
     ("curated news plans focused search query", CuratedNewsPlansFocusedSearchQuery),
     ("curated news skips irrelevant source without transcript card", CuratedNewsSkipsIrrelevantSourceWithoutTranscriptCard),
@@ -574,6 +575,26 @@ static void AskNarratorWithOperatorRequest()
     Require(requestText.Contains("Operator request for narrator", StringComparison.OrdinalIgnoreCase), "operator request label missing");
     Require(requestText.Contains("Assess the debate", StringComparison.OrdinalIgnoreCase), "operator request text missing from prompt");
     Require(File.ReadAllText(log.EventPath()).Contains("native_narrator_operator_request_completed"), "operator narrator event was not logged");
+    Directory.Delete(root, recursive: true);
+}
+
+static void GenerateNarratorDecisionCard()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+    var client = new FakeModelProviderClient("Agreed: test\nConflict: risk\nRisk: drift\nNext operator move: ask for evidence", "decision reasoning");
+    var service = new NarratorService(client, store, log);
+
+    var result = service.GenerateDecisionCardAsync("default").GetAwaiter().GetResult();
+    Require(result.Ok, $"decision card failed: {result.Error}");
+    var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+    Require(loaded.Engine.DecisionCard.Text.Contains("Next operator move", StringComparison.OrdinalIgnoreCase), "decision card text was not stored");
+    Require(loaded.Engine.DecisionCard.UpdatedAt > 0, "decision card timestamp was not stored");
+    Require(loaded.Engine.Messages.Count == 1, "decision card should not append transcript messages");
+    Require(File.ReadAllText(log.EventPath()).Contains("native_decision_card_completed"), "decision card event was not logged");
     Directory.Delete(root, recursive: true);
 }
 

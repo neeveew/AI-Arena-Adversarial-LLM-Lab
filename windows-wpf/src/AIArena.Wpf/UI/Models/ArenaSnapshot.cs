@@ -32,6 +32,8 @@ public sealed record ArenaSnapshot(
     int PrivateWindow,
     int NotesWindow,
     string Summary,
+    string DecisionCard,
+    double DecisionCardUpdatedAt,
     string ProviderLastError,
     bool InternetEnabled,
     string InternetMode,

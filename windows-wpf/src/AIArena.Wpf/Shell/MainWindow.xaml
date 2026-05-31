@@ -1881,11 +1881,40 @@
                                 <ComboBoxItem Content="Delta" Tag="delta" />
                             </ComboBox>
                         </Grid>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ComboBox x:Name="OperatorTemplatePicker"
+                                      Height="30"
+                                      IsEditable="True"
+                                      ToolTip="Reusable operator templates" />
+                            <Button Grid.Column="1"
+                                    Content="USE"
+                                    Click="UseOperatorTemplateButton_Click"
+                                    FontSize="10.5"
+                                    Padding="8,4"
+                                    MinHeight="30"
+                                    Margin="6,0,0,0" />
+                            <Button Grid.Column="2"
+                                    Content="SAVE"
+                                    Click="SaveOperatorTemplateButton_Click"
+                                    FontSize="10.5"
+                                    Padding="8,4"
+                                    MinHeight="30"
+                                    Margin="6,0,0,0"
+                                    ToolTip="Save current operator text as a template" />
+                        </Grid>
                         <Grid>
                             <TextBox x:Name="OperatorTurnText"
                                      MinHeight="78"
                                      AcceptsReturn="True"
                                      TextWrapping="Wrap"
+                                     VerticalContentAlignment="Top"
+                                     HorizontalContentAlignment="Left"
+                                     Padding="8,6"
                                      Text=""
                                      Tag="Inject public operator turn..."
                                      TextChanged="OperatorTurnText_TextChanged" />

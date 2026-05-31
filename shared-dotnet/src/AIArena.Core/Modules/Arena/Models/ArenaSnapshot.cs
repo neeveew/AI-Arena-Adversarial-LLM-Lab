@@ -53,6 +53,9 @@ public sealed class EngineSnapshot
     [JsonPropertyName("summary")]
     public string Summary { get; init; } = "";
 
+    [JsonPropertyName("decision_card")]
+    public DecisionCardState DecisionCard { get; init; } = new();
+
     [JsonPropertyName("turn_count")]
     public int TurnCount { get; set; }
 
@@ -103,6 +106,15 @@ public sealed class DialogueAgent
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Extra { get; init; }
+}
+
+public sealed class DecisionCardState
+{
+    [JsonPropertyName("text")]
+    public string Text { get; set; } = "";
+
+    [JsonPropertyName("updated_at")]
+    public double UpdatedAt { get; set; }
 }
 
 public sealed class DialogueMessage

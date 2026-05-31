@@ -160,6 +160,7 @@ public partial class MainWindow : Window
         _telemetryTimer.Tick += async (_, _) => await UpdateSystemTelemetryAsync();
         InitializeAboutPanel();
         InitializeVisualSettings();
+        InitializeOperatorTemplates();
         UpdateOperatorRouteUi();
         UpdateOperatorTurnMeter();
         LoadScenarioTemplates();
@@ -225,6 +226,23 @@ public partial class MainWindow : Window
         UpdateViewPresetState();
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
         UpdateTelemetryTimerState();
+    }
+
+    private void InitializeOperatorTemplates()
+    {
+        if (_wpfSettings.OperatorTemplates.Count == 0)
+        {
+            _wpfSettings.OperatorTemplates =
+            [
+                "Challenge the strongest assumption in the last turn.",
+                "Summarize the disagreement and ask for the smallest concrete next step.",
+                "Force the agents to separate facts, guesses, and decisions.",
+                "Ask for risks, reversibility, and what would change the conclusion."
+            ];
+        }
+
+        OperatorTemplatePicker.ItemsSource = _wpfSettings.OperatorTemplates;
+        OperatorTemplatePicker.SelectedIndex = _wpfSettings.OperatorTemplates.Count > 0 ? 0 : -1;
     }
 
     private async void LoadSessions(string? preferredSessionId = null)
@@ -1313,6 +1331,10 @@ public partial class MainWindow : Window
         if (_wpfSettings.ShowMatchQualityTimeline)
         {
             TranscriptItems.Children.Add(CreateMatchQualityTimelinePanel(messages));
+        }
+        if (_lastRenderedSnapshot is not null)
+        {
+            TranscriptItems.Children.Add(CreateDecisionCardPanel(_lastRenderedSnapshot));
         }
         if (_wpfSettings.TurnCompareMode)
         {
@@ -2464,6 +2486,82 @@ public partial class MainWindow : Window
             Margin = new Thickness(0, 0, 0, 12),
             Child = panel
         };
+    }
+
+    private Border CreateDecisionCardPanel(ArenaSnapshot snapshot)
+    {
+        var accent = ResourceBrush("NarratorAccentBrush");
+        var card = new Border
+        {
+            Background = BlendBrush(ResourceBrush("CardBrush"), accent, 0.08),
+            BorderBrush = BlendBrush(ResourceBrush("DisabledBorderBrush"), accent, 0.58),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(10),
+            Margin = new Thickness(0, 0, 0, 10)
+        };
+
+        var root = new DockPanel { LastChildFill = true };
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(10, 0, 0, 0)
+        };
+        actions.Children.Add(ActionButton("Generate", async (_, _) => await GenerateDecisionCardAsync(), true, TranscriptActionKind.Primary));
+        DockPanel.SetDock(actions, Dock.Right);
+        root.Children.Add(actions);
+
+        var content = new StackPanel();
+        var titleRow = new StackPanel { Orientation = Orientation.Horizontal };
+        titleRow.Children.Add(new TextBlock
+        {
+            Text = "Decision Card",
+            Foreground = accent,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 13
+        });
+        if (snapshot.DecisionCardUpdatedAt > 0)
+        {
+            titleRow.Children.Add(new TextBlock
+            {
+                Text = $"  updated {DateTimeOffset.FromUnixTimeSeconds((long)snapshot.DecisionCardUpdatedAt).ToLocalTime():h:mm tt}",
+                Foreground = ResourceBrush("MutedTextBrush"),
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+        }
+
+        content.Children.Add(titleRow);
+        content.Children.Add(new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(snapshot.DecisionCard)
+                ? "No decision card yet. Generate one to capture agreed points, conflict, risk, and the next operator move."
+                : snapshot.DecisionCard,
+            Foreground = string.IsNullOrWhiteSpace(snapshot.DecisionCard) ? ResourceBrush("MutedTextBrush") : ResourceBrush("TextBrush"),
+            FontSize = 12,
+            LineHeight = 17,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 6, 0, 0)
+        });
+        root.Children.Add(content);
+        card.Child = root;
+        return card;
+    }
+
+    private async Task GenerateDecisionCardAsync()
+    {
+        if (_activeSession is null)
+        {
+            LoadStatus.Text = "No active session.";
+            return;
+        }
+
+        await RunArenaBusyAsync("Generating decision card...", null, async () =>
+        {
+            var result = await _narratorService.GenerateDecisionCardAsync(_activeSession.Id);
+            await RefreshActiveSessionAsync(result.Ok ? "Decision card updated." : $"Decision card failed: {result.Error}");
+        }, allowDuringAutoChat: true);
     }
 
     private Border CreateTurnCompareColumn(TranscriptMessage message, string slot)
@@ -3884,6 +3982,7 @@ public partial class MainWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         text.Children.Add(new TextBlock
@@ -3925,7 +4024,22 @@ public partial class MainWindow : Window
         Grid.SetColumn(activityDot, 1);
         grid.Children.Add(activityDot);
 
-        Grid.SetColumn(playButton, 2);
+        var routeControls = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(2, 0, 0, 0)
+        };
+        var muteButton = CreateAgentModeButton(isActive ? "M" : "ON", isActive ? "Mute agent" : "Activate agent");
+        muteButton.Click += async (_, _) => await SetAgentMuteAsync(agent.Id, mute: isActive);
+        routeControls.Children.Add(muteButton);
+        var soloButton = CreateAgentModeButton("S", "Solo this agent");
+        soloButton.Click += async (_, _) => await SoloAgentAsync(agent.Id);
+        routeControls.Children.Add(soloButton);
+        Grid.SetColumn(routeControls, 2);
+        grid.Children.Add(routeControls);
+
+        Grid.SetColumn(playButton, 3);
         grid.Children.Add(playButton);
 
         cardLayer.Children.Add(grid);
@@ -3937,6 +4051,86 @@ public partial class MainWindow : Window
         }
 
         return card;
+    }
+
+    private Button CreateAgentModeButton(string content, string tooltip)
+    {
+        return new Button
+        {
+            Content = content,
+            Width = 24,
+            MinWidth = 24,
+            Height = 24,
+            MinHeight = 24,
+            Padding = new Thickness(0),
+            Margin = new Thickness(3, 0, 0, 0),
+            FontSize = 9.5,
+            Background = ResourceBrush("InputBrush"),
+            BorderBrush = ResourceBrush("DisabledBorderBrush"),
+            Foreground = ResourceBrush("MutedTextBrush"),
+            ToolTip = tooltip
+        };
+    }
+
+    private async Task SetAgentMuteAsync(string agentId, bool mute)
+    {
+        await RunArenaBusyAsync(mute ? $"Muting {agentId}..." : $"Activating {agentId}...", null, async () =>
+        {
+            if (_activeSession is null)
+            {
+                return;
+            }
+
+            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
+            var agent = snapshot?.Engine.Agents.FirstOrDefault(item => item.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase));
+            if (snapshot is null || agent is null)
+            {
+                ArenaRunStatus.Text = $"Agent {agentId} not found.";
+                return;
+            }
+
+            agent.Active = !mute;
+            if (!agent.Active)
+            {
+                agent.Status = "muted";
+            }
+            else if (agent.Status.Equals("muted", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(agent.Status))
+            {
+                agent.Status = "waiting";
+            }
+
+            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
+            await _eventLogStore.AppendAsync(_activeSession.Id, "native_agent_active_changed", new { Agent = agentId, Active = agent.Active });
+            await RefreshActiveSessionAsync(agent.Active ? $"{DisplayStatusValue(agentId)} activated." : $"{DisplayStatusValue(agentId)} muted.");
+        }, allowDuringAutoChat: true);
+    }
+
+    private async Task SoloAgentAsync(string agentId)
+    {
+        await RunArenaBusyAsync($"Soloing {agentId}...", null, async () =>
+        {
+            if (_activeSession is null)
+            {
+                return;
+            }
+
+            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
+            if (snapshot is null)
+            {
+                return;
+            }
+
+            foreach (var agent in snapshot.Engine.Agents)
+            {
+                var selected = agent.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase);
+                agent.Active = selected;
+                agent.Status = selected ? "waiting" : "muted";
+            }
+
+            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
+            await _eventLogStore.AppendAsync(_activeSession.Id, "native_agent_solo_enabled", new { Agent = agentId });
+            await RefreshActiveSessionAsync($"{DisplayStatusValue(agentId)} solo enabled.");
+        }, allowDuringAutoChat: true);
     }
 
     private Border CreateNarratorCard(ArenaSnapshot snapshot)
@@ -4883,6 +5077,44 @@ public partial class MainWindow : Window
     private void OperatorNarratorRouteButton_Click(object sender, RoutedEventArgs e)
     {
         SetOperatorRouteMode("narrator");
+    }
+
+    private void UseOperatorTemplateButton_Click(object sender, RoutedEventArgs e)
+    {
+        var template = OperatorTemplatePicker.Text.Trim();
+        if (string.IsNullOrWhiteSpace(template))
+        {
+            return;
+        }
+
+        OperatorTurnText.Text = template;
+        OperatorTurnText.Focus();
+        OperatorTurnText.CaretIndex = OperatorTurnText.Text.Length;
+    }
+
+    private void SaveOperatorTemplateButton_Click(object sender, RoutedEventArgs e)
+    {
+        var template = OperatorTurnText.Text.Trim();
+        if (string.IsNullOrWhiteSpace(template))
+        {
+            ArenaRunStatus.Text = "Operator template is empty.";
+            return;
+        }
+
+        if (!_wpfSettings.OperatorTemplates.Contains(template, StringComparer.OrdinalIgnoreCase))
+        {
+            _wpfSettings.OperatorTemplates.Insert(0, template);
+            _wpfSettings.OperatorTemplates = _wpfSettings.OperatorTemplates
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(12)
+                .ToList();
+            _wpfSettingsStore.Save(_wpfSettings);
+            InitializeOperatorTemplates();
+        }
+
+        OperatorTemplatePicker.Text = template;
+        ArenaRunStatus.Text = "Operator template saved.";
     }
 
     private void SetOperatorRouteMode(string mode)

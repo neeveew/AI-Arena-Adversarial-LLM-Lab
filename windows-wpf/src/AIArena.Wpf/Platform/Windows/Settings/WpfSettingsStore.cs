@@ -54,4 +54,11 @@ public sealed class WpfSettings
     public bool ShowAgentMemoryNotes { get; set; }
     public string TopStripMode { get; set; } = "diagnostics";
     public bool ShowTranscriptDiagnostics { get; set; } = true;
+    public List<string> OperatorTemplates { get; set; } =
+    [
+        "Challenge the strongest assumption in the last turn.",
+        "Summarize the disagreement and ask for the smallest concrete next step.",
+        "Force the agents to separate facts, guesses, and decisions.",
+        "Ask for risks, reversibility, and what would change the conclusion."
+    ];
 }
