@@ -85,6 +85,7 @@ public partial class MainWindow : Window
     private bool _decisionCardExpanded;
     private int? _timelineSelectedTurnFilter;
     private string? _activeAgentPerformanceDetailId;
+    private Window? _userGuideWindow;
     private Point _searchPopupDragStart;
     private double _searchPopupDragStartHorizontalOffset;
     private double _searchPopupDragStartVerticalOffset;
@@ -6526,8 +6527,12 @@ public partial class MainWindow : Window
 
     private void SetSavedStateStatus(string status, bool isDanger = false)
     {
-        SavedStateStatus.Text = status;
+        SavedStateStatus.Text = $"{status} · {DateTime.Now:h:mm tt}";
         SavedStateStatus.Foreground = isDanger ? ResourceBrush("DangerTextBrush") : ResourceBrush("MutedTextBrush");
+        if (LoadStatus is not null)
+        {
+            LoadStatus.Text = "";
+        }
     }
 
     private async void MatchLockChanged(object sender, RoutedEventArgs e)
@@ -7368,6 +7373,12 @@ public partial class MainWindow : Window
 
     private void OpenUserGuideButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_userGuideWindow is { IsVisible: true })
+        {
+            _userGuideWindow.Activate();
+            return;
+        }
+
         var guidePath = ResolveUserGuidePath();
         if (guidePath is null)
         {
@@ -7386,23 +7397,65 @@ public partial class MainWindow : Window
             MinWidth = 680,
             MinHeight = 420,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            WindowStyle = WindowStyle.None,
+            ResizeMode = ResizeMode.CanResizeWithGrip,
+            ShowInTaskbar = false,
             Background = ResourceBrush("WindowBrush"),
             Foreground = ResourceBrush("TextBrush")
         };
+        _userGuideWindow = dialog;
+        dialog.Closed += (_, _) => _userGuideWindow = null;
 
-        var root = new DockPanel { Margin = new Thickness(14) };
+        var chrome = new Border
+        {
+            Background = ResourceBrush("WindowBrush"),
+            BorderBrush = ResourceBrush("ControlBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(14)
+        };
+        var root = new DockPanel();
+        chrome.Child = root;
+
+        var header = new Grid { Margin = new Thickness(0, 0, 0, 12) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.MouseLeftButtonDown += (_, args) =>
+        {
+            if (args.ButtonState == MouseButtonState.Pressed)
+            {
+                dialog.DragMove();
+            }
+        };
+        var heading = new StackPanel();
+        heading.Children.Add(new TextBlock
+        {
+            Text = "AI Arena User Guide",
+            Foreground = ResourceBrush("TextBrush"),
+            FontSize = 18,
+            FontWeight = FontWeights.SemiBold
+        });
+        heading.Children.Add(new TextBlock
+        {
+            Text = "Readable reference for setup, controls, diagnostics, and troubleshooting.",
+            Foreground = ResourceBrush("MutedTextBrush"),
+            FontSize = 12,
+            Margin = new Thickness(0, 2, 0, 0)
+        });
+        header.Children.Add(heading);
+        var headerCloseButton = CreateGuideButton("X");
+        headerCloseButton.Width = 36;
+        headerCloseButton.Click += (_, _) => dialog.Close();
+        Grid.SetColumn(headerCloseButton, 1);
+        header.Children.Add(headerCloseButton);
+        DockPanel.SetDock(header, Dock.Top);
+        root.Children.Add(header);
+
         var footer = new DockPanel
         {
             LastChildFill = false,
             Margin = new Thickness(0, 10, 0, 0)
         };
-        var openFileButton = new Button
-        {
-            Content = "OPEN FILE",
-            MinWidth = 96,
-            MinHeight = 32,
-            Margin = new Thickness(0, 0, 8, 0)
-        };
+        var openFileButton = CreateGuideButton("OPEN FILE");
         openFileButton.Click += (_, _) => Process.Start(new ProcessStartInfo
         {
             FileName = guidePath,
@@ -7410,23 +7463,12 @@ public partial class MainWindow : Window
         });
         footer.Children.Add(openFileButton);
 
-        var copyPathButton = new Button
-        {
-            Content = "COPY PATH",
-            MinWidth = 96,
-            MinHeight = 32,
-            Margin = new Thickness(0, 0, 8, 0)
-        };
+        var copyPathButton = CreateGuideButton("COPY PATH");
         copyPathButton.Click += (_, _) => Clipboard.SetText(guidePath);
         footer.Children.Add(copyPathButton);
 
-        var closeButton = new Button
-        {
-            Content = "CLOSE",
-            MinWidth = 90,
-            MinHeight = 32,
-            HorizontalAlignment = HorizontalAlignment.Right
-        };
+        var closeButton = CreateGuideButton("CLOSE");
+        closeButton.HorizontalAlignment = HorizontalAlignment.Right;
         closeButton.Click += (_, _) => dialog.Close();
         DockPanel.SetDock(closeButton, Dock.Right);
         footer.Children.Add(closeButton);
@@ -7450,35 +7492,97 @@ public partial class MainWindow : Window
         };
         body.Children.Add(sectionList);
 
-        var guideViewer = new TextBox
+        var guideViewer = new FlowDocumentScrollViewer
         {
-            Text = sections.FirstOrDefault()?.Text ?? guideText,
-            IsReadOnly = true,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.Wrap,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Background = ResourceBrush("InputBrush"),
-            Foreground = ResourceBrush("TextBrush"),
-            BorderBrush = ResourceBrush("ControlBorderBrush"),
-            Padding = new Thickness(12),
-            FontFamily = new FontFamily("Consolas"),
-            FontSize = 12
+            Padding = new Thickness(14),
+            Document = BuildGuideDocument(sections.FirstOrDefault() ?? new UserGuideSection("Guide", guideText))
         };
         sectionList.SelectionChanged += (_, _) =>
         {
             if (sectionList.SelectedItem is UserGuideSection section)
             {
-                guideViewer.Text = section.Text;
-                guideViewer.ScrollToHome();
+                guideViewer.Document = BuildGuideDocument(section);
             }
         };
         Grid.SetColumn(guideViewer, 2);
         body.Children.Add(guideViewer);
         root.Children.Add(body);
 
-        dialog.Content = root;
-        dialog.ShowDialog();
+        dialog.Content = chrome;
+        dialog.Show();
+    }
+
+    private Button CreateGuideButton(string text)
+    {
+        return new Button
+        {
+            Content = text,
+            MinWidth = 90,
+            MinHeight = 32,
+            Padding = new Thickness(10, 5, 10, 5),
+            Margin = new Thickness(0, 0, 8, 0),
+            Background = ResourceBrush("InputBrush"),
+            BorderBrush = ResourceBrush("ControlBorderBrush"),
+            Foreground = ResourceBrush("TextBrush"),
+            FontWeight = FontWeights.SemiBold
+        };
+    }
+
+    private FlowDocument BuildGuideDocument(UserGuideSection section)
+    {
+        var document = new FlowDocument
+        {
+            Background = ResourceBrush("InputBrush"),
+            Foreground = ResourceBrush("TextBrush"),
+            FontFamily = new FontFamily("Segoe UI"),
+            FontSize = 13,
+            PagePadding = new Thickness(0),
+            LineHeight = 19
+        };
+
+        foreach (var rawLine in section.Text.Split(["\r\n", "\n"], StringSplitOptions.None))
+        {
+            var line = rawLine.TrimEnd();
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            if (line.StartsWith("## ", StringComparison.Ordinal) || line.StartsWith("# ", StringComparison.Ordinal))
+            {
+                document.Blocks.Add(new Paragraph(new Run(line.TrimStart('#', ' ').Trim()))
+                {
+                    Foreground = ResourceBrush("PrimaryBorderBrush"),
+                    FontSize = 18,
+                    FontWeight = FontWeights.SemiBold,
+                    Margin = new Thickness(0, 0, 0, 12)
+                });
+                continue;
+            }
+
+            if (line.StartsWith("### ", StringComparison.Ordinal))
+            {
+                document.Blocks.Add(new Paragraph(new Run(line.TrimStart('#', ' ').Trim()))
+                {
+                    Foreground = ResourceBrush("TextBrush"),
+                    FontSize = 15,
+                    FontWeight = FontWeights.SemiBold,
+                    Margin = new Thickness(0, 12, 0, 6)
+                });
+                continue;
+            }
+
+            var isBullet = line.StartsWith("- ", StringComparison.Ordinal) || line.StartsWith("* ", StringComparison.Ordinal);
+            document.Blocks.Add(new Paragraph(new Run(isBullet ? $"• {line[2..].Trim()}" : line.Trim()))
+            {
+                Foreground = isBullet ? ResourceBrush("TextBrush") : ResourceBrush("TextBrush"),
+                Margin = new Thickness(isBullet ? 12 : 0, 0, 0, 6)
+            });
+        }
+
+        return document;
     }
 
     private static IReadOnlyList<UserGuideSection> BuildUserGuideSections(string guideText)
