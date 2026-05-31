@@ -1,15 +1,120 @@
-# AI Arena - adversarial multi-agent LLM lab
+# AI Arena: Adversarial LLM Lab
 
-AI Arena is a native Windows WPF app backed by the shared .NET core library.
-The previous dashboard stack has been removed from the active source tree.
+A native Windows lab for running adversarial multi-agent conversations between local or OpenAI-compatible LLMs.
+
+[Download latest beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/download/v0.3.44-beta/AI.Arena.Setup.0.3.44-beta.exe) | [User guide](windows-wpf/docs/USER_GUIDE.md) | [Licence](LICENSE)
+
+AI Arena is not a chatbot and not just a model comparison board. It is a local adversarial multi-agent LLM lab where agents can argue, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
+
+You create the cast, assign models and personas, inject public operator turns, and let a separate narrator observe or summarize the match. The app includes discourse diagnostics for friction, consensus, role drift, unsupported claims, evidence pressure, and narrative heat.
+
+It is built for local experimentation with model behavior, multi-agent debate, red-team style reasoning, prompt/cast design, and AI discourse analysis.
 
 ## Screenshots
 
 ![AI Arena transcript view](screenshot-transcript.png)
 
+Transcript, live agents, discourse diagnostics, agent performance, and performance detail inspection.
+
 ![AI Arena custom match view](screenshot-custom-match.png)
 
-## Projects
+Custom match builder with scenario framing, personas, locks, checkpoints, sessions, and operator controls.
+
+## Why This Exists
+
+Most LLM tools are designed to produce a final answer. AI Arena is designed to observe the process.
+
+The interesting part is often not the final response, but what happens before it: disagreement, role drift, narrative collapse, unsupported certainty, evidence grounding, consensus formation, and operator-induced correction.
+
+AI Arena makes those dynamics visible. The friction strip, narrator layer, memory notes, timeline, and performance inspector help you watch agents form or resist consensus under pressure.
+
+## Key Features
+
+- Alpha, Beta, Gamma, and Delta participant agents.
+- Separate Narrator layer for observation and public narration.
+- Public Operator interventions that do not advance the turn order.
+- Per-agent personas and model assignments.
+- OpenAI-compatible provider support, including LM Studio.
+- Random Seed, AI Choice, and YOLO scenario generation.
+- Scenario and cast locks for controlled regeneration.
+- Local sessions, restore points, and scenario templates.
+- Discourse diagnostics: friction, consensus, role drift, unsupported claims, evidence pressure, and narrative heat.
+- Agent memory notes stored per session.
+- Turn compare mode for side-by-side transcript inspection.
+- Match quality timeline with click-to-filter.
+- Agent performance cards with detail popups.
+- Transcript search, filters, compact mode, reasoning display, retry, delete, and Markdown export.
+- Internet/news context with approval controls.
+- Native Windows/WPF interface.
+
+## Quick Start
+
+1. Download and run the latest beta installer:
+   [AI Arena Setup 0.3.44-beta.exe](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/download/v0.3.44-beta/AI.Arena.Setup.0.3.44-beta.exe)
+2. Start LM Studio or another OpenAI-compatible provider.
+3. Open Settings, then Model Provider.
+4. Set Provider base URL. For LM Studio, use:
+
+   ```text
+   http://127.0.0.1:1234/v1
+   ```
+
+5. Select a default model, or type a model name manually.
+6. Optionally assign different models to Alpha, Beta, Gamma, Delta, and Narrator.
+7. Press Test Provider.
+8. Open Custom Match and generate a setup using Random Seed, AI Choice, or YOLO.
+9. Return to Transcript and run 1 TURN or AUTO CHAT.
+
+## What Makes It Different
+
+AI Arena is not only a model comparison board. It is not only a chat interface. It is a local adversarial discourse environment with diagnostics, memory, narrator feedback, and operator control.
+
+The app is useful when you want to watch models:
+
+- challenge or reinforce each other;
+- drift away from assigned roles;
+- collapse into confident but unsupported narratives;
+- converge on shared assumptions;
+- respond to operator corrections;
+- behave differently under different personas, models, or context windows.
+
+## Requirements
+
+- Windows.
+- AI Arena installer.
+- .NET Desktop Runtime if your machine does not already have the required runtime.
+- LM Studio or any OpenAI-compatible `/v1` provider.
+- Local models are optional depending on your provider setup.
+
+AI Arena is not tied to a specific GPU vendor. Model execution depends on the provider you connect to.
+
+## Provider Setup
+
+AI Arena talks to OpenAI-compatible providers.
+
+For LM Studio:
+
+1. Open LM Studio.
+2. Load a model.
+3. Start the local server.
+4. Use this base URL in AI Arena:
+
+   ```text
+   http://127.0.0.1:1234/v1
+   ```
+
+If the provider is offline, AI Arena can still open sessions and display local data, but model turns will not run until the provider is reachable.
+
+## Technical Overview
+
+- Native Windows WPF app.
+- Shared .NET core library for arena logic, sessions, providers, diagnostics, internet tools, narration, transcript handling, match generation, and avatars.
+- OpenAI-compatible provider client.
+- Local session storage under `%LOCALAPPDATA%\AI Arena Alpha\data`.
+- No dependency on a specific model host.
+- No WebView/browser dashboard dependency in the active app.
+
+## Source Layout
 
 - `windows-wpf/src/AIArena.Wpf` - native Windows app.
   - `Shell` - main window and app dialogs.
@@ -32,18 +137,6 @@ The previous dashboard stack has been removed from the active source tree.
 dotnet build .\windows-wpf\src\AIArena.Wpf\AIArena.Wpf.csproj
 ```
 
-## User Guide
-
-The current user guide is maintained at `windows-wpf/docs/USER_GUIDE.md`.
-It covers installation, provider setup, transcript tools, Custom Match,
-memory notes, match quality timeline, agent performance popups, and licensing.
-
-## Licence
-
-AI Arena is distributed under the Shareable No-Derivatives Software Licence 1.0.
-You may share the software in its original, unmodified form. Modified
-redistribution requires written permission from Dominik Fiala.
-
 ## Release Helpers
 
 ```powershell
@@ -53,9 +146,20 @@ redistribution requires written permission from Dominik Fiala.
 .\scripts\wpf-release-sanity.ps1
 ```
 
-The generated dependency map lives at `docs/DEPENDENCY_INDEX.md`. Rebuild it with
-`.\scripts\dependency-index.ps1` after moving modules, services, project
-references, packages, or packaged resources.
+The generated dependency map lives at `docs/DEPENDENCY_INDEX.md`. Rebuild it with `.\scripts\dependency-index.ps1` after moving modules, services, project references, packages, or packaged resources.
 
-The app stores sessions and settings under `%LOCALAPPDATA%\AI Arena Alpha\data`
-for compatibility with existing local data.
+## Safety And Limitations
+
+- LLM outputs may be false, incomplete, or misleading.
+- Discourse diagnostics are heuristic. They do not verify factual correctness.
+- Internet/source use should be reviewed by the operator.
+- Model behavior depends heavily on the provider, model, prompt, context window, and local hardware.
+- This is a beta app for experimentation, not a correctness oracle.
+
+## Licence
+
+AI Arena is distributed under the Shareable No-Derivatives Software Licence 1.0.
+
+You may share AI Arena freely in its original, unmodified form. You may use it privately. You may not distribute edited, modified, forked, patched, rebuilt, or derivative versions without written permission from Dominik Fiala.
+
+Copyright (c) 2026 Dominik Fiala. All rights not expressly granted remain with the author.
