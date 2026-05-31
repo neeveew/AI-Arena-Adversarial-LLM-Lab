@@ -796,7 +796,16 @@
                         <TextBlock x:Name="TopMatchValue" Grid.Column="1" Text="-" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,0,0" />
                         <TextBlock Grid.Column="2" Text="|" Foreground="{DynamicResource ControlBorderBrush}" VerticalAlignment="Center" HorizontalAlignment="Center" />
                         <TextBlock Grid.Column="3" Text="Provider:" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
-                        <TextBlock x:Name="TopProviderValue" Grid.Column="4" Text="-" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,0,0" />
+                        <TextBlock x:Name="TopProviderValue"
+                                   Grid.Column="4"
+                                   Text="-"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
+                                   Margin="4,0,0,0"
+                                   Cursor="Hand"
+                                   MouseLeftButtonUp="TopProviderValue_MouseLeftButtonUp"
+                                   ToolTip="Provider details" />
                         <TextBlock Grid.Column="5" Text="|" Foreground="{DynamicResource ControlBorderBrush}" VerticalAlignment="Center" HorizontalAlignment="Center" />
                         <TextBlock Grid.Column="6" Text="Current turn:" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
                         <TextBlock x:Name="TopCurrentTurnValue" Grid.Column="7" Text="-" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,0,0" />
@@ -804,6 +813,110 @@
                         <TextBlock Grid.Column="9" Text="Turns:" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
                         <TextBlock x:Name="TopTurnsValue" Grid.Column="10" Text="0" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,0,0" />
                     </Grid>
+                    <Popup x:Name="ProviderHealthPopup"
+                           PlacementTarget="{Binding ElementName=TopProviderValue}"
+                           Placement="Bottom"
+                           HorizontalOffset="-68"
+                           VerticalOffset="6"
+                           StaysOpen="False"
+                           AllowsTransparency="True">
+                        <Border Background="{DynamicResource TopBarBrush}"
+                                BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="12"
+                                Width="360">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Provider Health"
+                                                   Foreground="{DynamicResource TextBrush}"
+                                                   FontWeight="SemiBold"
+                                                   FontSize="13" />
+                                        <TextBlock x:Name="ProviderHealthStatusText"
+                                                   Text="Status unavailable"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   FontSize="11"
+                                                   Margin="0,2,0,0" />
+                                    </StackPanel>
+                                    <Button Grid.Column="1"
+                                            Content="X"
+                                            Click="ProviderHealthCloseButton_Click"
+                                            Width="30"
+                                            MinWidth="30"
+                                            MinHeight="28"
+                                            Padding="0" />
+                                </Grid>
+                                <UniformGrid Columns="2" Margin="0,0,0,8">
+                                    <Border Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" Padding="8,6" Margin="0,0,5,5">
+                                        <StackPanel>
+                                            <TextBlock Text="Base URL" Foreground="{DynamicResource MutedTextBrush}" FontSize="10" />
+                                            <TextBlock x:Name="ProviderHealthBaseUrlText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" Padding="8,6" Margin="0,0,0,5">
+                                        <StackPanel>
+                                            <TextBlock Text="Models" Foreground="{DynamicResource MutedTextBrush}" FontSize="10" />
+                                            <TextBlock x:Name="ProviderHealthModelCountText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="11" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" Padding="8,6" Margin="0,0,5,0">
+                                        <StackPanel>
+                                            <TextBlock Text="Default model" Foreground="{DynamicResource MutedTextBrush}" FontSize="10" />
+                                            <TextBlock x:Name="ProviderHealthDefaultModelText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" Padding="8,6">
+                                        <StackPanel>
+                                            <TextBlock Text="Last check" Foreground="{DynamicResource MutedTextBrush}" FontSize="10" />
+                                            <TextBlock x:Name="ProviderHealthLastCheckText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="11" />
+                                        </StackPanel>
+                                    </Border>
+                                </UniformGrid>
+                                <Border x:Name="ProviderHealthModelWarning"
+                                        Background="{DynamicResource DangerBrush}"
+                                        BorderBrush="{DynamicResource DangerBorderBrush}"
+                                        BorderThickness="1"
+                                        Padding="8,6"
+                                        Margin="0,0,0,8"
+                                        Visibility="Collapsed">
+                                    <TextBlock x:Name="ProviderHealthModelWarningText"
+                                               Text="Selected model is not in the advertised model list."
+                                               Foreground="{DynamicResource DangerTextBrush}"
+                                               FontSize="11"
+                                               TextWrapping="Wrap" />
+                                </Border>
+                                <TextBlock x:Name="ProviderHealthLastErrorText"
+                                           Text="-"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontSize="11"
+                                           TextWrapping="Wrap"
+                                           Margin="0,0,0,10" />
+                                <UniformGrid Columns="3">
+                                    <Button x:Name="ProviderHealthTestButton"
+                                            Content="TEST"
+                                            Click="ProviderHealthTestButton_Click"
+                                            MinHeight="30"
+                                            Padding="6,4"
+                                            Margin="0,0,5,0" />
+                                    <Button x:Name="ProviderHealthRefreshModelsButton"
+                                            Content="MODELS"
+                                            Click="ProviderHealthRefreshModelsButton_Click"
+                                            MinHeight="30"
+                                            Padding="6,4"
+                                            Margin="0,0,5,0" />
+                                    <Button Content="SETTINGS"
+                                            Click="ProviderHealthSettingsButton_Click"
+                                            MinHeight="30"
+                                            Padding="6,4" />
+                                </UniformGrid>
+                            </StackPanel>
+                        </Border>
+                    </Popup>
                     <Grid Grid.Row="1">
                         <TextBlock x:Name="ArenaRunStatus"
                                    Text="Ready."

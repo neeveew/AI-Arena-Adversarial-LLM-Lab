@@ -71,6 +71,9 @@ public partial class MainWindow : Window
     private bool _isPersistingModelRouting;
     private bool _arenaBusy;
     private bool _telemetrySampleInFlight;
+    private int _lastProviderModelCount = -1;
+    private DateTimeOffset? _lastProviderHealthCheckedAt;
+    private DateTimeOffset? _lastModelListCheckedAt;
     private string _transcriptDashboardLayout = "";
     private Button? _breathingOperationButton;
     private bool _isDraggingSearchPopup;
@@ -1209,6 +1212,7 @@ public partial class MainWindow : Window
         TopMatchValue.Text = DisplayStatusValue(snapshot.MatchType);
         TopProviderValue.Text = snapshot.ProviderOnline ? "ONLINE" : "OFFLINE";
         TopProviderValue.Foreground = snapshot.ProviderOnline ? ResourceBrush("PrimaryBorderBrush") : ResourceBrush("DangerTextBrush");
+        TopProviderValue.ToolTip = $"Provider details - {snapshot.ProviderBaseUrl}";
         var current = CurrentTurnAgent(snapshot);
         TopCurrentTurnValue.Text = current?.Id.ToUpperInvariant() ?? "-";
         TopCurrentTurnValue.Foreground = current is null ? ResourceBrush("TextBrush") : AccentForSpeaker(current.Id);
@@ -1230,6 +1234,7 @@ public partial class MainWindow : Window
         SettingsProviderStatusText.Foreground = snapshot.ProviderOnline
             ? ResourceBrush("PrimaryBorderBrush")
             : ResourceBrush("DangerTextBrush");
+        UpdateProviderHealthPopup(snapshot);
     }
 
     private static AgentState? CurrentTurnAgent(ArenaSnapshot snapshot)
@@ -4164,13 +4169,18 @@ public partial class MainWindow : Window
 
     private async void TestProviderButton_Click(object sender, RoutedEventArgs e)
     {
+        await TestProviderAsync(TestProviderButton);
+    }
+
+    private async Task TestProviderAsync(Control busyControl)
+    {
         if (_activeSession is null)
         {
             ProviderTestStatus.Text = "No active session.";
             return;
         }
 
-        await RunBusyAsync(TestProviderButton, async () =>
+        await RunBusyAsync(busyControl, async () =>
         {
             ProviderTestStatus.Text = "Testing provider...";
             var config = await LoadSharedProviderConfigAsync();
@@ -4181,6 +4191,7 @@ public partial class MainWindow : Window
             }
 
             var result = await _providerHealth.TestCompletionAsync(config);
+            _lastProviderHealthCheckedAt = result.CheckedAt;
             if (result.Ok)
             {
                 await PersistProviderReachabilityAsync(true, "", result.LatencyMs, "Provider online.");
@@ -4188,6 +4199,8 @@ public partial class MainWindow : Window
             else
             {
                 var health = await _providerHealth.CheckAsync(ProviderHealthProbeConfig(config));
+                _lastProviderHealthCheckedAt = health.CheckedAt;
+                _lastProviderModelCount = health.ModelCount;
                 await PersistProviderReachabilityAsync(
                     health.Ok,
                     health.Ok ? result.Error : health.Error,
@@ -4198,6 +4211,7 @@ public partial class MainWindow : Window
             ProviderTestStatus.Text = result.Ok
                 ? $"Provider ok: {result.Model} at {result.BaseUrl}; {result.LatencyMs} ms; reply: {result.Text}"
                 : $"Provider failed: {result.Error}";
+            UpdateProviderHealthPopup();
         });
     }
 
@@ -5250,6 +5264,7 @@ public partial class MainWindow : Window
             var socket = await ProbeProviderSocketAsync(shared);
             if (!socket.Ok)
             {
+                _lastProviderHealthCheckedAt = DateTimeOffset.Now;
                 await PersistProviderReachabilityAsync(false, socket.Error, socket.LatencyMs, "Provider offline.", snapshot, sessionId);
                 return;
             }
@@ -5257,6 +5272,8 @@ public partial class MainWindow : Window
             if (!shared.LastTestOk)
             {
                 var health = await _providerHealth.CheckAsync(ProviderHealthProbeConfig(shared));
+                _lastProviderHealthCheckedAt = health.CheckedAt;
+                _lastProviderModelCount = health.ModelCount;
                 await PersistProviderReachabilityAsync(
                     health.Ok,
                     health.Ok ? "" : health.Error,
@@ -5269,6 +5286,7 @@ public partial class MainWindow : Window
             }
 
             nextInterval = TimeSpan.FromSeconds(10);
+            _lastProviderHealthCheckedAt = DateTimeOffset.Now;
             await PersistProviderReachabilityAsync(true, "", socket.LatencyMs, "Provider online.", snapshot, sessionId);
         }
         finally
@@ -5316,6 +5334,7 @@ public partial class MainWindow : Window
             LatencyMs = latencyMs
         });
         await UpdateActiveProviderStatusOnlyAsync(status);
+        UpdateProviderHealthPopup();
     }
 
     private async Task UpdateActiveProviderStatusOnlyAsync(string status)
@@ -5340,6 +5359,7 @@ public partial class MainWindow : Window
         var snapshot = SnapshotViewMapper.FromCore(latest, coreSnapshot);
         _activeSession = latest;
         _activeSnapshotWriteUtc = latest.LastModified;
+        _lastRenderedSnapshot = snapshot;
         UpdateTopBarStatus(snapshot);
         if (!_arenaBusy)
         {
@@ -6575,6 +6595,82 @@ public partial class MainWindow : Window
         }, DispatcherPriority.Background);
     }
 
+    private void TopProviderValue_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        UpdateProviderHealthPopup();
+        ProviderHealthPopup.IsOpen = true;
+        e.Handled = true;
+    }
+
+    private void ProviderHealthCloseButton_Click(object sender, RoutedEventArgs e)
+    {
+        ProviderHealthPopup.IsOpen = false;
+    }
+
+    private async void ProviderHealthTestButton_Click(object sender, RoutedEventArgs e)
+    {
+        await TestProviderAsync(ProviderHealthTestButton);
+        UpdateProviderHealthPopup();
+    }
+
+    private async void ProviderHealthRefreshModelsButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunBusyAsync(ProviderHealthRefreshModelsButton, async () =>
+        {
+            ProviderHealthStatusText.Text = "Refreshing advertised models...";
+            await RefreshAdvertisedModelsAsync(force: true);
+        });
+        UpdateProviderHealthPopup();
+    }
+
+    private void ProviderHealthSettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        ProviderHealthPopup.IsOpen = false;
+        OpenModelProviderSettings();
+    }
+
+    private void UpdateProviderHealthPopup(ArenaSnapshot? snapshot = null)
+    {
+        if (ProviderHealthStatusText is null)
+        {
+            return;
+        }
+
+        snapshot ??= _lastRenderedSnapshot;
+        var online = snapshot?.ProviderOnline == true;
+        var baseUrl = snapshot?.ProviderBaseUrl ?? ProviderBaseUrlText?.Text?.Trim() ?? "-";
+        var model = snapshot?.ProviderModel ?? ProviderModelText?.Text?.Trim() ?? "-";
+        var error = snapshot?.ProviderLastError ?? "";
+        var modelCount = _advertisedModels.Count > 0
+            ? _advertisedModels.Count
+            : _lastProviderModelCount;
+        var checkedAt = _lastProviderHealthCheckedAt ?? _lastModelListCheckedAt;
+
+        ProviderHealthStatusText.Text = online ? "ONLINE" : "OFFLINE";
+        ProviderHealthStatusText.Foreground = online ? ResourceBrush("PrimaryBorderBrush") : ResourceBrush("DangerTextBrush");
+        ProviderHealthBaseUrlText.Text = string.IsNullOrWhiteSpace(baseUrl) ? "-" : baseUrl;
+        ProviderHealthModelCountText.Text = modelCount >= 0 ? modelCount.ToString(System.Globalization.CultureInfo.InvariantCulture) : "unknown";
+        ProviderHealthDefaultModelText.Text = string.IsNullOrWhiteSpace(model) || model == "-" ? "not selected" : model;
+        ProviderHealthLastCheckText.Text = checkedAt is null
+            ? "waiting"
+            : checkedAt.Value.ToLocalTime().ToString("h:mm:ss tt", System.Globalization.CultureInfo.CurrentCulture);
+        ProviderHealthLastErrorText.Text = string.IsNullOrWhiteSpace(error)
+            ? "No provider error recorded."
+            : $"Last error: {error}";
+        ProviderHealthLastErrorText.Foreground = string.IsNullOrWhiteSpace(error)
+            ? ResourceBrush("MutedTextBrush")
+            : ResourceBrush("DangerTextBrush");
+
+        var missingModel = _advertisedModels.Count > 0
+            && !string.IsNullOrWhiteSpace(model)
+            && model != "-"
+            && !_advertisedModels.Contains(model, StringComparer.OrdinalIgnoreCase);
+        ProviderHealthModelWarning.Visibility = missingModel ? Visibility.Visible : Visibility.Collapsed;
+        ProviderHealthModelWarningText.Text = missingModel
+            ? $"Selected default model '{model}' is not in the advertised model list. Open settings to reselect or type it manually."
+            : "";
+    }
+
     private void TranscriptSearchText_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Escape)
@@ -7007,9 +7103,11 @@ public partial class MainWindow : Window
                 MaxOutputTokens = 16
             };
             var result = await _providerHealth.ListModelsAsync(config);
+            _lastModelListCheckedAt = result.CheckedAt;
             if (result.Ok)
             {
                 _advertisedModels = result.Models.OrderBy(model => model, StringComparer.OrdinalIgnoreCase).ToArray();
+                _lastProviderModelCount = _advertisedModels.Count;
                 ProviderModelsStatus.Text = $"{_advertisedModels.Count} advertised models found. Refreshes every 5s while settings are open.";
                 _isUpdatingRoleModelEditor = true;
                 try
@@ -7032,6 +7130,7 @@ public partial class MainWindow : Window
                 ProviderModelsStatus.Text = $"Model list unavailable: {result.Error}";
                 UpdateModelStateLabels();
             }
+            UpdateProviderHealthPopup();
         }
         finally
         {
