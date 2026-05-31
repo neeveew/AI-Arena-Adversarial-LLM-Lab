@@ -2456,6 +2456,11 @@
                                 Click="OpenReleasesButton_Click"
                                 Margin="0,12,0,0"
                                 ToolTip="Open the AI Arena GitHub releases page" />
+                        <Button x:Name="OpenUserGuideButton"
+                                Content="OPEN USER GUIDE"
+                                Click="OpenUserGuideButton_Click"
+                                Margin="0,8,0,0"
+                                ToolTip="Open the AI Arena user guide" />
                     </StackPanel>
                 </Expander>
                     </StackPanel>

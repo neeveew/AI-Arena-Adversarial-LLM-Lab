@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.3.56-beta"
+    [string]$Version = "0.3.57-beta"
 )
 
 $ErrorActionPreference = "Stop"
@@ -66,6 +66,9 @@ if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\NOTICE\.md"; DestDir: "\{app\}"'
 }
 if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\windows-wpf\\docs\\USER_GUIDE\.md"; DestDir: "\{app\}"') {
     throw "Installer no longer installs USER_GUIDE.md beside the app."
+}
+if ($scriptText -notmatch 'Filename: "\{app\}\\USER_GUIDE\.md"; Description: "Open user guide"; Flags: shellexec postinstall skipifsilent') {
+    throw "Installer no longer offers the user guide at the end of setup."
 }
 if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\windows-wpf\\src\\AIArena\.Wpf\\Assets\\ai-arena-icon\.ico"; DestDir: "\{app\}"') {
     throw "Installer no longer installs the app icon beside the app."

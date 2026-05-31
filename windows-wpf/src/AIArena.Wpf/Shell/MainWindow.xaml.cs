@@ -2520,17 +2520,22 @@ public partial class MainWindow : Window
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(10, 0, 0, 0)
         };
-        actions.Children.Add(ActionButton(
+        var expandButton = ActionButton(
             _decisionCardExpanded ? "Collapse" : "Expand",
             (_, _) =>
             {
                 _decisionCardExpanded = !_decisionCardExpanded;
                 PopulateTranscript(_lastRenderedMessages);
             },
-            hasCard));
-        actions.Children.Add(ActionButton("Generate", async (_, _) => await GenerateDecisionCardAsync(), true, TranscriptActionKind.Primary));
+            hasCard);
+        var generateButton = ActionButton("Generate", async (_, _) => await GenerateDecisionCardAsync(), true, TranscriptActionKind.Primary);
+        SetDecisionCardActionSize(expandButton);
+        SetDecisionCardActionSize(generateButton);
+        actions.Children.Add(expandButton);
+        actions.Children.Add(generateButton);
         DockPanel.SetDock(actions, Dock.Right);
         root.Children.Add(actions);
 
@@ -2572,6 +2577,19 @@ public partial class MainWindow : Window
         root.Children.Add(content);
         card.Child = root;
         return card;
+    }
+
+    private void SetDecisionCardActionSize(Button button)
+    {
+        button.Width = double.NaN;
+        button.MinWidth = 74;
+        button.Height = _wpfSettings.CompactTranscriptMode ? 26 : 32;
+        button.MinHeight = button.Height;
+        button.VerticalAlignment = VerticalAlignment.Top;
+        button.HorizontalAlignment = HorizontalAlignment.Left;
+        button.Padding = _wpfSettings.CompactTranscriptMode
+            ? new Thickness(8, 3, 8, 3)
+            : new Thickness(10, 5, 10, 5);
     }
 
     private async Task GenerateDecisionCardAsync()
@@ -7204,6 +7222,85 @@ public partial class MainWindow : Window
             FileName = ReleasesUrl,
             UseShellExecute = true
         });
+    }
+
+    private void OpenUserGuideButton_Click(object sender, RoutedEventArgs e)
+    {
+        var guidePath = ResolveUserGuidePath();
+        if (guidePath is null)
+        {
+            LoadStatus.Text = "User guide not found.";
+            return;
+        }
+
+        var guideText = File.ReadAllText(guidePath);
+        var dialog = new Window
+        {
+            Title = "AI Arena User Guide",
+            Owner = this,
+            Width = 860,
+            Height = 680,
+            MinWidth = 560,
+            MinHeight = 420,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = ResourceBrush("WindowBrush"),
+            Foreground = ResourceBrush("TextBrush")
+        };
+
+        var root = new DockPanel { Margin = new Thickness(14) };
+        var closeButton = new Button
+        {
+            Content = "CLOSE",
+            MinWidth = 90,
+            MinHeight = 32,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+        closeButton.Click += (_, _) => dialog.Close();
+        DockPanel.SetDock(closeButton, Dock.Bottom);
+        root.Children.Add(closeButton);
+
+        root.Children.Add(new TextBox
+        {
+            Text = guideText,
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Background = ResourceBrush("InputBrush"),
+            Foreground = ResourceBrush("TextBrush"),
+            BorderBrush = ResourceBrush("ControlBorderBrush"),
+            Padding = new Thickness(12),
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 12
+        });
+
+        dialog.Content = root;
+        dialog.ShowDialog();
+    }
+
+    private static string? ResolveUserGuidePath()
+    {
+        var installedGuide = Path.Combine(AppContext.BaseDirectory, "USER_GUIDE.md");
+        if (File.Exists(installedGuide))
+        {
+            return installedGuide;
+        }
+
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            var sourceGuide = Path.Combine(current.FullName, "windows-wpf", "docs", "USER_GUIDE.md");
+            if (File.Exists(sourceGuide))
+            {
+                return sourceGuide;
+            }
+
+            current = current.Parent;
+        }
+
+        return null;
     }
 
     private void OpenModelProviderSettings(string? baseUrl = null, string? model = null)
