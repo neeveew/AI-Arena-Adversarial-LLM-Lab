@@ -6465,18 +6465,81 @@ public partial class MainWindow : Window
 
     private void ArenaNavButton_Click(object sender, RoutedEventArgs e)
     {
+        ShowTranscriptPanel(clearFilters: false);
+    }
+
+    private void CustomMatchNavButton_Click(object sender, RoutedEventArgs e)
+    {
+        ShowCustomMatchPanel();
+    }
+
+    private void SessionOverviewMatch_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        ShowCustomMatchPanel();
+        e.Handled = true;
+    }
+
+    private void SessionOverviewTurns_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        ShowTranscriptPanel(clearFilters: true);
+        e.Handled = true;
+    }
+
+    private void SessionOverviewPerformance_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        AgentPerformanceCard.BringIntoView();
+        Dispatcher.BeginInvoke(() => AgentPerformanceCard.BringIntoView(), DispatcherPriority.Background);
+        e.Handled = true;
+    }
+
+    private void SessionOverviewProvider_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        OpenModelProviderSettings();
+        e.Handled = true;
+    }
+
+    private void ShowTranscriptPanel(bool clearFilters)
+    {
         TranscriptPanel.Visibility = Visibility.Visible;
         CustomMatchPanel.Visibility = Visibility.Collapsed;
         NewsPanel.Visibility = Visibility.Collapsed;
         UpdateNavigationTheme();
+
+        if (clearFilters)
+        {
+            ClearTranscriptFilters();
+        }
     }
 
-    private void CustomMatchNavButton_Click(object sender, RoutedEventArgs e)
+    private void ShowCustomMatchPanel()
     {
         TranscriptPanel.Visibility = Visibility.Collapsed;
         CustomMatchPanel.Visibility = Visibility.Visible;
         NewsPanel.Visibility = Visibility.Collapsed;
         UpdateNavigationTheme();
+    }
+
+    private void ClearTranscriptFilters()
+    {
+        _isRenderingSnapshot = true;
+        try
+        {
+            _timelineSelectedTurnFilter = null;
+            TranscriptSearchText.Clear();
+            TranscriptSearchPopup.IsOpen = false;
+            SelectComboTag(TranscriptTurnFilterPicker, "all");
+            TranscriptFilterSystemCheckBox.IsChecked = true;
+            TranscriptFilterAgentsCheckBox.IsChecked = true;
+            TranscriptFilterNarratorCheckBox.IsChecked = true;
+            TranscriptFilterOperatorCheckBox.IsChecked = true;
+        }
+        finally
+        {
+            _isRenderingSnapshot = false;
+        }
+
+        PopulateTranscript(_lastRenderedMessages);
+        Dispatcher.BeginInvoke(() => TranscriptScrollViewer.ScrollToTop(), DispatcherPriority.Background);
     }
 
     private void TranscriptFilter_Changed(object sender, RoutedEventArgs e)

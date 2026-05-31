@@ -388,6 +388,21 @@
             <Setter Property="Margin" Value="0,0,0,10" />
             <Setter Property="Opacity" Value="0.94" />
         </Style>
+        <Style x:Key="SessionOverviewHotspot" TargetType="Border">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Padding" Value="4,3" />
+            <Setter Property="Margin" Value="-4,-3,4,3" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource NavHoverBrush}" />
+                    <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="FilterChipCheckBox" TargetType="CheckBox">
             <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
@@ -663,30 +678,65 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
-                                <StackPanel Margin="0,0,8,6">
-                                    <TextBlock Text="Match" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" />
-                                    <TextBlock x:Name="SessionOverviewMatchText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" Margin="0,0,0,6" HorizontalAlignment="Right">
-                                    <TextBlock Text="Turns" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" />
-                                    <TextBlock x:Name="SessionOverviewTurnsText" Text="0" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Right" />
-                                </StackPanel>
-                                <StackPanel Grid.Row="1" Margin="0,0,8,6">
-                                    <TextBlock Text="Agents" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" />
-                                    <TextBlock x:Name="SessionOverviewParticipantsText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
-                                </StackPanel>
-                                <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,0,6" HorizontalAlignment="Right">
-                                    <TextBlock Text="Tokens" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" />
-                                    <TextBlock x:Name="SessionOverviewTokensText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Right" />
-                                </StackPanel>
-                                <StackPanel Grid.Row="2" Margin="0,0,8,0">
-                                    <TextBlock Text="Provider" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" />
-                                    <TextBlock x:Name="SessionOverviewProviderText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                </StackPanel>
-                                <StackPanel Grid.Row="2" Grid.Column="1" HorizontalAlignment="Right">
-                                    <TextBlock Text="Context" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" />
-                                    <TextBlock x:Name="SessionOverviewContextText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Right" />
-                                </StackPanel>
+                                <Border Style="{StaticResource SessionOverviewHotspot}"
+                                        MouseLeftButtonUp="SessionOverviewMatch_MouseLeftButtonUp"
+                                        ToolTip="Open Custom Match">
+                                    <StackPanel>
+                                        <TextBlock Text="Match" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" />
+                                        <TextBlock x:Name="SessionOverviewMatchText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="1"
+                                        Style="{StaticResource SessionOverviewHotspot}"
+                                        Margin="-4,-3,-4,3"
+                                        MouseLeftButtonUp="SessionOverviewTurns_MouseLeftButtonUp"
+                                        ToolTip="Open Transcript and clear filters">
+                                    <StackPanel HorizontalAlignment="Right">
+                                        <TextBlock Text="Turns" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" HorizontalAlignment="Right" />
+                                        <TextBlock x:Name="SessionOverviewTurnsText" Text="0" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Row="1"
+                                        Style="{StaticResource SessionOverviewHotspot}"
+                                        MouseLeftButtonUp="SessionOverviewPerformance_MouseLeftButtonUp"
+                                        ToolTip="Show Agent Performance">
+                                    <StackPanel>
+                                        <TextBlock Text="Agents" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" />
+                                        <TextBlock x:Name="SessionOverviewParticipantsText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Row="1"
+                                        Grid.Column="1"
+                                        Style="{StaticResource SessionOverviewHotspot}"
+                                        Margin="-4,-3,-4,3"
+                                        MouseLeftButtonUp="SessionOverviewPerformance_MouseLeftButtonUp"
+                                        ToolTip="Show Agent Performance">
+                                    <StackPanel HorizontalAlignment="Right">
+                                        <TextBlock Text="Tokens" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" HorizontalAlignment="Right" />
+                                        <TextBlock x:Name="SessionOverviewTokensText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Row="2"
+                                        Style="{StaticResource SessionOverviewHotspot}"
+                                        Margin="-4,-3,4,-3"
+                                        MouseLeftButtonUp="SessionOverviewProvider_MouseLeftButtonUp"
+                                        ToolTip="Open Settings / Model Provider">
+                                    <StackPanel>
+                                        <TextBlock Text="Provider" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" />
+                                        <TextBlock x:Name="SessionOverviewProviderText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Row="2"
+                                        Grid.Column="1"
+                                        Style="{StaticResource SessionOverviewHotspot}"
+                                        Margin="-4,-3,-4,-3"
+                                        MouseLeftButtonUp="SessionOverviewPerformance_MouseLeftButtonUp"
+                                        ToolTip="Show Agent Performance">
+                                    <StackPanel HorizontalAlignment="Right">
+                                        <TextBlock Text="Context" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" HorizontalAlignment="Right" />
+                                        <TextBlock x:Name="SessionOverviewContextText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                                    </StackPanel>
+                                </Border>
                             </Grid>
                         </StackPanel>
                     </Border>
@@ -1583,7 +1633,8 @@
             </Grid>
         </Grid>
 
-        <ScrollViewer Grid.Row="1"
+        <ScrollViewer x:Name="RightRailScrollViewer"
+                      Grid.Row="1"
                       Grid.Column="2"
                       Margin="0,14,14,14"
                       VerticalScrollBarVisibility="Auto"
@@ -1603,7 +1654,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource QuietCard}" Padding="10">
+                <Border x:Name="AgentPerformanceCard" Style="{StaticResource QuietCard}" Padding="10">
                     <StackPanel>
                         <TextBlock Text="Agent Performance" Style="{StaticResource SectionTitle}" Margin="0,0,0,6" />
                         <StackPanel x:Name="AgentPerformanceItems" />
