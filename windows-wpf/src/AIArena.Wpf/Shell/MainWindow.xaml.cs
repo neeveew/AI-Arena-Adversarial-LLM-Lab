@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Interop;
 using System.Windows.Input;
@@ -7392,15 +7393,15 @@ public partial class MainWindow : Window
         {
             Title = "AI Arena User Guide",
             Owner = this,
-            Width = 960,
+            Width = 1040,
             Height = 720,
-            MinWidth = 680,
-            MinHeight = 420,
+            MinWidth = 780,
+            MinHeight = 460,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             WindowStyle = WindowStyle.None,
             ResizeMode = ResizeMode.CanResizeWithGrip,
             ShowInTaskbar = false,
-            Background = ResourceBrush("WindowBrush"),
+            Background = ResourceBrush("AppBackgroundBrush"),
             Foreground = ResourceBrush("TextBrush")
         };
         _userGuideWindow = dialog;
@@ -7408,15 +7409,26 @@ public partial class MainWindow : Window
 
         var chrome = new Border
         {
-            Background = ResourceBrush("WindowBrush"),
+            Background = ResourceBrush("AppBackgroundBrush"),
             BorderBrush = ResourceBrush("ControlBorderBrush"),
             BorderThickness = new Thickness(1),
-            Padding = new Thickness(14)
+            Padding = new Thickness(8)
         };
+        var chromeGrid = new Grid();
+        chrome.Child = chromeGrid;
         var root = new DockPanel();
-        chrome.Child = root;
+        chromeGrid.Children.Add(root);
+        chromeGrid.Children.Add(new ResizeGrip
+        {
+            Width = 18,
+            Height = 18,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0),
+            Opacity = 0.65
+        });
 
-        var header = new Grid { Margin = new Thickness(0, 0, 0, 12) };
+        var header = new Grid { Margin = new Thickness(0, 0, 0, 8) };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.MouseLeftButtonDown += (_, args) =>
@@ -7444,6 +7456,7 @@ public partial class MainWindow : Window
         header.Children.Add(heading);
         var headerCloseButton = CreateGuideButton("X");
         headerCloseButton.Width = 36;
+        headerCloseButton.Margin = new Thickness(0);
         headerCloseButton.Click += (_, _) => dialog.Close();
         Grid.SetColumn(headerCloseButton, 1);
         header.Children.Add(headerCloseButton);
@@ -7453,7 +7466,7 @@ public partial class MainWindow : Window
         var footer = new DockPanel
         {
             LastChildFill = false,
-            Margin = new Thickness(0, 10, 0, 0)
+            Margin = new Thickness(0, 8, 0, 0)
         };
         var openFileButton = CreateGuideButton("OPEN FILE");
         openFileButton.Click += (_, _) => Process.Start(new ProcessStartInfo
@@ -7476,27 +7489,38 @@ public partial class MainWindow : Window
         root.Children.Add(footer);
 
         var body = new Grid();
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(270) });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var titleTemplate = new DataTemplate(typeof(UserGuideSection));
+        var titleFactory = new FrameworkElementFactory(typeof(TextBlock));
+        titleFactory.SetBinding(TextBlock.TextProperty, new Binding(nameof(UserGuideSection.Title)));
+        titleFactory.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+        titleFactory.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+        titleFactory.SetValue(TextBlock.MarginProperty, new Thickness(3, 2, 3, 2));
+        titleTemplate.VisualTree = titleFactory;
 
         var sectionList = new ListBox
         {
             ItemsSource = sections,
-            DisplayMemberPath = "Title",
+            ItemTemplate = titleTemplate,
             Background = ResourceBrush("InputBrush"),
             Foreground = ResourceBrush("TextBrush"),
             BorderBrush = ResourceBrush("ControlBorderBrush"),
-            Padding = new Thickness(6),
+            Padding = new Thickness(4),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
             SelectedIndex = 0
         };
+        ScrollViewer.SetHorizontalScrollBarVisibility(sectionList, ScrollBarVisibility.Disabled);
+        ScrollViewer.SetVerticalScrollBarVisibility(sectionList, ScrollBarVisibility.Auto);
         body.Children.Add(sectionList);
 
         var guideViewer = new FlowDocumentScrollViewer
         {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             Background = ResourceBrush("InputBrush"),
-            Padding = new Thickness(14),
+            Padding = new Thickness(12),
             Document = BuildGuideDocument(sections.FirstOrDefault() ?? new UserGuideSection("Guide", guideText))
         };
         sectionList.SelectionChanged += (_, _) =>
