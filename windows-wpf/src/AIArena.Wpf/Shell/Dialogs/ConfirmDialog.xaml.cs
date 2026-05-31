@@ -18,6 +18,8 @@ public partial class ConfirmDialog : Window
         ConfirmDialogTone tone)
     {
         InitializeComponent();
+        DialogChrome.ImportOwnerResources(owner, this);
+        DialogChrome.ApplyImplicitControlStyles(this);
         Owner = owner;
         Title = title;
         TitleText.Text = title;

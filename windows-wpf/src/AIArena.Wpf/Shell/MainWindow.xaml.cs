@@ -151,13 +151,18 @@ public partial class MainWindow : Window
         "PanelBrush",
         "CardBrush",
         "InputBrush",
+        "TranscriptHeaderBrush",
+        "TranscriptBodyBrush",
         "ControlBorderBrush",
         "TextBrush",
         "MutedTextBrush",
         "PrimaryBrush",
         "PrimaryBorderBrush",
+        "AssistBrush",
+        "AssistBorderBrush",
         "HoverBorderBrush",
         "NavHoverBrush",
+        "NavActiveBrush",
         "NavPressedBrush",
         "PressedPrimaryBrush",
         "DangerBorderBrush",
@@ -165,7 +170,14 @@ public partial class MainWindow : Window
         "DangerTextBrush",
         "DisabledBrush",
         "DisabledBorderBrush",
-        "DisabledTextBrush"
+        "DisabledTextBrush",
+        "OverlayBrush",
+        "AlphaAccentBrush",
+        "BetaAccentBrush",
+        "GammaAccentBrush",
+        "DeltaAccentBrush",
+        "NarratorAccentBrush",
+        "OperatorAccentBrush"
     ];
 
     private static readonly Type[] ThemeStyleKeys =
@@ -3894,12 +3906,6 @@ public partial class MainWindow : Window
             TranscriptActionKind.Danger => ResourceBrush("DangerTextBrush"),
             _ => ResourceBrush("TextBrush")
         };
-        var hoverBackground = kind switch
-        {
-            TranscriptActionKind.Primary => BlendBrush(ResourceBrush("InputBrush"), ResourceBrush("PrimaryBorderBrush"), 0.22),
-            TranscriptActionKind.Danger => BlendBrush(ResourceBrush("InputBrush"), ResourceBrush("DangerBorderBrush"), 0.2),
-            _ => BlendBrush(ResourceBrush("InputBrush"), ResourceBrush("ControlBorderBrush"), 0.18)
-        };
         var button = new Button
         {
             Content = iconMode
@@ -3927,19 +3933,6 @@ public partial class MainWindow : Window
             Margin = iconMode ? new Thickness(0, 0, compact ? 3 : 5, compact ? 2 : 4) : new Thickness(0, 0, compact ? 5 : 8, compact ? 5 : 8),
             Opacity = enabled ? 1.0 : 0.55,
             ToolTip = text
-        };
-        button.MouseEnter += (_, _) =>
-        {
-            if (button.IsEnabled)
-            {
-                button.Background = hoverBackground;
-                button.BorderBrush = border;
-            }
-        };
-        button.MouseLeave += (_, _) =>
-        {
-            button.Background = iconMode ? Brushes.Transparent : background;
-            button.BorderBrush = iconMode ? Brushes.Transparent : border;
         };
         if (handler is not null)
         {

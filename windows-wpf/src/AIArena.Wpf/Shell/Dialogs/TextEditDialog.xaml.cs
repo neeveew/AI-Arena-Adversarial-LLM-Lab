@@ -11,6 +11,8 @@ public partial class TextEditDialog : Window
     private TextEditDialog(Window owner, ThemePalette theme, string title, string value, string? subtitle)
     {
         InitializeComponent();
+        DialogChrome.ImportOwnerResources(owner, this);
+        DialogChrome.ApplyImplicitControlStyles(this);
         Owner = owner;
         Title = title;
         TitleText.Text = title;

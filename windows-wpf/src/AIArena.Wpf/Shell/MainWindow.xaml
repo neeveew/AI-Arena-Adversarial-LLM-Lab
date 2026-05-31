@@ -43,7 +43,7 @@
         <SolidColorBrush x:Key="NarratorAccentBrush" Color="#E17DB6" />
         <SolidColorBrush x:Key="OperatorAccentBrush" Color="#D66F72" />
         <Style TargetType="Button">
-            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
             <Setter Property="Background" Value="{DynamicResource InputBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />

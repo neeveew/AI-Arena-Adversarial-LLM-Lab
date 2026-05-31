@@ -14,6 +14,8 @@ public partial class InternetApprovalDialog : Window
     private InternetApprovalDialog(Window owner, ThemePalette theme, InternetToolRequest request)
     {
         InitializeComponent();
+        DialogChrome.ImportOwnerResources(owner, this);
+        DialogChrome.ApplyImplicitControlStyles(this);
         Owner = owner;
         RequestText.Text = string.Join(
             Environment.NewLine,
