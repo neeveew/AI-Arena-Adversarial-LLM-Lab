@@ -52,6 +52,7 @@ public sealed class WpfSettings
     public bool TurnCompareMode { get; set; }
     public bool ShowMatchQualityTimeline { get; set; }
     public bool ShowAgentMemoryNotes { get; set; }
+    public bool ShowDecisionCard { get; set; }
     public string TopStripMode { get; set; } = "diagnostics";
     public bool ShowTranscriptDiagnostics { get; set; } = true;
     public List<string> OperatorTemplates { get; set; } =

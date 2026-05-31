@@ -222,6 +222,7 @@ public partial class MainWindow : Window
         TurnCompareCheckBox.IsChecked = _wpfSettings.TurnCompareMode;
         MatchQualityTimelineCheckBox.IsChecked = _wpfSettings.ShowMatchQualityTimeline;
         MemoryNotesCheckBox.IsChecked = _wpfSettings.ShowAgentMemoryNotes;
+        DecisionCardCheckBox.IsChecked = _wpfSettings.ShowDecisionCard;
         _isRenderingSnapshot = false;
         UpdateViewPresetState();
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
@@ -230,17 +231,7 @@ public partial class MainWindow : Window
 
     private void InitializeOperatorTemplates()
     {
-        if (_wpfSettings.OperatorTemplates.Count == 0)
-        {
-            _wpfSettings.OperatorTemplates =
-            [
-                "Challenge the strongest assumption in the last turn.",
-                "Summarize the disagreement and ask for the smallest concrete next step.",
-                "Force the agents to separate facts, guesses, and decisions.",
-                "Ask for risks, reversibility, and what would change the conclusion."
-            ];
-        }
-
+        _wpfSettings.OperatorTemplates ??= [];
         OperatorTemplatePicker.ItemsSource = _wpfSettings.OperatorTemplates;
         OperatorTemplatePicker.SelectedIndex = _wpfSettings.OperatorTemplates.Count > 0 ? 0 : -1;
     }
@@ -386,6 +377,21 @@ public partial class MainWindow : Window
             PopulateTranscript(_lastRenderedMessages);
         }
         UpdateViewPresetState();
+    }
+
+    private void DecisionCardCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isRenderingSnapshot || DecisionCardCheckBox is null)
+        {
+            return;
+        }
+
+        _wpfSettings.ShowDecisionCard = DecisionCardCheckBox.IsChecked == true;
+        _wpfSettingsStore.Save(_wpfSettings);
+        if (_lastRenderedSnapshot is not null)
+        {
+            PopulateTranscript(_lastRenderedMessages);
+        }
     }
 
     private void FollowChatCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -1332,7 +1338,7 @@ public partial class MainWindow : Window
         {
             TranscriptItems.Children.Add(CreateMatchQualityTimelinePanel(messages));
         }
-        if (_lastRenderedSnapshot is not null)
+        if (_wpfSettings.ShowDecisionCard && _lastRenderedSnapshot is not null)
         {
             TranscriptItems.Children.Add(CreateDecisionCardPanel(_lastRenderedSnapshot));
         }
@@ -2491,14 +2497,15 @@ public partial class MainWindow : Window
     private Border CreateDecisionCardPanel(ArenaSnapshot snapshot)
     {
         var accent = ResourceBrush("NarratorAccentBrush");
+        var hasCard = !string.IsNullOrWhiteSpace(snapshot.DecisionCard);
         var card = new Border
         {
             Background = BlendBrush(ResourceBrush("CardBrush"), accent, 0.08),
             BorderBrush = BlendBrush(ResourceBrush("DisabledBorderBrush"), accent, 0.58),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(10),
-            Margin = new Thickness(0, 0, 0, 10)
+            Padding = new Thickness(9, 7, 9, 7),
+            Margin = new Thickness(0, 0, 0, 8)
         };
 
         var root = new DockPanel { LastChildFill = true };
@@ -2519,7 +2526,7 @@ public partial class MainWindow : Window
             Text = "Decision Card",
             Foreground = accent,
             FontWeight = FontWeights.SemiBold,
-            FontSize = 13
+            FontSize = 12
         });
         if (snapshot.DecisionCardUpdatedAt > 0)
         {
@@ -2527,22 +2534,24 @@ public partial class MainWindow : Window
             {
                 Text = $"  updated {DateTimeOffset.FromUnixTimeSeconds((long)snapshot.DecisionCardUpdatedAt).ToLocalTime():h:mm tt}",
                 Foreground = ResourceBrush("MutedTextBrush"),
-                FontSize = 11,
+                FontSize = 10.5,
                 VerticalAlignment = VerticalAlignment.Center
             });
         }
 
         content.Children.Add(titleRow);
+        var summary = hasCard
+            ? snapshot.DecisionCard.Trim().Replace("\r", " ").Replace("\n", " ")
+            : "No decision card yet. Generate one to capture agreed points, conflict, risk, and the next operator move.";
         content.Children.Add(new TextBlock
         {
-            Text = string.IsNullOrWhiteSpace(snapshot.DecisionCard)
-                ? "No decision card yet. Generate one to capture agreed points, conflict, risk, and the next operator move."
-                : snapshot.DecisionCard,
-            Foreground = string.IsNullOrWhiteSpace(snapshot.DecisionCard) ? ResourceBrush("MutedTextBrush") : ResourceBrush("TextBrush"),
-            FontSize = 12,
-            LineHeight = 17,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 6, 0, 0)
+            Text = summary,
+            Foreground = hasCard ? ResourceBrush("TextBrush") : ResourceBrush("MutedTextBrush"),
+            FontSize = 11.5,
+            TextWrapping = TextWrapping.NoWrap,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Margin = new Thickness(0, 4, 0, 0),
+            ToolTip = summary
         });
         root.Children.Add(content);
         card.Child = root;
@@ -3930,12 +3939,13 @@ public partial class MainWindow : Window
     private Border CreateAgentCard(AgentState agent, string? currentAgentId)
     {
         var isActive = agent.Active;
+        var isPaused = !isActive || agent.Status.Equals("muted", StringComparison.OrdinalIgnoreCase);
         var isCurrent = isActive && string.Equals(agent.Id, currentAgentId, StringComparison.OrdinalIgnoreCase);
         var isWorkingStatus = IsAgentWorkingStatus(agent.Status);
         var isRunning = isActive && isWorkingStatus;
         var showActivitySweep = isRunning;
         var speakerLabel = DisplayStatusValue(agent.Id);
-        var activityLabel = isRunning ? "thinking" : isCurrent ? "current" : isActive ? "waiting" : "inactive";
+        var activityLabel = isRunning ? "thinking" : isCurrent ? "current" : isPaused ? "paused" : "waiting";
         var playButton = new Button
         {
             Content = "▶",
@@ -3957,15 +3967,17 @@ public partial class MainWindow : Window
         playButton.Click += async (_, _) => await RunAgentTurnAsync(agent);
         _agentTurnButtons.Add(playButton);
 
-        var accent = isActive ? AccentForSpeaker(agent.Id) : ResourceBrush("DisabledBorderBrush");
+        var accent = isPaused ? ResourceBrush("BetaAccentBrush") : AccentForSpeaker(agent.Id);
         var card = new Border
         {
             Background = isRunning
                 ? BlendBrush(ResourceBrush("InputBrush"), accent, 0.18)
                 : isCurrent
                     ? BlendBrush(ResourceBrush("InputBrush"), accent, 0.1)
-                    : ResourceBrush("InputBrush"),
-            BorderBrush = BlendBrush(ResourceBrush("DisabledBorderBrush"), accent, isActive ? 0.75 : 0.16),
+                    : isPaused
+                        ? BlendBrush(ResourceBrush("InputBrush"), accent, 0.1)
+                        : ResourceBrush("InputBrush"),
+            BorderBrush = BlendBrush(ResourceBrush("DisabledBorderBrush"), accent, isActive ? 0.75 : 0.82),
             BorderThickness = new Thickness(0, 1, 0, 1),
             Padding = new Thickness(14, 8, 10, 8),
             Margin = new Thickness(0, -1, 0, 0),
@@ -3988,7 +4000,7 @@ public partial class MainWindow : Window
         text.Children.Add(new TextBlock
         {
             Text = $"{speakerLabel} - {activityLabel}",
-            Foreground = isActive ? Brushes.White : ResourceBrush("DisabledTextBrush"),
+            Foreground = isPaused ? accent : Brushes.White,
             FontWeight = FontWeights.SemiBold,
             FontSize = 12,
             LineHeight = 15,
@@ -3999,9 +4011,11 @@ public partial class MainWindow : Window
         text.Children.Add(new TextBlock
         {
             Text = modelText,
-            Foreground = isRunning || isCurrent
+            Foreground = isPaused
                 ? accent
-                : isActive ? ResourceBrush("MutedTextBrush") : ResourceBrush("DisabledTextBrush"),
+                : isRunning || isCurrent
+                ? accent
+                : ResourceBrush("MutedTextBrush"),
             FontSize = 11,
             LineHeight = 14,
             TextTrimming = TextTrimming.CharacterEllipsis,
@@ -4015,8 +4029,8 @@ public partial class MainWindow : Window
             Width = isRunning ? 8 : 6,
             Height = isRunning ? 8 : 6,
             CornerRadius = new CornerRadius(4),
-            Background = isActive ? accent : ResourceBrush("DisabledBorderBrush"),
-            Opacity = isRunning ? 1.0 : isCurrent ? 0.85 : isActive ? 0.45 : 0.25,
+            Background = accent,
+            Opacity = isRunning ? 1.0 : isCurrent ? 0.85 : isPaused ? 0.9 : 0.45,
             Margin = new Thickness(8, 0, 4, 0),
             VerticalAlignment = VerticalAlignment.Center,
             ToolTip = activityLabel
@@ -4030,7 +4044,7 @@ public partial class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(2, 0, 0, 0)
         };
-        var muteButton = CreateAgentModeButton(isActive ? "M" : "ON", isActive ? "Mute agent" : "Activate agent");
+        var muteButton = CreateAgentModeButton("⏸", isActive ? "Pause agent" : "Activate paused agent", isPaused);
         muteButton.Click += async (_, _) => await SetAgentMuteAsync(agent.Id, mute: isActive);
         routeControls.Children.Add(muteButton);
         var soloButton = CreateAgentModeButton("S", "Solo this agent");
@@ -4046,14 +4060,14 @@ public partial class MainWindow : Window
         card.Child = cardLayer;
         if (!isActive)
         {
-            card.Opacity = 0.62;
-            card.ToolTip = "Inactive: increase Active participants in App Settings to include this agent.";
+            card.Opacity = 0.9;
+            card.ToolTip = "Paused: click the pause button to activate this agent.";
         }
 
         return card;
     }
 
-    private Button CreateAgentModeButton(string content, string tooltip)
+    private Button CreateAgentModeButton(string content, string tooltip, bool highlighted = false)
     {
         return new Button
         {
@@ -4064,10 +4078,11 @@ public partial class MainWindow : Window
             MinHeight = 24,
             Padding = new Thickness(0),
             Margin = new Thickness(3, 0, 0, 0),
-            FontSize = 9.5,
-            Background = ResourceBrush("InputBrush"),
-            BorderBrush = ResourceBrush("DisabledBorderBrush"),
-            Foreground = ResourceBrush("MutedTextBrush"),
+            FontSize = content == "⏸" ? 12 : 9.5,
+            FontFamily = content == "⏸" ? new FontFamily("Segoe UI Symbol") : SystemFonts.MessageFontFamily,
+            Background = highlighted ? BlendBrush(ResourceBrush("InputBrush"), ResourceBrush("BetaAccentBrush"), 0.28) : ResourceBrush("InputBrush"),
+            BorderBrush = highlighted ? ResourceBrush("BetaAccentBrush") : ResourceBrush("DisabledBorderBrush"),
+            Foreground = highlighted ? ResourceBrush("BetaAccentBrush") : ResourceBrush("MutedTextBrush"),
             ToolTip = tooltip
         };
     }
@@ -5081,7 +5096,7 @@ public partial class MainWindow : Window
 
     private void UseOperatorTemplateButton_Click(object sender, RoutedEventArgs e)
     {
-        var template = OperatorTemplatePicker.Text.Trim();
+        var template = (OperatorTemplatePicker.SelectedItem?.ToString() ?? OperatorTemplatePicker.Text).Trim();
         if (string.IsNullOrWhiteSpace(template))
         {
             return;
@@ -5113,8 +5128,29 @@ public partial class MainWindow : Window
             InitializeOperatorTemplates();
         }
 
-        OperatorTemplatePicker.Text = template;
+        OperatorTemplatePicker.SelectedItem = template;
         ArenaRunStatus.Text = "Operator template saved.";
+    }
+
+    private void DeleteOperatorTemplateButton_Click(object sender, RoutedEventArgs e)
+    {
+        var template = (OperatorTemplatePicker.SelectedItem?.ToString() ?? OperatorTemplatePicker.Text).Trim();
+        if (string.IsNullOrWhiteSpace(template))
+        {
+            ArenaRunStatus.Text = "No operator template selected.";
+            return;
+        }
+
+        var removed = _wpfSettings.OperatorTemplates.RemoveAll(item => item.Equals(template, StringComparison.OrdinalIgnoreCase));
+        if (removed == 0)
+        {
+            ArenaRunStatus.Text = "Operator template was already removed.";
+            return;
+        }
+
+        _wpfSettingsStore.Save(_wpfSettings);
+        InitializeOperatorTemplates();
+        ArenaRunStatus.Text = "Operator template deleted.";
     }
 
     private void SetOperatorRouteMode(string mode)

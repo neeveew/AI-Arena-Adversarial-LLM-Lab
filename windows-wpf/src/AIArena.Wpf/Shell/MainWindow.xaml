@@ -1146,6 +1146,14 @@
                                               Unchecked="MemoryNotesCheckBox_Changed"
                                               Margin="0,0,0,8"
                                               ToolTip="Show agent memory notes" />
+                                    <CheckBox x:Name="DecisionCardCheckBox"
+                                              Content="Decision card"
+                                              Style="{StaticResource ToggleSwitchCheckBox}"
+                                              Foreground="{DynamicResource TextBrush}"
+                                              Checked="DecisionCardCheckBox_Changed"
+                                              Unchecked="DecisionCardCheckBox_Changed"
+                                              Margin="0,0,0,8"
+                                              ToolTip="Show compact narrator decision card" />
                                     <CheckBox x:Name="FollowChatCheckBox"
                                               Content="Auto-scroll"
                                               Style="{StaticResource ToggleSwitchCheckBox}"
@@ -1886,26 +1894,54 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <ComboBox x:Name="OperatorTemplatePicker"
                                       Height="30"
-                                      IsEditable="True"
+                                      IsEditable="False"
                                       ToolTip="Reusable operator templates" />
                             <Button Grid.Column="1"
-                                    Content="USE"
                                     Click="UseOperatorTemplateButton_Click"
-                                    FontSize="10.5"
-                                    Padding="8,4"
+                                    Width="30"
+                                    MinWidth="30"
                                     MinHeight="30"
-                                    Margin="6,0,0,0" />
-                            <Button Grid.Column="2"
-                                    Content="SAVE"
-                                    Click="SaveOperatorTemplateButton_Click"
-                                    FontSize="10.5"
-                                    Padding="8,4"
-                                    MinHeight="30"
+                                    Padding="0"
                                     Margin="6,0,0,0"
-                                    ToolTip="Save current operator text as a template" />
+                                    ToolTip="Use selected template">
+                                <TextBlock Text="&#x21AA;"
+                                           FontFamily="Segoe UI Symbol"
+                                           FontSize="13"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center" />
+                            </Button>
+                            <Button Grid.Column="2"
+                                    Click="SaveOperatorTemplateButton_Click"
+                                    Width="30"
+                                    MinWidth="30"
+                                    MinHeight="30"
+                                    Padding="0"
+                                    Margin="6,0,0,0"
+                                    ToolTip="Save current operator text as a template">
+                                <TextBlock Text="&#xE74E;"
+                                           FontFamily="Segoe MDL2 Assets"
+                                           FontSize="12"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center" />
+                            </Button>
+                            <Button Grid.Column="3"
+                                    Click="DeleteOperatorTemplateButton_Click"
+                                    Width="30"
+                                    MinWidth="30"
+                                    MinHeight="30"
+                                    Padding="0"
+                                    Margin="6,0,0,0"
+                                    ToolTip="Delete selected template">
+                                <TextBlock Text="&#xE74D;"
+                                           FontFamily="Segoe MDL2 Assets"
+                                           FontSize="12"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center" />
+                            </Button>
                         </Grid>
                         <Grid>
                             <TextBox x:Name="OperatorTurnText"
