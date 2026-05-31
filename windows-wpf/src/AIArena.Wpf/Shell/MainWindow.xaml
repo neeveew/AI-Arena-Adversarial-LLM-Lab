@@ -1380,6 +1380,61 @@
                             </UniformGrid>
                         </ScrollViewer>
                 </Border>
+                    <Popup x:Name="DiagnosticDetailPopup"
+                           Placement="Bottom"
+                           HorizontalOffset="0"
+                           VerticalOffset="8"
+                           StaysOpen="False"
+                           AllowsTransparency="True"
+                           PopupAnimation="Fade">
+                        <Border Width="420"
+                                MaxHeight="460"
+                                Background="{DynamicResource TopBarBrush}"
+                                BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="7"
+                                Padding="10">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="34" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock x:Name="DiagnosticDetailTitleText"
+                                                   Text="Diagnostic Detail"
+                                                   Foreground="{DynamicResource TextBrush}"
+                                                   FontWeight="SemiBold"
+                                                   FontSize="13"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock x:Name="DiagnosticDetailSubtitleText"
+                                                   Text=""
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   FontSize="10.5"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Margin="0,2,0,0" />
+                                    </StackPanel>
+                                    <Button x:Name="DiagnosticDetailCloseButton"
+                                            Grid.Column="1"
+                                            Content="X"
+                                            Click="DiagnosticDetailCloseButton_Click"
+                                            MinWidth="30"
+                                            MinHeight="28"
+                                            Padding="0"
+                                            ToolTip="Close diagnostic detail" />
+                                </Grid>
+                                <ScrollViewer Grid.Row="1"
+                                              VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <StackPanel x:Name="DiagnosticDetailContent" />
+                                </ScrollViewer>
+                            </Grid>
+                        </Border>
+                    </Popup>
                     <Border x:Name="TranscriptTelemetryHost"
                             Grid.Column="0"
                             Background="Transparent"
