@@ -364,6 +364,92 @@ public partial class MainWindow : Window
         ViewMenuPopup.IsOpen = !ViewMenuPopup.IsOpen;
     }
 
+    private void ViewPresetFocused_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyViewPreset(
+            compact: false,
+            compare: false,
+            timeline: false,
+            memory: false,
+            topStripMode: "diagnostics",
+            autoScroll: true);
+    }
+
+    private void ViewPresetDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyViewPreset(
+            compact: false,
+            compare: false,
+            timeline: true,
+            memory: true,
+            topStripMode: "diagnostics",
+            autoScroll: true);
+    }
+
+    private void ViewPresetCompact_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyViewPreset(
+            compact: true,
+            compare: false,
+            timeline: false,
+            memory: false,
+            topStripMode: "diagnostics",
+            autoScroll: true);
+    }
+
+    private void ViewPresetReview_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyViewPreset(
+            compact: true,
+            compare: true,
+            timeline: true,
+            memory: true,
+            topStripMode: "diagnostics",
+            autoScroll: false);
+    }
+
+    private void ApplyViewPreset(
+        bool compact,
+        bool compare,
+        bool timeline,
+        bool memory,
+        string topStripMode,
+        bool autoScroll)
+    {
+        _isRenderingSnapshot = true;
+        try
+        {
+            CompactTranscriptCheckBox.IsChecked = compact;
+            TurnCompareCheckBox.IsChecked = compare;
+            MatchQualityTimelineCheckBox.IsChecked = timeline;
+            MemoryNotesCheckBox.IsChecked = memory;
+            FollowChatCheckBox.IsChecked = autoScroll;
+            SelectComboTag(TopStripModePicker, topStripMode);
+        }
+        finally
+        {
+            _isRenderingSnapshot = false;
+        }
+
+        _wpfSettings.CompactTranscriptMode = compact;
+        _wpfSettings.TurnCompareMode = compare;
+        _wpfSettings.ShowMatchQualityTimeline = timeline;
+        _wpfSettings.ShowAgentMemoryNotes = memory;
+        _wpfSettings.TopStripMode = topStripMode;
+        _wpfSettings.ShowTranscriptDiagnostics = topStripMode.Equals("diagnostics", StringComparison.OrdinalIgnoreCase);
+        if (!compare)
+        {
+            _turnCompareSelection.Clear();
+        }
+
+        _turnCompareSuppressAutoSeed = false;
+        _wpfSettingsStore.Save(_wpfSettings);
+        UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
+        UpdateTelemetryTimerState();
+        PopulateTranscript(_lastRenderedMessages);
+        ViewMenuPopup.IsOpen = false;
+    }
+
     private async Task LoadSessionAsync(CoreSessionSummary session, bool force)
     {
         if (!force && session.LastModified == _activeSnapshotWriteUtc)
