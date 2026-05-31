@@ -24,6 +24,7 @@ var tests = new (string Name, Action Test)[]
     ("caches internet tool results briefly", CacheInternetToolResultsBriefly),
     ("loads snapshot from session store", LoadSnapshotFromSessionStore),
     ("saves snapshot through session store", SaveSnapshotThroughSessionStore),
+    ("creates default session on empty data root", CreateDefaultSessionOnEmptyDataRoot),
     ("creates transcript message with reasoning metadata", CreateTranscriptMessageWithReasoningMetadata),
     ("reads existing reasoning metadata from snapshot", ReadExistingReasoningMetadataFromSnapshot),
     ("matches exact transcript messages for deletion", MatchExactTranscriptMessagesForDeletion),
@@ -394,6 +395,19 @@ static void SaveSnapshotThroughSessionStore()
     Require(File.Exists(store.SnapshotPath()), "snapshot was not saved");
     var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult();
     Require(loaded?.Engine.Messages.Count == 1, "saved snapshot did not reload");
+    Directory.Delete(root, recursive: true);
+}
+
+static void CreateDefaultSessionOnEmptyDataRoot()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    store.EnsureDefaultSessionAsync().GetAwaiter().GetResult();
+    var snapshot = store.LoadSnapshotAsync().GetAwaiter().GetResult()
+        ?? throw new InvalidOperationException("default snapshot was not created");
+    Require(snapshot.Engine.Agents.Count == 4, "default snapshot should create four agents");
+    Require(snapshot.Engine.Agents.All(agent => agent.Active), "default agents should start active");
+    Require(File.Exists(store.SnapshotPath()), "default session snapshot file missing");
     Directory.Delete(root, recursive: true);
 }
 

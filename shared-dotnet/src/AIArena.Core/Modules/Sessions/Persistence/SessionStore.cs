@@ -27,6 +27,17 @@ public sealed class SessionStore
 
     public string SettingsPath => NativeDataPaths.ConfigPath(DataRoot, "settings.json");
 
+    public async Task EnsureDefaultSessionAsync(CancellationToken cancellationToken = default)
+    {
+        var sessions = await ListSessionsAsync(cancellationToken);
+        if (sessions.Count > 0)
+        {
+            return;
+        }
+
+        await SaveSnapshotAsync(CreateDefaultSnapshot(), "default", cancellationToken);
+    }
+
     public async Task<ArenaSnapshot?> LoadSnapshotAsync(string sessionId = "default", CancellationToken cancellationToken = default)
     {
         var path = NativeDataPaths.SessionSnapshotPath(DataRoot, sessionId);
@@ -158,6 +169,58 @@ public sealed class SessionStore
         }
 
         await SaveSnapshotAsync(clone, safeSession, cancellationToken);
+    }
+
+    public static ArenaSnapshot CreateDefaultSnapshot()
+    {
+        var snapshot = new ArenaSnapshot
+        {
+            MatchType = "balanced"
+        };
+
+        snapshot.Configs["shared"] = new ModelProviderConfig();
+        snapshot.MatchLocks["scenario"] = false;
+        snapshot.Engine.Steering.Topic = "";
+        snapshot.Engine.Steering.Global = "";
+        snapshot.Engine.Narrator.Persona = "Neutral observer. Track the exchange without joining as Alpha, Beta, Gamma, or Delta.";
+        snapshot.Engine.Narrator.Status = "idle";
+        snapshot.Engine.Agents.AddRange(
+        [
+            new DialogueAgent
+            {
+                Id = "alpha",
+                Name = "Alpha",
+                Persona = "Practical strategist. Surfaces assumptions, proposes concrete options, and keeps the exchange moving.",
+                Active = true,
+                Status = "waiting"
+            },
+            new DialogueAgent
+            {
+                Id = "beta",
+                Name = "Beta",
+                Persona = "Critical reviewer. Tests weak premises, edge cases, and hidden tradeoffs before accepting conclusions.",
+                Active = true,
+                Status = "waiting"
+            },
+            new DialogueAgent
+            {
+                Id = "gamma",
+                Name = "Gamma",
+                Persona = "Evidence mapper. Separates facts from guesses and asks what would change the current conclusion.",
+                Active = true,
+                Status = "waiting"
+            },
+            new DialogueAgent
+            {
+                Id = "delta",
+                Name = "Delta",
+                Persona = "Boundary tester. Identifies limits, misuse cases, escalation paths, and operational failure boundaries.",
+                Active = true,
+                Status = "waiting"
+            }
+        ]);
+
+        return snapshot;
     }
 
     public Task<bool> DeleteSessionAsync(string sessionId, CancellationToken cancellationToken = default)

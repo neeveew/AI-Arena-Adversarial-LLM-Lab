@@ -288,6 +288,12 @@ public partial class MainWindow : Window
     private async Task LoadSessionsAsync(string? preferredSessionId = null)
     {
         var sessions = await _coreSessionStore.ListSessionsAsync();
+        if (sessions.Count == 0)
+        {
+            await _coreSessionStore.EnsureDefaultSessionAsync();
+            sessions = await _coreSessionStore.ListSessionsAsync();
+        }
+
         _sessionSummaries = sessions;
 
         var defaultSession = sessions.FirstOrDefault(session => session.Id.Equals(preferredSessionId, StringComparison.OrdinalIgnoreCase))
@@ -4582,9 +4588,20 @@ public partial class MainWindow : Window
 
     private async void ApplySettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_isRenderingSnapshot || _activeSession is null)
+        if (_isRenderingSnapshot)
         {
             return;
+        }
+
+        if (_activeSession is null)
+        {
+            await _coreSessionStore.EnsureDefaultSessionAsync();
+            await LoadSessionsAsync("default");
+            if (_activeSession is null)
+            {
+                ProviderTestStatus.Text = "No writable session is available for settings.";
+                return;
+            }
         }
 
         var baseUrl = ProviderBaseUrlText.Text.Trim();
@@ -4659,8 +4676,7 @@ public partial class MainWindow : Window
             var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
             if (snapshot is null)
             {
-                ProviderTestStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
-                return;
+                snapshot = SessionStore.CreateDefaultSnapshot();
             }
 
             snapshot.Configs["shared"] = new CoreModelProviderConfig
