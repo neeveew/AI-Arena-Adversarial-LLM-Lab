@@ -2,7 +2,7 @@
 
 A native Windows lab for running adversarial multi-agent conversations between local or OpenAI-compatible LLMs.
 
-[Download latest beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/download/v0.3.44-beta/AI.Arena.Setup.0.3.44-beta.exe) | [User guide](windows-wpf/docs/USER_GUIDE.md) | [Licence](LICENSE)
+[Download latest beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](windows-wpf/docs/USER_GUIDE.md) | [Licence](LICENSE)
 
 AI Arena is not a chatbot and not just a model comparison board. It is a local adversarial multi-agent LLM lab where agents can argue, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
 
@@ -49,8 +49,8 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 
 ## Quick Start
 
-1. Download and run the latest beta installer:
-   [AI Arena Setup 0.3.44-beta.exe](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/download/v0.3.44-beta/AI.Arena.Setup.0.3.44-beta.exe)
+1. Download and run the latest beta installer from the
+   [GitHub releases page](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases).
 2. Start LM Studio or another OpenAI-compatible provider.
 3. Open Settings, then Model Provider.
 4. Set Provider base URL. For LM Studio, use:
@@ -140,6 +140,8 @@ dotnet build .\windows-wpf\src\AIArena.Wpf\AIArena.Wpf.csproj
 .\scripts\dependency-index.ps1 -Check
 .\scripts\wpf-release-sanity.ps1
 ```
+
+Release builds write `changes.txt` and `release-manifest.txt` beside the published app. Copy both into the versioned installer folder with the setup executable before uploading assets.
 
 The generated dependency map lives at `docs/DEPENDENCY_INDEX.md`. Rebuild it with `.\scripts\dependency-index.ps1` after moving modules, services, project references, packages, or packaged resources.
 

@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.3.72-beta"
+    [string]$Version = "0.3.73-beta"
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +11,8 @@ $releaseDir = Join-Path $Root "dist/AI Arena - $Version"
 $installerDir = Join-Path $Root "dist/installer/AI Arena - $Version"
 $installer = Join-Path $installerDir "AI Arena Setup $Version.exe"
 $changes = Join-Path $installerDir "changes.txt"
+$releaseManifest = Join-Path $releaseDir "release-manifest.txt"
+$installerManifest = Join-Path $installerDir "release-manifest.txt"
 $releaseExe = Join-Path $releaseDir "AI Arena.exe"
 $dependencyIndexScript = Join-Path $Root "scripts/dependency-index.ps1"
 $licenseFile = Join-Path $Root "LICENSE"
@@ -30,6 +32,8 @@ Assert-PathExists $innoScript "Inno script"
 Assert-PathExists $releaseExe "release executable"
 Assert-PathExists $installer "installer"
 Assert-PathExists $changes "installer changes file"
+Assert-PathExists $releaseManifest "release manifest"
+Assert-PathExists $installerManifest "installer release manifest"
 Assert-PathExists $dependencyIndexScript "dependency index script"
 Assert-PathExists $licenseFile "licence file"
 Assert-PathExists $noticeFile "notice file"
@@ -51,6 +55,18 @@ if ($scriptText -notmatch ('#define MyReleaseDir "\.\.\\\.\.\\dist\\AI Arena - '
 }
 if ($scriptText -notmatch ('OutputDir=\.\.\\\.\.\\dist\\installer\\AI Arena - \{#MyAppVersion\}')) {
     throw "Installer output directory no longer points at the versioned installer folder."
+}
+if ($scriptText -notmatch '#define MyReleaseUrl "https://github\.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases"') {
+    throw "Installer release URL drifted."
+}
+if ($scriptText -notmatch 'AppPublisherURL=\{#MyReleaseUrl\}') {
+    throw "Installer publisher URL is missing."
+}
+if ($scriptText -notmatch 'AppSupportURL=\{#MyReleaseUrl\}') {
+    throw "Installer support URL is missing."
+}
+if ($scriptText -notmatch 'AppUpdatesURL=\{#MyReleaseUrl\}') {
+    throw "Installer updates URL is missing."
 }
 if ($scriptText -notmatch 'AppId=\{\{E2F12C8E-9B8C-45C3-B9A1-A8F8E1725F61\}') {
     throw "Installer AppId drifted; stable AI Arena upgrade identity may be broken."
@@ -85,6 +101,15 @@ if ($scriptText -notmatch 'Name: "\{commondesktop\}\\\{#MyAppName\}".*IconFilena
 if ($scriptText -notmatch 'Name: "\{group\}\\\{#MyAppName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
     throw "Start Menu shortcut no longer has an explicit icon."
 }
+if ($scriptText -notmatch 'Name: "\{group\}\\AI Arena User Guide"; Filename: "\{app\}\\USER_GUIDE\.md"') {
+    throw "Start Menu user guide shortcut is missing."
+}
+if ($scriptText -notmatch 'Name: "\{group\}\\Release Notes"; Filename: "\{app\}\\changes\.txt"') {
+    throw "Start Menu release notes shortcut is missing."
+}
+if ($scriptText -notmatch 'Name: "\{group\}\\GitHub Releases"; Filename: "\{#MyReleaseUrl\}"') {
+    throw "Start Menu GitHub releases shortcut is missing."
+}
 
 $projectText = Get-Content -LiteralPath $wpfProject -Raw
 if ($projectText -notmatch ('<Version>' + [regex]::Escape($Version) + '</Version>')) {
@@ -113,6 +138,22 @@ foreach ($requiredGuideSection in @(
     if ($guideText -notmatch [regex]::Escape($requiredGuideSection)) {
         throw "User guide missing required section: $requiredGuideSection"
     }
+}
+
+$manifestText = Get-Content -LiteralPath $releaseManifest -Raw
+$installerManifestText = Get-Content -LiteralPath $installerManifest -Raw
+$releaseExeHash = (Get-FileHash -LiteralPath $releaseExe -Algorithm SHA256).Hash
+if ($manifestText -notmatch 'AI Arena Release Manifest') {
+    throw "Release manifest missing title."
+}
+if ($manifestText -notmatch ('Version: ' + [regex]::Escape($Version))) {
+    throw "Release manifest version drifted."
+}
+if ($manifestText -notmatch [regex]::Escape($releaseExeHash)) {
+    throw "Release manifest does not include the release executable hash."
+}
+if ($installerManifestText -ne $manifestText) {
+    throw "Installer release manifest copy does not match release manifest."
 }
 
 $looseInstallers = Get-ChildItem -LiteralPath (Join-Path $Root "dist/installer") -Filter "*.exe" -File -ErrorAction SilentlyContinue

@@ -1,17 +1,21 @@
 ; Inno Setup installer for the native WPF AI Arena build.
 
 #define MyAppName "AI Arena"
-#define MyAppVersion "0.3.72-beta"
+#define MyAppVersion "0.3.73-beta"
 #define MyAppPublisher "Dominik Fiala"
 #define MyAppExeName "AI Arena.exe"
 #define MyAppIconName "ai-arena-icon.ico"
-#define MyReleaseDir "..\..\dist\AI Arena - 0.3.72-beta"
+#define MyReleaseDir "..\..\dist\AI Arena - 0.3.73-beta"
+#define MyReleaseUrl "https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases"
 
 [Setup]
 AppId={{E2F12C8E-9B8C-45C3-B9A1-A8F8E1725F61}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppPublisherURL={#MyReleaseUrl}
+AppSupportURL={#MyReleaseUrl}
+AppUpdatesURL={#MyReleaseUrl}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -40,6 +44,9 @@ Source: "..\..\windows-wpf\src\AIArena.Wpf\Assets\ai-arena-icon.ico"; DestDir: "
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconName}"
+Name: "{group}\AI Arena User Guide"; Filename: "{app}\USER_GUIDE.md"; IconFilename: "{app}\{#MyAppIconName}"
+Name: "{group}\Release Notes"; Filename: "{app}\changes.txt"; IconFilename: "{app}\{#MyAppIconName}"
+Name: "{group}\GitHub Releases"; Filename: "{#MyReleaseUrl}"; IconFilename: "{app}\{#MyAppIconName}"
 Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconName}"; Tasks: desktopicon
 
 [Run]

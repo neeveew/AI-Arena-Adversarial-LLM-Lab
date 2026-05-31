@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.2.0-beta",
+    [string]$Version = "0.3.73-beta",
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
     [switch]$SelfContained,
@@ -13,6 +13,7 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $project = Join-Path $repoRoot "windows-wpf\src\AIArena.Wpf\AIArena.Wpf.csproj"
 $output = Join-Path $repoRoot "dist\AI Arena - $Version"
 $changesPath = Join-Path $output "changes.txt"
+$manifestPath = Join-Path $output "release-manifest.txt"
 
 if ((Test-Path $output) -and -not $Force) {
     throw "Versioned output already exists: $output. Choose a new version or pass -Force."
@@ -65,7 +66,29 @@ $changeLines = @(
 
 Set-Content -LiteralPath $changesPath -Value $changeLines -Encoding UTF8
 
+$manifestLines = @(
+    "AI Arena Release Manifest",
+    "Version: $Version",
+    "Built: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')",
+    "Configuration: $Configuration",
+    "Runtime: $Runtime",
+    "Self-contained: $($SelfContained.IsPresent)",
+    "",
+    "SHA256:"
+)
+
+$manifestLines += Get-ChildItem -LiteralPath $output -File |
+    Where-Object { $_.FullName -ne $manifestPath } |
+    Sort-Object Name |
+    ForEach-Object {
+        $hash = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
+        "$($hash.Hash)  $($_.Name)"
+    }
+
+Set-Content -LiteralPath $manifestPath -Value $manifestLines -Encoding UTF8
+
 Write-Host "WPF release build created:"
 Write-Host $output
 Write-Host $exe
 Write-Host $changesPath
+Write-Host $manifestPath
