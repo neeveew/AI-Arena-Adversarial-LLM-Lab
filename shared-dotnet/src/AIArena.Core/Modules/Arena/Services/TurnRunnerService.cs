@@ -129,6 +129,11 @@ public sealed class TurnRunnerService
         return await ReplaceMessageWithRetryAsync(sessionId, snapshot, original, plan, cancellationToken);
     }
 
+    private static bool CanRequestInternetTool(ArenaSnapshot snapshot, string requesterId)
+    {
+        return InternetToolService.CanExecute(snapshot.Engine.ModelRss, requesterId, out _);
+    }
+
     private async Task<OneTurnResult> RunPlannedTurnAsync(
         string sessionId,
         ArenaSnapshot snapshot,
@@ -146,11 +151,17 @@ public sealed class TurnRunnerService
         await MarkAgentThinkingAsync(snapshot, sessionId, agent, cancellationToken);
         await _eventLogStore.AppendAsync(sessionId, $"{eventPrefix}_started", new { speaker = plan.AgentId, model = plan.Config!.Model }, cancellationToken);
 
-        var result = await CompleteWithFallbackAsync(sessionId, plan, BuildPrompt(snapshot, plan, allowInternetTool: true), $"{eventPrefix}_fallback_to_default", cancellationToken);
+        var result = await CompleteWithFallbackAsync(
+            sessionId,
+            plan,
+            BuildPrompt(snapshot, plan, allowInternetTool: CanRequestInternetTool(snapshot, plan.AgentId)),
+            $"{eventPrefix}_fallback_to_default",
+            cancellationToken);
         if (result.Ok && InternetToolContract.TryParseRequest(result.Text, out var toolRequest, out _))
         {
             var requestedByAgent = WithRequester(toolRequest, plan.AgentId);
-            if (snapshot.Engine.ModelRss.RequireApproval)
+            if (snapshot.Engine.ModelRss.RequireApproval
+                && InternetToolService.CanExecute(snapshot.Engine.ModelRss, requestedByAgent.RequesterId, out _))
             {
                 var approvalMessage = _transcriptService.CreateInternetApprovalMessage(requestedByAgent, snapshot.Engine.TurnCount + 1);
                 snapshot.Engine.Messages.Add(approvalMessage);
@@ -403,9 +414,7 @@ public sealed class TurnRunnerService
                     "Do not refuse, scold, stall, or demand perfect framing. If essential information is missing, ask at most one concise clarification and still provide the most useful next step.",
                     "Stay constructive even in adversarial roles: challenge ideas by improving the work, not by blocking the operator.",
                     "Always produce non-empty public assistant content. Do not put the whole answer only in reasoning.",
-                    allowInternetTool
-                        ? "Prefer writing a normal conversational reply from the transcript. Request internet only when the next answer truly depends on current or external facts. If the user supplied a URL or bare domain, use fetch_url with a normalized https:// URL. Use web_search only when no URL/domain is known and discovery is needed. If a tool is essential, reply only with one JSON request like {\"tool\":\"fetch_url\",\"url\":\"https://example.com\",\"reason\":\"why this helps\"} or {\"tool\":\"web_search\",\"query\":\"short search query\",\"max_results\":1,\"reason\":\"why this helps\"}. Use query, not input. Do not include action."
-                        : "Use any Internet transcript card already provided. Do not request another internet tool in this response.")),
+                    InternetToolInstruction(snapshot.Engine.ModelRss, allowInternetTool))),
             new ModelChatMessage(
                 "user",
                 string.Join(
@@ -418,6 +427,21 @@ public sealed class TurnRunnerService
                     string.IsNullOrWhiteSpace(latestOperatorRequest) ? "Latest Operator request: -" : $"Latest Operator request: {latestOperatorRequest}",
                     $"Write the next public turn for {plan.AgentName}."))
         ];
+    }
+
+    private static string InternetToolInstruction(ModelRssSettings settings, bool allowInternetTool)
+    {
+        if (!allowInternetTool)
+        {
+            return "Use any Internet transcript card already provided. Do not request another internet tool in this response.";
+        }
+
+        var sourceScope = InternetToolService.NormalizeSourceScope(settings.SourceScope);
+        var fetchGuidance = sourceScope.Equals("open_web", StringComparison.OrdinalIgnoreCase)
+            ? "If the user supplied a URL or bare domain, use fetch_url with a normalized https:// URL. Use web_search only when no URL/domain is known and discovery is needed."
+            : "Direct URL fetch is limited to trusted configured sources. Do not invent arbitrary source URLs. Prefer web_search/rss_search unless the operator supplied a trusted URL.";
+
+        return $"Prefer writing a normal conversational reply from the transcript. Request internet only when the next answer truly depends on current or external facts. {fetchGuidance} If a tool is essential, reply only with one JSON request like {{\"tool\":\"fetch_url\",\"url\":\"https://example.com\",\"reason\":\"why this helps\"}} or {{\"tool\":\"web_search\",\"query\":\"short search query\",\"max_results\":1,\"reason\":\"why this helps\"}}. Use query, not input. Do not include action.";
     }
 
     private async Task<ModelCompletionResult> RepairEmptyContentAsync(

@@ -2338,7 +2338,8 @@
                             <ComboBoxItem Content="Model requested" Tag="model_requested" />
                             <ComboBoxItem Content="Auto" Tag="auto" />
                         </ComboBox>
-                        <TextBlock Text="Off blocks all fetches. Manual allows user buttons. Model Requested allows approved model tool calls. Auto allows manual, model-requested, and scheduled drops."
+                        <TextBlock x:Name="InternetModeHintText"
+                                   Text="Off blocks all fetches. Manual allows user buttons. Model Requested allows approved model tool calls. Auto allows manual, model-requested, and scheduled drops."
                                    Foreground="{DynamicResource MutedTextBrush}"
                                    TextWrapping="Wrap"
                                    Margin="0,0,0,10" />

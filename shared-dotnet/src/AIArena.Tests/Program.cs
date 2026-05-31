@@ -43,6 +43,7 @@ var tests = new (string Name, Action Test)[]
     ("native prompt prioritizes operator cooperation", NativePromptPrioritizesOperatorCooperation),
     ("native prompt hides other personas", NativePromptHidesOtherPersonas),
     ("native prompt includes selected private notes", NativePromptIncludesSelectedPrivateNotes),
+    ("native prompt suppresses internet when disabled", NativePromptSuppressesInternetWhenDisabled),
     ("native turn updates selected private notes", NativeTurnUpdatesSelectedPrivateNotes),
     ("runs native one turn into snapshot transcript", RunNativeOneTurnIntoSnapshotTranscript),
     ("repairs empty native one turn content", RepairEmptyNativeOneTurnContent),
@@ -847,6 +848,30 @@ static void NativePromptIncludesSelectedPrivateNotes()
     Require(combinedPrompt.Contains("BETA_MEMORY_SHOULD_APPEAR"), "selected agent private note missing");
     Require(!combinedPrompt.Contains("ALPHA_MEMORY_SHOULD_NOT_APPEAR"), "other agent private note leaked into prompt");
     Require(!combinedPrompt.Contains("older beta note should be trimmed"), "private notes window was not respected");
+    Directory.Delete(root, recursive: true);
+}
+
+static void NativePromptSuppressesInternetWhenDisabled()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    snapshot.Engine.ModelRss.UseInternet = false;
+    snapshot.Engine.ModelRss.Mode = "auto";
+    snapshot.Engine.ModelRss.AllowParticipantRequests = true;
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+    var client = new FakeModelProviderClient("normal reply", "native reasoning");
+    var service = new TurnRunnerService(client, store, log);
+
+    var result = service.RunOneTurnAsync().GetAwaiter().GetResult();
+    Require(result.Ok, $"turn failed: {result.Error}");
+    Require(client.Requests.Count == 1, "disabled internet should not trigger a tool follow-up");
+    var system = client.Requests[0].First(item => item.Role == "system").Content;
+    Require(system.Contains("Do not request another internet tool"), "prompt should suppress internet tools when disabled");
+    Require(!system.Contains("reply only with one JSON request"), "prompt should not advertise internet JSON when disabled");
+    var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+    Require(loaded.Engine.Messages.All(message => !message.Kind.Equals("internet", StringComparison.OrdinalIgnoreCase)), "disabled internet should not add an internet card");
     Directory.Delete(root, recursive: true);
 }
 

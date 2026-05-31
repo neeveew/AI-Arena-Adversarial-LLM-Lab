@@ -73,6 +73,7 @@ public partial class MainWindow : Window
     private bool _isRenderingSnapshot;
     private bool _isUpdatingRoleModelEditor;
     private bool _isPersistingModelRouting;
+    private bool _isUpdatingInternetSettingsUi;
     private bool _arenaBusy;
     private bool _telemetrySampleInFlight;
     private int _lastProviderModelCount = -1;
@@ -226,6 +227,7 @@ public partial class MainWindow : Window
         InitializeAboutPanel();
         InitializeVisualSettings();
         InitializeOperatorTemplates();
+        InitializeInternetSettingsUi();
         InitializeDiagnosticExplanationTiles();
         UpdateOperatorRouteUi();
         UpdateOperatorTurnMeter();
@@ -306,6 +308,94 @@ public partial class MainWindow : Window
         OperatorTemplatePicker.SelectedIndex = preferredIndex >= 0
             ? preferredIndex
             : _wpfSettings.OperatorTemplates.Count > 0 ? 0 : -1;
+    }
+
+    private void InitializeInternetSettingsUi()
+    {
+        UseInternetCheckBox.Checked += InternetUseToggle_Changed;
+        UseInternetCheckBox.Unchecked += InternetUseToggle_Changed;
+        InternetModePicker.SelectionChanged += InternetModePicker_SelectionChanged;
+    }
+
+    private void InternetUseToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        SyncInternetSettingsUi(preferToggle: true);
+    }
+
+    private void InternetModePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        SyncInternetSettingsUi(preferToggle: false);
+    }
+
+    private void SyncInternetSettingsUi(bool preferToggle)
+    {
+        if (_isRenderingSnapshot || _isUpdatingInternetSettingsUi)
+        {
+            return;
+        }
+
+        _isUpdatingInternetSettingsUi = true;
+        try
+        {
+            var mode = SelectedComboTag(InternetModePicker, "manual");
+            if (preferToggle)
+            {
+                if (UseInternetCheckBox.IsChecked == true)
+                {
+                    if (mode.Equals("off", StringComparison.OrdinalIgnoreCase))
+                    {
+                        SelectComboTag(InternetModePicker, "auto");
+                    }
+                }
+                else
+                {
+                    SelectComboTag(InternetModePicker, "off");
+                }
+            }
+            else
+            {
+                UseInternetCheckBox.IsChecked = !mode.Equals("off", StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        finally
+        {
+            _isUpdatingInternetSettingsUi = false;
+        }
+
+        UpdateInternetSettingsHint();
+    }
+
+    private void UpdateInternetSettingsHint()
+    {
+        if (InternetModeHintText is null)
+        {
+            return;
+        }
+
+        var useInternet = UseInternetCheckBox.IsChecked == true;
+        var mode = SelectedComboTag(InternetModePicker, "manual");
+        if (!useInternet || mode.Equals("off", StringComparison.OrdinalIgnoreCase))
+        {
+            InternetModeHintText.Text = "Internet is disabled. Agents will not be prompted to request tools, and manual internet actions are blocked.";
+            InternetModeHintText.Foreground = ResourceBrush("DangerTextBrush");
+            return;
+        }
+
+        InternetModeHintText.Text = mode switch
+        {
+            "manual" => "Manual allows user-triggered internet actions. Agents will not request tools.",
+            "model_requested" => "Model Requested allows participant/narrator tool calls when requester permissions allow it.",
+            "auto" => "Auto allows manual actions, model-requested tool calls, and scheduled drops when configured.",
+            _ => "Internet is enabled."
+        };
+        InternetModeHintText.Foreground = ResourceBrush("MutedTextBrush");
+    }
+
+    private static string SelectedComboTag(ComboBox combo, string fallback)
+    {
+        return combo.SelectedItem is ComboBoxItem item && item.Tag is not null
+            ? item.Tag.ToString() ?? fallback
+            : fallback;
     }
 
     private async void LoadSessions(string? preferredSessionId = null)
@@ -676,6 +766,7 @@ public partial class MainWindow : Window
         AllowNarratorInternetCheckBox.IsChecked = snapshot.AllowNarratorInternetRequests;
         RequireInternetApprovalCheckBox.IsChecked = snapshot.RequireInternetApproval;
         _isRenderingSnapshot = false;
+        UpdateInternetSettingsHint();
         UpdateSessionOverview(snapshot);
         _lastAgentPersonas = snapshot.Agents
             .Where(agent => !string.IsNullOrWhiteSpace(agent.Id))
@@ -4682,8 +4773,18 @@ public partial class MainWindow : Window
         notesWindow = Math.Clamp(notesWindow, 0, 60);
         internetMaxResults = Math.Clamp(internetMaxResults, 1, 10);
         var activeParticipants = ParseActiveParticipants();
-        var internetMode = (InternetModePicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "manual";
-        var internetSourceScope = (InternetSourceScopePicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "trusted";
+        var internetMode = SelectedComboTag(InternetModePicker, "manual");
+        var useInternet = UseInternetCheckBox.IsChecked == true;
+        if (!useInternet)
+        {
+            internetMode = "off";
+        }
+        else if (internetMode.Equals("off", StringComparison.OrdinalIgnoreCase))
+        {
+            internetMode = "auto";
+        }
+
+        var internetSourceScope = SelectedComboTag(InternetSourceScopePicker, "trusted");
 
         await RunArenaBusyAsync("Applying settings...", async () =>
         {
@@ -4712,7 +4813,7 @@ public partial class MainWindow : Window
             snapshot.Engine.TranscriptWindow = transcriptWindow;
             snapshot.Engine.PrivateWindow = privateWindow;
             snapshot.Engine.NotesWindow = notesWindow;
-            snapshot.Engine.ModelRss.UseInternet = UseInternetCheckBox.IsChecked == true && !internetMode.Equals("off", StringComparison.OrdinalIgnoreCase);
+            snapshot.Engine.ModelRss.UseInternet = useInternet && !internetMode.Equals("off", StringComparison.OrdinalIgnoreCase);
             snapshot.Engine.ModelRss.Mode = internetMode;
             snapshot.Engine.ModelRss.SourceScope = internetSourceScope;
             snapshot.Engine.ModelRss.MaxResults = internetMaxResults;
