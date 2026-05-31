@@ -675,6 +675,7 @@ public partial class MainWindow : Window
         PopulateAgents(snapshot);
         PopulateCustomMatch(snapshot);
         PopulateNews(snapshot.Messages);
+        UpdateOperatorPrivateTargetSummary();
     }
 
     private void UpdateSessionOverview(ArenaSnapshot snapshot)
@@ -5022,48 +5023,7 @@ public partial class MainWindow : Window
 
     private async void SendTurnButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null)
-        {
-            LoadStatus.Text = "No active session.";
-            return;
-        }
-
-        var text = OperatorTurnText.Text.Trim();
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            ArenaRunStatus.Text = "Operator turn is empty.";
-            return;
-        }
-
-        if (_operatorRouteMode.Equals("private", StringComparison.OrdinalIgnoreCase))
-        {
-            await SendPrivateOperatorNoteAsync(text);
-            return;
-        }
-
-        if (_operatorRouteMode.Equals("narrator", StringComparison.OrdinalIgnoreCase))
-        {
-            await AskNarratorFromOperatorAsync(text);
-            return;
-        }
-
-        await RunArenaBusyAsync("Injecting operator turn...", SendTurnButton, async () =>
-        {
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (snapshot is null)
-            {
-                ArenaRunStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
-                return;
-            }
-
-            var message = _transcriptService.CreateOperatorMessage(text, snapshot.Engine.TurnCount + 1);
-            snapshot.Engine.Messages.Add(message);
-            snapshot.Engine.TurnCount = message.Turn;
-            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_operator_turn_added", new { message.Turn, message.Text });
-            OperatorTurnText.Clear();
-            RefreshActiveSession("Operator turn added.");
-        }, allowDuringAutoChat: true);
+        await SendOperatorTurnAsync();
     }
 
     private async Task SendPrivateOperatorNoteAsync(string text)
@@ -5132,15 +5092,19 @@ public partial class MainWindow : Window
     private IEnumerable<AIArena.Core.Models.DialogueAgent> OperatorPrivateTargets(AIArena.Core.Models.ArenaSnapshot snapshot)
     {
         var selected = (OperatorPrivateTargetPicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "all";
-        var agents = snapshot.Engine.Agents.Where(agent =>
-            agent.Id.Equals("alpha", StringComparison.OrdinalIgnoreCase)
-            || agent.Id.Equals("beta", StringComparison.OrdinalIgnoreCase)
-            || agent.Id.Equals("gamma", StringComparison.OrdinalIgnoreCase)
-            || agent.Id.Equals("delta", StringComparison.OrdinalIgnoreCase));
+        var agents = snapshot.Engine.Agents.Where(agent => IsParticipantAgentId(agent.Id));
 
         return selected.Equals("all", StringComparison.OrdinalIgnoreCase)
             ? agents.Where(agent => agent.Active)
             : agents.Where(agent => agent.Id.Equals(selected, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsParticipantAgentId(string agentId)
+    {
+        return agentId.Equals("alpha", StringComparison.OrdinalIgnoreCase)
+            || agentId.Equals("beta", StringComparison.OrdinalIgnoreCase)
+            || agentId.Equals("gamma", StringComparison.OrdinalIgnoreCase)
+            || agentId.Equals("delta", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildOperatorPrivateNote(string text)
@@ -5169,6 +5133,37 @@ public partial class MainWindow : Window
     private void OperatorNarratorRouteButton_Click(object sender, RoutedEventArgs e)
     {
         SetOperatorRouteMode("narrator");
+    }
+
+    private void OperatorPrivateTargetPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isRenderingSnapshot)
+        {
+            return;
+        }
+
+        UpdateOperatorPrivateTargetSummary();
+    }
+
+    private void OperatorQuickIntentButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button || button.Tag is not string intent)
+        {
+            return;
+        }
+
+        InsertOperatorDraft(OperatorQuickIntentDraft(intent));
+    }
+
+    private async void OperatorTurnText_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || (Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await SendOperatorTurnAsync();
     }
 
     private void UseOperatorTemplateButton_Click(object sender, RoutedEventArgs e)
@@ -5247,7 +5242,8 @@ public partial class MainWindow : Window
             || OperatorNarratorRouteButton is null
             || OperatorPrivateTargetRow is null
             || SendTurnButton is null
-            || OperatorTurnText is null)
+            || OperatorTurnText is null
+            || OperatorRouteHintText is null)
         {
             return;
         }
@@ -5263,13 +5259,26 @@ public partial class MainWindow : Window
             ? "ASK NARRATOR"
             : _operatorRouteMode.Equals("private", StringComparison.OrdinalIgnoreCase)
                 ? "SEND PRIVATE"
-                : "SEND TURN";
+                : "SEND PUBLIC";
         OperatorTurnText.Tag = _operatorRouteMode switch
         {
             "private" => "Private guidance for agent memory...",
             "narrator" => "Ask narrator...",
             _ => "Inject public operator turn..."
         };
+        OperatorRouteHintText.Text = _operatorRouteMode switch
+        {
+            "private" => "Private guidance is written into selected agent memory notes and is not added as a public transcript turn.",
+            "narrator" => "Narrator requests ask the observer to answer publicly without advancing the participant turn order.",
+            _ => "Public turns are visible in the transcript and become context for all agents."
+        };
+        OperatorRouteHintText.SetResourceReference(TextBlock.ForegroundProperty, _operatorRouteMode switch
+        {
+            "private" => "BetaAccentBrush",
+            "narrator" => "NarratorAccentBrush",
+            _ => "MutedTextBrush"
+        });
+        UpdateOperatorPrivateTargetSummary();
     }
 
     private static void StyleOperatorRouteButton(Button button, bool active, string accentBrushKey)
@@ -5282,6 +5291,112 @@ public partial class MainWindow : Window
     private void OperatorTurnText_TextChanged(object sender, TextChangedEventArgs e)
     {
         UpdateOperatorTurnMeter();
+    }
+
+    private async Task SendOperatorTurnAsync()
+    {
+        if (_activeSession is null)
+        {
+            LoadStatus.Text = "No active session.";
+            return;
+        }
+
+        var text = OperatorTurnText.Text.Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            ArenaRunStatus.Text = "Operator turn is empty.";
+            return;
+        }
+
+        if (_operatorRouteMode.Equals("private", StringComparison.OrdinalIgnoreCase))
+        {
+            await SendPrivateOperatorNoteAsync(text);
+            return;
+        }
+
+        if (_operatorRouteMode.Equals("narrator", StringComparison.OrdinalIgnoreCase))
+        {
+            await AskNarratorFromOperatorAsync(text);
+            return;
+        }
+
+        await RunArenaBusyAsync("Injecting operator turn...", SendTurnButton, async () =>
+        {
+            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
+            if (snapshot is null)
+            {
+                ArenaRunStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
+                return;
+            }
+
+            var message = _transcriptService.CreateOperatorMessage(text, snapshot.Engine.TurnCount + 1);
+            snapshot.Engine.Messages.Add(message);
+            snapshot.Engine.TurnCount = message.Turn;
+            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
+            await _eventLogStore.AppendAsync(_activeSession.Id, "native_operator_turn_added", new { message.Turn, message.Text, Route = "public" });
+            OperatorTurnText.Clear();
+            RefreshActiveSession("Public operator turn added.");
+        }, allowDuringAutoChat: true);
+    }
+
+    private void InsertOperatorDraft(string draft)
+    {
+        if (string.IsNullOrWhiteSpace(draft))
+        {
+            return;
+        }
+
+        var current = OperatorTurnText.Text?.TrimEnd() ?? "";
+        OperatorTurnText.Text = string.IsNullOrWhiteSpace(current)
+            ? draft
+            : current + Environment.NewLine + Environment.NewLine + draft;
+        OperatorTurnText.Focus();
+        OperatorTurnText.CaretIndex = OperatorTurnText.Text.Length;
+        UpdateOperatorTurnMeter();
+    }
+
+    private string OperatorQuickIntentDraft(string intent)
+    {
+        var route = _operatorRouteMode.ToLowerInvariant();
+        return (route, intent) switch
+        {
+            ("private", "clarify") => "For your private memory: before your next reply, clarify the key ambiguity, define the terms you rely on, and name the assumption that would change your answer.",
+            ("private", "challenge") => "For your private memory: challenge the strongest unsupported assumption, give one counterexample, and propose a safer constraint.",
+            ("private", "ground") => "For your private memory: separate facts, assumptions, and testable signals before making a claim.",
+            ("private", "decide") => "For your private memory: prepare a concrete next step, the unresolved risk, and the smallest reversible action.",
+            ("narrator", "clarify") => "Narrator, identify the main ambiguity in the current exchange and suggest the next clarifying question for the operator.",
+            ("narrator", "challenge") => "Narrator, identify the strongest unsupported assumption or role drift risk and suggest how to pressure-test it.",
+            ("narrator", "ground") => "Narrator, separate what is established, what is assumed, and what evidence would be needed next.",
+            ("narrator", "decide") => "Narrator, produce a compact decision checkpoint: agreed points, conflict, risk, and next operator move.",
+            (_, "clarify") => "Clarify the key ambiguity before continuing. Define terms, surface assumptions, and identify what would change the conclusion.",
+            (_, "challenge") => "Challenge the strongest unsupported assumption. Name the risk, give a counterexample, and propose a safer constraint.",
+            (_, "ground") => "Ground the next step in observable evidence. Separate facts, assumptions, and testable signals.",
+            (_, "decide") => "Decision checkpoint: summarize agreement, unresolved conflict, risk, and the next smallest operator move.",
+            _ => ""
+        };
+    }
+
+    private void UpdateOperatorPrivateTargetSummary()
+    {
+        if (OperatorPrivateTargetSummaryText is null || OperatorPrivateTargetPicker is null)
+        {
+            return;
+        }
+
+        var selected = (OperatorPrivateTargetPicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "all";
+        if (selected.Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            var active = (_lastRenderedSnapshot?.Agents ?? [])
+                .Where(agent => agent.Active && IsParticipantAgentId(agent.Id))
+                .Select(agent => DisplayStatusValue(agent.Id))
+                .ToArray();
+            OperatorPrivateTargetSummaryText.Text = active.Length == 0
+                ? "No active private targets in the current snapshot."
+                : $"Writes private memory notes to {string.Join(", ", active)}; no public transcript turn.";
+            return;
+        }
+
+        OperatorPrivateTargetSummaryText.Text = $"Writes a private memory note to {DisplayStatusValue(selected)}; no public transcript turn.";
     }
 
     private void UpdateOperatorTurnMeter()

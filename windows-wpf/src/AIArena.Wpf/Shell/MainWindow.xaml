@@ -1803,7 +1803,17 @@
                                     MinHeight="28"
                                     ToolTip="Ask the narrator to reply publicly." />
                         </UniformGrid>
+                        <TextBlock x:Name="OperatorRouteHintText"
+                                   Text="Public turn visible to all agents."
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,8" />
                         <Grid x:Name="OperatorPrivateTargetRow" Visibility="Collapsed" Margin="0,0,0,8">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
@@ -1817,6 +1827,7 @@
                             <ComboBox x:Name="OperatorPrivateTargetPicker"
                                       Grid.Column="1"
                                       Height="30"
+                                      SelectionChanged="OperatorPrivateTargetPicker_SelectionChanged"
                                       SelectedIndex="0">
                                 <ComboBoxItem Content="All active agents" Tag="all" IsSelected="True" />
                                 <ComboBoxItem Content="Alpha" Tag="alpha" />
@@ -1824,7 +1835,55 @@
                                 <ComboBoxItem Content="Gamma" Tag="gamma" />
                                 <ComboBoxItem Content="Delta" Tag="delta" />
                             </ComboBox>
+                            <TextBlock x:Name="OperatorPrivateTargetSummaryText"
+                                       Grid.Row="1"
+                                       Grid.Column="1"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       FontSize="10.5"
+                                       TextWrapping="Wrap"
+                                       Margin="0,4,0,0"
+                                       Text="Writes private memory notes; no public transcript turn." />
                         </Grid>
+                        <WrapPanel Margin="0,0,0,8">
+                            <TextBlock Text="Intent"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       FontSize="11"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,8,0" />
+                            <Button Content="Clarify"
+                                    Tag="clarify"
+                                    Click="OperatorQuickIntentButton_Click"
+                                    FontSize="10"
+                                    Padding="8,3"
+                                    MinHeight="26"
+                                    Margin="0,0,5,5"
+                                    ToolTip="Insert a clarification prompt" />
+                            <Button Content="Challenge"
+                                    Tag="challenge"
+                                    Click="OperatorQuickIntentButton_Click"
+                                    FontSize="10"
+                                    Padding="8,3"
+                                    MinHeight="26"
+                                    Margin="0,0,5,5"
+                                    ToolTip="Insert an adversarial challenge prompt" />
+                            <Button Content="Ground"
+                                    Tag="ground"
+                                    Click="OperatorQuickIntentButton_Click"
+                                    FontSize="10"
+                                    Padding="8,3"
+                                    MinHeight="26"
+                                    Margin="0,0,5,5"
+                                    ToolTip="Insert an evidence-grounding prompt" />
+                            <Button Content="Decide"
+                                    Tag="decide"
+                                    Click="OperatorQuickIntentButton_Click"
+                                    FontSize="10"
+                                    Padding="8,3"
+                                    MinHeight="26"
+                                    Margin="0,0,5,5"
+                                    ToolTip="Insert a decision checkpoint prompt" />
+                        </WrapPanel>
                         <Grid Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -1889,6 +1948,7 @@
                                      Padding="8,6"
                                      Text=""
                                      Tag="Inject public operator turn..."
+                                     KeyDown="OperatorTurnText_KeyDown"
                                      TextChanged="OperatorTurnText_TextChanged" />
                         </Grid>
                         <Button x:Name="SendTurnButton"
