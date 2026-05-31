@@ -1577,7 +1577,7 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <TextBlock x:Name="SavedStateHelpText"
-                                           Text="One save/load/delete surface for the three persistence scopes: checkpoints restore this session, templates reuse match setup, and sessions switch working folders."
+                                           Text="One save/load/delete surface for checkpoints, reusable match templates, and session switching."
                                            Foreground="{DynamicResource MutedTextBrush}"
                                            TextWrapping="Wrap" />
                                 <Grid Grid.Row="2">
@@ -1593,7 +1593,7 @@
                                         <ComboBox x:Name="SavedStateModePicker"
                                                   SelectionChanged="SavedStateModePicker_SelectionChanged"
                                                   Background="{DynamicResource InputBrush}"
-                                                  Foreground="White"
+                                                  Foreground="{DynamicResource TextBrush}"
                                                   BorderBrush="{DynamicResource ControlBorderBrush}"
                                                   Padding="8">
                                             <ComboBoxItem Content="Checkpoint" Tag="checkpoint" IsSelected="True" />
@@ -1605,15 +1605,16 @@
                                         <TextBlock x:Name="SavedStateNameLabel" Text="Name" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
                                         <TextBox x:Name="SavedStateNameText"
                                                  Background="{DynamicResource InputBrush}"
-                                                 Foreground="White"
+                                                 Foreground="{DynamicResource TextBrush}"
                                                  BorderBrush="{DynamicResource ControlBorderBrush}"
                                                  Padding="8" />
                                     </StackPanel>
                                     <StackPanel Grid.Column="4">
                                         <TextBlock x:Name="SavedStateItemLabel" Text="Saved item" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
                                         <ComboBox x:Name="SavedStateItemPicker"
+                                                  SelectionChanged="SavedStateItemPicker_SelectionChanged"
                                                   Background="{DynamicResource InputBrush}"
-                                                  Foreground="White"
+                                                  Foreground="{DynamicResource TextBrush}"
                                                   BorderBrush="{DynamicResource ControlBorderBrush}"
                                                   Padding="8" />
                                     </StackPanel>
@@ -1648,6 +1649,11 @@
                                             MinWidth="100"
                                             Margin="0,0,12,0" />
                                     <StackPanel Grid.Column="3">
+                                        <TextBlock x:Name="SavedStateSelectionDetails"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,0,0,5"
+                                                   Text="No saved item selected." />
                                         <TextBlock x:Name="SavedStateStatus"
                                                    Foreground="{DynamicResource MutedTextBrush}"
                                                    TextWrapping="Wrap"

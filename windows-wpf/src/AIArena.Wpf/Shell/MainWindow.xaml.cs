@@ -5890,6 +5890,16 @@ public partial class MainWindow : Window
         UpdateSavedStatePicker();
     }
 
+    private void SavedStateItemPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isRenderingSnapshot || _isUpdatingSavedState)
+        {
+            return;
+        }
+
+        UpdateSavedStateSelectionDetails();
+    }
+
     private async void SavedStateSaveButton_Click(object sender, RoutedEventArgs e)
     {
         if (_activeSession is null)
@@ -5939,7 +5949,7 @@ public partial class MainWindow : Window
                 await DeleteSelectedSessionAsync();
                 break;
             case "template":
-                DeleteSelectedTemplate();
+                await DeleteSelectedTemplateAsync();
                 break;
             default:
                 await DeleteSelectedCheckpointAsync();
@@ -5959,6 +5969,12 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(newSessionId))
         {
             SetSavedStateStatus("Enter a new session name.", isDanger: true);
+            return;
+        }
+
+        if (_sessionSummaries.Any(session => session.Id.Equals(newSessionId, StringComparison.OrdinalIgnoreCase)))
+        {
+            SetSavedStateStatus($"Session already exists: {newSessionId}. Choose a different name.", isDanger: true);
             return;
         }
 
@@ -6037,6 +6053,26 @@ public partial class MainWindow : Window
             return;
         }
 
+        var requestedName = SavedStateNameText.Text.Trim();
+        var existingTemplate = string.IsNullOrWhiteSpace(requestedName)
+            ? null
+            : _scenarioTemplates.FirstOrDefault(template => template.Name.Equals(requestedName, StringComparison.OrdinalIgnoreCase));
+        if (existingTemplate is not null)
+        {
+            var replace = ConfirmDialog.Show(
+                this,
+                _theme,
+                "Replace Template",
+                $"Replace template \"{existingTemplate.Name}\"?\n\nThe saved match setup will be overwritten. Transcript data is never stored in templates.",
+                "Replace",
+                tone: ConfirmDialogTone.Normal);
+            if (!replace)
+            {
+                SetSavedStateStatus("Template save cancelled.");
+                return;
+            }
+        }
+
         await RunArenaBusyAsync("Saving match template...", async () =>
         {
             var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
@@ -6063,6 +6099,19 @@ public partial class MainWindow : Window
             return;
         }
 
+        var confirm = ConfirmDialog.Show(
+            this,
+            _theme,
+            "Load Template",
+            $"Load template \"{template.Name}\"?\n\nThis replaces the current match framing, cast, locks, participants, and model assignments. The current transcript stays in this session.",
+            "Load",
+            tone: ConfirmDialogTone.Normal);
+        if (!confirm)
+        {
+            SetSavedStateStatus("Template load cancelled.");
+            return;
+        }
+
         await RunArenaBusyAsync($"Applying match template {template.Name}...", async () =>
         {
             var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
@@ -6076,11 +6125,11 @@ public partial class MainWindow : Window
             await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
             await _eventLogStore.AppendAsync(_activeSession.Id, "native_scenario_template_applied", new { template.Id, template.Name });
             RefreshActiveSession($"Applied template: {template.Name}.");
-            SetSavedStateStatus($"Loaded template: {template.Name}.");
+            SetSavedStateStatus($"Loaded template: {template.Name}. Transcript was preserved.");
         });
     }
 
-    private void DeleteSelectedTemplate()
+    private async Task DeleteSelectedTemplateAsync()
     {
         if (SavedStateItemPicker.SelectedItem is not ScenarioTemplate template)
         {
@@ -6088,9 +6137,28 @@ public partial class MainWindow : Window
             return;
         }
 
+        var confirm = ConfirmDialog.Show(
+            this,
+            _theme,
+            "Delete Template",
+            $"Delete template \"{template.Name}\"?\n\nThis removes only the reusable match setup. The current arena state is not changed.",
+            "Delete",
+            tone: ConfirmDialogTone.Danger);
+        if (!confirm)
+        {
+            SetSavedStateStatus("Template delete cancelled.");
+            return;
+        }
+
         var deleted = _scenarioTemplateStore.Delete(template.Id);
+        if (deleted && _activeSession is not null)
+        {
+            await _eventLogStore.AppendAsync(_activeSession.Id, "native_scenario_template_deleted", new { template.Id, template.Name });
+        }
+
         LoadScenarioTemplates();
         SetSavedStateStatus(deleted ? $"Deleted template: {template.Name}." : "Template delete failed.", isDanger: !deleted);
+        ArenaRunStatus.Text = SavedStateStatus.Text;
     }
 
     private async Task SaveCheckpointAsync()
@@ -6330,8 +6398,7 @@ public partial class MainWindow : Window
         SavedStateNameText.IsEnabled = !busy;
         SavedStateItemPicker.IsEnabled = !busy;
         SavedStateSaveButton.IsEnabled = !busy;
-        SavedStateLoadButton.IsEnabled = !busy && SavedStateItemPicker.Items.Count > 0;
-        SavedStateDeleteButton.IsEnabled = !busy && SavedStateItemPicker.Items.Count > 0;
+        UpdateSavedStateActionButtons();
         foreach (var button in _agentTurnButtons)
         {
             button.IsEnabled = !busy;
@@ -6514,40 +6581,44 @@ public partial class MainWindow : Window
                 case "session":
                     SavedStateNameLabel.Text = "New session name";
                     SavedStateItemLabel.Text = "Existing session";
-                    SavedStateHelpText.Text = "Save creates a new working session from the current state. Load switches sessions. Delete removes the selected non-default session.";
+                    SavedStateHelpText.Text = "Sessions are working folders. Save copies the current setup into a fresh session, load switches sessions, and delete removes non-default sessions.";
                     SavedStateSaveButton.Content = "SAVE";
                     SavedStateLoadButton.Content = "LOAD";
+                    SavedStateNameText.ToolTip = "Enter a unique session name. Existing sessions are not overwritten.";
+                    SavedStateItemPicker.ToolTip = "Choose the session to load or delete.";
                     SavedStateItemPicker.ItemsSource = _sessionSummaries;
                     SelectSavedStateItem(selectedId, item => item is CoreSessionSummary session ? session.Id : "");
-                    SetSavedStateStatus(_sessionSummaries.Count == 1 ? "1 saved session." : $"{_sessionSummaries.Count} saved sessions.");
+                    SetSavedStateStatus(CountLabel(_sessionSummaries.Count, "session") + " available.");
                     break;
                 case "template":
                     SavedStateNameLabel.Text = "Template name";
                     SavedStateItemLabel.Text = "Saved template";
-                    SavedStateHelpText.Text = "Templates save reusable match framing: topic, global prompt, cast, locks, participants, and model assignments. Transcript is not restored.";
+                    SavedStateHelpText.Text = "Templates save reusable match setup: topic, global prompt, cast, locks, participants, and model assignments. Transcript is not restored.";
                     SavedStateSaveButton.Content = "SAVE";
                     SavedStateLoadButton.Content = "LOAD";
+                    SavedStateNameText.ToolTip = "Leave blank for an automatic template name. Matching names ask before overwrite.";
+                    SavedStateItemPicker.ToolTip = "Choose the template to load or delete.";
                     SavedStateItemPicker.DisplayMemberPath = "Name";
                     SavedStateItemPicker.ItemsSource = _scenarioTemplates;
                     SelectSavedStateItem(selectedId, item => item is ScenarioTemplate template ? template.Id : "");
-                    SetSavedStateStatus(_scenarioTemplates.Count == 0 ? "No saved templates." : $"{_scenarioTemplates.Count} saved template(s).");
+                    SetSavedStateStatus(_scenarioTemplates.Count == 0 ? "No templates saved yet." : CountLabel(_scenarioTemplates.Count, "template") + " available.");
                     break;
                 default:
                     SavedStateNameLabel.Text = "Checkpoint name";
                     SavedStateItemLabel.Text = "Saved checkpoint";
-                    SavedStateHelpText.Text = "Checkpoints capture the current transcript, cast, locks, provider settings, and arena state for this session.";
+                    SavedStateHelpText.Text = "Checkpoints capture the full current session state: transcript, cast, locks, provider settings, notes, diagnostics, and turn order.";
                     SavedStateSaveButton.Content = "SAVE";
                     SavedStateLoadButton.Content = "LOAD";
+                    SavedStateNameText.ToolTip = "Leave blank for a timestamped checkpoint name.";
+                    SavedStateItemPicker.ToolTip = "Choose the checkpoint to load or delete.";
                     SavedStateItemPicker.DisplayMemberPath = "Name";
                     SavedStateItemPicker.ItemsSource = _checkpointSummaries;
                     SelectSavedStateItem(selectedId, item => item is CheckpointSummary checkpoint ? checkpoint.Id : "");
-                    SetSavedStateStatus(_checkpointSummaries.Count == 0 ? "No checkpoints saved for this session." : $"{_checkpointSummaries.Count} saved checkpoint(s).");
+                    SetSavedStateStatus(_checkpointSummaries.Count == 0 ? "No checkpoints saved for this session." : CountLabel(_checkpointSummaries.Count, "checkpoint") + " available.");
                     break;
             }
 
-            var hasSelection = SavedStateItemPicker.Items.Count > 0;
-            SavedStateLoadButton.IsEnabled = !_arenaBusy && hasSelection;
-            SavedStateDeleteButton.IsEnabled = !_arenaBusy && hasSelection;
+            UpdateSavedStateSelectionDetails();
         }
         finally
         {
@@ -6572,6 +6643,65 @@ public partial class MainWindow : Window
         SavedStateItemPicker.SelectedIndex = SavedStateItemPicker.Items.Count > 0 ? 0 : -1;
     }
 
+    private void UpdateSavedStateSelectionDetails()
+    {
+        if (SavedStateSelectionDetails is null || SavedStateItemPicker is null)
+        {
+            return;
+        }
+
+        var mode = CurrentSavedStateMode();
+        var selected = SavedStateItemPicker.SelectedItem;
+        switch (selected)
+        {
+            case CoreSessionSummary session:
+                SavedStateSelectionDetails.Text = $"Selected session: {session.Id} | {CountLabel(session.MessageCount, "message")}, {CountLabel(session.CheckpointCount, "checkpoint")} | modified {session.LastModified.ToLocalTime():g}.";
+                SavedStateSelectionDetails.ToolTip = string.IsNullOrWhiteSpace(session.SnapshotPath)
+                    ? "Session has no snapshot yet."
+                    : session.SnapshotPath;
+                break;
+            case ScenarioTemplate template:
+                var activeAgents = template.Agents.Count(agent => agent.Active && !agent.Id.Equals("narrator", StringComparison.OrdinalIgnoreCase));
+                var lockedItems = template.Agents.Count(agent => agent.Locked) + (template.TopicLocked ? 1 : 0) + (template.GlobalLocked ? 1 : 0);
+                SavedStateSelectionDetails.Text = $"Selected template: {template.Name} | {template.MatchType} | {CountLabel(activeAgents, "active agent")} | {CountLabel(lockedItems, "lock")} | saved {template.SavedAt.ToLocalTime():g}.";
+                SavedStateSelectionDetails.ToolTip = "Loads match setup only. Transcript stays in the current session.";
+                break;
+            case CheckpointSummary checkpoint:
+                var checkpointTime = DateTimeOffset.FromUnixTimeSeconds(checkpoint.CreatedAt).ToLocalTime();
+                SavedStateSelectionDetails.Text = $"Selected checkpoint: {checkpoint.Name} | saved {checkpointTime:g} | restores full session state.";
+                SavedStateSelectionDetails.ToolTip = checkpoint.Path;
+                break;
+            default:
+                SavedStateSelectionDetails.Text = mode switch
+                {
+                    "session" => "No session selected. Save creates a fresh session from the current match setup.",
+                    "template" => "No template selected. Save stores reusable match setup without transcript data.",
+                    _ => "No checkpoint selected. Save captures the full current session state."
+                };
+                SavedStateSelectionDetails.ToolTip = null;
+                break;
+        }
+
+        UpdateSavedStateActionButtons();
+    }
+
+    private void UpdateSavedStateActionButtons()
+    {
+        if (SavedStateLoadButton is null || SavedStateDeleteButton is null || SavedStateItemPicker is null)
+        {
+            return;
+        }
+
+        var hasSelection = SavedStateItemPicker.SelectedItem is not null;
+        var selectedDefaultSession = SavedStateItemPicker.SelectedItem is CoreSessionSummary session
+            && session.Id.Equals("default", StringComparison.OrdinalIgnoreCase);
+        SavedStateLoadButton.IsEnabled = !_arenaBusy && hasSelection;
+        SavedStateDeleteButton.IsEnabled = !_arenaBusy && hasSelection && !selectedDefaultSession;
+        SavedStateDeleteButton.ToolTip = selectedDefaultSession
+            ? "Default session cannot be deleted."
+            : "Delete the selected saved item.";
+    }
+
     private void SetSavedStateStatus(string status, bool isDanger = false)
     {
         SavedStateStatus.Text = $"{status} · {DateTime.Now:h:mm tt}";
@@ -6580,6 +6710,11 @@ public partial class MainWindow : Window
         {
             LoadStatus.Text = "";
         }
+    }
+
+    private static string CountLabel(int count, string singular)
+    {
+        return count == 1 ? $"1 {singular}" : $"{count} {singular}s";
     }
 
     private async void MatchLockChanged(object sender, RoutedEventArgs e)
