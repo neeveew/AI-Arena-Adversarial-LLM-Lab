@@ -154,11 +154,18 @@ public partial class MainWindow : Window
         "ControlBorderBrush",
         "TextBrush",
         "MutedTextBrush",
+        "PrimaryBrush",
         "PrimaryBorderBrush",
+        "HoverBorderBrush",
+        "NavHoverBrush",
+        "NavPressedBrush",
+        "PressedPrimaryBrush",
         "DangerBorderBrush",
         "DangerBrush",
         "DangerTextBrush",
-        "DisabledBorderBrush"
+        "DisabledBrush",
+        "DisabledBorderBrush",
+        "DisabledTextBrush"
     ];
 
     private static readonly Type[] ThemeStyleKeys =
@@ -7613,7 +7620,6 @@ public partial class MainWindow : Window
         button.SetResourceReference(Control.BackgroundProperty, "InputBrush");
         button.SetResourceReference(Control.BorderBrushProperty, "ControlBorderBrush");
         button.SetResourceReference(Control.ForegroundProperty, "TextBrush");
-        AttachGuideButtonHover(button, danger: false);
         return button;
     }
 
@@ -7638,34 +7644,7 @@ public partial class MainWindow : Window
         button.SetResourceReference(Control.BackgroundProperty, "InputBrush");
         button.SetResourceReference(Control.BorderBrushProperty, "DangerBorderBrush");
         button.SetResourceReference(Control.ForegroundProperty, "DangerTextBrush");
-        AttachGuideButtonHover(button, danger: true);
         return button;
-    }
-
-    private void AttachGuideButtonHover(Button button, bool danger)
-    {
-        button.MouseEnter += (_, _) =>
-        {
-            button.SetResourceReference(Control.BackgroundProperty, danger ? "DangerBrush" : "NavHoverBrush");
-            button.SetResourceReference(Control.BorderBrushProperty, danger ? "DangerTextBrush" : "HoverBorderBrush");
-            button.SetResourceReference(Control.ForegroundProperty, danger ? "TextBrush" : "TextBrush");
-        };
-        button.MouseLeave += (_, _) =>
-        {
-            button.SetResourceReference(Control.BackgroundProperty, "InputBrush");
-            button.SetResourceReference(Control.BorderBrushProperty, danger ? "DangerBorderBrush" : "ControlBorderBrush");
-            button.SetResourceReference(Control.ForegroundProperty, danger ? "DangerTextBrush" : "TextBrush");
-        };
-        button.PreviewMouseDown += (_, _) =>
-        {
-            button.SetResourceReference(Control.BackgroundProperty, danger ? "DangerBorderBrush" : "PressedPrimaryBrush");
-        };
-        button.PreviewMouseUp += (_, _) =>
-        {
-            button.SetResourceReference(Control.BackgroundProperty, button.IsMouseOver
-                ? danger ? "DangerBrush" : "NavHoverBrush"
-                : "InputBrush");
-        };
     }
 
     private void CopyThemeResourcesTo(FrameworkElement target)
