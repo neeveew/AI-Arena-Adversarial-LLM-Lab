@@ -1835,45 +1835,52 @@
                                        VerticalAlignment="Center" />
                         </Grid>
                         <UniformGrid Columns="3" Margin="0,0,0,8">
-                            <Border Background="{DynamicResource InputBrush}"
-                                    BorderBrush="{DynamicResource OperatorAccentBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="4"
-                                    Padding="6,3"
+                            <Button x:Name="OperatorPublicRouteButton"
+                                    Content="PUBLIC"
+                                    Click="OperatorPublicRouteButton_Click"
+                                    FontSize="10.5"
+                                    Padding="5,4"
                                     Margin="0,0,5,0"
-                                    ToolTip="Operator turn is visible to all agents.">
-                                <TextBlock Text="Public"
-                                           Foreground="{DynamicResource TextBrush}"
-                                           FontSize="11"
-                                           FontWeight="SemiBold"
-                                           HorizontalAlignment="Center" />
-                            </Border>
-                            <Border Background="{DynamicResource InputBrush}"
-                                    BorderBrush="{DynamicResource DisabledBorderBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="4"
-                                    Padding="6,3"
+                                    MinHeight="28"
+                                    ToolTip="Add a public operator turn to the transcript." />
+                            <Button x:Name="OperatorPrivateRouteButton"
+                                    Content="PRIVATE"
+                                    Click="OperatorPrivateRouteButton_Click"
+                                    FontSize="10.5"
+                                    Padding="5,4"
                                     Margin="0,0,5,0"
-                                    ToolTip="Private operator notes are not enabled for this panel.">
-                                <TextBlock Text="Private off"
-                                           Foreground="{DynamicResource DisabledTextBrush}"
-                                           FontSize="11"
-                                           FontWeight="SemiBold"
-                                           HorizontalAlignment="Center" />
-                            </Border>
-                            <Border Background="{DynamicResource InputBrush}"
-                                    BorderBrush="{DynamicResource OperatorAccentBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="4"
-                                    Padding="6,3"
-                                    ToolTip="Operator turn does not pick the next agent for you.">
-                                <TextBlock Text="No advance"
-                                           Foreground="{DynamicResource TextBrush}"
-                                           FontSize="11"
-                                           FontWeight="SemiBold"
-                                           HorizontalAlignment="Center" />
-                            </Border>
+                                    MinHeight="28"
+                                    ToolTip="Write private guidance into agent memory notes." />
+                            <Button x:Name="OperatorNarratorRouteButton"
+                                    Content="NARRATOR"
+                                    Click="OperatorNarratorRouteButton_Click"
+                                    FontSize="10.5"
+                                    Padding="5,4"
+                                    MinHeight="28"
+                                    ToolTip="Ask the narrator to reply publicly." />
                         </UniformGrid>
+                        <Grid x:Name="OperatorPrivateTargetRow" Visibility="Collapsed" Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Target"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       FontSize="11"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,8,0" />
+                            <ComboBox x:Name="OperatorPrivateTargetPicker"
+                                      Grid.Column="1"
+                                      Height="30"
+                                      SelectedIndex="0">
+                                <ComboBoxItem Content="All active agents" Tag="all" IsSelected="True" />
+                                <ComboBoxItem Content="Alpha" Tag="alpha" />
+                                <ComboBoxItem Content="Beta" Tag="beta" />
+                                <ComboBoxItem Content="Gamma" Tag="gamma" />
+                                <ComboBoxItem Content="Delta" Tag="delta" />
+                            </ComboBox>
+                        </Grid>
                         <Grid>
                             <TextBox x:Name="OperatorTurnText"
                                      MinHeight="78"

@@ -33,6 +33,7 @@ var tests = new (string Name, Action Test)[]
     ("generates random seed match respecting locks", GenerateRandomSeedMatchRespectingLocks),
     ("generates YOLO seed respecting locks", GenerateYoloSeedRespectingLocks),
     ("adds narrator message to transcript", AddNarratorMessageToTranscript),
+    ("asks narrator with operator request", AskNarratorWithOperatorRequest),
     ("curates news into transcript when internet is enabled", CurateNewsIntoTranscriptWhenInternetEnabled),
     ("curated news plans focused search query", CuratedNewsPlansFocusedSearchQuery),
     ("curated news skips irrelevant source without transcript card", CuratedNewsSkipsIrrelevantSourceWithoutTranscriptCard),
@@ -550,6 +551,29 @@ static void AddNarratorMessageToTranscript()
     Require(message.SpeakerId == "narrator", "narrator speaker id mismatch");
     Require(message.Text == "narrator note", "narrator text mismatch");
     Require(TranscriptService.ReasoningContent(message) == "narrator reasoning", "narrator reasoning mismatch");
+    Directory.Delete(root, recursive: true);
+}
+
+static void AskNarratorWithOperatorRequest()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+    var client = new FakeModelProviderClient("narrator answer", "narrator reasoning");
+    var service = new NarratorService(client, store, log);
+
+    var result = service.AskNarratorAsync("default", "Assess the debate and recommend next intervention.").GetAwaiter().GetResult();
+    Require(result.Ok, $"narrator request failed: {result.Error}");
+    var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+    Require(loaded.Engine.Messages.Count == 2, "narrator answer was not appended");
+    Require(loaded.Engine.Messages.Last().SpeakerId == "narrator", "narrator answer speaker id mismatch");
+    Require(client.Requests.Count == 1, "narrator request should call provider once");
+    var requestText = string.Join(Environment.NewLine, client.Requests[0].Select(message => message.Content));
+    Require(requestText.Contains("Operator request for narrator", StringComparison.OrdinalIgnoreCase), "operator request label missing");
+    Require(requestText.Contains("Assess the debate", StringComparison.OrdinalIgnoreCase), "operator request text missing from prompt");
+    Require(File.ReadAllText(log.EventPath()).Contains("native_narrator_operator_request_completed"), "operator narrator event was not logged");
     Directory.Delete(root, recursive: true);
 }
 

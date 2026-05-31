@@ -25,6 +25,21 @@ public sealed class NarratorService
 
     public async Task<NarratorResult> NarrateNowAsync(string sessionId, CancellationToken cancellationToken = default)
     {
+        return await RunNarratorAsync(sessionId, operatorRequest: "", cancellationToken);
+    }
+
+    public async Task<NarratorResult> AskNarratorAsync(string sessionId, string operatorRequest, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(operatorRequest))
+        {
+            return NarratorResult.Failed("Operator request is empty.");
+        }
+
+        return await RunNarratorAsync(sessionId, operatorRequest.Trim(), cancellationToken);
+    }
+
+    private async Task<NarratorResult> RunNarratorAsync(string sessionId, string operatorRequest, CancellationToken cancellationToken)
+    {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
         {
@@ -39,9 +54,13 @@ public sealed class NarratorService
 
         snapshot.Engine.Narrator.Status = "thinking";
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-        await _eventLogStore.AppendAsync(sessionId, "native_narrator_started", new { model = config.Model }, cancellationToken);
+        await _eventLogStore.AppendAsync(
+            sessionId,
+            string.IsNullOrWhiteSpace(operatorRequest) ? "native_narrator_started" : "native_narrator_operator_request_started",
+            new { model = config.Model },
+            cancellationToken);
 
-        var prompt = BuildNarratorPrompt(snapshot);
+        var prompt = BuildNarratorPrompt(snapshot, operatorRequest);
         var result = await _modelClient.CompleteChatAsync(config, prompt, cancellationToken);
         if (!result.Ok && fallbackConfig is not null)
         {
@@ -73,7 +92,9 @@ public sealed class NarratorService
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
         await _eventLogStore.AppendAsync(
             sessionId,
-            result.Ok ? "native_narrator_completed" : "native_narrator_failed",
+            result.Ok
+                ? string.IsNullOrWhiteSpace(operatorRequest) ? "native_narrator_completed" : "native_narrator_operator_request_completed"
+                : string.IsNullOrWhiteSpace(operatorRequest) ? "native_narrator_failed" : "native_narrator_operator_request_failed",
             new { message.Turn, message.Status, message.Model.Model, message.Model.LatencyMs, error = result.Error },
             cancellationToken);
         return result.Ok
@@ -81,7 +102,7 @@ public sealed class NarratorService
             : NarratorResult.Failed(result.Error, message);
     }
 
-    private static IReadOnlyList<ModelChatMessage> BuildNarratorPrompt(ArenaSnapshot snapshot)
+    private static IReadOnlyList<ModelChatMessage> BuildNarratorPrompt(ArenaSnapshot snapshot, string operatorRequest)
     {
         var transcript = string.Join(
             Environment.NewLine,
@@ -105,6 +126,9 @@ public sealed class NarratorService
                     "Write one concise narrator note for the public transcript.",
                     "Do not write as Alpha, Beta, or Gamma.",
                     "Do not fetch live news or external data unless the operator explicitly provided it.",
+                    string.IsNullOrWhiteSpace(operatorRequest)
+                        ? "Use your own judgment about what the arena needs next."
+                        : "Answer the operator request directly, then add only the context needed for the arena.",
                     $"Narrator persona: {persona}")),
             new ModelChatMessage(
                 "user",
@@ -112,7 +136,9 @@ public sealed class NarratorService
                     Environment.NewLine + Environment.NewLine,
                     $"Topic: {topic}",
                     string.IsNullOrWhiteSpace(transcript) ? "Transcript: No public transcript yet." : $"Transcript:{Environment.NewLine}{transcript}",
-                    "Write the narrator note now."))
+                    string.IsNullOrWhiteSpace(operatorRequest)
+                        ? "Write the narrator note now."
+                        : $"Operator request for narrator:{Environment.NewLine}{operatorRequest}"))
         ];
     }
 
