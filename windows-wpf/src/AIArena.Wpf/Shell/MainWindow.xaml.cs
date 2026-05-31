@@ -63,8 +63,11 @@ public partial class MainWindow : Window
     private bool _isRefreshingModels;
     private bool _isCheckingProviderHealth;
     private CoreSessionSummary? _activeSession;
+    private IReadOnlyList<CoreSessionSummary> _sessionSummaries = [];
+    private IReadOnlyList<CheckpointSummary> _checkpointSummaries = [];
+    private IReadOnlyList<ScenarioTemplate> _scenarioTemplates = [];
     private DateTimeOffset _activeSnapshotWriteUtc;
-    private bool _isSelectingSession;
+    private bool _isUpdatingSavedState;
     private bool _isSelectingTheme;
     private bool _isRenderingSnapshot;
     private bool _isUpdatingRoleModelEditor;
@@ -131,6 +134,8 @@ public partial class MainWindow : Window
         int EmptyResponses,
         int InternetRequests,
         IReadOnlyList<double> Activity);
+
+    private sealed record UserGuideSection(string Title, string Text);
 
     public MainWindow()
     {
@@ -251,47 +256,33 @@ public partial class MainWindow : Window
     private async Task LoadSessionsAsync(string? preferredSessionId = null)
     {
         var sessions = await _coreSessionStore.ListSessionsAsync();
-        _isSelectingSession = true;
-        SessionPicker.ItemsSource = sessions;
+        _sessionSummaries = sessions;
 
         var defaultSession = sessions.FirstOrDefault(session => session.Id.Equals(preferredSessionId, StringComparison.OrdinalIgnoreCase))
             ?? sessions.FirstOrDefault(session => session.Id.Equals(_activeSession?.Id, StringComparison.OrdinalIgnoreCase))
             ?? sessions.FirstOrDefault(session => session.Id.Equals("default", StringComparison.OrdinalIgnoreCase))
             ?? sessions.FirstOrDefault();
-        SessionPicker.SelectedItem = defaultSession;
-        _isSelectingSession = false;
 
         if (defaultSession is null)
         {
             LoadStatus.Text = $"No sessions found in {Path.Combine(_coreSessionStore.DataRoot, "sessions")}";
+            SetSavedStateStatus("No saved sessions found.", isDanger: true);
+            UpdateSavedStatePicker();
             PopulateFallbackState("No AI Arena sessions found.");
             return;
         }
 
         await LoadSessionAsync(defaultSession, force: true);
+        UpdateSavedStatePicker(defaultSession.Id);
     }
 
     private void LoadScenarioTemplates(string? preferredTemplateId = null)
     {
-        var templates = _scenarioTemplateStore.Load();
-        ScenarioTemplatePicker.ItemsSource = templates;
-        ScenarioTemplatePicker.DisplayMemberPath = "Name";
-        var selected = templates.FirstOrDefault(template => template.Id.Equals(preferredTemplateId ?? "", StringComparison.OrdinalIgnoreCase))
-            ?? templates.FirstOrDefault();
-        ScenarioTemplatePicker.SelectedItem = selected;
-        ScenarioTemplateStatus.Text = selected is null
-            ? "No saved scenario templates yet."
-            : $"Selected: {selected.Name} ({selected.SavedAt.ToLocalTime():yyyy-MM-dd HH:mm})";
-    }
-
-    private void SessionPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_isSelectingSession || SessionPicker.SelectedItem is not CoreSessionSummary session)
+        _scenarioTemplates = _scenarioTemplateStore.Load();
+        if (CurrentSavedStateMode().Equals("template", StringComparison.OrdinalIgnoreCase))
         {
-            return;
+            UpdateSavedStatePicker(preferredTemplateId);
         }
-
-        _ = LoadSessionAsync(session, force: true);
     }
 
     private async void RefreshIfSnapshotChanged()
@@ -5841,18 +5832,85 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void CreateSessionButton_Click(object sender, RoutedEventArgs e)
+    private void SavedStateModePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_activeSession is null)
+        if (_isRenderingSnapshot || _isUpdatingSavedState)
         {
-            LoadStatus.Text = "No active session to use as a template.";
             return;
         }
 
-        var newSessionId = SessionStore.SafeSessionId(NewSessionText.Text);
+        UpdateSavedStatePicker();
+    }
+
+    private async void SavedStateSaveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeSession is null)
+        {
+            SetSavedStateStatus("No active session.", isDanger: true);
+            return;
+        }
+
+        var mode = CurrentSavedStateMode();
+        switch (mode)
+        {
+            case "session":
+                await SaveSessionCopyAsync();
+                break;
+            case "template":
+                await SaveScenarioTemplateAsync();
+                break;
+            default:
+                await SaveCheckpointAsync();
+                break;
+        }
+    }
+
+    private async void SavedStateLoadButton_Click(object sender, RoutedEventArgs e)
+    {
+        var mode = CurrentSavedStateMode();
+        switch (mode)
+        {
+            case "session":
+                await LoadSelectedSessionAsync();
+                break;
+            case "template":
+                await ApplySelectedTemplateAsync();
+                break;
+            default:
+                await RestoreSelectedCheckpointAsync();
+                break;
+        }
+    }
+
+    private async void SavedStateDeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        var mode = CurrentSavedStateMode();
+        switch (mode)
+        {
+            case "session":
+                await DeleteSelectedSessionAsync();
+                break;
+            case "template":
+                DeleteSelectedTemplate();
+                break;
+            default:
+                await DeleteSelectedCheckpointAsync();
+                break;
+        }
+    }
+
+    private async Task SaveSessionCopyAsync()
+    {
+        if (_activeSession is null)
+        {
+            SetSavedStateStatus("No active session to copy.", isDanger: true);
+            return;
+        }
+
+        var newSessionId = SessionStore.SafeSessionId(SavedStateNameText.Text);
         if (string.IsNullOrWhiteSpace(newSessionId))
         {
-            LoadStatus.Text = "New session name is empty.";
+            SetSavedStateStatus("Enter a new session name.", isDanger: true);
             return;
         }
 
@@ -5861,30 +5919,43 @@ public partial class MainWindow : Window
             var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
             if (snapshot is null)
             {
-                LoadStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
+                SetSavedStateStatus($"No snapshot found for session {_activeSession.Id}.", isDanger: true);
                 return;
             }
 
             await _coreSessionStore.CreateSessionAsync(newSessionId, snapshot);
             await _eventLogStore.AppendAsync(newSessionId, "native_session_created", new { source = _activeSession.Id });
-            NewSessionText.Clear();
+            SavedStateNameText.Clear();
             LoadSessions(newSessionId);
-            LoadStatus.Text = $"Created and switched to session {newSessionId}.";
+            SetSavedStateStatus($"Saved session: {newSessionId}.");
             ArenaRunStatus.Text = $"Session: {newSessionId}.";
         });
     }
 
-    private async void DeleteSessionButton_Click(object sender, RoutedEventArgs e)
+    private async Task LoadSelectedSessionAsync()
     {
-        if (_activeSession is null)
+        if (SavedStateItemPicker.SelectedItem is not CoreSessionSummary session)
         {
+            SetSavedStateStatus("Choose a session to load.", isDanger: true);
             return;
         }
 
-        var sessionId = _activeSession.Id;
-        if (sessionId.Equals("default", StringComparison.OrdinalIgnoreCase))
+        await LoadSessionAsync(session, force: true);
+        UpdateSavedStatePicker(session.Id);
+        SetSavedStateStatus($"Loaded session: {session.Id}.");
+    }
+
+    private async Task DeleteSelectedSessionAsync()
+    {
+        if (SavedStateItemPicker.SelectedItem is not CoreSessionSummary session)
         {
-            LoadStatus.Text = "Default session cannot be deleted from WPF.";
+            SetSavedStateStatus("Choose a session to delete.", isDanger: true);
+            return;
+        }
+
+        if (session.Id.Equals("default", StringComparison.OrdinalIgnoreCase))
+        {
+            SetSavedStateStatus("Default session cannot be deleted.", isDanger: true);
             return;
         }
 
@@ -5892,64 +5963,64 @@ public partial class MainWindow : Window
             this,
             _theme,
             "Delete Session",
-            $"Delete session \"{sessionId}\"?\n\nThis removes the session folder and cannot be undone.",
+            $"Delete session \"{session.Id}\"?\n\nThis removes the session folder and cannot be undone.",
             "Delete",
             tone: ConfirmDialogTone.Danger);
         if (!confirm)
         {
-            LoadStatus.Text = "Session delete cancelled.";
+            SetSavedStateStatus("Session delete cancelled.");
             return;
         }
 
-        await RunArenaBusyAsync($"Deleting session {sessionId}...", async () =>
+        await RunArenaBusyAsync($"Deleting session {session.Id}...", async () =>
         {
-            var deleted = await _coreSessionStore.DeleteSessionAsync(sessionId);
+            var deleted = await _coreSessionStore.DeleteSessionAsync(session.Id);
             LoadSessions("default");
-            LoadStatus.Text = deleted ? $"Deleted session {sessionId}." : $"Could not delete session {sessionId}.";
-            ArenaRunStatus.Text = LoadStatus.Text;
+            SetSavedStateStatus(deleted ? $"Deleted session: {session.Id}." : $"Could not delete session: {session.Id}.", isDanger: !deleted);
+            ArenaRunStatus.Text = SavedStateStatus.Text;
         });
     }
 
-    private async void SaveScenarioTemplateButton_Click(object sender, RoutedEventArgs e)
+    private async Task SaveScenarioTemplateAsync()
     {
         if (_activeSession is null)
         {
-            ScenarioTemplateStatus.Text = "No active session.";
+            SetSavedStateStatus("No active session.", isDanger: true);
             return;
         }
 
-        await RunArenaBusyAsync("Saving scenario template...", async () =>
+        await RunArenaBusyAsync("Saving match template...", async () =>
         {
             var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
             if (snapshot is null)
             {
-                ScenarioTemplateStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
+                SetSavedStateStatus($"No snapshot found for session {_activeSession.Id}.", isDanger: true);
                 return;
             }
 
-            var template = _scenarioTemplateStore.Save(ScenarioTemplateNameText.Text, snapshot);
-            ScenarioTemplateNameText.Clear();
+            var template = _scenarioTemplateStore.Save(SavedStateNameText.Text, snapshot);
+            SavedStateNameText.Clear();
             LoadScenarioTemplates(template.Id);
-            ScenarioTemplateStatus.Text = $"Saved template: {template.Name}.";
-            ArenaRunStatus.Text = ScenarioTemplateStatus.Text;
+            SetSavedStateStatus($"Saved template: {template.Name}.");
+            ArenaRunStatus.Text = SavedStateStatus.Text;
             await _eventLogStore.AppendAsync(_activeSession.Id, "native_scenario_template_saved", new { template.Id, template.Name });
         });
     }
 
-    private async void ApplyScenarioTemplateButton_Click(object sender, RoutedEventArgs e)
+    private async Task ApplySelectedTemplateAsync()
     {
-        if (_activeSession is null || ScenarioTemplatePicker.SelectedItem is not ScenarioTemplate template)
+        if (_activeSession is null || SavedStateItemPicker.SelectedItem is not ScenarioTemplate template)
         {
-            ScenarioTemplateStatus.Text = "Choose a scenario template to apply.";
+            SetSavedStateStatus("Choose a template to load.", isDanger: true);
             return;
         }
 
-        await RunArenaBusyAsync($"Applying scenario template {template.Name}...", async () =>
+        await RunArenaBusyAsync($"Applying match template {template.Name}...", async () =>
         {
             var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
             if (snapshot is null)
             {
-                ScenarioTemplateStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
+                SetSavedStateStatus($"No snapshot found for session {_activeSession.Id}.", isDanger: true);
                 return;
             }
 
@@ -5957,84 +6028,84 @@ public partial class MainWindow : Window
             await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
             await _eventLogStore.AppendAsync(_activeSession.Id, "native_scenario_template_applied", new { template.Id, template.Name });
             RefreshActiveSession($"Applied template: {template.Name}.");
-            ScenarioTemplateStatus.Text = $"Applied template: {template.Name}.";
+            SetSavedStateStatus($"Loaded template: {template.Name}.");
         });
     }
 
-    private void DeleteScenarioTemplateButton_Click(object sender, RoutedEventArgs e)
+    private void DeleteSelectedTemplate()
     {
-        if (ScenarioTemplatePicker.SelectedItem is not ScenarioTemplate template)
+        if (SavedStateItemPicker.SelectedItem is not ScenarioTemplate template)
         {
-            ScenarioTemplateStatus.Text = "Choose a scenario template to delete.";
+            SetSavedStateStatus("Choose a template to delete.", isDanger: true);
             return;
         }
 
         var deleted = _scenarioTemplateStore.Delete(template.Id);
         LoadScenarioTemplates();
-        ScenarioTemplateStatus.Text = deleted ? $"Deleted template: {template.Name}." : "Template delete failed.";
+        SetSavedStateStatus(deleted ? $"Deleted template: {template.Name}." : "Template delete failed.", isDanger: !deleted);
     }
 
-    private async void SaveCheckpointButton_Click(object sender, RoutedEventArgs e)
+    private async Task SaveCheckpointAsync()
     {
         if (_activeSession is null)
         {
-            SetCheckpointStatus("No active session.", isDanger: true);
+            SetSavedStateStatus("No active session.", isDanger: true);
             return;
         }
 
         await RunArenaBusyAsync("Saving checkpoint...", async () =>
         {
-            var checkpoint = await _coreSessionStore.SaveCheckpointAsync(_activeSession.Id, CheckpointNameText.Text);
+            var checkpoint = await _coreSessionStore.SaveCheckpointAsync(_activeSession.Id, SavedStateNameText.Text);
             await _eventLogStore.AppendAsync(_activeSession.Id, "native_checkpoint_saved", new { checkpoint.Id, checkpoint.Name });
-            CheckpointNameText.Clear();
+            SavedStateNameText.Clear();
             await RefreshCheckpointsAsync(checkpoint.Id);
-            SetCheckpointStatus($"Saved checkpoint: {checkpoint.Name}");
-            ArenaRunStatus.Text = CheckpointStatus.Text;
+            SetSavedStateStatus($"Saved checkpoint: {checkpoint.Name}.");
+            ArenaRunStatus.Text = SavedStateStatus.Text;
         });
     }
 
-    private async void RestoreCheckpointButton_Click(object sender, RoutedEventArgs e)
+    private async Task RestoreSelectedCheckpointAsync()
     {
-        if (_activeSession is null || CheckpointPicker.SelectedItem is not CheckpointSummary checkpoint)
+        if (_activeSession is null || SavedStateItemPicker.SelectedItem is not CheckpointSummary checkpoint)
         {
-            SetCheckpointStatus("Choose a checkpoint to restore.", isDanger: true);
+            SetSavedStateStatus("Choose a checkpoint to load.", isDanger: true);
             return;
         }
 
         var confirm = ConfirmDialog.Show(
             this,
             _theme,
-            "Restore Checkpoint",
-            $"Restore \"{checkpoint.Name}\"?\n\nThe current arena will return to that saved state, including transcript, cast, locks, and settings.",
-            "Restore",
+            "Load Checkpoint",
+            $"Load \"{checkpoint.Name}\"?\n\nThe current arena will return to that saved state, including transcript, cast, locks, and settings.",
+            "Load",
             tone: ConfirmDialogTone.Danger);
         if (!confirm)
         {
-            SetCheckpointStatus("Restore cancelled.");
+            SetSavedStateStatus("Checkpoint load cancelled.");
             return;
         }
 
-        await RunArenaBusyAsync($"Restoring checkpoint {checkpoint.Name}...", async () =>
+        await RunArenaBusyAsync($"Loading checkpoint {checkpoint.Name}...", async () =>
         {
             var restored = await _coreSessionStore.RestoreCheckpointAsync(_activeSession.Id, checkpoint.Id);
             if (restored is null)
             {
-                SetCheckpointStatus("Checkpoint restore failed.", isDanger: true);
+                SetSavedStateStatus("Checkpoint load failed.", isDanger: true);
                 return;
             }
 
             await _eventLogStore.AppendAsync(_activeSession.Id, "native_checkpoint_restored", new { restored.Id, restored.Name });
-            RefreshActiveSession($"Restored: {restored.Name}");
+            RefreshActiveSession($"Loaded checkpoint: {restored.Name}");
             await RefreshCheckpointsAsync(restored.Id);
-            SetCheckpointStatus($"Restored checkpoint: {restored.Name}");
+            SetSavedStateStatus($"Loaded checkpoint: {restored.Name}.");
         });
     }
 
-    private async void DeleteCheckpointButton_Click(object sender, RoutedEventArgs e)
+    private async Task DeleteSelectedCheckpointAsync()
     {
-        if (_activeSession is null || CheckpointPicker.SelectedItem is not CheckpointSummary checkpoint)
+        if (_activeSession is null || SavedStateItemPicker.SelectedItem is not CheckpointSummary checkpoint)
         {
-            SetCheckpointStatus("Choose a checkpoint to delete.", isDanger: true);
+            SetSavedStateStatus("Choose a checkpoint to delete.", isDanger: true);
             return;
         }
 
@@ -6047,7 +6118,7 @@ public partial class MainWindow : Window
             tone: ConfirmDialogTone.Danger);
         if (!confirm)
         {
-            SetCheckpointStatus("Delete cancelled.");
+            SetSavedStateStatus("Delete cancelled.");
             return;
         }
 
@@ -6060,8 +6131,8 @@ public partial class MainWindow : Window
             }
 
             await RefreshCheckpointsAsync();
-            SetCheckpointStatus(deleted ? $"Deleted checkpoint: {checkpoint.Name}" : "Checkpoint delete failed.", isDanger: !deleted);
-            ArenaRunStatus.Text = CheckpointStatus.Text;
+            SetSavedStateStatus(deleted ? $"Deleted checkpoint: {checkpoint.Name}." : "Checkpoint delete failed.", isDanger: !deleted);
+            ArenaRunStatus.Text = SavedStateStatus.Text;
         });
     }
 
@@ -6207,20 +6278,12 @@ public partial class MainWindow : Window
         AvatarStylePicker.IsEnabled = !busy;
         SystemGlyphStylePicker.IsEnabled = !busy;
         TopStripModePicker.IsEnabled = !busy;
-        SessionPicker.IsEnabled = !busy;
-        CreateSessionButton.IsEnabled = !busy;
-        DeleteSessionButton.IsEnabled = !busy;
-        NewSessionText.IsEnabled = !busy;
-        SaveScenarioTemplateButton.IsEnabled = !busy;
-        ApplyScenarioTemplateButton.IsEnabled = !busy && ScenarioTemplatePicker.Items.Count > 0;
-        DeleteScenarioTemplateButton.IsEnabled = !busy && ScenarioTemplatePicker.Items.Count > 0;
-        ScenarioTemplateNameText.IsEnabled = !busy;
-        ScenarioTemplatePicker.IsEnabled = !busy;
-        SaveCheckpointButton.IsEnabled = !busy;
-        RestoreCheckpointButton.IsEnabled = !busy && CheckpointPicker.Items.Count > 0;
-        DeleteCheckpointButton.IsEnabled = !busy && CheckpointPicker.Items.Count > 0;
-        CheckpointNameText.IsEnabled = !busy;
-        CheckpointPicker.IsEnabled = !busy;
+        SavedStateModePicker.IsEnabled = !busy;
+        SavedStateNameText.IsEnabled = !busy;
+        SavedStateItemPicker.IsEnabled = !busy;
+        SavedStateSaveButton.IsEnabled = !busy;
+        SavedStateLoadButton.IsEnabled = !busy && SavedStateItemPicker.Items.Count > 0;
+        SavedStateDeleteButton.IsEnabled = !busy && SavedStateItemPicker.Items.Count > 0;
         foreach (var button in _agentTurnButtons)
         {
             button.IsEnabled = !busy;
@@ -6358,34 +6421,113 @@ public partial class MainWindow : Window
             return;
         }
 
-        var checkpoints = await _coreSessionStore.ListCheckpointsAsync(_activeSession.Id);
-        CheckpointPicker.ItemsSource = checkpoints;
-        CheckpointPicker.SelectedItem = checkpoints.FirstOrDefault(checkpoint => checkpoint.Id == selectedCheckpointId)
-            ?? checkpoints.FirstOrDefault();
-        RestoreCheckpointButton.IsEnabled = !_arenaBusy && checkpoints.Count > 0;
-        DeleteCheckpointButton.IsEnabled = !_arenaBusy && checkpoints.Count > 0;
-        CheckpointCountText.Text = checkpoints.Count == 1 ? "1 saved checkpoint" : $"{checkpoints.Count} saved checkpoints";
-        CheckpointCountText.Foreground = checkpoints.Count > 0 ? ResourceBrush("TextBrush") : ResourceBrush("MutedTextBrush");
-        if (checkpoints.Count == 0)
+        _checkpointSummaries = await _coreSessionStore.ListCheckpointsAsync(_activeSession.Id);
+        if (CurrentSavedStateMode().Equals("checkpoint", StringComparison.OrdinalIgnoreCase))
         {
-            SetCheckpointStatus("No checkpoints saved for this session.");
+            UpdateSavedStatePicker(selectedCheckpointId);
+            if (_checkpointSummaries.Count == 0)
+            {
+                SetSavedStateStatus("No checkpoints saved for this session.");
+            }
         }
     }
 
     private void ClearCheckpoints(string status)
     {
-        CheckpointPicker.ItemsSource = Array.Empty<CheckpointSummary>();
-        RestoreCheckpointButton.IsEnabled = false;
-        DeleteCheckpointButton.IsEnabled = false;
-        CheckpointCountText.Text = "0 saved checkpoints";
-        CheckpointCountText.Foreground = ResourceBrush("MutedTextBrush");
-        SetCheckpointStatus(status);
+        _checkpointSummaries = [];
+        if (CurrentSavedStateMode().Equals("checkpoint", StringComparison.OrdinalIgnoreCase))
+        {
+            UpdateSavedStatePicker();
+        }
+        SetSavedStateStatus(status);
     }
 
-    private void SetCheckpointStatus(string status, bool isDanger = false)
+    private string CurrentSavedStateMode()
     {
-        CheckpointStatus.Text = status;
-        CheckpointStatus.Foreground = isDanger ? ResourceBrush("DangerTextBrush") : ResourceBrush("MutedTextBrush");
+        return (SavedStateModePicker?.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "checkpoint";
+    }
+
+    private void UpdateSavedStatePicker(string? selectedId = null)
+    {
+        if (SavedStateItemPicker is null || SavedStateModePicker is null)
+        {
+            return;
+        }
+
+        _isUpdatingSavedState = true;
+        try
+        {
+            var mode = CurrentSavedStateMode();
+            SavedStateItemPicker.ItemsSource = null;
+            SavedStateItemPicker.DisplayMemberPath = "";
+
+            switch (mode)
+            {
+                case "session":
+                    SavedStateNameLabel.Text = "New session name";
+                    SavedStateItemLabel.Text = "Existing session";
+                    SavedStateHelpText.Text = "Save creates a new working session from the current state. Load switches sessions. Delete removes the selected non-default session.";
+                    SavedStateSaveButton.Content = "SAVE";
+                    SavedStateLoadButton.Content = "LOAD";
+                    SavedStateItemPicker.ItemsSource = _sessionSummaries;
+                    SelectSavedStateItem(selectedId, item => item is CoreSessionSummary session ? session.Id : "");
+                    SetSavedStateStatus(_sessionSummaries.Count == 1 ? "1 saved session." : $"{_sessionSummaries.Count} saved sessions.");
+                    break;
+                case "template":
+                    SavedStateNameLabel.Text = "Template name";
+                    SavedStateItemLabel.Text = "Saved template";
+                    SavedStateHelpText.Text = "Templates save reusable match framing: topic, global prompt, cast, locks, participants, and model assignments. Transcript is not restored.";
+                    SavedStateSaveButton.Content = "SAVE";
+                    SavedStateLoadButton.Content = "LOAD";
+                    SavedStateItemPicker.DisplayMemberPath = "Name";
+                    SavedStateItemPicker.ItemsSource = _scenarioTemplates;
+                    SelectSavedStateItem(selectedId, item => item is ScenarioTemplate template ? template.Id : "");
+                    SetSavedStateStatus(_scenarioTemplates.Count == 0 ? "No saved templates." : $"{_scenarioTemplates.Count} saved template(s).");
+                    break;
+                default:
+                    SavedStateNameLabel.Text = "Checkpoint name";
+                    SavedStateItemLabel.Text = "Saved checkpoint";
+                    SavedStateHelpText.Text = "Checkpoints capture the current transcript, cast, locks, provider settings, and arena state for this session.";
+                    SavedStateSaveButton.Content = "SAVE";
+                    SavedStateLoadButton.Content = "LOAD";
+                    SavedStateItemPicker.DisplayMemberPath = "Name";
+                    SavedStateItemPicker.ItemsSource = _checkpointSummaries;
+                    SelectSavedStateItem(selectedId, item => item is CheckpointSummary checkpoint ? checkpoint.Id : "");
+                    SetSavedStateStatus(_checkpointSummaries.Count == 0 ? "No checkpoints saved for this session." : $"{_checkpointSummaries.Count} saved checkpoint(s).");
+                    break;
+            }
+
+            var hasSelection = SavedStateItemPicker.Items.Count > 0;
+            SavedStateLoadButton.IsEnabled = !_arenaBusy && hasSelection;
+            SavedStateDeleteButton.IsEnabled = !_arenaBusy && hasSelection;
+        }
+        finally
+        {
+            _isUpdatingSavedState = false;
+        }
+    }
+
+    private void SelectSavedStateItem(string? selectedId, Func<object, string> idSelector)
+    {
+        if (!string.IsNullOrWhiteSpace(selectedId))
+        {
+            foreach (var item in SavedStateItemPicker.Items)
+            {
+                if (idSelector(item).Equals(selectedId, StringComparison.OrdinalIgnoreCase))
+                {
+                    SavedStateItemPicker.SelectedItem = item;
+                    return;
+                }
+            }
+        }
+
+        SavedStateItemPicker.SelectedIndex = SavedStateItemPicker.Items.Count > 0 ? 0 : -1;
+    }
+
+    private void SetSavedStateStatus(string status, bool isDanger = false)
+    {
+        SavedStateStatus.Text = status;
+        SavedStateStatus.Foreground = isDanger ? ResourceBrush("DangerTextBrush") : ResourceBrush("MutedTextBrush");
     }
 
     private async void MatchLockChanged(object sender, RoutedEventArgs e)
@@ -7234,13 +7376,14 @@ public partial class MainWindow : Window
         }
 
         var guideText = File.ReadAllText(guidePath);
+        var sections = BuildUserGuideSections(guideText);
         var dialog = new Window
         {
             Title = "AI Arena User Guide",
             Owner = this,
-            Width = 860,
-            Height = 680,
-            MinWidth = 560,
+            Width = 960,
+            Height = 720,
+            MinWidth = 680,
             MinHeight = 420,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Background = ResourceBrush("WindowBrush"),
@@ -7248,21 +7391,68 @@ public partial class MainWindow : Window
         };
 
         var root = new DockPanel { Margin = new Thickness(14) };
+        var footer = new DockPanel
+        {
+            LastChildFill = false,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+        var openFileButton = new Button
+        {
+            Content = "OPEN FILE",
+            MinWidth = 96,
+            MinHeight = 32,
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        openFileButton.Click += (_, _) => Process.Start(new ProcessStartInfo
+        {
+            FileName = guidePath,
+            UseShellExecute = true
+        });
+        footer.Children.Add(openFileButton);
+
+        var copyPathButton = new Button
+        {
+            Content = "COPY PATH",
+            MinWidth = 96,
+            MinHeight = 32,
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        copyPathButton.Click += (_, _) => Clipboard.SetText(guidePath);
+        footer.Children.Add(copyPathButton);
+
         var closeButton = new Button
         {
             Content = "CLOSE",
             MinWidth = 90,
             MinHeight = 32,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(0, 10, 0, 0)
+            HorizontalAlignment = HorizontalAlignment.Right
         };
         closeButton.Click += (_, _) => dialog.Close();
-        DockPanel.SetDock(closeButton, Dock.Bottom);
-        root.Children.Add(closeButton);
+        DockPanel.SetDock(closeButton, Dock.Right);
+        footer.Children.Add(closeButton);
+        DockPanel.SetDock(footer, Dock.Bottom);
+        root.Children.Add(footer);
 
-        root.Children.Add(new TextBox
+        var body = new Grid();
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var sectionList = new ListBox
         {
-            Text = guideText,
+            ItemsSource = sections,
+            DisplayMemberPath = "Title",
+            Background = ResourceBrush("InputBrush"),
+            Foreground = ResourceBrush("TextBrush"),
+            BorderBrush = ResourceBrush("ControlBorderBrush"),
+            Padding = new Thickness(6),
+            SelectedIndex = 0
+        };
+        body.Children.Add(sectionList);
+
+        var guideViewer = new TextBox
+        {
+            Text = sections.FirstOrDefault()?.Text ?? guideText,
             IsReadOnly = true,
             AcceptsReturn = true,
             TextWrapping = TextWrapping.Wrap,
@@ -7274,10 +7464,54 @@ public partial class MainWindow : Window
             Padding = new Thickness(12),
             FontFamily = new FontFamily("Consolas"),
             FontSize = 12
-        });
+        };
+        sectionList.SelectionChanged += (_, _) =>
+        {
+            if (sectionList.SelectedItem is UserGuideSection section)
+            {
+                guideViewer.Text = section.Text;
+                guideViewer.ScrollToHome();
+            }
+        };
+        Grid.SetColumn(guideViewer, 2);
+        body.Children.Add(guideViewer);
+        root.Children.Add(body);
 
         dialog.Content = root;
         dialog.ShowDialog();
+    }
+
+    private static IReadOnlyList<UserGuideSection> BuildUserGuideSections(string guideText)
+    {
+        var sections = new List<UserGuideSection>();
+        using var reader = new StringReader(guideText);
+        var title = "Overview";
+        var content = new List<string>();
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            if (line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                if (content.Count > 0)
+                {
+                    sections.Add(new UserGuideSection(title, string.Join(Environment.NewLine, content).Trim()));
+                    content.Clear();
+                }
+
+                title = line.TrimStart('#', ' ').Trim();
+                content.Add(line);
+                continue;
+            }
+
+            content.Add(line);
+        }
+
+        if (content.Count > 0)
+        {
+            sections.Add(new UserGuideSection(title, string.Join(Environment.NewLine, content).Trim()));
+        }
+
+        return sections.Count > 0 ? sections : [new UserGuideSection("Guide", guideText)];
     }
 
     private static string? ResolveUserGuidePath()

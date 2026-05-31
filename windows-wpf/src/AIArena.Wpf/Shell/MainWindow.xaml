@@ -1542,135 +1542,7 @@
                         <UniformGrid x:Name="ScenarioPreviewItems" Columns="2" Margin="0,0,0,18" />
                         <TextBlock Text="CAST PREVIEW" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
                         <StackPanel x:Name="CastPreviewItems" Margin="0,0,0,18" />
-                        <Grid Margin="0,0,0,18">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="16" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                            </Grid.RowDefinitions>
-
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="RESTORE POINTS" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
-                            <TextBlock Grid.Row="0" Grid.Column="2" Text="SESSIONS" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
-
-                            <Border Grid.Row="1"
-                                    Grid.Column="0"
-                                    Background="{DynamicResource CardBrush}"
-                                    BorderBrush="{DynamicResource ControlBorderBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="8"
-                                    Padding="12"
-                                    MinHeight="276"
-                                    VerticalAlignment="Stretch">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="*" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="Capture transcript, cast, locks, provider settings, and arena state."
-                                                   Foreground="{DynamicResource MutedTextBrush}"
-                                                   TextWrapping="Wrap"
-                                                   Margin="0,0,0,12" />
-                                        <TextBlock Text="Checkpoint name" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
-                                        <TextBox x:Name="CheckpointNameText"
-                                                 Background="{DynamicResource InputBrush}"
-                                                 Foreground="White"
-                                                 BorderBrush="{DynamicResource ControlBorderBrush}"
-                                                 Padding="8"
-                                                 Margin="0,0,0,8" />
-                                        <Button x:Name="SaveCheckpointButton"
-                                                Content="SAVE CHECKPOINT"
-                                                Click="SaveCheckpointButton_Click"
-                                                Background="{DynamicResource PrimaryBrush}"
-                                                BorderBrush="{DynamicResource PrimaryBorderBrush}"
-                                                Margin="0,0,0,10" />
-                                        <TextBlock Text="Saved checkpoints" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
-                                        <ComboBox x:Name="CheckpointPicker"
-                                                  Background="{DynamicResource InputBrush}"
-                                                  Foreground="White"
-                                                  BorderBrush="{DynamicResource ControlBorderBrush}"
-                                                  DisplayMemberPath="Name"
-                                                  Padding="8"
-                                                  Margin="0,0,0,8" />
-                                        <WrapPanel>
-                                            <Button x:Name="RestoreCheckpointButton"
-                                                    Content="RESTORE"
-                                                    Click="RestoreCheckpointButton_Click"
-                                                    Margin="0,0,8,8" />
-                                            <Button x:Name="DeleteCheckpointButton"
-                                                    Content="DELETE"
-                                                    Click="DeleteCheckpointButton_Click"
-                                                    Background="{DynamicResource DangerBrush}"
-                                                    BorderBrush="{DynamicResource DangerBorderBrush}"
-                                                    Foreground="{DynamicResource DangerTextBrush}"
-                                                    Margin="0,0,0,8" />
-                                        </WrapPanel>
-                                    </StackPanel>
-                                    <StackPanel Grid.Row="2">
-                                        <TextBlock x:Name="CheckpointCountText"
-                                                   Foreground="{DynamicResource MutedTextBrush}"
-                                                   TextWrapping="Wrap"
-                                                   Text="0 saved checkpoints" />
-                                        <TextBlock x:Name="CheckpointStatus"
-                                                   Foreground="{DynamicResource MutedTextBrush}"
-                                                   TextWrapping="Wrap"
-                                                   Margin="0,6,0,0"
-                                                   Text="Ready to save a checkpoint." />
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
-
-                            <Border Grid.Row="1"
-                                    Grid.Column="2"
-                                    Background="{DynamicResource CardBrush}"
-                                    BorderBrush="{DynamicResource ControlBorderBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="8"
-                                    Padding="12"
-                                    MinHeight="276"
-                                    VerticalAlignment="Stretch">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="*" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="Choose an existing session, or name a new one to create and switch."
-                                                   Foreground="{DynamicResource MutedTextBrush}"
-                                                   TextWrapping="Wrap"
-                                                   Margin="0,0,0,12" />
-                                        <TextBlock Text="Existing session" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
-                                        <ComboBox x:Name="SessionPicker"
-                                                  SelectionChanged="SessionPicker_SelectionChanged"
-                                                  Margin="0,0,0,8" />
-                                        <TextBlock Text="New session name" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
-                                        <TextBox x:Name="NewSessionText" Margin="0,0,0,8" />
-                                        <WrapPanel Margin="0,0,0,8">
-                                            <Button x:Name="CreateSessionButton" Content="CREATE / SWITCH" Click="CreateSessionButton_Click" Margin="0,0,8,8" />
-                                            <Button x:Name="DeleteSessionButton"
-                                                    Content="DELETE SESSION"
-                                                    Click="DeleteSessionButton_Click"
-                                                    Background="{DynamicResource DangerBrush}"
-                                                    BorderBrush="{DynamicResource DangerBorderBrush}"
-                                                    Foreground="{DynamicResource DangerTextBrush}"
-                                                    Margin="0,0,0,8" />
-                                        </WrapPanel>
-                                    </StackPanel>
-                                    <TextBlock x:Name="LoadStatus"
-                                               Grid.Row="2"
-                                               Foreground="{DynamicResource MutedTextBrush}"
-                                               TextWrapping="Wrap"
-                                               Margin="0,2,0,0" />
-                                </Grid>
-                            </Border>
-                        </Grid>
-                        <TextBlock Text="SCENARIO TEMPLATES" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+                        <TextBlock Text="SAVED MATCH STATE" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
                         <Border Background="{DynamicResource CardBrush}"
                                 BorderBrush="{DynamicResource ControlBorderBrush}"
                                 BorderThickness="1"
@@ -1678,56 +1550,95 @@
                                 Padding="12"
                                 Margin="0,0,0,18">
                             <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="12" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0">
-                                    <TextBlock Text="Save current match framing, cast, locks, participants, and model assignments."
-                                               Foreground="{DynamicResource MutedTextBrush}"
-                                               TextWrapping="Wrap"
-                                               Margin="0,0,0,8" />
-                                    <TextBlock Text="Template name" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
-                                    <TextBox x:Name="ScenarioTemplateNameText"
-                                             Background="{DynamicResource InputBrush}"
-                                             Foreground="White"
-                                             BorderBrush="{DynamicResource ControlBorderBrush}"
-                                             Padding="8"
-                                             Margin="0,0,0,8" />
-                                    <Button x:Name="SaveScenarioTemplateButton"
-                                            Content="SAVE TEMPLATE"
-                                            Click="SaveScenarioTemplateButton_Click"
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="10" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="10" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBlock x:Name="SavedStateHelpText"
+                                           Text="One save/load/delete surface for the three persistence scopes: checkpoints restore this session, templates reuse match setup, and sessions switch working folders."
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           TextWrapping="Wrap" />
+                                <Grid Grid.Row="2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="170" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Mode" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                        <ComboBox x:Name="SavedStateModePicker"
+                                                  SelectionChanged="SavedStateModePicker_SelectionChanged"
+                                                  Background="{DynamicResource InputBrush}"
+                                                  Foreground="White"
+                                                  BorderBrush="{DynamicResource ControlBorderBrush}"
+                                                  Padding="8">
+                                            <ComboBoxItem Content="Checkpoint" Tag="checkpoint" IsSelected="True" />
+                                            <ComboBoxItem Content="Template" Tag="template" />
+                                            <ComboBoxItem Content="Session" Tag="session" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock x:Name="SavedStateNameLabel" Text="Name" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                        <TextBox x:Name="SavedStateNameText"
+                                                 Background="{DynamicResource InputBrush}"
+                                                 Foreground="White"
+                                                 BorderBrush="{DynamicResource ControlBorderBrush}"
+                                                 Padding="8" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="4">
+                                        <TextBlock x:Name="SavedStateItemLabel" Text="Saved item" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                        <ComboBox x:Name="SavedStateItemPicker"
+                                                  Background="{DynamicResource InputBrush}"
+                                                  Foreground="White"
+                                                  BorderBrush="{DynamicResource ControlBorderBrush}"
+                                                  Padding="8" />
+                                    </StackPanel>
+                                </Grid>
+                                <Grid Grid.Row="4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="SavedStateSaveButton"
+                                            Content="SAVE"
+                                            Click="SavedStateSaveButton_Click"
                                             Background="{DynamicResource PrimaryBrush}"
-                                            BorderBrush="{DynamicResource PrimaryBorderBrush}" />
-                                </StackPanel>
-                                <StackPanel Grid.Column="2">
-                                    <TextBlock Text="Saved template" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
-                                    <ComboBox x:Name="ScenarioTemplatePicker"
-                                              DisplayMemberPath="Name"
-                                              Background="{DynamicResource InputBrush}"
-                                              Foreground="White"
-                                              BorderBrush="{DynamicResource ControlBorderBrush}"
-                                              Padding="8"
-                                              Margin="0,0,0,8" />
-                                    <WrapPanel Margin="0,0,0,8">
-                                        <Button x:Name="ApplyScenarioTemplateButton"
-                                                Content="APPLY TEMPLATE"
-                                                Click="ApplyScenarioTemplateButton_Click"
-                                                Margin="0,0,8,8" />
-                                        <Button x:Name="DeleteScenarioTemplateButton"
-                                                Content="DELETE"
-                                                Click="DeleteScenarioTemplateButton_Click"
-                                                Background="{DynamicResource DangerBrush}"
-                                                BorderBrush="{DynamicResource DangerBorderBrush}"
-                                                Foreground="{DynamicResource DangerTextBrush}"
-                                                Margin="0,0,0,8" />
-                                    </WrapPanel>
-                                    <TextBlock x:Name="ScenarioTemplateStatus"
-                                               Foreground="{DynamicResource MutedTextBrush}"
-                                               TextWrapping="Wrap"
-                                               Text="No template selected." />
-                                </StackPanel>
+                                            BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                                            MinWidth="100"
+                                            Margin="0,0,8,0" />
+                                    <Button x:Name="SavedStateLoadButton"
+                                            Grid.Column="1"
+                                            Content="LOAD"
+                                            Click="SavedStateLoadButton_Click"
+                                            MinWidth="100"
+                                            Margin="0,0,8,0" />
+                                    <Button x:Name="SavedStateDeleteButton"
+                                            Grid.Column="2"
+                                            Content="DELETE"
+                                            Click="SavedStateDeleteButton_Click"
+                                            Background="{DynamicResource DangerBrush}"
+                                            BorderBrush="{DynamicResource DangerBorderBrush}"
+                                            Foreground="{DynamicResource DangerTextBrush}"
+                                            MinWidth="100"
+                                            Margin="0,0,12,0" />
+                                    <StackPanel Grid.Column="3">
+                                        <TextBlock x:Name="SavedStateStatus"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   TextWrapping="Wrap"
+                                                   Text="Ready." />
+                                        <TextBlock x:Name="LoadStatus"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,4,0,0" />
+                                    </StackPanel>
+                                </Grid>
                             </Grid>
                         </Border>
                     </StackPanel>

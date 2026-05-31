@@ -8,9 +8,9 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>AI Arena</AssemblyName>
     <Product>AI Arena</Product>
-    <Version>0.3.57-beta</Version>
-    <InformationalVersion>0.3.57-beta</InformationalVersion>
-    <FileVersion>0.3.57.0</FileVersion>
+    <Version>0.3.58-beta</Version>
+    <InformationalVersion>0.3.58-beta</InformationalVersion>
+    <FileVersion>0.3.58.0</FileVersion>
     <ApplicationIcon>Assets\ai-arena-icon.ico</ApplicationIcon>
   </PropertyGroup>
 
