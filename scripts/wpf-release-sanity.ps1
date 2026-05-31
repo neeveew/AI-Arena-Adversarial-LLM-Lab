@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.3.73-beta"
+    [string]$Version = "0.3.74-beta"
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,6 +47,9 @@ $scriptText = Get-Content -LiteralPath $innoScript -Raw
 if ($scriptText -notmatch '#define MyAppName "AI Arena"') {
     throw "Installer identity drifted: expected MyAppName to be AI Arena."
 }
+if ($scriptText -notmatch '#define MyAppDisplayName "AI Arena: Adversarial LLM Lab"') {
+    throw "Installer display identity drifted: expected AI Arena: Adversarial LLM Lab."
+}
 if ($scriptText -notmatch ('#define MyAppVersion "' + [regex]::Escape($Version) + '"')) {
     throw "Installer version drifted: expected $Version."
 }
@@ -71,6 +74,12 @@ if ($scriptText -notmatch 'AppUpdatesURL=\{#MyReleaseUrl\}') {
 if ($scriptText -notmatch 'AppId=\{\{E2F12C8E-9B8C-45C3-B9A1-A8F8E1725F61\}') {
     throw "Installer AppId drifted; stable AI Arena upgrade identity may be broken."
 }
+if ($scriptText -notmatch 'AppName=\{#MyAppDisplayName\}') {
+    throw "Installer AppName no longer uses the public display name."
+}
+if ($scriptText -notmatch 'AppVerName=\{#MyAppDisplayName\} - \{#MyAppVersion\}') {
+    throw "Installer AppVerName no longer shows the public display name and version."
+}
 if ($scriptText -notmatch 'LicenseFile=\.\.\\\.\.\\LICENSE') {
     throw "Installer licence page drifted: expected LICENSE to be shown during setup."
 }
@@ -89,14 +98,20 @@ if ($scriptText -notmatch 'Filename: "\{app\}\\USER_GUIDE\.md"; Description: "Op
 if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\windows-wpf\\src\\AIArena\.Wpf\\Assets\\ai-arena-icon\.ico"; DestDir: "\{app\}"') {
     throw "Installer no longer installs the app icon beside the app."
 }
-if ($scriptText -notmatch 'DefaultDirName=\{autopf\}\\\{#MyAppName\}') {
-    throw "Installer no longer defaults to Program Files."
+if ($scriptText -notmatch 'DefaultDirName=\{localappdata\}\\\{#MyAppName\}') {
+    throw "Installer no longer defaults to the per-user LocalAppData AI Arena folder."
 }
-if ($scriptText -notmatch 'PrivilegesRequired=admin') {
-    throw "Installer no longer requests admin rights for Program Files install."
+if ($scriptText -notmatch 'DisableDirPage=no') {
+    throw "Installer no longer allows manual install directory selection."
 }
-if ($scriptText -notmatch 'Name: "\{commondesktop\}\\\{#MyAppName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
-    throw "Desktop shortcut no longer has an explicit icon."
+if ($scriptText -notmatch 'UsePreviousAppDir=no') {
+    throw "Installer may remember older Program Files install paths instead of the current per-user default."
+}
+if ($scriptText -notmatch 'PrivilegesRequired=lowest') {
+    throw "Installer no longer uses per-user privileges."
+}
+if ($scriptText -notmatch 'Name: "\{userdesktop\}\\\{#MyAppName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
+    throw "Per-user desktop shortcut no longer has an explicit icon."
 }
 if ($scriptText -notmatch 'Name: "\{group\}\\\{#MyAppName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
     throw "Start Menu shortcut no longer has an explicit icon."

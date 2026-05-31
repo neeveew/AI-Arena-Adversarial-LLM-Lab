@@ -247,7 +247,7 @@ Copyright (c) 2026 Dominik Fiala.
 
 You may share AI Arena freely in its original, unmodified form. You may use it privately. You may not distribute edited, modified, forked, patched, rebuilt, or derivative versions without written permission from Dominik Fiala.
 
-The installer shows the licence during setup and installs the app to `Program Files\AI Arena` by default. `LICENSE`, `NOTICE.md`, release notes, the release manifest, and this user guide are installed beside the app. The Start Menu folder includes shortcuts for the app, user guide, release notes, and GitHub releases. User data remains in `%LOCALAPPDATA%\AI Arena` unless you choose to delete it during uninstall.
+The installer shows the licence during setup and installs the app to `%LOCALAPPDATA%\AI Arena` by default, which avoids the normal administrator prompt for clean per-user installs. You can still choose a different install directory during setup. `LICENSE`, `NOTICE.md`, release notes, the release manifest, and this user guide are installed beside the app. The Start Menu folder includes shortcuts for the app, user guide, release notes, and GitHub releases. Saved settings, sessions, checkpoints, templates, exports, logs, and cache files use named folders under `%LOCALAPPDATA%\AI Arena` unless you choose to delete leftover data during uninstall.
 
 ## Provider Troubleshooting
 

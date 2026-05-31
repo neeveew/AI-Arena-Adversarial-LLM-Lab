@@ -1,31 +1,35 @@
 ; Inno Setup installer for the native WPF AI Arena build.
 
 #define MyAppName "AI Arena"
-#define MyAppVersion "0.3.73-beta"
+#define MyAppDisplayName "AI Arena: Adversarial LLM Lab"
+#define MyAppVersion "0.3.74-beta"
 #define MyAppPublisher "Dominik Fiala"
 #define MyAppExeName "AI Arena.exe"
 #define MyAppIconName "ai-arena-icon.ico"
-#define MyReleaseDir "..\..\dist\AI Arena - 0.3.73-beta"
+#define MyReleaseDir "..\..\dist\AI Arena - 0.3.74-beta"
 #define MyReleaseUrl "https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases"
 
 [Setup]
 AppId={{E2F12C8E-9B8C-45C3-B9A1-A8F8E1725F61}
-AppName={#MyAppName}
+AppName={#MyAppDisplayName}
+AppVerName={#MyAppDisplayName} - {#MyAppVersion}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyReleaseUrl}
 AppSupportURL={#MyReleaseUrl}
 AppUpdatesURL={#MyReleaseUrl}
-DefaultDirName={autopf}\{#MyAppName}
+DefaultDirName={localappdata}\{#MyAppName}
 DefaultGroupName={#MyAppName}
+DisableDirPage=no
 DisableProgramGroupPage=yes
+UsePreviousAppDir=no
 OutputDir=..\..\dist\installer\AI Arena - {#MyAppVersion}
 OutputBaseFilename=AI Arena Setup {#MyAppVersion}
 SetupIconFile=..\..\windows-wpf\src\AIArena.Wpf\Assets\ai-arena-icon.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
-PrivilegesRequired=admin
+PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\{#MyAppExeName}
 LicenseFile=..\..\LICENSE
 
@@ -47,7 +51,7 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "
 Name: "{group}\AI Arena User Guide"; Filename: "{app}\USER_GUIDE.md"; IconFilename: "{app}\{#MyAppIconName}"
 Name: "{group}\Release Notes"; Filename: "{app}\changes.txt"; IconFilename: "{app}\{#MyAppIconName}"
 Name: "{group}\GitHub Releases"; Filename: "{#MyReleaseUrl}"; IconFilename: "{app}\{#MyAppIconName}"
-Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconName}"; Tasks: desktopicon
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
