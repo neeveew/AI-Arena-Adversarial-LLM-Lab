@@ -6,7 +6,7 @@ The current WPF shell includes:
 
 - native Windows desktop app
 - independent transcript and Arena scroll panels with slim theme-aware scrollbars
-- read-only loading from `%LOCALAPPDATA%\AI Arena Alpha\data\sessions`
+- read-only loading from `%LOCALAPPDATA%\AI Arena\sessions`
 - session picker for available snapshots
 - 1.2 second read-only snapshot refresh
 - compact top bar with session/provider status, theme selector, and settings icon
@@ -26,7 +26,7 @@ The current WPF shell includes:
 - top settings icon opens a translucent roll-down overlay above the Arena panel
 - editable WPF App Settings for active participants, provider URL, default model, per-role Alpha/Beta/Gamma/Narrator models, timeout, temperature, max output, internet mode, internet source scope, requester permissions, approval requirement, and max internet results
 - top-bar Theme selector with System, Dark Arena, Dark Green, Dark Blue, and High Contrast palettes
-- persisted WPF-local settings in `%LOCALAPPDATA%\AI Arena Alpha\data\native-wpf-settings.json`
+- persisted WPF-local settings in `%LOCALAPPDATA%\AI Arena\configs\native-wpf-settings.json`
 - Custom Match read view for scenario, cast, and lock status
 - Custom Match lock toggles for topic, global, and cast members
 - Random Seed match generation with visibly refreshed cast roles and personas

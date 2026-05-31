@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using AIArena.Core.Persistence;
 
 namespace AIArena.Wpf.Services;
 
@@ -11,10 +12,8 @@ public sealed class WpfSettingsStore
 
     public WpfSettingsStore()
     {
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var dataRoot = Path.Combine(localAppData, "AI Arena Alpha", "data");
-        Directory.CreateDirectory(dataRoot);
-        SettingsPath = Path.Combine(dataRoot, "native-wpf-settings.json");
+        var dataRoot = NativeDataPaths.DefaultDataRoot();
+        SettingsPath = NativeDataPaths.ConfigPath(dataRoot, "native-wpf-settings.json");
     }
 
     public WpfSettings Load()

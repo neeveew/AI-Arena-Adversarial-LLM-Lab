@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.3.62-beta"
+    [string]$Version = "0.3.63-beta"
 )
 
 $ErrorActionPreference = "Stop"
@@ -73,7 +73,13 @@ if ($scriptText -notmatch 'Filename: "\{app\}\\USER_GUIDE\.md"; Description: "Op
 if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\windows-wpf\\src\\AIArena\.Wpf\\Assets\\ai-arena-icon\.ico"; DestDir: "\{app\}"') {
     throw "Installer no longer installs the app icon beside the app."
 }
-if ($scriptText -notmatch 'Name: "\{userdesktop\}\\\{#MyAppName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
+if ($scriptText -notmatch 'DefaultDirName=\{autopf\}\\\{#MyAppName\}') {
+    throw "Installer no longer defaults to Program Files."
+}
+if ($scriptText -notmatch 'PrivilegesRequired=admin') {
+    throw "Installer no longer requests admin rights for Program Files install."
+}
+if ($scriptText -notmatch 'Name: "\{commondesktop\}\\\{#MyAppName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
     throw "Desktop shortcut no longer has an explicit icon."
 }
 if ($scriptText -notmatch 'Name: "\{group\}\\\{#MyAppName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {

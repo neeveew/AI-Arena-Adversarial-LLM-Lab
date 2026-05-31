@@ -26,11 +26,11 @@ This map tracks the native WPF port against the Python beta app. Keep it close t
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| Session picker | Done | Lists `%LOCALAPPDATA%\AI Arena Alpha\data\sessions`. |
+| Session picker | Done | Lists `%LOCALAPPDATA%\AI Arena\sessions`. |
 | Snapshot loading | Done | Read path is WPF-local through `SnapshotStore`. |
 | Snapshot writes | Partial | Native writes now happen for operator turns, pin, delete, 1 TURN, targeted turns, retry, and session creation through shared core stores. |
-| Event logging | Partial | Native actions append to `events.jsonl` through shared `EventLogStore`. |
-| Checkpoints | Done | Session-local save/restore/delete under `sessions/<session>/checkpoints`. Restore/delete use themed confirmation dialogs. |
+| Event logging | Partial | Native actions append to `%LOCALAPPDATA%\AI Arena\logs\sessions\<session>\events.jsonl` through shared `EventLogStore`. |
+| Checkpoints | Done | Session-scoped save/restore/delete under `%LOCALAPPDATA%\AI Arena\checkpoints\<session>`. Restore/delete use themed confirmation dialogs. |
 
 ## Transcript
 
@@ -78,7 +78,7 @@ This map tracks the native WPF port against the Python beta app. Keep it close t
 | Settings summary | Done | Active participant count is controlled inside Model Provider, with provider, internet, context windows, and help grouped in collapsed sections. The top bar uses a compact settings icon. |
 | Editable provider settings | Done | WPF can edit shared base URL, default model, per-role Alpha/Beta/Gamma/Narrator models, timeout, temperature, max output, internet toggle, internet mode, internet source scope, requester permissions, approval requirement, and max internet results. Advertised provider models refresh every 5 seconds while settings are open. |
 | App Settings overlay | Done | Top-bar settings icon opens an 80% opacity overlapping settings panel instead of inserting settings into the Arena control flow. |
-| WPF-local settings | Done | Theme preference is stored at `%LOCALAPPDATA%\AI Arena Alpha\data\native-wpf-settings.json`. |
+| WPF-local settings | Done | Theme preference is stored at `%LOCALAPPDATA%\AI Arena\configs\native-wpf-settings.json`. |
 | Provider health test | Done | Calls configured OpenAI-compatible endpoint through shared provider service. |
 | Provider editing | Done | WPF writes shared/native provider config and role-specific model overrides. Role models fall back to the shared default when unavailable. |
 | Ollama/OpenAI-compatible provider support | Partial | Depends on compatible `/v1` endpoint and model config. |

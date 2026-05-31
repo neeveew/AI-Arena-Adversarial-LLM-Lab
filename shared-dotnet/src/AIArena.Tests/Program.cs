@@ -430,10 +430,13 @@ static void ListSessionSummaries()
     var sessionDir = Path.Combine(root, "sessions", "default");
     Directory.CreateDirectory(sessionDir);
     File.WriteAllText(Path.Combine(sessionDir, "snapshot.json"), SampleSnapshot());
-    File.WriteAllText(Path.Combine(sessionDir, "events.jsonl"), "{}\n{}\n");
-    Directory.CreateDirectory(Path.Combine(sessionDir, "checkpoints"));
-    File.WriteAllText(Path.Combine(sessionDir, "checkpoints", "one.json"), "{}");
     var store = new SessionStore(root);
+    var eventPath = NativeDataPaths.EventPath(root, "default");
+    Directory.CreateDirectory(Path.GetDirectoryName(eventPath)!);
+    File.WriteAllText(eventPath, "{}\n{}\n");
+    var checkpointDir = store.CheckpointDirectory();
+    Directory.CreateDirectory(checkpointDir);
+    File.WriteAllText(Path.Combine(checkpointDir, "one.json"), "{}");
     var sessions = store.ListSessionsAsync().GetAwaiter().GetResult();
     Require(sessions.Count == 1, "session count mismatch");
     Require(sessions[0].MessageCount == 1, "message count mismatch");

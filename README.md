@@ -105,7 +105,7 @@ If the provider is offline, AI Arena can still open sessions and display local d
 - Native Windows WPF app.
 - Shared .NET core library for arena logic, sessions, providers, diagnostics, internet tools, narration, transcript handling, match generation, and avatars.
 - OpenAI-compatible provider client.
-- Local session storage under `%LOCALAPPDATA%\AI Arena Alpha\data`.
+- User data storage under `%LOCALAPPDATA%\AI Arena`, split into `configs`, `sessions`, `checkpoints`, `templates`, `exports`, `logs`, and `cache`.
 - No dependency on a specific model host.
 - No WebView/browser dashboard dependency in the active app.
 

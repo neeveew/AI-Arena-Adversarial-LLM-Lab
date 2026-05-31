@@ -186,11 +186,13 @@ The seed inspector shows the source, scenario seed, scenario style, persona seed
 
 ## Sessions, Checkpoints, and Templates
 
-Sessions are saved locally. Use the session controls to create, switch, or delete sessions.
+Sessions are saved locally under `%LOCALAPPDATA%\AI Arena\sessions`. Use the session controls to create, switch, or delete sessions.
 
-Restore points save the current transcript, cast, locks, provider settings, and arena state. Use them before risky edits or long Auto Chat runs.
+Restore points save the current transcript, cast, locks, provider settings, and arena state under `%LOCALAPPDATA%\AI Arena\checkpoints`. Use them before risky edits or long Auto Chat runs.
 
-Scenario templates save match framing, cast, locks, participants, and model assignments for reuse.
+Scenario templates save match framing, cast, locks, participants, and model assignments for reuse under `%LOCALAPPDATA%\AI Arena\templates`.
+
+App settings are saved under `%LOCALAPPDATA%\AI Arena\configs`. Exports, logs, and cache files have their own folders under the same AI Arena data root.
 
 ## Settings
 
@@ -245,7 +247,7 @@ Copyright (c) 2026 Dominik Fiala.
 
 You may share AI Arena freely in its original, unmodified form. You may use it privately. You may not distribute edited, modified, forked, patched, rebuilt, or derivative versions without written permission from Dominik Fiala.
 
-The installer shows the licence during setup and installs `LICENSE`, `NOTICE.md`, and this user guide beside the app.
+The installer shows the licence during setup and installs the app to `Program Files\AI Arena` by default. `LICENSE`, `NOTICE.md`, and this user guide are installed beside the app. User data remains in `%LOCALAPPDATA%\AI Arena` unless you choose to delete it during uninstall.
 
 ## Provider Troubleshooting
 

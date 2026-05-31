@@ -25,7 +25,7 @@ public sealed class SessionStore
 
     public string DataRoot { get; }
 
-    public string SettingsPath => Path.Combine(DataRoot, "settings.json");
+    public string SettingsPath => NativeDataPaths.ConfigPath(DataRoot, "settings.json");
 
     public async Task<ArenaSnapshot?> LoadSnapshotAsync(string sessionId = "default", CancellationToken cancellationToken = default)
     {
@@ -169,7 +169,7 @@ public sealed class SessionStore
             return Task.FromResult(false);
         }
 
-        var sessionsRoot = Path.GetFullPath(Path.Combine(DataRoot, "sessions"));
+        var sessionsRoot = Path.GetFullPath(NativeDataPaths.SessionsRoot(DataRoot));
         var sessionPath = Path.GetFullPath(Path.Combine(sessionsRoot, safeSession));
         if (!sessionPath.StartsWith(sessionsRoot, StringComparison.OrdinalIgnoreCase) || !Directory.Exists(sessionPath))
         {
@@ -185,7 +185,7 @@ public sealed class SessionStore
     public int CountCheckpoints(string sessionId = "default")
     {
         var safeSession = string.IsNullOrWhiteSpace(sessionId) ? "default" : sessionId;
-        var checkpointsPath = Path.Combine(DataRoot, "sessions", safeSession, "checkpoints");
+        var checkpointsPath = NativeDataPaths.CheckpointDirectory(DataRoot, safeSession);
         return Directory.Exists(checkpointsPath)
             ? Directory.EnumerateFiles(checkpointsPath, "*.json").Count()
             : 0;
@@ -292,7 +292,7 @@ public sealed class SessionStore
     public string CheckpointDirectory(string sessionId = "default")
     {
         var safeSession = string.IsNullOrWhiteSpace(sessionId) ? "default" : SafeSessionId(sessionId);
-        return Path.Combine(DataRoot, "sessions", safeSession, "checkpoints");
+        return NativeDataPaths.CheckpointDirectory(DataRoot, safeSession);
     }
 
     public static string SafeSessionId(string sessionId)
@@ -316,7 +316,7 @@ public sealed class SessionStore
 
     public async Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(CancellationToken cancellationToken = default)
     {
-        var sessionsRoot = Path.Combine(DataRoot, "sessions");
+        var sessionsRoot = NativeDataPaths.SessionsRoot(DataRoot);
         if (!Directory.Exists(sessionsRoot))
         {
             return Array.Empty<SessionSummary>();
@@ -331,8 +331,8 @@ public sealed class SessionStore
             var snapshot = File.Exists(snapshotPath)
                 ? await LoadSnapshotAsync(id, cancellationToken)
                 : null;
-            var checkpointPath = Path.Combine(sessionDir, "checkpoints");
-            var eventPath = Path.Combine(sessionDir, "events.jsonl");
+            var checkpointPath = CheckpointDirectory(id);
+            var eventPath = NativeDataPaths.EventPath(DataRoot, id);
             var lastModified = Directory.GetLastWriteTime(sessionDir);
             summaries.Add(new SessionSummary(
                 id,

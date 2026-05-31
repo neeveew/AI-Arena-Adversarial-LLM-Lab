@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using AIArena.Core.Models;
+using AIArena.Core.Persistence;
 
 namespace AIArena.Wpf.Services;
 
@@ -12,12 +13,8 @@ public sealed class ScenarioTemplateStore
 
     public ScenarioTemplateStore()
     {
-        var dataRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AI Arena Alpha",
-            "data");
-        Directory.CreateDirectory(dataRoot);
-        TemplatePath = Path.Combine(dataRoot, "scenario-templates.json");
+        var dataRoot = NativeDataPaths.DefaultDataRoot();
+        TemplatePath = NativeDataPaths.TemplatePath(dataRoot, "scenario-templates.json");
     }
 
     public IReadOnlyList<ScenarioTemplate> Load()
@@ -170,6 +167,7 @@ public sealed class ScenarioTemplateStore
         var ordered = templates
             .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        Directory.CreateDirectory(Path.GetDirectoryName(TemplatePath)!);
         File.WriteAllText(TemplatePath, JsonSerializer.Serialize(ordered, JsonOptions));
     }
 }

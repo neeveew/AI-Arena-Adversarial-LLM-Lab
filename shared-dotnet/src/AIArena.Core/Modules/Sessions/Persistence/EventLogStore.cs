@@ -37,7 +37,7 @@ public sealed class EventLogStore
     public string EventPath(string sessionId = "default")
     {
         var safeSession = string.IsNullOrWhiteSpace(sessionId) ? "default" : sessionId;
-        return Path.Combine(DataRoot, "sessions", safeSession, "events.jsonl");
+        return NativeDataPaths.EventPath(DataRoot, safeSession);
     }
 
     private static void RotateIfNeeded(string path)
