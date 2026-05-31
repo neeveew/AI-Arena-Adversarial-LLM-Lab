@@ -908,30 +908,40 @@
                                                FontWeight="SemiBold"
                                                Margin="0,0,0,6" />
                                     <UniformGrid Columns="2" Margin="0,0,0,10">
-                                        <Button Content="Focused"
+                                        <Button x:Name="ViewPresetFocusedButton"
+                                                Content="Focused"
                                                 Click="ViewPresetFocused_Click"
                                                 MinHeight="28"
                                                 Padding="6,3"
                                                 Margin="0,0,5,5"
                                                 ToolTip="Clean transcript view with diagnostics and auto-scroll." />
-                                        <Button Content="Diagnostics"
+                                        <Button x:Name="ViewPresetDiagnosticsButton"
+                                                Content="Diagnostics"
                                                 Click="ViewPresetDiagnostics_Click"
                                                 MinHeight="28"
                                                 Padding="6,3"
                                                 Margin="0,0,0,5"
                                                 ToolTip="Show timeline, memory, diagnostics, and auto-scroll." />
-                                        <Button Content="Compact"
+                                        <Button x:Name="ViewPresetCompactButton"
+                                                Content="Compact"
                                                 Click="ViewPresetCompact_Click"
                                                 MinHeight="28"
                                                 Padding="6,3"
                                                 Margin="0,0,5,0"
                                                 ToolTip="Dense laptop-friendly transcript view." />
-                                        <Button Content="Review"
+                                        <Button x:Name="ViewPresetReviewButton"
+                                                Content="Review"
                                                 Click="ViewPresetReview_Click"
                                                 MinHeight="28"
                                                 Padding="6,3"
                                                 ToolTip="Compact review mode with compare, timeline, and memory." />
                                     </UniformGrid>
+                                    <TextBlock x:Name="ViewActivePresetText"
+                                               Text="Active: Custom"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               FontSize="11"
+                                               TextTrimming="CharacterEllipsis"
+                                               Margin="0,-4,0,10" />
                                     <Border Height="1"
                                             Background="{DynamicResource DisabledBorderBrush}"
                                             Opacity="0.7"
@@ -977,6 +987,8 @@
                                               Content="Auto-scroll"
                                               Style="{StaticResource ToggleSwitchCheckBox}"
                                               Foreground="{DynamicResource TextBrush}"
+                                              Checked="FollowChatCheckBox_Changed"
+                                              Unchecked="FollowChatCheckBox_Changed"
                                               IsChecked="True" />
                                 </StackPanel>
                             </Border>

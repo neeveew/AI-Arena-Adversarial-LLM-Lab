@@ -216,6 +216,7 @@ public partial class MainWindow : Window
         MatchQualityTimelineCheckBox.IsChecked = _wpfSettings.ShowMatchQualityTimeline;
         MemoryNotesCheckBox.IsChecked = _wpfSettings.ShowAgentMemoryNotes;
         _isRenderingSnapshot = false;
+        UpdateViewPresetState();
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
         UpdateTelemetryTimerState();
     }
@@ -306,6 +307,7 @@ public partial class MainWindow : Window
         {
             PopulateTranscript(_lastRenderedMessages);
         }
+        UpdateViewPresetState();
     }
 
     private void TurnCompareCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -327,6 +329,7 @@ public partial class MainWindow : Window
         {
             PopulateTranscript(_lastRenderedMessages);
         }
+        UpdateViewPresetState();
     }
 
     private void MatchQualityTimelineCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -342,6 +345,7 @@ public partial class MainWindow : Window
         {
             PopulateTranscript(_lastRenderedMessages);
         }
+        UpdateViewPresetState();
     }
 
     private void MemoryNotesCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -357,6 +361,17 @@ public partial class MainWindow : Window
         {
             PopulateTranscript(_lastRenderedMessages);
         }
+        UpdateViewPresetState();
+    }
+
+    private void FollowChatCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isRenderingSnapshot || FollowChatCheckBox is null)
+        {
+            return;
+        }
+
+        UpdateViewPresetState();
     }
 
     private void ViewMenuButton_Click(object sender, RoutedEventArgs e)
@@ -447,7 +462,60 @@ public partial class MainWindow : Window
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
         UpdateTelemetryTimerState();
         PopulateTranscript(_lastRenderedMessages);
+        UpdateViewPresetState();
         ViewMenuPopup.IsOpen = false;
+    }
+
+    private void UpdateViewPresetState()
+    {
+        if (ViewActivePresetText is null
+            || ViewMenuButton is null
+            || ViewPresetFocusedButton is null
+            || ViewPresetDiagnosticsButton is null
+            || ViewPresetCompactButton is null
+            || ViewPresetReviewButton is null)
+        {
+            return;
+        }
+
+        var activePreset = CurrentViewPresetName();
+        ViewActivePresetText.Text = $"Active: {activePreset}";
+        ViewMenuButton.ToolTip = $"Transcript view controls - {activePreset}";
+        StyleViewPresetButton(ViewPresetFocusedButton, activePreset.Equals("Focused", StringComparison.OrdinalIgnoreCase));
+        StyleViewPresetButton(ViewPresetDiagnosticsButton, activePreset.Equals("Diagnostics", StringComparison.OrdinalIgnoreCase));
+        StyleViewPresetButton(ViewPresetCompactButton, activePreset.Equals("Compact", StringComparison.OrdinalIgnoreCase));
+        StyleViewPresetButton(ViewPresetReviewButton, activePreset.Equals("Review", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private string CurrentViewPresetName()
+    {
+        var compact = CompactTranscriptCheckBox?.IsChecked == true;
+        var compare = TurnCompareCheckBox?.IsChecked == true;
+        var timeline = MatchQualityTimelineCheckBox?.IsChecked == true;
+        var memory = MemoryNotesCheckBox?.IsChecked == true;
+        var autoScroll = FollowChatCheckBox?.IsChecked == true;
+        var diagnostics = CurrentTopStripMode().Equals("diagnostics", StringComparison.OrdinalIgnoreCase);
+
+        if (!diagnostics)
+        {
+            return "Custom";
+        }
+
+        return (compact, compare, timeline, memory, autoScroll) switch
+        {
+            (false, false, false, false, true) => "Focused",
+            (false, false, true, true, true) => "Diagnostics",
+            (true, false, false, false, true) => "Compact",
+            (true, true, true, true, false) => "Review",
+            _ => "Custom"
+        };
+    }
+
+    private static void StyleViewPresetButton(Button button, bool isActive)
+    {
+        button.SetResourceReference(Control.BackgroundProperty, isActive ? "PrimaryBrush" : "InputBrush");
+        button.SetResourceReference(Control.BorderBrushProperty, isActive ? "PrimaryBorderBrush" : "ControlBorderBrush");
+        button.SetResourceReference(Control.ForegroundProperty, isActive ? "TextBrush" : "MutedTextBrush");
     }
 
     private async Task LoadSessionAsync(CoreSessionSummary session, bool force)
@@ -6553,6 +6621,7 @@ public partial class MainWindow : Window
         _wpfSettingsStore.Save(_wpfSettings);
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
         UpdateTelemetryTimerState();
+        UpdateViewPresetState();
         if (_lastRenderedMessages.Count > 0)
         {
             PopulateTranscript(_lastRenderedMessages);
