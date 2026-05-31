@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Net.Sockets;
 using System.Windows;
 using System.Windows.Controls;
@@ -29,6 +30,7 @@ namespace AIArena.Wpf;
 
 public partial class MainWindow : Window
 {
+    private const string ReleasesUrl = "https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases";
     private readonly SessionStore _coreSessionStore = new();
     private readonly EventLogStore _eventLogStore = new();
     private readonly ModelProviderHealthService _providerHealth = new();
@@ -152,6 +154,7 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromSeconds(1)
         };
         _telemetryTimer.Tick += async (_, _) => await UpdateSystemTelemetryAsync();
+        InitializeAboutPanel();
         InitializeVisualSettings();
         LoadScenarioTemplates();
         Loaded += (_, _) =>
@@ -170,6 +173,26 @@ public partial class MainWindow : Window
             _providerHealthTimer.Stop();
             _telemetryTimer.Stop();
         };
+    }
+
+    private void InitializeAboutPanel()
+    {
+        var version = Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+        AboutVersionText.Text = $"Version {CleanDisplayVersion(version)}";
+        OpenReleasesButton.ToolTip = ReleasesUrl;
+    }
+
+    private static string CleanDisplayVersion(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return "unknown";
+        }
+
+        var plusIndex = version.IndexOf('+', StringComparison.Ordinal);
+        return plusIndex > 0 ? version[..plusIndex] : version;
     }
 
     private void InitializeThemePicker()
@@ -6381,6 +6404,15 @@ public partial class MainWindow : Window
     {
         AnimateSettingsGear();
         SetAppSettingsVisible(AppSettingsPanel.Visibility != Visibility.Visible);
+    }
+
+    private void OpenReleasesButton_Click(object sender, RoutedEventArgs e)
+    {
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = ReleasesUrl,
+            UseShellExecute = true
+        });
     }
 
     private void OpenModelProviderSettings(string? baseUrl = null, string? model = null)

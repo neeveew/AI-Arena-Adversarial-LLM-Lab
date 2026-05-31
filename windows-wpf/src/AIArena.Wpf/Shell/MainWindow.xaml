@@ -2106,10 +2106,25 @@
                 </Expander>
 
                 <Expander Header="Help / About" Style="{StaticResource SettingsExpander}" IsExpanded="False">
-                    <TextBlock Foreground="{DynamicResource TextBrush}"
-                               TextWrapping="Wrap"
-                               Margin="0,8,0,0"
-                               Text="AI Arena is a native Windows app where various LLM models battle, talk to each other, and explore structured topics or free-roam conversations.&#x0a;&#x0a;Author: Dominik Fiala&#x0a;Code: Codex 5.5&#x0a;&#x0a;Licence: Shareable No-Derivatives Software Licence 1.0&#x0a;Copyright © 2026 Dominik Fiala&#x0a;&#x0a;You may share AI Arena in its original, unmodified form. Modified redistribution requires written permission from the author." />
+                    <StackPanel Margin="0,8,0,0">
+                        <TextBlock Text="AI Arena"
+                                   Foreground="{DynamicResource TextBrush}"
+                                   FontSize="18"
+                                   FontWeight="SemiBold" />
+                        <TextBlock x:Name="AboutVersionText"
+                                   Text="Version loading..."
+                                   Foreground="{DynamicResource PrimaryBorderBrush}"
+                                   FontWeight="SemiBold"
+                                   Margin="0,2,0,10" />
+                        <TextBlock Foreground="{DynamicResource TextBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="Native Windows adversarial multi-agent LLM lab for running, steering, observing, and diagnosing conversations between local or OpenAI-compatible language models.&#x0a;&#x0a;Author: Dominik Fiala&#x0a;Code: Codex 5.5&#x0a;&#x0a;Licence: Shareable No-Derivatives Software Licence 1.0&#x0a;Copyright © 2026 Dominik Fiala&#x0a;&#x0a;You may share AI Arena in its original, unmodified form. Modified redistribution requires written permission from the author." />
+                        <Button x:Name="OpenReleasesButton"
+                                Content="OPEN GITHUB RELEASES"
+                                Click="OpenReleasesButton_Click"
+                                Margin="0,12,0,0"
+                                ToolTip="Open the AI Arena GitHub releases page" />
+                    </StackPanel>
                 </Expander>
                     </StackPanel>
                 </ScrollViewer>

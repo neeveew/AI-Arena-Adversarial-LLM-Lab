@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.3.45-beta"
+    [string]$Version = "0.3.46-beta"
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,6 +17,7 @@ $licenseFile = Join-Path $Root "LICENSE"
 $noticeFile = Join-Path $Root "NOTICE.md"
 $userGuideFile = Join-Path $Root "windows-wpf/docs/USER_GUIDE.md"
 $shortcutIconFile = Join-Path $Root "windows-wpf/src/AIArena.Wpf/Assets/ai-arena-icon.ico"
+$wpfProject = Join-Path $Root "windows-wpf/src/AIArena.Wpf/AIArena.Wpf.csproj"
 
 function Assert-PathExists {
     param([string]$Path, [string]$Label)
@@ -34,6 +35,7 @@ Assert-PathExists $licenseFile "licence file"
 Assert-PathExists $noticeFile "notice file"
 Assert-PathExists $userGuideFile "user guide"
 Assert-PathExists $shortcutIconFile "shortcut icon"
+Assert-PathExists $wpfProject "WPF project"
 
 & $dependencyIndexScript -Check
 
@@ -73,6 +75,14 @@ if ($scriptText -notmatch 'Name: "\{userdesktop\}\\\{#MyAppName\}".*IconFilename
 }
 if ($scriptText -notmatch 'Name: "\{group\}\\\{#MyAppName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
     throw "Start Menu shortcut no longer has an explicit icon."
+}
+
+$projectText = Get-Content -LiteralPath $wpfProject -Raw
+if ($projectText -notmatch ('<Version>' + [regex]::Escape($Version) + '</Version>')) {
+    throw "WPF project Version drifted: expected $Version."
+}
+if ($projectText -notmatch ('<InformationalVersion>' + [regex]::Escape($Version) + '</InformationalVersion>')) {
+    throw "WPF project InformationalVersion drifted: expected $Version."
 }
 
 $licenseText = Get-Content -LiteralPath $licenseFile -Raw
