@@ -1,4 +1,4 @@
-# AI Arena
+# AI Arena adversarial multi-agent LLM lab
 
 AI Arena is a native Windows WPF app backed by the shared .NET core library.
 The previous dashboard stack has been removed from the active source tree.
