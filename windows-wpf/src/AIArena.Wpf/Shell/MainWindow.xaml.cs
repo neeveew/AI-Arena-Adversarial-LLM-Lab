@@ -79,6 +79,7 @@ public partial class MainWindow : Window
     private Button? _breathingOperationButton;
     private bool _isDraggingSearchPopup;
     private bool _turnCompareSuppressAutoSeed;
+    private bool _decisionCardExpanded;
     private int? _timelineSelectedTurnFilter;
     private string? _activeAgentPerformanceDetailId;
     private Point _searchPopupDragStart;
@@ -2521,6 +2522,14 @@ public partial class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             Margin = new Thickness(10, 0, 0, 0)
         };
+        actions.Children.Add(ActionButton(
+            _decisionCardExpanded ? "Collapse" : "Expand",
+            (_, _) =>
+            {
+                _decisionCardExpanded = !_decisionCardExpanded;
+                PopulateTranscript(_lastRenderedMessages);
+            },
+            hasCard));
         actions.Children.Add(ActionButton("Generate", async (_, _) => await GenerateDecisionCardAsync(), true, TranscriptActionKind.Primary));
         DockPanel.SetDock(actions, Dock.Right);
         root.Children.Add(actions);
@@ -2551,11 +2560,12 @@ public partial class MainWindow : Window
             : "No decision card yet. Generate one to capture agreed points, conflict, risk, and the next operator move.";
         content.Children.Add(new TextBlock
         {
-            Text = summary,
+            Text = _decisionCardExpanded && hasCard ? snapshot.DecisionCard.Trim() : summary,
             Foreground = hasCard ? ResourceBrush("TextBrush") : ResourceBrush("MutedTextBrush"),
             FontSize = 11.5,
-            TextWrapping = TextWrapping.NoWrap,
-            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextWrapping = _decisionCardExpanded && hasCard ? TextWrapping.Wrap : TextWrapping.NoWrap,
+            TextTrimming = _decisionCardExpanded && hasCard ? TextTrimming.None : TextTrimming.CharacterEllipsis,
+            LineHeight = _decisionCardExpanded && hasCard ? 17 : double.NaN,
             Margin = new Thickness(0, 4, 0, 0),
             ToolTip = summary
         });
@@ -3973,20 +3983,20 @@ public partial class MainWindow : Window
         playButton.Click += async (_, _) => await RunAgentTurnAsync(agent);
         _agentTurnButtons.Add(playButton);
 
-        var accent = AccentForSpeaker(agent.Id);
-        var pauseAccent = ResourceBrush("BetaAccentBrush");
+        var identityAccent = AccentForSpeaker(agent.Id);
+        var stateAccent = ResourceBrush("PrimaryBorderBrush");
         var card = new Border
         {
             Background = isRunning
-                ? BlendBrush(ResourceBrush("InputBrush"), accent, 0.18)
+                ? BlendBrush(ResourceBrush("InputBrush"), stateAccent, 0.18)
                 : isCurrent
-                    ? BlendBrush(ResourceBrush("InputBrush"), accent, 0.1)
+                    ? BlendBrush(ResourceBrush("InputBrush"), stateAccent, 0.1)
                     : isPaused
                         ? BlendBrush(ResourceBrush("InputBrush"), ResourceBrush("DisabledBorderBrush"), 0.12)
                         : ResourceBrush("InputBrush"),
             BorderBrush = isPaused
                 ? BlendBrush(ResourceBrush("DisabledBorderBrush"), ResourceBrush("MutedTextBrush"), 0.18)
-                : BlendBrush(ResourceBrush("DisabledBorderBrush"), accent, 0.75),
+                : BlendBrush(ResourceBrush("DisabledBorderBrush"), isRunning || isCurrent ? stateAccent : identityAccent, 0.75),
             BorderThickness = new Thickness(0, 1, 0, 1),
             Padding = new Thickness(14, 8, 10, 8),
             Margin = new Thickness(0, -1, 0, 0),
@@ -3996,7 +4006,7 @@ public partial class MainWindow : Window
         var cardLayer = new Grid();
         if (showActivitySweep)
         {
-            cardLayer.Children.Add(CreateAgentActivitySweep(accent, isRunning));
+            cardLayer.Children.Add(CreateAgentActivitySweep(stateAccent, isRunning));
         }
 
         var grid = new Grid();
@@ -4023,7 +4033,7 @@ public partial class MainWindow : Window
             Foreground = isPaused
                 ? ResourceBrush("DisabledTextBrush")
                 : isRunning || isCurrent
-                ? accent
+                ? stateAccent
                 : ResourceBrush("MutedTextBrush"),
             FontSize = 11,
             LineHeight = 14,
@@ -4038,7 +4048,9 @@ public partial class MainWindow : Window
             Width = isRunning ? 8 : 6,
             Height = isRunning ? 8 : 6,
             CornerRadius = new CornerRadius(4),
-            Background = isPaused ? ResourceBrush("DisabledBorderBrush") : accent,
+            Background = isPaused
+                ? ResourceBrush("DisabledBorderBrush")
+                : isRunning || isCurrent ? stateAccent : identityAccent,
             Opacity = isRunning ? 1.0 : isCurrent ? 0.85 : isPaused ? 0.35 : 0.45,
             Margin = new Thickness(8, 0, 4, 0),
             VerticalAlignment = VerticalAlignment.Center,
