@@ -71,6 +71,17 @@ public sealed class ScenarioTemplateStore
         snapshot.MatchType = template.MatchType;
         snapshot.Engine.Steering.Topic = template.Topic;
         snapshot.Engine.Steering.Global = template.Global;
+        if (!string.IsNullOrWhiteSpace(template.ScenarioGeneratorStyle)
+            || !string.IsNullOrWhiteSpace(template.ScenarioGeneratorSeed)
+            || !string.IsNullOrWhiteSpace(template.PersonaGeneratorStyle)
+            || !string.IsNullOrWhiteSpace(template.PersonaGeneratorSeed))
+        {
+            snapshot.ScenarioGenerator.Style = template.ScenarioGeneratorStyle;
+            snapshot.ScenarioGenerator.Seed = template.ScenarioGeneratorSeed;
+            snapshot.ScenarioGenerator.Intensity = template.ScenarioGeneratorIntensity;
+            snapshot.PersonaRandomizer.Style = template.PersonaGeneratorStyle;
+            snapshot.PersonaRandomizer.Seed = template.PersonaGeneratorSeed;
+        }
         snapshot.MatchLocks["topic"] = template.TopicLocked;
         snapshot.MatchLocks["global"] = template.GlobalLocked;
 
@@ -159,7 +170,12 @@ public sealed class ScenarioTemplateStore
             snapshot.MatchLocks.TryGetValue("topic", out var topicLocked) && topicLocked,
             snapshot.MatchLocks.TryGetValue("global", out var globalLocked) && globalLocked,
             agents.ToList(),
-            configs);
+            configs,
+            snapshot.ScenarioGenerator.Style,
+            snapshot.ScenarioGenerator.Seed,
+            snapshot.ScenarioGenerator.Intensity,
+            snapshot.PersonaRandomizer.Style,
+            snapshot.PersonaRandomizer.Seed);
     }
 
     private void SaveAll(IReadOnlyList<ScenarioTemplate> templates)
@@ -182,7 +198,12 @@ public sealed record ScenarioTemplate(
     bool TopicLocked,
     bool GlobalLocked,
     List<ScenarioTemplateAgent> Agents,
-    Dictionary<string, ScenarioTemplateModelConfig> ModelConfigs);
+    Dictionary<string, ScenarioTemplateModelConfig> ModelConfigs,
+    string ScenarioGeneratorStyle = "",
+    string ScenarioGeneratorSeed = "",
+    string ScenarioGeneratorIntensity = "",
+    string PersonaGeneratorStyle = "",
+    string PersonaGeneratorSeed = "");
 
 public sealed record ScenarioTemplateAgent(
     string Id,

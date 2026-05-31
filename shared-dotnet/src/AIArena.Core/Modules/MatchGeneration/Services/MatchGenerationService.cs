@@ -9,7 +9,22 @@ namespace AIArena.Core.Services;
 
 public sealed class MatchGenerationService
 {
-    private static readonly string[] Styles = ["balanced", "adversarial", "research", "technical", "philosophical"];
+    private static readonly string[] Styles =
+    [
+        "balanced",
+        "adversarial",
+        "technical",
+        "scientific",
+        "research",
+        "product",
+        "safety",
+        "philosophical",
+        "legal",
+        "creative",
+        "red-team",
+        "incident"
+    ];
+    private static readonly string[] Intensities = ["normal", "sharp", "spicy", "chaos"];
     private readonly IModelProviderClient _modelClient;
     private readonly SessionStore _sessionStore;
     private readonly EventLogStore _eventLogStore;
@@ -21,7 +36,11 @@ public sealed class MatchGenerationService
         _eventLogStore = eventLogStore ?? new EventLogStore(_sessionStore.DataRoot);
     }
 
-    public async Task<MatchGenerationResult> GenerateRandomSeedAsync(string sessionId, CancellationToken cancellationToken = default)
+    public async Task<MatchGenerationResult> GenerateRandomSeedAsync(
+        string sessionId,
+        string requestedStyle = "auto",
+        string requestedIntensity = "normal",
+        CancellationToken cancellationToken = default)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
@@ -30,17 +49,20 @@ public sealed class MatchGenerationService
         }
 
         var seed = Guid.NewGuid().ToString("N")[..12];
-        var style = RandomStyle(seed, snapshot.MatchType);
-        var generated = GenerateTemplateMatch(style, seed, RequiredAgentIds(snapshot));
+        var style = ResolveRandomSeedStyle(requestedStyle, seed, snapshot.MatchType);
+        var intensity = NormalizeIntensity(requestedIntensity);
+        var generated = GenerateTemplateMatch(style, seed, intensity, RequiredAgentIds(snapshot));
         ApplyGeneratedMatch(snapshot, generated, clearTranscript: false);
         snapshot.ScenarioGenerator.Style = style;
         snapshot.ScenarioGenerator.Seed = seed;
-        snapshot.PersonaRandomizer.Style = style is "technical" ? "technical" : style is "adversarial" ? "adversarial" : "balanced";
+        snapshot.ScenarioGenerator.Intensity = intensity;
+        snapshot.PersonaRandomizer.Style = PersonaStyleFor(style);
         snapshot.PersonaRandomizer.Seed = seed;
+        snapshot.PersonaRandomizer.Intensity = intensity;
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-        await _eventLogStore.AppendAsync(sessionId, "native_random_seed_match_generated", new { seed, style, locks = snapshot.MatchLocks }, cancellationToken);
-        return MatchGenerationResult.Completed(generated.Label, seed, style);
+        await _eventLogStore.AppendAsync(sessionId, "native_random_seed_match_generated", new { seed, style, intensity, locks = snapshot.MatchLocks }, cancellationToken);
+        return MatchGenerationResult.Completed(generated.Label, seed, style, intensity);
     }
 
     public async Task<MatchGenerationResult> GenerateAiChoiceAsync(string sessionId, CancellationToken cancellationToken = default)
@@ -81,8 +103,10 @@ public sealed class MatchGenerationService
         snapshot.MatchType = NormalizeStyle(generated.Style);
         snapshot.ScenarioGenerator.Style = snapshot.MatchType;
         snapshot.ScenarioGenerator.Seed = "ai-choice";
-        snapshot.PersonaRandomizer.Style = snapshot.MatchType is "technical" ? "technical" : snapshot.MatchType is "adversarial" ? "adversarial" : "balanced";
+        snapshot.ScenarioGenerator.Intensity = "";
+        snapshot.PersonaRandomizer.Style = PersonaStyleFor(snapshot.MatchType);
         snapshot.PersonaRandomizer.Seed = "ai-choice";
+        snapshot.PersonaRandomizer.Intensity = "";
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
         await _eventLogStore.AppendAsync(sessionId, "native_ai_choice_match_generated", new { generated.Label, generated.Style, locks = snapshot.MatchLocks }, cancellationToken);
@@ -103,8 +127,10 @@ public sealed class MatchGenerationService
         ApplyGeneratedMatch(snapshot, generated, clearTranscript: false);
         snapshot.ScenarioGenerator.Style = style;
         snapshot.ScenarioGenerator.Seed = seed;
+        snapshot.ScenarioGenerator.Intensity = "";
         snapshot.PersonaRandomizer.Style = "yolo";
         snapshot.PersonaRandomizer.Seed = seed;
+        snapshot.PersonaRandomizer.Intensity = "";
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
         await _eventLogStore.AppendAsync(sessionId, "native_yolo_seed_match_generated", new { seed, style, generated.Label, locks = snapshot.MatchLocks }, cancellationToken);
@@ -124,26 +150,31 @@ public sealed class MatchGenerationService
         await _eventLogStore.AppendAsync(sessionId, "native_match_lock_changed", new { key, locked }, cancellationToken);
     }
 
-    private static GeneratedMatch GenerateTemplateMatch(string style, string seed, IReadOnlyList<string> agentIds)
+    private static GeneratedMatch GenerateTemplateMatch(string style, string seed, string intensity, IReadOnlyList<string> agentIds)
     {
-        var rng = new Random(StableSeed($"ai-arena-wpf:{style}:{seed}:{string.Join(",", agentIds)}"));
+        var rng = new Random(StableSeed($"ai-arena-wpf:{style}:{intensity}:{seed}:{string.Join(",", agentIds)}"));
         var pools = TemplatePools.For(style);
         var domain = Pick(rng, pools.Domains);
         var tension = Pick(rng, pools.Tensions);
         var outcome = Pick(rng, pools.Outcomes);
-        var topic = $"{domain}: resolve {tension} and produce {outcome}.";
-        var global = $"Stay focused on {topic} Surface assumptions, define terms, and keep the exchange concrete. Do not fetch external news or live data unless the operator explicitly provides it.";
+        var topic = BuildTopic(domain, tension, outcome, intensity);
+        var global = string.Join(
+            " ",
+            $"Stay focused on {topic}",
+            IntensityGlobalFrame(intensity),
+            "Surface assumptions, define terms, and keep the exchange concrete.",
+            "Do not fetch external news or live data unless the operator explicitly provides it.");
         var personas = agentIds
             .Where(id => id is "alpha" or "beta" or "gamma" or "delta")
-            .Select(id => GeneratedPersona.For(style, seed, id))
-            .Append(GeneratedPersona.Narrator(style, seed))
+            .Select(id => GeneratedPersona.For(style, seed, id, intensity))
+            .Append(GeneratedPersona.Narrator(style, seed, intensity))
             .ToArray();
         return new GeneratedMatch(
-            $"Random {style} match",
+            $"Random {StyleLabel(style)}{IntensityLabelSuffix(intensity)} match",
             style,
             topic,
             global,
-            $"Track how the participants handle {tension}. Highlight unresolved cruxes, evidence gaps, and the path toward {outcome}.",
+            $"{IntensityNarratorFrame(intensity)} Track how the participants handle {tension}. Highlight unresolved cruxes, evidence gaps, and the path toward {outcome}.",
             personas);
     }
 
@@ -240,7 +271,7 @@ public sealed class MatchGenerationService
                     $"Current topic: {snapshot.Engine.Steering.Topic}",
                     $"Current cast:{Environment.NewLine}{agents}",
                     "Return this JSON shape:",
-                    $"{{\"label\":\"short label\",\"style\":\"balanced|adversarial|research|technical|philosophical\",\"scenario\":{{\"topic\":\"...\",\"global\":\"...\",\"narrator_brief\":\"...\"}},\"personas\":[{PersonaJsonShape(snapshot)},{{\"agent_id\":\"narrator\",\"role\":\"Narrator\",\"persona\":\"...\"}}]}}"))
+                    $"{{\"label\":\"short label\",\"style\":\"balanced|adversarial|technical|scientific|research|product|safety|philosophical|legal|creative|red-team|incident\",\"scenario\":{{\"topic\":\"...\",\"global\":\"...\",\"narrator_brief\":\"...\"}},\"personas\":[{PersonaJsonShape(snapshot)},{{\"agent_id\":\"narrator\",\"role\":\"Narrator\",\"persona\":\"...\"}}]}}"))
         ];
     }
 
@@ -318,6 +349,32 @@ public sealed class MatchGenerationService
         return Styles.Contains(cleaned) ? cleaned : "balanced";
     }
 
+    private static string ResolveRandomSeedStyle(string requestedStyle, string seed, string currentStyle)
+    {
+        var cleaned = string.IsNullOrWhiteSpace(requestedStyle) ? "auto" : requestedStyle.Trim().ToLowerInvariant();
+        return cleaned.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            ? RandomStyle(seed, currentStyle)
+            : NormalizeStyle(cleaned);
+    }
+
+    private static string NormalizeIntensity(string value)
+    {
+        var cleaned = string.IsNullOrWhiteSpace(value) ? "normal" : value.Trim().ToLowerInvariant();
+        return Intensities.Contains(cleaned) ? cleaned : "normal";
+    }
+
+    private static string PersonaStyleFor(string style)
+    {
+        return NormalizeStyle(style) switch
+        {
+            "technical" => "technical",
+            "adversarial" or "red-team" => "adversarial",
+            "scientific" or "research" => "research",
+            "philosophical" => "philosophical",
+            _ => "balanced"
+        };
+    }
+
     private static GeneratedPersona[] EnsureRequiredPersonas(IReadOnlyList<GeneratedPersona> personas, string style, string seed, IReadOnlyList<string> requiredAgentIds)
     {
         var output = personas
@@ -346,6 +403,77 @@ public sealed class MatchGenerationService
     {
         var choices = Styles.Where(style => !style.Equals(NormalizeStyle(currentStyle), StringComparison.OrdinalIgnoreCase)).ToArray();
         return choices[Math.Abs(StableSeed($"style:{seed}")) % choices.Length];
+    }
+
+    private static string BuildTopic(string domain, string tension, string outcome, string intensity)
+    {
+        return intensity switch
+        {
+            "sharp" => $"{domain}: resolve {tension} under visible disagreement and produce {outcome}.",
+            "spicy" => $"{domain}: resolve {tension} with conflicting incentives, weak evidence, and a narrow decision window; produce {outcome}.",
+            "chaos" => $"{domain}: stabilize partial information, shifting constraints, and {tension}; produce {outcome}.",
+            _ => $"{domain}: resolve {tension} and produce {outcome}."
+        };
+    }
+
+    private static string IntensityGlobalFrame(string intensity)
+    {
+        return intensity switch
+        {
+            "sharp" => "Make disagreement explicit, assign each participant a claim to pressure-test, and do not accept easy consensus.",
+            "spicy" => "Expose hidden incentives, uncomfortable tradeoffs, and weak evidence before allowing the group to converge.",
+            "chaos" => "Assume some premises are incomplete or unstable; first stabilize definitions, then separate signal from noise.",
+            _ => "Keep disagreement useful rather than theatrical."
+        };
+    }
+
+    private static string IntensityNarratorFrame(string intensity)
+    {
+        return intensity switch
+        {
+            "sharp" => "Watch for productive conflict versus stubborn repetition.",
+            "spicy" => "Watch whether pressure reveals better constraints or merely increases narrative heat.",
+            "chaos" => "Watch whether the agents stabilize ambiguity before making claims.",
+            _ => "Watch whether the arena improves the decision quality."
+        };
+    }
+
+    internal static string PersonaPressure(string intensity)
+    {
+        return intensity switch
+        {
+            "sharp" => "Role pressure: challenge one weak assumption every turn.",
+            "spicy" => "Role pressure: surface one uncomfortable tradeoff or hidden incentive.",
+            "chaos" => "Role pressure: mark uncertainty, stabilize terms, and avoid pretending the situation is cleaner than it is.",
+            _ => ""
+        };
+    }
+
+    private static string StyleLabel(string style)
+    {
+        return NormalizeStyle(style) switch
+        {
+            "red-team" => "red-team",
+            var cleaned => cleaned
+        };
+    }
+
+    private static string IntensityLabel(string intensity)
+    {
+        return NormalizeIntensity(intensity) switch
+        {
+            "normal" => "normal",
+            "sharp" => "sharp",
+            "spicy" => "spicy",
+            "chaos" => "chaos",
+            _ => "normal"
+        };
+    }
+
+    private static string IntensityLabelSuffix(string intensity)
+    {
+        var label = IntensityLabel(intensity);
+        return label.Equals("normal", StringComparison.OrdinalIgnoreCase) ? "" : $" {label}";
     }
 
     private static IReadOnlyList<string> RequiredAgentIds(ArenaSnapshot snapshot)
@@ -434,10 +562,10 @@ public sealed class MatchGenerationService
     }
 }
 
-public sealed record MatchGenerationResult(bool Ok, string Label, string Seed, string Style, string Error)
+public sealed record MatchGenerationResult(bool Ok, string Label, string Seed, string Style, string Intensity, string Error)
 {
-    public static MatchGenerationResult Completed(string label, string seed, string style) => new(true, label, seed, style, "");
-    public static MatchGenerationResult Failed(string error) => new(false, "", "", "", error);
+    public static MatchGenerationResult Completed(string label, string seed, string style, string intensity = "") => new(true, label, seed, style, intensity, "");
+    public static MatchGenerationResult Failed(string error) => new(false, "", "", "", "", error);
 }
 
 internal sealed record GeneratedMatch(string Label, string Style, string Topic, string Global, string NarratorBrief, IReadOnlyList<GeneratedPersona> Personas)
@@ -447,7 +575,7 @@ internal sealed record GeneratedMatch(string Label, string Style, string Topic, 
 
 internal sealed record GeneratedPersona(string AgentId, string Role, string Persona)
 {
-    public static GeneratedPersona For(string style, string seed, string agentId)
+    public static GeneratedPersona For(string style, string seed, string agentId, string intensity = "normal")
     {
         var rng = new Random(MatchGenerationServiceSeed($"persona:{style}:{seed}:{agentId}"));
         var pools = agentId.Equals("delta", StringComparison.OrdinalIgnoreCase)
@@ -458,20 +586,31 @@ internal sealed record GeneratedPersona(string AgentId, string Role, string Pers
         var temperament = pools.Temperaments[rng.Next(pools.Temperaments.Length)];
         var priority = pools.Priorities[rng.Next(pools.Priorities.Length)];
         var blindSpot = pools.BlindSpots[rng.Next(pools.BlindSpots.Length)];
+        var pressure = MatchGenerationService.PersonaPressure(intensity);
         return new GeneratedPersona(
             agentId,
             role,
-            $"{role}. Thinking style: {thinking}. Temperament: {temperament}. Priority/bias: {priority}. Blind spot: {blindSpot}.");
+            string.Join(" ", new[]
+            {
+                $"{role}. Thinking style: {thinking}. Temperament: {temperament}. Priority/bias: {priority}. Blind spot: {blindSpot}.",
+                pressure
+            }.Where(item => !string.IsNullOrWhiteSpace(item))));
     }
 
-    public static GeneratedPersona Narrator(string style, string seed)
+    public static GeneratedPersona Narrator(string style, string seed, string intensity = "normal")
     {
-        var persona = For(style, seed, "narrator");
+        var persona = For(style, seed, "narrator", intensity);
         var role = style switch
         {
-            "adversarial" => "Critical observer",
+            "adversarial" or "red-team" => "Critical observer",
             "technical" => "Process auditor",
+            "scientific" or "research" => "Evidence observer",
+            "product" => "Decision observer",
+            "safety" => "Safety observer",
             "philosophical" => "Conceptual observer",
+            "legal" => "Policy observer",
+            "creative" => "Narrative observer",
+            "incident" => "Incident observer",
             _ => "Neutral observer"
         };
         return persona with { Role = role, Persona = $"{role}. Track the exchange without joining as Alpha, Beta, Gamma, or Delta. {persona.Persona}" };
@@ -517,9 +656,16 @@ internal sealed record TemplatePools(string[] Domains, string[] Tensions, string
         return style switch
         {
             "adversarial" => new(["a fragile launch plan", "a disputed safety claim", "a controversial governance choice"], ["optimism versus evidence", "attack surface versus usability", "confidence versus uncertainty"], ["the strongest failure modes", "a risk register with mitigations", "a sharper go/no-go standard"]),
-            "research" => new(["an unresolved empirical question", "a weakly understood user behavior", "a competing-hypothesis investigation"], ["signal versus noise", "exploration versus confirmation", "anecdote versus measurement"], ["testable hypotheses", "an evidence plan", "next research questions"]),
             "technical" => new(["a production architecture decision", "a reliability incident review", "a scaling bottleneck"], ["complexity versus control", "latency versus correctness", "migration risk versus technical debt"], ["an implementation plan", "explicit invariants", "a test and rollback strategy"]),
+            "scientific" => new(["a contested experimental result", "a replication failure", "a measurement design dispute"], ["model fit versus causal explanation", "small sample signal versus noise", "hypothesis elegance versus falsifiability"], ["a falsification plan", "a stronger experimental design", "decision-grade uncertainty bounds"]),
+            "research" => new(["an unresolved empirical question", "a weakly understood user behavior", "a competing-hypothesis investigation"], ["signal versus noise", "exploration versus confirmation", "anecdote versus measurement"], ["testable hypotheses", "an evidence plan", "next research questions"]),
+            "product" => new(["a product launch tradeoff", "a retention strategy dispute", "a roadmap prioritization fight"], ["user delight versus operational load", "speed to market versus trust", "feature breadth versus product coherence"], ["a reversible launch plan", "a decision matrix", "clear success and rollback thresholds"]),
+            "safety" => new(["an AI safety boundary decision", "a misuse mitigation design", "a trust and verification policy"], ["capability versus control", "openness versus abuse resistance", "false confidence versus useful autonomy"], ["safety constraints", "abuse cases with mitigations", "a risk acceptance standard"]),
             "philosophical" => new(["a question about responsibility and agency", "a value conflict in automation", "an ethical boundary case"], ["principles versus consequences", "individual agency versus system effects", "freedom versus obligation"], ["clearer concepts", "the crux of disagreement", "a principled but usable stance"]),
+            "legal" => new(["a compliance interpretation dispute", "a policy exception request", "a data governance boundary case"], ["literal rule versus operational reality", "risk avoidance versus practical enforcement", "privacy obligations versus product utility"], ["a defensible policy stance", "a review checklist", "a risk-tiered decision path"]),
+            "creative" => new(["a story-world design conflict", "a brand voice pivot", "an interactive narrative mechanic"], ["novelty versus coherence", "emotional force versus clarity", "audience surprise versus trust"], ["a sharper creative brief", "a usable constraint set", "three testable creative directions"]),
+            "red-team" => new(["an adversarial system test", "a disputed threat model", "a high-risk deployment claim"], ["attack path realism versus defensive optimism", "security theatre versus measurable control", "abuse potential versus useful access"], ["a prioritized exploit map", "hard go/no-go criteria", "a mitigation-first test plan"]),
+            "incident" => new(["a live incident review", "a failed rollback decision", "a service reliability postmortem"], ["local fix versus systemic cause", "customer harm versus internal green metrics", "speed of recovery versus evidence preservation"], ["an incident timeline", "root-cause hypotheses", "clear prevention actions"]),
             _ => new(["a difficult product decision", "a public-interest technology tradeoff", "a team strategy reset"], ["speed versus care", "autonomy versus coordination", "short-term wins versus durable value"], ["a practical recommendation", "a map of tradeoffs", "a reversible next step"])
         };
     }
@@ -530,8 +676,15 @@ internal sealed record TemplatePools(string[] Domains, string[] Tensions, string
         {
             "adversarial" => new(["Red-team examiner", "Failure-mode hunter", "Contrarian reviewer"], ["stress-tests claims before accepting them", "looks for hidden incentives and edge cases", "tests weak premises constructively"], ["sharp but fair", "skeptical and persistent", "direct but cooperative under uncertainty"], ["surface risks early", "clarify evidence standards", "protect against overconfidence"], ["may undervalue fragile early ideas", "may mistake caution for rigor", "may over-focus on downside scenarios"]),
             "technical" => new(["Architecture critic", "Implementation planner", "Reliability engineer"], ["models interfaces, invariants, and failure modes", "reduces problems to testable mechanisms", "tracks dependencies and state transitions"], ["precise and cooperative", "methodical under pressure", "pragmatic and detail-oriented"], ["make behavior explicit", "reduce operational risk", "keep abstractions accountable"], ["may underweight user emotion", "may ask for more structure than the operator needs", "may focus on internals before outcomes"]),
+            "scientific" => new(["Experimentalist", "Causal skeptic", "Method auditor", "Replication planner"], ["turns claims into falsifiable tests", "separates mechanism from correlation", "hunts confounders before accepting signal"], ["careful and empirical", "skeptical but curious", "precise under uncertainty"], ["protect inference quality", "rank evidence by what it can disprove", "make uncertainty useful"], ["may over-demand clean evidence", "may discount field intuition", "may slow action while improving measurement"]),
             "research" => new(["Field ethnographer", "Statistical skeptic", "Hypothesis gardener", "Evidence cartographer", "Replication hawk"], ["turns vague questions into observable claims", "separates causal evidence from correlation", "maps competing hypotheses without flattening them"], ["patient and empirical", "quietly skeptical", "curious but disciplined"], ["design tests that could change minds", "protect against overfitting anecdotes", "rank evidence by decision value"], ["may move slowly while improving the question", "may distrust useful intuition", "may over-prioritize clean measurement"]),
+            "product" => new(["Product strategist", "User advocate", "Launch operator", "Growth skeptic"], ["turns ambiguity into product bets", "tests whether value survives operational reality", "maps user trust against business pressure"], ["commercially alert", "practical and user-centered", "decisive but test-minded"], ["protect user value", "make tradeoffs measurable", "ship reversibly"], ["may over-index on adoption", "may underweight rare failure modes", "may simplify messy stakeholder politics"]),
+            "safety" => new(["Safety analyst", "Abuse-case mapper", "Trust calibrator", "Verification critic"], ["maps misuse paths and control failures", "separates helpful autonomy from unsafe delegation", "tests whether assurances are observable"], ["cautious but constructive", "clear under uncertainty", "protective without panic"], ["make risk visible early", "define safety thresholds", "avoid unsupported confidence"], ["may slow useful capability", "may overcorrect toward refusal", "may miss proportional tradeoffs"]),
             "philosophical" => new(["Moral cartographer", "Boundary-case prosecutor", "Conceptual locksmith", "Consequence witness", "Principle weaver"], ["clarifies hidden definitions", "tests principles against edge cases", "tracks value conflicts across levels"], ["reflective and precise", "patient but probing", "calmly adversarial"], ["make the crux explicit", "preserve moral nuance under pressure", "connect principles to lived consequences"], ["may over-abstract practical constraints", "may linger on definitions too long", "may underestimate execution pressure"]),
+            "legal" => new(["Policy interpreter", "Compliance critic", "Rights mapper", "Precedent skeptic"], ["turns obligations into operational tests", "separates legal exposure from moral discomfort", "maps exceptions and enforcement risk"], ["careful and exact", "risk-aware but practical", "plainspoken under constraint"], ["preserve defensibility", "name review thresholds", "avoid hidden liability"], ["may become too conservative", "may over-focus on edge clauses", "may underweight product urgency"]),
+            "creative" => new(["Narrative designer", "Tone alchemist", "Audience advocate", "Constraint poet"], ["turns constraints into creative fuel", "tests emotional coherence", "keeps novelty connected to audience meaning"], ["playful but disciplined", "bold and concrete", "sensitive to tone"], ["preserve emotional signal", "make the weirdness legible", "turn taste into testable choices"], ["may overvalue novelty", "may resist practical limits", "may under-specify execution details"]),
+            "red-team" => new(["Exploit thinker", "Threat-model critic", "Control breaker", "Adversarial tester"], ["finds attack paths before defenders are comfortable", "turns assumptions into exploit hypotheses", "tests whether controls survive motivated misuse"], ["sharp and relentless", "skeptical but useful", "pressure-oriented"], ["break weak assurances", "rank threats by practical leverage", "force measurable mitigations"], ["may see attacks everywhere", "may undervalue usability", "may overfit to dramatic failures"]),
+            "incident" => new(["Incident commander", "Postmortem analyst", "Reliability witness", "Escalation lead"], ["separates symptoms from systemic causes", "tracks timeline, blast radius, and recovery choices", "turns confusion into operational hypotheses"], ["calm under pressure", "direct and accountable", "evidence-led"], ["restore service without hiding causes", "protect customers", "convert failure into prevention"], ["may favor containment over learning", "may miss product context", "may compress ambiguity too early"]),
             _ => new(["Systems synthesist", "Practical strategist", "Evidence mapper", "Decision facilitator", "Tradeoff architect", "Operational translator", "Risk balancer"], ["weighs tradeoffs explicitly", "compares options from first principles", "separates facts from assumptions", "turns ambiguity into testable branches"], ["calm but engaged", "patient and concrete", "curious without being credulous", "measured and candid"], ["preserve nuance while still reaching decisions", "find the smallest useful next step", "make disagreements legible", "balance speed, quality, and reversibility"], ["may over-index on consensus", "may delay bold calls while mapping context", "may underplay emotional or political friction", "may miss asymmetric opportunities"])
         };
     }
@@ -542,8 +695,13 @@ internal sealed record TemplatePools(string[] Domains, string[] Tensions, string
         {
             "adversarial" => new(["Boundary tester", "Escalation mapper", "Misuse-case scout", "Constraint prosecutor"], ["pushes claims against misuse cases and operating limits", "maps escalation paths before accepting closure", "tests where incentives break the proposed guardrails"], ["calm and exacting", "unblinking under pressure", "protective without becoming obstructive"], ["make failure boundaries explicit", "separate acceptable risk from avoidable exposure", "keep edge cases visible without derailing progress"], ["may over-index on rare edge cases", "may slow convergence by expanding the threat surface", "may treat fragile assumptions as failures too early"]),
             "technical" => new(["Boundary tester", "Operational risk sentinel", "Guardrail engineer", "Exception-path auditor"], ["models limits, invariants, and exception flows", "tests rollback paths, abuse cases, and operational constraints", "looks for hidden coupling at system boundaries"], ["precise and steady", "skeptical but implementation-minded", "quietly forceful"], ["define safe operating envelopes", "make escalation and rollback concrete", "prevent edge cases from becoming incidents"], ["may privilege containment over speed", "may ask for more guardrails than the first release needs", "may underweight product momentum"]),
-            "research" => new(["Boundary ethnographer", "Outlier investigator", "Validity boundary mapper", "Adversarial sampling scout"], ["searches for cases where the finding stops applying", "tests sampling blind spots and boundary conditions", "separates robust patterns from context-specific artifacts"], ["patient and skeptical", "methodical but curious", "careful with generalization"], ["mark the limits of evidence", "protect against over-generalization", "turn edge cases into sharper research questions"], ["may over-prioritize exceptions", "may slow synthesis while hunting boundary cases", "may distrust useful directional signals"]),
+            "scientific" or "research" => new(["Boundary ethnographer", "Outlier investigator", "Validity boundary mapper", "Adversarial sampling scout"], ["searches for cases where the finding stops applying", "tests sampling blind spots and boundary conditions", "separates robust patterns from context-specific artifacts"], ["patient and skeptical", "methodical but curious", "careful with generalization"], ["mark the limits of evidence", "protect against over-generalization", "turn edge cases into sharper research questions"], ["may over-prioritize exceptions", "may slow synthesis while hunting boundary cases", "may distrust useful directional signals"]),
+            "product" => new(["Launch risk mapper", "Adoption boundary tester", "Trust sentinel", "Market constraint critic"], ["tests where product value stops outweighing cost", "maps rollback and support thresholds", "separates user excitement from durable trust"], ["pragmatic and skeptical", "commercially aware", "protective of users"], ["define reversible launch bounds", "name user harm early", "keep business pressure honest"], ["may dampen momentum", "may over-prioritize edge users", "may treat ambition as risk"]),
+            "safety" or "red-team" => new(["Misuse boundary mapper", "Control failure scout", "Escalation sentinel", "Adversarial guardrail tester"], ["tests where controls fail under motivated misuse", "maps abuse escalation paths", "keeps safety boundaries observable"], ["calm and exacting", "unblinking but fair", "protective without theatre"], ["make failure boundaries explicit", "separate acceptable risk from avoidable exposure", "keep edge cases visible without derailing progress"], ["may over-index on rare abuse cases", "may slow convergence by expanding the threat surface", "may treat fragile assumptions as failures too early"]),
             "philosophical" => new(["Boundary-case examiner", "Limit-condition witness", "Principle stress tester", "Obligation boundary mapper"], ["tests principles against limit cases", "tracks where obligations change under pressure", "looks for hidden exceptions in broad claims"], ["calmly adversarial", "exact about thresholds", "unmoved by elegant overreach"], ["make moral boundaries legible", "preserve exceptions that matter", "prevent universal language from swallowing context"], ["may linger at the margins", "may treat practical compromise as conceptual leakage", "may resist closure when a usable stance is enough"]),
+            "legal" => new(["Exception mapper", "Liability boundary tester", "Policy edge reviewer", "Enforcement skeptic"], ["maps where policy language stops being operational", "tests exceptions against misuse and precedent", "separates defensible risk from wishful compliance"], ["careful and exacting", "risk-aware", "plainspoken"], ["make review boundaries explicit", "protect rights and auditability", "avoid informal policy drift"], ["may overconstrain implementation", "may slow decisions with edge clauses", "may underweight practical enforcement"]),
+            "creative" => new(["Coherence sentinel", "Audience trust critic", "Taste boundary tester", "Constraint keeper"], ["tests where novelty breaks meaning", "maps tone drift and audience confusion", "keeps creative choices tied to the brief"], ["sensitive and exacting", "playful but firm", "clear-eyed about audience cost"], ["protect coherence", "make creative risks intentional", "turn taste disputes into testable options"], ["may sand down bold ideas", "may over-explain mystery", "may privilege coherence over surprise"]),
+            "incident" => new(["Blast-radius mapper", "Rollback sentinel", "Failure boundary tester", "Recovery critic"], ["tests where the incident plan fails", "maps escalation and rollback edges", "keeps customer impact visible"], ["steady and exacting", "calm under pressure", "evidence-led"], ["make recovery boundaries explicit", "protect evidence and users", "turn failure into prevention"], ["may over-focus on containment", "may slow recovery with analysis", "may underweight morale and trust repair"]),
             _ => new(["Boundary tester", "Constraint mapper", "Operational sentinel", "Misuse-case analyst"], ["identifies limits, misuse cases, and escalation paths", "tests whether a recommendation survives practical constraints", "maps the boundary between acceptable and unacceptable risk"], ["calm and exacting", "direct but non-theatrical", "protective of operational reality"], ["make constraints explicit before conclusions are accepted", "keep exception paths visible", "separate useful risk from unsafe overreach"], ["may over-index on edge cases", "may slow convergence by asking for more boundary checks", "may miss upside while guarding the downside"])
         };
     }

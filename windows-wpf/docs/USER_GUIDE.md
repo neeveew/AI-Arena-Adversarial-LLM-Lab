@@ -13,7 +13,7 @@ The app is designed for local experimentation with model behavior. You can creat
 5. Pick a Default model from the dropdown, or type one manually.
 6. Optionally assign different models to Alpha, Beta, Gamma, Delta, and Narrator.
 7. Press Test Provider.
-8. Open Custom Match and choose Random Seed, AI Choice, or YOLO.
+8. Open Custom Match and choose a Random Seed style/intensity, AI Choice, or YOLO.
 9. Return to Transcript and run 1 TURN or AUTO CHAT.
 
 ## Main Concepts
@@ -170,7 +170,14 @@ Each item can be edited and locked. Locked cards use a golden border and lock gl
 
 ### Random Seed
 
-Random Seed generates a deterministic scenario and cast. Locked topic, global instruction, or cast members are preserved.
+Random Seed generates a deterministic scenario and cast. Use the style picker to choose Auto, Balanced, Adversarial, Technical, Scientific, Research, Product, Safety, Philosophical, Legal, Creative, Red-team, or Incident. Use the intensity picker to choose Normal, Sharp, Spicy, or Chaos. Locked topic, global instruction, or cast members are preserved.
+
+Intensity changes the pressure applied to the generated setup:
+
+- Normal keeps the scenario practical and controlled.
+- Sharp increases visible disagreement and assumption testing.
+- Spicy adds hidden incentives, uncomfortable tradeoffs, and weaker evidence.
+- Chaos adds partial information and unstable constraints that agents must stabilize before converging.
 
 ### AI Choice
 
@@ -182,7 +189,7 @@ YOLO generates a more experimental scenario seed. It can touch the topic, global
 
 ### Seed Inspector
 
-The seed inspector shows the source, scenario seed, scenario style, persona seed, and persona style. Use it to understand what kind of generated setup you are running.
+The seed inspector shows the source, scenario seed, scenario style, intensity when available, persona seed, and persona style. Use it to understand what kind of generated setup you are running.
 
 ## Sessions, Checkpoints, and Templates
 

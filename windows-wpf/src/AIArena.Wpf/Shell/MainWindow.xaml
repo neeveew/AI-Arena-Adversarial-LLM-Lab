@@ -1581,6 +1581,41 @@
                                        FontSize="11"
                                        VerticalAlignment="Center"
                                        Margin="0,0,10,0" />
+                            <ComboBox x:Name="RandomSeedStylePicker"
+                                      Width="126"
+                                      FontSize="11"
+                                      Padding="7,5"
+                                      MinHeight="32"
+                                      Margin="0,0,6,0"
+                                      ToolTip="Random Seed scenario style"
+                                      SelectionChanged="RandomSeedOptions_Changed">
+                                <ComboBoxItem Content="Auto style" Tag="auto" />
+                                <ComboBoxItem Content="Balanced" Tag="balanced" />
+                                <ComboBoxItem Content="Adversarial" Tag="adversarial" />
+                                <ComboBoxItem Content="Technical" Tag="technical" />
+                                <ComboBoxItem Content="Scientific" Tag="scientific" />
+                                <ComboBoxItem Content="Research" Tag="research" />
+                                <ComboBoxItem Content="Product" Tag="product" />
+                                <ComboBoxItem Content="Safety" Tag="safety" />
+                                <ComboBoxItem Content="Philosophical" Tag="philosophical" />
+                                <ComboBoxItem Content="Legal" Tag="legal" />
+                                <ComboBoxItem Content="Creative" Tag="creative" />
+                                <ComboBoxItem Content="Red-team" Tag="red-team" />
+                                <ComboBoxItem Content="Incident" Tag="incident" />
+                            </ComboBox>
+                            <ComboBox x:Name="RandomSeedIntensityPicker"
+                                      Width="94"
+                                      FontSize="11"
+                                      Padding="7,5"
+                                      MinHeight="32"
+                                      Margin="0,0,8,0"
+                                      ToolTip="Random Seed pressure level"
+                                      SelectionChanged="RandomSeedOptions_Changed">
+                                <ComboBoxItem Content="Normal" Tag="normal" />
+                                <ComboBoxItem Content="Sharp" Tag="sharp" />
+                                <ComboBoxItem Content="Spicy" Tag="spicy" />
+                                <ComboBoxItem Content="Chaos" Tag="chaos" />
+                            </ComboBox>
                             <Button x:Name="RandomSeedButton"
                                     Content="RANDOM SEED"
                                     Click="RandomSeedButton_Click"

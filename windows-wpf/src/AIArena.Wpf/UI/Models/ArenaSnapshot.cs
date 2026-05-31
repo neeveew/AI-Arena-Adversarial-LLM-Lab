@@ -10,6 +10,7 @@ public sealed record ArenaSnapshot(
     bool TopicLocked,
     bool GlobalLocked,
     string ScenarioGeneratorStyle,
+    string ScenarioGeneratorIntensity,
     string ScenarioGeneratorSeed,
     string PersonaGeneratorStyle,
     string PersonaGeneratorSeed,

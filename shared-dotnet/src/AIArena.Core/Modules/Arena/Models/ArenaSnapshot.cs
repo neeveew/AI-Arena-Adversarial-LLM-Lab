@@ -311,6 +311,9 @@ public sealed class GeneratorState
     [JsonPropertyName("seed")]
     public string Seed { get; set; } = "";
 
+    [JsonPropertyName("intensity")]
+    public string Intensity { get; set; } = "";
+
     [JsonPropertyName("apply_on_reset")]
     public bool ApplyOnReset { get; set; }
 }

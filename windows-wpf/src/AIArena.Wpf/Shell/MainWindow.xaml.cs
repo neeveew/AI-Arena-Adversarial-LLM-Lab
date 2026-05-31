@@ -286,6 +286,8 @@ public partial class MainWindow : Window
         SelectComboTag(AvatarStylePicker, CurrentAvatarStyle());
         SelectComboTag(SystemGlyphStylePicker, _wpfSettings.SystemEventGlyphs ? "glyph" : "fallback");
         SelectComboTag(TopStripModePicker, CurrentTopStripMode());
+        SelectComboTag(RandomSeedStylePicker, _wpfSettings.RandomSeedStyle);
+        SelectComboTag(RandomSeedIntensityPicker, _wpfSettings.RandomSeedIntensity);
         CompactTranscriptCheckBox.IsChecked = _wpfSettings.CompactTranscriptMode;
         TurnCompareCheckBox.IsChecked = _wpfSettings.TurnCompareMode;
         MatchQualityTimelineCheckBox.IsChecked = _wpfSettings.ShowMatchQualityTimeline;
@@ -546,6 +548,18 @@ public partial class MainWindow : Window
         {
             PopulateTranscript(_lastRenderedMessages);
         }
+    }
+
+    private void RandomSeedOptions_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isRenderingSnapshot || RandomSeedStylePicker is null || RandomSeedIntensityPicker is null)
+        {
+            return;
+        }
+
+        _wpfSettings.RandomSeedStyle = SelectedComboTag(RandomSeedStylePicker, "auto");
+        _wpfSettings.RandomSeedIntensity = SelectedComboTag(RandomSeedIntensityPicker, "normal");
+        _wpfSettingsStore.Save(_wpfSettings);
     }
 
     private void FollowChatCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -1993,6 +2007,7 @@ public partial class MainWindow : Window
     {
         var scenarioSeed = DisplayStatusValue(snapshot.ScenarioGeneratorSeed);
         var scenarioStyle = DisplayStatusValue(snapshot.ScenarioGeneratorStyle);
+        var scenarioIntensity = DisplayStatusValue(snapshot.ScenarioGeneratorIntensity);
         var personaSeed = DisplayStatusValue(snapshot.PersonaGeneratorSeed);
         var personaStyle = DisplayStatusValue(snapshot.PersonaGeneratorStyle);
         var source = ScenarioSeedSource(snapshot.ScenarioGeneratorSeed, snapshot.PersonaGeneratorStyle);
@@ -2000,6 +2015,10 @@ public partial class MainWindow : Window
         ScenarioSeedInspector.Children.Add(CreateSetupChip("Source", source, ResourceBrush("PrimaryBorderBrush")));
         ScenarioSeedInspector.Children.Add(CreateSetupChip("Scenario", ShortSeedValue(scenarioSeed), ResourceBrush("TextBrush")));
         ScenarioSeedInspector.Children.Add(CreateSetupChip("Style", scenarioStyle, ResourceBrush("MutedTextBrush")));
+        if (scenarioIntensity != "-")
+        {
+            ScenarioSeedInspector.Children.Add(CreateSetupChip("Intensity", scenarioIntensity, ResourceBrush("BetaAccentBrush")));
+        }
         ScenarioSeedInspector.Children.Add(CreateSetupChip("Personas", ShortSeedValue(personaSeed), ResourceBrush("NarratorAccentBrush")));
         ScenarioSeedInspector.Children.Add(CreateSetupChip("Persona style", personaStyle, ResourceBrush("MutedTextBrush")));
     }
@@ -2030,6 +2049,22 @@ public partial class MainWindow : Window
         }
 
         return seed.Length <= 18 ? seed : $"{seed[..15]}...";
+    }
+
+    private static string RandomSeedOptionLabel(string style, string intensity)
+    {
+        static string Clean(string value) => string.IsNullOrWhiteSpace(value)
+            ? ""
+            : value.Trim().Replace('-', ' ');
+
+        var cleanStyle = Clean(style);
+        var cleanIntensity = Clean(intensity);
+        var styleLabel = cleanStyle.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            ? "auto-style"
+            : cleanStyle;
+        return cleanIntensity.Equals("normal", StringComparison.OrdinalIgnoreCase)
+            ? styleLabel
+            : $"{styleLabel} {cleanIntensity}";
     }
 
     private void PopulateNews(IReadOnlyList<TranscriptMessage> messages)
@@ -4985,9 +5020,11 @@ public partial class MainWindow : Window
             return;
         }
 
-        await RunArenaBusyAsync("Generating random seed match...", RandomSeedButton, async () =>
+        var style = SelectedComboTag(RandomSeedStylePicker, "auto");
+        var intensity = SelectedComboTag(RandomSeedIntensityPicker, "normal");
+        await RunArenaBusyAsync($"Generating {RandomSeedOptionLabel(style, intensity)} random seed...", RandomSeedButton, async () =>
         {
-            var result = await _matchGeneration.GenerateRandomSeedAsync(_activeSession.Id);
+            var result = await _matchGeneration.GenerateRandomSeedAsync(_activeSession.Id, style, intensity);
             var status = result.Ok
                 ? $"Random seed match generated: {result.Label}"
                 : $"Random seed failed: {result.Error}";
@@ -6537,6 +6574,8 @@ public partial class MainWindow : Window
         OneTurnButton.IsEnabled = !busy;
         ResetButton.IsEnabled = !busy;
         RandomSeedButton.IsEnabled = !busy || autoChatRunning;
+        RandomSeedStylePicker.IsEnabled = !busy;
+        RandomSeedIntensityPicker.IsEnabled = !busy;
         AiChoiceButton.IsEnabled = !busy || autoChatRunning;
         YoloScenarioButton.IsEnabled = !busy || autoChatRunning;
         NarrateNowButton.IsEnabled = !busy || autoChatRunning;

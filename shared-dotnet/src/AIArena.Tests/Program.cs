@@ -32,6 +32,7 @@ var tests = new (string Name, Action Test)[]
     ("saves restores and deletes native checkpoints", SaveRestoreDeleteNativeCheckpoints),
     ("writes timestamped event log entries", WriteTimestampedEventLogEntries),
     ("generates random seed match respecting locks", GenerateRandomSeedMatchRespectingLocks),
+    ("generates requested random seed style and intensity", GenerateRequestedRandomSeedStyleAndIntensity),
     ("generates YOLO seed respecting locks", GenerateYoloSeedRespectingLocks),
     ("adds narrator message to transcript", AddNarratorMessageToTranscript),
     ("asks narrator with operator request", AskNarratorWithOperatorRequest),
@@ -519,6 +520,29 @@ static void GenerateRandomSeedMatchRespectingLocks()
     Require(loaded.Engine.Messages.Count == 1, "transcript was not preserved");
     Require(loaded.Engine.TurnCount == 1, "turn count changed during match generation");
     Require(File.ReadAllText(log.EventPath()).Contains("native_random_seed_match_generated"), "random seed event was not logged");
+    Directory.Delete(root, recursive: true);
+}
+
+static void GenerateRequestedRandomSeedStyleAndIntensity()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+
+    var service = new MatchGenerationService(sessionStore: store, eventLogStore: log);
+    var result = service.GenerateRandomSeedAsync("default", "scientific", "spicy").GetAwaiter().GetResult();
+    Require(result.Ok, $"random seed failed: {result.Error}");
+    Require(result.Style == "scientific", "requested random seed style was not returned");
+    Require(result.Intensity == "spicy", "requested random seed intensity was not returned");
+    var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+    Require(loaded.MatchType == "scientific", "requested random seed style was not applied to match type");
+    Require(loaded.ScenarioGenerator.Style == "scientific", "requested random seed style was not stored");
+    Require(loaded.ScenarioGenerator.Intensity == "spicy", "requested random seed intensity was not stored");
+    Require(loaded.PersonaRandomizer.Style == "research", "scientific persona style did not map to research");
+    Require(loaded.Engine.Steering.Global.Contains("uncomfortable tradeoffs", StringComparison.OrdinalIgnoreCase), "spicy pressure was not included in the global frame");
+    Require(File.ReadAllText(log.EventPath()).Contains("\"intensity\":\"spicy\""), "random seed intensity was not logged");
     Directory.Delete(root, recursive: true);
 }
 

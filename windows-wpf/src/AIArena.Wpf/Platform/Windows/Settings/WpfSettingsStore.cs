@@ -54,6 +54,8 @@ public sealed class WpfSettings
     public bool ShowDecisionCard { get; set; }
     public string TopStripMode { get; set; } = "diagnostics";
     public bool ShowTranscriptDiagnostics { get; set; } = true;
+    public string RandomSeedStyle { get; set; } = "auto";
+    public string RandomSeedIntensity { get; set; } = "normal";
     public List<string> OperatorTemplates { get; set; } =
     [
         "Challenge the strongest assumption in the last turn.",
