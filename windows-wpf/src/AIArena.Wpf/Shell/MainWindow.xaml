@@ -1691,7 +1691,7 @@
                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled">
                     <StackPanel>
-                <Expander Header="Model Provider" Style="{StaticResource SettingsExpander}" IsExpanded="True">
+                <Expander x:Name="ModelProviderSettingsExpander" Header="Model Provider" Style="{StaticResource SettingsExpander}" IsExpanded="True">
                     <StackPanel Margin="0,8,0,0">
                         <TextBlock Text="Provider base URL" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
                         <TextBox x:Name="ProviderBaseUrlText"

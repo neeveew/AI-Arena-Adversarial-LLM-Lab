@@ -1727,6 +1727,11 @@ public partial class MainWindow : Window
             setup.Children.Add(CreateSetupChip("Turn", current is null ? "-" : DisplayStatusValue(current.Id), current is null ? ResourceBrush("MutedTextBrush") : AccentForSpeaker(current.Id)));
             setup.Children.Add(CreateSetupChip("Model", ShortModelName(CurrentTurnModel(snapshot, current)), ResourceBrush("MutedTextBrush")));
             panel.Children.Add(setup);
+
+            if (ShouldShowProviderSetup(snapshot, current))
+            {
+                panel.Children.Add(CreateProviderQuickSetupCard(snapshot, current));
+            }
         }
 
         panel.Children.Add(new TextBlock
@@ -1744,6 +1749,138 @@ public partial class MainWindow : Window
             BlendBrush(ResourceBrush("CardBrush"), accent, 0.08),
             accent,
             panel);
+    }
+
+    private bool ShouldShowProviderSetup(ArenaSnapshot snapshot, AgentState? current)
+    {
+        var currentModel = CurrentTurnModel(snapshot, current);
+        return !snapshot.ProviderOnline
+            || string.IsNullOrWhiteSpace(currentModel)
+            || currentModel == "-"
+            || string.IsNullOrWhiteSpace(snapshot.ProviderModel)
+            || snapshot.ProviderModel == "-";
+    }
+
+    private Border CreateProviderQuickSetupCard(ArenaSnapshot snapshot, AgentState? current)
+    {
+        var accent = snapshot.ProviderOnline ? ResourceBrush("BetaAccentBrush") : ResourceBrush("DangerBorderBrush");
+        var baseUrlBox = new TextBox
+        {
+            Text = string.IsNullOrWhiteSpace(snapshot.ProviderBaseUrl) || snapshot.ProviderBaseUrl == "-"
+                ? "http://127.0.0.1:1234/v1"
+                : snapshot.ProviderBaseUrl,
+            Background = ResourceBrush("InputBrush"),
+            Foreground = ResourceBrush("TextBrush"),
+            BorderBrush = ResourceBrush("ControlBorderBrush"),
+            Padding = new Thickness(8),
+            MinWidth = 230,
+            ToolTip = "OpenAI-compatible provider base URL."
+        };
+
+        var modelBox = new ComboBox
+        {
+            IsEditable = true,
+            IsTextSearchEnabled = false,
+            Text = CurrentTurnModel(snapshot, current) == "-" ? "" : CurrentTurnModel(snapshot, current),
+            Background = ResourceBrush("InputBrush"),
+            Foreground = ResourceBrush("TextBrush"),
+            BorderBrush = ResourceBrush("ControlBorderBrush"),
+            Padding = new Thickness(8),
+            MinWidth = 230,
+            ToolTip = "Pick an advertised model or type one manually."
+        };
+        foreach (var model in _advertisedModels)
+        {
+            modelBox.Items.Add(model);
+        }
+
+        var statusText = new TextBlock
+        {
+            Text = ProviderSetupStatus(snapshot),
+            Foreground = ResourceBrush("MutedTextBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 7, 0, 0)
+        };
+
+        var actions = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        actions.Children.Add(ActionButton("Save + test", async (_, _) =>
+        {
+            await SaveAndTestProviderQuickSetupAsync(baseUrlBox.Text, modelBox.Text, statusText);
+        }, true, TranscriptActionKind.Primary));
+        actions.Children.Add(ActionButton("Open settings", (_, _) => OpenModelProviderSettings(baseUrlBox.Text, modelBox.Text), true));
+
+        var fields = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        fields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        fields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
+        fields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var baseUrlStack = new StackPanel();
+        baseUrlStack.Children.Add(new TextBlock
+        {
+            Text = "Provider base URL",
+            Foreground = ResourceBrush("MutedTextBrush"),
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 5)
+        });
+        baseUrlStack.Children.Add(baseUrlBox);
+        fields.Children.Add(baseUrlStack);
+
+        var modelStack = new StackPanel();
+        modelStack.Children.Add(new TextBlock
+        {
+            Text = "Default model",
+            Foreground = ResourceBrush("MutedTextBrush"),
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 5)
+        });
+        modelStack.Children.Add(modelBox);
+        Grid.SetColumn(modelStack, 2);
+        fields.Children.Add(modelStack);
+
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Provider setup",
+            Foreground = ResourceBrush("TextBrush"),
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Connect LM Studio or another OpenAI-compatible /v1 provider before running turns.",
+            Foreground = ResourceBrush("MutedTextBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 3, 0, 0)
+        });
+        panel.Children.Add(fields);
+        panel.Children.Add(actions);
+        panel.Children.Add(statusText);
+
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.1),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.5),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10),
+            Margin = new Thickness(0, 8, 0, 2),
+            Child = panel
+        };
+    }
+
+    private string ProviderSetupStatus(ArenaSnapshot snapshot)
+    {
+        if (snapshot.ProviderOnline)
+        {
+            return "Provider is online. Choose a model, then run 1 TURN.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(snapshot.ProviderLastError) && snapshot.ProviderLastError != "-")
+        {
+            return snapshot.ProviderLastError;
+        }
+
+        return "Provider is offline. Start LM Studio server, then save and test.";
     }
 
     private Border CreateSetupChip(string label, string value, Brush accent)
@@ -3884,6 +4021,67 @@ public partial class MainWindow : Window
                 ? $"Provider ok: {result.Model} at {result.BaseUrl}; {result.LatencyMs} ms; reply: {result.Text}"
                 : $"Provider failed: {result.Error}";
         });
+    }
+
+    private async Task SaveAndTestProviderQuickSetupAsync(string baseUrl, string model, TextBlock statusText)
+    {
+        if (_activeSession is null)
+        {
+            statusText.Foreground = ResourceBrush("DangerTextBrush");
+            statusText.Text = "No active session.";
+            return;
+        }
+
+        baseUrl = baseUrl.Trim();
+        model = model.Trim();
+        if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(model))
+        {
+            statusText.Foreground = ResourceBrush("DangerTextBrush");
+            statusText.Text = "Base URL and default model are required.";
+            return;
+        }
+
+        statusText.Foreground = ResourceBrush("MutedTextBrush");
+        statusText.Text = "Saving provider setup...";
+        ProviderBaseUrlText.Text = baseUrl;
+        ProviderModelText.Text = model;
+        await PersistModelRoutingAsync("Provider quick setup saved.", refreshModels: true);
+
+        var config = await LoadSharedProviderConfigAsync();
+        if (config is null)
+        {
+            statusText.Foreground = ResourceBrush("DangerTextBrush");
+            statusText.Text = "Provider setup could not be loaded after save.";
+            return;
+        }
+
+        statusText.Text = "Testing provider completion...";
+        var result = await _providerHealth.TestCompletionAsync(config);
+        if (result.Ok)
+        {
+            await PersistProviderReachabilityAsync(true, "", result.LatencyMs, "Provider online.");
+            statusText.Foreground = ResourceBrush("AlphaAccentBrush");
+            statusText.Text = $"Provider online: {result.Model}, {result.LatencyMs} ms.";
+            ProviderTestStatus.Text = $"Provider ok: {result.Model} at {result.BaseUrl}; {result.LatencyMs} ms; reply: {result.Text}";
+            RefreshActiveSession("Provider quick setup complete.");
+            return;
+        }
+
+        var health = await _providerHealth.CheckAsync(ProviderHealthProbeConfig(config));
+        await PersistProviderReachabilityAsync(
+            health.Ok,
+            health.Ok ? result.Error : health.Error,
+            result.LatencyMs,
+            health.Ok ? "Provider online; completion test failed." : "Provider offline.");
+
+        statusText.Foreground = health.Ok ? ResourceBrush("BetaAccentBrush") : ResourceBrush("DangerTextBrush");
+        statusText.Text = health.Ok
+            ? $"Provider responded, but completion failed: {result.Error}"
+            : $"Provider offline: {health.Error}";
+        ProviderTestStatus.Text = result.Ok
+            ? $"Provider ok: {result.Model} at {result.BaseUrl}; {result.LatencyMs} ms; reply: {result.Text}"
+            : $"Provider failed: {result.Error}";
+        RefreshActiveSession(health.Ok ? "Provider reachable; completion test failed." : "Provider offline.");
     }
 
     private async void PreloadSelectedModelsButton_Click(object sender, RoutedEventArgs e)
@@ -6183,6 +6381,34 @@ public partial class MainWindow : Window
     {
         AnimateSettingsGear();
         SetAppSettingsVisible(AppSettingsPanel.Visibility != Visibility.Visible);
+    }
+
+    private void OpenModelProviderSettings(string? baseUrl = null, string? model = null)
+    {
+        if (!string.IsNullOrWhiteSpace(baseUrl))
+        {
+            ProviderBaseUrlText.Text = baseUrl.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            ProviderModelText.Text = model.Trim();
+        }
+
+        SetAppSettingsVisible(true);
+        ModelProviderSettingsExpander.IsExpanded = true;
+        Dispatcher.BeginInvoke(() =>
+        {
+            ModelProviderSettingsExpander.BringIntoView();
+            if (string.IsNullOrWhiteSpace(ProviderModelText.Text))
+            {
+                ProviderModelText.Focus();
+            }
+            else
+            {
+                TestProviderButton.Focus();
+            }
+        }, DispatcherPriority.Background);
     }
 
     private void CloseAppSettingsButton_Click(object sender, RoutedEventArgs e)
