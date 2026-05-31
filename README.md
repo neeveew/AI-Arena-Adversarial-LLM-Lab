@@ -67,10 +67,6 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 
 ## What Makes It Different
 
-AI Arena is not only a model comparison board. It is not only a chat interface. It is a local adversarial discourse environment with diagnostics, memory, narrator feedback, and operator control.
-
-The app is useful when you want to watch models:
-
 - challenge or reinforce each other;
 - drift away from assigned roles;
 - collapse into confident but unsupported narratives;
@@ -81,12 +77,11 @@ The app is useful when you want to watch models:
 ## Requirements
 
 - Windows.
-- AI Arena installer.
 - .NET Desktop Runtime if your machine does not already have the required runtime.
 - LM Studio or any OpenAI-compatible `/v1` provider.
 - Local models are optional depending on your provider setup.
 
-AI Arena is not tied to a specific GPU vendor. Model execution depends on the provider you connect to.
+Model execution depends on the provider you connect to.
 
 ## Provider Setup
 
