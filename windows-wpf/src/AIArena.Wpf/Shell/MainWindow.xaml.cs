@@ -229,11 +229,17 @@ public partial class MainWindow : Window
         UpdateTelemetryTimerState();
     }
 
-    private void InitializeOperatorTemplates()
+    private void InitializeOperatorTemplates(string? preferredTemplate = null)
     {
         _wpfSettings.OperatorTemplates ??= [];
+        OperatorTemplatePicker.ItemsSource = null;
         OperatorTemplatePicker.ItemsSource = _wpfSettings.OperatorTemplates;
-        OperatorTemplatePicker.SelectedIndex = _wpfSettings.OperatorTemplates.Count > 0 ? 0 : -1;
+        var preferredIndex = string.IsNullOrWhiteSpace(preferredTemplate)
+            ? -1
+            : _wpfSettings.OperatorTemplates.FindIndex(item => item.Equals(preferredTemplate, StringComparison.OrdinalIgnoreCase));
+        OperatorTemplatePicker.SelectedIndex = preferredIndex >= 0
+            ? preferredIndex
+            : _wpfSettings.OperatorTemplates.Count > 0 ? 0 : -1;
     }
 
     private async void LoadSessions(string? preferredSessionId = null)
@@ -3967,7 +3973,8 @@ public partial class MainWindow : Window
         playButton.Click += async (_, _) => await RunAgentTurnAsync(agent);
         _agentTurnButtons.Add(playButton);
 
-        var accent = isPaused ? ResourceBrush("BetaAccentBrush") : AccentForSpeaker(agent.Id);
+        var accent = AccentForSpeaker(agent.Id);
+        var pauseAccent = ResourceBrush("BetaAccentBrush");
         var card = new Border
         {
             Background = isRunning
@@ -3975,9 +3982,11 @@ public partial class MainWindow : Window
                 : isCurrent
                     ? BlendBrush(ResourceBrush("InputBrush"), accent, 0.1)
                     : isPaused
-                        ? BlendBrush(ResourceBrush("InputBrush"), accent, 0.1)
+                        ? BlendBrush(ResourceBrush("InputBrush"), ResourceBrush("DisabledBorderBrush"), 0.12)
                         : ResourceBrush("InputBrush"),
-            BorderBrush = BlendBrush(ResourceBrush("DisabledBorderBrush"), accent, isActive ? 0.75 : 0.82),
+            BorderBrush = isPaused
+                ? BlendBrush(ResourceBrush("DisabledBorderBrush"), ResourceBrush("MutedTextBrush"), 0.18)
+                : BlendBrush(ResourceBrush("DisabledBorderBrush"), accent, 0.75),
             BorderThickness = new Thickness(0, 1, 0, 1),
             Padding = new Thickness(14, 8, 10, 8),
             Margin = new Thickness(0, -1, 0, 0),
@@ -4000,7 +4009,7 @@ public partial class MainWindow : Window
         text.Children.Add(new TextBlock
         {
             Text = $"{speakerLabel} - {activityLabel}",
-            Foreground = isPaused ? accent : Brushes.White,
+            Foreground = isPaused ? ResourceBrush("MutedTextBrush") : Brushes.White,
             FontWeight = FontWeights.SemiBold,
             FontSize = 12,
             LineHeight = 15,
@@ -4012,7 +4021,7 @@ public partial class MainWindow : Window
         {
             Text = modelText,
             Foreground = isPaused
-                ? accent
+                ? ResourceBrush("DisabledTextBrush")
                 : isRunning || isCurrent
                 ? accent
                 : ResourceBrush("MutedTextBrush"),
@@ -4029,8 +4038,8 @@ public partial class MainWindow : Window
             Width = isRunning ? 8 : 6,
             Height = isRunning ? 8 : 6,
             CornerRadius = new CornerRadius(4),
-            Background = accent,
-            Opacity = isRunning ? 1.0 : isCurrent ? 0.85 : isPaused ? 0.9 : 0.45,
+            Background = isPaused ? ResourceBrush("DisabledBorderBrush") : accent,
+            Opacity = isRunning ? 1.0 : isCurrent ? 0.85 : isPaused ? 0.35 : 0.45,
             Margin = new Thickness(8, 0, 4, 0),
             VerticalAlignment = VerticalAlignment.Center,
             ToolTip = activityLabel
@@ -4060,7 +4069,6 @@ public partial class MainWindow : Window
         card.Child = cardLayer;
         if (!isActive)
         {
-            card.Opacity = 0.9;
             card.ToolTip = "Paused: click the pause button to activate this agent.";
         }
 
@@ -5125,7 +5133,7 @@ public partial class MainWindow : Window
                 .Take(12)
                 .ToList();
             _wpfSettingsStore.Save(_wpfSettings);
-            InitializeOperatorTemplates();
+            InitializeOperatorTemplates(template);
         }
 
         OperatorTemplatePicker.SelectedItem = template;
@@ -5141,15 +5149,19 @@ public partial class MainWindow : Window
             return;
         }
 
-        var removed = _wpfSettings.OperatorTemplates.RemoveAll(item => item.Equals(template, StringComparison.OrdinalIgnoreCase));
-        if (removed == 0)
+        var nextTemplates = _wpfSettings.OperatorTemplates
+            .Where(item => !item.Equals(template, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (nextTemplates.Count == _wpfSettings.OperatorTemplates.Count)
         {
             ArenaRunStatus.Text = "Operator template was already removed.";
             return;
         }
 
+        var nextSelection = nextTemplates.FirstOrDefault();
+        _wpfSettings.OperatorTemplates = nextTemplates;
         _wpfSettingsStore.Save(_wpfSettings);
-        InitializeOperatorTemplates();
+        InitializeOperatorTemplates(nextSelection);
         ArenaRunStatus.Text = "Operator template deleted.";
     }
 
