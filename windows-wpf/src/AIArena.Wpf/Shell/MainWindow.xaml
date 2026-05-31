@@ -1655,31 +1655,76 @@
                     </Border>
                 </Popup>
 
-                <Border Style="{StaticResource Card}" Opacity="1" BorderBrush="{DynamicResource OperatorAccentBrush}">
+                <Border Style="{StaticResource Card}" Opacity="1">
                     <StackPanel>
-                        <TextBlock Text="Operator Turn" Style="{StaticResource SectionTitle}" Margin="0,0,0,12" />
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Operator Turn" Style="{StaticResource SectionTitle}" VerticalAlignment="Center" />
+                            <TextBlock x:Name="OperatorTurnMeterText"
+                                       Grid.Column="1"
+                                       Text="0 chars / ~0 tok"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       FontSize="11"
+                                       VerticalAlignment="Center" />
+                        </Grid>
+                        <UniformGrid Columns="3" Margin="0,0,0,8">
+                            <Border Background="{DynamicResource InputBrush}"
+                                    BorderBrush="{DynamicResource OperatorAccentBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4"
+                                    Padding="6,3"
+                                    Margin="0,0,5,0"
+                                    ToolTip="Operator turn is visible to all agents.">
+                                <TextBlock Text="Public"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontSize="11"
+                                           FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" />
+                            </Border>
+                            <Border Background="{DynamicResource InputBrush}"
+                                    BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4"
+                                    Padding="6,3"
+                                    Margin="0,0,5,0"
+                                    ToolTip="Private operator notes are not enabled for this panel.">
+                                <TextBlock Text="Private off"
+                                           Foreground="{DynamicResource DisabledTextBrush}"
+                                           FontSize="11"
+                                           FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" />
+                            </Border>
+                            <Border Background="{DynamicResource InputBrush}"
+                                    BorderBrush="{DynamicResource OperatorAccentBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4"
+                                    Padding="6,3"
+                                    ToolTip="Operator turn does not pick the next agent for you.">
+                                <TextBlock Text="No advance"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontSize="11"
+                                           FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" />
+                            </Border>
+                        </UniformGrid>
                         <Grid>
                             <TextBox x:Name="OperatorTurnText"
-                                     MinHeight="92"
+                                     MinHeight="78"
                                      AcceptsReturn="True"
                                      TextWrapping="Wrap"
                                      Text=""
-                                     Tag="Inject public operator turn..." />
+                                     Tag="Inject public operator turn..."
+                                     TextChanged="OperatorTurnText_TextChanged" />
                         </Grid>
-                        <WrapPanel Margin="0,8,0,0">
-                            <Border Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="6,2" Margin="0,0,6,0">
-                                <TextBlock Text="Public to all agents" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" />
-                            </Border>
-                            <Border Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="6,2">
-                                <TextBlock Text="Does not advance turn order" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" />
-                            </Border>
-                        </WrapPanel>
                         <Button x:Name="SendTurnButton"
                                 Content="SEND TURN"
                                 Click="SendTurnButton_Click"
                                 Background="{DynamicResource DangerBrush}"
                                 BorderBrush="{DynamicResource OperatorAccentBrush}"
-                                Margin="0,10,0,0" />
+                                Margin="0,8,0,0" />
                     </StackPanel>
                 </Border>
 

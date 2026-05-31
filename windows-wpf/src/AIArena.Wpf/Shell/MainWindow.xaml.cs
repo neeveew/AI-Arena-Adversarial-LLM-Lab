@@ -156,6 +156,7 @@ public partial class MainWindow : Window
         _telemetryTimer.Tick += async (_, _) => await UpdateSystemTelemetryAsync();
         InitializeAboutPanel();
         InitializeVisualSettings();
+        UpdateOperatorTurnMeter();
         LoadScenarioTemplates();
         Loaded += (_, _) =>
         {
@@ -4749,6 +4750,27 @@ public partial class MainWindow : Window
             OperatorTurnText.Clear();
             RefreshActiveSession("Operator turn added.");
         }, allowDuringAutoChat: true);
+    }
+
+    private void OperatorTurnText_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        UpdateOperatorTurnMeter();
+    }
+
+    private void UpdateOperatorTurnMeter()
+    {
+        if (OperatorTurnText is null || OperatorTurnMeterText is null)
+        {
+            return;
+        }
+
+        var text = OperatorTurnText.Text?.Trim() ?? "";
+        var charCount = text.Length;
+        var tokenEstimate = charCount == 0 ? 0 : Math.Max(1, (int)Math.Ceiling(charCount / 4.0));
+        OperatorTurnMeterText.Text = $"{charCount} chars / ~{tokenEstimate} tok";
+        OperatorTurnMeterText.Foreground = charCount > 0
+            ? ResourceBrush("OperatorAccentBrush")
+            : ResourceBrush("MutedTextBrush");
     }
 
     private void CopyTranscriptMessage(TranscriptMessage message)
