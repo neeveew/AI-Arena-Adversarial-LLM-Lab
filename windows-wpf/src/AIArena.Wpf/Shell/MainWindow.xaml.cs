@@ -7470,15 +7470,6 @@ public partial class MainWindow : Window
         chrome.Child = chromeGrid;
         var root = new DockPanel();
         chromeGrid.Children.Add(root);
-        chromeGrid.Children.Add(new ResizeGrip
-        {
-            Width = 18,
-            Height = 18,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Bottom,
-            Margin = new Thickness(0),
-            Opacity = 0.65
-        });
 
         var header = new Grid { Margin = new Thickness(0, 0, 0, 8) };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -7517,12 +7508,13 @@ public partial class MainWindow : Window
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
 
-        var footer = new DockPanel
-        {
-            LastChildFill = false,
-            Margin = new Thickness(0, 8, 0, 0)
-        };
+        var footer = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var openFileButton = CreateGuideButton("OPEN FILE");
+        openFileButton.Margin = new Thickness(0);
         openFileButton.Click += (_, _) => Process.Start(new ProcessStartInfo
         {
             FileName = guidePath,
@@ -7530,15 +7522,22 @@ public partial class MainWindow : Window
         });
         footer.Children.Add(openFileButton);
 
-        var copyPathButton = CreateGuideButton("COPY PATH");
-        copyPathButton.Click += (_, _) => Clipboard.SetText(guidePath);
-        footer.Children.Add(copyPathButton);
-
         var closeButton = CreateGuideButton("CLOSE");
-        closeButton.HorizontalAlignment = HorizontalAlignment.Right;
+        closeButton.Margin = new Thickness(0);
         closeButton.Click += (_, _) => dialog.Close();
-        DockPanel.SetDock(closeButton, Dock.Right);
+        Grid.SetColumn(closeButton, 2);
         footer.Children.Add(closeButton);
+        var resizeGrip = new ResizeGrip
+        {
+            Width = 18,
+            Height = 18,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(8, 0, 0, 0),
+            Opacity = 0.55
+        };
+        Grid.SetColumn(resizeGrip, 3);
+        footer.Children.Add(resizeGrip);
         DockPanel.SetDock(footer, Dock.Bottom);
         root.Children.Add(footer);
 
@@ -7614,6 +7613,7 @@ public partial class MainWindow : Window
         button.SetResourceReference(Control.BackgroundProperty, "InputBrush");
         button.SetResourceReference(Control.BorderBrushProperty, "ControlBorderBrush");
         button.SetResourceReference(Control.ForegroundProperty, "TextBrush");
+        AttachGuideButtonHover(button, danger: false);
         return button;
     }
 
@@ -7638,7 +7638,34 @@ public partial class MainWindow : Window
         button.SetResourceReference(Control.BackgroundProperty, "InputBrush");
         button.SetResourceReference(Control.BorderBrushProperty, "DangerBorderBrush");
         button.SetResourceReference(Control.ForegroundProperty, "DangerTextBrush");
+        AttachGuideButtonHover(button, danger: true);
         return button;
+    }
+
+    private void AttachGuideButtonHover(Button button, bool danger)
+    {
+        button.MouseEnter += (_, _) =>
+        {
+            button.SetResourceReference(Control.BackgroundProperty, danger ? "DangerBrush" : "NavHoverBrush");
+            button.SetResourceReference(Control.BorderBrushProperty, danger ? "DangerTextBrush" : "HoverBorderBrush");
+            button.SetResourceReference(Control.ForegroundProperty, danger ? "TextBrush" : "TextBrush");
+        };
+        button.MouseLeave += (_, _) =>
+        {
+            button.SetResourceReference(Control.BackgroundProperty, "InputBrush");
+            button.SetResourceReference(Control.BorderBrushProperty, danger ? "DangerBorderBrush" : "ControlBorderBrush");
+            button.SetResourceReference(Control.ForegroundProperty, danger ? "DangerTextBrush" : "TextBrush");
+        };
+        button.PreviewMouseDown += (_, _) =>
+        {
+            button.SetResourceReference(Control.BackgroundProperty, danger ? "DangerBorderBrush" : "PressedPrimaryBrush");
+        };
+        button.PreviewMouseUp += (_, _) =>
+        {
+            button.SetResourceReference(Control.BackgroundProperty, button.IsMouseOver
+                ? danger ? "DangerBrush" : "NavHoverBrush"
+                : "InputBrush");
+        };
     }
 
     private void CopyThemeResourcesTo(FrameworkElement target)
