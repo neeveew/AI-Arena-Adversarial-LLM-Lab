@@ -33,10 +33,10 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 - Alpha, Beta, Gamma, and Delta participant agents.
 - Separate Narrator layer for observation and public narration.
 - Public Operator interventions that do not advance the turn order.
-- Per-agent personas, model assignments, and voice styles.
+- Per-agent personas, model assignments, voice styles, and absurd persona-mixer constraints.
 - Optional debug voice/style cue chips for spotting when constrained agents drift.
 - OpenAI-compatible provider support, including LM Studio.
-- Random Seed style/intensity controls, AI Choice, and YOLO scenario generation.
+- Random Seed role-pack, pressure, style, and absurdity controls, plus AI Choice and YOLO scenario generation.
 - Scenario and cast locks for controlled regeneration.
 - Local sessions, restore points, and scenario templates.
 - Discourse diagnostics: friction, consensus, role drift, unsupported claims, evidence pressure, and narrative heat.
@@ -63,7 +63,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 5. Select a default model, or type a model name manually.
 6. Optionally assign different models to Alpha, Beta, Gamma, Delta, and Narrator.
 7. Press Test Provider.
-8. Open Custom Match and generate a setup using Random Seed style/intensity, AI Choice, or YOLO.
+8. Open Custom Match and generate a setup using Random Seed role pack/style/pressure/absurdity, AI Choice, or YOLO.
 9. Return to Transcript and run 1 TURN or AUTO CHAT.
 
 ## What Makes It Different

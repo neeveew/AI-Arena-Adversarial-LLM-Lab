@@ -40,6 +40,8 @@ public sealed class MatchGenerationService
         string sessionId,
         string requestedStyle = "auto",
         string requestedIntensity = "normal",
+        string requestedRolePack = "auto",
+        string requestedAbsurdity = "grounded",
         CancellationToken cancellationToken = default)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
@@ -51,21 +53,32 @@ public sealed class MatchGenerationService
         var seed = Guid.NewGuid().ToString("N")[..12];
         var style = ResolveRandomSeedStyle(requestedStyle, seed, snapshot.MatchType);
         var intensity = NormalizeIntensity(requestedIntensity);
-        var generated = GenerateTemplateMatch(style, seed, intensity, RequiredAgentIds(snapshot));
+        var rolePack = NormalizeRolePack(requestedRolePack);
+        var absurdity = NormalizeAbsurdity(requestedAbsurdity);
+        var generated = GenerateTemplateMatch(style, seed, intensity, rolePack, absurdity, RequiredAgentIds(snapshot));
         ApplyGeneratedMatch(snapshot, generated, clearTranscript: false);
         snapshot.ScenarioGenerator.Style = style;
         snapshot.ScenarioGenerator.Seed = seed;
         snapshot.ScenarioGenerator.Intensity = intensity;
+        snapshot.ScenarioGenerator.RolePack = rolePack;
+        snapshot.ScenarioGenerator.Absurdity = absurdity;
         snapshot.PersonaRandomizer.Style = PersonaStyleFor(style);
         snapshot.PersonaRandomizer.Seed = seed;
         snapshot.PersonaRandomizer.Intensity = intensity;
+        snapshot.PersonaRandomizer.RolePack = rolePack;
+        snapshot.PersonaRandomizer.Absurdity = absurdity;
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-        await _eventLogStore.AppendAsync(sessionId, "native_random_seed_match_generated", new { seed, style, intensity, locks = snapshot.MatchLocks }, cancellationToken);
+        await _eventLogStore.AppendAsync(sessionId, "native_random_seed_match_generated", new { seed, style, intensity, rolePack, absurdity, locks = snapshot.MatchLocks }, cancellationToken);
         return MatchGenerationResult.Completed(generated.Label, seed, style, intensity);
     }
 
-    public async Task<MatchGenerationResult> GenerateAiChoiceAsync(string sessionId, CancellationToken cancellationToken = default)
+    public async Task<MatchGenerationResult> GenerateAiChoiceAsync(
+        string sessionId,
+        string requestedRolePack = "auto",
+        string requestedIntensity = "normal",
+        string requestedAbsurdity = "grounded",
+        CancellationToken cancellationToken = default)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
@@ -79,7 +92,10 @@ public sealed class MatchGenerationService
             return MatchGenerationResult.Failed("No provider config for narrator.");
         }
 
-        var prompt = BuildAiChoicePrompt(snapshot);
+        var rolePack = NormalizeRolePack(requestedRolePack);
+        var intensity = NormalizeIntensity(requestedIntensity);
+        var absurdity = NormalizeAbsurdity(requestedAbsurdity);
+        var prompt = BuildAiChoicePrompt(snapshot, rolePack, intensity, absurdity);
         var result = await _modelClient.CompleteChatAsync(config, prompt, cancellationToken);
         if (!result.Ok && fallbackConfig is not null)
         {
@@ -103,17 +119,26 @@ public sealed class MatchGenerationService
         snapshot.MatchType = NormalizeStyle(generated.Style);
         snapshot.ScenarioGenerator.Style = snapshot.MatchType;
         snapshot.ScenarioGenerator.Seed = "ai-choice";
-        snapshot.ScenarioGenerator.Intensity = "";
+        snapshot.ScenarioGenerator.Intensity = intensity;
+        snapshot.ScenarioGenerator.RolePack = rolePack;
+        snapshot.ScenarioGenerator.Absurdity = absurdity;
         snapshot.PersonaRandomizer.Style = PersonaStyleFor(snapshot.MatchType);
         snapshot.PersonaRandomizer.Seed = "ai-choice";
-        snapshot.PersonaRandomizer.Intensity = "";
+        snapshot.PersonaRandomizer.Intensity = intensity;
+        snapshot.PersonaRandomizer.RolePack = rolePack;
+        snapshot.PersonaRandomizer.Absurdity = absurdity;
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-        await _eventLogStore.AppendAsync(sessionId, "native_ai_choice_match_generated", new { generated.Label, generated.Style, locks = snapshot.MatchLocks }, cancellationToken);
-        return MatchGenerationResult.Completed(generated.Label, "ai-choice", generated.Style);
+        await _eventLogStore.AppendAsync(sessionId, "native_ai_choice_match_generated", new { generated.Label, generated.Style, rolePack, absurdity, locks = snapshot.MatchLocks }, cancellationToken);
+        return MatchGenerationResult.Completed(generated.Label, "ai-choice", generated.Style, intensity);
     }
 
-    public async Task<MatchGenerationResult> GenerateYoloSeedAsync(string sessionId, CancellationToken cancellationToken = default)
+    public async Task<MatchGenerationResult> GenerateYoloSeedAsync(
+        string sessionId,
+        string requestedRolePack = "auto",
+        string requestedIntensity = "normal",
+        string requestedAbsurdity = "grounded",
+        CancellationToken cancellationToken = default)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
@@ -123,18 +148,25 @@ public sealed class MatchGenerationService
 
         var seed = $"yolo-{Guid.NewGuid():N}"[..13].ToUpperInvariant();
         var style = RandomStyle(seed, snapshot.MatchType);
-        var generated = GenerateYoloMatch(style, seed, RequiredAgentIds(snapshot));
+        var rolePack = NormalizeRolePack(requestedRolePack);
+        var intensity = NormalizeIntensity(requestedIntensity);
+        var absurdity = NormalizeAbsurdity(requestedAbsurdity);
+        var generated = GenerateYoloMatch(style, seed, rolePack, intensity, absurdity, RequiredAgentIds(snapshot));
         ApplyGeneratedMatch(snapshot, generated, clearTranscript: false);
         snapshot.ScenarioGenerator.Style = style;
         snapshot.ScenarioGenerator.Seed = seed;
-        snapshot.ScenarioGenerator.Intensity = "";
+        snapshot.ScenarioGenerator.Intensity = intensity;
+        snapshot.ScenarioGenerator.RolePack = rolePack;
+        snapshot.ScenarioGenerator.Absurdity = absurdity;
         snapshot.PersonaRandomizer.Style = "yolo";
         snapshot.PersonaRandomizer.Seed = seed;
-        snapshot.PersonaRandomizer.Intensity = "";
+        snapshot.PersonaRandomizer.Intensity = intensity;
+        snapshot.PersonaRandomizer.RolePack = rolePack;
+        snapshot.PersonaRandomizer.Absurdity = absurdity;
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-        await _eventLogStore.AppendAsync(sessionId, "native_yolo_seed_match_generated", new { seed, style, generated.Label, locks = snapshot.MatchLocks }, cancellationToken);
-        return MatchGenerationResult.Completed(generated.Label, seed, style);
+        await _eventLogStore.AppendAsync(sessionId, "native_yolo_seed_match_generated", new { seed, style, generated.Label, rolePack, absurdity, locks = snapshot.MatchLocks }, cancellationToken);
+        return MatchGenerationResult.Completed(generated.Label, seed, style, intensity);
     }
 
     public async Task ToggleLockAsync(string sessionId, string key, bool locked, CancellationToken cancellationToken = default)
@@ -150,10 +182,11 @@ public sealed class MatchGenerationService
         await _eventLogStore.AppendAsync(sessionId, "native_match_lock_changed", new { key, locked }, cancellationToken);
     }
 
-    private static GeneratedMatch GenerateTemplateMatch(string style, string seed, string intensity, IReadOnlyList<string> agentIds)
+    private static GeneratedMatch GenerateTemplateMatch(string style, string seed, string intensity, string rolePack, string absurdity, IReadOnlyList<string> agentIds)
     {
-        var rng = new Random(StableSeed($"ai-arena-wpf:{style}:{intensity}:{seed}:{string.Join(",", agentIds)}"));
+        var rng = new Random(StableSeed($"ai-arena-wpf:{style}:{intensity}:{rolePack}:{absurdity}:{seed}:{string.Join(",", agentIds)}"));
         var pools = TemplatePools.For(style);
+        var rolePackFrame = RolePackFrame(rolePack);
         var domain = Pick(rng, pools.Domains);
         var tension = Pick(rng, pools.Tensions);
         var outcome = Pick(rng, pools.Outcomes);
@@ -161,26 +194,28 @@ public sealed class MatchGenerationService
         var global = string.Join(
             " ",
             $"Stay focused on {topic}",
+            RolePackGlobalFrame(rolePack),
+            AbsurdityGlobalFrame(absurdity),
             IntensityGlobalFrame(intensity),
             "Surface assumptions, define terms, and keep the exchange concrete.",
             "Do not fetch external news or live data unless the operator explicitly provides it.");
         var personas = agentIds
             .Where(id => id is "alpha" or "beta" or "gamma" or "delta")
-            .Select(id => GeneratedPersona.For(style, seed, id, intensity))
+            .Select(id => GeneratedPersona.For(style, seed, id, intensity, rolePack, absurdity))
             .Append(GeneratedPersona.Narrator(style, seed, intensity))
             .ToArray();
         return new GeneratedMatch(
-            $"Random {StyleLabel(style)}{IntensityLabelSuffix(intensity)} match",
+            $"Random {StyleLabel(style)}{IntensityLabelSuffix(intensity)}{RolePackLabelSuffix(rolePack)} match",
             style,
             topic,
             global,
-            $"{IntensityNarratorFrame(intensity)} Track how the participants handle {tension}. Highlight unresolved cruxes, evidence gaps, and the path toward {outcome}.",
+            $"{IntensityNarratorFrame(intensity)} {rolePackFrame.NarratorHint} Track how the participants handle {tension}. Highlight unresolved cruxes, evidence gaps, and the path toward {outcome}.",
             personas);
     }
 
-    private static GeneratedMatch GenerateYoloMatch(string style, string seed, IReadOnlyList<string> agentIds)
+    private static GeneratedMatch GenerateYoloMatch(string style, string seed, string rolePack, string intensity, string absurdity, IReadOnlyList<string> agentIds)
     {
-        var rng = new Random(StableSeed($"ai-arena-yolo:{style}:{seed}:{string.Join(",", agentIds)}"));
+        var rng = new Random(StableSeed($"ai-arena-yolo:{style}:{rolePack}:{intensity}:{absurdity}:{seed}:{string.Join(",", agentIds)}"));
         var frame = Pick(rng, YoloTemplatePools.Frames);
         var operation = Pick(rng, YoloTemplatePools.OperationRules);
         var pressure = Pick(rng, YoloTemplatePools.DiagnosticsPressures);
@@ -191,15 +226,18 @@ public sealed class MatchGenerationService
             frame.GlobalFrame,
             operation,
             pressure.GlobalPressure,
+            RolePackGlobalFrame(rolePack),
+            AbsurdityGlobalFrame(absurdity),
+            IntensityGlobalFrame(intensity),
             demand.GlobalDemand,
             "Do not fetch external news or live data unless the operator explicitly provides it.");
         var personas = agentIds
             .Where(id => id is "alpha" or "beta" or "gamma" or "delta")
-            .Select(id => GeneratedPersona.Yolo(style, seed, id, pressure.PersonaPressure))
+            .Select(id => GeneratedPersona.Yolo(style, seed, id, pressure.PersonaPressure, rolePack, absurdity))
             .Append(GeneratedPersona.YoloNarrator(style, seed, pressure.NarratorPressure))
             .ToArray();
         return new GeneratedMatch(
-            $"YOLO {frame.Label}",
+            $"YOLO {frame.Label}{RolePackLabelSuffix(rolePack)}",
             style,
             topic,
             global,
@@ -228,6 +266,7 @@ public sealed class MatchGenerationService
                 if (!IsLocked(locks, "narrator"))
                 {
                     snapshot.Engine.Narrator.Persona = persona.Persona;
+                    snapshot.Engine.Narrator.VoiceStyle = NormalizeGeneratedVoice(persona.VoiceStyle);
                 }
                 continue;
             }
@@ -237,6 +276,7 @@ public sealed class MatchGenerationService
             {
                 agent.Name = AgentLabel(agent.Id, persona.Role);
                 agent.Persona = persona.Persona;
+                agent.VoiceStyle = NormalizeGeneratedVoice(persona.VoiceStyle);
                 agent.PrivateNotes.Clear();
                 agent.Status = "waiting";
             }
@@ -252,7 +292,7 @@ public sealed class MatchGenerationService
         }
     }
 
-    private static IReadOnlyList<ModelChatMessage> BuildAiChoicePrompt(ArenaSnapshot snapshot)
+    private static IReadOnlyList<ModelChatMessage> BuildAiChoicePrompt(ArenaSnapshot snapshot, string rolePack, string intensity, string absurdity)
     {
         var agents = string.Join(Environment.NewLine, snapshot.Engine.Agents.Select(agent => $"- {agent.Id}: {agent.Name}: {agent.Persona}"));
         return
@@ -268,10 +308,15 @@ public sealed class MatchGenerationService
                     "Each participant must get a distinct role and persona. Do not reuse the current cast roles.",
                     "Make the roles visibly different, specific, and useful for the scenario.",
                     $"Current match type: {snapshot.MatchType}",
+                    $"Requested role pack: {RolePackFrame(rolePack).Label}.",
+                    $"Requested debate pressure: {IntensityLabel(intensity)}.",
+                    $"Requested absurdity: {AbsurdityLabel(absurdity)}.",
+                    "If absurdity is odd or higher, create visible role/voice mismatches while preserving debate usefulness.",
+                    "Optional persona field voice_style may be default, scientific, legal_policy, plain_language, idioms, cute, poetic, socratic, bullet_only, skeptical, executive_brief, evidence_ledger, no_analogies, hedge_uncertainty, bark_only, or science_gibberish.",
                     $"Current topic: {snapshot.Engine.Steering.Topic}",
                     $"Current cast:{Environment.NewLine}{agents}",
                     "Return this JSON shape:",
-                    $"{{\"label\":\"short label\",\"style\":\"balanced|adversarial|technical|scientific|research|product|safety|philosophical|legal|creative|red-team|incident\",\"scenario\":{{\"topic\":\"...\",\"global\":\"...\",\"narrator_brief\":\"...\"}},\"personas\":[{PersonaJsonShape(snapshot)},{{\"agent_id\":\"narrator\",\"role\":\"Narrator\",\"persona\":\"...\"}}]}}"))
+                    $"{{\"label\":\"short label\",\"style\":\"balanced|adversarial|technical|scientific|research|product|safety|philosophical|legal|creative|red-team|incident\",\"scenario\":{{\"topic\":\"...\",\"global\":\"...\",\"narrator_brief\":\"...\"}},\"personas\":[{PersonaJsonShape(snapshot)},{{\"agent_id\":\"narrator\",\"role\":\"Narrator\",\"persona\":\"...\",\"voice_style\":\"default\"}}]}}"))
         ];
     }
 
@@ -290,7 +335,8 @@ public sealed class MatchGenerationService
                     .Select(item => new GeneratedPersona(
                         item.GetStringOrDefault("agent_id", ""),
                         item.GetStringOrDefault("role", item.GetStringOrDefault("name", "")),
-                        item.GetStringOrDefault("persona", "")))
+                        item.GetStringOrDefault("persona", ""),
+                        item.GetStringOrDefault("voice_style", "default")))
                     .Where(item => !string.IsNullOrWhiteSpace(item.AgentId) && !string.IsNullOrWhiteSpace(item.Persona))
                     .ToArray()
                 : [];
@@ -361,6 +407,46 @@ public sealed class MatchGenerationService
     {
         var cleaned = string.IsNullOrWhiteSpace(value) ? "normal" : value.Trim().ToLowerInvariant();
         return Intensities.Contains(cleaned) ? cleaned : "normal";
+    }
+
+    private static string NormalizeRolePack(string value)
+    {
+        var cleaned = string.IsNullOrWhiteSpace(value)
+            ? "auto"
+            : value.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_').Replace("/", "_");
+        return cleaned switch
+        {
+            "auto" => "auto",
+            "balanced" => "balanced",
+            "red_team" or "redteam" => "red_team",
+            "scientific_review" or "science_review" => "scientific_review",
+            "technical_architecture" or "technical_arch" => "technical_architecture",
+            "safety_audit" => "safety_audit",
+            "legal_policy" or "legal" or "policy" => "legal_policy",
+            "incident_response" or "incident" => "incident_response",
+            "product_risk" or "product" => "product_risk",
+            "absurd_lab" or "absurd" => "absurd_lab",
+            _ => "auto"
+        };
+    }
+
+    private static string NormalizeAbsurdity(string value)
+    {
+        var cleaned = string.IsNullOrWhiteSpace(value) ? "grounded" : value.Trim().ToLowerInvariant();
+        return cleaned switch
+        {
+            "grounded" or "none" or "off" => "grounded",
+            "odd" or "weird" => "odd",
+            "absurd" => "absurd",
+            "maximum" or "max" => "maximum",
+            _ => "grounded"
+        };
+    }
+
+    private static string NormalizeGeneratedVoice(string? voiceStyle)
+    {
+        var normalized = VoiceStyleInstructions.Normalize(voiceStyle);
+        return normalized.Equals("default", StringComparison.OrdinalIgnoreCase) ? "" : normalized;
     }
 
     private static string PersonaStyleFor(string style)
@@ -446,6 +532,57 @@ public sealed class MatchGenerationService
             "spicy" => "Role pressure: surface one uncomfortable tradeoff or hidden incentive.",
             "chaos" => "Role pressure: mark uncertainty, stabilize terms, and avoid pretending the situation is cleaner than it is.",
             _ => ""
+        };
+    }
+
+    private static RolePackFrame RolePackFrame(string rolePack)
+    {
+        return NormalizeRolePack(rolePack) switch
+        {
+            "red_team" => new("Red team", "Treat each role as part of an adversarial review crew: proposal, exploit path, mitigation, and boundary test.", "Watch whether adversarial pressure produces better controls instead of theatre."),
+            "scientific_review" => new("Scientific review", "Treat each role as a research-review function: hypothesis, methods, statistics, and validity boundary.", "Watch whether claims become falsifiable and uncertainty remains honest."),
+            "technical_architecture" => new("Technical architecture", "Treat each role as an architecture review function: design, reliability, implementation, and rollback boundary.", "Watch whether the cast turns argument into implementable constraints."),
+            "safety_audit" => new("Safety audit", "Treat each role as a safety audit function: capability, misuse, verification, and escalation boundary.", "Watch whether safety claims become observable controls."),
+            "legal_policy" => new("Legal / policy", "Treat each role as a policy review function: rights, obligations, exceptions, and enforcement practicality.", "Watch whether policy language becomes operational without losing nuance."),
+            "incident_response" => new("Incident response", "Treat each role as an incident room function: commander, root cause, customer impact, and prevention boundary.", "Watch whether urgency preserves evidence and produces prevention."),
+            "product_risk" => new("Product risk", "Treat each role as a product risk function: user value, launch pressure, trust cost, and rollback boundary.", "Watch whether growth pressure remains reversible and honest."),
+            "absurd_lab" => new("Absurd lab", "Treat each role as an intentionally mismatched persona stress test. Preserve reasoning despite strange expertise and expression constraints.", "Watch whether absurd constraints reveal role drift, loss of signal, or surprising robustness."),
+            "balanced" => new("Balanced", "Treat each role as a balanced review crew with distinct but cooperative cognitive functions.", "Watch whether the group preserves useful disagreement."),
+            _ => new("Auto pack", "", "")
+        };
+    }
+
+    private static string RolePackGlobalFrame(string rolePack)
+    {
+        var frame = RolePackFrame(rolePack).GlobalFrame;
+        return string.IsNullOrWhiteSpace(frame) ? "" : frame;
+    }
+
+    private static string AbsurdityGlobalFrame(string absurdity)
+    {
+        return NormalizeAbsurdity(absurdity) switch
+        {
+            "odd" => "Some persona/voice pairings may be unusual; preserve the debate objective even when expression is stylized.",
+            "absurd" => "Persona mixer is active: expertise, voice, and reasoning distortion may intentionally conflict. Do not abandon the assigned expertise or the debate objective.",
+            "maximum" => "Maximum persona mixer is active: preserve useful reasoning through extreme expression constraints and mismatched expertise. Treat the absurdity as a stress test, not permission to become content-free.",
+            _ => ""
+        };
+    }
+
+    private static string RolePackLabelSuffix(string rolePack)
+    {
+        var label = RolePackFrame(rolePack).Label;
+        return label.Equals("Auto pack", StringComparison.OrdinalIgnoreCase) ? "" : $" {label}";
+    }
+
+    private static string AbsurdityLabel(string absurdity)
+    {
+        return NormalizeAbsurdity(absurdity) switch
+        {
+            "odd" => "Odd",
+            "absurd" => "Absurd",
+            "maximum" => "Maximum",
+            _ => "Grounded"
         };
     }
 
@@ -546,7 +683,7 @@ public sealed class MatchGenerationService
     {
         return string.Join(
             ",",
-            RequiredAgentIds(snapshot).Select(id => $"{{\"agent_id\":\"{id}\",\"role\":\"...\",\"persona\":\"...\"}}"));
+            RequiredAgentIds(snapshot).Select(id => $"{{\"agent_id\":\"{id}\",\"role\":\"...\",\"persona\":\"...\",\"voice_style\":\"default\"}}"));
     }
 
     private static int ParticipantOrder(string id)
@@ -573,28 +710,33 @@ internal sealed record GeneratedMatch(string Label, string Style, string Topic, 
     public static GeneratedMatch Empty { get; } = new("", "balanced", "", "", "", []);
 }
 
-internal sealed record GeneratedPersona(string AgentId, string Role, string Persona)
+internal sealed record GeneratedPersona(string AgentId, string Role, string Persona, string VoiceStyle = "default")
 {
-    public static GeneratedPersona For(string style, string seed, string agentId, string intensity = "normal")
+    public static GeneratedPersona For(string style, string seed, string agentId, string intensity = "normal", string rolePack = "auto", string absurdity = "grounded")
     {
-        var rng = new Random(MatchGenerationServiceSeed($"persona:{style}:{seed}:{agentId}"));
+        var rng = new Random(MatchGenerationServiceSeed($"persona:{style}:{seed}:{agentId}:{rolePack}:{absurdity}"));
         var pools = agentId.Equals("delta", StringComparison.OrdinalIgnoreCase)
             ? TemplatePools.ForDeltaPersona(style)
             : TemplatePools.ForPersona(style);
-        var role = pools.Roles[rng.Next(pools.Roles.Length)];
+        var role = RoleForPack(rolePack, agentId) ?? pools.Roles[rng.Next(pools.Roles.Length)];
         var thinking = pools.Thinking[rng.Next(pools.Thinking.Length)];
         var temperament = pools.Temperaments[rng.Next(pools.Temperaments.Length)];
         var priority = pools.Priorities[rng.Next(pools.Priorities.Length)];
         var blindSpot = pools.BlindSpots[rng.Next(pools.BlindSpots.Length)];
         var pressure = MatchGenerationService.PersonaPressure(intensity);
+        var voice = VoiceForMixer(rolePack, absurdity, agentId, rng);
+        var distortion = DistortionForMixer(absurdity, agentId, rng);
+        var mixer = MixerFrame(role, voice, distortion);
         return new GeneratedPersona(
             agentId,
             role,
             string.Join(" ", new[]
             {
                 $"{role}. Thinking style: {thinking}. Temperament: {temperament}. Priority/bias: {priority}. Blind spot: {blindSpot}.",
+                mixer,
                 pressure
-            }.Where(item => !string.IsNullOrWhiteSpace(item))));
+            }.Where(item => !string.IsNullOrWhiteSpace(item))),
+            voice);
     }
 
     public static GeneratedPersona Narrator(string style, string seed, string intensity = "normal")
@@ -616,19 +758,27 @@ internal sealed record GeneratedPersona(string AgentId, string Role, string Pers
         return persona with { Role = role, Persona = $"{role}. Track the exchange without joining as Alpha, Beta, Gamma, or Delta. {persona.Persona}" };
     }
 
-    public static GeneratedPersona Yolo(string style, string seed, string agentId, string pressure)
+    public static GeneratedPersona Yolo(string style, string seed, string agentId, string pressure, string rolePack = "auto", string absurdity = "grounded")
     {
-        var rng = new Random(MatchGenerationServiceSeed($"yolo-persona:{style}:{seed}:{agentId}"));
+        var rng = new Random(MatchGenerationServiceSeed($"yolo-persona:{style}:{seed}:{agentId}:{rolePack}:{absurdity}"));
         var pools = YoloTemplatePools.ForPersona(agentId, style);
-        var role = pools.Roles[rng.Next(pools.Roles.Length)];
+        var role = RoleForPack(rolePack, agentId) ?? pools.Roles[rng.Next(pools.Roles.Length)];
         var thinking = pools.Thinking[rng.Next(pools.Thinking.Length)];
         var temperament = pools.Temperaments[rng.Next(pools.Temperaments.Length)];
         var priority = pools.Priorities[rng.Next(pools.Priorities.Length)];
         var blindSpot = pools.BlindSpots[rng.Next(pools.BlindSpots.Length)];
+        var voice = VoiceForMixer(rolePack, absurdity, agentId, rng);
+        var distortion = DistortionForMixer(absurdity, agentId, rng);
+        var mixer = MixerFrame(role, voice, distortion);
         return new GeneratedPersona(
             agentId,
             role,
-            $"{role}. Arena function: {thinking}. Pressure focus: {pressure}. Temperament: {temperament}. Priority/bias: {priority}. Blind spot: {blindSpot}.");
+            string.Join(" ", new[]
+            {
+                $"{role}. Arena function: {thinking}. Pressure focus: {pressure}. Temperament: {temperament}. Priority/bias: {priority}. Blind spot: {blindSpot}.",
+                mixer
+            }.Where(item => !string.IsNullOrWhiteSpace(item))),
+            voice);
     }
 
     public static GeneratedPersona YoloNarrator(string style, string seed, string pressure)
@@ -641,6 +791,160 @@ internal sealed record GeneratedPersona(string AgentId, string Role, string Pers
             role,
             $"{role}. Observe AI Arena as a turn-based adversarial lab. Do not join as Alpha, Beta, Gamma, or Delta. Track {pressure}, role drift, unsupported claims, evidence pressure, consensus collapse, narrative heat, and whether the exchange produces sharper constraints.");
     }
+
+    private static string? RoleForPack(string rolePack, string agentId)
+    {
+        var key = rolePack.Trim().ToLowerInvariant();
+        return key switch
+        {
+            "balanced" => agentId switch
+            {
+                "alpha" => "Practical strategist",
+                "beta" => "Critical reviewer",
+                "gamma" => "Evidence mapper",
+                "delta" => "Boundary tester",
+                _ => null
+            },
+            "red_team" => agentId switch
+            {
+                "alpha" => "Proposal defender",
+                "beta" => "Exploit path hunter",
+                "gamma" => "Mitigation auditor",
+                "delta" => "Abuse boundary mapper",
+                _ => null
+            },
+            "scientific_review" => agentId switch
+            {
+                "alpha" => "Hypothesis builder",
+                "beta" => "Statistical skeptic",
+                "gamma" => "Methodology critic",
+                "delta" => "Validity boundary mapper",
+                _ => null
+            },
+            "technical_architecture" => agentId switch
+            {
+                "alpha" => "Architecture proposer",
+                "beta" => "Reliability critic",
+                "gamma" => "Implementation planner",
+                "delta" => "Rollback boundary tester",
+                _ => null
+            },
+            "safety_audit" => agentId switch
+            {
+                "alpha" => "Capability advocate",
+                "beta" => "Misuse analyst",
+                "gamma" => "Verification critic",
+                "delta" => "Escalation boundary mapper",
+                _ => null
+            },
+            "legal_policy" => agentId switch
+            {
+                "alpha" => "Rights mapper",
+                "beta" => "Obligation interpreter",
+                "gamma" => "Exception reviewer",
+                "delta" => "Enforcement skeptic",
+                _ => null
+            },
+            "incident_response" => agentId switch
+            {
+                "alpha" => "Incident commander",
+                "beta" => "Root-cause analyst",
+                "gamma" => "Customer impact witness",
+                "delta" => "Prevention boundary tester",
+                _ => null
+            },
+            "product_risk" => agentId switch
+            {
+                "alpha" => "Product champion",
+                "beta" => "Trust-risk critic",
+                "gamma" => "Launch operator",
+                "delta" => "Rollback sentinel",
+                _ => null
+            },
+            "absurd_lab" => agentId switch
+            {
+                "alpha" => "Nuclear physicist",
+                "beta" => "Pet lover",
+                "gamma" => "Medieval compliance bard",
+                "delta" => "Underwater accountant",
+                _ => null
+            },
+            _ => null
+        };
+    }
+
+    private static string VoiceForMixer(string rolePack, string absurdity, string agentId, Random rng)
+    {
+        if (rolePack.Equals("absurd_lab", StringComparison.OrdinalIgnoreCase))
+        {
+            return agentId switch
+            {
+                "alpha" => "bark_only",
+                "beta" => "science_gibberish",
+                "gamma" => "legal_policy",
+                "delta" => "cute",
+                _ => "default"
+            };
+        }
+
+        return absurdity switch
+        {
+            "odd" => Pick(rng, ["idioms", "cute", "poetic", "executive_brief", "hedge_uncertainty"]),
+            "absurd" => Pick(rng, ["bark_only", "science_gibberish", "cute", "legal_policy", "poetic"]),
+            "maximum" => agentId switch
+            {
+                "alpha" => "bark_only",
+                "beta" => "science_gibberish",
+                "gamma" => "cute",
+                "delta" => "idioms",
+                _ => "default"
+            },
+            _ => "default"
+        };
+    }
+
+    private static string DistortionForMixer(string absurdity, string agentId, Random rng)
+    {
+        if (absurdity.Equals("grounded", StringComparison.OrdinalIgnoreCase))
+        {
+            return "";
+        }
+
+        var options = absurdity switch
+        {
+            "maximum" => new[] { "evidence-obsessed", "overconfident about weak signals", "literal-minded under metaphor", "consensus-resistant", "overly cautious about tiny edge cases" },
+            "absurd" => new[] { "evidence-obsessed", "overconfident but testable", "literal-minded", "excessively cautious", "contrarian about obvious claims" },
+            _ => new[] { "slightly overconfident", "overly cautious", "evidence-hungry", "literal-minded" }
+        };
+
+        return agentId.Equals("alpha", StringComparison.OrdinalIgnoreCase)
+            && (absurdity.Equals("absurd", StringComparison.OrdinalIgnoreCase) || absurdity.Equals("maximum", StringComparison.OrdinalIgnoreCase))
+            ? "evidence-obsessed"
+            : Pick(rng, options);
+    }
+
+    private static string MixerFrame(string role, string voiceStyle, string distortion)
+    {
+        var voice = VoiceStyleInstructions.Normalize(voiceStyle);
+        if (voice.Equals("default", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(distortion))
+        {
+            return "";
+        }
+
+        var parts = new List<string> { $"Persona mixer: expertise layer is {role}." };
+        if (!voice.Equals("default", StringComparison.OrdinalIgnoreCase))
+        {
+            parts.Add($"Expression constraint is {VoiceStyleInstructions.Label(voice)}.");
+        }
+        if (!string.IsNullOrWhiteSpace(distortion))
+        {
+            parts.Add($"Reasoning distortion is {distortion}.");
+        }
+        parts.Add("Preserve the assigned expertise and debate objective even when the expression constraint is strange.");
+        return string.Join(" ", parts);
+    }
+
+    private static T Pick<T>(Random rng, IReadOnlyList<T> values) => values[rng.Next(values.Count)];
 
     private static int MatchGenerationServiceSeed(string value)
     {
@@ -714,6 +1018,8 @@ internal sealed record YoloFrame(string Label, string Topic, string GlobalFrame)
 internal sealed record YoloPressure(string TopicPressure, string GlobalPressure, string PersonaPressure, string NarratorPressure);
 
 internal sealed record YoloDemand(string TopicOutcome, string GlobalDemand);
+
+internal sealed record RolePackFrame(string Label, string GlobalFrame, string NarratorHint);
 
 internal static class YoloTemplatePools
 {

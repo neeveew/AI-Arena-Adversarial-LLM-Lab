@@ -11,6 +11,8 @@ public sealed record ArenaSnapshot(
     bool GlobalLocked,
     string ScenarioGeneratorStyle,
     string ScenarioGeneratorIntensity,
+    string ScenarioGeneratorRolePack,
+    string ScenarioGeneratorAbsurdity,
     string ScenarioGeneratorSeed,
     string PersonaGeneratorStyle,
     string PersonaGeneratorSeed,

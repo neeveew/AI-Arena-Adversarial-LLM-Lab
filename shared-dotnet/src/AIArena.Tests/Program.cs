@@ -33,6 +33,7 @@ var tests = new (string Name, Action Test)[]
     ("writes timestamped event log entries", WriteTimestampedEventLogEntries),
     ("generates random seed match respecting locks", GenerateRandomSeedMatchRespectingLocks),
     ("generates requested random seed style and intensity", GenerateRequestedRandomSeedStyleAndIntensity),
+    ("generates absurd role pack voice constraints", GenerateAbsurdRolePackVoiceConstraints),
     ("generates YOLO seed respecting locks", GenerateYoloSeedRespectingLocks),
     ("adds narrator message to transcript", AddNarratorMessageToTranscript),
     ("asks narrator with operator request", AskNarratorWithOperatorRequest),
@@ -551,6 +552,31 @@ static void GenerateRequestedRandomSeedStyleAndIntensity()
     Require(loaded.PersonaRandomizer.Style == "research", "scientific persona style did not map to research");
     Require(loaded.Engine.Steering.Global.Contains("uncomfortable tradeoffs", StringComparison.OrdinalIgnoreCase), "spicy pressure was not included in the global frame");
     Require(File.ReadAllText(log.EventPath()).Contains("\"intensity\":\"spicy\""), "random seed intensity was not logged");
+    Directory.Delete(root, recursive: true);
+}
+
+static void GenerateAbsurdRolePackVoiceConstraints()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+
+    var service = new MatchGenerationService(sessionStore: store, eventLogStore: log);
+    var result = service.GenerateRandomSeedAsync("default", "technical", "chaos", "absurd_lab", "absurd").GetAwaiter().GetResult();
+    Require(result.Ok, $"absurd random seed failed: {result.Error}");
+    var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+    var alpha = loaded.Engine.Agents.First(agent => agent.Id == "alpha");
+    var beta = loaded.Engine.Agents.First(agent => agent.Id == "beta");
+    Require(alpha.Name.Contains("Nuclear physicist", StringComparison.OrdinalIgnoreCase), "absurd alpha role was not applied");
+    Require(alpha.VoiceStyle == "bark_only", "absurd alpha bark voice was not applied");
+    Require(beta.Name.Contains("Pet lover", StringComparison.OrdinalIgnoreCase), "absurd beta role was not applied");
+    Require(beta.VoiceStyle == "science_gibberish", "absurd beta science gibberish voice was not applied");
+    Require(loaded.ScenarioGenerator.RolePack == "absurd_lab", "role pack was not stored");
+    Require(loaded.ScenarioGenerator.Absurdity == "absurd", "absurdity was not stored");
+    Require(loaded.Engine.Steering.Global.Contains("Persona mixer", StringComparison.OrdinalIgnoreCase), "persona mixer global frame missing");
+    Require(File.ReadAllText(log.EventPath()).Contains("\"rolePack\":\"absurd_lab\""), "role pack was not logged");
     Directory.Delete(root, recursive: true);
 }
 

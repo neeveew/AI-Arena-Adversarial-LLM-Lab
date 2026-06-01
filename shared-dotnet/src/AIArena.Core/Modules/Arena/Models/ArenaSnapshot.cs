@@ -320,6 +320,12 @@ public sealed class GeneratorState
     [JsonPropertyName("intensity")]
     public string Intensity { get; set; } = "";
 
+    [JsonPropertyName("role_pack")]
+    public string RolePack { get; set; } = "";
+
+    [JsonPropertyName("absurdity")]
+    public string Absurdity { get; set; } = "";
+
     [JsonPropertyName("apply_on_reset")]
     public bool ApplyOnReset { get; set; }
 }

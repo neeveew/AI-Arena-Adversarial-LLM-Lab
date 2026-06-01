@@ -292,8 +292,10 @@ public partial class MainWindow : Window
         SelectComboTag(AvatarStylePicker, CurrentAvatarStyle());
         SelectComboTag(SystemGlyphStylePicker, _wpfSettings.SystemEventGlyphs ? "glyph" : "fallback");
         SelectComboTag(TopStripModePicker, CurrentTopStripMode());
+        SelectComboTag(RandomSeedRolePackPicker, _wpfSettings.RandomSeedRolePack);
         SelectComboTag(RandomSeedStylePicker, _wpfSettings.RandomSeedStyle);
         SelectComboTag(RandomSeedIntensityPicker, _wpfSettings.RandomSeedIntensity);
+        SelectComboTag(RandomSeedAbsurdityPicker, _wpfSettings.RandomSeedAbsurdity);
         CompactTranscriptCheckBox.IsChecked = _wpfSettings.CompactTranscriptMode;
         TurnCompareCheckBox.IsChecked = _wpfSettings.TurnCompareMode;
         MatchQualityTimelineCheckBox.IsChecked = _wpfSettings.ShowMatchQualityTimeline;
@@ -578,13 +580,19 @@ public partial class MainWindow : Window
 
     private void RandomSeedOptions_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (_isRenderingSnapshot || RandomSeedStylePicker is null || RandomSeedIntensityPicker is null)
+        if (_isRenderingSnapshot
+            || RandomSeedRolePackPicker is null
+            || RandomSeedStylePicker is null
+            || RandomSeedIntensityPicker is null
+            || RandomSeedAbsurdityPicker is null)
         {
             return;
         }
 
+        _wpfSettings.RandomSeedRolePack = SelectedComboTag(RandomSeedRolePackPicker, "auto");
         _wpfSettings.RandomSeedStyle = SelectedComboTag(RandomSeedStylePicker, "auto");
         _wpfSettings.RandomSeedIntensity = SelectedComboTag(RandomSeedIntensityPicker, "normal");
+        _wpfSettings.RandomSeedAbsurdity = SelectedComboTag(RandomSeedAbsurdityPicker, "grounded");
         _wpfSettingsStore.Save(_wpfSettings);
     }
 
@@ -2159,6 +2167,8 @@ public partial class MainWindow : Window
         var scenarioSeed = DisplayStatusValue(snapshot.ScenarioGeneratorSeed);
         var scenarioStyle = DisplayStatusValue(snapshot.ScenarioGeneratorStyle);
         var scenarioIntensity = DisplayStatusValue(snapshot.ScenarioGeneratorIntensity);
+        var scenarioRolePack = DisplayStatusValue(snapshot.ScenarioGeneratorRolePack);
+        var scenarioAbsurdity = DisplayStatusValue(snapshot.ScenarioGeneratorAbsurdity);
         var personaSeed = DisplayStatusValue(snapshot.PersonaGeneratorSeed);
         var personaStyle = DisplayStatusValue(snapshot.PersonaGeneratorStyle);
         var source = ScenarioSeedSource(snapshot.ScenarioGeneratorSeed, snapshot.PersonaGeneratorStyle);
@@ -2168,7 +2178,15 @@ public partial class MainWindow : Window
         ScenarioSeedInspector.Children.Add(CreateSetupChip("Style", scenarioStyle, ResourceBrush("MutedTextBrush")));
         if (scenarioIntensity != "-")
         {
-            ScenarioSeedInspector.Children.Add(CreateSetupChip("Intensity", scenarioIntensity, ResourceBrush("BetaAccentBrush")));
+            ScenarioSeedInspector.Children.Add(CreateSetupChip("Pressure", scenarioIntensity, ResourceBrush("BetaAccentBrush")));
+        }
+        if (scenarioRolePack != "-" && !scenarioRolePack.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            ScenarioSeedInspector.Children.Add(CreateSetupChip("Pack", scenarioRolePack.Replace('_', ' '), ResourceBrush("PrimaryBorderBrush")));
+        }
+        if (scenarioAbsurdity != "-" && !scenarioAbsurdity.Equals("grounded", StringComparison.OrdinalIgnoreCase))
+        {
+            ScenarioSeedInspector.Children.Add(CreateSetupChip("Absurdity", scenarioAbsurdity, ResourceBrush("NarratorAccentBrush")));
         }
         ScenarioSeedInspector.Children.Add(CreateSetupChip("Personas", ShortSeedValue(personaSeed), ResourceBrush("NarratorAccentBrush")));
         ScenarioSeedInspector.Children.Add(CreateSetupChip("Persona style", personaStyle, ResourceBrush("MutedTextBrush")));
@@ -2202,7 +2220,7 @@ public partial class MainWindow : Window
         return seed.Length <= 18 ? seed : $"{seed[..15]}...";
     }
 
-    private static string RandomSeedOptionLabel(string style, string intensity)
+    private static string RandomSeedOptionLabel(string style, string intensity, string rolePack, string absurdity)
     {
         static string Clean(string value) => string.IsNullOrWhiteSpace(value)
             ? ""
@@ -2213,9 +2231,21 @@ public partial class MainWindow : Window
         var styleLabel = cleanStyle.Equals("auto", StringComparison.OrdinalIgnoreCase)
             ? "auto-style"
             : cleanStyle;
-        return cleanIntensity.Equals("normal", StringComparison.OrdinalIgnoreCase)
+        var baseLabel = cleanIntensity.Equals("normal", StringComparison.OrdinalIgnoreCase)
             ? styleLabel
             : $"{styleLabel} {cleanIntensity}";
+        var pack = Clean(rolePack).Replace('_', ' ');
+        var weird = Clean(absurdity);
+        if (!string.IsNullOrWhiteSpace(pack) && !pack.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            baseLabel = $"{baseLabel}, {pack}";
+        }
+        if (!string.IsNullOrWhiteSpace(weird) && !weird.Equals("grounded", StringComparison.OrdinalIgnoreCase))
+        {
+            baseLabel = $"{baseLabel}, {weird}";
+        }
+
+        return baseLabel;
     }
 
     private void PopulateNews(IReadOnlyList<TranscriptMessage> messages)
@@ -2659,7 +2689,9 @@ public partial class MainWindow : Window
             ("executive_brief", "Voice: Executive"),
             ("evidence_ledger", "Voice: Evidence"),
             ("no_analogies", "Voice: No analogies"),
-            ("hedge_uncertainty", "Voice: Hedge")
+            ("hedge_uncertainty", "Voice: Hedge"),
+            ("bark_only", "Voice: Bark-only"),
+            ("science_gibberish", "Voice: Science gibberish")
         ];
     }
 
@@ -2735,7 +2767,8 @@ public partial class MainWindow : Window
         var normalized = NormalizeVoiceStyleTag(voiceStyle);
         return normalized.Equals("bullet_only", StringComparison.OrdinalIgnoreCase)
             || normalized.Equals("evidence_ledger", StringComparison.OrdinalIgnoreCase)
-            || normalized.Equals("no_analogies", StringComparison.OrdinalIgnoreCase);
+            || normalized.Equals("no_analogies", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("bark_only", StringComparison.OrdinalIgnoreCase);
     }
 
     private Brush VoiceAdherenceAccent(string state)
@@ -5394,11 +5427,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        var rolePack = SelectedComboTag(RandomSeedRolePackPicker, "auto");
         var style = SelectedComboTag(RandomSeedStylePicker, "auto");
         var intensity = SelectedComboTag(RandomSeedIntensityPicker, "normal");
-        await RunArenaBusyAsync($"Generating {RandomSeedOptionLabel(style, intensity)} random seed...", RandomSeedButton, async () =>
+        var absurdity = SelectedComboTag(RandomSeedAbsurdityPicker, "grounded");
+        await RunArenaBusyAsync($"Generating {RandomSeedOptionLabel(style, intensity, rolePack, absurdity)} random seed...", RandomSeedButton, async () =>
         {
-            var result = await _matchGeneration.GenerateRandomSeedAsync(_activeSession.Id, style, intensity);
+            var result = await _matchGeneration.GenerateRandomSeedAsync(_activeSession.Id, style, intensity, rolePack, absurdity);
             var status = result.Ok
                 ? $"Random seed match generated: {result.Label}"
                 : $"Random seed failed: {result.Error}";
@@ -5428,7 +5463,10 @@ public partial class MainWindow : Window
 
         await RunArenaBusyAsync("Asking narrator for AI Choice match...", AiChoiceButton, async () =>
         {
-            var result = await _matchGeneration.GenerateAiChoiceAsync(_activeSession.Id);
+            var rolePack = SelectedComboTag(RandomSeedRolePackPicker, "auto");
+            var intensity = SelectedComboTag(RandomSeedIntensityPicker, "normal");
+            var absurdity = SelectedComboTag(RandomSeedAbsurdityPicker, "grounded");
+            var result = await _matchGeneration.GenerateAiChoiceAsync(_activeSession.Id, rolePack, intensity, absurdity);
             var status = result.Ok
                 ? $"AI Choice match generated: {result.Label}"
                 : $"AI Choice failed: {result.Error}";
@@ -5458,7 +5496,10 @@ public partial class MainWindow : Window
 
         await RunArenaBusyAsync("Generating YOLO seed...", YoloScenarioButton, async () =>
         {
-            var result = await _matchGeneration.GenerateYoloSeedAsync(_activeSession.Id);
+            var rolePack = SelectedComboTag(RandomSeedRolePackPicker, "auto");
+            var intensity = SelectedComboTag(RandomSeedIntensityPicker, "normal");
+            var absurdity = SelectedComboTag(RandomSeedAbsurdityPicker, "grounded");
+            var result = await _matchGeneration.GenerateYoloSeedAsync(_activeSession.Id, rolePack, intensity, absurdity);
             var status = result.Ok
                 ? $"YOLO seed generated: {result.Label} - {result.Seed}"
                 : $"YOLO seed failed: {result.Error}";
@@ -6990,6 +7031,10 @@ public partial class MainWindow : Window
         SystemGlyphStylePicker.IsEnabled = !busy;
         TopStripModePicker.IsEnabled = !busy;
         DebugControlsCheckBox.IsEnabled = !busy;
+        RandomSeedRolePackPicker.IsEnabled = !busy;
+        RandomSeedStylePicker.IsEnabled = !busy;
+        RandomSeedIntensityPicker.IsEnabled = !busy;
+        RandomSeedAbsurdityPicker.IsEnabled = !busy;
         SavedStateModePicker.IsEnabled = !busy;
         SavedStateNameText.IsEnabled = !busy;
         SavedStateItemPicker.IsEnabled = !busy;

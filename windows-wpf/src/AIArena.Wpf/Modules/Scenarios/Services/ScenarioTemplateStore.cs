@@ -79,8 +79,12 @@ public sealed class ScenarioTemplateStore
             snapshot.ScenarioGenerator.Style = template.ScenarioGeneratorStyle;
             snapshot.ScenarioGenerator.Seed = template.ScenarioGeneratorSeed;
             snapshot.ScenarioGenerator.Intensity = template.ScenarioGeneratorIntensity;
+            snapshot.ScenarioGenerator.RolePack = template.ScenarioGeneratorRolePack;
+            snapshot.ScenarioGenerator.Absurdity = template.ScenarioGeneratorAbsurdity;
             snapshot.PersonaRandomizer.Style = template.PersonaGeneratorStyle;
             snapshot.PersonaRandomizer.Seed = template.PersonaGeneratorSeed;
+            snapshot.PersonaRandomizer.RolePack = template.ScenarioGeneratorRolePack;
+            snapshot.PersonaRandomizer.Absurdity = template.ScenarioGeneratorAbsurdity;
         }
         snapshot.MatchLocks["topic"] = template.TopicLocked;
         snapshot.MatchLocks["global"] = template.GlobalLocked;
@@ -178,6 +182,8 @@ public sealed class ScenarioTemplateStore
             snapshot.ScenarioGenerator.Style,
             snapshot.ScenarioGenerator.Seed,
             snapshot.ScenarioGenerator.Intensity,
+            snapshot.ScenarioGenerator.RolePack,
+            snapshot.ScenarioGenerator.Absurdity,
             snapshot.PersonaRandomizer.Style,
             snapshot.PersonaRandomizer.Seed);
     }
@@ -206,6 +212,8 @@ public sealed record ScenarioTemplate(
     string ScenarioGeneratorStyle = "",
     string ScenarioGeneratorSeed = "",
     string ScenarioGeneratorIntensity = "",
+    string ScenarioGeneratorRolePack = "",
+    string ScenarioGeneratorAbsurdity = "",
     string PersonaGeneratorStyle = "",
     string PersonaGeneratorSeed = "");
 

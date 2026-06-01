@@ -22,6 +22,8 @@ internal static class VoiceStyleInstructions
             "evidence" or "evidence_ledger" => "evidence_ledger",
             "no_analogies" => "no_analogies",
             "hedge" or "hedge_uncertainty" or "must_hedge_uncertainty" => "hedge_uncertainty",
+            "bark" or "barks" or "bark_only" => "bark_only",
+            "science_gibberish" or "scientific_gibberish" or "gibberish_science" => "science_gibberish",
             _ => "default"
         };
     }
@@ -68,6 +70,8 @@ internal static class VoiceStyleInstructions
             "evidence_ledger" => "Evidence ledger",
             "no_analogies" => "No analogies",
             "hedge_uncertainty" => "Hedge uncertainty",
+            "bark_only" => "Bark-only",
+            "science_gibberish" => "Science gibberish",
             _ => "Default"
         };
     }
@@ -89,6 +93,8 @@ internal static class VoiceStyleInstructions
             "evidence_ledger" => "Style rule: structure the answer as an evidence ledger: Evidence, Inference, Assumptions, Uncertainty, Next test.",
             "no_analogies" => "Style rule: do not use analogies, metaphors, idioms, or decorative language. State the reasoning directly.",
             "hedge_uncertainty" => "Style rule: explicitly hedge uncertainty. Mark confidence, unknowns, and what would change the conclusion.",
+            "bark_only" => "Style rule: speak in bark-like utterances only, using very short bracketed technical labels only when needed to preserve the debate signal.",
+            "science_gibberish" => "Style rule: use playful pseudo-scientific jargon, invented metrics, and over-serious lab language while still pointing at the actual tradeoff.",
             _ => ""
         };
     }

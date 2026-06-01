@@ -58,6 +58,8 @@ public sealed class WpfSettings
     public bool ShowTranscriptDiagnostics { get; set; } = true;
     public string RandomSeedStyle { get; set; } = "auto";
     public string RandomSeedIntensity { get; set; } = "normal";
+    public string RandomSeedRolePack { get; set; } = "auto";
+    public string RandomSeedAbsurdity { get; set; } = "grounded";
     public List<string> OperatorTemplates { get; set; } =
     [
         "Challenge the strongest assumption in the last turn.",

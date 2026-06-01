@@ -40,6 +40,8 @@ public sealed class VoiceStyleAdherenceService
             "evidence_ledger" => RequiredSectionScore(lower, evidence, missing, ["evidence", "inference", "assumptions", "uncertainty", "next test"]),
             "no_analogies" => NoAnalogiesScore(lower, evidence, missing),
             "hedge_uncertainty" => KeywordScore(lower, evidence, missing, "uncertainty hedges", ["confidence", "uncertain", "unknown", "likely", "possibly", "might", "could", "if", "would change", "depends"], baseline: 34, perHit: 8, maxHits: 7),
+            "bark_only" => KeywordScore(lower, evidence, missing, "bark markers", ["bark", "woof", "arf", "ruff", "grr"], baseline: 22, perHit: 14, maxHits: 6),
+            "science_gibberish" => KeywordScore(lower, evidence, missing, "pseudo-science markers", ["quantum", "entropy", "vector", "coefficient", "phase", "isotope", "neutrino", "calibrat", "oscillat", "flux", "molecule", "hypothesis"], baseline: 30, perHit: 8, maxHits: 8),
             _ => 0
         };
 

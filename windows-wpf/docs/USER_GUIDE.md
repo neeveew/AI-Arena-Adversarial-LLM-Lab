@@ -13,7 +13,7 @@ The app is designed for local experimentation with model behavior. You can creat
 5. Pick a Default model from the dropdown, or type one manually.
 6. Optionally assign different models to Alpha, Beta, Gamma, Delta, and Narrator.
 7. Press Test Provider.
-8. Open Custom Match and choose a Random Seed style/intensity, AI Choice, or YOLO.
+8. Open Custom Match and choose a role pack, style, pressure, absurdity level, AI Choice, or YOLO.
 9. Return to Transcript and run 1 TURN or AUTO CHAT.
 
 ## Main Concepts
@@ -32,7 +32,7 @@ The left rail contains the app identity, navigation, session overview, and live 
 The center area contains the active page:
 
 - Transcript: the arena conversation, diagnostics, filters, timeline, memory notes, and compare tools.
-- Custom Match: scenario preview, cast preview, locks, per-agent voice styles, seed generation, and checkpoint/session tools.
+- Custom Match: scenario preview, cast preview, locks, per-agent voice styles, role packs, absurdity controls, seed generation, and checkpoint/session tools.
 
 The right rail contains:
 
@@ -181,7 +181,14 @@ AI Arena also scores non-default voices with a lightweight Style Fit meter. This
 
 ### Random Seed
 
-Random Seed generates a deterministic scenario and cast. Use the style picker to choose Auto, Balanced, Adversarial, Technical, Scientific, Research, Product, Safety, Philosophical, Legal, Creative, Red-team, or Incident. Use the intensity picker to choose Normal, Sharp, Spicy, or Chaos. Locked topic, global instruction, or cast members are preserved.
+Random Seed generates a deterministic scenario and cast. Use Role pack to choose Auto, Balanced, Red team, Scientific review, Technical architecture, Safety audit, Legal / policy, Incident response, Product risk, or Absurd lab. Use Style to choose Auto, Balanced, Adversarial, Technical, Scientific, Research, Product, Safety, Philosophical, Legal, Creative, Red-team, or Incident. Use Pressure to choose Normal, Sharp, Spicy, or Chaos. Use Absurdity to mix expertise, voice constraints, and reasoning distortions. Locked topic, global instruction, or cast members are preserved.
+
+Absurdity levels:
+
+- Grounded keeps voices and roles practical.
+- Odd adds stylized but still useful voice constraints.
+- Absurd creates visible mismatches such as a technical expert speaking through a strange expression layer.
+- Maximum pushes the Persona Mixer into stress-test territory.
 
 Intensity changes the pressure applied to the generated setup:
 
