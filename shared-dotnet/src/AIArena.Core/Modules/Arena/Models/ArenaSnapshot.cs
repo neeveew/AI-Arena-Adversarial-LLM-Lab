@@ -23,6 +23,9 @@ public sealed class ArenaSnapshot
     [JsonPropertyName("persona_randomizer")]
     public GeneratorState PersonaRandomizer { get; init; } = new();
 
+    [JsonPropertyName("generation_history")]
+    public List<GenerationHistoryEntry> GenerationHistory { get; init; } = new();
+
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Extra { get; init; }
 }
@@ -112,6 +115,78 @@ public sealed class DialogueAgent
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Extra { get; init; }
+}
+
+public sealed class GenerationHistoryEntry
+{
+    [JsonPropertyName("id")]
+    public string Id { get; init; } = "";
+
+    [JsonPropertyName("kind")]
+    public string Kind { get; init; } = "";
+
+    [JsonPropertyName("label")]
+    public string Label { get; init; } = "";
+
+    [JsonPropertyName("style")]
+    public string Style { get; init; } = "";
+
+    [JsonPropertyName("intensity")]
+    public string Intensity { get; init; } = "";
+
+    [JsonPropertyName("role_pack")]
+    public string RolePack { get; init; } = "";
+
+    [JsonPropertyName("absurdity")]
+    public string Absurdity { get; init; } = "";
+
+    [JsonPropertyName("scenario_seed")]
+    public string ScenarioSeed { get; init; } = "";
+
+    [JsonPropertyName("persona_seed")]
+    public string PersonaSeed { get; init; } = "";
+
+    [JsonPropertyName("created_at")]
+    public double CreatedAt { get; init; }
+
+    [JsonPropertyName("match")]
+    public GeneratedMatchSnapshot Match { get; init; } = new();
+}
+
+public sealed class GeneratedMatchSnapshot
+{
+    [JsonPropertyName("label")]
+    public string Label { get; init; } = "";
+
+    [JsonPropertyName("style")]
+    public string Style { get; init; } = "balanced";
+
+    [JsonPropertyName("topic")]
+    public string Topic { get; init; } = "";
+
+    [JsonPropertyName("global")]
+    public string Global { get; init; } = "";
+
+    [JsonPropertyName("narrator_brief")]
+    public string NarratorBrief { get; init; } = "";
+
+    [JsonPropertyName("personas")]
+    public List<GeneratedPersonaSnapshot> Personas { get; init; } = new();
+}
+
+public sealed class GeneratedPersonaSnapshot
+{
+    [JsonPropertyName("agent_id")]
+    public string AgentId { get; init; } = "";
+
+    [JsonPropertyName("role")]
+    public string Role { get; init; } = "";
+
+    [JsonPropertyName("persona")]
+    public string Persona { get; init; } = "";
+
+    [JsonPropertyName("voice_style")]
+    public string VoiceStyle { get; init; } = "default";
 }
 
 public sealed class DecisionCardState

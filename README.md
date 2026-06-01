@@ -36,7 +36,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 - Per-agent personas, model assignments, voice styles, pressure profiles, and absurd persona-mixer constraints.
 - Optional debug voice/style cue chips and voice drift enforcement for constrained agents.
 - OpenAI-compatible provider support, including LM Studio.
-- Random Seed role-pack, pressure, style, and absurdity controls, including a seeded-shuffle 50+ role Absurd Lab library, plus AI Choice and YOLO scenario generation.
+- Random Seed presets, role-pack, pressure, style, and absurdity controls, including a seeded-shuffle 50+ role Absurd Lab library, plus AI Choice, YOLO, and replayable generation history.
 - Scenario and cast locks for controlled regeneration.
 - Local sessions, restore points, and scenario templates.
 - Discourse diagnostics: friction, consensus, role drift, unsupported claims, evidence pressure, and narrative heat.
@@ -63,7 +63,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 5. Select a default model, or type a model name manually.
 6. Optionally assign different models to Alpha, Beta, Gamma, Delta, and Narrator.
 7. Press Test Provider.
-8. Open Custom Match and generate a setup using Random Seed role pack/style/pressure/absurdity, AI Choice, or YOLO.
+8. Open Custom Match and generate a setup using Random Seed presets or role pack/style/pressure/absurdity, AI Choice, or YOLO.
 9. Return to Transcript and run 1 TURN or AUTO CHAT.
 
 ## What Makes It Different

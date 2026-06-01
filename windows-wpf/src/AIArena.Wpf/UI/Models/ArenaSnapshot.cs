@@ -16,6 +16,7 @@ public sealed record ArenaSnapshot(
     string ScenarioGeneratorSeed,
     string PersonaGeneratorStyle,
     string PersonaGeneratorSeed,
+    IReadOnlyList<GenerationHistoryItem> GenerationHistory,
     int TurnCount,
     int TurnIndex,
     string ProviderModel,

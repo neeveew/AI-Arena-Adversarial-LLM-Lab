@@ -24,7 +24,7 @@ public sealed class MatchGenerationService
         "red-team",
         "incident"
     ];
-    private static readonly string[] Intensities = ["normal", "sharp", "spicy", "chaos"];
+    private static readonly string[] Intensities = ["normal", "sharp", "spicy", "chaos", "one_line"];
     private readonly IModelProviderClient _modelClient;
     private readonly SessionStore _sessionStore;
     private readonly EventLogStore _eventLogStore;
@@ -42,6 +42,7 @@ public sealed class MatchGenerationService
         string requestedIntensity = "normal",
         string requestedRolePack = "auto",
         string requestedAbsurdity = "grounded",
+        string? replaySeed = null,
         CancellationToken cancellationToken = default)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
@@ -50,7 +51,7 @@ public sealed class MatchGenerationService
             return MatchGenerationResult.Failed($"No snapshot found for session {sessionId}.");
         }
 
-        var seed = Guid.NewGuid().ToString("N")[..12];
+        var seed = string.IsNullOrWhiteSpace(replaySeed) ? Guid.NewGuid().ToString("N")[..12] : replaySeed.Trim();
         var style = ResolveRandomSeedStyle(requestedStyle, seed, snapshot.MatchType);
         var intensity = NormalizeIntensity(requestedIntensity);
         var rolePack = NormalizeRolePack(requestedRolePack);
@@ -67,6 +68,7 @@ public sealed class MatchGenerationService
         snapshot.PersonaRandomizer.Intensity = intensity;
         snapshot.PersonaRandomizer.RolePack = rolePack;
         snapshot.PersonaRandomizer.Absurdity = absurdity;
+        RecordGenerationHistory(snapshot, "random", generated, seed, seed, intensity, rolePack, absurdity);
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
         await _eventLogStore.AppendAsync(sessionId, "native_random_seed_match_generated", new { seed, style, intensity, rolePack, absurdity, locks = snapshot.MatchLocks }, cancellationToken);
@@ -127,6 +129,7 @@ public sealed class MatchGenerationService
         snapshot.PersonaRandomizer.Intensity = intensity;
         snapshot.PersonaRandomizer.RolePack = rolePack;
         snapshot.PersonaRandomizer.Absurdity = absurdity;
+        RecordGenerationHistory(snapshot, "ai_choice", generated, "ai-choice", "ai-choice", intensity, rolePack, absurdity);
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
         await _eventLogStore.AppendAsync(sessionId, "native_ai_choice_match_generated", new { generated.Label, generated.Style, rolePack, absurdity, locks = snapshot.MatchLocks }, cancellationToken);
@@ -138,6 +141,7 @@ public sealed class MatchGenerationService
         string requestedRolePack = "auto",
         string requestedIntensity = "normal",
         string requestedAbsurdity = "grounded",
+        string? replaySeed = null,
         CancellationToken cancellationToken = default)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
@@ -146,7 +150,9 @@ public sealed class MatchGenerationService
             return MatchGenerationResult.Failed($"No snapshot found for session {sessionId}.");
         }
 
-        var seed = $"yolo-{Guid.NewGuid():N}"[..13].ToUpperInvariant();
+        var seed = string.IsNullOrWhiteSpace(replaySeed)
+            ? $"yolo-{Guid.NewGuid():N}"[..13].ToUpperInvariant()
+            : replaySeed.Trim();
         var style = RandomStyle(seed, snapshot.MatchType);
         var rolePack = NormalizeRolePack(requestedRolePack);
         var intensity = NormalizeIntensity(requestedIntensity);
@@ -163,10 +169,47 @@ public sealed class MatchGenerationService
         snapshot.PersonaRandomizer.Intensity = intensity;
         snapshot.PersonaRandomizer.RolePack = rolePack;
         snapshot.PersonaRandomizer.Absurdity = absurdity;
+        RecordGenerationHistory(snapshot, "yolo", generated, seed, seed, intensity, rolePack, absurdity);
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
         await _eventLogStore.AppendAsync(sessionId, "native_yolo_seed_match_generated", new { seed, style, generated.Label, rolePack, absurdity, locks = snapshot.MatchLocks }, cancellationToken);
         return MatchGenerationResult.Completed(generated.Label, seed, style, intensity);
+    }
+
+    public async Task<MatchGenerationResult> ReplayGenerationAsync(string sessionId, string historyId, CancellationToken cancellationToken = default)
+    {
+        var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
+        if (snapshot is null)
+        {
+            return MatchGenerationResult.Failed($"No snapshot found for session {sessionId}.");
+        }
+
+        var entry = snapshot.GenerationHistory.FirstOrDefault(item => item.Id.Equals(historyId, StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+        {
+            return MatchGenerationResult.Failed("Generation history item not found.");
+        }
+
+        var generated = FromHistory(entry.Match);
+        ApplyGeneratedMatch(snapshot, generated, clearTranscript: false);
+        snapshot.MatchType = NormalizeStyle(generated.Style);
+        snapshot.ScenarioGenerator.Style = snapshot.MatchType;
+        snapshot.ScenarioGenerator.Seed = entry.ScenarioSeed;
+        snapshot.ScenarioGenerator.Intensity = NormalizeIntensity(entry.Intensity);
+        snapshot.ScenarioGenerator.RolePack = NormalizeRolePack(entry.RolePack);
+        snapshot.ScenarioGenerator.Absurdity = NormalizeAbsurdity(entry.Absurdity);
+        snapshot.PersonaRandomizer.Style = entry.Kind.Equals("yolo", StringComparison.OrdinalIgnoreCase)
+            ? "yolo"
+            : PersonaStyleFor(snapshot.MatchType);
+        snapshot.PersonaRandomizer.Seed = entry.PersonaSeed;
+        snapshot.PersonaRandomizer.Intensity = snapshot.ScenarioGenerator.Intensity;
+        snapshot.PersonaRandomizer.RolePack = snapshot.ScenarioGenerator.RolePack;
+        snapshot.PersonaRandomizer.Absurdity = snapshot.ScenarioGenerator.Absurdity;
+        RecordGenerationHistory(snapshot, entry.Kind, generated, entry.ScenarioSeed, entry.PersonaSeed, snapshot.ScenarioGenerator.Intensity, snapshot.ScenarioGenerator.RolePack, snapshot.ScenarioGenerator.Absurdity);
+
+        await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
+        await _eventLogStore.AppendAsync(sessionId, "native_generation_replayed", new { entry.Id, entry.Kind, entry.Label, seed = entry.ScenarioSeed }, cancellationToken);
+        return MatchGenerationResult.Completed($"Replayed {entry.Label}", entry.ScenarioSeed, generated.Style, entry.Intensity);
     }
 
     public async Task ToggleLockAsync(string sessionId, string key, bool locked, CancellationToken cancellationToken = default)
@@ -227,6 +270,72 @@ public sealed class MatchGenerationService
             snapshot.Engine.TurnIndex = 0;
             snapshot.Engine.LastError = "";
         }
+    }
+
+    private static void RecordGenerationHistory(
+        ArenaSnapshot snapshot,
+        string kind,
+        GeneratedMatch generated,
+        string scenarioSeed,
+        string personaSeed,
+        string intensity,
+        string rolePack,
+        string absurdity)
+    {
+        var entry = new GenerationHistoryEntry
+        {
+            Id = Guid.NewGuid().ToString("N")[..12],
+            Kind = kind,
+            Label = generated.Label,
+            Style = generated.Style,
+            Intensity = NormalizeIntensity(intensity),
+            RolePack = NormalizeRolePack(rolePack),
+            Absurdity = NormalizeAbsurdity(absurdity),
+            ScenarioSeed = scenarioSeed,
+            PersonaSeed = personaSeed,
+            CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            Match = ToHistory(generated)
+        };
+
+        snapshot.GenerationHistory.Insert(0, entry);
+        if (snapshot.GenerationHistory.Count > 20)
+        {
+            snapshot.GenerationHistory.RemoveRange(20, snapshot.GenerationHistory.Count - 20);
+        }
+    }
+
+    private static GeneratedMatchSnapshot ToHistory(GeneratedMatch generated)
+    {
+        return new GeneratedMatchSnapshot
+        {
+            Label = generated.Label,
+            Style = generated.Style,
+            Topic = generated.Topic,
+            Global = generated.Global,
+            NarratorBrief = generated.NarratorBrief,
+            Personas = generated.Personas
+                .Select(persona => new GeneratedPersonaSnapshot
+                {
+                    AgentId = persona.AgentId,
+                    Role = persona.Role,
+                    Persona = persona.Persona,
+                    VoiceStyle = persona.VoiceStyle
+                })
+                .ToList()
+        };
+    }
+
+    private static GeneratedMatch FromHistory(GeneratedMatchSnapshot match)
+    {
+        return new GeneratedMatch(
+            string.IsNullOrWhiteSpace(match.Label) ? "Replayed match" : match.Label,
+            NormalizeStyle(match.Style),
+            match.Topic,
+            match.Global,
+            match.NarratorBrief,
+            match.Personas
+                .Select(persona => new GeneratedPersona(persona.AgentId, persona.Role, persona.Persona, persona.VoiceStyle))
+                .ToArray());
     }
 
     private static IReadOnlyList<ModelChatMessage> BuildAiChoicePrompt(ArenaSnapshot snapshot, string rolePack, string intensity, string absurdity)
@@ -435,6 +544,7 @@ public sealed class MatchGenerationService
             "sharp" => "Role pressure: challenge one weak assumption every turn.",
             "spicy" => "Role pressure: surface one uncomfortable tradeoff or hidden incentive.",
             "chaos" => "Role pressure: mark uncertainty, stabilize terms, and avoid pretending the situation is cleaner than it is.",
+            "one_line" => "Role pressure: answer in one high-signal sentence; make it sharp, useful, and memorable without becoming vague.",
             _ => ""
         };
     }
@@ -458,6 +568,7 @@ public sealed class MatchGenerationService
             "sharp" => "sharp",
             "spicy" => "spicy",
             "chaos" => "chaos",
+            "one_line" => "one-line",
             _ => "normal"
         };
     }

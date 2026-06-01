@@ -75,6 +75,7 @@ internal static class ScenarioSeedGenerator
             "sharp" => $"{domain}: resolve {tension} under visible disagreement and produce {outcome}.",
             "spicy" => $"{domain}: resolve {tension} with conflicting incentives, weak evidence, and a narrow decision window; produce {outcome}.",
             "chaos" => $"{domain}: stabilize partial information, shifting constraints, and {tension}; produce {outcome}.",
+            "one_line" => $"{domain}: resolve {tension} through one-sentence high-signal turns and produce {outcome}.",
             _ => $"{domain}: resolve {tension} and produce {outcome}."
         };
     }
@@ -86,6 +87,7 @@ internal static class ScenarioSeedGenerator
             "sharp" => "Make disagreement explicit, assign each participant a claim to pressure-test, and do not accept easy consensus.",
             "spicy" => "Expose hidden incentives, uncomfortable tradeoffs, and weak evidence before allowing the group to converge.",
             "chaos" => "Assume some premises are incomplete or unstable; first stabilize definitions, then separate signal from noise.",
+            "one_line" => "Every agent turn should be one high-signal sentence: concise, memorable, and decision-relevant.",
             _ => "Keep disagreement useful rather than theatrical."
         };
     }
@@ -97,6 +99,7 @@ internal static class ScenarioSeedGenerator
             "sharp" => "Watch for productive conflict versus stubborn repetition.",
             "spicy" => "Watch whether pressure reveals better constraints or merely increases narrative heat.",
             "chaos" => "Watch whether the agents stabilize ambiguity before making claims.",
+            "one_line" => "Watch whether short turns preserve signal or collapse into slogans.",
             _ => "Watch whether the arena improves the decision quality."
         };
     }
@@ -129,6 +132,7 @@ internal static class ScenarioSeedGenerator
             "sharp" => "sharp",
             "spicy" => "spicy",
             "chaos" => "chaos",
+            "one_line" => "one-line",
             _ => "normal"
         };
         return label.Equals("normal", StringComparison.OrdinalIgnoreCase) ? "" : $" {label}";

@@ -34,6 +34,8 @@ var tests = new (string Name, Action Test)[]
     ("writes timestamped event log entries", WriteTimestampedEventLogEntries),
     ("generates random seed match respecting locks", GenerateRandomSeedMatchRespectingLocks),
     ("generates requested random seed style and intensity", GenerateRequestedRandomSeedStyleAndIntensity),
+    ("generates one-line pressure random seed", GenerateOneLinePressureRandomSeed),
+    ("records and replays generation history", RecordReplayGeneratedMatchHistory),
     ("generates absurd role pack voice constraints", GenerateAbsurdRolePackVoiceConstraints),
     ("absurd role library exposes wide variety", AbsurdRoleLibraryExposesWideVariety),
     ("absurd role shuffle is deterministic and varied", AbsurdRoleShuffleIsDeterministicAndVaried),
@@ -558,6 +560,54 @@ static void GenerateRequestedRandomSeedStyleAndIntensity()
     Require(loaded.PersonaRandomizer.Style == "research", "scientific persona style did not map to research");
     Require(loaded.Engine.Steering.Global.Contains("uncomfortable tradeoffs", StringComparison.OrdinalIgnoreCase), "spicy pressure was not included in the global frame");
     Require(File.ReadAllText(log.EventPath()).Contains("\"intensity\":\"spicy\""), "random seed intensity was not logged");
+    Directory.Delete(root, recursive: true);
+}
+
+static void GenerateOneLinePressureRandomSeed()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+
+    var service = new MatchGenerationService(sessionStore: store, eventLogStore: log);
+    var result = service.GenerateRandomSeedAsync("default", "creative", "one_line", "absurd_lab", "maximum").GetAwaiter().GetResult();
+    Require(result.Ok, $"one-line random seed failed: {result.Error}");
+    Require(result.Intensity == "one_line", "one-line intensity was not returned");
+    var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+    Require(loaded.ScenarioGenerator.Intensity == "one_line", "one-line intensity was not stored");
+    Require(loaded.Engine.Steering.Global.Contains("one high-signal sentence", StringComparison.OrdinalIgnoreCase), "one-line global instruction missing");
+    Require(loaded.Engine.Agents.Any(agent => agent.Persona.Contains("one high-signal sentence", StringComparison.OrdinalIgnoreCase)), "one-line persona pressure missing");
+    Require(File.ReadAllText(log.EventPath()).Contains("\"intensity\":\"one_line\""), "one-line intensity was not logged");
+    Directory.Delete(root, recursive: true);
+}
+
+static void RecordReplayGeneratedMatchHistory()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+
+    var service = new MatchGenerationService(sessionStore: store, eventLogStore: log);
+    var result = service.GenerateRandomSeedAsync("default", "technical", "sharp", "safety_audit", "odd", "fixed-seed").GetAwaiter().GetResult();
+    Require(result.Ok, $"random seed failed: {result.Error}");
+    var generated = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+    var history = generated.GenerationHistory.Single();
+    Require(history.ScenarioSeed == "fixed-seed", "history did not store replay seed");
+    Require(!string.IsNullOrWhiteSpace(history.Match.Topic), "history did not store generated topic");
+
+    generated.Engine.Steering.Topic = "manually overwritten topic";
+    store.SaveSnapshotAsync(generated).GetAwaiter().GetResult();
+    var replay = service.ReplayGenerationAsync("default", history.Id).GetAwaiter().GetResult();
+    Require(replay.Ok, $"replay failed: {replay.Error}");
+    var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+    Require(loaded.Engine.Steering.Topic == history.Match.Topic, "replay did not restore generated topic");
+    Require(loaded.GenerationHistory.Count == 2, "replay did not add a history entry");
+    Require(loaded.Engine.Messages.Count == 1, "replay should preserve transcript");
+    Require(File.ReadAllText(log.EventPath()).Contains("native_generation_replayed"), "replay event was not logged");
     Directory.Delete(root, recursive: true);
 }
 

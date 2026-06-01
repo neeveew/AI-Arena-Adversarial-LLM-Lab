@@ -61,6 +61,7 @@ public sealed class WpfSettings
     public string RandomSeedIntensity { get; set; } = "normal";
     public string RandomSeedRolePack { get; set; } = "auto";
     public string RandomSeedAbsurdity { get; set; } = "grounded";
+    public string RandomSeedPreset { get; set; } = "manual";
     public List<string> OperatorTemplates { get; set; } =
     [
         "Challenge the strongest assumption in the last turn.",

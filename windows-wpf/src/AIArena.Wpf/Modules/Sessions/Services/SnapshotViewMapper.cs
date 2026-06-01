@@ -4,6 +4,7 @@ using AgentState = AIArena.Wpf.Models.AgentState;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 using CoreSnapshot = AIArena.Core.Models.ArenaSnapshot;
 using RenderSnapshot = AIArena.Wpf.Models.ArenaSnapshot;
+using GenerationHistoryItem = AIArena.Wpf.Models.GenerationHistoryItem;
 using TranscriptMessage = AIArena.Wpf.Models.TranscriptMessage;
 
 namespace AIArena.Wpf.Services;
@@ -30,6 +31,7 @@ public static class SnapshotViewMapper
             DisplayValue(snapshot.ScenarioGenerator.Seed),
             DisplayValue(snapshot.PersonaRandomizer.Style),
             DisplayValue(snapshot.PersonaRandomizer.Seed),
+            ParseGenerationHistory(snapshot),
             snapshot.Engine.TurnCount,
             snapshot.Engine.TurnIndex,
             DisplayValue(sharedConfig.Model),
@@ -84,6 +86,7 @@ public static class SnapshotViewMapper
             "-",
             "-",
             "-",
+            [],
             0,
             0,
             "-",
@@ -208,6 +211,24 @@ public static class SnapshotViewMapper
                     Locked(snapshot, id),
                     agent.PrivateNotes.Where(note => !string.IsNullOrWhiteSpace(note)).ToArray());
             })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<GenerationHistoryItem> ParseGenerationHistory(CoreSnapshot snapshot)
+    {
+        return snapshot.GenerationHistory
+            .Select(item => new GenerationHistoryItem(
+                item.Id,
+                DisplayValue(item.Kind),
+                DisplayValue(item.Label),
+                DisplayValue(item.Style),
+                DisplayValue(item.Intensity),
+                DisplayValue(item.RolePack),
+                DisplayValue(item.Absurdity),
+                DisplayValue(item.ScenarioSeed),
+                DisplayValue(item.PersonaSeed),
+                item.CreatedAt,
+                item.Match.Topic))
             .ToArray();
     }
 

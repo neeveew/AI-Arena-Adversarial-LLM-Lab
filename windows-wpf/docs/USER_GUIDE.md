@@ -13,7 +13,7 @@ The app is designed for local experimentation with model behavior. You can creat
 5. Pick a Default model from the dropdown, or type one manually.
 6. Optionally assign different models to Alpha, Beta, Gamma, Delta, and Narrator.
 7. Press Test Provider.
-8. Open Custom Match and choose a role pack, style, pressure, absurdity level, AI Choice, or YOLO.
+8. Open Custom Match and choose a preset, role pack, style, pressure, absurdity level, AI Choice, or YOLO.
 9. Return to Transcript and run 1 TURN or AUTO CHAT.
 
 ## Main Concepts
@@ -32,7 +32,7 @@ The left rail contains the app identity, navigation, session overview, and live 
 The center area contains the active page:
 
 - Transcript: the arena conversation, diagnostics, filters, timeline, memory notes, and compare tools.
-- Custom Match: scenario preview, cast preview, locks, per-agent voice styles, role packs, absurdity controls, seed generation, and checkpoint/session tools.
+- Custom Match: scenario preview, cast preview, locks, per-agent voice styles, role packs, presets, absurdity controls, generation history, and checkpoint/session tools.
 
 The right rail contains:
 
@@ -183,7 +183,9 @@ AI Arena also scores non-default voices with a lightweight Style Fit meter. This
 
 ### Random Seed
 
-Random Seed generates a deterministic scenario and cast. Use Role pack to choose Auto, Balanced, Red team, Scientific review, Technical architecture, Safety audit, Legal / policy, Incident response, Product risk, or Absurd lab. Absurd lab draws from a seeded-shuffle 50+ role library and assigns each generated role its own expertise leak, useful function, voice constraint, reasoning distortion, and blind spot. Use Style to choose Auto, Balanced, Adversarial, Technical, Scientific, Research, Product, Safety, Philosophical, Legal, Creative, Red-team, or Incident. Use Pressure to choose Normal, Sharp, Spicy, or Chaos. Use Absurdity to mix expertise, voice constraints, and reasoning distortions. Locked topic, global instruction, or cast members are preserved.
+Random Seed generates a deterministic scenario and cast. Use Preset for quick setups such as Hostile review, Evidence trial, Consensus trap, Chaos room, or One-line mayhem. Selecting any individual generation dropdown returns the preset to Manual.
+
+Use Role pack to choose Auto, Balanced, Red team, Scientific review, Technical architecture, Safety audit, Legal / policy, Incident response, Product risk, or Absurd lab. Absurd lab draws from a seeded-shuffle 50+ role library and assigns each generated role its own expertise leak, useful function, voice constraint, reasoning distortion, and blind spot. Use Style to choose Auto, Balanced, Adversarial, Technical, Scientific, Research, Product, Safety, Philosophical, Legal, Creative, Red-team, or Incident. Use Pressure to choose Normal, Sharp, Spicy, Chaos, or One-line. Use Absurdity to mix expertise, voice constraints, and reasoning distortions. Locked topic, global instruction, or cast members are preserved.
 
 Absurdity levels:
 
@@ -198,6 +200,9 @@ Intensity changes the pressure applied to the generated setup:
 - Sharp increases visible disagreement and assumption testing.
 - Spicy adds hidden incentives, uncomfortable tradeoffs, and weaker evidence.
 - Chaos adds partial information and unstable constraints that agents must stabilize before converging.
+- One-line asks each agent for one high-signal sentence per turn, useful for testing short-form debate and chat-room style payloads.
+
+Absurd Lab cast cards show a small `?` inspector button when the generated persona contains extra role metadata. Use it to inspect constraints such as absurd function, expertise leak, expression constraint, and reasoning distortion without expanding the card.
 
 ### AI Choice
 
@@ -210,6 +215,8 @@ YOLO generates a more experimental scenario seed. It can touch the topic, global
 ### Seed Inspector
 
 The seed inspector shows the source, scenario seed, scenario style, intensity when available, persona seed, and persona style. Use it to understand what kind of generated setup you are running.
+
+The generation history picker keeps recent Random Seed, AI Choice, and YOLO setups. Replay restores the selected generated setup without making another model call, while preserving the transcript. Copy Seed copies the selected scenario seed; AI Choice entries can still replay because the full generated setup is stored in the session snapshot.
 
 ## Sessions, Checkpoints, and Templates
 

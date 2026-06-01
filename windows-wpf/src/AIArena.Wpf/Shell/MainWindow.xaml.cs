@@ -78,6 +78,7 @@ public partial class MainWindow : Window
     private bool _isUpdatingRoleModelEditor;
     private bool _isPersistingModelRouting;
     private bool _isUpdatingInternetSettingsUi;
+    private bool _isApplyingRandomSeedPreset;
     private bool _arenaBusy;
     private bool _telemetrySampleInFlight;
     private int _lastProviderModelCount = -1;
@@ -159,6 +160,8 @@ public partial class MainWindow : Window
         IReadOnlyList<UserGuideSection> Sections,
         ListBox SectionList,
         FlowDocumentScrollViewer GuideViewer);
+
+    private sealed record RoleDetailPayload(string Title, string Persona);
 
     private static readonly string[] ThemeResourceKeys =
     [
@@ -293,6 +296,7 @@ public partial class MainWindow : Window
         SelectComboTag(AvatarStylePicker, CurrentAvatarStyle());
         SelectComboTag(SystemGlyphStylePicker, _wpfSettings.SystemEventGlyphs ? "glyph" : "fallback");
         SelectComboTag(TopStripModePicker, CurrentTopStripMode());
+        SelectComboTag(RandomSeedPresetPicker, _wpfSettings.RandomSeedPreset);
         SelectComboTag(RandomSeedRolePackPicker, _wpfSettings.RandomSeedRolePack);
         SelectComboTag(RandomSeedStylePicker, _wpfSettings.RandomSeedStyle);
         SelectComboTag(RandomSeedIntensityPicker, _wpfSettings.RandomSeedIntensity);
@@ -595,9 +599,44 @@ public partial class MainWindow : Window
         ArenaRunStatus.Text = LoadStatus.Text;
     }
 
+    private void RandomSeedPreset_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isRenderingSnapshot || _isApplyingRandomSeedPreset || RandomSeedPresetPicker is null)
+        {
+            return;
+        }
+
+        var preset = SelectedComboTag(RandomSeedPresetPicker, "manual");
+        _wpfSettings.RandomSeedPreset = preset;
+        if (!preset.Equals("manual", StringComparison.OrdinalIgnoreCase))
+        {
+            var config = RandomSeedPresetValues(preset);
+            _isApplyingRandomSeedPreset = true;
+            try
+            {
+                SelectComboTag(RandomSeedRolePackPicker, config.RolePack);
+                SelectComboTag(RandomSeedStylePicker, config.Style);
+                SelectComboTag(RandomSeedIntensityPicker, config.Intensity);
+                SelectComboTag(RandomSeedAbsurdityPicker, config.Absurdity);
+            }
+            finally
+            {
+                _isApplyingRandomSeedPreset = false;
+            }
+
+            _wpfSettings.RandomSeedRolePack = config.RolePack;
+            _wpfSettings.RandomSeedStyle = config.Style;
+            _wpfSettings.RandomSeedIntensity = config.Intensity;
+            _wpfSettings.RandomSeedAbsurdity = config.Absurdity;
+        }
+
+        _wpfSettingsStore.Save(_wpfSettings);
+    }
+
     private void RandomSeedOptions_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (_isRenderingSnapshot
+            || _isApplyingRandomSeedPreset
             || RandomSeedRolePackPicker is null
             || RandomSeedStylePicker is null
             || RandomSeedIntensityPicker is null
@@ -610,7 +649,33 @@ public partial class MainWindow : Window
         _wpfSettings.RandomSeedStyle = SelectedComboTag(RandomSeedStylePicker, "auto");
         _wpfSettings.RandomSeedIntensity = SelectedComboTag(RandomSeedIntensityPicker, "normal");
         _wpfSettings.RandomSeedAbsurdity = SelectedComboTag(RandomSeedAbsurdityPicker, "grounded");
+        _wpfSettings.RandomSeedPreset = "manual";
+        if (RandomSeedPresetPicker is not null)
+        {
+            _isApplyingRandomSeedPreset = true;
+            try
+            {
+                SelectComboTag(RandomSeedPresetPicker, "manual");
+            }
+            finally
+            {
+                _isApplyingRandomSeedPreset = false;
+            }
+        }
         _wpfSettingsStore.Save(_wpfSettings);
+    }
+
+    private static (string RolePack, string Style, string Intensity, string Absurdity) RandomSeedPresetValues(string preset)
+    {
+        return preset switch
+        {
+            "hostile_review" => ("red_team", "adversarial", "spicy", "grounded"),
+            "evidence_trial" => ("scientific_review", "research", "sharp", "grounded"),
+            "consensus_trap" => ("balanced", "philosophical", "sharp", "odd"),
+            "chaos_room" => ("absurd_lab", "technical", "chaos", "maximum"),
+            "one_line_mayhem" => ("absurd_lab", "creative", "one_line", "maximum"),
+            _ => ("auto", "auto", "normal", "grounded")
+        };
     }
 
     private void FollowChatCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -2137,6 +2202,7 @@ public partial class MainWindow : Window
         _pressureControls.Clear();
 
         PopulateScenarioSeedInspector(snapshot);
+        PopulateGenerationHistory(snapshot);
 
         ScenarioPreviewItems.Children.Add(CreateLockCard(
             "topic",
@@ -2211,6 +2277,103 @@ public partial class MainWindow : Window
         }
         ScenarioSeedInspector.Children.Add(CreateSetupChip("Personas", ShortSeedValue(personaSeed), ResourceBrush("NarratorAccentBrush")));
         ScenarioSeedInspector.Children.Add(CreateSetupChip("Persona style", personaStyle, ResourceBrush("MutedTextBrush")));
+    }
+
+    private void PopulateGenerationHistory(ArenaSnapshot snapshot)
+    {
+        if (GenerationHistoryPicker is null)
+        {
+            return;
+        }
+
+        GenerationHistoryPicker.Items.Clear();
+        foreach (var item in snapshot.GenerationHistory.Take(20))
+        {
+            GenerationHistoryPicker.Items.Add(new ComboBoxItem
+            {
+                Content = GenerationHistoryLabel(item),
+                Tag = item,
+                ToolTip = GenerationHistoryTooltip(item)
+            });
+        }
+
+        if (GenerationHistoryPicker.Items.Count == 0)
+        {
+            GenerationHistoryPicker.Items.Add(new ComboBoxItem
+            {
+                Content = "No history yet",
+                IsEnabled = false
+            });
+        }
+
+        GenerationHistoryPicker.SelectedIndex = 0;
+        UpdateGenerationHistoryActions();
+    }
+
+    private void UpdateGenerationHistoryActions()
+    {
+        var hasItem = SelectedGenerationHistory() is not null;
+        if (ReplayGenerationButton is not null)
+        {
+            ReplayGenerationButton.IsEnabled = hasItem && !_arenaBusy;
+        }
+
+        if (CopyGenerationSeedButton is not null)
+        {
+            CopyGenerationSeedButton.IsEnabled = hasItem && !_arenaBusy;
+        }
+    }
+
+    private GenerationHistoryItem? SelectedGenerationHistory()
+    {
+        return GenerationHistoryPicker?.SelectedItem is ComboBoxItem { Tag: GenerationHistoryItem item }
+            ? item
+            : null;
+    }
+
+    private static string GenerationHistoryLabel(GenerationHistoryItem item)
+    {
+        var kind = item.Kind switch
+        {
+            "ai_choice" => "AI Choice",
+            "yolo" => "YOLO",
+            "random" => "Random",
+            _ => DisplayStatusValue(item.Kind)
+        };
+        var time = DisplayTime(item.CreatedAt);
+        var style = DisplayStatusValue(item.Style);
+        var pressure = item.Intensity.Equals("normal", StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : $" / {item.Intensity.Replace('_', ' ')}";
+        return $"{kind} - {style}{pressure} - {ShortHistoryText(item.Topic, 32)}{(string.IsNullOrWhiteSpace(time) ? "" : $" ({time})")}";
+    }
+
+    private static string GenerationHistoryTooltip(GenerationHistoryItem item)
+    {
+        return string.Join(
+            Environment.NewLine,
+            $"Label: {DisplayStatusValue(item.Label)}",
+            $"Kind: {DisplayStatusValue(item.Kind)}",
+            $"Style: {DisplayStatusValue(item.Style)}",
+            $"Pressure: {DisplayStatusValue(item.Intensity)}",
+            $"Pack: {DisplayStatusValue(item.RolePack)}",
+            $"Absurdity: {DisplayStatusValue(item.Absurdity)}",
+            $"Scenario seed: {DisplayStatusValue(item.ScenarioSeed)}",
+            $"Persona seed: {DisplayStatusValue(item.PersonaSeed)}",
+            $"Topic: {DisplayStatusValue(item.Topic)}");
+    }
+
+    private static string ShortHistoryText(string value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value == "-")
+        {
+            return "-";
+        }
+
+        var singleLine = value.Trim().Replace("\r", " ").Replace("\n", " ");
+        return singleLine.Length <= maxLength
+            ? singleLine
+            : $"{singleLine[..Math.Max(0, maxLength - 3)]}...";
     }
 
     private static string ScenarioSeedSource(string scenarioSeed, string personaStyle)
@@ -2575,6 +2738,26 @@ public partial class MainWindow : Window
         {
             actions.Children.Add(CreateVoiceStylePicker(lockKey, voiceStyle ?? "", cardAccent));
         }
+        if (isAgentCard && HasRoleDetails(body))
+        {
+            var detailsButton = new Button
+            {
+                Content = "?",
+                Tag = new RoleDetailPayload(title, body),
+                MinHeight = 28,
+                MinWidth = 30,
+                Padding = new Thickness(7, 3, 7, 3),
+                Margin = new Thickness(0, 0, 8, 0),
+                Background = ResourceBrush("InputBrush"),
+                BorderBrush = cardAccent,
+                Foreground = cardAccent,
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                ToolTip = "Inspect generated role constraints"
+            };
+            detailsButton.Click += RoleDetailsButton_Click;
+            actions.Children.Add(detailsButton);
+        }
         actions.Children.Add(editButton);
         actions.Children.Add(lockBox);
         DockPanel.SetDock(actions, Dock.Right);
@@ -2643,6 +2826,131 @@ public partial class MainWindow : Window
             Margin = new Thickness(0, 0, isCastCard ? 0 : 10, 10),
             Child = layout
         };
+    }
+
+    private static bool HasRoleDetails(string persona)
+    {
+        return persona.Contains("Absurd function:", StringComparison.OrdinalIgnoreCase)
+            || persona.Contains("Expertise leak:", StringComparison.OrdinalIgnoreCase)
+            || persona.Contains("Persona mixer:", StringComparison.OrdinalIgnoreCase)
+            || persona.Contains("Expression constraint:", StringComparison.OrdinalIgnoreCase)
+            || persona.Contains("Reasoning distortion:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void RoleDetailsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: RoleDetailPayload payload })
+        {
+            return;
+        }
+
+        var window = new Window
+        {
+            Owner = this,
+            Title = $"{payload.Title} details",
+            Width = 620,
+            Height = 420,
+            MinWidth = 460,
+            MinHeight = 320,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            ResizeMode = ResizeMode.CanResize,
+            Background = ResourceBrush("PanelBrush"),
+            Foreground = ResourceBrush("TextBrush")
+        };
+        DialogChrome.ImportOwnerResources(this, window);
+        DialogChrome.ApplyImplicitControlStyles(window);
+
+        var root = new Grid
+        {
+            Background = ResourceBrush("PanelBrush"),
+            Margin = new Thickness(1)
+        };
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        var title = new TextBlock
+        {
+            Text = payload.Title,
+            Foreground = ResourceBrush("TextBrush"),
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(14, 12, 14, 8)
+        };
+        root.Children.Add(title);
+
+        var details = new TextBox
+        {
+            Text = RoleDetailsText(payload.Persona),
+            IsReadOnly = true,
+            TextWrapping = TextWrapping.Wrap,
+            AcceptsReturn = true,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Background = ResourceBrush("InputBrush"),
+            Foreground = ResourceBrush("TextBrush"),
+            BorderBrush = ResourceBrush("ControlBorderBrush"),
+            Padding = new Thickness(12),
+            Margin = new Thickness(14, 0, 14, 10)
+        };
+        Grid.SetRow(details, 1);
+        root.Children.Add(details);
+
+        var close = new Button
+        {
+            Content = "CLOSE",
+            HorizontalAlignment = HorizontalAlignment.Right,
+            MinWidth = 96,
+            Margin = new Thickness(14, 0, 14, 14)
+        };
+        close.Click += (_, _) => window.Close();
+        Grid.SetRow(close, 2);
+        root.Children.Add(close);
+
+        window.Content = root;
+        window.Show();
+        window.Activate();
+    }
+
+    private static string RoleDetailsText(string persona)
+    {
+        var labels = new[]
+        {
+            "Absurd function:",
+            "Arena function:",
+            "Expertise leak:",
+            "Failure bias:",
+            "Role pressure:",
+            "Persona mixer:",
+            "Expression constraint:",
+            "Reasoning distortion:"
+        };
+
+        var lines = labels
+            .Select(label => ExtractRoleDetailSegment(persona, label, labels))
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .ToArray();
+        return lines.Length == 0
+            ? persona
+            : string.Join($"{Environment.NewLine}{Environment.NewLine}", lines);
+    }
+
+    private static string ExtractRoleDetailSegment(string persona, string label, IReadOnlyList<string> labels)
+    {
+        var start = persona.IndexOf(label, StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+        {
+            return "";
+        }
+
+        var valueStart = start + label.Length;
+        var next = labels
+            .Select(candidate => persona.IndexOf(candidate, valueStart, StringComparison.OrdinalIgnoreCase))
+            .Where(index => index >= 0)
+            .DefaultIfEmpty(persona.Length)
+            .Min();
+        var value = persona[valueStart..next].Trim(' ', '\r', '\n', '\t', '.');
+        return string.IsNullOrWhiteSpace(value) ? "" : $"{label} {value}";
     }
 
     private ComboBox CreateVoiceStylePicker(string lockKey, string voiceStyle, Brush accent)
@@ -5641,6 +5949,70 @@ public partial class MainWindow : Window
         }, allowDuringAutoChat: true);
     }
 
+    private async void ReplayGenerationButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeSession is null)
+        {
+            LoadStatus.Text = "No active session.";
+            return;
+        }
+
+        var item = SelectedGenerationHistory();
+        if (item is null)
+        {
+            LoadStatus.Text = "No generated match selected.";
+            ArenaRunStatus.Text = LoadStatus.Text;
+            return;
+        }
+
+        await RunArenaBusyAsync($"Replaying generated match: {item.Label}...", ReplayGenerationButton, async () =>
+        {
+            var result = await _matchGeneration.ReplayGenerationAsync(_activeSession.Id, item.Id);
+            var status = result.Ok
+                ? $"Replayed generated match: {item.Label}"
+                : $"Replay failed: {result.Error}";
+            RefreshActiveSession(status);
+        }, allowDuringAutoChat: true);
+    }
+
+    private void CopyGenerationSeedButton_Click(object sender, RoutedEventArgs e)
+    {
+        var item = SelectedGenerationHistory();
+        if (item is null)
+        {
+            LoadStatus.Text = "No generated match selected.";
+            ArenaRunStatus.Text = LoadStatus.Text;
+            return;
+        }
+
+        var seed = string.IsNullOrWhiteSpace(item.ScenarioSeed) || item.ScenarioSeed == "-"
+            ? item.PersonaSeed
+            : item.ScenarioSeed;
+        if (string.IsNullOrWhiteSpace(seed) || seed == "-")
+        {
+            LoadStatus.Text = "Selected generation has no seed to copy.";
+            ArenaRunStatus.Text = LoadStatus.Text;
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(seed);
+            LoadStatus.Text = $"Copied generation seed: {seed}";
+            ArenaRunStatus.Text = LoadStatus.Text;
+        }
+        catch (Exception ex)
+        {
+            LoadStatus.Text = $"Copy seed failed: {ex.Message}";
+            ArenaRunStatus.Text = LoadStatus.Text;
+        }
+    }
+
+    private void GenerationHistoryPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateGenerationHistoryActions();
+    }
+
     private async void NarrateNowButton_Click(object sender, RoutedEventArgs e)
     {
         if (_activeSession is null)
@@ -7123,8 +7495,12 @@ public partial class MainWindow : Window
         OneTurnButton.IsEnabled = !busy;
         ResetButton.IsEnabled = !busy;
         RandomSeedButton.IsEnabled = !busy || autoChatRunning;
+        RandomSeedPresetPicker.IsEnabled = !busy;
         RandomSeedStylePicker.IsEnabled = !busy;
         RandomSeedIntensityPicker.IsEnabled = !busy;
+        GenerationHistoryPicker.IsEnabled = !busy;
+        ReplayGenerationButton.IsEnabled = !busy && SelectedGenerationHistory() is not null;
+        CopyGenerationSeedButton.IsEnabled = !busy && SelectedGenerationHistory() is not null;
         AiChoiceButton.IsEnabled = !busy || autoChatRunning;
         YoloScenarioButton.IsEnabled = !busy || autoChatRunning;
         NarrateNowButton.IsEnabled = !busy || autoChatRunning;
@@ -7166,10 +7542,14 @@ public partial class MainWindow : Window
         TopStripModePicker.IsEnabled = !busy;
         DebugControlsCheckBox.IsEnabled = !busy;
         VoiceDriftEnforcementCheckBox.IsEnabled = !busy;
+        RandomSeedPresetPicker.IsEnabled = !busy;
         RandomSeedRolePackPicker.IsEnabled = !busy;
         RandomSeedStylePicker.IsEnabled = !busy;
         RandomSeedIntensityPicker.IsEnabled = !busy;
         RandomSeedAbsurdityPicker.IsEnabled = !busy;
+        GenerationHistoryPicker.IsEnabled = !busy;
+        ReplayGenerationButton.IsEnabled = !busy && SelectedGenerationHistory() is not null;
+        CopyGenerationSeedButton.IsEnabled = !busy && SelectedGenerationHistory() is not null;
         SavedStateModePicker.IsEnabled = !busy;
         SavedStateNameText.IsEnabled = !busy;
         SavedStateItemPicker.IsEnabled = !busy;

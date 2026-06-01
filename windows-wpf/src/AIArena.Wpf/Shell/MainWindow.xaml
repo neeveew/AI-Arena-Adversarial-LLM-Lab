@@ -1638,6 +1638,21 @@
                                        FontSize="11"
                                        VerticalAlignment="Center"
                                        Margin="0,0,10,0" />
+                            <ComboBox x:Name="RandomSeedPresetPicker"
+                                      Width="142"
+                                      FontSize="11"
+                                      Padding="7,5"
+                                      MinHeight="32"
+                                      Margin="0,0,6,0"
+                                      ToolTip="Generation preset"
+                                      SelectionChanged="RandomSeedPreset_Changed">
+                                <ComboBoxItem Content="Manual" Tag="manual" IsSelected="True" />
+                                <ComboBoxItem Content="Hostile review" Tag="hostile_review" />
+                                <ComboBoxItem Content="Evidence trial" Tag="evidence_trial" />
+                                <ComboBoxItem Content="Consensus trap" Tag="consensus_trap" />
+                                <ComboBoxItem Content="Chaos room" Tag="chaos_room" />
+                                <ComboBoxItem Content="One-line mayhem" Tag="one_line_mayhem" />
+                            </ComboBox>
                             <ComboBox x:Name="RandomSeedRolePackPicker"
                                       Width="132"
                                       FontSize="11"
@@ -1691,6 +1706,7 @@
                                 <ComboBoxItem Content="Sharp" Tag="sharp" />
                                 <ComboBoxItem Content="Spicy" Tag="spicy" />
                                 <ComboBoxItem Content="Chaos" Tag="chaos" />
+                                <ComboBoxItem Content="One-line" Tag="one_line" />
                             </ComboBox>
                             <ComboBox x:Name="RandomSeedAbsurdityPicker"
                                       Width="104"
@@ -1728,7 +1744,29 @@
                                     BorderBrush="{DynamicResource BetaAccentBrush}"
                                     FontSize="11"
                                     Padding="11,6"
-                                    ToolTip="Generate a local seeded meta setup for the arena simulation" />
+                                    ToolTip="Generate a local seeded meta setup for the arena simulation"
+                                    Margin="0,0,8,0" />
+                            <ComboBox x:Name="GenerationHistoryPicker"
+                                      Width="168"
+                                      FontSize="11"
+                                      Padding="7,5"
+                                      MinHeight="32"
+                                      Margin="0,0,6,0"
+                                      ToolTip="Recent generated matches"
+                                      SelectionChanged="GenerationHistoryPicker_SelectionChanged" />
+                            <Button x:Name="ReplayGenerationButton"
+                                    Content="REPLAY"
+                                    Click="ReplayGenerationButton_Click"
+                                    FontSize="11"
+                                    Padding="11,6"
+                                    Margin="0,0,6,0"
+                                    ToolTip="Replay the selected generated match without calling a model" />
+                            <Button x:Name="CopyGenerationSeedButton"
+                                    Content="COPY SEED"
+                                    Click="CopyGenerationSeedButton_Click"
+                                    FontSize="11"
+                                    Padding="11,6"
+                                    ToolTip="Copy the selected generation seed" />
                         </WrapPanel>
                     </Border>
                 </Grid>
