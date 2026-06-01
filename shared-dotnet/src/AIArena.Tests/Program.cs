@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
@@ -34,6 +35,7 @@ var tests = new (string Name, Action Test)[]
     ("generates random seed match respecting locks", GenerateRandomSeedMatchRespectingLocks),
     ("generates requested random seed style and intensity", GenerateRequestedRandomSeedStyleAndIntensity),
     ("generates absurd role pack voice constraints", GenerateAbsurdRolePackVoiceConstraints),
+    ("absurd role library exposes wide variety", AbsurdRoleLibraryExposesWideVariety),
     ("generates YOLO seed respecting locks", GenerateYoloSeedRespectingLocks),
     ("adds narrator message to transcript", AddNarratorMessageToTranscript),
     ("asks narrator with operator request", AskNarratorWithOperatorRequest),
@@ -562,24 +564,55 @@ static void GenerateAbsurdRolePackVoiceConstraints()
     var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
     var store = new SessionStore(root);
     var log = new EventLogStore(root);
-    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    var snapshot = SessionStore.CreateDefaultSnapshot();
     store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
 
     var service = new MatchGenerationService(sessionStore: store, eventLogStore: log);
     var result = service.GenerateRandomSeedAsync("default", "technical", "chaos", "absurd_lab", "absurd").GetAwaiter().GetResult();
     Require(result.Ok, $"absurd random seed failed: {result.Error}");
     var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
-    var alpha = loaded.Engine.Agents.First(agent => agent.Id == "alpha");
-    var beta = loaded.Engine.Agents.First(agent => agent.Id == "beta");
-    Require(alpha.Name.Contains("Nuclear physicist", StringComparison.OrdinalIgnoreCase), "absurd alpha role was not applied");
-    Require(alpha.VoiceStyle == "bark_only", "absurd alpha bark voice was not applied");
-    Require(beta.Name.Contains("Pet lover", StringComparison.OrdinalIgnoreCase), "absurd beta role was not applied");
-    Require(beta.VoiceStyle == "science_gibberish", "absurd beta science gibberish voice was not applied");
+    var roles = loaded.Engine.Agents
+        .Where(agent => agent.Id is "alpha" or "beta" or "gamma" or "delta")
+        .Select(agent => RoleTitle(agent.Name))
+        .ToArray();
+    var legacyRoles = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "Nuclear physicist",
+        "Pet lover",
+        "Medieval compliance bard",
+        "Underwater accountant"
+    };
+    Require(roles.Length == 4, "absurd lab should generate four active agent roles");
+    Require(roles.Distinct(StringComparer.OrdinalIgnoreCase).Count() == roles.Length, "absurd lab repeated a role inside one match");
+    Require(roles.All(role => !legacyRoles.Contains(role)), "absurd lab fell back to the old fixed cast");
+    foreach (var agent in loaded.Engine.Agents.Where(agent => agent.Id is "alpha" or "beta" or "gamma" or "delta"))
+    {
+        Require(!string.IsNullOrWhiteSpace(agent.VoiceStyle), $"{agent.Id} absurd voice was not applied");
+        Require(agent.Persona.Contains("Absurd function:", StringComparison.OrdinalIgnoreCase), $"{agent.Id} absurd function missing from persona");
+        Require(agent.Persona.Contains("Expertise leak:", StringComparison.OrdinalIgnoreCase), $"{agent.Id} expertise leak missing from persona");
+    }
     Require(loaded.ScenarioGenerator.RolePack == "absurd_lab", "role pack was not stored");
     Require(loaded.ScenarioGenerator.Absurdity == "absurd", "absurdity was not stored");
     Require(loaded.Engine.Steering.Global.Contains("Persona mixer", StringComparison.OrdinalIgnoreCase), "persona mixer global frame missing");
     Require(File.ReadAllText(log.EventPath()).Contains("\"rolePack\":\"absurd_lab\""), "role pack was not logged");
     Directory.Delete(root, recursive: true);
+}
+
+static void AbsurdRoleLibraryExposesWideVariety()
+{
+    var generatedPersonaType = typeof(MatchGenerationService).Assembly.GetType("AIArena.Core.Services.GeneratedPersona");
+    Require(generatedPersonaType is not null, "GeneratedPersona type not found");
+    var field = generatedPersonaType!.GetField("AbsurdRoles", BindingFlags.NonPublic | BindingFlags.Static);
+    Require(field is not null, "Absurd role library field not found");
+    var roles = (Array?)field!.GetValue(null);
+    Require(roles is not null, "Absurd role library was null");
+    Require(roles!.Length >= 50, "Absurd role library should contain at least 50 roles");
+    var roleNames = roles.Cast<object>()
+        .Select(item => item.GetType().GetProperty("Role")?.GetValue(item)?.ToString() ?? "")
+        .Where(item => !string.IsNullOrWhiteSpace(item))
+        .ToArray();
+    Require(roleNames.Distinct(StringComparer.OrdinalIgnoreCase).Count() == roleNames.Length, "Absurd role library contains duplicate role names");
+    Require(roleNames.Length >= 50, "Absurd role names were not readable");
 }
 
 static void GenerateYoloSeedRespectingLocks()
@@ -611,6 +644,12 @@ static void GenerateYoloSeedRespectingLocks()
     Require(client.Requests.Count == 0, "YOLO seed should not call the model provider");
     Require(File.ReadAllText(log.EventPath()).Contains("native_yolo_seed_match_generated"), "YOLO seed event was not logged");
     Directory.Delete(root, recursive: true);
+}
+
+static string RoleTitle(string agentName)
+{
+    var colon = agentName.IndexOf(':', StringComparison.Ordinal);
+    return colon >= 0 ? agentName[(colon + 1)..].Trim() : agentName.Trim();
 }
 
 static void AddNarratorMessageToTranscript()

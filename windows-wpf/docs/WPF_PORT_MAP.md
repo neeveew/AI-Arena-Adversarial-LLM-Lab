@@ -60,7 +60,7 @@ This map tracks the native WPF port against the Python beta app. Keep it close t
 | Model-requested internet during 1 TURN | Partial | If enabled in App Settings, an agent may emit a valid internet tool JSON request. WPF injects an Internet transcript card, then asks the agent for the final public turn. Auto Chat uses the same turn runner; retry integration is intentionally disabled for internet requests. |
 | Internet approval mode | Done | Optional setting pauses model-requested internet by injecting a pending Internet Approval card with Approve Once, Reject, Copy URL, and Delete actions. |
 | Internet cache | Done | Successful internet tool results are cached in memory for 15 minutes by request and source settings. |
-| Random Seed | Done | Native deterministic template generation with role pack, style, pressure, and absurdity controls; visibly refreshed cast roles/personas/voices; respects topic/global/agent/narrator locks, preserves transcript. |
+| Random Seed | Done | Native deterministic template generation with role pack, style, pressure, and absurdity controls; Absurd Lab uses a 50+ role seeded library with associated persona functions; respects topic/global/agent/narrator locks, preserves transcript. |
 | AI Choice | Partial | Calls configured narrator/shared model for match JSON, fills missing cast members, applies with locks, preserves transcript. Needs broader malformed-output recovery. |
 
 ## Live Agents

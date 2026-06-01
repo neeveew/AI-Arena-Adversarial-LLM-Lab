@@ -183,7 +183,7 @@ AI Arena also scores non-default voices with a lightweight Style Fit meter. This
 
 ### Random Seed
 
-Random Seed generates a deterministic scenario and cast. Use Role pack to choose Auto, Balanced, Red team, Scientific review, Technical architecture, Safety audit, Legal / policy, Incident response, Product risk, or Absurd lab. Use Style to choose Auto, Balanced, Adversarial, Technical, Scientific, Research, Product, Safety, Philosophical, Legal, Creative, Red-team, or Incident. Use Pressure to choose Normal, Sharp, Spicy, or Chaos. Use Absurdity to mix expertise, voice constraints, and reasoning distortions. Locked topic, global instruction, or cast members are preserved.
+Random Seed generates a deterministic scenario and cast. Use Role pack to choose Auto, Balanced, Red team, Scientific review, Technical architecture, Safety audit, Legal / policy, Incident response, Product risk, or Absurd lab. Absurd lab draws from a 50+ role library and assigns each generated role its own expertise leak, useful function, voice constraint, reasoning distortion, and blind spot. Use Style to choose Auto, Balanced, Adversarial, Technical, Scientific, Research, Product, Safety, Philosophical, Legal, Creative, Red-team, or Incident. Use Pressure to choose Normal, Sharp, Spicy, or Chaos. Use Absurdity to mix expertise, voice constraints, and reasoning distortions. Locked topic, global instruction, or cast members are preserved.
 
 Absurdity levels:
 
