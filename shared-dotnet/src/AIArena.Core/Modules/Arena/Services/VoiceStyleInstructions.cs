@@ -28,21 +28,67 @@ internal static class VoiceStyleInstructions
 
     public static string Instruction(string? value)
     {
+        var normalized = Normalize(value);
+        if (normalized.Equals("default", StringComparison.OrdinalIgnoreCase))
+        {
+            return "";
+        }
+
+        return string.Join(
+            Environment.NewLine,
+            $"Voice contract: {Label(normalized)}.",
+            StyleRule(normalized),
+            "Maintain this voice from the first sentence through the final sentence. Do not drift back to a generic assistant tone.",
+            "If the voice style is difficult, simplify the content while preserving the style. Do not announce, explain, or apologize for using the style.",
+            "Before finalizing, silently check that every paragraph or bullet still follows the voice contract.");
+    }
+
+    public static string TurnReminder(string? value)
+    {
+        var normalized = Normalize(value);
+        return normalized.Equals("default", StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : $"Voice contract for this turn: {Label(normalized)}. Keep the entire response in this style; do not drift into generic prose.";
+    }
+
+    public static string Label(string? value)
+    {
         return Normalize(value) switch
         {
-            "scientific" => "Communication constraint: use precise scientific language. Separate evidence, inference, uncertainty, and testable claims.",
-            "legal_policy" => "Communication constraint: use legal/policy framing. Name obligations, exceptions, risk classes, and review thresholds.",
-            "plain_language" => "Communication constraint: use plain language. Keep terms simple, actionable, and easy for a non-specialist to follow.",
-            "idioms" => "Communication constraint: speak mainly through idioms and familiar sayings while preserving the actual reasoning and uncertainty.",
-            "cute" => "Communication constraint: use cute, gentle language while still preserving evidence quality, tradeoffs, and uncertainty.",
-            "poetic" => "Communication constraint: use vivid poetic language without inventing facts or hiding the concrete decision.",
-            "socratic" => "Communication constraint: use a Socratic style. Lead with questions, but still provide a useful next step.",
-            "bullet_only" => "Communication constraint: use bullets only. Keep every bullet meaningful and avoid paragraph prose.",
-            "skeptical" => "Communication constraint: maintain a skeptical tone. Challenge claims, but keep the critique constructive and specific.",
-            "executive_brief" => "Communication constraint: write as an executive brief. Lead with the decision, then key risks, evidence, and next action.",
-            "evidence_ledger" => "Communication constraint: structure the answer as an evidence ledger: Evidence, Inference, Assumptions, Uncertainty, Next test.",
-            "no_analogies" => "Communication constraint: do not use analogies, metaphors, idioms, or decorative language. State the reasoning directly.",
-            "hedge_uncertainty" => "Communication constraint: explicitly hedge uncertainty. Mark confidence, unknowns, and what would change the conclusion.",
+            "scientific" => "Scientific",
+            "legal_policy" => "Legal / Policy",
+            "plain_language" => "Plain language",
+            "idioms" => "Idioms",
+            "cute" => "Cute",
+            "poetic" => "Poetic",
+            "socratic" => "Socratic",
+            "bullet_only" => "Bullet-only",
+            "skeptical" => "Skeptical",
+            "executive_brief" => "Executive brief",
+            "evidence_ledger" => "Evidence ledger",
+            "no_analogies" => "No analogies",
+            "hedge_uncertainty" => "Hedge uncertainty",
+            _ => "Default"
+        };
+    }
+
+    private static string StyleRule(string normalized)
+    {
+        return normalized switch
+        {
+            "scientific" => "Style rule: use precise scientific language. Separate evidence, inference, uncertainty, and testable claims.",
+            "legal_policy" => "Style rule: use legal/policy framing. Name obligations, exceptions, risk classes, and review thresholds.",
+            "plain_language" => "Style rule: use plain language. Keep terms simple, actionable, and easy for a non-specialist to follow.",
+            "idioms" => "Style rule: speak mainly through idioms and familiar sayings while preserving the actual reasoning and uncertainty.",
+            "cute" => "Style rule: use cute, gentle language while still preserving evidence quality, tradeoffs, and uncertainty.",
+            "poetic" => "Style rule: use vivid poetic language without inventing facts or hiding the concrete decision.",
+            "socratic" => "Style rule: use a Socratic style. Lead with questions, but still provide a useful next step.",
+            "bullet_only" => "Style rule: use bullets only. Keep every bullet meaningful and avoid paragraph prose.",
+            "skeptical" => "Style rule: maintain a skeptical tone. Challenge claims, but keep the critique constructive and specific.",
+            "executive_brief" => "Style rule: write as an executive brief. Lead with the decision, then key risks, evidence, and next action.",
+            "evidence_ledger" => "Style rule: structure the answer as an evidence ledger: Evidence, Inference, Assumptions, Uncertainty, Next test.",
+            "no_analogies" => "Style rule: do not use analogies, metaphors, idioms, or decorative language. State the reasoning directly.",
+            "hedge_uncertainty" => "Style rule: explicitly hedge uncertainty. Mark confidence, unknowns, and what would change the conclusion.",
             _ => ""
         };
     }

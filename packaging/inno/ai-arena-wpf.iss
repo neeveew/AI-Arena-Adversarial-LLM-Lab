@@ -2,11 +2,11 @@
 
 #define MyAppName "AI Arena"
 #define MyAppDisplayName "AI Arena: Adversarial LLM Lab"
-#define MyAppVersion "0.3.77-beta"
+#define MyAppVersion "0.3.78-beta"
 #define MyAppPublisher "Dominik Fiala"
 #define MyAppExeName "AI Arena.exe"
 #define MyAppIconName "ai-arena-icon.ico"
-#define MyReleaseDir "..\..\dist\AI Arena - 0.3.77-beta"
+#define MyReleaseDir "..\..\dist\AI Arena - 0.3.78-beta"
 #define MyReleaseUrl "https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases"
 
 [Setup]

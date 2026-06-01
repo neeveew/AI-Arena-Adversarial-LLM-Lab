@@ -168,7 +168,7 @@ Cast Preview includes:
 
 Each item can be edited and locked. Locked cards use a golden border and lock glyph. Locked content is preserved when generating new seeds.
 
-Cast cards also include a Voice dropdown and a compact Voice chip whenever the style is not Default. Voice styles are communication constraints that stay separate from the persona, such as Scientific, Legal / Policy, Plain language, Idioms, Cute, Poetic, Socratic, Bullet-only, Skeptical, Executive brief, Evidence ledger, No analogies, and Hedge uncertainty. Use them to test whether a model can preserve reasoning quality while speaking in a constrained style.
+Cast cards also include a Voice dropdown and a compact Voice chip whenever the style is not Default. Voice styles are reinforced as per-turn contracts that stay separate from the persona, such as Scientific, Legal / Policy, Plain language, Idioms, Cute, Poetic, Socratic, Bullet-only, Skeptical, Executive brief, Evidence ledger, No analogies, and Hedge uncertainty. Use them to test whether a model can preserve reasoning quality while speaking in a constrained style.
 
 Transcript cards and Agent Performance detail also show the active Voice chip for non-default styles, so constrained turns remain visible while reviewing a match.
 

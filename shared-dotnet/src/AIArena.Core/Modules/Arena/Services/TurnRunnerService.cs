@@ -388,6 +388,7 @@ public sealed class TurnRunnerService
         var topic = string.IsNullOrWhiteSpace(snapshot.Engine.Steering.Topic) ? "Open arena discussion" : snapshot.Engine.Steering.Topic;
         var global = string.IsNullOrWhiteSpace(snapshot.Engine.Steering.Global) ? "Keep the exchange concrete, useful, and responsive to the current transcript." : snapshot.Engine.Steering.Global;
         var voiceInstruction = VoiceStyleInstructions.Instruction(agent?.VoiceStyle);
+        var voiceReminder = VoiceStyleInstructions.TurnReminder(agent?.VoiceStyle);
         var cast = string.Join(
             Environment.NewLine,
             active.Select(item => item.Id == plan.AgentId
@@ -427,6 +428,7 @@ public sealed class TurnRunnerService
                     string.IsNullOrWhiteSpace(privateNotes) ? "Your private memory notes: -" : $"Your private memory notes:{Environment.NewLine}{privateNotes}",
                     string.IsNullOrWhiteSpace(transcript) ? "Transcript: No public transcript yet." : $"Transcript:{Environment.NewLine}{transcript}",
                     string.IsNullOrWhiteSpace(latestOperatorRequest) ? "Latest Operator request: -" : $"Latest Operator request: {latestOperatorRequest}",
+                    voiceReminder,
                     $"Write the next public turn for {plan.AgentName}."))
         ];
     }

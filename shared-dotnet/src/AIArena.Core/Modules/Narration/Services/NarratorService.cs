@@ -163,6 +163,7 @@ public sealed class NarratorService
             ? "Careful observer. Concise, concrete, and useful."
             : snapshot.Engine.Narrator.Persona;
         var voiceInstruction = VoiceStyleInstructions.Instruction(snapshot.Engine.Narrator.VoiceStyle);
+        var voiceReminder = VoiceStyleInstructions.TurnReminder(snapshot.Engine.Narrator.VoiceStyle);
 
         return
         [
@@ -185,6 +186,7 @@ public sealed class NarratorService
                     Environment.NewLine + Environment.NewLine,
                     $"Topic: {topic}",
                     string.IsNullOrWhiteSpace(transcript) ? "Transcript: No public transcript yet." : $"Transcript:{Environment.NewLine}{transcript}",
+                    voiceReminder,
                     string.IsNullOrWhiteSpace(operatorRequest)
                         ? "Write the narrator note now."
                         : $"Operator request for narrator:{Environment.NewLine}{operatorRequest}"))

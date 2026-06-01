@@ -638,6 +638,8 @@ static void NarratorPromptIncludesSelectedVoiceStyle()
     var result = service.AskNarratorAsync("default", "Summarize the pressure.").GetAwaiter().GetResult();
     Require(result.Ok, $"narrator request failed: {result.Error}");
     var requestText = string.Join(Environment.NewLine, client.Requests[0].Select(message => message.Content));
+    Require(requestText.Contains("Voice contract: Poetic", StringComparison.OrdinalIgnoreCase), "narrator voice contract missing");
+    Require(requestText.Contains("Voice contract for this turn: Poetic", StringComparison.OrdinalIgnoreCase), "narrator turn voice reminder missing");
     Require(requestText.Contains("vivid poetic language", StringComparison.OrdinalIgnoreCase), "narrator voice style instruction missing");
     Directory.Delete(root, recursive: true);
 }
@@ -864,7 +866,10 @@ static void NativePromptIncludesSelectedVoiceStyle()
     var result = service.RunOneTurnAsync().GetAwaiter().GetResult();
     Require(result.Ok, $"turn failed: {result.Error}");
     var system = client.Requests[0].First(item => item.Role == "system").Content;
+    var user = client.Requests[0].First(item => item.Role == "user").Content;
+    Require(system.Contains("Voice contract: Evidence ledger", StringComparison.OrdinalIgnoreCase), "voice contract missing from selected agent prompt");
     Require(system.Contains("evidence ledger", StringComparison.OrdinalIgnoreCase), "voice style instruction missing from selected agent prompt");
+    Require(user.Contains("Voice contract for this turn: Evidence ledger", StringComparison.OrdinalIgnoreCase), "turn voice reminder missing from selected agent prompt");
     Require(system.Contains("Evidence, Inference, Assumptions, Uncertainty, Next test", StringComparison.OrdinalIgnoreCase), "evidence ledger format missing");
     Directory.Delete(root, recursive: true);
 }
