@@ -1656,7 +1656,7 @@ public partial class MainWindow : Window
         {
             TranscriptItems.Children.Add(CreateMatchQualityTimelinePanel(messages));
         }
-        if (_wpfSettings.ShowDecisionCard && _lastRenderedSnapshot is not null)
+        if (ShouldShowDecisionCard() && _lastRenderedSnapshot is not null)
         {
             TranscriptItems.Children.Add(CreateDecisionCardPanel(_lastRenderedSnapshot));
         }
@@ -2690,6 +2690,11 @@ public partial class MainWindow : Window
     private bool ShouldShowStyleFit()
     {
         return _wpfSettings.AllowDebugControls && _wpfSettings.ShowStyleFit;
+    }
+
+    private bool ShouldShowDecisionCard()
+    {
+        return _wpfSettings.AllowDebugControls && _wpfSettings.ShowDecisionCard;
     }
 
     private static string VoiceAdherenceState(int score, int samples)

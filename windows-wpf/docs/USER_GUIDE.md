@@ -40,7 +40,7 @@ The right rail contains:
 - Agent Performance.
 - Operator Turn.
 
-The top rail contains match status, provider status, current turn, turn count, export, search, View menu, theme picker, and Settings.
+The top rail contains match status, provider status, current turn, turn count, export, search, View menu, optional Debug menu, theme picker, and Settings.
 
 ## Top Rail
 
@@ -51,6 +51,7 @@ The top rail contains match status, provider status, current turn, turn count, e
 - Search icon: opens a draggable transcript search popup. Escape closes it.
 - Export icon: exports the currently visible transcript messages to Markdown.
 - View menu: toggles Compact transcript, Turn compare, Quality timeline, Memory notes, and Auto-scroll.
+- Debug menu: appears only when Settings -> Visuals -> Allow debug controls is enabled. It holds experimental transcript helpers such as Decision card and Style fit.
 - Theme: changes the app palette.
 - Gear icon: opens Settings.
 
@@ -102,6 +103,10 @@ Click a timeline bar to filter the transcript to that turn. Click the selected b
 Open View, then enable Memory notes. Memory notes are private per-agent notes stored in the session snapshot and used by model context windows.
 
 The memory panel lets you refresh, edit, clear individual agent notes, or clear all notes. Notes can also update after successful agent turns.
+
+### Debug Controls
+
+Open Settings -> Visuals, then enable Allow debug controls. The top rail shows a Debug menu for experimental helpers. Decision card shows a compact narrator-generated operator summary above the transcript. Style fit shows optional cue chips for constrained voice styles.
 
 ## Discourse Diagnostics
 
