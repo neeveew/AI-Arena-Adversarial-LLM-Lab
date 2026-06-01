@@ -39,6 +39,8 @@ var tests = new (string Name, Action Test)[]
     ("narrator prompt includes selected voice style", NarratorPromptIncludesSelectedVoiceStyle),
     ("voice adherence scores evidence ledger strong", VoiceAdherenceScoresEvidenceLedgerStrong),
     ("voice adherence detects bullet-only drift", VoiceAdherenceDetectsBulletOnlyDrift),
+    ("voice adherence scores figurative idioms", VoiceAdherenceScoresFigurativeIdioms),
+    ("voice adherence scores cute tone", VoiceAdherenceScoresCuteTone),
     ("generates narrator decision card", GenerateNarratorDecisionCard),
     ("curates news into transcript when internet is enabled", CurateNewsIntoTranscriptWhenInternetEnabled),
     ("curated news plans focused search query", CuratedNewsPlansFocusedSearchQuery),
@@ -662,6 +664,24 @@ static void VoiceAdherenceDetectsBulletOnlyDrift()
     var diagnostic = service.Analyze("bullet_only", "This paragraph ignores the selected bullet-only voice and drifts into prose.");
     Require(diagnostic.State == "broken", $"expected broken bullet-only voice, got {diagnostic.State} {diagnostic.Score}");
     Require(diagnostic.Missing.Any(item => item.Contains("non-bullet", StringComparison.OrdinalIgnoreCase)), "bullet-only missing evidence should mention non-bullet lines");
+}
+
+static void VoiceAdherenceScoresFigurativeIdioms()
+{
+    var service = new VoiceStyleAdherenceService();
+    var diagnostic = service.Analyze(
+        "idioms",
+        "Well now, this whole situation smells like trying to catch smoke in a sieve. The constraints keep shifting like sand, and the choice is a tug-of-war between building a moat and managing the river before anyone gets washed away.");
+    Require(diagnostic.State == "strong", $"expected strong idiom/metaphor voice, got {diagnostic.State} {diagnostic.Score}");
+}
+
+static void VoiceAdherenceScoresCuteTone()
+{
+    var service = new VoiceStyleAdherenceService();
+    var diagnostic = service.Analyze(
+        "cute",
+        "Oooh, honey, this is a cozy little nudge toward caution. The boundary wiggles like jelly, so let's stitch this quilt gently and keep the wobbly bits visible.");
+    Require(diagnostic.State == "strong", $"expected strong cute voice, got {diagnostic.State} {diagnostic.Score}");
 }
 
 static void GenerateNarratorDecisionCard()

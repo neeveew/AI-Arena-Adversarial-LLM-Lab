@@ -30,9 +30,9 @@ public sealed class VoiceStyleAdherenceService
             "scientific" => KeywordScore(lower, evidence, missing, "scientific markers", ["evidence", "inference", "uncertainty", "hypothesis", "test", "metric", "data", "causal", "observed", "variable", "confidence"], baseline: 34, perHit: 8, maxHits: 7),
             "legal_policy" => KeywordScore(lower, evidence, missing, "policy/legal markers", ["obligation", "exception", "threshold", "risk", "compliance", "review", "policy", "standard", "permission", "liability", "condition"], baseline: 34, perHit: 8, maxHits: 7),
             "plain_language" => PlainLanguageScore(lower, body, evidence, missing),
-            "idioms" => KeywordScore(lower, evidence, missing, "idioms", ["rule of thumb", "red flag", "ballpark", "on the table", "line in the sand", "needle", "roadmap", "ground rules", "back to square one", "at stake", "under the hood"], baseline: 26, perHit: 18, maxHits: 4),
-            "cute" => KeywordScore(lower, evidence, missing, "gentle/cute language", ["gentle", "little", "tiny", "soft", "kind", "friendly", "tidy", "careful", "sweet", "cozy"], baseline: 30, perHit: 10, maxHits: 6),
-            "poetic" => KeywordScore(lower, evidence, missing, "poetic imagery", ["like", "as if", "shadow", "light", "thread", "terrain", "weight", "echo", "map", "horizon", "pulse", "breath"], baseline: 30, perHit: 8, maxHits: 7),
+            "idioms" => FigurativeScore(lower, evidence, missing, "idiom/metaphor markers", ["rule of thumb", "red flag", "ballpark", "on the table", "line in the sand", "needle", "roadmap", "ground rules", "back to square one", "at stake", "under the hood", "smells like", "catch smoke", "sieve", "shifting like", "tug-of-war", "moat", "wrong side of the wall", "river", "water flow", "nets", "walls", "freeze", "banks", "washed away", "nail down", "crystal clear", "wind shifts", "fence"], baseline: 28, perHit: 9, maxHits: 8),
+            "cute" => FigurativeScore(lower, evidence, missing, "gentle/cute language", ["gentle", "little", "tiny", "soft", "kind", "friendly", "tidy", "careful", "sweet", "cozy", "oooh", "honey", "nudge", "quilt", "jelly", "wobbly", "wiggles", "smudge", "snug", "sparkle"], baseline: 30, perHit: 9, maxHits: 8),
+            "poetic" => FigurativeScore(lower, evidence, missing, "poetic imagery", ["like", "as if", "shadow", "shadows", "light", "thread", "terrain", "weight", "echo", "map", "horizon", "pulse", "breath", "bleed", "embrace", "currents", "ice", "gray", "carved", "stone"], baseline: 30, perHit: 8, maxHits: 8),
             "socratic" => SocraticScore(body, evidence, missing),
             "bullet_only" => BulletOnlyScore(body, evidence, missing),
             "skeptical" => KeywordScore(lower, evidence, missing, "skeptical challenge markers", ["however", "but", "assumption", "evidence", "unsupported", "risk", "challenge", "verify", "not proven", "counterexample", "fails"], baseline: 34, perHit: 8, maxHits: 7),
@@ -68,6 +68,32 @@ public sealed class VoiceStyleAdherenceService
         }
 
         return baseline + hits.Length * perHit;
+    }
+
+    private static int FigurativeScore(string lower, List<string> evidence, List<string> missing, string markerLabel, IReadOnlyList<string> markers, int baseline, int perHit, int maxHits)
+    {
+        var score = KeywordScore(lower, evidence, missing, markerLabel, markers, baseline, perHit, maxHits);
+        var simileCount = CountOccurrences(lower, " like ") + CountOccurrences(lower, " as if ") + CountOccurrences(lower, " as ");
+        if (simileCount > 0)
+        {
+            evidence.Add($"{Math.Min(simileCount, 4)} simile cue(s)");
+            score += Math.Min(16, simileCount * 4);
+        }
+
+        return score;
+    }
+
+    private static int CountOccurrences(string text, string marker)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(marker, index, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            count++;
+            index += marker.Length;
+        }
+
+        return count;
     }
 
     private static int RequiredSectionScore(string lower, List<string> evidence, List<string> missing, IReadOnlyList<string> headings)
