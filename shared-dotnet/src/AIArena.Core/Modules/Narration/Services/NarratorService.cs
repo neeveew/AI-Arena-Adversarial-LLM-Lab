@@ -161,6 +161,7 @@ public sealed class NarratorService
         var persona = string.IsNullOrWhiteSpace(snapshot.Engine.Narrator.Persona)
             ? "Careful observer. Concise, concrete, and useful."
             : snapshot.Engine.Narrator.Persona;
+        var voiceInstruction = VoiceStyleInstructions.Instruction(snapshot.Engine.Narrator.VoiceStyle);
 
         return
         [
@@ -175,7 +176,8 @@ public sealed class NarratorService
                     string.IsNullOrWhiteSpace(operatorRequest)
                         ? "Use your own judgment about what the arena needs next."
                         : "Answer the operator request directly, then add only the context needed for the arena.",
-                    $"Narrator persona: {persona}")),
+                    $"Narrator persona: {persona}",
+                    voiceInstruction)),
             new ModelChatMessage(
                 "user",
                 string.Join(

@@ -387,6 +387,7 @@ public sealed class TurnRunnerService
             .FirstOrDefault()?.Text.Trim() ?? "";
         var topic = string.IsNullOrWhiteSpace(snapshot.Engine.Steering.Topic) ? "Open arena discussion" : snapshot.Engine.Steering.Topic;
         var global = string.IsNullOrWhiteSpace(snapshot.Engine.Steering.Global) ? "Keep the exchange concrete, useful, and responsive to the current transcript." : snapshot.Engine.Steering.Global;
+        var voiceInstruction = VoiceStyleInstructions.Instruction(agent?.VoiceStyle);
         var cast = string.Join(
             Environment.NewLine,
             active.Select(item => item.Id == plan.AgentId
@@ -408,6 +409,7 @@ public sealed class TurnRunnerService
                     "You are participating in AI Arena as the selected agent.",
                     $"Selected agent: {plan.AgentName}.",
                     $"Your persona: {agent?.Persona ?? plan.AgentName}.",
+                    voiceInstruction,
                     "Do not write for the other agents. Reply only as the selected agent.",
                     "You do not know the private roles, personas, or instructions of other participants. Infer only from public transcript text. Never describe another participant's hidden role or persona.",
                     "Treat the latest Operator message as the highest-priority task direction when it is feasible and safe. Follow it directly before pursuing your persona's critique or agenda.",

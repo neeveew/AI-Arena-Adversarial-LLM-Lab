@@ -95,6 +95,9 @@ public sealed class DialogueAgent
     [JsonPropertyName("persona")]
     public string Persona { get; set; } = "";
 
+    [JsonPropertyName("voice_style")]
+    public string VoiceStyle { get; set; } = "";
+
     [JsonPropertyName("active")]
     public bool Active { get; set; } = true;
 
@@ -229,6 +232,9 @@ public sealed class NarratorState
 
     [JsonPropertyName("persona")]
     public string Persona { get; set; } = "";
+
+    [JsonPropertyName("voice_style")]
+    public string VoiceStyle { get; set; } = "";
 
     [JsonPropertyName("status")]
     public string Status { get; set; } = "idle";

@@ -24,6 +24,7 @@ public sealed record ArenaSnapshot(
     string NarratorModel,
     string NarratorStatus,
     string NarratorPersona,
+    string NarratorVoiceStyle,
     bool NarratorLocked,
     string ProviderBaseUrl,
     int ProviderTimeout,

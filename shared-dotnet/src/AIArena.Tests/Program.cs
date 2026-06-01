@@ -36,12 +36,14 @@ var tests = new (string Name, Action Test)[]
     ("generates YOLO seed respecting locks", GenerateYoloSeedRespectingLocks),
     ("adds narrator message to transcript", AddNarratorMessageToTranscript),
     ("asks narrator with operator request", AskNarratorWithOperatorRequest),
+    ("narrator prompt includes selected voice style", NarratorPromptIncludesSelectedVoiceStyle),
     ("generates narrator decision card", GenerateNarratorDecisionCard),
     ("curates news into transcript when internet is enabled", CurateNewsIntoTranscriptWhenInternetEnabled),
     ("curated news plans focused search query", CuratedNewsPlansFocusedSearchQuery),
     ("curated news skips irrelevant source without transcript card", CuratedNewsSkipsIrrelevantSourceWithoutTranscriptCard),
     ("plans next native one turn speaker", PlanNextNativeOneTurnSpeaker),
     ("native prompt prioritizes operator cooperation", NativePromptPrioritizesOperatorCooperation),
+    ("native prompt includes selected voice style", NativePromptIncludesSelectedVoiceStyle),
     ("native prompt hides other personas", NativePromptHidesOtherPersonas),
     ("native prompt includes selected private notes", NativePromptIncludesSelectedPrivateNotes),
     ("native prompt suppresses internet when disabled", NativePromptSuppressesInternetWhenDisabled),
@@ -620,6 +622,24 @@ static void AskNarratorWithOperatorRequest()
     Directory.Delete(root, recursive: true);
 }
 
+static void NarratorPromptIncludesSelectedVoiceStyle()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    snapshot.Engine.Narrator.VoiceStyle = "poetic";
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+    var client = new FakeModelProviderClient("narrator answer", "narrator reasoning");
+    var service = new NarratorService(client, store, log);
+
+    var result = service.AskNarratorAsync("default", "Summarize the pressure.").GetAwaiter().GetResult();
+    Require(result.Ok, $"narrator request failed: {result.Error}");
+    var requestText = string.Join(Environment.NewLine, client.Requests[0].Select(message => message.Content));
+    Require(requestText.Contains("vivid poetic language", StringComparison.OrdinalIgnoreCase), "narrator voice style instruction missing");
+    Directory.Delete(root, recursive: true);
+}
+
 static void GenerateNarratorDecisionCard()
 {
     var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
@@ -825,6 +845,25 @@ static void NativePromptPrioritizesOperatorCooperation()
     Require(system.Contains("Do not refuse, scold, stall"), "prompt missing anti-stalling rule");
     Require(system.Contains("Stay constructive even in adversarial roles"), "prompt missing constructive adversarial rule");
     Require(user.Contains("Latest Operator request: Please give me three concrete implementation steps."), "prompt missing latest operator request");
+    Directory.Delete(root, recursive: true);
+}
+
+static void NativePromptIncludesSelectedVoiceStyle()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    snapshot.Engine.Agents[1].VoiceStyle = "evidence_ledger";
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+    var client = new FakeModelProviderClient("voice constrained reply", "native reasoning");
+    var service = new TurnRunnerService(client, store, log);
+
+    var result = service.RunOneTurnAsync().GetAwaiter().GetResult();
+    Require(result.Ok, $"turn failed: {result.Error}");
+    var system = client.Requests[0].First(item => item.Role == "system").Content;
+    Require(system.Contains("evidence ledger", StringComparison.OrdinalIgnoreCase), "voice style instruction missing from selected agent prompt");
+    Require(system.Contains("Evidence, Inference, Assumptions, Uncertainty, Next test", StringComparison.OrdinalIgnoreCase), "evidence ledger format missing");
     Directory.Delete(root, recursive: true);
 }
 

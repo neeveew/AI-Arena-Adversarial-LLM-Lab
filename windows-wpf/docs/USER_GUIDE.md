@@ -32,7 +32,7 @@ The left rail contains the app identity, navigation, session overview, and live 
 The center area contains the active page:
 
 - Transcript: the arena conversation, diagnostics, filters, timeline, memory notes, and compare tools.
-- Custom Match: scenario preview, cast preview, locks, seed generation, and checkpoint/session tools.
+- Custom Match: scenario preview, cast preview, locks, per-agent voice styles, seed generation, and checkpoint/session tools.
 
 The right rail contains:
 
@@ -167,6 +167,8 @@ Cast Preview includes:
 - Narrator.
 
 Each item can be edited and locked. Locked cards use a golden border and lock glyph. Locked content is preserved when generating new seeds.
+
+Cast cards also include a Voice dropdown. Voice styles are communication constraints that stay separate from the persona, such as Scientific, Legal / Policy, Plain language, Idioms, Cute, Poetic, Socratic, Bullet-only, Skeptical, Executive brief, Evidence ledger, No analogies, and Hedge uncertainty. Use them to test whether a model can preserve reasoning quality while speaking in a constrained style.
 
 ### Random Seed
 

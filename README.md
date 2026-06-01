@@ -33,7 +33,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 - Alpha, Beta, Gamma, and Delta participant agents.
 - Separate Narrator layer for observation and public narration.
 - Public Operator interventions that do not advance the turn order.
-- Per-agent personas and model assignments.
+- Per-agent personas, model assignments, and voice styles.
 - OpenAI-compatible provider support, including LM Studio.
 - Random Seed style/intensity controls, AI Choice, and YOLO scenario generation.
 - Scenario and cast locks for controlled regeneration.

@@ -90,6 +90,7 @@ public sealed class ScenarioTemplateStore
             if (agentTemplate.Id.Equals("narrator", StringComparison.OrdinalIgnoreCase))
             {
                 snapshot.Engine.Narrator.Persona = agentTemplate.Persona;
+                snapshot.Engine.Narrator.VoiceStyle = agentTemplate.VoiceStyle ?? "";
                 snapshot.MatchLocks["narrator"] = agentTemplate.Locked;
                 continue;
             }
@@ -103,6 +104,7 @@ public sealed class ScenarioTemplateStore
 
             agent.Name = agentTemplate.Name;
             agent.Persona = agentTemplate.Persona;
+            agent.VoiceStyle = agentTemplate.VoiceStyle ?? "";
             agent.Active = agentTemplate.Active;
             snapshot.MatchLocks[agentTemplate.Id] = agentTemplate.Locked;
         }
@@ -141,13 +143,15 @@ public sealed class ScenarioTemplateStore
                 agent.Name,
                 agent.Persona,
                 agent.Active,
-                snapshot.MatchLocks.TryGetValue(agent.Id, out var locked) && locked))
+                snapshot.MatchLocks.TryGetValue(agent.Id, out var locked) && locked,
+                agent.VoiceStyle))
             .Append(new ScenarioTemplateAgent(
                 "narrator",
                 "Narrator",
                 snapshot.Engine.Narrator.Persona,
                 true,
-                snapshot.MatchLocks.TryGetValue("narrator", out var narratorLocked) && narratorLocked))
+                snapshot.MatchLocks.TryGetValue("narrator", out var narratorLocked) && narratorLocked,
+                snapshot.Engine.Narrator.VoiceStyle))
             .ToArray();
 
         var configs = snapshot.Configs.ToDictionary(
@@ -210,7 +214,8 @@ public sealed record ScenarioTemplateAgent(
     string Name,
     string Persona,
     bool Active,
-    bool Locked);
+    bool Locked,
+    string VoiceStyle = "");
 
 public sealed record ScenarioTemplateModelConfig(
     string BaseUrl,

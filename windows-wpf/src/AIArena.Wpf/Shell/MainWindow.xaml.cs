@@ -54,6 +54,7 @@ public partial class MainWindow : Window
     private readonly List<Button> _narratorActionButtons = [];
     private readonly List<Button> _transcriptActionButtons = [];
     private readonly List<CheckBox> _lockControls = [];
+    private readonly List<ComboBox> _voiceControls = [];
     private readonly List<TranscriptMessage> _turnCompareSelection = [];
     private readonly Dictionary<string, string> _roleModels = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ModelPreloadResult> _lastPreloadResults = new(StringComparer.OrdinalIgnoreCase);
@@ -819,6 +820,7 @@ public partial class MainWindow : Window
                 "Narrator",
                 snapshot.NarratorStatus,
                 snapshot.NarratorPersona,
+                snapshot.NarratorVoiceStyle,
                 snapshot.NarratorModel,
                 true,
                 snapshot.NarratorLocked,
@@ -1284,6 +1286,7 @@ public partial class MainWindow : Window
                     "Narrator",
                     snapshot.NarratorStatus,
                     snapshot.NarratorPersona,
+                    snapshot.NarratorVoiceStyle,
                     snapshot.NarratorModel,
                     true,
                     snapshot.NarratorLocked,
@@ -1958,6 +1961,7 @@ public partial class MainWindow : Window
         CastPreviewItems.Children.Clear();
         ScenarioSeedInspector.Children.Clear();
         _lockControls.Clear();
+        _voiceControls.Clear();
 
         PopulateScenarioSeedInspector(snapshot);
 
@@ -1990,7 +1994,8 @@ public partial class MainWindow : Window
                     string.IsNullOrWhiteSpace(agent.Persona) ? "(no persona)" : agent.Persona,
                     BlendBrush(ResourceBrush("CardBrush"), AccentForSpeaker(agent.Id), 0.16),
                     AccentForSpeaker(agent.Id),
-                    agent.Locked));
+                    agent.Locked,
+                    agent.VoiceStyle));
             }
         }
 
@@ -2000,7 +2005,8 @@ public partial class MainWindow : Window
             string.IsNullOrWhiteSpace(snapshot.NarratorPersona) ? "(no narrator persona)" : snapshot.NarratorPersona,
             BlendBrush(ResourceBrush("CardBrush"), ResourceBrush("NarratorAccentBrush"), 0.16),
             ResourceBrush("NarratorAccentBrush"),
-            snapshot.NarratorLocked));
+            snapshot.NarratorLocked,
+            snapshot.NarratorVoiceStyle));
     }
 
     private void PopulateScenarioSeedInspector(ArenaSnapshot snapshot)
@@ -2323,7 +2329,7 @@ public partial class MainWindow : Window
             : "-";
     }
 
-    private Border CreateLockCard(string lockKey, string title, string body, Brush background, Brush accent, bool locked)
+    private Border CreateLockCard(string lockKey, string title, string body, Brush background, Brush accent, bool locked, string? voiceStyle = null)
     {
         var lockAccent = ResourceBrush("BetaAccentBrush");
         var isCastCard = IsAgentSpeaker(lockKey) || NormalizeMatchLockKey(lockKey) == "narrator";
@@ -2364,6 +2370,10 @@ public partial class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(14, 0, 0, 0)
         };
+        if (isCastCard)
+        {
+            actions.Children.Add(CreateVoiceStylePicker(lockKey, voiceStyle ?? "", cardAccent));
+        }
         actions.Children.Add(editButton);
         actions.Children.Add(lockBox);
         DockPanel.SetDock(actions, Dock.Right);
@@ -2422,6 +2432,102 @@ public partial class MainWindow : Window
             Margin = new Thickness(0, 0, isCastCard ? 0 : 10, 10),
             Child = layout
         };
+    }
+
+    private ComboBox CreateVoiceStylePicker(string lockKey, string voiceStyle, Brush accent)
+    {
+        var picker = new ComboBox
+        {
+            Tag = lockKey,
+            Width = 150,
+            MinHeight = 28,
+            Padding = new Thickness(6, 3, 6, 3),
+            Margin = new Thickness(0, 0, 8, 0),
+            FontSize = 11,
+            ToolTip = "Communication style for this model"
+        };
+
+        foreach (var option in VoiceStyleOptions())
+        {
+            picker.Items.Add(new ComboBoxItem { Content = option.Label, Tag = option.Tag });
+        }
+
+        SelectComboTag(picker, NormalizeVoiceStyleTag(voiceStyle));
+        picker.SelectionChanged += VoiceStylePicker_SelectionChanged;
+        _voiceControls.Add(picker);
+        return picker;
+    }
+
+    private async void VoiceStylePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isRenderingSnapshot || _activeSession is null || sender is not ComboBox picker || picker.Tag is not string key)
+        {
+            return;
+        }
+
+        var voiceStyle = SelectedComboTag(picker, "default");
+        await RunArenaBusyAsync($"Updating {DisplayLockKey(key)} voice...", async () =>
+        {
+            var latest = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
+            if (latest is null)
+            {
+                LoadStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
+                return;
+            }
+
+            if (!ApplyVoiceStyle(latest, key, voiceStyle))
+            {
+                LoadStatus.Text = $"Could not update {DisplayLockKey(key)} voice.";
+                ArenaRunStatus.Text = LoadStatus.Text;
+                return;
+            }
+
+            await SaveSnapshotWithFeedbackAsync(latest, _activeSession.Id);
+            await _eventLogStore.AppendAsync(_activeSession.Id, "native_match_voice_style_changed", new
+            {
+                key = NormalizeMatchLockKey(key),
+                voice_style = voiceStyle
+            });
+            RefreshActiveSession($"Updated {DisplayLockKey(key)} voice: {VoiceStyleLabel(voiceStyle)}.");
+        });
+    }
+
+    private static IReadOnlyList<(string Tag, string Label)> VoiceStyleOptions()
+    {
+        return
+        [
+            ("default", "Voice: Default"),
+            ("scientific", "Voice: Scientific"),
+            ("legal_policy", "Voice: Legal / Policy"),
+            ("plain_language", "Voice: Plain"),
+            ("idioms", "Voice: Idioms"),
+            ("cute", "Voice: Cute"),
+            ("poetic", "Voice: Poetic"),
+            ("socratic", "Voice: Socratic"),
+            ("bullet_only", "Voice: Bullet-only"),
+            ("skeptical", "Voice: Skeptical"),
+            ("executive_brief", "Voice: Executive"),
+            ("evidence_ledger", "Voice: Evidence"),
+            ("no_analogies", "Voice: No analogies"),
+            ("hedge_uncertainty", "Voice: Hedge")
+        ];
+    }
+
+    private static string NormalizeVoiceStyleTag(string? value)
+    {
+        var cleaned = string.IsNullOrWhiteSpace(value)
+            ? "default"
+            : value.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+        return VoiceStyleOptions().Any(option => option.Tag.Equals(cleaned, StringComparison.OrdinalIgnoreCase))
+            ? cleaned
+            : "default";
+    }
+
+    private static string VoiceStyleLabel(string? value)
+    {
+        var tag = NormalizeVoiceStyleTag(value);
+        var label = VoiceStyleOptions().First(option => option.Tag == tag).Label;
+        return label.Replace("Voice: ", "", StringComparison.OrdinalIgnoreCase);
     }
 
     private Border CreateLockMetaChip(string text, Brush accent)
@@ -6636,6 +6742,10 @@ public partial class MainWindow : Window
         {
             checkBox.IsEnabled = !busy;
         }
+        foreach (var comboBox in _voiceControls)
+        {
+            comboBox.IsEnabled = !busy;
+        }
         ArenaRunStatus.Text = status;
     }
 
@@ -7049,6 +7159,32 @@ public partial class MainWindow : Window
                 }
 
                 agent.Persona = value;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static bool ApplyVoiceStyle(AIArena.Core.Models.ArenaSnapshot snapshot, string key, string value)
+    {
+        var normalizedKey = NormalizeMatchLockKey(key);
+        var normalizedVoice = NormalizeVoiceStyleTag(value);
+        switch (normalizedKey)
+        {
+            case "narrator":
+                snapshot.Engine.Narrator.VoiceStyle = normalizedVoice == "default" ? "" : normalizedVoice;
+                return true;
+            case "alpha":
+            case "beta":
+            case "gamma":
+            case "delta":
+                var agent = snapshot.Engine.Agents.FirstOrDefault(item => item.Id.Equals(normalizedKey, StringComparison.OrdinalIgnoreCase));
+                if (agent is null)
+                {
+                    return false;
+                }
+
+                agent.VoiceStyle = normalizedVoice == "default" ? "" : normalizedVoice;
                 return true;
             default:
                 return false;
