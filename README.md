@@ -36,7 +36,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 - Per-agent personas, model assignments, voice styles, pressure profiles, and absurd persona-mixer constraints.
 - Optional debug voice/style cue chips and voice drift enforcement for constrained agents.
 - OpenAI-compatible provider support, including LM Studio.
-- Random Seed role-pack, pressure, style, and absurdity controls, including a 50+ role Absurd Lab library, plus AI Choice and YOLO scenario generation.
+- Random Seed role-pack, pressure, style, and absurdity controls, including a seeded-shuffle 50+ role Absurd Lab library, plus AI Choice and YOLO scenario generation.
 - Scenario and cast locks for controlled regeneration.
 - Local sessions, restore points, and scenario templates.
 - Discourse diagnostics: friction, consensus, role drift, unsupported claims, evidence pressure, and narrative heat.

@@ -36,6 +36,8 @@ var tests = new (string Name, Action Test)[]
     ("generates requested random seed style and intensity", GenerateRequestedRandomSeedStyleAndIntensity),
     ("generates absurd role pack voice constraints", GenerateAbsurdRolePackVoiceConstraints),
     ("absurd role library exposes wide variety", AbsurdRoleLibraryExposesWideVariety),
+    ("absurd role shuffle is deterministic and varied", AbsurdRoleShuffleIsDeterministicAndVaried),
+    ("template seed generator is deterministic", TemplateSeedGeneratorIsDeterministic),
     ("generates YOLO seed respecting locks", GenerateYoloSeedRespectingLocks),
     ("adds narrator message to transcript", AddNarratorMessageToTranscript),
     ("asks narrator with operator request", AskNarratorWithOperatorRequest),
@@ -590,6 +592,7 @@ static void GenerateAbsurdRolePackVoiceConstraints()
         Require(!string.IsNullOrWhiteSpace(agent.VoiceStyle), $"{agent.Id} absurd voice was not applied");
         Require(agent.Persona.Contains("Absurd function:", StringComparison.OrdinalIgnoreCase), $"{agent.Id} absurd function missing from persona");
         Require(agent.Persona.Contains("Expertise leak:", StringComparison.OrdinalIgnoreCase), $"{agent.Id} expertise leak missing from persona");
+        Require(agent.Persona.Contains("Role pressure:", StringComparison.OrdinalIgnoreCase), $"{agent.Id} pressure metadata missing from persona");
     }
     Require(loaded.ScenarioGenerator.RolePack == "absurd_lab", "role pack was not stored");
     Require(loaded.ScenarioGenerator.Absurdity == "absurd", "absurdity was not stored");
@@ -600,19 +603,45 @@ static void GenerateAbsurdRolePackVoiceConstraints()
 
 static void AbsurdRoleLibraryExposesWideVariety()
 {
-    var generatedPersonaType = typeof(MatchGenerationService).Assembly.GetType("AIArena.Core.Services.GeneratedPersona");
-    Require(generatedPersonaType is not null, "GeneratedPersona type not found");
-    var field = generatedPersonaType!.GetField("AbsurdRoles", BindingFlags.NonPublic | BindingFlags.Static);
-    Require(field is not null, "Absurd role library field not found");
-    var roles = (Array?)field!.GetValue(null);
-    Require(roles is not null, "Absurd role library was null");
-    Require(roles!.Length >= 50, "Absurd role library should contain at least 50 roles");
-    var roleNames = roles.Cast<object>()
+    var roles = AbsurdRoleCatalogEntries();
+    Require(roles.Length >= 50, "Absurd role library should contain at least 50 roles");
+    var roleNames = roles
         .Select(item => item.GetType().GetProperty("Role")?.GetValue(item)?.ToString() ?? "")
         .Where(item => !string.IsNullOrWhiteSpace(item))
         .ToArray();
     Require(roleNames.Distinct(StringComparer.OrdinalIgnoreCase).Count() == roleNames.Length, "Absurd role library contains duplicate role names");
     Require(roleNames.Length >= 50, "Absurd role names were not readable");
+}
+
+static void AbsurdRoleShuffleIsDeterministicAndVaried()
+{
+    var first = AbsurdRoleNamesForSeed("same-seed");
+    var second = AbsurdRoleNamesForSeed("same-seed");
+    Require(first.SequenceEqual(second), "same absurd seed should produce the same role lineup");
+    Require(first.Distinct(StringComparer.OrdinalIgnoreCase).Count() == first.Length, "same seed produced duplicate absurd roles");
+
+    var lineups = Enumerable.Range(0, 40)
+        .Select(index => AbsurdRoleNamesForSeed($"seed-{index}"))
+        .ToArray();
+    foreach (var lineup in lineups)
+    {
+        Require(lineup.Distinct(StringComparer.OrdinalIgnoreCase).Count() == lineup.Length, "absurd shuffle produced duplicate roles inside a lineup");
+    }
+
+    var uniqueLineups = lineups.Select(lineup => string.Join("|", lineup)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    var uniqueRoles = lineups.SelectMany(lineup => lineup).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    Require(uniqueLineups >= 30, "absurd shuffle did not vary lineups across seeds");
+    Require(uniqueRoles >= 40, "absurd shuffle did not draw broadly from the role library");
+}
+
+static void TemplateSeedGeneratorIsDeterministic()
+{
+    var first = GenerateTemplateMatchByReflection("fixed-seed");
+    var second = GenerateTemplateMatchByReflection("fixed-seed");
+    var third = GenerateTemplateMatchByReflection("different-seed");
+    Require(GeneratedMatchProperty(first, "Topic") == GeneratedMatchProperty(second, "Topic"), "same seed should preserve generated topic");
+    Require(GeneratedPersonaRoles(first).SequenceEqual(GeneratedPersonaRoles(second)), "same seed should preserve generated personas");
+    Require(!GeneratedPersonaRoles(first).SequenceEqual(GeneratedPersonaRoles(third)), "different seed should vary generated personas");
 }
 
 static void GenerateYoloSeedRespectingLocks()
@@ -650,6 +679,55 @@ static string RoleTitle(string agentName)
 {
     var colon = agentName.IndexOf(':', StringComparison.Ordinal);
     return colon >= 0 ? agentName[(colon + 1)..].Trim() : agentName.Trim();
+}
+
+static object[] AbsurdRoleCatalogEntries()
+{
+    var catalogType = typeof(MatchGenerationService).Assembly.GetType("AIArena.Core.Services.AbsurdRoleCatalog");
+    Require(catalogType is not null, "AbsurdRoleCatalog type not found");
+    var property = catalogType!.GetProperty("All", BindingFlags.Public | BindingFlags.Static);
+    Require(property is not null, "AbsurdRoleCatalog.All property not found");
+    var values = (System.Collections.IEnumerable?)property!.GetValue(null);
+    Require(values is not null, "AbsurdRoleCatalog.All was null");
+    return values!.Cast<object>().ToArray();
+}
+
+static string[] AbsurdRoleNamesForSeed(string seed)
+{
+    var catalogType = typeof(MatchGenerationService).Assembly.GetType("AIArena.Core.Services.AbsurdRoleCatalog");
+    Require(catalogType is not null, "AbsurdRoleCatalog type not found");
+    var method = catalogType!.GetMethod("For", BindingFlags.Public | BindingFlags.Static);
+    Require(method is not null, "AbsurdRoleCatalog.For method not found");
+    return new[] { "alpha", "beta", "gamma", "delta" }
+        .Select(agentId => method!.Invoke(null, new object[] { "absurd_lab", seed, agentId }))
+        .Select(role => role?.GetType().GetProperty("Role")?.GetValue(role)?.ToString() ?? "")
+        .ToArray();
+}
+
+static object GenerateTemplateMatchByReflection(string seed)
+{
+    var generatorType = typeof(MatchGenerationService).Assembly.GetType("AIArena.Core.Services.ScenarioSeedGenerator");
+    Require(generatorType is not null, "ScenarioSeedGenerator type not found");
+    var method = generatorType!.GetMethod("GenerateTemplateMatch", BindingFlags.Public | BindingFlags.Static);
+    Require(method is not null, "GenerateTemplateMatch method not found");
+    var generated = method!.Invoke(null, new object[] { "technical", seed, "chaos", "absurd_lab", "absurd", new[] { "alpha", "beta", "gamma", "delta" } });
+    Require(generated is not null, "GenerateTemplateMatch returned null");
+    return generated!;
+}
+
+static string GeneratedMatchProperty(object match, string propertyName)
+{
+    return match.GetType().GetProperty(propertyName)?.GetValue(match)?.ToString() ?? "";
+}
+
+static string[] GeneratedPersonaRoles(object match)
+{
+    var personas = (System.Collections.IEnumerable?)match.GetType().GetProperty("Personas")?.GetValue(match);
+    Require(personas is not null, "GeneratedMatch.Personas was not readable");
+    return personas!.Cast<object>()
+        .Where(persona => (persona.GetType().GetProperty("AgentId")?.GetValue(persona)?.ToString() ?? "") is not "narrator")
+        .Select(persona => persona.GetType().GetProperty("Role")?.GetValue(persona)?.ToString() ?? "")
+        .ToArray();
 }
 
 static void AddNarratorMessageToTranscript()
