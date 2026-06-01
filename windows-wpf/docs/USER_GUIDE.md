@@ -172,7 +172,7 @@ Cast cards also include a Voice dropdown and a compact Voice chip whenever the s
 
 Transcript cards and Agent Performance detail also show the active Voice chip for non-default styles, so constrained turns remain visible while reviewing a match.
 
-AI Arena also scores non-default voices with a lightweight Style Fit meter. The transcript and Turn Compare show Fit chips, while Agent Performance shows recent voice drift details. Scores are heuristic: strong means the response visibly followed the selected style, drifting means partial adherence, and broken means the voice mostly collapsed back to generic prose.
+AI Arena also scores non-default voices with a lightweight Style Fit meter. This is experimental, so the transcript and Turn Compare cue chips only appear when Settings -> Visuals -> Allow debug controls is enabled and Debug -> Style fit is turned on. Agent Performance keeps the fuller style cue details. Scores are heuristic: strong cues mean the response visibly followed the selected style, partial cues mean some markers were present, and low cues mean the style was not very visible.
 
 ### Random Seed
 

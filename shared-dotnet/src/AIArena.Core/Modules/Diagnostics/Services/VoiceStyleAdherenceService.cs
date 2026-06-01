@@ -19,7 +19,7 @@ public sealed class VoiceStyleAdherenceService
         var body = text?.Trim() ?? "";
         if (string.IsNullOrWhiteSpace(body))
         {
-            return new VoiceAdherenceDiagnostic(normalized, label, "broken", 0, $"{label} voice has no text to evaluate.", [], ["non-empty response"]);
+            return new VoiceAdherenceDiagnostic(normalized, label, "broken", 0, $"{label} style has no text to evaluate.", [], ["non-empty response"]);
         }
 
         var lower = body.ToLowerInvariant();
@@ -47,9 +47,9 @@ public sealed class VoiceStyleAdherenceService
         var state = score >= 74 ? "strong" : score >= 46 ? "drifting" : "broken";
         var summary = state switch
         {
-            "strong" => $"{label} voice is holding.",
-            "drifting" => $"{label} voice is present but drifting.",
-            _ => $"{label} voice appears broken."
+            "strong" => $"{label} style has strong visible cues.",
+            "drifting" => $"{label} style has partial visible cues.",
+            _ => $"{label} style has low visible cues."
         };
 
         return new VoiceAdherenceDiagnostic(normalized, label, state, score, summary, evidence, missing);

@@ -299,7 +299,10 @@ public partial class MainWindow : Window
         MatchQualityTimelineCheckBox.IsChecked = _wpfSettings.ShowMatchQualityTimeline;
         MemoryNotesCheckBox.IsChecked = _wpfSettings.ShowAgentMemoryNotes;
         DecisionCardCheckBox.IsChecked = _wpfSettings.ShowDecisionCard;
+        DebugControlsCheckBox.IsChecked = _wpfSettings.AllowDebugControls;
+        StyleFitCheckBox.IsChecked = _wpfSettings.ShowStyleFit;
         _isRenderingSnapshot = false;
+        UpdateDebugControlsVisibility();
         UpdateViewPresetState();
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
         UpdateTelemetryTimerState();
@@ -554,6 +557,23 @@ public partial class MainWindow : Window
         {
             PopulateTranscript(_lastRenderedMessages);
         }
+        UpdateViewPresetState();
+    }
+
+    private void StyleFitCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isRenderingSnapshot || StyleFitCheckBox is null)
+        {
+            return;
+        }
+
+        _wpfSettings.ShowStyleFit = StyleFitCheckBox.IsChecked == true;
+        _wpfSettingsStore.Save(_wpfSettings);
+        if (_lastRenderedMessages.Count > 0)
+        {
+            PopulateTranscript(_lastRenderedMessages);
+        }
+        UpdateViewPresetState();
     }
 
     private void RandomSeedOptions_Changed(object sender, SelectionChangedEventArgs e)
@@ -576,6 +596,32 @@ public partial class MainWindow : Window
         }
 
         UpdateViewPresetState();
+    }
+
+    private void DebugMenuButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_wpfSettings.AllowDebugControls)
+        {
+            DebugMenuPopup.IsOpen = false;
+            return;
+        }
+
+        DebugMenuPopup.IsOpen = !DebugMenuPopup.IsOpen;
+    }
+
+    private void UpdateDebugControlsVisibility()
+    {
+        if (DebugMenuHost is null)
+        {
+            return;
+        }
+
+        var allowDebug = _wpfSettings.AllowDebugControls;
+        DebugMenuHost.Visibility = allowDebug ? Visibility.Visible : Visibility.Collapsed;
+        if (DebugMenuPopup is not null && !allowDebug)
+        {
+            DebugMenuPopup.IsOpen = false;
+        }
     }
 
     private void ViewMenuButton_Click(object sender, RoutedEventArgs e)
@@ -1035,7 +1081,7 @@ public partial class MainWindow : Window
         }
         if (stats.VoiceAdherenceSamples > 0 && !stats.VoiceAdherenceState.Equals("strong", StringComparison.OrdinalIgnoreCase))
         {
-            alerts.Add($"voice {stats.VoiceAdherenceState} {stats.VoiceAdherenceScore}");
+            alerts.Add($"style {VoiceAdherenceDisplayState(stats.VoiceAdherenceState)} {stats.VoiceAdherenceScore}");
         }
         if (stats.LastLatencyMs > 0)
         {
@@ -1268,7 +1314,7 @@ public partial class MainWindow : Window
         var stack = new StackPanel();
         stack.Children.Add(new TextBlock
         {
-            Text = $"Voice Drift: {DisplayStatusValue(stats.VoiceAdherenceState)} {stats.VoiceAdherenceScore}",
+            Text = $"Style Cues: {DisplayStatusValue(VoiceAdherenceDisplayState(stats.VoiceAdherenceState))} {stats.VoiceAdherenceScore}",
             Foreground = accent,
             FontSize = 12,
             FontWeight = FontWeights.SemiBold,
@@ -1276,7 +1322,7 @@ public partial class MainWindow : Window
         });
         stack.Children.Add(new TextBlock
         {
-            Text = $"{stats.VoiceAdherenceSamples} scored turn(s). Strong is 74+, drifting is 46-73, broken is below 46.",
+            Text = $"{stats.VoiceAdherenceSamples} scored turn(s). Strong cues are 74+, partial cues are 46-73, low cues are below 46.",
             Foreground = ResourceBrush("MutedTextBrush"),
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap,
@@ -1290,8 +1336,8 @@ public partial class MainWindow : Window
         {
             stack.Children.Add(new TextBlock
             {
-                Text = $"Turn {diagnostic.Message.Turn}: {diagnostic.Diagnostic.Label} - {diagnostic.Diagnostic.State} {diagnostic.Diagnostic.Score}",
-                Foreground = VoiceAdherenceAccent(diagnostic.Diagnostic.State),
+                Text = $"Turn {diagnostic.Message.Turn}: {diagnostic.Diagnostic.Label} - {VoiceAdherenceDisplayState(diagnostic.Diagnostic.State)} {diagnostic.Diagnostic.Score}",
+                Foreground = VoiceAdherenceAccent(diagnostic.Diagnostic),
                 FontSize = 10.5,
                 FontWeight = FontWeights.SemiBold,
                 TextWrapping = TextWrapping.Wrap,
@@ -2641,6 +2687,11 @@ public partial class MainWindow : Window
             : $"Voice: {VoiceStyleLabel(value)}";
     }
 
+    private bool ShouldShowStyleFit()
+    {
+        return _wpfSettings.AllowDebugControls && _wpfSettings.ShowStyleFit;
+    }
+
     private static string VoiceAdherenceState(int score, int samples)
     {
         if (samples <= 0)
@@ -2651,13 +2702,54 @@ public partial class MainWindow : Window
         return score >= 74 ? "strong" : score >= 46 ? "drifting" : "broken";
     }
 
+    private static string VoiceAdherenceDisplayState(string state)
+    {
+        return state.Equals("strong", StringComparison.OrdinalIgnoreCase)
+            ? "strong cues"
+            : state.Equals("drifting", StringComparison.OrdinalIgnoreCase)
+                ? "partial cues"
+                : state.Equals("broken", StringComparison.OrdinalIgnoreCase)
+                    ? "low cues"
+                    : "no cues";
+    }
+
+    private static string VoiceAdherenceChipText(CoreVoiceAdherenceDiagnostic diagnostic)
+    {
+        var cue = diagnostic.State.Equals("strong", StringComparison.OrdinalIgnoreCase)
+            ? "strong"
+            : diagnostic.State.Equals("drifting", StringComparison.OrdinalIgnoreCase)
+                ? "partial"
+                : diagnostic.State.Equals("broken", StringComparison.OrdinalIgnoreCase)
+                    ? "low"
+                    : "none";
+        return $"Cues: {cue} {diagnostic.Score}";
+    }
+
+    private static bool IsStrictVoiceStyle(string? voiceStyle)
+    {
+        var normalized = NormalizeVoiceStyleTag(voiceStyle);
+        return normalized.Equals("bullet_only", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("evidence_ledger", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("no_analogies", StringComparison.OrdinalIgnoreCase);
+    }
+
     private Brush VoiceAdherenceAccent(string state)
     {
         return state.Equals("strong", StringComparison.OrdinalIgnoreCase)
             ? ResourceBrush("GammaAccentBrush")
             : state.Equals("drifting", StringComparison.OrdinalIgnoreCase)
                 ? ResourceBrush("BetaAccentBrush")
-                : ResourceBrush("DangerBorderBrush");
+                : ResourceBrush("MutedTextBrush");
+    }
+
+    private Brush VoiceAdherenceAccent(CoreVoiceAdherenceDiagnostic diagnostic)
+    {
+        if (diagnostic.State.Equals("broken", StringComparison.OrdinalIgnoreCase) && IsStrictVoiceStyle(diagnostic.VoiceStyle))
+        {
+            return ResourceBrush("DangerBorderBrush");
+        }
+
+        return VoiceAdherenceAccent(diagnostic.State);
     }
 
     private static string VoiceAdherenceTooltip(CoreVoiceAdherenceDiagnostic diagnostic)
@@ -3074,12 +3166,15 @@ public partial class MainWindow : Window
         if (!isInternet && !isSystemEvent && !string.IsNullOrWhiteSpace(compareVoiceChip))
         {
             meta.Children.Add(CreateTranscriptStatPill(compareVoiceChip, isInternet));
-            var compareAdherence = _voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text);
-            meta.Children.Add(CreateTranscriptStatPill(
-                $"Fit: {compareAdherence.State} {compareAdherence.Score}",
-                isInternet,
-                accentOverride: VoiceAdherenceAccent(compareAdherence.State),
-                toolTip: VoiceAdherenceTooltip(compareAdherence)));
+            if (ShouldShowStyleFit())
+            {
+                var compareAdherence = _voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text);
+                meta.Children.Add(CreateTranscriptStatPill(
+                    VoiceAdherenceChipText(compareAdherence),
+                    isInternet,
+                    accentOverride: VoiceAdherenceAccent(compareAdherence),
+                    toolTip: VoiceAdherenceTooltip(compareAdherence)));
+            }
         }
         meta.Children.Add(CreateTranscriptStatPill(FormatGeneratedTokens(message), isInternet));
         if (message.PromptTokens > 0)
@@ -4042,12 +4137,15 @@ public partial class MainWindow : Window
         if (!isInternet && !isSystemEvent && !string.IsNullOrWhiteSpace(voiceChip))
         {
             identity.Children.Add(CreateTranscriptStatPill(voiceChip, isInternet));
-            var voiceAdherence = _voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text);
-            identity.Children.Add(CreateTranscriptStatPill(
-                $"Fit: {voiceAdherence.State} {voiceAdherence.Score}",
-                isInternet,
-                accentOverride: VoiceAdherenceAccent(voiceAdherence.State),
-                toolTip: VoiceAdherenceTooltip(voiceAdherence)));
+            if (ShouldShowStyleFit())
+            {
+                var voiceAdherence = _voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text);
+                identity.Children.Add(CreateTranscriptStatPill(
+                    VoiceAdherenceChipText(voiceAdherence),
+                    isInternet,
+                    accentOverride: VoiceAdherenceAccent(voiceAdherence),
+                    toolTip: VoiceAdherenceTooltip(voiceAdherence)));
+            }
         }
         foreach (var pill in CreateTranscriptStatPills(message, isInternet))
         {
@@ -6886,6 +6984,7 @@ public partial class MainWindow : Window
         AvatarStylePicker.IsEnabled = !busy;
         SystemGlyphStylePicker.IsEnabled = !busy;
         TopStripModePicker.IsEnabled = !busy;
+        DebugControlsCheckBox.IsEnabled = !busy;
         SavedStateModePicker.IsEnabled = !busy;
         SavedStateNameText.IsEnabled = !busy;
         SavedStateItemPicker.IsEnabled = !busy;
@@ -8765,7 +8864,8 @@ public partial class MainWindow : Window
         if (_isRenderingSnapshot
             || AvatarStylePicker is null
             || SystemGlyphStylePicker is null
-            || TopStripModePicker is null)
+            || TopStripModePicker is null
+            || DebugControlsCheckBox is null)
         {
             return;
         }
@@ -8776,7 +8876,9 @@ public partial class MainWindow : Window
         _wpfSettings.SystemEventGlyphs = (SystemGlyphStylePicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() != "fallback";
         _wpfSettings.TopStripMode = (TopStripModePicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "diagnostics";
         _wpfSettings.ShowTranscriptDiagnostics = _wpfSettings.TopStripMode.Equals("diagnostics", StringComparison.OrdinalIgnoreCase);
+        _wpfSettings.AllowDebugControls = DebugControlsCheckBox.IsChecked == true;
         _wpfSettingsStore.Save(_wpfSettings);
+        UpdateDebugControlsVisibility();
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
         UpdateTelemetryTimerState();
         UpdateViewPresetState();

@@ -52,6 +52,8 @@ public sealed class WpfSettings
     public bool ShowMatchQualityTimeline { get; set; }
     public bool ShowAgentMemoryNotes { get; set; }
     public bool ShowDecisionCard { get; set; }
+    public bool AllowDebugControls { get; set; }
+    public bool ShowStyleFit { get; set; }
     public string TopStripMode { get; set; } = "diagnostics";
     public bool ShowTranscriptDiagnostics { get; set; } = true;
     public string RandomSeedStyle { get; set; } = "auto";

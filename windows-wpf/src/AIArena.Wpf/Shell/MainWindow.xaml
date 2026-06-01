@@ -1184,6 +1184,54 @@
                             </Border>
                         </Popup>
                     </Grid>
+                    <Grid x:Name="DebugMenuHost" VerticalAlignment="Center" Margin="0,0,14,0" Visibility="Collapsed">
+                        <Button x:Name="DebugMenuButton"
+                                Content="Debug"
+                                Click="DebugMenuButton_Click"
+                                Width="64"
+                                Height="30"
+                                MinHeight="30"
+                                Padding="8,0"
+                                Background="Transparent"
+                                BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                Foreground="{DynamicResource TextBrush}"
+                                FontWeight="SemiBold"
+                                ToolTip="Experimental diagnostics" />
+                        <Popup x:Name="DebugMenuPopup"
+                               PlacementTarget="{Binding ElementName=DebugMenuButton}"
+                               Placement="Bottom"
+                               HorizontalOffset="-146"
+                               VerticalOffset="6"
+                               StaysOpen="False"
+                               AllowsTransparency="True">
+                            <Border Background="{DynamicResource TopBarBrush}"
+                                    BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="10"
+                                    Width="220">
+                                <StackPanel>
+                                    <TextBlock Text="Debug"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               Margin="0,0,0,8" />
+                                    <CheckBox x:Name="StyleFitCheckBox"
+                                              Content="Style fit"
+                                              Style="{StaticResource ToggleSwitchCheckBox}"
+                                              Foreground="{DynamicResource TextBrush}"
+                                              Checked="StyleFitCheckBox_Changed"
+                                              Unchecked="StyleFitCheckBox_Changed"
+                                              Margin="0,0,0,8"
+                                              ToolTip="Show optional heuristic style cue chips on transcript cards" />
+                                    <TextBlock Text="Experimental diagnostics can be noisy and are hidden unless debug controls are enabled."
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               FontSize="11"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </Grid>
                     <TextBlock Text="Theme" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0" />
                     <ComboBox x:Name="ThemePicker"
                               Width="140"
@@ -2346,11 +2394,24 @@
                                   Foreground="White"
                                   BorderBrush="{DynamicResource ControlBorderBrush}"
                                   Padding="8"
+                                  Margin="0,0,0,10"
                                   ToolTip="Choose what appears above the transcript cards.">
                             <ComboBoxItem Content="Discourse diagnostics" Tag="diagnostics" />
                             <ComboBoxItem Content="System telemetry" Tag="telemetry" />
                             <ComboBoxItem Content="Hidden" Tag="hidden" />
                         </ComboBox>
+                        <CheckBox x:Name="DebugControlsCheckBox"
+                                  Content="Allow debug controls"
+                                  Style="{StaticResource ToggleSwitchCheckBox}"
+                                  Foreground="{DynamicResource TextBrush}"
+                                  FontWeight="SemiBold"
+                                  Checked="VisualSettings_Changed"
+                                  Unchecked="VisualSettings_Changed"
+                                  Margin="0,0,0,6"
+                                  ToolTip="Show the top-rail Debug menu for experimental diagnostics." />
+                        <TextBlock Text="Debug controls expose experimental diagnostics without cluttering the default app shell."
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   TextWrapping="Wrap" />
                     </StackPanel>
                 </Expander>
 
