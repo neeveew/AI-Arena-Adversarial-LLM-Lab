@@ -1614,30 +1614,31 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <StackPanel Grid.Row="0">
                         <TextBlock Text="Custom Match" Foreground="White" FontSize="22" FontWeight="SemiBold" />
                         <TextBlock Text="Review scenario framing, cast personas, and lock what should survive random generation."
                                    Foreground="{DynamicResource MutedTextBrush}"
                                    TextWrapping="Wrap" />
+                        <WrapPanel x:Name="ScenarioSeedInspector" Margin="0,8,0,0" />
                     </StackPanel>
-                    <Border Grid.Row="1"
-                            Background="{DynamicResource InputBrush}"
-                            BorderBrush="{DynamicResource DisabledBorderBrush}"
-                            BorderThickness="1"
-                            CornerRadius="6"
-                            Padding="8"
-                            Margin="0,10,0,0"
-                            HorizontalAlignment="Stretch">
-                        <StackPanel>
-                            <WrapPanel>
+                    <WrapPanel Grid.Row="1"
+                               Margin="0,10,0,0"
+                               HorizontalAlignment="Left"
+                               VerticalAlignment="Top">
+                        <Border Background="{DynamicResource CardBrush}"
+                                BorderBrush="{DynamicResource ControlBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="8"
+                                Margin="0,0,8,8">
+                            <StackPanel>
                                 <TextBlock Text="Generate"
                                            Foreground="{DynamicResource MutedTextBrush}"
                                            FontWeight="SemiBold"
                                            FontSize="11"
-                                           VerticalAlignment="Center"
-                                           Margin="0,0,10,0" />
+                                           Margin="0,0,0,6" />
+                                <WrapPanel>
                                 <ComboBox x:Name="RandomSeedPresetPicker"
                                       Width="142"
                                       FontSize="11"
@@ -1652,74 +1653,6 @@
                                 <ComboBoxItem Content="Consensus trap" Tag="consensus_trap" />
                                 <ComboBoxItem Content="Chaos room" Tag="chaos_room" />
                                 <ComboBoxItem Content="One-line mayhem" Tag="one_line_mayhem" />
-                                </ComboBox>
-                                <ComboBox x:Name="RandomSeedRolePackPicker"
-                                      Width="132"
-                                      FontSize="11"
-                                      Padding="7,5"
-                                      MinHeight="32"
-                                      Margin="0,0,6,0"
-                                      ToolTip="Adversarial role pack"
-                                      SelectionChanged="RandomSeedOptions_Changed">
-                                <ComboBoxItem Content="Auto pack" Tag="auto" />
-                                <ComboBoxItem Content="Balanced" Tag="balanced" />
-                                <ComboBoxItem Content="Red team" Tag="red_team" />
-                                <ComboBoxItem Content="Scientific review" Tag="scientific_review" />
-                                <ComboBoxItem Content="Technical arch" Tag="technical_architecture" />
-                                <ComboBoxItem Content="Safety audit" Tag="safety_audit" />
-                                <ComboBoxItem Content="Legal / policy" Tag="legal_policy" />
-                                <ComboBoxItem Content="Incident response" Tag="incident_response" />
-                                <ComboBoxItem Content="Product risk" Tag="product_risk" />
-                                <ComboBoxItem Content="Absurd lab" Tag="absurd_lab" />
-                                </ComboBox>
-                                <ComboBox x:Name="RandomSeedStylePicker"
-                                      Width="112"
-                                      FontSize="11"
-                                      Padding="7,5"
-                                      MinHeight="32"
-                                      Margin="0,0,6,0"
-                                      ToolTip="Random Seed scenario style"
-                                      SelectionChanged="RandomSeedOptions_Changed">
-                                <ComboBoxItem Content="Auto style" Tag="auto" />
-                                <ComboBoxItem Content="Balanced" Tag="balanced" />
-                                <ComboBoxItem Content="Adversarial" Tag="adversarial" />
-                                <ComboBoxItem Content="Technical" Tag="technical" />
-                                <ComboBoxItem Content="Scientific" Tag="scientific" />
-                                <ComboBoxItem Content="Research" Tag="research" />
-                                <ComboBoxItem Content="Product" Tag="product" />
-                                <ComboBoxItem Content="Safety" Tag="safety" />
-                                <ComboBoxItem Content="Philosophical" Tag="philosophical" />
-                                <ComboBoxItem Content="Legal" Tag="legal" />
-                                <ComboBoxItem Content="Creative" Tag="creative" />
-                                <ComboBoxItem Content="Red-team" Tag="red-team" />
-                                <ComboBoxItem Content="Incident" Tag="incident" />
-                                </ComboBox>
-                                <ComboBox x:Name="RandomSeedIntensityPicker"
-                                      Width="90"
-                                      FontSize="11"
-                                      Padding="7,5"
-                                      MinHeight="32"
-                                      Margin="0,0,8,0"
-                                      ToolTip="Debate pressure level"
-                                      SelectionChanged="RandomSeedOptions_Changed">
-                                <ComboBoxItem Content="Normal" Tag="normal" />
-                                <ComboBoxItem Content="Sharp" Tag="sharp" />
-                                <ComboBoxItem Content="Spicy" Tag="spicy" />
-                                <ComboBoxItem Content="Chaos" Tag="chaos" />
-                                <ComboBoxItem Content="One-line" Tag="one_line" />
-                                </ComboBox>
-                                <ComboBox x:Name="RandomSeedAbsurdityPicker"
-                                      Width="104"
-                                      FontSize="11"
-                                      Padding="7,5"
-                                      MinHeight="32"
-                                      Margin="0,0,8,0"
-                                      ToolTip="Persona mixer absurdity"
-                                      SelectionChanged="RandomSeedOptions_Changed">
-                                <ComboBoxItem Content="Grounded" Tag="grounded" />
-                                <ComboBoxItem Content="Odd" Tag="odd" />
-                                <ComboBoxItem Content="Absurd" Tag="absurd" />
-                                <ComboBoxItem Content="Maximum" Tag="maximum" />
                                 </ComboBox>
                                 <Button x:Name="RandomSeedButton"
                                     Content="RANDOM SEED"
@@ -1746,17 +1679,109 @@
                                     Padding="11,6"
                                     ToolTip="Generate a local seeded meta setup for the arena simulation"
                                     Margin="0,0,8,0" />
-                            </WrapPanel>
-                            <WrapPanel Margin="0,7,0,0">
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{DynamicResource CardBrush}"
+                                BorderBrush="{DynamicResource ControlBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="8"
+                                Margin="0,0,8,8">
+                            <StackPanel>
+                                <TextBlock Text="Tune"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontWeight="SemiBold"
+                                           FontSize="11"
+                                           Margin="0,0,0,6" />
+                                <WrapPanel>
+                                    <ComboBox x:Name="RandomSeedRolePackPicker"
+                                          Width="132"
+                                          FontSize="11"
+                                          Padding="7,5"
+                                          MinHeight="32"
+                                          Margin="0,0,6,0"
+                                          ToolTip="Adversarial role pack"
+                                          SelectionChanged="RandomSeedOptions_Changed">
+                                    <ComboBoxItem Content="Auto pack" Tag="auto" />
+                                    <ComboBoxItem Content="Balanced" Tag="balanced" />
+                                    <ComboBoxItem Content="Red team" Tag="red_team" />
+                                    <ComboBoxItem Content="Scientific review" Tag="scientific_review" />
+                                    <ComboBoxItem Content="Technical arch" Tag="technical_architecture" />
+                                    <ComboBoxItem Content="Safety audit" Tag="safety_audit" />
+                                    <ComboBoxItem Content="Legal / policy" Tag="legal_policy" />
+                                    <ComboBoxItem Content="Incident response" Tag="incident_response" />
+                                    <ComboBoxItem Content="Product risk" Tag="product_risk" />
+                                    <ComboBoxItem Content="Absurd lab" Tag="absurd_lab" />
+                                    </ComboBox>
+                                    <ComboBox x:Name="RandomSeedStylePicker"
+                                          Width="112"
+                                          FontSize="11"
+                                          Padding="7,5"
+                                          MinHeight="32"
+                                          Margin="0,0,6,0"
+                                          ToolTip="Random Seed scenario style"
+                                          SelectionChanged="RandomSeedOptions_Changed">
+                                    <ComboBoxItem Content="Auto style" Tag="auto" />
+                                    <ComboBoxItem Content="Balanced" Tag="balanced" />
+                                    <ComboBoxItem Content="Adversarial" Tag="adversarial" />
+                                    <ComboBoxItem Content="Technical" Tag="technical" />
+                                    <ComboBoxItem Content="Scientific" Tag="scientific" />
+                                    <ComboBoxItem Content="Research" Tag="research" />
+                                    <ComboBoxItem Content="Product" Tag="product" />
+                                    <ComboBoxItem Content="Safety" Tag="safety" />
+                                    <ComboBoxItem Content="Philosophical" Tag="philosophical" />
+                                    <ComboBoxItem Content="Legal" Tag="legal" />
+                                    <ComboBoxItem Content="Creative" Tag="creative" />
+                                    <ComboBoxItem Content="Red-team" Tag="red-team" />
+                                    <ComboBoxItem Content="Incident" Tag="incident" />
+                                    </ComboBox>
+                                    <ComboBox x:Name="RandomSeedIntensityPicker"
+                                          Width="90"
+                                          FontSize="11"
+                                          Padding="7,5"
+                                          MinHeight="32"
+                                          Margin="0,0,6,0"
+                                          ToolTip="Debate pressure level"
+                                          SelectionChanged="RandomSeedOptions_Changed">
+                                    <ComboBoxItem Content="Normal" Tag="normal" />
+                                    <ComboBoxItem Content="Sharp" Tag="sharp" />
+                                    <ComboBoxItem Content="Spicy" Tag="spicy" />
+                                    <ComboBoxItem Content="Chaos" Tag="chaos" />
+                                    <ComboBoxItem Content="One-line" Tag="one_line" />
+                                    </ComboBox>
+                                    <ComboBox x:Name="RandomSeedAbsurdityPicker"
+                                          Width="104"
+                                          FontSize="11"
+                                          Padding="7,5"
+                                          MinHeight="32"
+                                          Margin="0,0,0,0"
+                                          ToolTip="Persona mixer absurdity"
+                                          SelectionChanged="RandomSeedOptions_Changed">
+                                    <ComboBoxItem Content="Grounded" Tag="grounded" />
+                                    <ComboBoxItem Content="Odd" Tag="odd" />
+                                    <ComboBoxItem Content="Absurd" Tag="absurd" />
+                                    <ComboBoxItem Content="Maximum" Tag="maximum" />
+                                    </ComboBox>
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{DynamicResource CardBrush}"
+                                BorderBrush="{DynamicResource ControlBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="8"
+                                Margin="0,0,8,8">
+                            <StackPanel>
                                 <TextBlock Text="Recent"
                                            Foreground="{DynamicResource MutedTextBrush}"
                                            FontWeight="SemiBold"
                                            FontSize="11"
-                                           VerticalAlignment="Center"
-                                           Margin="0,0,10,0" />
+                                           Margin="0,0,0,6" />
+                                <WrapPanel>
                                 <ComboBox x:Name="GenerationHistoryPicker"
-                                          Width="260"
-                                          FontSize="11"
+                                           Width="260"
+                                           FontSize="11"
                                           Padding="7,5"
                                           MinHeight="32"
                                           Margin="0,0,6,0"
@@ -1775,10 +1800,10 @@
                                         FontSize="11"
                                         Padding="11,6"
                                         ToolTip="Copy the selected generation seed" />
-                            </WrapPanel>
-                        </StackPanel>
-                    </Border>
-                    <WrapPanel x:Name="ScenarioSeedInspector" Grid.Row="2" Margin="0,8,0,0" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                    </WrapPanel>
                 </Grid>
                 <ScrollViewer Grid.Row="1"
                               VerticalScrollBarVisibility="Auto"
