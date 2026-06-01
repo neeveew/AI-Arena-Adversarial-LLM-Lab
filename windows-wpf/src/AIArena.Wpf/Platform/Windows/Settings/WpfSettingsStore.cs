@@ -77,7 +77,7 @@ public sealed class WpfSettingsStore
 
 public sealed class WpfSettings
 {
-    public string ThemeId { get; set; } = "system";
+    public string ThemeId { get; set; } = "dark-blue";
     public string AvatarStyle { get; set; } = "pack";
     public bool ChampionAvatars { get; set; } = true;
     public bool SystemEventGlyphs { get; set; } = true;

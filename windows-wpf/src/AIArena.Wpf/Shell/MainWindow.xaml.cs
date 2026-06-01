@@ -284,11 +284,14 @@ public partial class MainWindow : Window
     {
         var themeId = ThemePalette.NormalizeId(_wpfSettings.ThemeId);
         _wpfSettings.ThemeId = themeId;
+        var themes = ThemePalette.BuiltIn
+            .Where(item => !item.Id.Equals("system", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
         _isSelectingTheme = true;
-        ThemePicker.ItemsSource = ThemePalette.BuiltIn;
-        ThemePicker.SelectedValue = ThemePalette.BuiltIn.Any(item => item.Id == themeId)
+        ThemePicker.ItemsSource = themes;
+        ThemePicker.SelectedValue = themes.Any(item => item.Id == themeId)
             ? themeId
-            : "system";
+            : "dark-blue";
         _isSelectingTheme = false;
     }
 
@@ -8677,11 +8680,14 @@ public partial class MainWindow : Window
 
     private void ThemePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_isSelectingTheme || ThemePicker.SelectedValue is not string themeId)
+        if (_isSelectingTheme)
         {
             return;
         }
 
+        var themeId = ThemePicker.SelectedItem is ThemePalette selectedTheme
+            ? selectedTheme.Id
+            : ThemePalette.NormalizeId(ThemePicker.SelectedValue?.ToString());
         ApplyTheme(themeId, persist: true, rerender: true);
     }
 

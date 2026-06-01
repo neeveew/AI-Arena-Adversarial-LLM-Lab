@@ -208,7 +208,12 @@ public sealed record ThemePalette(
     {
         if (string.IsNullOrWhiteSpace(id))
         {
-            return "system";
+            return "dark-blue";
+        }
+
+        if (string.Equals(id.Trim(), "system", StringComparison.OrdinalIgnoreCase))
+        {
+            return "dark-blue";
         }
 
         var cleaned = id.Trim();
@@ -226,7 +231,7 @@ public sealed record ThemePalette(
 
         var slug = cleaned.ToLowerInvariant().Replace('_', '-').Replace(' ', '-');
         return BuiltIn.FirstOrDefault(item => string.Equals(item.Id, slug, StringComparison.OrdinalIgnoreCase))?.Id
-            ?? "system";
+            ?? "dark-blue";
     }
 
     private static Color ColorFrom(string value)

@@ -1611,34 +1611,34 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <Grid Margin="0,0,0,12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0">
                         <TextBlock Text="Custom Match" Foreground="White" FontSize="22" FontWeight="SemiBold" />
                         <TextBlock Text="Review scenario framing, cast personas, and lock what should survive random generation."
                                    Foreground="{DynamicResource MutedTextBrush}"
                                    TextWrapping="Wrap" />
-                        <WrapPanel x:Name="ScenarioSeedInspector" Margin="0,8,0,0" />
                     </StackPanel>
-                    <Border Grid.Column="1"
+                    <Border Grid.Row="1"
                             Background="{DynamicResource InputBrush}"
                             BorderBrush="{DynamicResource DisabledBorderBrush}"
                             BorderThickness="1"
                             CornerRadius="6"
-                            Padding="7"
-                            Margin="18,0,0,0"
-                            MaxWidth="760"
-                            VerticalAlignment="Center">
-                        <WrapPanel>
-                            <TextBlock Text="Generate"
-                                       Foreground="{DynamicResource MutedTextBrush}"
-                                       FontWeight="SemiBold"
-                                       FontSize="11"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,10,0" />
-                            <ComboBox x:Name="RandomSeedPresetPicker"
+                            Padding="8"
+                            Margin="0,10,0,0"
+                            HorizontalAlignment="Stretch">
+                        <StackPanel>
+                            <WrapPanel>
+                                <TextBlock Text="Generate"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontWeight="SemiBold"
+                                           FontSize="11"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,10,0" />
+                                <ComboBox x:Name="RandomSeedPresetPicker"
                                       Width="142"
                                       FontSize="11"
                                       Padding="7,5"
@@ -1652,8 +1652,8 @@
                                 <ComboBoxItem Content="Consensus trap" Tag="consensus_trap" />
                                 <ComboBoxItem Content="Chaos room" Tag="chaos_room" />
                                 <ComboBoxItem Content="One-line mayhem" Tag="one_line_mayhem" />
-                            </ComboBox>
-                            <ComboBox x:Name="RandomSeedRolePackPicker"
+                                </ComboBox>
+                                <ComboBox x:Name="RandomSeedRolePackPicker"
                                       Width="132"
                                       FontSize="11"
                                       Padding="7,5"
@@ -1671,8 +1671,8 @@
                                 <ComboBoxItem Content="Incident response" Tag="incident_response" />
                                 <ComboBoxItem Content="Product risk" Tag="product_risk" />
                                 <ComboBoxItem Content="Absurd lab" Tag="absurd_lab" />
-                            </ComboBox>
-                            <ComboBox x:Name="RandomSeedStylePicker"
+                                </ComboBox>
+                                <ComboBox x:Name="RandomSeedStylePicker"
                                       Width="112"
                                       FontSize="11"
                                       Padding="7,5"
@@ -1693,8 +1693,8 @@
                                 <ComboBoxItem Content="Creative" Tag="creative" />
                                 <ComboBoxItem Content="Red-team" Tag="red-team" />
                                 <ComboBoxItem Content="Incident" Tag="incident" />
-                            </ComboBox>
-                            <ComboBox x:Name="RandomSeedIntensityPicker"
+                                </ComboBox>
+                                <ComboBox x:Name="RandomSeedIntensityPicker"
                                       Width="90"
                                       FontSize="11"
                                       Padding="7,5"
@@ -1707,8 +1707,8 @@
                                 <ComboBoxItem Content="Spicy" Tag="spicy" />
                                 <ComboBoxItem Content="Chaos" Tag="chaos" />
                                 <ComboBoxItem Content="One-line" Tag="one_line" />
-                            </ComboBox>
-                            <ComboBox x:Name="RandomSeedAbsurdityPicker"
+                                </ComboBox>
+                                <ComboBox x:Name="RandomSeedAbsurdityPicker"
                                       Width="104"
                                       FontSize="11"
                                       Padding="7,5"
@@ -1720,8 +1720,8 @@
                                 <ComboBoxItem Content="Odd" Tag="odd" />
                                 <ComboBoxItem Content="Absurd" Tag="absurd" />
                                 <ComboBoxItem Content="Maximum" Tag="maximum" />
-                            </ComboBox>
-                            <Button x:Name="RandomSeedButton"
+                                </ComboBox>
+                                <Button x:Name="RandomSeedButton"
                                     Content="RANDOM SEED"
                                     Click="RandomSeedButton_Click"
                                     Background="{DynamicResource PrimaryBrush}"
@@ -1729,7 +1729,7 @@
                                     FontSize="11"
                                     Padding="11,6"
                                     Margin="0,0,6,0" />
-                            <Button x:Name="AiChoiceButton"
+                                <Button x:Name="AiChoiceButton"
                                     Content="AI CHOICE"
                                     Click="AiChoiceButton_Click"
                                     Background="{DynamicResource AssistBrush}"
@@ -1737,7 +1737,7 @@
                                     FontSize="11"
                                     Padding="11,6"
                                     Margin="0,0,6,0" />
-                            <Button x:Name="YoloScenarioButton"
+                                <Button x:Name="YoloScenarioButton"
                                     Content="YOLO"
                                     Click="YoloScenarioButton_Click"
                                     Background="{DynamicResource AssistBrush}"
@@ -1746,29 +1746,39 @@
                                     Padding="11,6"
                                     ToolTip="Generate a local seeded meta setup for the arena simulation"
                                     Margin="0,0,8,0" />
-                            <ComboBox x:Name="GenerationHistoryPicker"
-                                      Width="168"
-                                      FontSize="11"
-                                      Padding="7,5"
-                                      MinHeight="32"
-                                      Margin="0,0,6,0"
-                                      ToolTip="Recent generated matches"
-                                      SelectionChanged="GenerationHistoryPicker_SelectionChanged" />
-                            <Button x:Name="ReplayGenerationButton"
-                                    Content="REPLAY"
-                                    Click="ReplayGenerationButton_Click"
-                                    FontSize="11"
-                                    Padding="11,6"
-                                    Margin="0,0,6,0"
-                                    ToolTip="Replay the selected generated match without calling a model" />
-                            <Button x:Name="CopyGenerationSeedButton"
-                                    Content="COPY SEED"
-                                    Click="CopyGenerationSeedButton_Click"
-                                    FontSize="11"
-                                    Padding="11,6"
-                                    ToolTip="Copy the selected generation seed" />
-                        </WrapPanel>
+                            </WrapPanel>
+                            <WrapPanel Margin="0,7,0,0">
+                                <TextBlock Text="Recent"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontWeight="SemiBold"
+                                           FontSize="11"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,10,0" />
+                                <ComboBox x:Name="GenerationHistoryPicker"
+                                          Width="260"
+                                          FontSize="11"
+                                          Padding="7,5"
+                                          MinHeight="32"
+                                          Margin="0,0,6,0"
+                                          ToolTip="Recent generated matches"
+                                          SelectionChanged="GenerationHistoryPicker_SelectionChanged" />
+                                <Button x:Name="ReplayGenerationButton"
+                                        Content="REPLAY"
+                                        Click="ReplayGenerationButton_Click"
+                                        FontSize="11"
+                                        Padding="11,6"
+                                        Margin="0,0,6,0"
+                                        ToolTip="Replay the selected generated match without calling a model" />
+                                <Button x:Name="CopyGenerationSeedButton"
+                                        Content="COPY SEED"
+                                        Click="CopyGenerationSeedButton_Click"
+                                        FontSize="11"
+                                        Padding="11,6"
+                                        ToolTip="Copy the selected generation seed" />
+                            </WrapPanel>
+                        </StackPanel>
                     </Border>
+                    <WrapPanel x:Name="ScenarioSeedInspector" Grid.Row="2" Margin="0,8,0,0" />
                 </Grid>
                 <ScrollViewer Grid.Row="1"
                               VerticalScrollBarVisibility="Auto"
