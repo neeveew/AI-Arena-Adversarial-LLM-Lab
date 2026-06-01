@@ -34,6 +34,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 - Separate Narrator layer for observation and public narration.
 - Public Operator interventions that do not advance the turn order.
 - Per-agent personas, model assignments, and voice styles.
+- Heuristic voice/style fit chips for spotting when constrained agents drift.
 - OpenAI-compatible provider support, including LM Studio.
 - Random Seed style/intensity controls, AI Choice, and YOLO scenario generation.
 - Scenario and cast locks for controlled regeneration.

@@ -172,6 +172,8 @@ Cast cards also include a Voice dropdown and a compact Voice chip whenever the s
 
 Transcript cards and Agent Performance detail also show the active Voice chip for non-default styles, so constrained turns remain visible while reviewing a match.
 
+AI Arena also scores non-default voices with a lightweight Style Fit meter. The transcript and Turn Compare show Fit chips, while Agent Performance shows recent voice drift details. Scores are heuristic: strong means the response visibly followed the selected style, drifting means partial adherence, and broken means the voice mostly collapsed back to generic prose.
+
 ### Random Seed
 
 Random Seed generates a deterministic scenario and cast. Use the style picker to choose Auto, Balanced, Adversarial, Technical, Scientific, Research, Product, Safety, Philosophical, Legal, Creative, Red-team, or Incident. Use the intensity picker to choose Normal, Sharp, Spicy, or Chaos. Locked topic, global instruction, or cast members are preserved.

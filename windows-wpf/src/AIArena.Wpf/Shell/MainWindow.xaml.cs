@@ -19,6 +19,7 @@ using CoreDiscourseTurn = AIArena.Core.Models.DiscourseTurn;
 using CoreFrictionDiagnostics = AIArena.Core.Models.FrictionDiagnostics;
 using CoreMetricDiagnostic = AIArena.Core.Models.MetricDiagnostic;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
+using CoreVoiceAdherenceDiagnostic = AIArena.Core.Models.VoiceAdherenceDiagnostic;
 using AIArena.Core.Persistence;
 using AIArena.Core.Providers;
 using AIArena.Core.Services;
@@ -41,6 +42,7 @@ public partial class MainWindow : Window
     private readonly MatchGenerationService _matchGeneration = new();
     private readonly NarratorService _narratorService = new();
     private readonly DiscourseDiagnosticsService _discourseDiagnostics = new();
+    private readonly VoiceStyleAdherenceService _voiceStyleAdherenceService = new();
     private readonly InternetToolService _internetToolService;
     private readonly CuratedNewsService _curatedNewsService = new();
     private readonly WpfSettingsStore _wpfSettingsStore = new();
@@ -145,6 +147,9 @@ public partial class MainWindow : Window
         int Failures,
         int EmptyResponses,
         int InternetRequests,
+        int VoiceAdherenceScore,
+        string VoiceAdherenceState,
+        int VoiceAdherenceSamples,
         IReadOnlyList<double> Activity);
 
     private sealed record UserGuideSection(string Title, string Text);
@@ -890,6 +895,13 @@ public partial class MainWindow : Window
             .TakeLast(12)
             .Select(message => (double)Math.Max(1, Math.Max(message.CompletionTokens, message.TotalTokens)))
             .ToArray();
+        var voiceDiagnostics = messages
+            .Select(message => _voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text))
+            .Where(diagnostic => !diagnostic.State.Equals("none", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var voiceScore = voiceDiagnostics.Length == 0
+            ? 0
+            : (int)Math.Round(voiceDiagnostics.Average(diagnostic => diagnostic.Score));
 
         return new AgentPerformanceStats(
             agent.Id,
@@ -904,6 +916,9 @@ public partial class MainWindow : Window
             failures,
             empty,
             internetRequests,
+            voiceScore,
+            VoiceAdherenceState(voiceScore, voiceDiagnostics.Length),
+            voiceDiagnostics.Length,
             activity);
     }
 
@@ -1018,6 +1033,10 @@ public partial class MainWindow : Window
         {
             alerts.Add($"{stats.InternetRequests} web");
         }
+        if (stats.VoiceAdherenceSamples > 0 && !stats.VoiceAdherenceState.Equals("strong", StringComparison.OrdinalIgnoreCase))
+        {
+            alerts.Add($"voice {stats.VoiceAdherenceState} {stats.VoiceAdherenceScore}");
+        }
         if (stats.LastLatencyMs > 0)
         {
             alerts.Add($"last {FormatDuration(stats.LastLatencyMs)}");
@@ -1114,6 +1133,10 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(voiceChipText))
         {
             panel.Children.Add(CreatePerformanceVoiceChip(voiceChipText, accent));
+        }
+        if (stats.VoiceAdherenceSamples > 0)
+        {
+            panel.Children.Add(CreateVoiceAdherenceDetail(stats, recentTurns));
         }
 
         var metrics = new UniformGrid
@@ -1236,6 +1259,56 @@ public partial class MainWindow : Window
                 FontSize = 11,
                 FontWeight = FontWeights.SemiBold
             }
+        };
+    }
+
+    private Border CreateVoiceAdherenceDetail(AgentPerformanceStats stats, IReadOnlyList<TranscriptMessage> recentTurns)
+    {
+        var accent = VoiceAdherenceAccent(stats.VoiceAdherenceState);
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock
+        {
+            Text = $"Voice Drift: {DisplayStatusValue(stats.VoiceAdherenceState)} {stats.VoiceAdherenceScore}",
+            Foreground = accent,
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 4)
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = $"{stats.VoiceAdherenceSamples} scored turn(s). Strong is 74+, drifting is 46-73, broken is below 46.",
+            Foreground = ResourceBrush("MutedTextBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 7)
+        });
+
+        foreach (var diagnostic in recentTurns
+            .Select(message => (Message: message, Diagnostic: _voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text)))
+            .Where(item => !item.Diagnostic.State.Equals("none", StringComparison.OrdinalIgnoreCase))
+            .Take(3))
+        {
+            stack.Children.Add(new TextBlock
+            {
+                Text = $"Turn {diagnostic.Message.Turn}: {diagnostic.Diagnostic.Label} - {diagnostic.Diagnostic.State} {diagnostic.Diagnostic.Score}",
+                Foreground = VoiceAdherenceAccent(diagnostic.Diagnostic.State),
+                FontSize = 10.5,
+                FontWeight = FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 2),
+                ToolTip = VoiceAdherenceTooltip(diagnostic.Diagnostic)
+            });
+        }
+
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.08),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.34),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(8),
+            Margin = new Thickness(0, 0, 0, 10),
+            Child = stack
         };
     }
 
@@ -2568,6 +2641,36 @@ public partial class MainWindow : Window
             : $"Voice: {VoiceStyleLabel(value)}";
     }
 
+    private static string VoiceAdherenceState(int score, int samples)
+    {
+        if (samples <= 0)
+        {
+            return "none";
+        }
+
+        return score >= 74 ? "strong" : score >= 46 ? "drifting" : "broken";
+    }
+
+    private Brush VoiceAdherenceAccent(string state)
+    {
+        return state.Equals("strong", StringComparison.OrdinalIgnoreCase)
+            ? ResourceBrush("GammaAccentBrush")
+            : state.Equals("drifting", StringComparison.OrdinalIgnoreCase)
+                ? ResourceBrush("BetaAccentBrush")
+                : ResourceBrush("DangerBorderBrush");
+    }
+
+    private static string VoiceAdherenceTooltip(CoreVoiceAdherenceDiagnostic diagnostic)
+    {
+        var evidence = diagnostic.Evidence.Count == 0
+            ? "Evidence: -"
+            : $"Evidence: {string.Join("; ", diagnostic.Evidence)}";
+        var missing = diagnostic.Missing.Count == 0
+            ? "Missing: -"
+            : $"Missing: {string.Join("; ", diagnostic.Missing)}";
+        return $"{diagnostic.Summary}{Environment.NewLine}{evidence}{Environment.NewLine}{missing}";
+    }
+
     private Border CreateLockMetaChip(string text, Brush accent)
     {
         return new Border
@@ -2971,6 +3074,12 @@ public partial class MainWindow : Window
         if (!isInternet && !isSystemEvent && !string.IsNullOrWhiteSpace(compareVoiceChip))
         {
             meta.Children.Add(CreateTranscriptStatPill(compareVoiceChip, isInternet));
+            var compareAdherence = _voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text);
+            meta.Children.Add(CreateTranscriptStatPill(
+                $"Fit: {compareAdherence.State} {compareAdherence.Score}",
+                isInternet,
+                accentOverride: VoiceAdherenceAccent(compareAdherence.State),
+                toolTip: VoiceAdherenceTooltip(compareAdherence)));
         }
         meta.Children.Add(CreateTranscriptStatPill(FormatGeneratedTokens(message), isInternet));
         if (message.PromptTokens > 0)
@@ -3683,21 +3792,23 @@ public partial class MainWindow : Window
         return pills;
     }
 
-    private Border CreateTranscriptStatPill(string text, bool isInternet, bool isDanger = false)
+    private Border CreateTranscriptStatPill(string text, bool isInternet, bool isDanger = false, Brush? accentOverride = null, string? toolTip = null)
     {
         var compact = _wpfSettings.CompactTranscriptMode;
+        var accent = accentOverride ?? ResourceBrush(isInternet ? "AssistBorderBrush" : "PrimaryBorderBrush");
         return new Border
         {
-            Background = isDanger ? ResourceBrush("DangerBrush") : BlendBrush(ResourceBrush("TranscriptBodyBrush"), ResourceBrush(isInternet ? "AssistBorderBrush" : "PrimaryBorderBrush"), 0.1),
-            BorderBrush = isDanger ? ResourceBrush("DangerBorderBrush") : BlendBrush(ResourceBrush("ControlBorderBrush"), ResourceBrush(isInternet ? "AssistBorderBrush" : "PrimaryBorderBrush"), 0.38),
+            Background = isDanger ? ResourceBrush("DangerBrush") : BlendBrush(ResourceBrush("TranscriptBodyBrush"), accent, 0.1),
+            BorderBrush = isDanger ? ResourceBrush("DangerBorderBrush") : BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.38),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(4),
             Padding = compact ? new Thickness(5, 0, 5, 1) : new Thickness(6, 1, 6, 2),
             Margin = new Thickness(0, 0, compact ? 4 : 6, 0),
+            ToolTip = toolTip,
             Child = new TextBlock
             {
                 Text = text,
-                Foreground = isDanger ? ResourceBrush("DangerTextBrush") : ResourceBrush("MutedTextBrush"),
+                Foreground = isDanger ? ResourceBrush("DangerTextBrush") : accentOverride ?? ResourceBrush("MutedTextBrush"),
                 FontSize = compact ? 10 : 12,
                 FontWeight = FontWeights.SemiBold
             }
@@ -3931,6 +4042,12 @@ public partial class MainWindow : Window
         if (!isInternet && !isSystemEvent && !string.IsNullOrWhiteSpace(voiceChip))
         {
             identity.Children.Add(CreateTranscriptStatPill(voiceChip, isInternet));
+            var voiceAdherence = _voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text);
+            identity.Children.Add(CreateTranscriptStatPill(
+                $"Fit: {voiceAdherence.State} {voiceAdherence.Score}",
+                isInternet,
+                accentOverride: VoiceAdherenceAccent(voiceAdherence.State),
+                toolTip: VoiceAdherenceTooltip(voiceAdherence)));
         }
         foreach (var pill in CreateTranscriptStatPills(message, isInternet))
         {

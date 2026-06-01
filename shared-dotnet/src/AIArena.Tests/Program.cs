@@ -37,6 +37,8 @@ var tests = new (string Name, Action Test)[]
     ("adds narrator message to transcript", AddNarratorMessageToTranscript),
     ("asks narrator with operator request", AskNarratorWithOperatorRequest),
     ("narrator prompt includes selected voice style", NarratorPromptIncludesSelectedVoiceStyle),
+    ("voice adherence scores evidence ledger strong", VoiceAdherenceScoresEvidenceLedgerStrong),
+    ("voice adherence detects bullet-only drift", VoiceAdherenceDetectsBulletOnlyDrift),
     ("generates narrator decision card", GenerateNarratorDecisionCard),
     ("curates news into transcript when internet is enabled", CurateNewsIntoTranscriptWhenInternetEnabled),
     ("curated news plans focused search query", CuratedNewsPlansFocusedSearchQuery),
@@ -642,6 +644,24 @@ static void NarratorPromptIncludesSelectedVoiceStyle()
     Require(requestText.Contains("Voice contract for this turn: Poetic", StringComparison.OrdinalIgnoreCase), "narrator turn voice reminder missing");
     Require(requestText.Contains("vivid poetic language", StringComparison.OrdinalIgnoreCase), "narrator voice style instruction missing");
     Directory.Delete(root, recursive: true);
+}
+
+static void VoiceAdherenceScoresEvidenceLedgerStrong()
+{
+    var service = new VoiceStyleAdherenceService();
+    var diagnostic = service.Analyze(
+        "evidence_ledger",
+        "Evidence: Turn 1 named the failure mode.\nInference: the test is underspecified.\nAssumptions: logs are complete.\nUncertainty: confidence is medium.\nNext test: isolate the retry path.");
+    Require(diagnostic.State == "strong", $"expected strong evidence ledger voice, got {diagnostic.State} {diagnostic.Score}");
+    Require(diagnostic.Score >= 74, "evidence ledger score too low");
+}
+
+static void VoiceAdherenceDetectsBulletOnlyDrift()
+{
+    var service = new VoiceStyleAdherenceService();
+    var diagnostic = service.Analyze("bullet_only", "This paragraph ignores the selected bullet-only voice and drifts into prose.");
+    Require(diagnostic.State == "broken", $"expected broken bullet-only voice, got {diagnostic.State} {diagnostic.Score}");
+    Require(diagnostic.Missing.Any(item => item.Contains("non-bullet", StringComparison.OrdinalIgnoreCase)), "bullet-only missing evidence should mention non-bullet lines");
 }
 
 static void GenerateNarratorDecisionCard()
