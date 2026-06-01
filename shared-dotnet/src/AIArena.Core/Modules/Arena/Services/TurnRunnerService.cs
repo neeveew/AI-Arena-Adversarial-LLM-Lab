@@ -64,6 +64,11 @@ public sealed class TurnRunnerService
 
     public async Task<OneTurnResult> RunOneTurnAsync(string sessionId = "default", CancellationToken cancellationToken = default)
     {
+        return await RunOneTurnAsync(sessionId, enforceVoiceDrift: false, cancellationToken);
+    }
+
+    public async Task<OneTurnResult> RunOneTurnAsync(string sessionId, bool enforceVoiceDrift, CancellationToken cancellationToken = default)
+    {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
         {
@@ -81,10 +86,15 @@ public sealed class TurnRunnerService
             return OneTurnResult.Failed(plan.Error);
         }
 
-        return await RunPlannedTurnAsync(sessionId, snapshot, plan, advanceTurnIndex: true, "native_one_turn", cancellationToken);
+        return await RunPlannedTurnAsync(sessionId, snapshot, plan, advanceTurnIndex: true, "native_one_turn", enforceVoiceDrift, cancellationToken);
     }
 
     public async Task<OneTurnResult> RunAgentTurnAsync(string sessionId, string agentId, CancellationToken cancellationToken = default)
+    {
+        return await RunAgentTurnAsync(sessionId, agentId, enforceVoiceDrift: false, cancellationToken);
+    }
+
+    public async Task<OneTurnResult> RunAgentTurnAsync(string sessionId, string agentId, bool enforceVoiceDrift, CancellationToken cancellationToken = default)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
@@ -103,10 +113,15 @@ public sealed class TurnRunnerService
             return OneTurnResult.Failed(plan.Error);
         }
 
-        return await RunPlannedTurnAsync(sessionId, snapshot, plan, advanceTurnIndex: false, "native_agent_turn", cancellationToken);
+        return await RunPlannedTurnAsync(sessionId, snapshot, plan, advanceTurnIndex: false, "native_agent_turn", enforceVoiceDrift, cancellationToken);
     }
 
     public async Task<OneTurnResult> RetryTurnAsync(string sessionId, int turn, string speakerId, double createdAt, CancellationToken cancellationToken = default)
+    {
+        return await RetryTurnAsync(sessionId, turn, speakerId, createdAt, enforceVoiceDrift: false, cancellationToken);
+    }
+
+    public async Task<OneTurnResult> RetryTurnAsync(string sessionId, int turn, string speakerId, double createdAt, bool enforceVoiceDrift, CancellationToken cancellationToken = default)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
@@ -126,7 +141,7 @@ public sealed class TurnRunnerService
             return OneTurnResult.Failed(plan.Error);
         }
 
-        return await ReplaceMessageWithRetryAsync(sessionId, snapshot, original, plan, cancellationToken);
+        return await ReplaceMessageWithRetryAsync(sessionId, snapshot, original, plan, enforceVoiceDrift, cancellationToken);
     }
 
     private static bool CanRequestInternetTool(ArenaSnapshot snapshot, string requesterId)
@@ -140,6 +155,7 @@ public sealed class TurnRunnerService
         OneTurnPlan plan,
         bool advanceTurnIndex,
         string eventPrefix,
+        bool enforceVoiceDrift,
         CancellationToken cancellationToken)
     {
         var agent = snapshot.Engine.Agents.FirstOrDefault(item => string.Equals(item.Id, plan.AgentId, StringComparison.OrdinalIgnoreCase));
@@ -149,12 +165,12 @@ public sealed class TurnRunnerService
         }
 
         await MarkAgentThinkingAsync(snapshot, sessionId, agent, cancellationToken);
-        await _eventLogStore.AppendAsync(sessionId, $"{eventPrefix}_started", new { speaker = plan.AgentId, model = plan.Config!.Model }, cancellationToken);
+        await _eventLogStore.AppendAsync(sessionId, $"{eventPrefix}_started", new { speaker = plan.AgentId, model = plan.Config!.Model, voice_drift_enforcement = enforceVoiceDrift }, cancellationToken);
 
         var result = await CompleteWithFallbackAsync(
             sessionId,
             plan,
-            BuildPrompt(snapshot, plan, allowInternetTool: CanRequestInternetTool(snapshot, plan.AgentId)),
+            BuildPrompt(snapshot, plan, allowInternetTool: CanRequestInternetTool(snapshot, plan.AgentId), enforceVoiceDrift: enforceVoiceDrift),
             $"{eventPrefix}_fallback_to_default",
             cancellationToken);
         if (result.Ok && InternetToolContract.TryParseRequest(result.Text, out var toolRequest, out _))
@@ -189,9 +205,9 @@ public sealed class TurnRunnerService
                 new { speaker = plan.AgentId, requestedByAgent.Tool, requestedByAgent.Query, requestedByAgent.Url, toolResult.Ok, toolResult.Error },
                 cancellationToken);
 
-            result = await CompleteWithFallbackAsync(sessionId, plan, BuildPrompt(snapshot, plan, allowInternetTool: false), $"{eventPrefix}_fallback_to_default", cancellationToken);
+            result = await CompleteWithFallbackAsync(sessionId, plan, BuildPrompt(snapshot, plan, allowInternetTool: false, enforceVoiceDrift: enforceVoiceDrift), $"{eventPrefix}_fallback_to_default", cancellationToken);
         }
-        result = await RepairEmptyContentAsync(sessionId, snapshot, plan, result, eventPrefix, cancellationToken);
+        result = await RepairEmptyContentAsync(sessionId, snapshot, plan, result, eventPrefix, enforceVoiceDrift, cancellationToken);
 
         var text = result.Ok
             ? result.Text
@@ -230,6 +246,7 @@ public sealed class TurnRunnerService
         ArenaSnapshot snapshot,
         DialogueMessage original,
         OneTurnPlan plan,
+        bool enforceVoiceDrift,
         CancellationToken cancellationToken)
     {
         await _eventLogStore.AppendAsync(sessionId, "native_retry_message_started", new { turn = original.Turn, speaker = plan.AgentId, model = plan.Config!.Model }, cancellationToken);
@@ -241,8 +258,8 @@ public sealed class TurnRunnerService
         }
 
         await MarkAgentThinkingAsync(snapshot, sessionId, agent, cancellationToken);
-        var result = await CompleteWithFallbackAsync(sessionId, plan, BuildPrompt(snapshot, plan, original.Turn, allowInternetTool: false), "native_retry_fallback_to_default", cancellationToken);
-        result = await RepairEmptyContentAsync(sessionId, snapshot, plan, result, "native_retry_message", cancellationToken);
+        var result = await CompleteWithFallbackAsync(sessionId, plan, BuildPrompt(snapshot, plan, original.Turn, allowInternetTool: false, enforceVoiceDrift: enforceVoiceDrift), "native_retry_fallback_to_default", cancellationToken);
+        result = await RepairEmptyContentAsync(sessionId, snapshot, plan, result, "native_retry_message", enforceVoiceDrift, cancellationToken);
 
         var text = result.Ok
             ? result.Text
@@ -364,7 +381,7 @@ public sealed class TurnRunnerService
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
     }
 
-    private IReadOnlyList<ModelChatMessage> BuildPrompt(ArenaSnapshot snapshot, OneTurnPlan plan, int? beforeTurn = null, bool allowInternetTool = true)
+    private IReadOnlyList<ModelChatMessage> BuildPrompt(ArenaSnapshot snapshot, OneTurnPlan plan, int? beforeTurn = null, bool allowInternetTool = true, bool enforceVoiceDrift = false)
     {
         var active = snapshot.Engine.Agents.Where(agent => agent.Active).ToArray();
         var agent = active.FirstOrDefault(item => item.Id == plan.AgentId);
@@ -388,7 +405,10 @@ public sealed class TurnRunnerService
         var topic = string.IsNullOrWhiteSpace(snapshot.Engine.Steering.Topic) ? "Open arena discussion" : snapshot.Engine.Steering.Topic;
         var global = string.IsNullOrWhiteSpace(snapshot.Engine.Steering.Global) ? "Keep the exchange concrete, useful, and responsive to the current transcript." : snapshot.Engine.Steering.Global;
         var voiceInstruction = VoiceStyleInstructions.Instruction(agent?.VoiceStyle);
+        var voiceEnforcement = enforceVoiceDrift ? VoiceStyleInstructions.Enforcement(agent?.VoiceStyle) : "";
         var voiceReminder = VoiceStyleInstructions.TurnReminder(agent?.VoiceStyle);
+        var pressureInstruction = AgentPressureInstructions.Instruction(agent?.PressureProfile);
+        var pressureReminder = AgentPressureInstructions.TurnReminder(agent?.PressureProfile);
         var cast = string.Join(
             Environment.NewLine,
             active.Select(item => item.Id == plan.AgentId
@@ -411,6 +431,8 @@ public sealed class TurnRunnerService
                     $"Selected agent: {plan.AgentName}.",
                     $"Your persona: {agent?.Persona ?? plan.AgentName}.",
                     voiceInstruction,
+                    voiceEnforcement,
+                    pressureInstruction,
                     "Do not write for the other agents. Reply only as the selected agent.",
                     "You do not know the private roles, personas, or instructions of other participants. Infer only from public transcript text. Never describe another participant's hidden role or persona.",
                     "Treat the latest Operator message as the highest-priority task direction when it is feasible and safe. Follow it directly before pursuing your persona's critique or agenda.",
@@ -429,6 +451,7 @@ public sealed class TurnRunnerService
                     string.IsNullOrWhiteSpace(transcript) ? "Transcript: No public transcript yet." : $"Transcript:{Environment.NewLine}{transcript}",
                     string.IsNullOrWhiteSpace(latestOperatorRequest) ? "Latest Operator request: -" : $"Latest Operator request: {latestOperatorRequest}",
                     voiceReminder,
+                    pressureReminder,
                     $"Write the next public turn for {plan.AgentName}."))
         ];
     }
@@ -454,6 +477,7 @@ public sealed class TurnRunnerService
         OneTurnPlan plan,
         ModelCompletionResult result,
         string eventPrefix,
+        bool enforceVoiceDrift,
         CancellationToken cancellationToken)
     {
         if (!result.Ok || !string.IsNullOrWhiteSpace(result.Text))
@@ -462,7 +486,7 @@ public sealed class TurnRunnerService
         }
 
         await _eventLogStore.AppendAsync(sessionId, $"{eventPrefix}_empty_content_retry", new { speaker = plan.AgentId, model = result.Model }, cancellationToken);
-        var repairPrompt = BuildPrompt(snapshot, plan, allowInternetTool: false)
+        var repairPrompt = BuildPrompt(snapshot, plan, allowInternetTool: false, enforceVoiceDrift: enforceVoiceDrift)
             .Append(new ModelChatMessage("user", "Your previous response had no public content. Write the public message now in 2-5 concise sentences. Do not output reasoning only. Do not request internet."))
             .ToArray();
         var repaired = await CompleteWithFallbackAsync(sessionId, plan, repairPrompt, $"{eventPrefix}_empty_content_fallback_to_default", cancellationToken);

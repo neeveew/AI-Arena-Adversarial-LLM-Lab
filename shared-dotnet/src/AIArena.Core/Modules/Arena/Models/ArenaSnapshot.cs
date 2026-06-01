@@ -98,6 +98,9 @@ public sealed class DialogueAgent
     [JsonPropertyName("voice_style")]
     public string VoiceStyle { get; set; } = "";
 
+    [JsonPropertyName("pressure_profile")]
+    public string PressureProfile { get; set; } = "";
+
     [JsonPropertyName("active")]
     public bool Active { get; set; } = true;
 

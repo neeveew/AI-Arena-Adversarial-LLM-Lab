@@ -17,7 +17,7 @@ This map tracks the native WPF port against the Python beta app. Keep it close t
 | Independent transcript and arena panel scrolling | Done | WPF replaced paused WinUI 3 shell because WPF scrolling behaved correctly. Scrollbars are slim and theme-aware. |
 | Left navigation | Partial | Arena, Custom Match, and News switch views. Export is a placeholder. Files is intentionally omitted. |
 | Top health/status bar | Partial | Session, match, provider, model, turn count, Theme selector, and compact settings icon are visible from snapshots. Status text is left-aligned and trims before crowding right-side controls. |
-| Debug controls | Done | Optional Settings -> Visuals toggle reveals a top-rail Debug dropdown for experimental diagnostics such as Decision Card and Style Fit cue chips. |
+| Debug controls | Done | Optional Settings -> Visuals toggle reveals a top-rail Debug dropdown for experimental diagnostics such as Decision Card, Style Fit cue chips, and Voice Drift Enforcement. |
 | Theme selector | Done | System, Dark Arena, Dark Green, Dark Blue, and High Contrast palettes apply immediately and persist to WPF-local settings. |
 | 1.2 second snapshot refresh | Done | Refreshes selected session when snapshot timestamp changes. |
 | Follow Chat | Done | Single follow toggle; transcript is newest-first and follow keeps the latest card at the top. |
@@ -89,7 +89,7 @@ This map tracks the native WPF port against the Python beta app. Keep it close t
 | Feature | Status | Notes |
 | --- | --- | --- |
 | Scenario preview | Done | Read-only topic/global cards. |
-| Cast preview | Done | Agent/persona cards with per-agent voice style selectors, visible non-default voice chips, and heuristic style-fit scoring in transcript/performance views. |
+| Cast preview | Done | Agent/persona cards with per-agent pressure and voice style selectors, visible non-default chips, and heuristic style-fit scoring in transcript/performance views. |
 | Locks | Done | Topic/global/agent lock checkboxes persist to snapshot and are respected by native match generation. |
 | Random seed generation | Done | Generates deterministic scenario/cast updates through shared native services while respecting locks. |
 | Request AI to generate | Partial | AI Choice calls the configured narrator/shared model and fills missing cast members; malformed-output recovery still needs more coverage. |

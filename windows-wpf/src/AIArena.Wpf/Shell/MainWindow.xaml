@@ -1224,6 +1224,14 @@
                                               Unchecked="StyleFitCheckBox_Changed"
                                               Margin="0,0,0,8"
                                               ToolTip="Show optional heuristic style cue chips on transcript cards" />
+                                    <CheckBox x:Name="VoiceDriftEnforcementCheckBox"
+                                              Content="Voice drift enforcement"
+                                              Style="{StaticResource ToggleSwitchCheckBox}"
+                                              Foreground="{DynamicResource TextBrush}"
+                                              Checked="VoiceDriftEnforcementCheckBox_Changed"
+                                              Unchecked="VoiceDriftEnforcementCheckBox_Changed"
+                                              Margin="0,0,0,8"
+                                              ToolTip="Inject stricter voice reminders into agent prompts while debug is enabled" />
                                     <TextBlock Text="Experimental diagnostics can be noisy and are hidden unless debug controls are enabled."
                                                Foreground="{DynamicResource MutedTextBrush}"
                                                FontSize="11"

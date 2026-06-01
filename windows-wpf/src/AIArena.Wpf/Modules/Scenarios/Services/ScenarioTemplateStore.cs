@@ -109,6 +109,7 @@ public sealed class ScenarioTemplateStore
             agent.Name = agentTemplate.Name;
             agent.Persona = agentTemplate.Persona;
             agent.VoiceStyle = agentTemplate.VoiceStyle ?? "";
+            agent.PressureProfile = agentTemplate.PressureProfile ?? "";
             agent.Active = agentTemplate.Active;
             snapshot.MatchLocks[agentTemplate.Id] = agentTemplate.Locked;
         }
@@ -148,14 +149,16 @@ public sealed class ScenarioTemplateStore
                 agent.Persona,
                 agent.Active,
                 snapshot.MatchLocks.TryGetValue(agent.Id, out var locked) && locked,
-                agent.VoiceStyle))
+                agent.VoiceStyle,
+                agent.PressureProfile))
             .Append(new ScenarioTemplateAgent(
                 "narrator",
                 "Narrator",
                 snapshot.Engine.Narrator.Persona,
                 true,
                 snapshot.MatchLocks.TryGetValue("narrator", out var narratorLocked) && narratorLocked,
-                snapshot.Engine.Narrator.VoiceStyle))
+                snapshot.Engine.Narrator.VoiceStyle,
+                ""))
             .ToArray();
 
         var configs = snapshot.Configs.ToDictionary(
@@ -223,7 +226,8 @@ public sealed record ScenarioTemplateAgent(
     string Persona,
     bool Active,
     bool Locked,
-    string VoiceStyle = "");
+    string VoiceStyle = "",
+    string PressureProfile = "");
 
 public sealed record ScenarioTemplateModelConfig(
     string BaseUrl,

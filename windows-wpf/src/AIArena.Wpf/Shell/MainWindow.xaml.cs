@@ -57,6 +57,7 @@ public partial class MainWindow : Window
     private readonly List<Button> _transcriptActionButtons = [];
     private readonly List<CheckBox> _lockControls = [];
     private readonly List<ComboBox> _voiceControls = [];
+    private readonly List<ComboBox> _pressureControls = [];
     private readonly List<TranscriptMessage> _turnCompareSelection = [];
     private readonly Dictionary<string, string> _roleModels = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ModelPreloadResult> _lastPreloadResults = new(StringComparer.OrdinalIgnoreCase);
@@ -303,6 +304,7 @@ public partial class MainWindow : Window
         DecisionCardCheckBox.IsChecked = _wpfSettings.ShowDecisionCard;
         DebugControlsCheckBox.IsChecked = _wpfSettings.AllowDebugControls;
         StyleFitCheckBox.IsChecked = _wpfSettings.ShowStyleFit;
+        VoiceDriftEnforcementCheckBox.IsChecked = _wpfSettings.EnforceVoiceDrift;
         _isRenderingSnapshot = false;
         UpdateDebugControlsVisibility();
         UpdateViewPresetState();
@@ -576,6 +578,21 @@ public partial class MainWindow : Window
             PopulateTranscript(_lastRenderedMessages);
         }
         UpdateViewPresetState();
+    }
+
+    private void VoiceDriftEnforcementCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isRenderingSnapshot || VoiceDriftEnforcementCheckBox is null)
+        {
+            return;
+        }
+
+        _wpfSettings.EnforceVoiceDrift = VoiceDriftEnforcementCheckBox.IsChecked == true;
+        _wpfSettingsStore.Save(_wpfSettings);
+        LoadStatus.Text = _wpfSettings.EnforceVoiceDrift
+            ? "Debug: voice drift enforcement enabled."
+            : "Debug: voice drift enforcement disabled.";
+        ArenaRunStatus.Text = LoadStatus.Text;
     }
 
     private void RandomSeedOptions_Changed(object sender, SelectionChangedEventArgs e)
@@ -880,6 +897,7 @@ public partial class MainWindow : Window
                 snapshot.NarratorStatus,
                 snapshot.NarratorPersona,
                 snapshot.NarratorVoiceStyle,
+                "",
                 snapshot.NarratorModel,
                 true,
                 snapshot.NarratorLocked,
@@ -1440,6 +1458,7 @@ public partial class MainWindow : Window
                     snapshot.NarratorStatus,
                     snapshot.NarratorPersona,
                     snapshot.NarratorVoiceStyle,
+                    "",
                     snapshot.NarratorModel,
                     true,
                     snapshot.NarratorLocked,
@@ -2115,6 +2134,7 @@ public partial class MainWindow : Window
         ScenarioSeedInspector.Children.Clear();
         _lockControls.Clear();
         _voiceControls.Clear();
+        _pressureControls.Clear();
 
         PopulateScenarioSeedInspector(snapshot);
 
@@ -2148,7 +2168,8 @@ public partial class MainWindow : Window
                     BlendBrush(ResourceBrush("CardBrush"), AccentForSpeaker(agent.Id), 0.16),
                     AccentForSpeaker(agent.Id),
                     agent.Locked,
-                    agent.VoiceStyle));
+                    agent.VoiceStyle,
+                    agent.PressureProfile));
             }
         }
 
@@ -2504,10 +2525,11 @@ public partial class MainWindow : Window
             : "-";
     }
 
-    private Border CreateLockCard(string lockKey, string title, string body, Brush background, Brush accent, bool locked, string? voiceStyle = null)
+    private Border CreateLockCard(string lockKey, string title, string body, Brush background, Brush accent, bool locked, string? voiceStyle = null, string? pressureProfile = null)
     {
         var lockAccent = ResourceBrush("BetaAccentBrush");
         var isCastCard = IsAgentSpeaker(lockKey) || NormalizeMatchLockKey(lockKey) == "narrator";
+        var isAgentCard = IsAgentSpeaker(lockKey);
         var cardAccent = locked ? lockAccent : accent;
         var lockBox = new CheckBox
         {
@@ -2539,12 +2561,16 @@ public partial class MainWindow : Window
         editButton.Click += EditLockCardButton_Click;
 
         var header = new DockPanel { LastChildFill = true };
-        var actions = new StackPanel
+        var actions = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
             VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(14, 0, 0, 0)
         };
+        if (isAgentCard)
+        {
+            actions.Children.Add(CreateAgentPressurePicker(lockKey, pressureProfile ?? "", cardAccent));
+        }
         if (isCastCard)
         {
             actions.Children.Add(CreateVoiceStylePicker(lockKey, voiceStyle ?? "", cardAccent));
@@ -2569,6 +2595,11 @@ public partial class MainWindow : Window
         if (isCastCard && !string.IsNullOrWhiteSpace(visibleVoiceStyle))
         {
             titlePanel.Children.Add(CreateLockMetaChip(visibleVoiceStyle, accent));
+        }
+        var visiblePressure = AgentPressureChipText(pressureProfile);
+        if (isAgentCard && !string.IsNullOrWhiteSpace(visiblePressure))
+        {
+            titlePanel.Children.Add(CreateLockMetaChip(visiblePressure, accent));
         }
         if (locked)
         {
@@ -2638,6 +2669,30 @@ public partial class MainWindow : Window
         return picker;
     }
 
+    private ComboBox CreateAgentPressurePicker(string lockKey, string pressureProfile, Brush accent)
+    {
+        var picker = new ComboBox
+        {
+            Tag = lockKey,
+            Width = 136,
+            MinHeight = 28,
+            Padding = new Thickness(6, 3, 6, 3),
+            Margin = new Thickness(0, 0, 8, 0),
+            FontSize = 11,
+            ToolTip = "Debate pressure for this agent"
+        };
+
+        foreach (var option in AgentPressureOptions())
+        {
+            picker.Items.Add(new ComboBoxItem { Content = option.Label, Tag = option.Tag });
+        }
+
+        SelectComboTag(picker, NormalizeAgentPressureTag(pressureProfile));
+        picker.SelectionChanged += AgentPressurePicker_SelectionChanged;
+        _pressureControls.Add(picker);
+        return picker;
+    }
+
     private async void VoiceStylePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_isRenderingSnapshot || _activeSession is null || sender is not ComboBox picker || picker.Tag is not string key)
@@ -2672,6 +2727,40 @@ public partial class MainWindow : Window
         });
     }
 
+    private async void AgentPressurePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isRenderingSnapshot || _activeSession is null || sender is not ComboBox picker || picker.Tag is not string key)
+        {
+            return;
+        }
+
+        var pressure = SelectedComboTag(picker, "default");
+        await RunArenaBusyAsync($"Updating {DisplayLockKey(key)} pressure...", async () =>
+        {
+            var latest = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
+            if (latest is null)
+            {
+                LoadStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
+                return;
+            }
+
+            if (!ApplyAgentPressure(latest, key, pressure))
+            {
+                LoadStatus.Text = $"Could not update {DisplayLockKey(key)} pressure.";
+                ArenaRunStatus.Text = LoadStatus.Text;
+                return;
+            }
+
+            await SaveSnapshotWithFeedbackAsync(latest, _activeSession.Id);
+            await _eventLogStore.AppendAsync(_activeSession.Id, "native_agent_pressure_changed", new
+            {
+                key = NormalizeMatchLockKey(key),
+                pressure_profile = pressure
+            });
+            RefreshActiveSession($"Updated {DisplayLockKey(key)} pressure: {AgentPressureLabel(pressure)}.");
+        });
+    }
+
     private static IReadOnlyList<(string Tag, string Label)> VoiceStyleOptions()
     {
         return
@@ -2692,6 +2781,22 @@ public partial class MainWindow : Window
             ("hedge_uncertainty", "Voice: Hedge"),
             ("bark_only", "Voice: Bark-only"),
             ("science_gibberish", "Voice: Science gibberish")
+        ];
+    }
+
+    private static IReadOnlyList<(string Tag, string Label)> AgentPressureOptions()
+    {
+        return
+        [
+            ("default", "Pressure: Default"),
+            ("calm", "Pressure: Calm"),
+            ("assertive", "Pressure: Assertive"),
+            ("contrarian", "Pressure: Contrarian"),
+            ("evidence", "Pressure: Evidence"),
+            ("risk", "Pressure: Risk"),
+            ("concise", "Pressure: Concise"),
+            ("expansive", "Pressure: Expansive"),
+            ("chaos", "Pressure: Chaos")
         ];
     }
 
@@ -2719,6 +2824,30 @@ public partial class MainWindow : Window
             : $"Voice: {VoiceStyleLabel(value)}";
     }
 
+    private static string NormalizeAgentPressureTag(string? value)
+    {
+        var cleaned = string.IsNullOrWhiteSpace(value)
+            ? "default"
+            : value.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+        return AgentPressureOptions().Any(option => option.Tag.Equals(cleaned, StringComparison.OrdinalIgnoreCase))
+            ? cleaned
+            : "default";
+    }
+
+    private static string AgentPressureLabel(string? value)
+    {
+        var tag = NormalizeAgentPressureTag(value);
+        var label = AgentPressureOptions().First(option => option.Tag == tag).Label;
+        return label.Replace("Pressure: ", "", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string AgentPressureChipText(string? value)
+    {
+        return NormalizeAgentPressureTag(value).Equals("default", StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : $"Pressure: {AgentPressureLabel(value)}";
+    }
+
     private bool ShouldShowStyleFit()
     {
         return _wpfSettings.AllowDebugControls && _wpfSettings.ShowStyleFit;
@@ -2727,6 +2856,11 @@ public partial class MainWindow : Window
     private bool ShouldShowDecisionCard()
     {
         return _wpfSettings.AllowDebugControls && _wpfSettings.ShowDecisionCard;
+    }
+
+    private bool ShouldEnforceVoiceDrift()
+    {
+        return _wpfSettings.AllowDebugControls && _wpfSettings.EnforceVoiceDrift;
     }
 
     private static string VoiceAdherenceState(int score, int samples)
@@ -5319,7 +5453,7 @@ public partial class MainWindow : Window
                 OneTurnResult result;
                 try
                 {
-                    result = await _turnRunner.RunOneTurnAsync(_activeSession.Id, token);
+                    result = await _turnRunner.RunOneTurnAsync(_activeSession.Id, ShouldEnforceVoiceDrift(), token);
                 }
                 finally
                 {
@@ -5553,7 +5687,7 @@ public partial class MainWindow : Window
 
         await RunArenaBusyAsync("Running native 1 TURN...", OneTurnButton, async () =>
         {
-            var result = await _turnRunner.RunOneTurnAsync(_activeSession.Id);
+            var result = await _turnRunner.RunOneTurnAsync(_activeSession.Id, ShouldEnforceVoiceDrift());
             var status = result.Ok && result.Message is not null
                 ? $"1 TURN complete: {result.Message.Speaker} ({result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms)"
                 : $"1 TURN failed: {result.Error}";
@@ -5579,7 +5713,7 @@ public partial class MainWindow : Window
 
         await RunArenaBusyAsync($"Running {agent.Name} once...", async () =>
         {
-            var result = await _turnRunner.RunAgentTurnAsync(_activeSession.Id, agent.Id);
+            var result = await _turnRunner.RunAgentTurnAsync(_activeSession.Id, agent.Id, ShouldEnforceVoiceDrift());
             var status = result.Ok && result.Message is not null
                 ? $"{agent.Name} one-shot complete: {result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms"
                 : $"{agent.Name} one-shot failed: {result.Error}";
@@ -6320,7 +6454,7 @@ public partial class MainWindow : Window
 
         await RunArenaBusyAsync($"Retrying turn {message.Turn} with {message.Speaker}...", async () =>
         {
-            var result = await _turnRunner.RetryTurnAsync(_activeSession.Id, message.Turn, message.SpeakerId, message.CreatedAt);
+            var result = await _turnRunner.RetryTurnAsync(_activeSession.Id, message.Turn, message.SpeakerId, message.CreatedAt, ShouldEnforceVoiceDrift());
             var status = result.Ok && result.Message is not null
                 ? $"Retry replaced turn {message.Turn}: {result.Message.Speaker} ({result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms)"
                 : $"Retry failed: {result.Error}";
@@ -7031,6 +7165,7 @@ public partial class MainWindow : Window
         SystemGlyphStylePicker.IsEnabled = !busy;
         TopStripModePicker.IsEnabled = !busy;
         DebugControlsCheckBox.IsEnabled = !busy;
+        VoiceDriftEnforcementCheckBox.IsEnabled = !busy;
         RandomSeedRolePackPicker.IsEnabled = !busy;
         RandomSeedStylePicker.IsEnabled = !busy;
         RandomSeedIntensityPicker.IsEnabled = !busy;
@@ -7057,6 +7192,10 @@ public partial class MainWindow : Window
             checkBox.IsEnabled = !busy;
         }
         foreach (var comboBox in _voiceControls)
+        {
+            comboBox.IsEnabled = !busy;
+        }
+        foreach (var comboBox in _pressureControls)
         {
             comboBox.IsEnabled = !busy;
         }
@@ -7499,6 +7638,29 @@ public partial class MainWindow : Window
                 }
 
                 agent.VoiceStyle = normalizedVoice == "default" ? "" : normalizedVoice;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static bool ApplyAgentPressure(AIArena.Core.Models.ArenaSnapshot snapshot, string key, string value)
+    {
+        var normalizedKey = NormalizeMatchLockKey(key);
+        var normalizedPressure = NormalizeAgentPressureTag(value);
+        switch (normalizedKey)
+        {
+            case "alpha":
+            case "beta":
+            case "gamma":
+            case "delta":
+                var agent = snapshot.Engine.Agents.FirstOrDefault(item => item.Id.Equals(normalizedKey, StringComparison.OrdinalIgnoreCase));
+                if (agent is null)
+                {
+                    return false;
+                }
+
+                agent.PressureProfile = normalizedPressure == "default" ? "" : normalizedPressure;
                 return true;
             default:
                 return false;

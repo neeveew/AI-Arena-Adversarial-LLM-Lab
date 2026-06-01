@@ -202,6 +202,7 @@ public static class SnapshotViewMapper
                     string.IsNullOrWhiteSpace(agent.Status) ? "waiting" : agent.Status,
                     agent.Persona,
                     agent.VoiceStyle,
+                    agent.PressureProfile,
                     DisplayValue(Config(snapshot, id).Model is { Length: > 0 } model ? model : sharedModel),
                     agent.Active,
                     Locked(snapshot, id),

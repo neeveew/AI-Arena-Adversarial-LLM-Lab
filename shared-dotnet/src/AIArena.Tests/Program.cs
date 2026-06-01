@@ -49,6 +49,8 @@ var tests = new (string Name, Action Test)[]
     ("plans next native one turn speaker", PlanNextNativeOneTurnSpeaker),
     ("native prompt prioritizes operator cooperation", NativePromptPrioritizesOperatorCooperation),
     ("native prompt includes selected voice style", NativePromptIncludesSelectedVoiceStyle),
+    ("native prompt includes selected pressure profile", NativePromptIncludesSelectedPressureProfile),
+    ("native prompt includes debug voice drift enforcement", NativePromptIncludesDebugVoiceDriftEnforcement),
     ("native prompt hides other personas", NativePromptHidesOtherPersonas),
     ("native prompt includes selected private notes", NativePromptIncludesSelectedPrivateNotes),
     ("native prompt suppresses internet when disabled", NativePromptSuppressesInternetWhenDisabled),
@@ -937,6 +939,44 @@ static void NativePromptIncludesSelectedVoiceStyle()
     Require(system.Contains("evidence ledger", StringComparison.OrdinalIgnoreCase), "voice style instruction missing from selected agent prompt");
     Require(user.Contains("Voice contract for this turn: Evidence ledger", StringComparison.OrdinalIgnoreCase), "turn voice reminder missing from selected agent prompt");
     Require(system.Contains("Evidence, Inference, Assumptions, Uncertainty, Next test", StringComparison.OrdinalIgnoreCase), "evidence ledger format missing");
+    Directory.Delete(root, recursive: true);
+}
+
+static void NativePromptIncludesSelectedPressureProfile()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    snapshot.Engine.Agents[1].PressureProfile = "evidence";
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+    var client = new FakeModelProviderClient("pressure constrained reply", "native reasoning");
+    var service = new TurnRunnerService(client, store, log);
+
+    var result = service.RunOneTurnAsync().GetAwaiter().GetResult();
+    Require(result.Ok, $"turn failed: {result.Error}");
+    var combinedPrompt = string.Join(Environment.NewLine, client.Requests[0].Select(item => item.Content));
+    Require(combinedPrompt.Contains("Pressure profile: Evidence-first", StringComparison.OrdinalIgnoreCase), "pressure profile missing from selected agent prompt");
+    Require(combinedPrompt.Contains("separate evidence, inference, assumptions", StringComparison.OrdinalIgnoreCase), "pressure rule missing from selected agent prompt");
+    Directory.Delete(root, recursive: true);
+}
+
+static void NativePromptIncludesDebugVoiceDriftEnforcement()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    snapshot.Engine.Agents[1].VoiceStyle = "idioms";
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+    var client = new FakeModelProviderClient("voice enforced reply", "native reasoning");
+    var service = new TurnRunnerService(client, store, log);
+
+    var result = service.RunOneTurnAsync("default", enforceVoiceDrift: true).GetAwaiter().GetResult();
+    Require(result.Ok, $"turn failed: {result.Error}");
+    var system = client.Requests[0].First(item => item.Role == "system").Content;
+    Require(system.Contains("Debug voice drift enforcement is active for Idioms", StringComparison.OrdinalIgnoreCase), "debug voice enforcement missing");
+    Require(system.Contains("The first sentence and final sentence must both clearly match", StringComparison.OrdinalIgnoreCase), "strict voice boundary missing");
     Directory.Delete(root, recursive: true);
 }
 

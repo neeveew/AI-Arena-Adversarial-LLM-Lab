@@ -106,7 +106,7 @@ The memory panel lets you refresh, edit, clear individual agent notes, or clear 
 
 ### Debug Controls
 
-Open Settings -> Visuals, then enable Allow debug controls. The top rail shows a Debug menu for experimental helpers. Decision card shows a compact narrator-generated operator summary above the transcript. Style fit shows optional cue chips for constrained voice styles.
+Open Settings -> Visuals, then enable Allow debug controls. The top rail shows a Debug menu for experimental helpers. Decision card shows a compact narrator-generated operator summary above the transcript. Style fit shows optional cue chips for constrained voice styles. Voice drift enforcement injects stricter per-turn voice reminders into agent prompts while Debug is enabled.
 
 ## Discourse Diagnostics
 
@@ -173,11 +173,13 @@ Cast Preview includes:
 
 Each item can be edited and locked. Locked cards use a golden border and lock glyph. Locked content is preserved when generating new seeds.
 
-Cast cards also include a Voice dropdown and a compact Voice chip whenever the style is not Default. Voice styles are reinforced as per-turn contracts that stay separate from the persona, such as Scientific, Legal / Policy, Plain language, Idioms, Cute, Poetic, Socratic, Bullet-only, Skeptical, Executive brief, Evidence ledger, No analogies, and Hedge uncertainty. Use them to test whether a model can preserve reasoning quality while speaking in a constrained style.
+Cast cards also include Pressure and Voice dropdowns. Pressure profiles change how hard each agent pushes the debate: Calm, Assertive, Contrarian, Evidence-first, Risk-first, Concise, Expansive, or Chaos. Use this to make one model stabilize the discussion while another challenges assumptions, demands evidence, or expands the mechanism.
+
+Voice styles are reinforced as per-turn contracts that stay separate from the persona, such as Scientific, Legal / Policy, Plain language, Idioms, Cute, Poetic, Socratic, Bullet-only, Skeptical, Executive brief, Evidence ledger, No analogies, Hedge uncertainty, Bark-only, and Science gibberish. Use them to test whether a model can preserve reasoning quality while speaking in a constrained style.
 
 Transcript cards and Agent Performance detail also show the active Voice chip for non-default styles, so constrained turns remain visible while reviewing a match.
 
-AI Arena also scores non-default voices with a lightweight Style Fit meter. This is experimental, so the transcript and Turn Compare cue chips only appear when Settings -> Visuals -> Allow debug controls is enabled and Debug -> Style fit is turned on. Agent Performance keeps the fuller style cue details. Scores are heuristic: strong cues mean the response visibly followed the selected style, partial cues mean some markers were present, and low cues mean the style was not very visible.
+AI Arena also scores non-default voices with a lightweight Style Fit meter. This is experimental, so the transcript and Turn Compare cue chips only appear when Settings -> Visuals -> Allow debug controls is enabled and Debug -> Style fit is turned on. Agent Performance keeps the fuller style cue details. Scores are heuristic: strong cues mean the response visibly followed the selected style, partial cues mean some markers were present, and low cues mean the style was not very visible. If a model drifts too quickly, enable Debug -> Voice drift enforcement to add stronger style reminders to future turns.
 
 ### Random Seed
 

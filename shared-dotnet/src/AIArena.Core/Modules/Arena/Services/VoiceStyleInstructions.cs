@@ -53,6 +53,23 @@ internal static class VoiceStyleInstructions
             : $"Voice contract for this turn: {Label(normalized)}. Keep the entire response in this style; do not drift into generic prose.";
     }
 
+    public static string Enforcement(string? value)
+    {
+        var normalized = Normalize(value);
+        if (normalized.Equals("default", StringComparison.OrdinalIgnoreCase))
+        {
+            return "";
+        }
+
+        return string.Join(
+            Environment.NewLine,
+            $"Debug voice drift enforcement is active for {Label(normalized)}.",
+            StyleRule(normalized),
+            "Every paragraph, bullet, or line must visibly satisfy the voice contract.",
+            "If the content becomes difficult, shorten the response rather than dropping the assigned voice.",
+            "The first sentence and final sentence must both clearly match the voice contract.");
+    }
+
     public static string Label(string? value)
     {
         return Normalize(value) switch

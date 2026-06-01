@@ -6,6 +6,7 @@ public sealed record AgentState(
     string Status,
     string Persona,
     string VoiceStyle,
+    string PressureProfile,
     string Model,
     bool Active,
     bool Locked,

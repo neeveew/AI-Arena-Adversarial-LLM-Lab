@@ -6,7 +6,7 @@ A native Windows lab for running adversarial multi-agent conversations between l
 
 AI Arena is not a chatbot and not just a model comparison board. It is a local adversarial multi-agent LLM lab where agents can argue, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
 
-You create the cast, assign models and personas, inject public operator turns, and let a separate narrator observe or summarize the match. The app includes discourse diagnostics for friction, consensus, role drift, unsupported claims, evidence pressure, and narrative heat.
+You create the cast, assign models, personas, voices, and pressure profiles, inject public operator turns, and let a separate narrator observe or summarize the match. The app includes discourse diagnostics for friction, consensus, role drift, unsupported claims, evidence pressure, and narrative heat.
 
 It is built for local experimentation with model behavior, multi-agent debate, red-team style reasoning, prompt/cast design, and AI discourse analysis.
 
@@ -33,8 +33,8 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 - Alpha, Beta, Gamma, and Delta participant agents.
 - Separate Narrator layer for observation and public narration.
 - Public Operator interventions that do not advance the turn order.
-- Per-agent personas, model assignments, voice styles, and absurd persona-mixer constraints.
-- Optional debug voice/style cue chips for spotting when constrained agents drift.
+- Per-agent personas, model assignments, voice styles, pressure profiles, and absurd persona-mixer constraints.
+- Optional debug voice/style cue chips and voice drift enforcement for constrained agents.
 - OpenAI-compatible provider support, including LM Studio.
 - Random Seed role-pack, pressure, style, and absurdity controls, plus AI Choice and YOLO scenario generation.
 - Scenario and cast locks for controlled regeneration.

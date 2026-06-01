@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.3.83-beta",
+    [string]$Version = "0.3.84-beta",
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
     [switch]$SelfContained,
