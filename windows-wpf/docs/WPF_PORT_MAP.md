@@ -88,7 +88,7 @@ This map tracks the native WPF port against the Python beta app. Keep it close t
 | Feature | Status | Notes |
 | --- | --- | --- |
 | Scenario preview | Done | Read-only topic/global cards. |
-| Cast preview | Done | Agent/persona cards with per-agent voice style selectors. |
+| Cast preview | Done | Agent/persona cards with per-agent voice style selectors and visible non-default voice chips. |
 | Locks | Done | Topic/global/agent lock checkboxes persist to snapshot and are respected by native match generation. |
 | Random seed generation | Done | Generates deterministic scenario/cast updates through shared native services while respecting locks. |
 | Request AI to generate | Partial | AI Choice calls the configured narrator/shared model and fills missing cast members; malformed-output recovery still needs more coverage. |

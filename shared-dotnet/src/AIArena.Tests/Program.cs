@@ -419,10 +419,12 @@ static void CreateTranscriptMessageWithReasoningMetadata()
 {
     var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
     var agent = snapshot.Engine.Agents[0];
+    agent.VoiceStyle = "scientific";
     var result = new ModelCompletionResult(true, "http://127.0.0.1:1234/v1", "reasoning-model", "visible", "internal trace", 42, 10, 5, 15, "", DateTimeOffset.Now);
     var message = new TranscriptService().CreateAssistantMessage(agent, result.Text, result, 2);
     Require(message.Model.Model == "reasoning-model", "model metadata mismatch");
     Require(message.Metadata.ContainsKey("reasoning_content"), "reasoning metadata missing");
+    Require(message.Metadata.TryGetValue("voice_style", out var voiceStyle) && voiceStyle.GetString() == "scientific", "voice style metadata missing");
     Require(TranscriptService.ReasoningContent(message) == "internal trace", "reasoning metadata value mismatch");
 }
 

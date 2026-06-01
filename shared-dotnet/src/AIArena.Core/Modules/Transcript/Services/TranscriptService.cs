@@ -40,7 +40,7 @@ public sealed class TranscriptService
                 CompletionTokens = result.CompletionTokens,
                 TotalTokens = result.TotalTokens
             },
-            Metadata = ReasoningMetadata(result.Reasoning)
+            Metadata = AssistantMetadata(result.Reasoning, agent.VoiceStyle)
         };
     }
 
@@ -155,7 +155,7 @@ public sealed class TranscriptService
                 CompletionTokens = result.CompletionTokens,
                 TotalTokens = result.TotalTokens
             },
-            Metadata = ReasoningMetadata(result.Reasoning),
+            Metadata = AssistantMetadata(result.Reasoning, agent.VoiceStyle),
             Extra = original.Extra
         };
     }
@@ -238,6 +238,18 @@ public sealed class TranscriptService
             {
                 ["reasoning_content"] = JsonSerializer.SerializeToElement(reasoning.Trim())
             };
+    }
+
+    private static Dictionary<string, JsonElement> AssistantMetadata(string reasoning, string voiceStyle)
+    {
+        var metadata = ReasoningMetadata(reasoning);
+        var normalizedVoiceStyle = VoiceStyleInstructions.Normalize(voiceStyle);
+        if (!normalizedVoiceStyle.Equals("default", StringComparison.OrdinalIgnoreCase))
+        {
+            metadata["voice_style"] = JsonSerializer.SerializeToElement(normalizedVoiceStyle);
+        }
+
+        return metadata;
     }
 
     private static bool SameMessageFallback(DialogueMessage message, int turn, string speakerId, double createdAt)

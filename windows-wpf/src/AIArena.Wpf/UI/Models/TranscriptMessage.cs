@@ -11,6 +11,7 @@ public sealed record TranscriptMessage(
     int CompletionTokens,
     int TotalTokens,
     string Status,
+    string VoiceStyle,
     bool Pinned,
     string Kind,
     string Text,

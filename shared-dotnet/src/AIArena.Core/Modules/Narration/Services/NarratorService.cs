@@ -125,6 +125,7 @@ public sealed class NarratorService
             Id = "narrator",
             Name = "Narrator",
             Persona = snapshot.Engine.Narrator.Persona,
+            VoiceStyle = snapshot.Engine.Narrator.VoiceStyle,
             Active = false,
             Status = result.Ok ? "spoke" : "error"
         };

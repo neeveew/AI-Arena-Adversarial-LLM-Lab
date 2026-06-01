@@ -1110,6 +1110,11 @@ public partial class MainWindow : Window
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 2, 0, 8)
         });
+        var voiceChipText = VoiceStyleChipText(agent?.VoiceStyle);
+        if (!string.IsNullOrWhiteSpace(voiceChipText))
+        {
+            panel.Children.Add(CreatePerformanceVoiceChip(voiceChipText, accent));
+        }
 
         var metrics = new UniformGrid
         {
@@ -1209,6 +1214,27 @@ public partial class MainWindow : Window
                         TextTrimming = TextTrimming.CharacterEllipsis
                     }
                 }
+            }
+        };
+    }
+
+    private Border CreatePerformanceVoiceChip(string text, Brush accent)
+    {
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.09),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.34),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(7, 3, 7, 3),
+            Margin = new Thickness(0, -2, 0, 10),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Child = new TextBlock
+            {
+                Text = text,
+                Foreground = accent,
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold
             }
         };
     }
@@ -2390,6 +2416,11 @@ public partial class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Center
         });
         titlePanel.Children.Add(CreateLockMetaChip(DisplayLockKey(lockKey), accent));
+        var visibleVoiceStyle = VoiceStyleChipText(voiceStyle);
+        if (isCastCard && !string.IsNullOrWhiteSpace(visibleVoiceStyle))
+        {
+            titlePanel.Children.Add(CreateLockMetaChip(visibleVoiceStyle, accent));
+        }
         if (locked)
         {
             titlePanel.Children.Add(CreateLockMetaChip("Locked", lockAccent));
@@ -2528,6 +2559,13 @@ public partial class MainWindow : Window
         var tag = NormalizeVoiceStyleTag(value);
         var label = VoiceStyleOptions().First(option => option.Tag == tag).Label;
         return label.Replace("Voice: ", "", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string VoiceStyleChipText(string? value)
+    {
+        return NormalizeVoiceStyleTag(value).Equals("default", StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : $"Voice: {VoiceStyleLabel(value)}";
     }
 
     private Border CreateLockMetaChip(string text, Brush accent)
@@ -2928,6 +2966,11 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(message.Model))
         {
             meta.Children.Add(CreateTranscriptStatPill(message.Model, isInternet));
+        }
+        var compareVoiceChip = VoiceStyleChipText(message.VoiceStyle);
+        if (!isInternet && !isSystemEvent && !string.IsNullOrWhiteSpace(compareVoiceChip))
+        {
+            meta.Children.Add(CreateTranscriptStatPill(compareVoiceChip, isInternet));
         }
         meta.Children.Add(CreateTranscriptStatPill(FormatGeneratedTokens(message), isInternet));
         if (message.PromptTokens > 0)
@@ -3883,6 +3926,11 @@ public partial class MainWindow : Window
         if (!isInternet && !string.IsNullOrWhiteSpace(message.Model))
         {
             identity.Children.Add(CreateTranscriptStatPill(message.Model, isInternet));
+        }
+        var voiceChip = VoiceStyleChipText(message.VoiceStyle);
+        if (!isInternet && !isSystemEvent && !string.IsNullOrWhiteSpace(voiceChip))
+        {
+            identity.Children.Add(CreateTranscriptStatPill(voiceChip, isInternet));
         }
         foreach (var pill in CreateTranscriptStatPills(message, isInternet))
         {

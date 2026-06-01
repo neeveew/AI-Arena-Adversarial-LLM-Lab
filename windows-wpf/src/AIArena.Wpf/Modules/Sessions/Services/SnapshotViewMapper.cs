@@ -60,7 +60,7 @@ public static class SnapshotViewMapper
             modelRss.RequireApproval,
             string.IsNullOrWhiteSpace(snapshot.Engine.NewsAutomation.Mode) ? "manual" : snapshot.Engine.NewsAutomation.Mode,
             sharedConfig.LastTestOk,
-            ParseMessages(snapshot.Engine.Messages),
+            ParseMessages(snapshot.Engine.Messages, snapshot),
             ParseAgents(snapshot.Engine.Agents, snapshot));
     }
 
@@ -112,7 +112,7 @@ public static class SnapshotViewMapper
             false,
             "manual",
             false,
-            [new TranscriptMessage(0, "Transcript", "transcript", 0, "-", 0, 0, 0, 0, "empty", false, "message", message, "", "", "", "", "", "", "", "", false, [])],
+            [new TranscriptMessage(0, "Transcript", "transcript", 0, "-", 0, 0, 0, 0, "empty", "", false, "message", message, "", "", "", "", "", "", "", "", false, [])],
             []);
     }
 
@@ -131,7 +131,7 @@ public static class SnapshotViewMapper
         return string.IsNullOrWhiteSpace(value) ? "-" : value;
     }
 
-    private static IReadOnlyList<TranscriptMessage> ParseMessages(IReadOnlyList<DialogueMessage> messages)
+    private static IReadOnlyList<TranscriptMessage> ParseMessages(IReadOnlyList<DialogueMessage> messages, CoreSnapshot snapshot)
     {
         return messages
             .Select(message =>
@@ -149,6 +149,7 @@ public static class SnapshotViewMapper
                     message.Model.CompletionTokens,
                     message.Model.TotalTokens,
                     string.IsNullOrWhiteSpace(message.Status) ? "ok" : message.Status,
+                    VoiceStyleForMessage(message, snapshot),
                     message.Pinned,
                     string.IsNullOrWhiteSpace(message.Kind) ? "message" : message.Kind,
                     message.Text,
@@ -164,6 +165,24 @@ public static class SnapshotViewMapper
                     ParseInternetSources(JsonProperty(result, "sources")));
             })
             .ToArray();
+    }
+
+    private static string VoiceStyleForMessage(DialogueMessage message, CoreSnapshot snapshot)
+    {
+        var stored = MetadataString(message, "voice_style");
+        if (!string.IsNullOrWhiteSpace(stored))
+        {
+            return stored;
+        }
+
+        if (message.SpeakerId.Equals("narrator", StringComparison.OrdinalIgnoreCase))
+        {
+            return snapshot.Engine.Narrator.VoiceStyle;
+        }
+
+        return snapshot.Engine.Agents
+            .FirstOrDefault(agent => agent.Id.Equals(message.SpeakerId, StringComparison.OrdinalIgnoreCase))
+            ?.VoiceStyle ?? "";
     }
 
     private static IReadOnlyList<AgentState> ParseAgents(IReadOnlyList<DialogueAgent> agents, CoreSnapshot snapshot)
