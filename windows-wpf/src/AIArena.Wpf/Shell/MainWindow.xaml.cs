@@ -207,6 +207,18 @@ public partial class MainWindow : Window
         typeof(CheckBox)
     ];
 
+    private static readonly string[] RoleDetailLabels =
+    [
+        "Absurd function:",
+        "Arena function:",
+        "Expertise leak:",
+        "Failure bias:",
+        "Role pressure:",
+        "Persona mixer:",
+        "Expression constraint:",
+        "Reasoning distortion:"
+    ];
+
     public MainWindow()
     {
         InitializeComponent();
@@ -680,6 +692,39 @@ public partial class MainWindow : Window
             "chaos_room" => ("absurd_lab", "technical", "chaos", "maximum"),
             "one_line_mayhem" => ("absurd_lab", "creative", "one_line", "maximum"),
             _ => ("auto", "auto", "normal", "grounded")
+        };
+    }
+
+    private void GenerationHelpButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string key })
+        {
+            return;
+        }
+
+        var (title, body) = GenerationHelpText(key);
+        GenerationHelpTitleText.Text = title;
+        GenerationHelpBodyText.Text = body;
+        GenerationHelpPopup.IsOpen = false;
+        GenerationHelpPopup.IsOpen = true;
+    }
+
+    private static (string Title, string Body) GenerationHelpText(string key)
+    {
+        return key switch
+        {
+            "generate" => (
+                "Generate",
+                "Manual keeps your current tune settings. Random Seed is deterministic and local. AI Choice asks the configured model to build a match. YOLO creates a seeded meta scenario and cast while respecting locks."),
+            "tune" => (
+                "Tune",
+                "Role pack chooses the cast family. Style chooses the scenario domain. Pressure changes how hard the debate pushes. Absurdity mixes expertise, expression constraints, and reasoning distortions."),
+            "recent" => (
+                "Recent",
+                "Recent stores generated setups in the session snapshot. Replay restores the selected setup without another model call. Copy Seed copies the scenario seed for sharing or reruns."),
+            _ => (
+                "Custom Match",
+                "Use generation controls to create scenario/cast setups, then lock anything you want to preserve before generating again.")
         };
     }
 
@@ -1657,10 +1702,30 @@ public partial class MainWindow : Window
         var current = CurrentTurnAgent(snapshot);
         TopCurrentTurnValue.Text = current?.Id.ToUpperInvariant() ?? "-";
         TopCurrentTurnValue.Foreground = current is null ? ResourceBrush("TextBrush") : AccentForSpeaker(current.Id);
+        TopCurrentTurnValue.ToolTip = current is null
+            ? "No active turn participant."
+            : $"{DisplayStatusValue(current.Id)}: {current.Name}\nModel: {CurrentTurnModel(snapshot, current)}";
         TopTurnsValue.Text = snapshot.TurnCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         TopBarStatus.ToolTip = $"Session: {snapshot.SessionId}\nModel: {CurrentTurnModel(snapshot, current)}";
+        if (!_arenaBusy && _autoChatCancellation is null)
+        {
+            ArenaRunStatus.Text = TopRunStateSummary(snapshot, current);
+        }
+
         UpdateSettingsProviderStatus(snapshot);
+    }
+
+    private static string TopRunStateSummary(ArenaSnapshot snapshot, AgentState? current)
+    {
+        var provider = snapshot.ProviderOnline ? "provider online" : "provider offline";
+        if (current is null)
+        {
+            return $"Ready: no active turn participant; {provider}.";
+        }
+
+        var model = ShortModelName(CurrentTurnModel(snapshot, current));
+        return $"Ready: next {DisplayStatusValue(current.Id)} using {model}; {provider}.";
     }
 
     private void UpdateSettingsProviderStatus(ArenaSnapshot snapshot)
@@ -2795,14 +2860,17 @@ public partial class MainWindow : Window
         }
         header.Children.Add(titlePanel);
 
+        var displayBody = isCastCard ? CompactCastPreviewBody(body) : body;
         var text = new TextBlock
         {
-            Text = body,
+            Text = displayBody,
             Foreground = ResourceBrush("TextBrush"),
             TextWrapping = TextWrapping.Wrap,
             FontSize = 12,
             LineHeight = 18,
-            Margin = new Thickness(0, 8, 0, 0)
+            MaxHeight = isCastCard ? 58 : double.PositiveInfinity,
+            Margin = new Thickness(0, 7, 0, 0),
+            ToolTip = body
         };
 
         var stack = new StackPanel();
@@ -2835,11 +2903,31 @@ public partial class MainWindow : Window
 
     private static bool HasRoleDetails(string persona)
     {
-        return persona.Contains("Absurd function:", StringComparison.OrdinalIgnoreCase)
-            || persona.Contains("Expertise leak:", StringComparison.OrdinalIgnoreCase)
-            || persona.Contains("Persona mixer:", StringComparison.OrdinalIgnoreCase)
-            || persona.Contains("Expression constraint:", StringComparison.OrdinalIgnoreCase)
-            || persona.Contains("Reasoning distortion:", StringComparison.OrdinalIgnoreCase);
+        return RoleDetailLabels.Any(label => persona.Contains(label, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string CompactCastPreviewBody(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return body;
+        }
+
+        var firstDetailIndex = RoleDetailLabels
+            .Select(label => body.IndexOf(label, StringComparison.OrdinalIgnoreCase))
+            .Where(index => index > 0)
+            .DefaultIfEmpty(-1)
+            .Min();
+        var preview = firstDetailIndex > 0 ? body[..firstDetailIndex] : body;
+        preview = preview.Trim().Replace("\r", " ").Replace("\n", " ");
+        while (preview.Contains("  ", StringComparison.Ordinal))
+        {
+            preview = preview.Replace("  ", " ", StringComparison.Ordinal);
+        }
+
+        return preview.Length <= 300
+            ? preview
+            : $"{preview[..297].TrimEnd()}...";
     }
 
     private void RoleDetailsButton_Click(object sender, RoutedEventArgs e)
@@ -2919,20 +3007,8 @@ public partial class MainWindow : Window
 
     private static string RoleDetailsText(string persona)
     {
-        var labels = new[]
-        {
-            "Absurd function:",
-            "Arena function:",
-            "Expertise leak:",
-            "Failure bias:",
-            "Role pressure:",
-            "Persona mixer:",
-            "Expression constraint:",
-            "Reasoning distortion:"
-        };
-
-        var lines = labels
-            .Select(label => ExtractRoleDetailSegment(persona, label, labels))
+        var lines = RoleDetailLabels
+            .Select(label => ExtractRoleDetailSegment(persona, label, RoleDetailLabels))
             .Where(line => !string.IsNullOrWhiteSpace(line))
             .ToArray();
         return lines.Length == 0
@@ -2963,10 +3039,10 @@ public partial class MainWindow : Window
         var picker = new ComboBox
         {
             Tag = lockKey,
-            Width = 150,
+            Width = 132,
             MinHeight = 28,
             Padding = new Thickness(6, 3, 6, 3),
-            Margin = new Thickness(0, 0, 8, 0),
+            Margin = new Thickness(0, 0, 6, 0),
             FontSize = 11,
             ToolTip = "Communication style for this model"
         };
@@ -2987,10 +3063,10 @@ public partial class MainWindow : Window
         var picker = new ComboBox
         {
             Tag = lockKey,
-            Width = 136,
+            Width = 124,
             MinHeight = 28,
             Padding = new Thickness(6, 3, 6, 3),
-            Margin = new Thickness(0, 0, 8, 0),
+            Margin = new Thickness(0, 0, 6, 0),
             FontSize = 11,
             ToolTip = "Debate pressure for this agent"
         };
@@ -7501,8 +7577,10 @@ public partial class MainWindow : Window
         ResetButton.IsEnabled = !busy;
         RandomSeedButton.IsEnabled = !busy || autoChatRunning;
         RandomSeedPresetPicker.IsEnabled = !busy;
+        RandomSeedRolePackPicker.IsEnabled = !busy;
         RandomSeedStylePicker.IsEnabled = !busy;
         RandomSeedIntensityPicker.IsEnabled = !busy;
+        RandomSeedAbsurdityPicker.IsEnabled = !busy;
         GenerationHistoryPicker.IsEnabled = !busy;
         ReplayGenerationButton.IsEnabled = !busy && SelectedGenerationHistory() is not null;
         CopyGenerationSeedButton.IsEnabled = !busy && SelectedGenerationHistory() is not null;
@@ -7547,14 +7625,6 @@ public partial class MainWindow : Window
         TopStripModePicker.IsEnabled = !busy;
         DebugControlsCheckBox.IsEnabled = !busy;
         VoiceDriftEnforcementCheckBox.IsEnabled = !busy;
-        RandomSeedPresetPicker.IsEnabled = !busy;
-        RandomSeedRolePackPicker.IsEnabled = !busy;
-        RandomSeedStylePicker.IsEnabled = !busy;
-        RandomSeedIntensityPicker.IsEnabled = !busy;
-        RandomSeedAbsurdityPicker.IsEnabled = !busy;
-        GenerationHistoryPicker.IsEnabled = !busy;
-        ReplayGenerationButton.IsEnabled = !busy && SelectedGenerationHistory() is not null;
-        CopyGenerationSeedButton.IsEnabled = !busy && SelectedGenerationHistory() is not null;
         SavedStateModePicker.IsEnabled = !busy;
         SavedStateNameText.IsEnabled = !busy;
         SavedStateItemPicker.IsEnabled = !busy;

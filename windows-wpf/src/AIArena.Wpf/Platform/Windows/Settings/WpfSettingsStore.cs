@@ -22,6 +22,13 @@ public sealed class WpfSettingsStore
         SettingsPath = NativeDataPaths.ConfigPath(dataRoot, "native-wpf-settings.json");
     }
 
+    public WpfSettingsStore(string settingsPath)
+    {
+        SettingsPath = string.IsNullOrWhiteSpace(settingsPath)
+            ? NativeDataPaths.ConfigPath(NativeDataPaths.DefaultDataRoot(), "native-wpf-settings.json")
+            : settingsPath;
+    }
+
     public WpfSettings Load()
     {
         if (!File.Exists(SettingsPath))

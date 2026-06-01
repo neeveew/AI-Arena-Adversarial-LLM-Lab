@@ -1633,11 +1633,33 @@
                                 Padding="8"
                                 Margin="0,0,8,8">
                             <StackPanel>
-                                <TextBlock Text="Generate"
-                                           Foreground="{DynamicResource MutedTextBrush}"
-                                           FontWeight="SemiBold"
-                                           FontSize="11"
-                                           Margin="0,0,0,6" />
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Generate"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               FontWeight="SemiBold"
+                                               FontSize="11"
+                                               VerticalAlignment="Center" />
+                                    <Button Grid.Column="1"
+                                            Content="?"
+                                            Tag="generate"
+                                            Click="GenerationHelpButton_Click"
+                                            Width="22"
+                                            Height="22"
+                                            MinWidth="22"
+                                            MinHeight="22"
+                                            Padding="0"
+                                            Margin="8,0,0,0"
+                                            Background="{DynamicResource InputBrush}"
+                                            BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                            Foreground="{DynamicResource MutedTextBrush}"
+                                            FontSize="11"
+                                            FontWeight="SemiBold"
+                                            ToolTip="Explain generation methods" />
+                                </Grid>
                                 <WrapPanel>
                                 <ComboBox x:Name="RandomSeedPresetPicker"
                                       Width="142"
@@ -1689,11 +1711,33 @@
                                 Padding="8"
                                 Margin="0,0,8,8">
                             <StackPanel>
-                                <TextBlock Text="Tune"
-                                           Foreground="{DynamicResource MutedTextBrush}"
-                                           FontWeight="SemiBold"
-                                           FontSize="11"
-                                           Margin="0,0,0,6" />
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Tune"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               FontWeight="SemiBold"
+                                               FontSize="11"
+                                               VerticalAlignment="Center" />
+                                    <Button Grid.Column="1"
+                                            Content="?"
+                                            Tag="tune"
+                                            Click="GenerationHelpButton_Click"
+                                            Width="22"
+                                            Height="22"
+                                            MinWidth="22"
+                                            MinHeight="22"
+                                            Padding="0"
+                                            Margin="8,0,0,0"
+                                            Background="{DynamicResource InputBrush}"
+                                            BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                            Foreground="{DynamicResource MutedTextBrush}"
+                                            FontSize="11"
+                                            FontWeight="SemiBold"
+                                            ToolTip="Explain preset tuning controls" />
+                                </Grid>
                                 <WrapPanel>
                                     <ComboBox x:Name="RandomSeedRolePackPicker"
                                           Width="132"
@@ -1773,11 +1817,33 @@
                                 Padding="8"
                                 Margin="0,0,8,8">
                             <StackPanel>
-                                <TextBlock Text="Recent"
-                                           Foreground="{DynamicResource MutedTextBrush}"
-                                           FontWeight="SemiBold"
-                                           FontSize="11"
-                                           Margin="0,0,0,6" />
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Recent"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               FontWeight="SemiBold"
+                                               FontSize="11"
+                                               VerticalAlignment="Center" />
+                                    <Button Grid.Column="1"
+                                            Content="?"
+                                            Tag="recent"
+                                            Click="GenerationHelpButton_Click"
+                                            Width="22"
+                                            Height="22"
+                                            MinWidth="22"
+                                            MinHeight="22"
+                                            Padding="0"
+                                            Margin="8,0,0,0"
+                                            Background="{DynamicResource InputBrush}"
+                                            BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                            Foreground="{DynamicResource MutedTextBrush}"
+                                            FontSize="11"
+                                            FontWeight="SemiBold"
+                                            ToolTip="Explain generation history" />
+                                </Grid>
                                 <WrapPanel>
                                 <ComboBox x:Name="GenerationHistoryPicker"
                                            Width="260"
@@ -1804,6 +1870,31 @@
                             </StackPanel>
                         </Border>
                     </WrapPanel>
+                    <Popup x:Name="GenerationHelpPopup"
+                           Placement="MousePoint"
+                           StaysOpen="False"
+                           AllowsTransparency="True">
+                        <Border Background="{DynamicResource TopBarBrush}"
+                                BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="12"
+                                Width="340">
+                            <StackPanel>
+                                <TextBlock x:Name="GenerationHelpTitleText"
+                                           Text="Generation help"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontSize="13"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6" />
+                                <TextBlock x:Name="GenerationHelpBodyText"
+                                           Text="Choose how Custom Match generates scenarios and casts."
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           TextWrapping="Wrap"
+                                           LineHeight="18" />
+                            </StackPanel>
+                        </Border>
+                    </Popup>
                 </Grid>
                 <ScrollViewer Grid.Row="1"
                               VerticalScrollBarVisibility="Auto"

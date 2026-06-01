@@ -13,7 +13,7 @@ The app is designed for local experimentation with model behavior. You can creat
 5. Pick a Default model from the dropdown, or type one manually.
 6. Optionally assign different models to Alpha, Beta, Gamma, Delta, and Narrator.
 7. Press Test Provider.
-8. Open Custom Match and choose a preset, role pack, style, pressure, absurdity level, AI Choice, or YOLO.
+8. Open Custom Match and use the Generate, Tune, and Recent controls to choose a preset, role pack, style, pressure, absurdity level, AI Choice, or YOLO.
 9. Return to Transcript and run 1 TURN or AUTO CHAT.
 
 ## Main Concepts
@@ -32,7 +32,7 @@ The left rail contains the app identity, navigation, session overview, and live 
 The center area contains the active page:
 
 - Transcript: the arena conversation, diagnostics, filters, timeline, memory notes, and compare tools.
-- Custom Match: scenario preview, cast preview, locks, per-agent voice styles, role packs, presets, absurdity controls, generation history, and checkpoint/session tools.
+- Custom Match: scenario preview, cast preview, locks, per-agent voice styles, pressure controls, grouped generation controls, generation history, and checkpoint/session tools.
 
 The right rail contains:
 
@@ -48,6 +48,7 @@ The top rail contains match status, provider status, current turn, turn count, e
 - Provider: online/offline provider state.
 - Current turn: next scheduled participant.
 - Turns: transcript turn count.
+- The second status line shows the current idle/run state. When idle, it names the next participant, selected model, and provider state.
 - Search icon: opens a draggable transcript search popup. Escape closes it.
 - Export icon: exports the currently visible transcript messages to Markdown.
 - View menu: toggles Compact transcript, Turn compare, Quality timeline, Memory notes, and Auto-scroll.
@@ -156,7 +157,13 @@ Use this to clarify a topic, add constraints, correct the match, ask a question,
 
 ## Custom Match
 
-Custom Match controls the scenario and cast.
+Custom Match controls the scenario and cast. The top console is grouped into Generate, Tune, and Recent so setup controls stay compact.
+
+- Generate chooses how to create a setup: Manual, Random Seed, AI Choice, or YOLO.
+- Tune chooses the role pack, scenario style, debate pressure, and absurdity level.
+- Recent replays or copies previously generated setups stored in the current session.
+
+Each group has a small `?` help button for an in-place explanation.
 
 Scenario Preview includes:
 
@@ -173,7 +180,7 @@ Cast Preview includes:
 
 Each item can be edited and locked. Locked cards use a golden border and lock glyph. Locked content is preserved when generating new seeds.
 
-Cast cards also include Pressure and Voice dropdowns. Pressure profiles change how hard each agent pushes the debate: Calm, Assertive, Contrarian, Evidence-first, Risk-first, Concise, Expansive, or Chaos. Use this to make one model stabilize the discussion while another challenges assumptions, demands evidence, or expands the mechanism.
+Cast cards also include compact Pressure and Voice dropdowns. Pressure profiles change how hard each agent pushes the debate: Calm, Assertive, Contrarian, Evidence-first, Risk-first, Concise, Expansive, or Chaos. Use this to make one model stabilize the discussion while another challenges assumptions, demands evidence, or expands the mechanism.
 
 Voice styles are reinforced as per-turn contracts that stay separate from the persona, such as Scientific, Legal / Policy, Plain language, Idioms, Cute, Poetic, Socratic, Bullet-only, Skeptical, Executive brief, Evidence ledger, No analogies, Hedge uncertainty, Bark-only, and Science gibberish. Use them to test whether a model can preserve reasoning quality while speaking in a constrained style.
 
@@ -202,7 +209,7 @@ Intensity changes the pressure applied to the generated setup:
 - Chaos adds partial information and unstable constraints that agents must stabilize before converging.
 - One-line asks each agent for one high-signal sentence per turn, useful for testing short-form debate and chat-room style payloads.
 
-Absurd Lab cast cards show a small `?` inspector button when the generated persona contains extra role metadata. Use it to inspect constraints such as absurd function, expertise leak, expression constraint, and reasoning distortion without expanding the card.
+Absurd Lab cast cards show a small `?` inspector button when the generated persona contains extra role metadata. The card preview stays compact; use the inspector or hover the persona text to inspect constraints such as absurd function, expertise leak, expression constraint, and reasoning distortion without expanding the row.
 
 ### AI Choice
 

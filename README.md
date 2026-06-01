@@ -63,7 +63,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 5. Select a default model, or type a model name manually.
 6. Optionally assign different models to Alpha, Beta, Gamma, Delta, and Narrator.
 7. Press Test Provider.
-8. Open Custom Match and generate a setup using Random Seed presets or role pack/style/pressure/absurdity, AI Choice, or YOLO.
+8. Open Custom Match and use the grouped Generate, Tune, and Recent controls to create or replay a setup with Random Seed, AI Choice, or YOLO.
 9. Return to Transcript and run 1 TURN or AUTO CHAT.
 
 ## What Makes It Different
