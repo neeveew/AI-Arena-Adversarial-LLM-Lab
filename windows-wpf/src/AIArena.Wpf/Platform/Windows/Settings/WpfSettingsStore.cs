@@ -1,12 +1,18 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AIArena.Core.Persistence;
 
 namespace AIArena.Wpf.Services;
 
 public sealed class WpfSettingsStore
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.Never
+    };
 
     public string SettingsPath { get; }
 
@@ -26,7 +32,7 @@ public sealed class WpfSettingsStore
         try
         {
             var json = File.ReadAllText(SettingsPath);
-            return JsonSerializer.Deserialize<WpfSettings>(json) ?? new WpfSettings();
+            return Normalize(JsonSerializer.Deserialize<WpfSettings>(json) ?? new WpfSettings());
         }
         catch
         {
@@ -36,8 +42,36 @@ public sealed class WpfSettingsStore
 
     public void Save(WpfSettings settings)
     {
+        Normalize(settings);
+        Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
         var json = JsonSerializer.Serialize(settings, JsonOptions);
-        File.WriteAllText(SettingsPath, json);
+        var tempPath = $"{SettingsPath}.tmp";
+        File.WriteAllText(tempPath, json);
+        if (File.Exists(SettingsPath))
+        {
+            File.SetAttributes(SettingsPath, File.GetAttributes(SettingsPath) & ~FileAttributes.ReadOnly);
+        }
+
+        File.Move(tempPath, SettingsPath, overwrite: true);
+    }
+
+    private static WpfSettings Normalize(WpfSettings settings)
+    {
+        settings.ThemeId = ThemePalette.NormalizeId(settings.ThemeId);
+        settings.AvatarStyle = NormalizeChoice(settings.AvatarStyle, "pack");
+        settings.TopStripMode = NormalizeChoice(settings.TopStripMode, "diagnostics");
+        settings.RandomSeedStyle = NormalizeChoice(settings.RandomSeedStyle, "auto");
+        settings.RandomSeedIntensity = NormalizeChoice(settings.RandomSeedIntensity, "normal");
+        settings.RandomSeedRolePack = NormalizeChoice(settings.RandomSeedRolePack, "auto");
+        settings.RandomSeedAbsurdity = NormalizeChoice(settings.RandomSeedAbsurdity, "grounded");
+        settings.RandomSeedPreset = NormalizeChoice(settings.RandomSeedPreset, "manual");
+        settings.OperatorTemplates ??= [];
+        return settings;
+    }
+
+    private static string NormalizeChoice(string? value, string fallback)
+    {
+        return string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
     }
 }
 

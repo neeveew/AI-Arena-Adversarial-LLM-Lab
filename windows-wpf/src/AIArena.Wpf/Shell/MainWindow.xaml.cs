@@ -282,10 +282,12 @@ public partial class MainWindow : Window
 
     private void InitializeThemePicker()
     {
+        var themeId = ThemePalette.NormalizeId(_wpfSettings.ThemeId);
+        _wpfSettings.ThemeId = themeId;
         _isSelectingTheme = true;
         ThemePicker.ItemsSource = ThemePalette.BuiltIn;
-        ThemePicker.SelectedValue = ThemePalette.BuiltIn.Any(item => item.Id == _wpfSettings.ThemeId)
-            ? _wpfSettings.ThemeId
+        ThemePicker.SelectedValue = ThemePalette.BuiltIn.Any(item => item.Id == themeId)
+            ? themeId
             : "system";
         _isSelectingTheme = false;
     }
@@ -8721,7 +8723,7 @@ public partial class MainWindow : Window
 
         if (persist)
         {
-            _wpfSettings.ThemeId = themeId;
+            _wpfSettings.ThemeId = _theme.Id;
             _wpfSettingsStore.Save(_wpfSettings);
         }
 

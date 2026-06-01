@@ -194,13 +194,39 @@ public sealed record ThemePalette(
 
     public static ThemePalette Resolve(string? id)
     {
-        if (string.Equals(id, "system", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(id))
+        var normalizedId = NormalizeId(id);
+        if (string.Equals(normalizedId, "system", StringComparison.OrdinalIgnoreCase))
         {
             return BuiltIn.First(item => item.Id == "dark-arena") with { Id = "system", Name = "System" };
         }
 
-        return BuiltIn.FirstOrDefault(item => string.Equals(item.Id, id, StringComparison.OrdinalIgnoreCase))
+        return BuiltIn.FirstOrDefault(item => string.Equals(item.Id, normalizedId, StringComparison.OrdinalIgnoreCase))
             ?? BuiltIn.First(item => item.Id == "dark-arena");
+    }
+
+    public static string NormalizeId(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return "system";
+        }
+
+        var cleaned = id.Trim();
+        var byId = BuiltIn.FirstOrDefault(item => string.Equals(item.Id, cleaned, StringComparison.OrdinalIgnoreCase));
+        if (byId is not null)
+        {
+            return byId.Id;
+        }
+
+        var byName = BuiltIn.FirstOrDefault(item => string.Equals(item.Name, cleaned, StringComparison.OrdinalIgnoreCase));
+        if (byName is not null)
+        {
+            return byName.Id;
+        }
+
+        var slug = cleaned.ToLowerInvariant().Replace('_', '-').Replace(' ', '-');
+        return BuiltIn.FirstOrDefault(item => string.Equals(item.Id, slug, StringComparison.OrdinalIgnoreCase))?.Id
+            ?? "system";
     }
 
     private static Color ColorFrom(string value)
