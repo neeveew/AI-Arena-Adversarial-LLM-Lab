@@ -22,6 +22,7 @@ var tests = new (string Name, Action Test)[]
     ("role style catalog formats voice adherence cues", RoleStyleCatalogFormatsVoiceAdherenceCues),
     ("agent memory coordinator normalizes notes", AgentMemoryCoordinatorNormalizesNotes),
     ("agent board coordinator formats statuses", AgentBoardCoordinatorFormatsStatuses),
+    ("arena operation coordinator selects operation mode", ArenaOperationCoordinatorSelectsOperationMode),
     ("transcript adjunct helpers format labels", TranscriptAdjunctHelpersFormatLabels),
     ("transcript mutation coordinator formats statuses", TranscriptMutationCoordinatorFormatsStatuses),
     ("arena run coordinator formats statuses", ArenaRunCoordinatorFormatsStatuses),
@@ -436,6 +437,14 @@ static void AgentBoardCoordinatorFormatsStatuses()
     Require(AgentBoardCoordinator.IsAgentWorkingStatus("busy"), "busy should count as working");
     Require(AgentBoardCoordinator.IsAgentWorkingStatus(" generating "), "generating should count as working");
     Require(!AgentBoardCoordinator.IsAgentWorkingStatus("waiting"), "waiting should not count as working");
+}
+
+static void ArenaOperationCoordinatorSelectsOperationMode()
+{
+    Require(ArenaOperationCoordinator.OperationMode(busy: false, allowDuringAutoChat: false, autoChatRunning: false) == ArenaOperationMode.OwnsBusyState, "idle operation should own busy state");
+    Require(ArenaOperationCoordinator.OperationMode(busy: true, allowDuringAutoChat: false, autoChatRunning: true) == ArenaOperationMode.Blocked, "busy operation should block without explicit auto-chat allowance");
+    Require(ArenaOperationCoordinator.OperationMode(busy: true, allowDuringAutoChat: true, autoChatRunning: false) == ArenaOperationMode.Blocked, "auto-chat allowance should not run when auto-chat is inactive");
+    Require(ArenaOperationCoordinator.OperationMode(busy: true, allowDuringAutoChat: true, autoChatRunning: true) == ArenaOperationMode.RunsDuringAutoChat, "allowed operation should run during active auto-chat");
 }
 
 static void TranscriptAdjunctHelpersFormatLabels()

@@ -8,7 +8,6 @@ using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
-using System.Windows.Media.Effects;
 using System.Windows.Threading;
 using System.Runtime.InteropServices;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
@@ -73,6 +72,7 @@ public partial class MainWindow : Window
     private readonly ShellNavigationCoordinator? _shellNavigationCoordinator;
     private readonly MatchQualityTimelineCoordinator? _matchQualityTimelineCoordinator;
     private readonly AgentBoardCoordinator? _agentBoardCoordinator;
+    private readonly ArenaOperationCoordinator? _arenaOperationCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
     private readonly DispatcherTimer _providerHealthTimer;
@@ -83,7 +83,6 @@ public partial class MainWindow : Window
     private DateTimeOffset _activeSnapshotWriteUtc;
     private bool _isRenderingSnapshot;
     private bool _arenaBusy;
-    private Button? _breathingOperationButton;
     private WpfSettings _wpfSettings = new();
     private ThemePalette _theme = ThemePalette.Resolve("system");
     private ArenaViewSnapshot? _lastRenderedSnapshot;
@@ -186,6 +185,9 @@ public partial class MainWindow : Window
 
     private AgentBoardCoordinator AgentBoard =>
         _agentBoardCoordinator ?? throw new InvalidOperationException("Agent board coordinator is not initialized.");
+
+    private ArenaOperationCoordinator ArenaOperations =>
+        _arenaOperationCoordinator ?? throw new InvalidOperationException("Arena operation coordinator is not initialized.");
 
     public MainWindow()
     {
@@ -833,6 +835,54 @@ public partial class MainWindow : Window
             force => ProviderReachability.RefreshAsync(force),
             SetLoadStatus,
             SetArenaRunStatus);
+        _arenaOperationCoordinator = new ArenaOperationCoordinator(
+            _arenaOperationLock,
+            LoadStatus,
+            ArenaRunStatus,
+            AutoChatButton,
+            OneTurnButton,
+            ResetButton,
+            NarrateNowButton,
+            StopButton,
+            [
+                TestProviderButton,
+                PreloadSelectedModelsButton,
+                ApplySettingsButton,
+                ProviderBaseUrlText,
+                ProviderModelText,
+                AlphaRoleModelText,
+                BetaRoleModelText,
+                GammaRoleModelText,
+                DeltaRoleModelText,
+                NarratorRoleModelText,
+                ProviderTimeoutText,
+                ProviderTemperatureText,
+                ProviderMaxOutputText,
+                ContextTranscriptWindowText,
+                ContextPrivateWindowText,
+                ContextNotesWindowText,
+                AutoChatCadencePicker,
+                AvatarStylePicker,
+                SystemGlyphStylePicker,
+                TopStripModePicker,
+                DebugControlsCheckBox,
+                VoiceDriftEnforcementCheckBox,
+                SavedStateModePicker,
+                SavedStateNameText,
+                SavedStateItemPicker,
+                SavedStateSaveButton
+            ],
+            () => _arenaBusy,
+            value => _arenaBusy = value,
+            () => _arenaRunCoordinator?.IsAutoChatRunning == true,
+            (busy, autoChatRunning) => ScenarioWorkflow.UpdateBusyState(busy, autoChatRunning),
+            (busy, autoChatRunning) => InternetWorkflow.UpdateBusyState(busy, autoChatRunning),
+            () => OperatorTurn.UpdateBusyState(),
+            busy => AgentRoster.UpdateBusyState(busy),
+            () => SavedStateCoordinator.UpdateActionButtons(),
+            busy => AgentBoard.UpdateBusyState(busy),
+            busy => TranscriptActions.UpdateBusyState(busy),
+            busy => MatchLock.UpdateBusyState(busy));
         InitializeAboutPanel();
         InitializeVisualSettings();
         ScenarioWorkflow.InitializeControls();
@@ -1538,50 +1588,7 @@ public partial class MainWindow : Window
 
     private async Task RunArenaBusyAsync(string status, Button? operationButton, Func<Task> action, bool allowDuringAutoChat = false)
     {
-        var ownsBusyState = !_arenaBusy;
-        var runsDuringAutoChat = !ownsBusyState && allowDuringAutoChat && (_arenaRunCoordinator?.IsAutoChatRunning == true);
-        if (!ownsBusyState && !runsDuringAutoChat)
-        {
-            return;
-        }
-
-        if (ownsBusyState)
-        {
-            SetArenaBusy(true, status, stopEnabled: false, operationButton);
-        }
-        else
-        {
-            ArenaRunStatus.Text = status;
-            LoadStatus.Text = status;
-            SetBreathingOperationButton(operationButton);
-            if (operationButton is not null)
-            {
-                operationButton.IsEnabled = false;
-            }
-        }
-
-        try
-        {
-            await _arenaOperationLock.WaitAsync();
-            await action();
-        }
-        finally
-        {
-            _arenaOperationLock.Release();
-            if (ownsBusyState)
-            {
-                SetArenaBusy(false, ArenaRunStatus.Text, stopEnabled: false);
-            }
-            else if (runsDuringAutoChat)
-            {
-                if (operationButton is not null)
-                {
-                    operationButton.IsEnabled = true;
-                }
-
-                SetBreathingOperationButton(_arenaRunCoordinator?.IsAutoChatRunning == true ? AutoChatButton : null);
-            }
-        }
+        await ArenaOperations.RunAsync(status, operationButton, action, allowDuringAutoChat);
     }
 
     private void SetArenaBusy(bool busy, string status, bool stopEnabled)
@@ -1591,137 +1598,14 @@ public partial class MainWindow : Window
 
     private void SetArenaBusy(bool busy, string status, bool stopEnabled, Button? operationButton)
     {
-        _arenaBusy = busy;
-        SetBreathingOperationButton(busy ? operationButton : null);
-        SetButtonBreathing(StopButton, busy && stopEnabled);
-        var autoChatRunning = _arenaRunCoordinator?.IsAutoChatRunning == true;
-        AutoChatButton.IsEnabled = !busy;
-        OneTurnButton.IsEnabled = !busy;
-        ResetButton.IsEnabled = !busy;
-        ScenarioWorkflow.UpdateBusyState(busy, autoChatRunning);
-        InternetWorkflow.UpdateBusyState(busy, autoChatRunning);
-        NarrateNowButton.IsEnabled = !busy || autoChatRunning;
-        StopButton.IsEnabled = stopEnabled;
-        if (busy && operationButton is not null)
+        if (_arenaOperationCoordinator is null)
         {
-            operationButton.IsEnabled = true;
-        }
-        OperatorTurn.UpdateBusyState();
-        TestProviderButton.IsEnabled = !busy;
-        PreloadSelectedModelsButton.IsEnabled = !busy;
-        ApplySettingsButton.IsEnabled = !busy;
-        AgentRoster.UpdateBusyState(busy);
-        ProviderBaseUrlText.IsEnabled = !busy;
-        ProviderModelText.IsEnabled = !busy;
-        AlphaRoleModelText.IsEnabled = !busy;
-        BetaRoleModelText.IsEnabled = !busy;
-        GammaRoleModelText.IsEnabled = !busy;
-        DeltaRoleModelText.IsEnabled = !busy;
-        NarratorRoleModelText.IsEnabled = !busy;
-        ProviderTimeoutText.IsEnabled = !busy;
-        ProviderTemperatureText.IsEnabled = !busy;
-        ProviderMaxOutputText.IsEnabled = !busy;
-        ContextTranscriptWindowText.IsEnabled = !busy;
-        ContextPrivateWindowText.IsEnabled = !busy;
-        ContextNotesWindowText.IsEnabled = !busy;
-        AutoChatCadencePicker.IsEnabled = !busy;
-        AvatarStylePicker.IsEnabled = !busy;
-        SystemGlyphStylePicker.IsEnabled = !busy;
-        TopStripModePicker.IsEnabled = !busy;
-        DebugControlsCheckBox.IsEnabled = !busy;
-        VoiceDriftEnforcementCheckBox.IsEnabled = !busy;
-        SavedStateModePicker.IsEnabled = !busy;
-        SavedStateNameText.IsEnabled = !busy;
-        SavedStateItemPicker.IsEnabled = !busy;
-        SavedStateSaveButton.IsEnabled = !busy;
-        SavedStateCoordinator.UpdateActionButtons();
-        AgentBoard.UpdateBusyState(busy);
-        TranscriptActions.UpdateBusyState(busy);
-        MatchLock.UpdateBusyState(busy);
-        ArenaRunStatus.Text = status;
-    }
-
-    private void SetBreathingOperationButton(Button? button)
-    {
-        if (_breathingOperationButton == button)
-        {
+            _arenaBusy = busy;
+            ArenaRunStatus.Text = status;
             return;
         }
 
-        if (_breathingOperationButton is not null)
-        {
-            SetButtonBreathing(_breathingOperationButton, false);
-        }
-
-        _breathingOperationButton = button;
-        if (_breathingOperationButton is not null)
-        {
-            SetButtonBreathing(_breathingOperationButton, true);
-        }
-    }
-
-    private static void SetButtonBreathing(Button button, bool breathing)
-    {
-        if (!breathing)
-        {
-            if (button.RenderTransform is ScaleTransform scale && !scale.IsFrozen)
-            {
-                scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
-                scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
-                scale.ScaleX = 1;
-                scale.ScaleY = 1;
-            }
-
-            if (button.Effect is DropShadowEffect glow && !glow.IsFrozen)
-            {
-                glow.BeginAnimation(DropShadowEffect.OpacityProperty, null);
-                glow.BeginAnimation(DropShadowEffect.BlurRadiusProperty, null);
-            }
-
-            button.Effect = null;
-            return;
-        }
-
-        var scaleTransform = new ScaleTransform(1, 1);
-        button.RenderTransform = scaleTransform;
-        button.RenderTransformOrigin = new Point(0.5, 0.5);
-        var borderColor = button.BorderBrush is SolidColorBrush borderBrush
-            ? borderBrush.Color
-            : Colors.White;
-        var glowEffect = new DropShadowEffect
-        {
-            Color = borderColor,
-            Direction = 0,
-            ShadowDepth = 0,
-            BlurRadius = 9,
-            Opacity = 0.2
-        };
-        button.Effect = glowEffect;
-
-        var ease = new SineEase { EasingMode = EasingMode.EaseInOut };
-        var scaleAnimation = new DoubleAnimation(1, 1.025, TimeSpan.FromMilliseconds(760))
-        {
-            AutoReverse = true,
-            RepeatBehavior = RepeatBehavior.Forever,
-            EasingFunction = ease
-        };
-        var glowAnimation = new DoubleAnimation(0.18, 0.62, TimeSpan.FromMilliseconds(760))
-        {
-            AutoReverse = true,
-            RepeatBehavior = RepeatBehavior.Forever,
-            EasingFunction = ease
-        };
-        var blurAnimation = new DoubleAnimation(8, 15, TimeSpan.FromMilliseconds(760))
-        {
-            AutoReverse = true,
-            RepeatBehavior = RepeatBehavior.Forever,
-            EasingFunction = ease
-        };
-
-        scaleTransform.BeginAnimation(ScaleTransform.ScaleXProperty, scaleAnimation);
-        scaleTransform.BeginAnimation(ScaleTransform.ScaleYProperty, scaleAnimation);
-        glowEffect.BeginAnimation(DropShadowEffect.OpacityProperty, glowAnimation);
-        glowEffect.BeginAnimation(DropShadowEffect.BlurRadiusProperty, blurAnimation);
+        ArenaOperations.SetBusy(busy, status, stopEnabled, operationButton);
     }
 
     private async void RefreshActiveSession(string status)
