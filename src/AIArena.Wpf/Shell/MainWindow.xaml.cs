@@ -53,6 +53,7 @@ public partial class MainWindow : Window
     private readonly TelemetryWorkflowCoordinator? _telemetryWorkflowCoordinator;
     private readonly AgentPerformanceCoordinator? _agentPerformanceCoordinator;
     private readonly DiagnosticsWorkflowCoordinator? _diagnosticsWorkflowCoordinator;
+    private readonly MatchSetupCoordinator? _matchSetupCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
     private readonly DispatcherTimer _providerHealthTimer;
@@ -62,7 +63,6 @@ public partial class MainWindow : Window
     private readonly List<CheckBox> _lockControls = [];
     private readonly List<ComboBox> _voiceControls = [];
     private readonly List<ComboBox> _pressureControls = [];
-    private readonly List<RivalryMatrixControlRow> _rivalryMatrixControls = [];
     private readonly SemaphoreSlim _arenaOperationLock = new(1, 1);
     private IReadOnlyList<TranscriptMessage> _lastRenderedMessages = [];
     private IReadOnlyDictionary<string, string> _lastAgentPersonas = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -113,6 +113,9 @@ public partial class MainWindow : Window
     private DiagnosticsWorkflowCoordinator DiagnosticsWorkflow =>
         _diagnosticsWorkflowCoordinator ?? throw new InvalidOperationException("Diagnostics workflow coordinator is not initialized.");
 
+    private MatchSetupCoordinator MatchSetup =>
+        _matchSetupCoordinator ?? throw new InvalidOperationException("Match setup coordinator is not initialized.");
+
     private sealed record MatchQualityPoint(
         int Turn,
         string Speaker,
@@ -124,11 +127,6 @@ public partial class MainWindow : Window
         string Label,
         string Body,
         string Severity);
-
-    private sealed record RivalryMatrixControlRow(
-        string Source,
-        ComboBox Target,
-        ComboBox Stance);
 
     private sealed record RoleDetailPayload(string Title, string Persona);
 
@@ -431,6 +429,21 @@ public partial class MainWindow : Window
             DisplayStatusValue,
             IsSystemEvent,
             BlendBrush);
+        _matchSetupCoordinator = new MatchSetupCoordinator(
+            _coreSessionStore,
+            _eventLogStore,
+            RivalryMatrixEnabledCheckBox,
+            RivalryMatrixRows,
+            RivalryMatrixStatusText,
+            ApplyRivalryMatrixButton,
+            () => _activeSession,
+            ResourceBrush,
+            AccentForSpeaker,
+            DisplayStatusValue,
+            BlendBrush,
+            (status, button, action, allowDuringAutoChat) => RunArenaBusyAsync(status, button, action, allowDuringAutoChat),
+            (snapshot, sessionId) => SaveSnapshotWithFeedbackAsync(snapshot, sessionId),
+            status => RefreshActiveSessionAsync(status));
         InitializeAboutPanel();
         InitializeVisualSettings();
         ScenarioWorkflow.InitializeControls();
@@ -1363,132 +1376,7 @@ public partial class MainWindow : Window
             snapshot.NarratorLocked,
             snapshot.NarratorVoiceStyle));
 
-        PopulateRivalryMatrixControls(snapshot);
-    }
-
-    private void PopulateRivalryMatrixControls(ArenaViewSnapshot snapshot)
-    {
-        RivalryMatrixEnabledCheckBox.IsChecked = snapshot.RivalryMatrixEnabled;
-        RivalryMatrixRows.Children.Clear();
-        _rivalryMatrixControls.Clear();
-        var links = snapshot.RivalryMatrix
-            .GroupBy(link => link.Source, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        var agentIds = snapshot.Agents
-            .Where(agent => agent.Active)
-            .Select(agent => agent.Id)
-            .Where(IsAgentSpeaker)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .DefaultIfEmpty("alpha")
-            .ToArray();
-
-        foreach (var source in agentIds)
-        {
-            RivalryMatrixRows.Children.Add(CreateRivalryMatrixRow(source));
-        }
-
-        foreach (var (source, targetPicker, stancePicker) in RivalryMatrixControls())
-        {
-            PopulateRivalryTargetPicker(targetPicker, source, agentIds);
-            PopulateRivalryStancePicker(stancePicker);
-            var link = links.TryGetValue(source, out var item) ? item : null;
-            SelectComboTag(targetPicker, link?.Target ?? "");
-            SelectComboTag(stancePicker, NormalizeRivalryStance(link?.Stance ?? "neutral"));
-        }
-
-        RivalryMatrixStatusText.Text = RivalryMatrixSummary(snapshot.RivalryMatrixEnabled, snapshot.RivalryMatrix);
-    }
-
-    private Border CreateRivalryMatrixRow(string source)
-    {
-        var stack = new StackPanel { Width = 178, Margin = new Thickness(0, 0, 8, 8) };
-        stack.Children.Add(new TextBlock
-        {
-            Text = DisplayStatusValue(source),
-            Foreground = AccentForSpeaker(source),
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 5),
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            ToolTip = DisplayStatusValue(source)
-        });
-
-        var target = new ComboBox
-        {
-            Tag = source,
-            Margin = new Thickness(0, 0, 0, 6),
-            Padding = new Thickness(7, 5, 7, 5),
-            FontSize = 11,
-            ToolTip = $"Relationship target for {DisplayStatusValue(source)}"
-        };
-        var stance = new ComboBox
-        {
-            Tag = source,
-            Padding = new Thickness(7, 5, 7, 5),
-            FontSize = 11,
-            ToolTip = $"Relationship stance for {DisplayStatusValue(source)}"
-        };
-        stack.Children.Add(target);
-        stack.Children.Add(stance);
-
-        _rivalryMatrixControls.Add(new RivalryMatrixControlRow(source, target, stance));
-        return new Border
-        {
-            Background = BlendBrush(ResourceBrush("InputBrush"), AccentForSpeaker(source), 0.06),
-            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), AccentForSpeaker(source), 0.32),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(8),
-            Margin = new Thickness(0, 0, 8, 8),
-            Child = stack
-        };
-    }
-
-    private IEnumerable<(string Source, ComboBox Target, ComboBox Stance)> RivalryMatrixControls()
-    {
-        return _rivalryMatrixControls.Select(row => (row.Source, row.Target, row.Stance));
-    }
-
-    private void PopulateRivalryTargetPicker(ComboBox picker, string source, IReadOnlyList<string> agentIds)
-    {
-        picker.Items.Clear();
-        picker.Items.Add(new ComboBoxItem { Content = "No target", Tag = "" });
-        foreach (var id in agentIds.Where(id => !id.Equals(source, StringComparison.OrdinalIgnoreCase)))
-        {
-            picker.Items.Add(new ComboBoxItem { Content = DisplayStatusValue(id), Tag = id });
-        }
-    }
-
-    private static void PopulateRivalryStancePicker(ComboBox picker)
-    {
-        picker.Items.Clear();
-        picker.Items.Add(new ComboBoxItem { Content = "Neutral", Tag = "neutral" });
-        picker.Items.Add(new ComboBoxItem { Content = "Challenge", Tag = "challenge" });
-        picker.Items.Add(new ComboBoxItem { Content = "Support", Tag = "support" });
-        picker.Items.Add(new ComboBoxItem { Content = "Steelman", Tag = "steelman" });
-        picker.Items.Add(new ComboBoxItem { Content = "Cross-examine", Tag = "cross_examine" });
-        picker.Items.Add(new ComboBoxItem { Content = "Rival", Tag = "rival" });
-    }
-
-    private static string NormalizeRivalryStance(string stance)
-    {
-        var value = string.IsNullOrWhiteSpace(stance) ? "neutral" : stance.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
-        return value switch
-        {
-            "challenge" or "support" or "steelman" or "cross_examine" or "rival" => value,
-            _ => "neutral"
-        };
-    }
-
-    private static string RivalryMatrixSummary(bool enabled, IReadOnlyList<RivalryMatrixItem> links)
-    {
-        var active = links.Count(link => !NormalizeRivalryStance(link.Stance).Equals("neutral", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(link.Target));
-        if (!enabled)
-        {
-            return active == 0 ? "Relationship pressure is off." : $"{active} relationship rule(s) saved, currently disabled.";
-        }
-
-        return active == 0 ? "Relationship pressure enabled with neutral rules." : $"{active} relationship rule(s) active.";
+        MatchSetup.PopulateRivalryMatrix(snapshot);
     }
 
     private void PopulateScenarioSeedInspector(ArenaViewSnapshot snapshot)
@@ -5029,52 +4917,7 @@ public partial class MainWindow : Window
 
     private async void ApplyRivalryMatrixButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null)
-        {
-            RivalryMatrixStatusText.Text = "No active session.";
-            RivalryMatrixStatusText.Foreground = ResourceBrush("DangerTextBrush");
-            return;
-        }
-
-        await RunArenaBusyAsync("Applying relationship matrix...", ApplyRivalryMatrixButton, async () =>
-        {
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (snapshot is null)
-            {
-                RivalryMatrixStatusText.Text = $"No snapshot found for session {_activeSession.Id}.";
-                RivalryMatrixStatusText.Foreground = ResourceBrush("DangerTextBrush");
-                return;
-            }
-
-            snapshot.Engine.RivalryMatrix.Enabled = RivalryMatrixEnabledCheckBox.IsChecked == true;
-            snapshot.Engine.RivalryMatrix.Links.Clear();
-            foreach (var (source, targetPicker, stancePicker) in RivalryMatrixControls())
-            {
-                var target = SelectedComboTag(targetPicker, "");
-                var stance = NormalizeRivalryStance(SelectedComboTag(stancePicker, "neutral"));
-                if (string.IsNullOrWhiteSpace(target) || stance.Equals("neutral", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                snapshot.Engine.RivalryMatrix.Links.Add(new AIArena.Core.Models.RivalryLink
-                {
-                    Source = source,
-                    Target = target,
-                    Stance = stance
-                });
-            }
-
-            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_rivalry_matrix_applied", new
-            {
-                snapshot.Engine.RivalryMatrix.Enabled,
-                links = snapshot.Engine.RivalryMatrix.Links.Select(link => new { link.Source, link.Target, link.Stance }).ToArray()
-            });
-            await RefreshActiveSessionAsync(RivalryMatrixSummary(snapshot.Engine.RivalryMatrix.Enabled, snapshot.Engine.RivalryMatrix.Links
-                .Select(link => new RivalryMatrixItem(link.Source, link.Target, link.Stance))
-                .ToArray()));
-        }, allowDuringAutoChat: true);
+        await MatchSetup.ApplyRivalryMatrixAsync();
     }
 
     private void GenerationHistoryPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
