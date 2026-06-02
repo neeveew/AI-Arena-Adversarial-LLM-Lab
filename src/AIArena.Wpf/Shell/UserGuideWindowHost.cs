@@ -1,3 +1,4 @@
+using AIArena.Wpf.Services;
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
@@ -89,6 +90,7 @@ internal sealed class UserGuideWindowHost
             Background = ResourceBrush(owner, "AppBackgroundBrush"),
             Foreground = ResourceBrush(owner, "TextBrush")
         };
+        dialog.SourceInitialized += (_, _) => WindowChromeService.ApplyNativeChromeColor(dialog);
         CopyThemeResources(owner, dialog);
         dialog.SetResourceReference(Window.BackgroundProperty, "AppBackgroundBrush");
         dialog.SetResourceReference(Window.ForegroundProperty, "TextBrush");
@@ -100,7 +102,7 @@ internal sealed class UserGuideWindowHost
             Background = ResourceBrush(dialog, "AppBackgroundBrush"),
             BorderBrush = ResourceBrush(dialog, "ControlBorderBrush"),
             BorderThickness = new Thickness(1),
-            Padding = new Thickness(8)
+            Padding = new Thickness(14, 16, 14, 12)
         };
         chrome.SetResourceReference(Border.BackgroundProperty, "AppBackgroundBrush");
         chrome.SetResourceReference(Border.BorderBrushProperty, "ControlBorderBrush");
@@ -144,7 +146,7 @@ internal sealed class UserGuideWindowHost
 
     private static Grid CreateHeader(Window dialog)
     {
-        var header = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+        var header = new Grid { Margin = new Thickness(0, 0, 0, 12) };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.MouseLeftButtonDown += (_, args) => DialogChrome.DragMoveIfPossible(dialog, args);
@@ -180,7 +182,7 @@ internal sealed class UserGuideWindowHost
 
     private static Grid CreateFooter(Window dialog, string guidePath)
     {
-        var footer = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        var footer = new Grid { Margin = new Thickness(0, 12, 0, 0) };
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -219,7 +221,7 @@ internal sealed class UserGuideWindowHost
     {
         var body = new Grid();
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(270) });
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(20) });
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
         var titleTemplate = new DataTemplate(typeof(UserGuideSection));
@@ -227,7 +229,7 @@ internal sealed class UserGuideWindowHost
         titleFactory.SetBinding(TextBlock.TextProperty, new Binding(nameof(UserGuideSection.Title)));
         titleFactory.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
         titleFactory.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
-        titleFactory.SetValue(TextBlock.MarginProperty, new Thickness(3, 2, 3, 2));
+        titleFactory.SetValue(TextBlock.MarginProperty, new Thickness(6, 3, 6, 3));
         titleTemplate.VisualTree = titleFactory;
 
         var sectionList = new ListBox
@@ -237,7 +239,7 @@ internal sealed class UserGuideWindowHost
             Background = ResourceBrush(dialog, "InputBrush"),
             Foreground = ResourceBrush(dialog, "TextBrush"),
             BorderBrush = ResourceBrush(dialog, "ControlBorderBrush"),
-            Padding = new Thickness(4),
+            Padding = new Thickness(8),
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             SelectedIndex = 0
         };
@@ -252,7 +254,7 @@ internal sealed class UserGuideWindowHost
         {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             Background = ResourceBrush(dialog, "InputBrush"),
-            Padding = new Thickness(12),
+            Padding = new Thickness(20, 16, 20, 20),
             Document = BuildGuideDocument(dialog, sections.FirstOrDefault() ?? new UserGuideSection("Guide", guideText))
         };
         guideViewer.SetResourceReference(Control.BackgroundProperty, "InputBrush");
