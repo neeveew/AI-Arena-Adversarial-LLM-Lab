@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
-using System.Net.Sockets;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -34,6 +33,7 @@ public partial class MainWindow : Window
     private readonly SessionStore _coreSessionStore = new();
     private readonly EventLogStore _eventLogStore = new();
     private readonly ModelProviderHealthService _providerHealth = new();
+    private readonly ProviderReachabilityService _providerReachabilityService;
     private readonly ModelPreloadService _modelPreloadService = new();
     private readonly ProviderAutoConfigureService _providerAutoConfigureService = new();
     private readonly TranscriptService _transcriptService = new();
@@ -67,7 +67,6 @@ public partial class MainWindow : Window
     private IReadOnlyList<TranscriptMessage> _lastRenderedMessages = [];
     private IReadOnlyDictionary<string, string> _lastAgentPersonas = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     private bool _isRefreshingModels;
-    private bool _isCheckingProviderHealth;
     private CoreSessionSummary? _activeSession;
     private IReadOnlyList<CoreSessionSummary> _sessionSummaries = [];
     private IReadOnlyList<CheckpointSummary> _checkpointSummaries = [];
@@ -182,6 +181,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _providerReachabilityService = new ProviderReachabilityService(_coreSessionStore, _eventLogStore, _providerHealth);
         _internetToolService = new InternetToolService(eventLogStore: _eventLogStore);
         _wpfSettings = _wpfSettingsStore.Load();
         ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
@@ -5885,7 +5885,7 @@ public partial class MainWindow : Window
             }
             else
             {
-                var health = await _providerHealth.CheckAsync(ProviderHealthProbeConfig(config));
+                var health = await _providerHealth.CheckAsync(ProviderReachabilityService.HealthProbeConfig(config));
                 _lastProviderHealthCheckedAt = health.CheckedAt;
                 _lastProviderModelCount = health.ModelCount;
                 await PersistProviderReachabilityAsync(
@@ -5946,7 +5946,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var health = await _providerHealth.CheckAsync(ProviderHealthProbeConfig(config));
+        var health = await _providerHealth.CheckAsync(ProviderReachabilityService.HealthProbeConfig(config));
         await PersistProviderReachabilityAsync(
             health.Ok,
             health.Ok ? result.Error : health.Error,
@@ -7665,73 +7665,33 @@ public partial class MainWindow : Window
 
     private async Task<CoreModelProviderConfig?> LoadSharedProviderConfigAsync()
     {
-        if (_activeSession is null)
-        {
-            return null;
-        }
-
-        var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-        if (snapshot is null)
-        {
-            return null;
-        }
-
-        return snapshot.Configs.TryGetValue("shared", out var shared)
-            ? shared
-            : snapshot.Configs.Values.FirstOrDefault();
+        return _activeSession is null
+            ? null
+            : await _providerReachabilityService.LoadSharedConfigAsync(_activeSession.Id);
     }
 
     private async Task RefreshProviderReachabilityAsync(bool force = false)
     {
-        if (_activeSession is null || _isCheckingProviderHealth || (_arenaBusy && !force))
+        if (_activeSession is null || (_arenaBusy && !force))
         {
             return;
         }
 
-        _isCheckingProviderHealth = true;
-        var nextInterval = TimeSpan.FromSeconds(3);
-        try
+        var result = await _providerReachabilityService.RefreshAsync(_activeSession.Id);
+        if (result is null)
         {
-            var sessionId = _activeSession.Id;
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(sessionId);
-            if (snapshot is null || !snapshot.Configs.TryGetValue("shared", out var shared))
-            {
-                return;
-            }
-
-            var socket = await ProbeProviderSocketAsync(shared);
-            if (!socket.Ok)
-            {
-                _lastProviderHealthCheckedAt = DateTimeOffset.Now;
-                await PersistProviderReachabilityAsync(false, socket.Error, socket.LatencyMs, "Provider offline.", snapshot, sessionId);
-                return;
-            }
-
-            if (!shared.LastTestOk)
-            {
-                var health = await _providerHealth.CheckAsync(ProviderHealthProbeConfig(shared));
-                _lastProviderHealthCheckedAt = health.CheckedAt;
-                _lastProviderModelCount = health.ModelCount;
-                await PersistProviderReachabilityAsync(
-                    health.Ok,
-                    health.Ok ? "" : health.Error,
-                    socket.LatencyMs,
-                    health.Ok ? "Provider online." : "Provider reachable; model list unavailable.",
-                    snapshot,
-                    sessionId);
-                nextInterval = health.Ok ? TimeSpan.FromSeconds(10) : TimeSpan.FromSeconds(3);
-                return;
-            }
-
-            nextInterval = TimeSpan.FromSeconds(10);
-            _lastProviderHealthCheckedAt = DateTimeOffset.Now;
-            await PersistProviderReachabilityAsync(true, "", socket.LatencyMs, "Provider online.", snapshot, sessionId);
+            return;
         }
-        finally
+
+        _lastProviderHealthCheckedAt = result.CheckedAt;
+        if (result.ModelCount.HasValue)
         {
-            _isCheckingProviderHealth = false;
-            _providerHealthTimer.Interval = nextInterval;
+            _lastProviderModelCount = result.ModelCount.Value;
         }
+
+        _providerHealthTimer.Interval = result.NextInterval;
+        await UpdateActiveProviderStatusOnlyAsync(result.Status);
+        UpdateProviderHealthPopup();
     }
 
     private async Task PersistProviderReachabilityAsync(
@@ -7748,30 +7708,14 @@ public partial class MainWindow : Window
         }
 
         sessionId ??= _activeSession.Id;
-        snapshot ??= await _coreSessionStore.LoadSnapshotAsync(sessionId);
-        if (snapshot is null || !snapshot.Configs.TryGetValue("shared", out var shared))
+        var result = await _providerReachabilityService.PersistAsync(sessionId, online, error, latencyMs, status, snapshot);
+        if (result is null)
         {
             return;
         }
 
-        error = online ? "" : error;
-        if (shared.LastTestOk == online
-            && shared.LastError.Equals(error, StringComparison.Ordinal))
-        {
-            await UpdateActiveProviderStatusOnlyAsync(status);
-            return;
-        }
-
-        snapshot.Configs["shared"] = CopyProviderConfigWithStatus(shared, online, error, latencyMs);
-        await _coreSessionStore.SaveSnapshotAsync(snapshot, sessionId);
-        _providerHealthTimer.Interval = online ? TimeSpan.FromSeconds(10) : TimeSpan.FromSeconds(3);
-        await _eventLogStore.AppendAsync(sessionId, "native_provider_reachability_changed", new
-        {
-            Online = online,
-            Error = error,
-            LatencyMs = latencyMs
-        });
-        await UpdateActiveProviderStatusOnlyAsync(status);
+        _providerHealthTimer.Interval = result.NextInterval;
+        await UpdateActiveProviderStatusOnlyAsync(result.Status);
         UpdateProviderHealthPopup();
     }
 
@@ -10597,70 +10541,6 @@ public partial class MainWindow : Window
             LastTestOk = configs.TryGetValue(key, out existing) && existing.LastTestOk
         };
     }
-
-    private static CoreModelProviderConfig ProviderHealthProbeConfig(CoreModelProviderConfig source)
-    {
-        return new CoreModelProviderConfig
-        {
-            BaseUrl = source.BaseUrl,
-            Model = source.Model,
-            Timeout = Math.Clamp(Math.Min(source.Timeout, 3), 1, 3),
-            Temperature = source.Temperature,
-            MaxOutputTokens = source.MaxOutputTokens,
-            LastError = source.LastError,
-            LastLatencyMs = source.LastLatencyMs,
-            LastTestOk = source.LastTestOk,
-            Extra = source.Extra
-        };
-    }
-
-    private static CoreModelProviderConfig CopyProviderConfigWithStatus(CoreModelProviderConfig source, bool online, string error, int latencyMs)
-    {
-        return new CoreModelProviderConfig
-        {
-            BaseUrl = source.BaseUrl,
-            Model = source.Model,
-            Timeout = source.Timeout,
-            Temperature = source.Temperature,
-            MaxOutputTokens = source.MaxOutputTokens,
-            LastError = error,
-            LastLatencyMs = latencyMs,
-            LastTestOk = online,
-            Extra = source.Extra
-        };
-    }
-
-    private static async Task<ProviderSocketProbe> ProbeProviderSocketAsync(CoreModelProviderConfig config)
-    {
-        var baseUrl = ModelProviderHealthService.NormalizeBaseUrl(config.BaseUrl);
-        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
-        {
-            return new ProviderSocketProbe(false, 0, $"Provider URL is invalid: {baseUrl}");
-        }
-
-        var port = uri.IsDefaultPort
-            ? uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? 443 : 80
-            : uri.Port;
-        var watch = Stopwatch.StartNew();
-        try
-        {
-            using var client = new TcpClient();
-            using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(750));
-            await client.ConnectAsync(uri.Host, port, timeout.Token);
-            watch.Stop();
-            return new ProviderSocketProbe(true, (int)watch.ElapsedMilliseconds, "");
-        }
-        catch (Exception ex) when (ex is SocketException or OperationCanceledException)
-        {
-            watch.Stop();
-            return new ProviderSocketProbe(
-                false,
-                (int)watch.ElapsedMilliseconds,
-                $"Provider unreachable at {baseUrl}. Start LM Studio server or check the base URL.");
-        }
-    }
-
-    private sealed record ProviderSocketProbe(bool Ok, int LatencyMs, string Error);
 
     private static string DisplayRoleModel(string model)
     {

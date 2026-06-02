@@ -9,6 +9,8 @@ var tests = new (string Name, Action Test)[]
     ("backs up corrupt settings file", BackupCorruptSettingsFile),
     ("backs up corrupt scenario template file", BackupCorruptScenarioTemplateFile),
     ("scenario template restores dynamic roster", ScenarioTemplateRestoresDynamicRoster),
+    ("provider reachability clamps probe timeout", ProviderReachabilityClampsProbeTimeout),
+    ("provider reachability copies status metadata", ProviderReachabilityCopiesStatusMetadata),
     ("auto configure keeps low VRAM to one model", AutoConfigureLowVramSingleModel),
     ("auto configure spreads high VRAM model variety", AutoConfigureHighVramVariety),
     ("auto configure prefers useful multi GPU fit", AutoConfigurePrefersUsefulMultiGpuFit)
@@ -227,6 +229,51 @@ static void ScenarioTemplateRestoresDynamicRoster()
     Require(snapshot.Configs["epsilon"].Model == "saved-epsilon-model", "saved epsilon model was not restored");
     Require(!snapshot.Configs.ContainsKey("beta"), "stale beta config was not removed");
     Require(!snapshot.Configs.ContainsKey("zeta"), "stale dynamic config was not removed");
+}
+
+static void ProviderReachabilityClampsProbeTimeout()
+{
+    var source = new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:1234/v1",
+        Model = "test-model",
+        Timeout = 120,
+        Temperature = 0.7,
+        MaxOutputTokens = 2048,
+        LastError = "previous error",
+        LastLatencyMs = 99,
+        LastTestOk = true
+    };
+
+    var probe = ProviderReachabilityService.HealthProbeConfig(source);
+
+    Require(probe.Timeout == 3, "health probe timeout should clamp to 3 seconds");
+    Require(probe.Model == source.Model, "health probe should preserve model");
+    Require(probe.Temperature == source.Temperature, "health probe should preserve temperature");
+    Require(probe.LastTestOk == source.LastTestOk, "health probe should preserve prior status");
+}
+
+static void ProviderReachabilityCopiesStatusMetadata()
+{
+    var source = new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:1234/v1",
+        Model = "test-model",
+        Timeout = 60,
+        Temperature = 0.4,
+        MaxOutputTokens = 1024,
+        LastError = "old",
+        LastLatencyMs = 12,
+        LastTestOk = false
+    };
+
+    var updated = ProviderReachabilityService.CopyConfigWithStatus(source, online: true, error: "", latencyMs: 42);
+
+    Require(updated.BaseUrl == source.BaseUrl, "status copy should preserve base URL");
+    Require(updated.Model == source.Model, "status copy should preserve model");
+    Require(updated.LastTestOk, "status copy should update online flag");
+    Require(updated.LastLatencyMs == 42, "status copy should update latency");
+    Require(updated.LastError == "", "status copy should update error");
 }
 
 static void AutoConfigureLowVramSingleModel()
