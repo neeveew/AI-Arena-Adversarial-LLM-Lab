@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AIArena.Core/AIArena.Core.csproj" />
+    <Project Path="src/AIArena.Wpf/AIArena.Wpf.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AIArena.Tests/AIArena.Tests.csproj" />
+    <Project Path="tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj" />
+  </Folder>
+</Solution>

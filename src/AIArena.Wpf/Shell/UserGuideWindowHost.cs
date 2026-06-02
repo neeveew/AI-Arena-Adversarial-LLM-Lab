@@ -432,7 +432,7 @@ internal sealed class UserGuideWindowHost
         var current = new DirectoryInfo(AppContext.BaseDirectory);
         while (current is not null)
         {
-            var sourceGuide = Path.Combine(current.FullName, "windows-wpf", "docs", "USER_GUIDE.md");
+            var sourceGuide = Path.Combine(current.FullName, "docs", "USER_GUIDE.md");
             if (File.Exists(sourceGuide))
             {
                 return sourceGuide;

@@ -31,27 +31,27 @@ function Format-ListValue {
 function Get-ModuleName {
     param([string]$RelativePath)
 
-    if ($RelativePath -match '^shared-dotnet/src/AIArena\.Core/Modules/([^/]+)/') {
+    if ($RelativePath -match '^src/AIArena\.Core/Modules/([^/]+)/') {
         return "Core/$($Matches[1])"
     }
 
-    if ($RelativePath -match '^windows-wpf/src/AIArena\.Wpf/Modules/([^/]+)/') {
+    if ($RelativePath -match '^src/AIArena\.Wpf/Modules/([^/]+)/') {
         return "WPF/$($Matches[1])"
     }
 
-    if ($RelativePath -match '^windows-wpf/src/AIArena\.Wpf/Platform/Windows/([^/]+)/') {
+    if ($RelativePath -match '^src/AIArena\.Wpf/Platform/Windows/([^/]+)/') {
         return "WPF/Platform.$($Matches[1])"
     }
 
-    if ($RelativePath -match '^windows-wpf/src/AIArena\.Wpf/UI/([^/]+)/') {
+    if ($RelativePath -match '^src/AIArena\.Wpf/UI/([^/]+)/') {
         return "WPF/UI.$($Matches[1])"
     }
 
-    if ($RelativePath -match '^windows-wpf/src/AIArena\.Wpf/Shell/') {
+    if ($RelativePath -match '^src/AIArena\.Wpf/Shell/') {
         return "WPF/Shell"
     }
 
-    if ($RelativePath -match '^shared-dotnet/src/AIArena\.Tests/') {
+    if ($RelativePath -match '^tests/AIArena\.Tests/') {
         return "Tests"
     }
 

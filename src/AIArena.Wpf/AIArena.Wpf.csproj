@@ -15,7 +15,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\shared-dotnet\src\AIArena.Core\AIArena.Core.csproj" />
+    <ProjectReference Include="..\AIArena.Core\AIArena.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

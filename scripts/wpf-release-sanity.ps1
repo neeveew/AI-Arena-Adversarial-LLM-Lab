@@ -17,9 +17,9 @@ $releaseExe = Join-Path $releaseDir "AI Arena.exe"
 $dependencyIndexScript = Join-Path $Root "scripts/dependency-index.ps1"
 $licenseFile = Join-Path $Root "LICENSE"
 $noticeFile = Join-Path $Root "NOTICE.md"
-$userGuideFile = Join-Path $Root "windows-wpf/docs/USER_GUIDE.md"
-$shortcutIconFile = Join-Path $Root "windows-wpf/src/AIArena.Wpf/Assets/ai-arena-icon.ico"
-$wpfProject = Join-Path $Root "windows-wpf/src/AIArena.Wpf/AIArena.Wpf.csproj"
+$userGuideFile = Join-Path $Root "docs/USER_GUIDE.md"
+$shortcutIconFile = Join-Path $Root "src/AIArena.Wpf/Assets/ai-arena-icon.ico"
+$wpfProject = Join-Path $Root "src/AIArena.Wpf/AIArena.Wpf.csproj"
 
 function Assert-PathExists {
     param([string]$Path, [string]$Label)
@@ -89,13 +89,13 @@ if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\LICENSE"; DestDir: "\{app\}"') {
 if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\NOTICE\.md"; DestDir: "\{app\}"') {
     throw "Installer no longer installs NOTICE.md beside the app."
 }
-if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\windows-wpf\\docs\\USER_GUIDE\.md"; DestDir: "\{app\}"') {
+if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\docs\\USER_GUIDE\.md"; DestDir: "\{app\}"') {
     throw "Installer no longer installs USER_GUIDE.md beside the app."
 }
 if ($scriptText -notmatch 'Filename: "\{app\}\\USER_GUIDE\.md"; Description: "Open user guide"; Flags: shellexec postinstall skipifsilent') {
     throw "Installer no longer offers the user guide at the end of setup."
 }
-if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\windows-wpf\\src\\AIArena\.Wpf\\Assets\\ai-arena-icon\.ico"; DestDir: "\{app\}"') {
+if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\src\\AIArena\.Wpf\\Assets\\ai-arena-icon\.ico"; DestDir: "\{app\}"') {
     throw "Installer no longer installs the app icon beside the app."
 }
 if ($scriptText -notmatch 'DefaultDirName=\{localappdata\}\\\{#MyAppName\}') {

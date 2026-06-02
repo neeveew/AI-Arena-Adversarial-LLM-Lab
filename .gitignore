@@ -13,8 +13,3 @@ TestResults/
 *.nupkg
 *.snupkg
 .DS_Store
-shared-dotnet/**/bin/
-shared-dotnet/**/obj/
-windows-wpf/**/bin/
-windows-wpf/**/obj/
-windows-wpf/.vs/

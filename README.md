@@ -2,7 +2,7 @@
 
 A native Windows lab for running adversarial multi-agent conversations between local or OpenAI-compatible LLMs.
 
-[Download latest beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](windows-wpf/docs/USER_GUIDE.md) | [Licence](LICENSE)
+[Download latest beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [Licence](LICENSE)
 
 AI Arena is not a chatbot and not just a model comparison board. It is a local adversarial multi-agent LLM lab where agents can argue, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
 
@@ -113,32 +113,33 @@ If the provider is offline, AI Arena can still open sessions and display local d
 
 ## Source Layout
 
-- `windows-wpf/src/AIArena.Wpf` - native Windows app.
+- `src/AIArena.Wpf` - native Windows app.
   - `Shell` - main window and app dialogs.
   - `UI` - WPF controls, view models, and visual helpers.
   - `Modules` - WPF-facing feature services and adapters.
   - `Platform/Windows` - settings, telemetry, and theming integrations.
   - `Assets` - icons and packaged visual assets.
-- `shared-dotnet/src/AIArena.Core` - shared domain models and services.
+- `src/AIArena.Core` - shared domain models and services.
   - `Modules/Arena` - turn running and arena snapshots.
   - `Modules/Provider` - OpenAI-compatible provider config, client, and health checks.
   - `Modules/Sessions` - data paths, event log, summaries, and session storage.
   - `Modules/Internet` - internet tool contracts, fetching, and curated news.
   - `Modules/Diagnostics`, `Modules/MatchGeneration`, `Modules/Narration`, `Modules/Transcript`, and `Modules/Avatars` - focused core features.
-- `shared-dotnet/src/AIArena.Tests` - shared .NET smoke tests.
-- `docs` and `windows-wpf/docs` - product notes, port map, and user-facing guides.
+- `tests/AIArena.Tests` - shared .NET smoke tests.
+- `tests/AIArena.Wpf.Tests` - WPF app smoke tests.
+- `docs` - product notes, dependency index, and user-facing guides.
 
 ## Build
 
 ```powershell
-dotnet build .\windows-wpf\src\AIArena.Wpf\AIArena.Wpf.csproj
+dotnet build .\src\AIArena.Wpf\AIArena.Wpf.csproj
 ```
 
 ## Release Helpers
 
 ```powershell
-.\windows-wpf\scripts\build-wpf-preview.ps1
-.\windows-wpf\scripts\build-wpf-release.ps1
+.\scripts\build-wpf-preview.ps1
+.\scripts\build-wpf-release.ps1
 .\scripts\dependency-index.ps1 -Check
 .\scripts\wpf-release-sanity.ps1
 ```

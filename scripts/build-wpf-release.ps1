@@ -9,8 +9,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
-$project = Join-Path $repoRoot "windows-wpf\src\AIArena.Wpf\AIArena.Wpf.csproj"
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$project = Join-Path $repoRoot "src\AIArena.Wpf\AIArena.Wpf.csproj"
 $output = Join-Path $repoRoot "dist\AI Arena - $Version"
 $changesPath = Join-Path $output "changes.txt"
 $manifestPath = Join-Path $output "release-manifest.txt"

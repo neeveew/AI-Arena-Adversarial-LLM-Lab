@@ -47,9 +47,7 @@ The current WPF shell includes:
 - dark AI Arena layout direction
 - no WebView or browser UI
 - no dependency on the archived WinUI project
-- shared .NET services from `..\shared-dotnet\src\AIArena.Core`
-
-Feature status is tracked in `docs/WPF_PORT_MAP.md`.
+- shared .NET services from `src/AIArena.Core`
 
 User-facing feature guidance is tracked in `docs/USER_GUIDE.md`.
 
@@ -81,7 +79,7 @@ dotnet run --project .\src\AIArena.Wpf\AIArena.Wpf.csproj
 .\scripts\build-wpf-preview.ps1
 ```
 
-The preview executable is written to `..\dist\AI Arena WPF\AI Arena.exe`.
+The preview executable is written to `dist\AI Arena WPF\AI Arena.exe`.
 
 ## Versioned Release Build
 
@@ -89,4 +87,4 @@ The preview executable is written to `..\dist\AI Arena WPF\AI Arena.exe`.
 .\scripts\build-wpf-release.ps1 -Version "0.3.42-beta" -Changes "Updated user guide"
 ```
 
-The release executable and `changes.txt` are written to `..\dist\AI Arena - <version>\`.
+The release executable and `changes.txt` are written to `dist\AI Arena - <version>\`.

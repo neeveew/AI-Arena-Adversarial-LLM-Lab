@@ -7,7 +7,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\AIArena.Core\AIArena.Core.csproj" />
+    <ProjectReference Include="..\..\src\AIArena.Core\AIArena.Core.csproj" />
   </ItemGroup>
 </Project>
-

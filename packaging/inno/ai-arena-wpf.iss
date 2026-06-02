@@ -25,7 +25,7 @@ DisableProgramGroupPage=yes
 UsePreviousAppDir=no
 OutputDir=..\..\dist\installer\AI Arena - {#MyAppVersion}
 OutputBaseFilename=AI Arena Setup {#MyAppVersion}
-SetupIconFile=..\..\windows-wpf\src\AIArena.Wpf\Assets\ai-arena-icon.ico
+SetupIconFile=..\..\src\AIArena.Wpf\Assets\ai-arena-icon.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -43,8 +43,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Source: "{#MyReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\windows-wpf\docs\USER_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\windows-wpf\src\AIArena.Wpf\Assets\ai-arena-icon.ico"; DestDir: "{app}"; DestName: "{#MyAppIconName}"; Flags: ignoreversion
+Source: "..\..\docs\USER_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\src\AIArena.Wpf\Assets\ai-arena-icon.ico"; DestDir: "{app}"; DestName: "{#MyAppIconName}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconName}"
