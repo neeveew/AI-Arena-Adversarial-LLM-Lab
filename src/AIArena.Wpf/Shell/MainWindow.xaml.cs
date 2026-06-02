@@ -52,6 +52,7 @@ public partial class MainWindow : Window
     private readonly TranscriptInsightCoordinator? _transcriptInsightCoordinator;
     private readonly ScenarioWorkflowCoordinator? _scenarioWorkflowCoordinator;
     private readonly OperatorTurnCoordinator? _operatorTurnCoordinator;
+    private readonly InternetWorkflowCoordinator? _internetWorkflowCoordinator;
     private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
@@ -71,7 +72,6 @@ public partial class MainWindow : Window
     private DateTimeOffset _activeSnapshotWriteUtc;
     private bool _isSelectingTheme;
     private bool _isRenderingSnapshot;
-    private bool _isUpdatingInternetSettingsUi;
     private bool _arenaBusy;
     private bool _telemetrySampleInFlight;
     private string _transcriptDashboardLayout = "";
@@ -110,6 +110,9 @@ public partial class MainWindow : Window
 
     private OperatorTurnCoordinator OperatorTurn =>
         _operatorTurnCoordinator ?? throw new InvalidOperationException("Operator turn coordinator is not initialized.");
+
+    private InternetWorkflowCoordinator InternetWorkflow =>
+        _internetWorkflowCoordinator ?? throw new InvalidOperationException("Internet workflow coordinator is not initialized.");
 
     private ProviderSettingsCoordinator ProviderSettings =>
         _providerSettingsCoordinator ?? throw new InvalidOperationException("Provider settings coordinator is not initialized.");
@@ -353,6 +356,32 @@ public partial class MainWindow : Window
             status => RefreshActiveSessionAsync(status),
             status => LoadStatus.Text = status,
             status => ArenaRunStatus.Text = status);
+        _internetWorkflowCoordinator = new InternetWorkflowCoordinator(
+            this,
+            _coreSessionStore,
+            _eventLogStore,
+            _transcriptService,
+            _internetToolService,
+            _curatedNewsService,
+            UseInternetCheckBox,
+            InternetModePicker,
+            InternetModeHintText,
+            InternetSourceScopePicker,
+            InternetMaxResultsText,
+            AllowParticipantInternetCheckBox,
+            AllowNarratorInternetCheckBox,
+            RequireInternetApprovalCheckBox,
+            CurateNewsButton,
+            () => _activeSession,
+            () => _theme,
+            () => _arenaBusy,
+            () => _isRenderingSnapshot,
+            ResourceBrush,
+            (status, button, action, allowDuringAutoChat) => RunArenaBusyAsync(status, button, action, allowDuringAutoChat),
+            (snapshot, sessionId) => SaveSnapshotWithFeedbackAsync(snapshot, sessionId),
+            status => RefreshActiveSessionAsync(status),
+            status => LoadStatus.Text = status,
+            status => ArenaRunStatus.Text = status);
         ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
         InitializeThemePicker();
         _refreshTimer = new DispatcherTimer
@@ -379,7 +408,7 @@ public partial class MainWindow : Window
         InitializeVisualSettings();
         ScenarioWorkflow.InitializeControls();
         OperatorTurn.InitializeControls();
-        InitializeInternetSettingsUi();
+        InternetWorkflow.InitializeControls();
         InitializeDiagnosticExplanationTiles();
         SavedStateCoordinator.LoadScenarioTemplates();
         ShowStoreLoadWarningIfAny();
@@ -455,87 +484,6 @@ public partial class MainWindow : Window
         UpdateViewPresetState();
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
         UpdateTelemetryTimerState();
-    }
-
-    private void InitializeInternetSettingsUi()
-    {
-        UseInternetCheckBox.Checked += InternetUseToggle_Changed;
-        UseInternetCheckBox.Unchecked += InternetUseToggle_Changed;
-        InternetModePicker.SelectionChanged += InternetModePicker_SelectionChanged;
-    }
-
-    private void InternetUseToggle_Changed(object sender, RoutedEventArgs e)
-    {
-        SyncInternetSettingsUi(preferToggle: true);
-    }
-
-    private void InternetModePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        SyncInternetSettingsUi(preferToggle: false);
-    }
-
-    private void SyncInternetSettingsUi(bool preferToggle)
-    {
-        if (_isRenderingSnapshot || _isUpdatingInternetSettingsUi)
-        {
-            return;
-        }
-
-        _isUpdatingInternetSettingsUi = true;
-        try
-        {
-            var mode = SelectedComboTag(InternetModePicker, "manual");
-            if (preferToggle)
-            {
-                if (UseInternetCheckBox.IsChecked == true)
-                {
-                    if (mode.Equals("off", StringComparison.OrdinalIgnoreCase))
-                    {
-                        SelectComboTag(InternetModePicker, "auto");
-                    }
-                }
-                else
-                {
-                    SelectComboTag(InternetModePicker, "off");
-                }
-            }
-            else
-            {
-                UseInternetCheckBox.IsChecked = !mode.Equals("off", StringComparison.OrdinalIgnoreCase);
-            }
-        }
-        finally
-        {
-            _isUpdatingInternetSettingsUi = false;
-        }
-
-        UpdateInternetSettingsHint();
-    }
-
-    private void UpdateInternetSettingsHint()
-    {
-        if (InternetModeHintText is null)
-        {
-            return;
-        }
-
-        var useInternet = UseInternetCheckBox.IsChecked == true;
-        var mode = SelectedComboTag(InternetModePicker, "manual");
-        if (!useInternet || mode.Equals("off", StringComparison.OrdinalIgnoreCase))
-        {
-            InternetModeHintText.Text = "Internet is disabled. Agents will not be prompted to request tools, and manual internet actions are blocked.";
-            InternetModeHintText.Foreground = ResourceBrush("DangerTextBrush");
-            return;
-        }
-
-        InternetModeHintText.Text = mode switch
-        {
-            "manual" => "Manual allows user-triggered internet actions. Agents will not request tools.",
-            "model_requested" => "Model Requested allows participant/narrator tool calls when requester permissions allow it.",
-            "auto" => "Auto allows manual actions, model-requested tool calls, and scheduled drops when configured.",
-            _ => "Internet is enabled."
-        };
-        InternetModeHintText.Foreground = ResourceBrush("MutedTextBrush");
     }
 
     private static string SelectedComboTag(ComboBox combo, string fallback)
@@ -1041,16 +989,10 @@ public partial class MainWindow : Window
         ContextPrivateWindowText.Text = snapshot.PrivateWindow.ToString(System.Globalization.CultureInfo.InvariantCulture);
         ContextNotesWindowText.Text = snapshot.NotesWindow.ToString(System.Globalization.CultureInfo.InvariantCulture);
         ContextSummaryText.Text = string.IsNullOrWhiteSpace(snapshot.Summary) ? "No summary has been generated for this session." : snapshot.Summary;
-        UseInternetCheckBox.IsChecked = snapshot.InternetEnabled;
-        SelectComboTag(InternetModePicker, snapshot.InternetMode);
-        SelectComboTag(InternetSourceScopePicker, snapshot.InternetSourceScope);
-        InternetMaxResultsText.Text = snapshot.InternetMaxResults.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        AllowParticipantInternetCheckBox.IsChecked = snapshot.AllowParticipantInternetRequests;
-        AllowNarratorInternetCheckBox.IsChecked = snapshot.AllowNarratorInternetRequests;
-        RequireInternetApprovalCheckBox.IsChecked = snapshot.RequireInternetApproval;
+        InternetWorkflow.ApplySnapshot(snapshot);
         OperatorTurn.ApplySnapshot(snapshot);
         _isRenderingSnapshot = false;
-        UpdateInternetSettingsHint();
+        InternetWorkflow.UpdateSettingsHint();
         OperatorTurn.UpdatePrivateTargetSummary();
         UpdateSessionOverview(snapshot);
         _lastAgentPersonas = snapshot.Agents
@@ -3357,8 +3299,8 @@ public partial class MainWindow : Window
         }
         if (message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase) && message.Status.Equals("pending", StringComparison.OrdinalIgnoreCase))
         {
-            actions.Children.Add(ActionButton("Approve Once", async (_, _) => await ApproveInternetRequestAsync(message), canMutate, TranscriptActionKind.Primary));
-            actions.Children.Add(ActionButton("Reject", async (_, _) => await RejectInternetRequestAsync(message), canMutate, TranscriptActionKind.Danger));
+            actions.Children.Add(ActionButton("Approve Once", async (_, _) => await InternetWorkflow.ApproveInternetRequestAsync(message), canMutate, TranscriptActionKind.Primary));
+            actions.Children.Add(ActionButton("Reject", async (_, _) => await InternetWorkflow.RejectInternetRequestAsync(message), canMutate, TranscriptActionKind.Danger));
             actions.Children.Add(ActionButton("Copy URL", (_, _) => CopyInternetUrl(message), canMutate && !string.IsNullOrWhiteSpace(message.InternetUrl)));
         }
 
@@ -5751,7 +5693,7 @@ public partial class MainWindow : Window
                     && result.Message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase)
                     && result.Message.Status.Equals("pending", StringComparison.OrdinalIgnoreCase))
                 {
-                    var resolved = await HandleInternetApprovalDialogAsync(result.Message, resumeAutoChat: true);
+                    var resolved = await InternetWorkflow.HandleInternetApprovalDialogAsync(result.Message, resumeAutoChat: true);
                     if (!resolved)
                     {
                         ArenaRunStatus.Text = "Auto Chat paused for internet approval.";
@@ -5936,20 +5878,7 @@ public partial class MainWindow : Window
 
     private async void CurateNewsButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null)
-        {
-            LoadStatus.Text = "No active session.";
-            return;
-        }
-
-        await RunArenaBusyAsync("Curating news...", CurateNewsButton, async () =>
-        {
-            var result = await _curatedNewsService.CurateNowAsync(_activeSession.Id);
-            var status = result.Ok && result.Message is not null
-                ? $"Curated news added at turn {result.Message.Turn}."
-                : $"Curate news failed: {result.Error}";
-            RefreshActiveSession(status);
-        }, allowDuringAutoChat: true);
+        await InternetWorkflow.CurateNewsAsync();
     }
 
     private async void OneTurnButton_Click(object sender, RoutedEventArgs e)
@@ -5973,7 +5902,7 @@ public partial class MainWindow : Window
                 && result.Message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase)
                 && result.Message.Status.Equals("pending", StringComparison.OrdinalIgnoreCase))
             {
-                await HandleInternetApprovalDialogAsync(result.Message, resumeAutoChat: false);
+                await InternetWorkflow.HandleInternetApprovalDialogAsync(result.Message, resumeAutoChat: false);
             }
         });
     }
@@ -6059,207 +5988,6 @@ public partial class MainWindow : Window
     private void ExportTranscriptButton_Click(object sender, RoutedEventArgs e)
     {
         TranscriptExportCoordinator.ExportTranscript();
-    }
-
-    private async Task ApproveInternetRequestAsync(TranscriptMessage message)
-    {
-        if (_arenaBusy || _activeSession is null || message.Turn <= 0)
-        {
-            return;
-        }
-
-        await RunArenaBusyAsync($"Approving internet request from turn {message.Turn}...", async () =>
-        {
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (snapshot is null)
-            {
-                ArenaRunStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
-                return;
-            }
-
-            var original = TranscriptService.FindMessage(snapshot, message.Turn, message.SpeakerId, message.CreatedAt);
-            if (original is null)
-            {
-                ArenaRunStatus.Text = $"Could not find approval turn {message.Turn}.";
-                return;
-            }
-
-            var request = _transcriptService.InternetRequestFor(original);
-            if (request is null)
-            {
-                ArenaRunStatus.Text = $"Approval turn {message.Turn} has no valid internet request.";
-                return;
-            }
-
-            var result = await _internetToolService.ExecuteAsync(snapshot, request, _activeSession.Id);
-            var replacement = _transcriptService.CreateInternetToolMessage(request, result, original.Turn);
-            if (!_transcriptService.ReplaceMessage(snapshot, original.Turn, original.SpeakerId, original.CreatedAt, replacement))
-            {
-                ArenaRunStatus.Text = $"Could not replace approval turn {message.Turn}.";
-                return;
-            }
-
-            snapshot.Engine.LastError = result.Ok ? "" : result.Error;
-            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-            await _eventLogStore.AppendAsync(
-                _activeSession.Id,
-                result.Ok ? "native_internet_request_approved" : "native_internet_request_approval_failed",
-                new { message.Turn, request.Tool, request.Query, request.Url, result.Ok, result.Error });
-            RefreshActiveSession(result.Ok
-                ? $"Approved internet request at turn {message.Turn}."
-                : $"Internet request failed after approval: {result.Error}");
-        });
-    }
-
-    private async Task<bool> HandleInternetApprovalDialogAsync(CoreDialogueMessage approvalMessage, bool resumeAutoChat)
-    {
-        if (_activeSession is null)
-        {
-            return false;
-        }
-
-        var request = _transcriptService.InternetRequestFor(approvalMessage);
-        if (request is null)
-        {
-            return false;
-        }
-
-        ArenaRunStatus.Text = resumeAutoChat ? "Auto Chat paused for internet approval." : "Internet approval required.";
-        LoadStatus.Text = ArenaRunStatus.Text;
-        var choice = InternetApprovalDialog.Show(this, _theme, request);
-        if (choice == InternetApprovalChoice.AlwaysApprove)
-        {
-            RequireInternetApprovalCheckBox.IsChecked = false;
-        }
-
-        return choice switch
-        {
-            InternetApprovalChoice.ApproveOnce => await ResolveInternetApprovalAsync(approvalMessage, alwaysApprove: false, approve: true),
-            InternetApprovalChoice.AlwaysApprove => await ResolveInternetApprovalAsync(approvalMessage, alwaysApprove: true, approve: true),
-            _ => await ResolveInternetApprovalAsync(approvalMessage, alwaysApprove: false, approve: false)
-        };
-    }
-
-    private async Task<bool> ResolveInternetApprovalAsync(CoreDialogueMessage approvalMessage, bool alwaysApprove, bool approve)
-    {
-        if (_activeSession is null)
-        {
-            return false;
-        }
-
-        var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-        if (snapshot is null)
-        {
-            ArenaRunStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
-            return false;
-        }
-
-        var original = TranscriptService.FindMessage(snapshot, approvalMessage.Turn, approvalMessage.SpeakerId, approvalMessage.CreatedAt);
-        if (original is null)
-        {
-            ArenaRunStatus.Text = $"Could not find approval turn {approvalMessage.Turn}.";
-            return false;
-        }
-
-        var request = _transcriptService.InternetRequestFor(original);
-        if (request is null)
-        {
-            ArenaRunStatus.Text = $"Approval turn {approvalMessage.Turn} has no valid internet request.";
-            return false;
-        }
-
-        if (alwaysApprove)
-        {
-            snapshot.Engine.ModelRss.RequireApproval = false;
-        }
-
-        if (!approve)
-        {
-            var rejected = new CoreDialogueMessage
-            {
-                Turn = original.Turn,
-                Speaker = original.Speaker,
-                SpeakerId = original.SpeakerId,
-                Text = original.Text + Environment.NewLine + "Status: rejected by operator",
-                Status = "rejected",
-                Pinned = original.Pinned,
-                Kind = original.Kind,
-                CreatedAt = original.CreatedAt,
-                Model = original.Model,
-                Metadata = original.Metadata,
-                Extra = original.Extra
-            };
-            if (!_transcriptService.ReplaceMessage(snapshot, original.Turn, original.SpeakerId, original.CreatedAt, rejected))
-            {
-                ArenaRunStatus.Text = $"Could not reject approval turn {approvalMessage.Turn}.";
-                return false;
-            }
-
-            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_internet_request_rejected", new { original.Turn, request.Tool, request.Query, request.Url });
-            RefreshActiveSession($"Rejected internet request at turn {approvalMessage.Turn}.");
-            return true;
-        }
-
-        var result = await _internetToolService.ExecuteAsync(snapshot, request, _activeSession.Id);
-        var replacement = _transcriptService.CreateInternetToolMessage(request, result, original.Turn);
-        if (!_transcriptService.ReplaceMessage(snapshot, original.Turn, original.SpeakerId, original.CreatedAt, replacement))
-        {
-            ArenaRunStatus.Text = $"Could not replace approval turn {approvalMessage.Turn}.";
-            return false;
-        }
-
-        snapshot.Engine.LastError = result.Ok ? "" : result.Error;
-        await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-        await _eventLogStore.AppendAsync(
-            _activeSession.Id,
-            result.Ok ? "native_internet_request_approved" : "native_internet_request_approval_failed",
-            new { original.Turn, request.Tool, request.Query, request.Url, result.Ok, result.Error, AlwaysApprove = alwaysApprove });
-        RefreshActiveSession(result.Ok
-            ? $"Approved internet request at turn {approvalMessage.Turn}."
-            : $"Internet request failed after approval: {result.Error}");
-        return true;
-    }
-
-    private async Task RejectInternetRequestAsync(TranscriptMessage message)
-    {
-        if (_arenaBusy || _activeSession is null || message.Turn <= 0)
-        {
-            return;
-        }
-
-        await MutateTranscriptAsync($"Rejected internet request at turn {message.Turn}.", async snapshot =>
-        {
-            var original = TranscriptService.FindMessage(snapshot, message.Turn, message.SpeakerId, message.CreatedAt);
-            if (original is null)
-            {
-                LoadStatus.Text = $"Could not find approval turn {message.Turn}.";
-                return false;
-            }
-
-            var replacement = new CoreDialogueMessage
-            {
-                Turn = original.Turn,
-                Speaker = original.Speaker,
-                SpeakerId = original.SpeakerId,
-                Text = original.Text + Environment.NewLine + "Status: rejected by operator",
-                Status = "rejected",
-                Pinned = original.Pinned,
-                Kind = original.Kind,
-                CreatedAt = original.CreatedAt,
-                Model = original.Model,
-                Metadata = original.Metadata,
-                Extra = original.Extra
-            };
-            if (!_transcriptService.ReplaceMessage(snapshot, original.Turn, original.SpeakerId, original.CreatedAt, replacement))
-            {
-                LoadStatus.Text = $"Could not reject approval turn {message.Turn}.";
-                return false;
-            }
-
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_internet_request_rejected", new { message.Turn, message.InternetTool, message.InternetQuery, message.InternetUrl });
-            return true;
-        });
     }
 
     private async Task DeleteTranscriptMessageAsync(TranscriptMessage message)
@@ -6562,8 +6290,8 @@ public partial class MainWindow : Window
         OneTurnButton.IsEnabled = !busy;
         ResetButton.IsEnabled = !busy;
         ScenarioWorkflow.UpdateBusyState(busy, autoChatRunning);
+        InternetWorkflow.UpdateBusyState(busy, autoChatRunning);
         NarrateNowButton.IsEnabled = !busy || autoChatRunning;
-        CurateNewsButton.IsEnabled = !busy || autoChatRunning;
         StopButton.IsEnabled = stopEnabled;
         if (busy && operationButton is not null)
         {
@@ -6587,13 +6315,6 @@ public partial class MainWindow : Window
         ContextTranscriptWindowText.IsEnabled = !busy;
         ContextPrivateWindowText.IsEnabled = !busy;
         ContextNotesWindowText.IsEnabled = !busy;
-        UseInternetCheckBox.IsEnabled = !busy;
-        InternetModePicker.IsEnabled = !busy;
-        InternetSourceScopePicker.IsEnabled = !busy;
-        InternetMaxResultsText.IsEnabled = !busy;
-        AllowParticipantInternetCheckBox.IsEnabled = !busy;
-        AllowNarratorInternetCheckBox.IsEnabled = !busy;
-        RequireInternetApprovalCheckBox.IsEnabled = !busy;
         AutoChatCadencePicker.IsEnabled = !busy;
         AvatarStylePicker.IsEnabled = !busy;
         SystemGlyphStylePicker.IsEnabled = !busy;
