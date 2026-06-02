@@ -44,7 +44,6 @@ public partial class MainWindow : Window
     private readonly CuratedNewsService _curatedNewsService = new();
     private readonly WpfSettingsStore _wpfSettingsStore = new();
     private readonly ScenarioTemplateStore _scenarioTemplateStore = new();
-    private readonly SystemTelemetryService _systemTelemetryService = new();
     private readonly UserGuideWindowHost _userGuideWindowHost = new();
     private readonly SavedStateWorkflowCoordinator? _savedStateCoordinator;
     private readonly TranscriptExportCoordinator? _transcriptExportCoordinator;
@@ -54,10 +53,10 @@ public partial class MainWindow : Window
     private readonly OperatorTurnCoordinator? _operatorTurnCoordinator;
     private readonly InternetWorkflowCoordinator? _internetWorkflowCoordinator;
     private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
+    private readonly TelemetryWorkflowCoordinator? _telemetryWorkflowCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
     private readonly DispatcherTimer _providerHealthTimer;
-    private readonly DispatcherTimer _telemetryTimer;
     private readonly List<Button> _agentTurnButtons = [];
     private readonly List<Button> _narratorActionButtons = [];
     private readonly List<Button> _transcriptActionButtons = [];
@@ -73,7 +72,6 @@ public partial class MainWindow : Window
     private bool _isSelectingTheme;
     private bool _isRenderingSnapshot;
     private bool _arenaBusy;
-    private bool _telemetrySampleInFlight;
     private string _transcriptDashboardLayout = "";
     private Button? _breathingOperationButton;
     private bool _decisionCardExpanded;
@@ -83,11 +81,6 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _autoChatCancellation;
     private const int DiagnosticHistoryLimit = 36;
     private const int DiagnosticWindowSize = 8;
-    private const int TelemetryHistoryLimit = 36;
-    private readonly List<double> _cpuTelemetryHistory = [];
-    private readonly List<double> _gpuTelemetryHistory = [];
-    private readonly List<double> _vramTelemetryHistory = [];
-    private readonly List<double> _ramTelemetryHistory = [];
     private Style? _lockToggleStyle;
     private ArenaViewSnapshot? _lastRenderedSnapshot;
     private CoreFrictionDiagnostics? _lastDiagnostics;
@@ -116,6 +109,9 @@ public partial class MainWindow : Window
 
     private ProviderSettingsCoordinator ProviderSettings =>
         _providerSettingsCoordinator ?? throw new InvalidOperationException("Provider settings coordinator is not initialized.");
+
+    private TelemetryWorkflowCoordinator TelemetryWorkflow =>
+        _telemetryWorkflowCoordinator ?? throw new InvalidOperationException("Telemetry workflow coordinator is not initialized.");
 
     private sealed record DiagnosticHistoryPoint(
         int Friction,
@@ -399,11 +395,22 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromSeconds(3)
         };
         _providerHealthTimer.Tick += async (_, _) => await RefreshProviderReachabilityAsync();
-        _telemetryTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromSeconds(1)
-        };
-        _telemetryTimer.Tick += async (_, _) => await UpdateSystemTelemetryAsync();
+        _telemetryWorkflowCoordinator = new TelemetryWorkflowCoordinator(
+            TelemetryCpuValueText,
+            TelemetryCpuSparkline,
+            TelemetryGpuValueText,
+            TelemetryGpuDetailText,
+            TelemetryGpuSparkline,
+            TelemetryVramValueText,
+            TelemetryVramDetailText,
+            TelemetryVramUsageBar,
+            TelemetryRamValueText,
+            TelemetryRamDetailText,
+            TelemetryRamUsageBar,
+            () => _transcriptDashboardLayout.Equals("telemetry", StringComparison.OrdinalIgnoreCase)
+                && TranscriptTelemetryHost.Visibility == Visibility.Visible
+                && TranscriptTelemetryHost.IsVisible,
+            ResourceBrush);
         InitializeAboutPanel();
         InitializeVisualSettings();
         ScenarioWorkflow.InitializeControls();
@@ -417,7 +424,7 @@ public partial class MainWindow : Window
             LoadSessions();
             _refreshTimer.Start();
             _providerHealthTimer.Start();
-            UpdateTelemetryTimerState();
+            TelemetryWorkflow.UpdateTimerState();
             _ = RefreshProviderReachabilityAsync(force: true);
         };
         SourceInitialized += (_, _) => ApplyNativeChromeColor();
@@ -426,7 +433,7 @@ public partial class MainWindow : Window
             _refreshTimer.Stop();
             _modelRefreshTimer.Stop();
             _providerHealthTimer.Stop();
-            _telemetryTimer.Stop();
+            TelemetryWorkflow.Stop();
         };
     }
 
@@ -483,7 +490,7 @@ public partial class MainWindow : Window
         UpdateDebugControlsVisibility();
         UpdateViewPresetState();
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
-        UpdateTelemetryTimerState();
+        TelemetryWorkflow.UpdateTimerState();
     }
 
     private static string SelectedComboTag(ComboBox combo, string fallback)
@@ -882,7 +889,7 @@ public partial class MainWindow : Window
         TranscriptInsight.SetTurnCompareMode(compare);
         _wpfSettingsStore.Save(_wpfSettings);
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
-        UpdateTelemetryTimerState();
+        TelemetryWorkflow.UpdateTimerState();
         PopulateTranscript(_lastRenderedMessages);
         UpdateViewPresetState();
         ViewMenuPopup.IsOpen = false;
@@ -1919,7 +1926,7 @@ public partial class MainWindow : Window
             DiagnosticDetailPopup.IsOpen = false;
         }
 
-        UpdateTelemetryTimerState();
+        TelemetryWorkflow.UpdateTimerState();
     }
 
     private bool IsDiagnosticsDisplayed()
@@ -1927,138 +1934,6 @@ public partial class MainWindow : Window
         return _transcriptDashboardLayout.Equals("diagnostics", StringComparison.OrdinalIgnoreCase)
             && TranscriptDiagnosticsHost.Visibility == Visibility.Visible
             && TranscriptDiagnosticsHost.IsVisible;
-    }
-
-    private bool IsTelemetryDisplayed()
-    {
-        return _transcriptDashboardLayout.Equals("telemetry", StringComparison.OrdinalIgnoreCase)
-            && TranscriptTelemetryHost.Visibility == Visibility.Visible
-            && TranscriptTelemetryHost.IsVisible;
-    }
-
-    private void UpdateTelemetryTimerState()
-    {
-        if (IsTelemetryDisplayed())
-        {
-            if (!_telemetryTimer.IsEnabled)
-            {
-                _ = UpdateSystemTelemetryAsync();
-                _telemetryTimer.Start();
-            }
-        }
-        else
-        {
-            _telemetryTimer.Stop();
-        }
-    }
-
-    private async Task UpdateSystemTelemetryAsync()
-    {
-        if (!IsTelemetryDisplayed())
-        {
-            _telemetryTimer.Stop();
-            return;
-        }
-
-        if (_telemetrySampleInFlight)
-        {
-            return;
-        }
-
-        _telemetrySampleInFlight = true;
-        SystemTelemetrySample sample;
-        try
-        {
-            sample = await Task.Run(() => _systemTelemetryService.Sample());
-        }
-        finally
-        {
-            _telemetrySampleInFlight = false;
-        }
-
-        SetTelemetryTile(
-            TelemetryCpuValueText,
-            TelemetryCpuSparkline,
-            _cpuTelemetryHistory,
-            sample.CpuPercent,
-            sample.CpuPercent.HasValue ? $"{sample.CpuPercent.Value:0}%" : "—",
-            ResourceBrush("AlphaAccentBrush"));
-        SetTelemetryTile(
-            TelemetryGpuValueText,
-            TelemetryGpuSparkline,
-            _gpuTelemetryHistory,
-            sample.GpuPercent,
-            sample.GpuPercent.HasValue ? $"{sample.GpuPercent.Value:0}%" : "—",
-            ResourceBrush("DeltaAccentBrush"));
-        TelemetryGpuDetailText.Text = !string.IsNullOrWhiteSpace(sample.GpuName)
-            ? sample.GpuName
-            : sample.GpuPercent.HasValue ? "Local GPU" : "Unavailable";
-        SetTelemetryUsageBar(
-            TelemetryVramValueText,
-            TelemetryVramDetailText,
-            TelemetryVramUsageBar,
-            sample.VramUsedGb,
-            sample.VramTotalGb,
-            sample.VramUsedGb.HasValue && sample.VramTotalGb is > 0
-                ? (sample.VramUsedGb.Value / sample.VramTotalGb.Value) * 100d
-                : null);
-        SetTelemetryUsageBar(
-            TelemetryRamValueText,
-            TelemetryRamDetailText,
-            TelemetryRamUsageBar,
-            sample.RamUsedGb,
-            sample.RamTotalGb,
-            sample.RamPercent);
-    }
-
-    private static void SetTelemetryTile(
-        TextBlock valueText,
-        MetricSparklineControl sparkline,
-        List<double> history,
-        double? graphValue,
-        string displayValue,
-        Brush accent)
-    {
-        valueText.Text = displayValue;
-        valueText.Foreground = accent;
-        sparkline.AccentBrush = accent;
-        if (graphValue.HasValue)
-        {
-            history.Add(graphValue.Value);
-            while (history.Count > TelemetryHistoryLimit)
-            {
-                history.RemoveAt(0);
-            }
-        }
-
-        sparkline.Values = history.ToArray();
-    }
-
-    private static void SetTelemetryUsageBar(
-        TextBlock valueText,
-        TextBlock detailText,
-        FrameworkElement usageBar,
-        double? usedGb,
-        double? totalGb,
-        double? percent)
-    {
-        if (usedGb.HasValue)
-        {
-            valueText.Text = $"{usedGb.Value:0.#} GB";
-            detailText.Text = totalGb.HasValue ? $"/ {totalGb.Value:0.#} GB" : "";
-        }
-        else
-        {
-            valueText.Text = "—";
-            detailText.Text = "Unavailable";
-        }
-
-        var parentWidth = usageBar.Parent is FrameworkElement parent
-            ? parent.ActualWidth
-            : 0;
-        usageBar.Width = percent.HasValue && parentWidth > 0
-            ? parentWidth * Math.Clamp(percent.Value / 100d, 0, 1)
-            : 0;
     }
 
     private void PopulateAgents(ArenaViewSnapshot snapshot)
@@ -7649,7 +7524,7 @@ public partial class MainWindow : Window
         _wpfSettingsStore.Save(_wpfSettings);
         UpdateDebugControlsVisibility();
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
-        UpdateTelemetryTimerState();
+        TelemetryWorkflow.UpdateTimerState();
         UpdateViewPresetState();
         if (_lastRenderedMessages.Count > 0)
         {
