@@ -4,11 +4,9 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using System.Runtime.InteropServices;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 using CoreVoiceAdherenceDiagnostic = AIArena.Core.Models.VoiceAdherenceDiagnostic;
 using AIArena.Core.Persistence;
@@ -913,7 +911,7 @@ public partial class MainWindow : Window
             TelemetryWorkflow.UpdateTimerState();
             _ = ProviderReachability.RefreshAsync(force: true);
         };
-        SourceInitialized += (_, _) => ApplyNativeChromeColor();
+        SourceInitialized += (_, _) => WindowChromeService.ApplyNativeChromeColor(this);
         Closed += (_, _) =>
         {
             _refreshTimer.Stop();
@@ -2034,42 +2032,6 @@ public partial class MainWindow : Window
             "auto" => "manual buttons plus automatic/model-requested fetches",
             _ => "manual user actions only"
         };
-    }
-
-    private void ApplyNativeChromeColor()
-    {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
-        {
-            return;
-        }
-
-        var handle = new WindowInteropHelper(this).Handle;
-        if (handle == IntPtr.Zero)
-        {
-            return;
-        }
-
-        var darkGray = ColorRef(0x20, 0x20, 0x20);
-        var borderGray = ColorRef(0x58, 0x58, 0x58);
-        var white = ColorRef(0xFF, 0xFF, 0xFF);
-        _ = DwmSetWindowAttribute(handle, DwmWindowAttribute.BorderColor, ref borderGray, Marshal.SizeOf<int>());
-        _ = DwmSetWindowAttribute(handle, DwmWindowAttribute.CaptionColor, ref darkGray, Marshal.SizeOf<int>());
-        _ = DwmSetWindowAttribute(handle, DwmWindowAttribute.TextColor, ref white, Marshal.SizeOf<int>());
-    }
-
-    private static int ColorRef(byte red, byte green, byte blue)
-    {
-        return red | (green << 8) | (blue << 16);
-    }
-
-    [DllImport("dwmapi.dll", PreserveSig = true)]
-    private static extern int DwmSetWindowAttribute(IntPtr hwnd, DwmWindowAttribute attribute, ref int attributeValue, int attributeSize);
-
-    private enum DwmWindowAttribute
-    {
-        BorderColor = 34,
-        CaptionColor = 35,
-        TextColor = 36
     }
 
 }

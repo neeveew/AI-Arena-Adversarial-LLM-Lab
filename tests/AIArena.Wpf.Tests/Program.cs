@@ -29,6 +29,7 @@ var tests = new (string Name, Action Test)[]
     ("arena session mutation coordinator normalizes settings", ArenaSessionMutationCoordinatorNormalizesSettings),
     ("session overview coordinator formats summaries", SessionOverviewCoordinatorFormatsSummaries),
     ("shell ui helpers blend brushes", ShellUiHelpersBlendBrushes),
+    ("window chrome service packs color refs", WindowChromeServicePacksColorRefs),
     ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
     ("app settings coordinator selects provider focus", AppSettingsCoordinatorSelectsProviderFocus),
@@ -559,6 +560,11 @@ static void ShellUiHelpersBlendBrushes()
     var high = RequireSolidColor(ShellUiHelpers.BlendBrush(new SolidColorBrush(Color.FromRgb(10, 20, 30)), new SolidColorBrush(Color.FromRgb(200, 210, 220)), 2), "high clamp should return solid");
     Require(low == Color.FromRgb(10, 20, 30), "blend amount should clamp below zero");
     Require(high == Color.FromRgb(200, 210, 220), "blend amount should clamp above one");
+}
+
+static void WindowChromeServicePacksColorRefs()
+{
+    Require(WindowChromeService.ColorRef(0x11, 0x22, 0x33) == 0x00332211, "COLORREF should pack bytes as 0x00bbggrr");
 }
 
 static void ProviderReachabilityCoordinatorFormatsPopupState()
