@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Windows;
@@ -46,6 +46,7 @@ public partial class MainWindow : Window
     private readonly TranscriptExportCoordinator? _transcriptExportCoordinator;
     private readonly TranscriptSearchCoordinator? _transcriptSearchCoordinator;
     private readonly TranscriptInsightCoordinator? _transcriptInsightCoordinator;
+    private readonly TranscriptCardRenderer? _transcriptCardRenderer;
     private readonly ScenarioWorkflowCoordinator? _scenarioWorkflowCoordinator;
     private readonly OperatorTurnCoordinator? _operatorTurnCoordinator;
     private readonly InternetWorkflowCoordinator? _internetWorkflowCoordinator;
@@ -90,6 +91,9 @@ public partial class MainWindow : Window
 
     private TranscriptInsightCoordinator TranscriptInsight =>
         _transcriptInsightCoordinator ?? throw new InvalidOperationException("Transcript insight coordinator is not initialized.");
+
+    private TranscriptCardRenderer TranscriptCards =>
+        _transcriptCardRenderer ?? throw new InvalidOperationException("Transcript card renderer is not initialized.");
 
     private ScenarioWorkflowCoordinator ScenarioWorkflow =>
         _scenarioWorkflowCoordinator ?? throw new InvalidOperationException("Scenario workflow coordinator is not initialized.");
@@ -327,6 +331,37 @@ public partial class MainWindow : Window
             RefreshActiveSessionForCoordinatorAsync,
             SetLoadStatus,
             SetArenaRunStatus);
+        _transcriptCardRenderer = new TranscriptCardRenderer(
+            () => _wpfSettings.CompactTranscriptMode,
+            () => _arenaBusy,
+            button => _transcriptActionButtons.Add(button),
+            ResourceBrush,
+            BlendBrush,
+            AccentForSpeaker,
+            speakerId => _lastAgentPersonas.TryGetValue(speakerId, out var persona) ? persona : "",
+            CurrentAvatarStyle,
+            () => _wpfSettings.ChampionAvatars,
+            () => _wpfSettings.SystemEventGlyphs,
+            VoiceStyleChipText,
+            ShouldShowStyleFit,
+            (style, text) => _voiceStyleAdherenceService.Analyze(style, text),
+            VoiceAdherenceChipText,
+            diagnostic => VoiceAdherenceAccent(diagnostic),
+            VoiceAdherenceTooltip,
+            FormatDuration,
+            FormatCompactNumber,
+            CopyTranscriptMessage,
+            TogglePinTranscriptMessageAsync,
+            RetryTranscriptMessageAsync,
+            DeleteTranscriptMessageAsync,
+            message => InternetWorkflow.ApproveInternetRequestAsync(message),
+            message => InternetWorkflow.RejectInternetRequestAsync(message),
+            CopyInternetUrl,
+            IsAgentSpeaker,
+            () => _wpfSettings.TurnCompareMode,
+            message => TranscriptInsight.IsTurnSelectedForCompare(message),
+            TranscriptInsightCoordinator.CanCompareMessage,
+            message => TranscriptInsight.ToggleTurnCompareMessage(message));
         ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
         InitializeThemePicker();
         _refreshTimer = new DispatcherTimer
@@ -1854,67 +1889,7 @@ public partial class MainWindow : Window
 
     private Border CreateTranscriptCard(TranscriptMessage message, bool retryable, bool searchMatch, bool isLatest)
     {
-        var hasInternetDetails = !string.IsNullOrWhiteSpace(message.InternetTool)
-            || !string.IsNullOrWhiteSpace(message.InternetQuery)
-            || !string.IsNullOrWhiteSpace(message.InternetUrl)
-            || message.InternetSources.Count > 0;
-        var isInternet = message.Kind.Equals("internet", StringComparison.OrdinalIgnoreCase)
-            || message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase);
-        var body = string.IsNullOrWhiteSpace(message.Text) ? "(empty message)" : message.Text;
-        var isSystemEvent = IsSystemEvent(message, isInternet);
-        var accent = isSystemEvent
-            ? ResourceBrush(message.Status.Equals("error", StringComparison.OrdinalIgnoreCase) ? "DangerBorderBrush" : "AssistBorderBrush")
-            : (isInternet || hasInternetDetails) ? ResourceBrush("AssistBorderBrush") : AccentForSpeaker(message.SpeakerId);
-
-        var actions = new WrapPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Margin = new Thickness(0, 8, 0, 0)
-        };
-        var canMutate = message.Turn > 0;
-        actions.Children.Add(ActionButton("Copy", (_, _) => CopyTranscriptMessage(message), canMutate, iconGlyph: "\uE8C8"));
-        actions.Children.Add(ActionButton(message.Pinned ? "Unpin" : "Pin", async (_, _) => await TogglePinTranscriptMessageAsync(message), canMutate, TranscriptActionKind.Primary, "\uE718"));
-        actions.Children.Add(ActionButton("Retry", async (_, _) => await RetryTranscriptMessageAsync(message), canMutate && retryable && IsAgentSpeaker(message.SpeakerId) && !isInternet, iconGlyph: "\uE72C"));
-        actions.Children.Add(ActionButton("Delete", async (_, _) => await DeleteTranscriptMessageAsync(message), canMutate, TranscriptActionKind.Danger, "\uE74D"));
-        if (_wpfSettings.TurnCompareMode)
-        {
-            var selectedForCompare = TranscriptInsight.IsTurnSelectedForCompare(message);
-            actions.Children.Add(ActionButton(
-                selectedForCompare ? "Drop compare" : "Compare",
-                (_, _) => TranscriptInsight.ToggleTurnCompareMessage(message),
-                canMutate && TranscriptInsightCoordinator.CanCompareMessage(message),
-                selectedForCompare ? TranscriptActionKind.Primary : TranscriptActionKind.Neutral));
-        }
-        if (message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase) && message.Status.Equals("pending", StringComparison.OrdinalIgnoreCase))
-        {
-            actions.Children.Add(ActionButton("Approve Once", async (_, _) => await InternetWorkflow.ApproveInternetRequestAsync(message), canMutate, TranscriptActionKind.Primary));
-            actions.Children.Add(ActionButton("Reject", async (_, _) => await InternetWorkflow.RejectInternetRequestAsync(message), canMutate, TranscriptActionKind.Danger));
-            actions.Children.Add(ActionButton("Copy URL", (_, _) => CopyInternetUrl(message), canMutate && !string.IsNullOrWhiteSpace(message.InternetUrl)));
-        }
-
-        var extras = new StackPanel();
-        if (hasInternetDetails)
-        {
-            extras.Children.Add(CreateTranscriptExpander(
-                message.Kind.Equals("news", StringComparison.OrdinalIgnoreCase) ? "Source / selection" : "Internet details",
-                accent: ResourceBrush("AssistBorderBrush"),
-                content: CreateInternetDetails(message)));
-        }
-        if (!string.IsNullOrWhiteSpace(message.Reasoning))
-        {
-            extras.Children.Add(CreateTranscriptExpander(
-                "Model reasoning",
-                AccentForSpeaker(message.SpeakerId),
-                new TextBlock
-                {
-                    Text = message.Reasoning,
-                    Foreground = ResourceBrush("TextBrush"),
-                    TextWrapping = TextWrapping.Wrap,
-                    Margin = new Thickness(0, 8, 0, 0)
-                }));
-        }
-        extras.Children.Add(actions);
-        return CreateTranscriptCardLayout(message, body, accent, isInternet, searchMatch, isLatest, isSystemEvent, extras);
+        return TranscriptCards.CreateCard(message, retryable, searchMatch, isLatest);
     }
 
     private Border CreateTurnComparePanel(IReadOnlyList<TranscriptMessage> visibleMessages)
@@ -2636,434 +2611,30 @@ public partial class MainWindow : Window
             .ToArray();
     }
 
-    private IReadOnlyList<Border> CreateTranscriptStatPills(TranscriptMessage message, bool isInternet)
-    {
-        var pills = new List<Border>
-        {
-            CreateTranscriptStatPill(FormatDuration(message.LatencyMs), isInternet)
-        };
-
-        pills.Add(CreateTranscriptStatPill(FormatGeneratedTokens(message), isInternet));
-
-        if (message.PromptTokens > 0)
-        {
-            pills.Add(CreateTranscriptStatPill($"ctx: {FormatCompactNumber(message.PromptTokens)}", isInternet));
-        }
-        else if (message.TotalTokens > 0 && message.CompletionTokens <= 0)
-        {
-            pills.Add(CreateTranscriptStatPill($"total: {FormatCompactNumber(message.TotalTokens)}", isInternet));
-        }
-
-        if (!message.Status.Equals("ok", StringComparison.OrdinalIgnoreCase))
-        {
-            pills.Add(CreateTranscriptStatPill(message.Status, isInternet, isDanger: message.Status.Equals("error", StringComparison.OrdinalIgnoreCase)));
-        }
-
-        if (message.Pinned)
-        {
-            pills.Add(CreateTranscriptStatPill("pinned", isInternet));
-        }
-
-        return pills;
-    }
-
     private Border CreateTranscriptStatPill(string text, bool isInternet, bool isDanger = false, Brush? accentOverride = null, string? toolTip = null)
     {
-        var compact = _wpfSettings.CompactTranscriptMode;
-        var accent = accentOverride ?? ResourceBrush(isInternet ? "AssistBorderBrush" : "PrimaryBorderBrush");
-        return new Border
-        {
-            Background = isDanger ? ResourceBrush("DangerBrush") : BlendBrush(ResourceBrush("TranscriptBodyBrush"), accent, 0.1),
-            BorderBrush = isDanger ? ResourceBrush("DangerBorderBrush") : BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.38),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = compact ? new Thickness(5, 0, 5, 1) : new Thickness(6, 1, 6, 2),
-            Margin = new Thickness(0, 0, compact ? 4 : 6, 0),
-            ToolTip = toolTip,
-            Child = new TextBlock
-            {
-                Text = text,
-                Foreground = isDanger ? ResourceBrush("DangerTextBrush") : accentOverride ?? ResourceBrush("MutedTextBrush"),
-                FontSize = compact ? 10 : 12,
-                FontWeight = FontWeights.SemiBold
-            }
-        };
+        return TranscriptCards.CreateStatPill(text, isInternet, isDanger, accentOverride, toolTip);
     }
 
     private Expander CreateTranscriptExpander(string header, Brush accent, UIElement content)
     {
-        return new Expander
-        {
-            Header = header,
-            Foreground = accent,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 12, 0, 0),
-            ToolTip = $"Show {header.ToLowerInvariant()}",
-            Content = new Border
-            {
-                Background = BlendBrush(ResourceBrush("TranscriptBodyBrush"), accent, 0.14),
-                BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.42),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(10),
-                Margin = new Thickness(0, 8, 0, 0),
-                Child = content
-            }
-        };
-    }
-
-    private Border CreateTranscriptCardLayout(TranscriptMessage message, string body, Brush accent, bool isInternet, bool searchMatch, bool isLatest, bool isSystemEvent, UIElement? extraContent)
-    {
-        var compact = _wpfSettings.CompactTranscriptMode;
-        var isError = message.Status.Equals("error", StringComparison.OrdinalIgnoreCase);
-        var accentWeight = isLatest ? (compact ? 0.28 : 0.32) : (compact ? 0.14 : 0.18);
-        var normalBackground = BlendBrush(ResourceBrush("TranscriptBodyBrush"), accent, isError ? 0.16 : accentWeight);
-        var hoverBackground = BlendBrush(ResourceBrush("TranscriptBodyBrush"), accent, isError ? 0.22 : accentWeight + 0.06);
-        var normalBorder = isError
-            ? ResourceBrush("DangerBorderBrush")
-            : BlendBrush(ResourceBrush("ControlBorderBrush"), accent, searchMatch || isLatest ? 0.82 : 0.38);
-        var hoverBorder = isError ? ResourceBrush("DangerTextBrush") : BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.82);
-        var border = new Border
-        {
-            Style = null,
-            Background = normalBackground,
-            BorderBrush = normalBorder,
-            BorderThickness = new Thickness(searchMatch || isLatest || isError ? 2 : 1),
-            CornerRadius = new CornerRadius(compact ? 6 : 8),
-            Margin = new Thickness(0, 0, 0, compact ? 6 : 12),
-            Opacity = isLatest || isError || isSystemEvent ? 1.0 : 0.88
-        };
-        border.MouseEnter += (_, _) =>
-        {
-            border.Background = hoverBackground;
-            border.BorderBrush = hoverBorder;
-        };
-        border.MouseLeave += (_, _) =>
-        {
-            border.Background = normalBackground;
-            border.BorderBrush = normalBorder;
-        };
-
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(compact ? 46 : 84) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-        var rail = new Grid
-        {
-            Background = BlendBrush(ResourceBrush("TranscriptHeaderBrush"), accent, isLatest ? 0.22 : 0.11)
-        };
-        rail.Children.Add(new Border
-        {
-            Width = isLatest ? (compact ? 4 : 5) : (compact ? 2 : 3),
-            Background = accent,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            CornerRadius = new CornerRadius(compact ? 6 : 8, 0, 0, compact ? 6 : 8)
-        });
-        var railStack = new Grid
-        {
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Top,
-            Margin = compact ? new Thickness(6, 8, 4, 6) : new Thickness(8, 13, 6, 12)
-        };
-        railStack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        if (!compact)
-        {
-            railStack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        }
-        railStack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-        var turnNumber = new TextBlock
-        {
-            Text = message.Turn.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            Foreground = Brushes.White,
-            FontSize = compact ? 16 : 20,
-            FontWeight = FontWeights.SemiBold,
-            HorizontalAlignment = HorizontalAlignment.Center
-        };
-        Grid.SetRow(turnNumber, 0);
-        railStack.Children.Add(turnNumber);
-
-        if (!compact)
-        {
-            var avatar = CreateTranscriptAvatar(message, accent, isInternet, isSystemEvent);
-            avatar.Margin = new Thickness(0, 7, 0, 5);
-            avatar.HorizontalAlignment = HorizontalAlignment.Center;
-            Grid.SetRow(avatar, 1);
-            railStack.Children.Add(avatar);
-        }
-
-        var railLabel = new TextBlock
-        {
-            Text = compact ? CompactRailLabel(message, isInternet) : TranscriptRailLabel(message, isInternet),
-            Foreground = accent,
-            FontSize = compact ? 9 : 10,
-            FontWeight = FontWeights.SemiBold,
-            HorizontalAlignment = HorizontalAlignment.Center
-        };
-        Grid.SetRow(railLabel, compact ? 1 : 2);
-        railStack.Children.Add(railLabel);
-
-        rail.Children.Add(railStack);
-        Grid.SetColumn(rail, 0);
-        grid.Children.Add(rail);
-
-        var content = new Grid();
-        content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        Grid.SetColumn(content, 1);
-        grid.Children.Add(content);
-
-        var header = new Border
-        {
-            Background = BlendBrush(ResourceBrush("TranscriptHeaderBrush"), accent, isLatest ? 0.28 : isError ? 0.18 : 0.16),
-            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, isLatest ? 0.56 : 0.28),
-            BorderThickness = new Thickness(0, 0, 0, 1),
-            Padding = compact ? new Thickness(10, 5, 10, 5) : new Thickness(14, 8, 14, 8),
-            CornerRadius = new CornerRadius(0, compact ? 6 : 8, 0, 0)
-        };
-        header.Child = CreateTranscriptHeader(message, accent, isInternet, searchMatch, isLatest, isSystemEvent);
-        Grid.SetRow(header, 0);
-        content.Children.Add(header);
-
-        var bodyStack = new StackPanel
-        {
-            Margin = compact ? new Thickness(10, 8, 10, 8) : new Thickness(14, 13, 14, 13)
-        };
-        var bodyBlock = new TextBlock
-        {
-            Text = body,
-            Foreground = isError ? ResourceBrush("DangerTextBrush") : ResourceBrush("TextBrush"),
-            TextWrapping = TextWrapping.Wrap,
-            FontSize = compact ? 13 : 15,
-            LineHeight = compact ? 18 : 22
-        };
-        if (isError)
-        {
-            bodyStack.Children.Add(new Border
-            {
-                Background = BlendBrush(ResourceBrush("DangerBrush"), accent, 0.08),
-                BorderBrush = ResourceBrush("DangerBorderBrush"),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(12),
-                Child = bodyBlock
-            });
-        }
-        else
-        {
-            bodyStack.Children.Add(bodyBlock);
-        }
-
-        if (extraContent is not null)
-        {
-            bodyStack.Children.Add(extraContent);
-        }
-
-        Grid.SetRow(bodyStack, 1);
-        content.Children.Add(bodyStack);
-
-        border.Child = grid;
-        return border;
-    }
-
-    private AgentAvatarControl CreateTranscriptAvatar(TranscriptMessage message, Brush accent, bool isInternet, bool isSystemEvent)
-    {
-        var avatar = new AgentAvatarControl
-        {
-            Width = 44,
-            Height = 44,
-            AgentId = message.SpeakerId,
-            DisplayName = message.Speaker,
-            Model = message.Model,
-            Persona = PersonaForSpeaker(message.SpeakerId),
-            AccentBrush = accent,
-            BaseBrush = ResourceBrush("TranscriptBodyBrush"),
-            IsSystem = isSystemEvent || isInternet,
-            AvatarStyle = CurrentAvatarStyle(),
-            UseChampionPortrait = _wpfSettings.ChampionAvatars,
-            UseSystemGlyph = _wpfSettings.SystemEventGlyphs,
-            FallbackText = SpeakerGlyph(message, isInternet),
-            ToolTip = AvatarToolTip(message, isSystemEvent)
-        };
-        ToolTipService.SetShowDuration(avatar, 60000);
-        return avatar;
-    }
-
-    private Grid CreateTranscriptHeader(TranscriptMessage message, Brush accent, bool isInternet, bool searchMatch, bool isLatest, bool isSystemEvent)
-    {
-        var header = new Grid();
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        var identity = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
-        identity.Children.Add(new TextBlock
-        {
-            Text = TranscriptSpeakerTitle(message, isInternet, isSystemEvent),
-            Foreground = Brushes.White,
-            FontSize = 16,
-            FontWeight = FontWeights.SemiBold,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 8, 0)
-        });
-        if (isLatest)
-        {
-            identity.Children.Add(CreateTranscriptStatPill("Latest", isInternet));
-        }
-        if (!isInternet && !string.IsNullOrWhiteSpace(message.Model))
-        {
-            identity.Children.Add(CreateTranscriptStatPill(message.Model, isInternet));
-        }
-        var voiceChip = VoiceStyleChipText(message.VoiceStyle);
-        if (!isInternet && !isSystemEvent && !string.IsNullOrWhiteSpace(voiceChip))
-        {
-            identity.Children.Add(CreateTranscriptStatPill(voiceChip, isInternet));
-            if (ShouldShowStyleFit())
-            {
-                var voiceAdherence = _voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text);
-                identity.Children.Add(CreateTranscriptStatPill(
-                    VoiceAdherenceChipText(voiceAdherence),
-                    isInternet,
-                    accentOverride: VoiceAdherenceAccent(voiceAdherence),
-                    toolTip: VoiceAdherenceTooltip(voiceAdherence)));
-            }
-        }
-        foreach (var pill in CreateTranscriptStatPills(message, isInternet))
-        {
-            identity.Children.Add(pill);
-        }
-        if (searchMatch)
-        {
-            identity.Children.Add(CreateTranscriptStatPill("search match", isInternet));
-        }
-        Grid.SetColumn(identity, 0);
-        header.Children.Add(identity);
-
-        var time = new TextBlock
-        {
-            Text = DisplayTime(message.CreatedAt),
-            Foreground = ResourceBrush("MutedTextBrush"),
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(12, 0, 0, 0)
-        };
-        Grid.SetColumn(time, 1);
-        header.Children.Add(time);
-
-        return header;
+        return TranscriptCards.CreateExpander(header, accent, content);
     }
 
     private static string TranscriptSpeakerTitle(TranscriptMessage message, bool isInternet, bool isSystemEvent)
     {
-        if (isSystemEvent)
-        {
-            return "SYSTEM EVENT";
-        }
-
-        if (isInternet)
-        {
-            return message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase)
-                ? "Internet Approval"
-                : "Internet Tool";
-        }
-
-        return string.IsNullOrWhiteSpace(message.Speaker) ? "Unknown" : message.Speaker;
-    }
-
-    private static string TranscriptRailLabel(TranscriptMessage message, bool isInternet)
-    {
-        if (IsSystemEvent(message, isInternet) || message.Kind.Equals("news", StringComparison.OrdinalIgnoreCase))
-        {
-            return "SYSTEM";
-        }
-
-        return message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase)
-            ? "OPERATOR"
-            : "AGENT";
-    }
-
-    private static string CompactRailLabel(TranscriptMessage message, bool isInternet)
-    {
-        if (IsSystemEvent(message, isInternet) || message.Kind.Equals("news", StringComparison.OrdinalIgnoreCase))
-        {
-            return "SYS";
-        }
-
-        if (message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase))
-        {
-            return "OP";
-        }
-
-        return string.IsNullOrWhiteSpace(message.SpeakerId)
-            ? "AI"
-            : message.SpeakerId[..Math.Min(3, message.SpeakerId.Length)].ToUpperInvariant();
-    }
-
-    private static string SpeakerGlyph(TranscriptMessage message, bool isInternet)
-    {
-        if (IsSystemEvent(message, isInternet))
-        {
-            return "!";
-        }
-
-        if (isInternet)
-        {
-            return "i";
-        }
-
-        return string.IsNullOrWhiteSpace(message.SpeakerId)
-            ? "?"
-            : message.SpeakerId[..1].ToUpperInvariant();
-    }
-
-    private string PersonaForSpeaker(string speakerId)
-    {
-        return _lastAgentPersonas.TryGetValue(speakerId, out var persona) ? persona : "";
-    }
-
-    private static string AvatarToolTip(TranscriptMessage message, bool isSystemEvent)
-    {
-        var speaker = string.IsNullOrWhiteSpace(message.Speaker) ? message.SpeakerId : message.Speaker;
-        var model = string.IsNullOrWhiteSpace(message.Model) ? "-" : message.Model;
-        var kind = isSystemEvent ? "System event" : "Deterministic procedural avatar";
-        return $"{speaker}{Environment.NewLine}Model: {model}{Environment.NewLine}{kind}";
+        return TranscriptCardRenderer.TranscriptSpeakerTitle(message, isInternet, isSystemEvent);
     }
 
     private static bool IsSystemEvent(TranscriptMessage message, bool isInternet)
     {
-        if (isInternet || message.Kind.Equals("news", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (!message.Status.Equals("error", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return message.Text.Contains("Model call failed", StringComparison.OrdinalIgnoreCase)
-            || message.Text.Contains("Provider unreachable", StringComparison.OrdinalIgnoreCase)
-            || message.Text.Contains("provider", StringComparison.OrdinalIgnoreCase);
+        return TranscriptCardRenderer.IsSystemEvent(message, isInternet);
     }
 
     private static string DisplayTime(double createdAt)
     {
-        if (createdAt <= 0)
-        {
-            return "";
-        }
-
-        try
-        {
-            return DateTimeOffset
-                .FromUnixTimeSeconds((long)createdAt)
-                .ToLocalTime()
-                .ToString("h:mm:ss tt", System.Globalization.CultureInfo.InvariantCulture);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            return "";
-        }
+        return TranscriptCardRenderer.DisplayTime(createdAt);
     }
-
     private Border CreateNewsInspectorCard(TranscriptMessage message)
     {
         var isPending = message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase)
@@ -3105,139 +2676,12 @@ public partial class MainWindow : Window
 
     private UIElement CreateInternetDetails(TranscriptMessage message)
     {
-        var panel = new StackPanel
-        {
-            Margin = new Thickness(0, 2, 0, 0)
-        };
-
-        void AddRow(string label, string value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return;
-            }
-
-            var row = new Border
-            {
-                Background = ResourceBrush("InputBrush"),
-                BorderBrush = ResourceBrush("ControlBorderBrush"),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(8, 6, 8, 6),
-                Margin = new Thickness(0, 0, 0, 6),
-                Child = new TextBlock
-                {
-                    Text = $"{label}: {value}",
-                    Foreground = ResourceBrush("TextBrush"),
-                    TextWrapping = TextWrapping.Wrap
-                }
-            };
-            panel.Children.Add(row);
-        }
-
-        AddRow("Requester", message.InternetRequester);
-        AddRow("Mode", message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase) ? "pending approval" : "executed");
-        AddRow("Tool", message.InternetTool);
-        AddRow("Query", message.InternetQuery);
-        AddRow("URL", message.InternetUrl);
-        AddRow("Reason", message.InternetReason);
-        AddRow("Fetch", string.IsNullOrWhiteSpace(message.InternetCheckedAt)
-            ? ""
-            : $"{(message.InternetCached ? "cached" : "fetched")} at {message.InternetCheckedAt}");
-        AddRow("Summary", message.InternetSummary);
-        if (message.InternetSources.Count > 0)
-        {
-            panel.Children.Add(new TextBlock
-            {
-                Text = "Sources",
-                Foreground = ResourceBrush("MutedTextBrush"),
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 8, 0, 4)
-            });
-            foreach (var source in message.InternetSources)
-            {
-                panel.Children.Add(new Border
-                {
-                    Background = BlendBrush(ResourceBrush("TranscriptBodyBrush"), ResourceBrush("AssistBorderBrush"), 0.12),
-                    BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), ResourceBrush("AssistBorderBrush"), 0.45),
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(4),
-                    Padding = new Thickness(8, 6, 8, 6),
-                    Margin = new Thickness(0, 0, 0, 6),
-                    Child = new TextBlock
-                    {
-                        Text = source,
-                        Foreground = ResourceBrush("TextBrush"),
-                        TextWrapping = TextWrapping.Wrap
-                    }
-                });
-            }
-        }
-
-        return panel;
+        return TranscriptCards.CreateInternetDetails(message);
     }
-
     private Button ActionButton(string text, RoutedEventHandler? handler, bool enabled, TranscriptActionKind kind = TranscriptActionKind.Neutral, string? iconGlyph = null)
     {
-        var iconMode = !string.IsNullOrWhiteSpace(iconGlyph);
-        var compact = _wpfSettings.CompactTranscriptMode;
-        var iconSize = compact ? 24 : 30;
-        var background = ResourceBrush("InputBrush");
-        var border = kind switch
-        {
-            TranscriptActionKind.Primary => ResourceBrush("PrimaryBorderBrush"),
-            TranscriptActionKind.Danger => ResourceBrush("DangerBorderBrush"),
-            _ => ResourceBrush("ControlBorderBrush")
-        };
-        var foreground = kind switch
-        {
-            TranscriptActionKind.Primary => ResourceBrush("TextBrush"),
-            TranscriptActionKind.Danger => ResourceBrush("DangerTextBrush"),
-            _ => ResourceBrush("TextBrush")
-        };
-        var button = new Button
-        {
-            Content = iconMode
-                ? new TextBlock
-                {
-                    Text = iconGlyph,
-                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                    FontSize = compact ? 13 : 15,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
-                }
-                : text,
-            IsEnabled = enabled && !_arenaBusy,
-            Tag = enabled,
-            Background = iconMode ? Brushes.Transparent : background,
-            BorderBrush = iconMode ? Brushes.Transparent : border,
-            Foreground = foreground,
-            FontSize = iconMode ? (compact ? 13 : 15) : (compact ? 12 : 13),
-            FontWeight = FontWeights.SemiBold,
-            MinWidth = iconMode ? iconSize : 0,
-            MinHeight = iconMode ? iconSize : (compact ? 26 : 32),
-            Width = iconMode ? iconSize : double.NaN,
-            Height = iconMode ? iconSize : double.NaN,
-            Padding = iconMode ? new Thickness(0) : compact ? new Thickness(8, 3, 8, 3) : new Thickness(10, 5, 10, 5),
-            Margin = iconMode ? new Thickness(0, 0, compact ? 3 : 5, compact ? 2 : 4) : new Thickness(0, 0, compact ? 5 : 8, compact ? 5 : 8),
-            Opacity = enabled ? 1.0 : 0.55,
-            ToolTip = text
-        };
-        if (handler is not null)
-        {
-            button.Click += handler;
-        }
-        _transcriptActionButtons.Add(button);
-        return button;
+        return TranscriptCards.CreateActionButton(text, handler, enabled, kind, iconGlyph);
     }
-
-    private enum TranscriptActionKind
-    {
-        Neutral,
-        Primary,
-        Danger
-    }
-
     private Border CreateAgentStatusCard(string title, string status, Brush accent)
     {
         var card = new Border
