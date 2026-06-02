@@ -200,32 +200,6 @@ internal sealed class UserGuideWindowHost
         };
         Grid.SetColumn(windowControls, 2);
 
-        var minimizeButton = CreateWindowControlButton(dialog, "\uE921", "Minimize guide");
-        minimizeButton.Click += (_, _) => dialog.WindowState = WindowState.Minimized;
-        windowControls.Children.Add(minimizeButton);
-
-        var maximizeGlyph = new TextBlock
-        {
-            Text = "\uE922",
-            FontFamily = new FontFamily("Segoe MDL2 Assets"),
-            FontSize = 11,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        var maximizeButton = CreateWindowControlButton(dialog, maximizeGlyph, "Maximize guide");
-        maximizeButton.Click += (_, _) =>
-        {
-            dialog.WindowState = dialog.WindowState == WindowState.Maximized
-                ? WindowState.Normal
-                : WindowState.Maximized;
-        };
-        dialog.StateChanged += (_, _) =>
-        {
-            maximizeGlyph.Text = dialog.WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
-            maximizeButton.ToolTip = dialog.WindowState == WindowState.Maximized ? "Restore guide" : "Maximize guide";
-        };
-        windowControls.Children.Add(maximizeButton);
-
         var closeButton = CreateWindowControlButton(dialog, "\uE8BB", "Close guide", closeButton: true);
         closeButton.Click += (_, _) => dialog.Close();
         windowControls.Children.Add(closeButton);
@@ -647,9 +621,9 @@ internal sealed class UserGuideWindowHost
 
     private static Button CreateWindowControlButton(FrameworkElement resources, string glyph, string tooltip, bool closeButton = false)
     {
-        return CreateWindowControlButton(
-            resources,
-            new TextBlock
+        var button = new Button
+        {
+            Content = new TextBlock
             {
                 Text = glyph,
                 FontFamily = new FontFamily("Segoe MDL2 Assets"),
@@ -657,15 +631,6 @@ internal sealed class UserGuideWindowHost
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             },
-            tooltip,
-            closeButton);
-    }
-
-    private static Button CreateWindowControlButton(FrameworkElement resources, TextBlock content, string tooltip, bool closeButton = false)
-    {
-        var button = new Button
-        {
-            Content = content,
             Width = closeButton ? 36 : 34,
             Height = 36,
             MinWidth = closeButton ? 36 : 34,
