@@ -61,6 +61,7 @@ public partial class MainWindow : Window
     private readonly MatchSetupCoordinator? _matchSetupCoordinator;
     private readonly MatchLockCoordinator? _matchLockCoordinator;
     private readonly AgentRosterCoordinator? _agentRosterCoordinator;
+    private readonly ArenaSessionMutationCoordinator? _arenaSessionMutationCoordinator;
     private readonly MatchQualityTimelineCoordinator? _matchQualityTimelineCoordinator;
     private readonly AgentBoardCoordinator? _agentBoardCoordinator;
     private readonly DispatcherTimer _refreshTimer;
@@ -139,6 +140,9 @@ public partial class MainWindow : Window
 
     private AgentRosterCoordinator AgentRoster =>
         _agentRosterCoordinator ?? throw new InvalidOperationException("Agent roster coordinator is not initialized.");
+
+    private ArenaSessionMutationCoordinator ArenaSessionMutations =>
+        _arenaSessionMutationCoordinator ?? throw new InvalidOperationException("Arena session mutation coordinator is not initialized.");
 
     private MatchQualityTimelineCoordinator MatchQualityTimeline =>
         _matchQualityTimelineCoordinator ?? throw new InvalidOperationException("Match quality timeline coordinator is not initialized.");
@@ -602,6 +606,39 @@ public partial class MainWindow : Window
             RunArenaBusyForCoordinatorAsync,
             SaveSnapshotForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync,
+            SetArenaRunStatus);
+        _arenaSessionMutationCoordinator = new ArenaSessionMutationCoordinator(
+            this,
+            _coreSessionStore,
+            _eventLogStore,
+            ProviderSettings,
+            AgentRoster,
+            ProviderBaseUrlText,
+            ProviderModelText,
+            ProviderTimeoutText,
+            ProviderTemperatureText,
+            ProviderMaxOutputText,
+            ContextTranscriptWindowText,
+            ContextPrivateWindowText,
+            ContextNotesWindowText,
+            UseInternetCheckBox,
+            InternetModePicker,
+            InternetSourceScopePicker,
+            InternetMaxResultsText,
+            AllowParticipantInternetCheckBox,
+            AllowNarratorInternetCheckBox,
+            RequireInternetApprovalCheckBox,
+            ProviderTestStatus,
+            ResetButton,
+            () => _activeSession,
+            () => _isRenderingSnapshot,
+            () => _theme,
+            preferredSessionId => LoadSessionsAsync(preferredSessionId),
+            RunArenaBusyForCoordinatorAsync,
+            SaveSnapshotForCoordinatorAsync,
+            RefreshActiveSessionForCoordinatorAsync,
+            force => RefreshProviderReachabilityAsync(force),
+            SetLoadStatus,
             SetArenaRunStatus);
         InitializeAboutPanel();
         InitializeVisualSettings();
@@ -1988,167 +2025,7 @@ public partial class MainWindow : Window
 
     private async void ApplySettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_isRenderingSnapshot)
-        {
-            return;
-        }
-
-        if (_activeSession is null)
-        {
-            await _coreSessionStore.EnsureDefaultSessionAsync();
-            await LoadSessionsAsync("default");
-            if (_activeSession is null)
-            {
-                ProviderTestStatus.Text = "No writable session is available for settings.";
-                return;
-            }
-        }
-
-        var baseUrl = ProviderBaseUrlText.Text.Trim();
-        var model = ProviderModelText.Text.Trim();
-        ProviderSettings.SaveRoleModelDrafts();
-        var alphaModel = ProviderSettings.RoleModel("alpha");
-        var betaModel = ProviderSettings.RoleModel("beta");
-        var gammaModel = ProviderSettings.RoleModel("gamma");
-        var deltaModel = ProviderSettings.RoleModel("delta");
-        var narratorModel = ProviderSettings.RoleModel("narrator");
-        if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(model))
-        {
-            ProviderTestStatus.Text = "Base URL and model are required.";
-            return;
-        }
-
-        if (!int.TryParse(ProviderTimeoutText.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var timeout))
-        {
-            ProviderTestStatus.Text = "Timeout must be a whole number.";
-            return;
-        }
-
-        if (!double.TryParse(ProviderTemperatureText.Text.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var temperature))
-        {
-            ProviderTestStatus.Text = "Temperature must be a number.";
-            return;
-        }
-
-        if (!int.TryParse(ProviderMaxOutputText.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var maxOutput))
-        {
-            ProviderTestStatus.Text = "Max output must be a whole number.";
-            return;
-        }
-
-        if (!int.TryParse(ContextTranscriptWindowText.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var transcriptWindow))
-        {
-            ProviderTestStatus.Text = "Transcript window must be a whole number.";
-            return;
-        }
-
-        if (!int.TryParse(ContextPrivateWindowText.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var privateWindow))
-        {
-            ProviderTestStatus.Text = "Private notes window must be a whole number.";
-            return;
-        }
-
-        if (!int.TryParse(ContextNotesWindowText.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var notesWindow))
-        {
-            ProviderTestStatus.Text = "Pinned notes window must be a whole number.";
-            return;
-        }
-
-        if (!int.TryParse(InternetMaxResultsText.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var internetMaxResults))
-        {
-            ProviderTestStatus.Text = "Internet results must be a whole number.";
-            return;
-        }
-
-        timeout = Math.Clamp(timeout, 1, 3600);
-        temperature = Math.Clamp(temperature, 0, 2);
-        maxOutput = Math.Clamp(maxOutput, 1, 32768);
-        transcriptWindow = Math.Clamp(transcriptWindow, 1, 60);
-        privateWindow = Math.Clamp(privateWindow, 0, 60);
-        notesWindow = Math.Clamp(notesWindow, 0, 60);
-        internetMaxResults = Math.Clamp(internetMaxResults, 1, 10);
-        var activeParticipants = AgentRoster.ParseActiveParticipants();
-        var internetMode = ShellUiHelpers.SelectedComboTag(InternetModePicker, "manual");
-        var useInternet = UseInternetCheckBox.IsChecked == true;
-        if (!useInternet)
-        {
-            internetMode = "off";
-        }
-        else if (internetMode.Equals("off", StringComparison.OrdinalIgnoreCase))
-        {
-            internetMode = "auto";
-        }
-
-        var internetSourceScope = ShellUiHelpers.SelectedComboTag(InternetSourceScopePicker, "trusted");
-
-        await RunArenaBusyAsync("Applying settings...", async () =>
-        {
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (snapshot is null)
-            {
-                snapshot = SessionStore.CreateDefaultSnapshot();
-            }
-
-            snapshot.Configs["shared"] = new CoreModelProviderConfig
-            {
-                BaseUrl = ModelProviderHealthService.NormalizeBaseUrl(baseUrl),
-                Model = model,
-                Timeout = timeout,
-                Temperature = temperature,
-                MaxOutputTokens = maxOutput,
-                LastError = snapshot.Configs.TryGetValue("shared", out var existing) ? existing.LastError : "",
-                LastLatencyMs = snapshot.Configs.TryGetValue("shared", out existing) ? existing.LastLatencyMs : 0,
-                LastTestOk = snapshot.Configs.TryGetValue("shared", out existing) && existing.LastTestOk
-            };
-            ProviderSettingsCoordinator.SaveRoleModelConfig(snapshot.Configs, "alpha", alphaModel, snapshot.Configs["shared"]);
-            ProviderSettingsCoordinator.SaveRoleModelConfig(snapshot.Configs, "beta", betaModel, snapshot.Configs["shared"]);
-            ProviderSettingsCoordinator.SaveRoleModelConfig(snapshot.Configs, "gamma", gammaModel, snapshot.Configs["shared"]);
-            ProviderSettingsCoordinator.SaveRoleModelConfig(snapshot.Configs, "delta", deltaModel, snapshot.Configs["shared"]);
-            ProviderSettingsCoordinator.SaveRoleModelConfig(snapshot.Configs, "narrator", narratorModel, snapshot.Configs["shared"]);
-            snapshot.Engine.TranscriptWindow = transcriptWindow;
-            snapshot.Engine.PrivateWindow = privateWindow;
-            snapshot.Engine.NotesWindow = notesWindow;
-            snapshot.Engine.ModelRss.UseInternet = useInternet && !internetMode.Equals("off", StringComparison.OrdinalIgnoreCase);
-            snapshot.Engine.ModelRss.Mode = internetMode;
-            snapshot.Engine.ModelRss.SourceScope = internetSourceScope;
-            snapshot.Engine.ModelRss.MaxResults = internetMaxResults;
-            snapshot.Engine.ModelRss.AllowParticipantRequests = AllowParticipantInternetCheckBox.IsChecked == true;
-            snapshot.Engine.ModelRss.AllowModelRss = AllowParticipantInternetCheckBox.IsChecked == true;
-            snapshot.Engine.ModelRss.AllowNarratorRequests = AllowNarratorInternetCheckBox.IsChecked == true;
-            snapshot.Engine.ModelRss.RequireApproval = RequireInternetApprovalCheckBox.IsChecked == true;
-            AgentRosterService.EnsureParticipantCount(snapshot, Math.Max(activeParticipants, AgentRosterService.MinParticipants));
-            for (var index = 0; index < snapshot.Engine.Agents.Count; index++)
-            {
-                snapshot.Engine.Agents[index].Active = AgentRosterService.IsParticipantId(snapshot.Engine.Agents[index].Id)
-                    && index < activeParticipants;
-            }
-
-            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_settings_applied", new
-            {
-                snapshot.Configs["shared"].BaseUrl,
-                snapshot.Configs["shared"].Model,
-                snapshot.Configs["shared"].Timeout,
-                snapshot.Configs["shared"].Temperature,
-                snapshot.Configs["shared"].MaxOutputTokens,
-                AlphaModel = alphaModel,
-                BetaModel = betaModel,
-                GammaModel = gammaModel,
-                DeltaModel = deltaModel,
-                NarratorModel = narratorModel,
-                snapshot.Engine.ModelRss.UseInternet,
-                snapshot.Engine.ModelRss.Mode,
-                snapshot.Engine.ModelRss.SourceScope,
-                snapshot.Engine.ModelRss.MaxResults,
-                snapshot.Engine.ModelRss.AllowParticipantRequests,
-                snapshot.Engine.ModelRss.AllowNarratorRequests,
-                snapshot.Engine.ModelRss.RequireApproval,
-                ActiveParticipants = activeParticipants
-            });
-            ProviderTestStatus.Text = "Settings applied.";
-            RefreshActiveSession("Settings applied.");
-            _ = RefreshProviderReachabilityAsync(force: true);
-        });
+        await ArenaSessionMutations.ApplySettingsAsync();
     }
 
     private async void AutoChatButton_Click(object sender, RoutedEventArgs e)
@@ -2163,51 +2040,7 @@ public partial class MainWindow : Window
 
     private async void ResetButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null)
-        {
-            LoadStatus.Text = "No active session.";
-            return;
-        }
-
-        var confirm = ConfirmDialog.Show(
-            this,
-            _theme,
-            "Reset Arena",
-            "Reset the current arena transcript and live state?\n\nScenario, cast, locks, provider settings, and checkpoints are preserved.",
-            "Reset",
-            tone: ConfirmDialogTone.Danger);
-        if (!confirm)
-        {
-            ArenaRunStatus.Text = "Reset cancelled.";
-            return;
-        }
-
-        await RunArenaBusyAsync("Resetting arena...", ResetButton, async () =>
-        {
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (snapshot is null)
-            {
-                ArenaRunStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
-                return;
-            }
-
-            snapshot.Engine.Messages.Clear();
-            snapshot.Engine.Narration.Clear();
-            snapshot.Engine.TurnCount = 0;
-            snapshot.Engine.TurnIndex = 0;
-            snapshot.Engine.LastError = "";
-            snapshot.Engine.Narrator.Status = "idle";
-            snapshot.Engine.Narrator.LastError = "";
-            foreach (var agent in snapshot.Engine.Agents)
-            {
-                agent.Status = "waiting";
-                agent.PrivateNotes.Clear();
-            }
-
-            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_arena_reset", new { session = _activeSession.Id });
-            RefreshActiveSession("Arena reset.");
-        });
+        await ArenaSessionMutations.ResetArenaAsync();
     }
 
     private async void RandomSeedButton_Click(object sender, RoutedEventArgs e)

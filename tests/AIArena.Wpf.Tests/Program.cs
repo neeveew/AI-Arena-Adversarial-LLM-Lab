@@ -23,7 +23,8 @@ var tests = new (string Name, Action Test)[]
     ("agent board coordinator formats statuses", AgentBoardCoordinatorFormatsStatuses),
     ("transcript adjunct helpers format labels", TranscriptAdjunctHelpersFormatLabels),
     ("transcript mutation coordinator formats statuses", TranscriptMutationCoordinatorFormatsStatuses),
-    ("arena run coordinator formats statuses", ArenaRunCoordinatorFormatsStatuses)
+    ("arena run coordinator formats statuses", ArenaRunCoordinatorFormatsStatuses),
+    ("arena session mutation coordinator normalizes settings", ArenaSessionMutationCoordinatorNormalizesSettings)
 };
 
 var failures = 0;
@@ -474,6 +475,21 @@ static void ArenaRunCoordinatorFormatsStatuses()
     Require(ArenaRunCoordinator.AutoChatStatus(OneTurnResult.Failed("offline")) == "Auto Chat stopped: offline", "auto-chat failure status should include error");
     Require(ArenaRunCoordinator.IsPendingInternetApproval(approval), "pending internet approval should be detected");
     Require(!ArenaRunCoordinator.IsPendingInternetApproval(CoreMessageForTest(6, "Tool", "internet", "internet_approval", "ok", "tool-model", 12)), "resolved internet approval should not be pending");
+}
+
+static void ArenaSessionMutationCoordinatorNormalizesSettings()
+{
+    Require(ArenaSessionMutationCoordinator.EffectiveInternetMode(useInternet: false, "auto") == "off", "disabled internet should force off mode");
+    Require(ArenaSessionMutationCoordinator.EffectiveInternetMode(useInternet: true, "off") == "auto", "enabled internet should not keep off mode");
+    Require(ArenaSessionMutationCoordinator.EffectiveInternetMode(useInternet: true, "model_requested") == "model_requested", "selected internet mode should be preserved");
+    Require(ArenaSessionMutationCoordinator.ClampTimeout(-5) == 1, "timeout should clamp low");
+    Require(ArenaSessionMutationCoordinator.ClampTimeout(5000) == 3600, "timeout should clamp high");
+    Require(ArenaSessionMutationCoordinator.ClampTemperature(-0.5) == 0, "temperature should clamp low");
+    Require(ArenaSessionMutationCoordinator.ClampTemperature(3) == 2, "temperature should clamp high");
+    Require(ArenaSessionMutationCoordinator.ClampMaxOutput(50000) == 32768, "max output should clamp high");
+    Require(ArenaSessionMutationCoordinator.ClampContextWindow(0) == 1, "transcript window should keep at least one turn");
+    Require(ArenaSessionMutationCoordinator.ClampOptionalContextWindow(-2) == 0, "optional context windows should allow zero");
+    Require(ArenaSessionMutationCoordinator.ClampInternetMaxResults(99) == 10, "internet max results should clamp high");
 }
 
 static DialogueMessage CoreMessageForTest(int turn, string speaker, string speakerId, string kind, string status, string model, int latencyMs)
