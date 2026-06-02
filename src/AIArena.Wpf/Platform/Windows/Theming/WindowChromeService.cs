@@ -8,6 +8,24 @@ internal static class WindowChromeService
 {
     public static void ApplyNativeChromeColor(Window window)
     {
+        ApplyNativeChromeColor(
+            window,
+            ColorRef(0x58, 0x58, 0x58),
+            ColorRef(0x20, 0x20, 0x20),
+            ColorRef(0xFF, 0xFF, 0xFF));
+    }
+
+    public static void ApplySubtleNativeChromeColor(Window window)
+    {
+        ApplyNativeChromeColor(
+            window,
+            ColorRef(0x12, 0x1B, 0x26),
+            ColorRef(0x0B, 0x12, 0x1B),
+            ColorRef(0xFF, 0xFF, 0xFF));
+    }
+
+    private static void ApplyNativeChromeColor(Window window, int borderColor, int captionColor, int textColor)
+    {
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
         {
             return;
@@ -19,12 +37,9 @@ internal static class WindowChromeService
             return;
         }
 
-        var darkGray = ColorRef(0x20, 0x20, 0x20);
-        var borderGray = ColorRef(0x58, 0x58, 0x58);
-        var white = ColorRef(0xFF, 0xFF, 0xFF);
-        _ = DwmSetWindowAttribute(handle, DwmWindowAttribute.BorderColor, ref borderGray, Marshal.SizeOf<int>());
-        _ = DwmSetWindowAttribute(handle, DwmWindowAttribute.CaptionColor, ref darkGray, Marshal.SizeOf<int>());
-        _ = DwmSetWindowAttribute(handle, DwmWindowAttribute.TextColor, ref white, Marshal.SizeOf<int>());
+        _ = DwmSetWindowAttribute(handle, DwmWindowAttribute.BorderColor, ref borderColor, Marshal.SizeOf<int>());
+        _ = DwmSetWindowAttribute(handle, DwmWindowAttribute.CaptionColor, ref captionColor, Marshal.SizeOf<int>());
+        _ = DwmSetWindowAttribute(handle, DwmWindowAttribute.TextColor, ref textColor, Marshal.SizeOf<int>());
     }
 
     internal static int ColorRef(byte red, byte green, byte blue)

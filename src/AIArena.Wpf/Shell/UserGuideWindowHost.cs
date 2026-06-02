@@ -90,7 +90,7 @@ internal sealed class UserGuideWindowHost
             Background = ResourceBrush(owner, "AppBackgroundBrush"),
             Foreground = ResourceBrush(owner, "TextBrush")
         };
-        dialog.SourceInitialized += (_, _) => WindowChromeService.ApplyNativeChromeColor(dialog);
+        dialog.SourceInitialized += (_, _) => WindowChromeService.ApplySubtleNativeChromeColor(dialog);
         CopyThemeResources(owner, dialog);
         dialog.SetResourceReference(Window.BackgroundProperty, "AppBackgroundBrush");
         dialog.SetResourceReference(Window.ForegroundProperty, "TextBrush");
@@ -101,8 +101,8 @@ internal sealed class UserGuideWindowHost
         {
             Background = ResourceBrush(dialog, "AppBackgroundBrush"),
             BorderBrush = ResourceBrush(dialog, "ControlBorderBrush"),
-            BorderThickness = new Thickness(1),
-            Padding = new Thickness(14, 16, 14, 12)
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(18, 18, 18, 14)
         };
         chrome.SetResourceReference(Border.BackgroundProperty, "AppBackgroundBrush");
         chrome.SetResourceReference(Border.BorderBrushProperty, "ControlBorderBrush");
@@ -254,7 +254,7 @@ internal sealed class UserGuideWindowHost
         {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             Background = ResourceBrush(dialog, "InputBrush"),
-            Padding = new Thickness(20, 16, 20, 20),
+            Padding = new Thickness(0),
             Document = BuildGuideDocument(dialog, sections.FirstOrDefault() ?? new UserGuideSection("Guide", guideText))
         };
         guideViewer.SetResourceReference(Control.BackgroundProperty, "InputBrush");
@@ -343,7 +343,7 @@ internal sealed class UserGuideWindowHost
             Foreground = ResourceBrush(resources, "TextBrush"),
             FontFamily = new FontFamily("Segoe UI"),
             FontSize = 13,
-            PagePadding = new Thickness(0),
+            PagePadding = new Thickness(24, 6, 36, 20),
             LineHeight = 19
         };
 
