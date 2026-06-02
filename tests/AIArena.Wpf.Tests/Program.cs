@@ -24,7 +24,8 @@ var tests = new (string Name, Action Test)[]
     ("transcript adjunct helpers format labels", TranscriptAdjunctHelpersFormatLabels),
     ("transcript mutation coordinator formats statuses", TranscriptMutationCoordinatorFormatsStatuses),
     ("arena run coordinator formats statuses", ArenaRunCoordinatorFormatsStatuses),
-    ("arena session mutation coordinator normalizes settings", ArenaSessionMutationCoordinatorNormalizesSettings)
+    ("arena session mutation coordinator normalizes settings", ArenaSessionMutationCoordinatorNormalizesSettings),
+    ("session overview coordinator formats summaries", SessionOverviewCoordinatorFormatsSummaries)
 };
 
 var failures = 0;
@@ -490,6 +491,99 @@ static void ArenaSessionMutationCoordinatorNormalizesSettings()
     Require(ArenaSessionMutationCoordinator.ClampContextWindow(0) == 1, "transcript window should keep at least one turn");
     Require(ArenaSessionMutationCoordinator.ClampOptionalContextWindow(-2) == 0, "optional context windows should allow zero");
     Require(ArenaSessionMutationCoordinator.ClampInternetMaxResults(99) == 10, "internet max results should clamp high");
+}
+
+static void SessionOverviewCoordinatorFormatsSummaries()
+{
+    var alpha = new AgentState("alpha", "Alpha", "waiting", "", "default", "default", "", true, false, []);
+    var beta = new AgentState("beta", "Beta", "waiting", "", "default", "default", "beta-model", true, false, []);
+    var messages = new[]
+    {
+        TranscriptForTest(1, "Alpha", "alpha", "message", "ok") with { PromptTokens = 120, CompletionTokens = 40 },
+        TranscriptForTest(2, "Beta", "beta", "message", "ok") with { PromptTokens = 240, CompletionTokens = -5 }
+    };
+    var snapshot = SnapshotForOverviewTest(
+        providerOnline: false,
+        providerModel: "shared-model",
+        providerLastError: "provider boom",
+        turnIndex: 1,
+        messages,
+        [alpha, beta]);
+    var current = SessionOverviewCoordinator.CurrentTurnAgent(snapshot);
+
+    Require(current?.Id == "beta", "current turn should wrap over active agents");
+    Require(SessionOverviewCoordinator.CurrentTurnModel(snapshot, current) == "beta-model", "current agent model should win over shared model");
+    Require(SessionOverviewCoordinator.CurrentTurnModel(snapshot, alpha) == "shared-model", "shared model should be used when current agent has no model");
+    Require(SessionOverviewCoordinator.DisplayStatusValue(" alpha ") == "ALPHA", "status labels should trim and uppercase");
+    Require(SessionOverviewCoordinator.TopRunStateSummary(snapshot, current, model => model) == "Ready: next BETA using beta-model; provider offline.", "top run summary should remain stable");
+    Require(SessionOverviewCoordinator.ProviderSetupStatus(snapshot) == "provider boom", "provider setup should surface provider error");
+    Require(SessionOverviewCoordinator.ProviderSetupStatus(snapshot with { ProviderOnline = true }) == "Provider is online. Choose a model, then run 1 TURN.", "online provider setup status should remain stable");
+    Require(SessionOverviewCoordinator.ParticipantSummary(snapshot) == "2 agents + operator", "participant summary should count active agents");
+    Require(SessionOverviewCoordinator.TotalCompletionTokens(snapshot) == 40, "completion token total should ignore negative values");
+    Require(SessionOverviewCoordinator.MaxPromptContext(snapshot) == 240, "prompt context should use maximum prompt tokens");
+}
+
+static ArenaViewSnapshot SnapshotForOverviewTest(
+    bool providerOnline,
+    string providerModel,
+    string providerLastError,
+    int turnIndex,
+    IReadOnlyList<TranscriptMessage> messages,
+    IReadOnlyList<AgentState> agents)
+{
+    return new ArenaViewSnapshot(
+        "session",
+        "snapshot.json",
+        DateTime.UtcNow,
+        "research",
+        "",
+        "",
+        false,
+        false,
+        "auto",
+        "normal",
+        "auto",
+        "grounded",
+        "",
+        "auto",
+        "",
+        [],
+        false,
+        [],
+        messages.Count,
+        turnIndex,
+        providerModel,
+        "",
+        "",
+        "",
+        "",
+        "",
+        "idle",
+        "",
+        "default",
+        false,
+        "http://127.0.0.1:1234/v1",
+        60,
+        0.7,
+        2048,
+        12,
+        4,
+        4,
+        "",
+        "",
+        0,
+        providerLastError,
+        false,
+        "off",
+        "trusted",
+        4,
+        false,
+        false,
+        true,
+        "manual",
+        providerOnline,
+        messages,
+        agents);
 }
 
 static DialogueMessage CoreMessageForTest(int turn, string speaker, string speakerId, string kind, string status, string model, int latencyMs)

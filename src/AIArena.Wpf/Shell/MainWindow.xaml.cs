@@ -57,6 +57,7 @@ public partial class MainWindow : Window
     private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
     private readonly TelemetryWorkflowCoordinator? _telemetryWorkflowCoordinator;
     private readonly AgentPerformanceCoordinator? _agentPerformanceCoordinator;
+    private readonly SessionOverviewCoordinator? _sessionOverviewCoordinator;
     private readonly DiagnosticsWorkflowCoordinator? _diagnosticsWorkflowCoordinator;
     private readonly MatchSetupCoordinator? _matchSetupCoordinator;
     private readonly MatchLockCoordinator? _matchLockCoordinator;
@@ -128,6 +129,9 @@ public partial class MainWindow : Window
 
     private AgentPerformanceCoordinator AgentPerformance =>
         _agentPerformanceCoordinator ?? throw new InvalidOperationException("Agent performance coordinator is not initialized.");
+
+    private SessionOverviewCoordinator SessionOverview =>
+        _sessionOverviewCoordinator ?? throw new InvalidOperationException("Session overview coordinator is not initialized.");
 
     private DiagnosticsWorkflowCoordinator DiagnosticsWorkflow =>
         _diagnosticsWorkflowCoordinator ?? throw new InvalidOperationException("Diagnostics workflow coordinator is not initialized.");
@@ -513,6 +517,28 @@ public partial class MainWindow : Window
             diagnostic => VoiceAdherenceAccent(diagnostic),
             ShellUiHelpers.CompactPreview,
             BlendBrush);
+        _sessionOverviewCoordinator = new SessionOverviewCoordinator(
+            SessionOverviewMatchText,
+            SessionOverviewTurnsText,
+            SessionOverviewParticipantsText,
+            SessionOverviewTokensText,
+            SessionOverviewProviderText,
+            SessionOverviewContextText,
+            TopMatchValue,
+            TopProviderValue,
+            TopCurrentTurnValue,
+            TopTurnsValue,
+            TopBarStatus,
+            ArenaRunStatus,
+            SettingsProviderStatusText,
+            () => _arenaBusy,
+            () => _arenaRunCoordinator?.IsAutoChatRunning == true,
+            ResourceBrush,
+            AccentForSpeaker,
+            FormatCompactNumber,
+            ShortModelName,
+            snapshot => AgentPerformance.Populate(snapshot),
+            UpdateProviderHealthPopup);
         _diagnosticsWorkflowCoordinator = new DiagnosticsWorkflowCoordinator(
             _discourseDiagnostics,
             FrictionChip,
@@ -1198,15 +1224,7 @@ public partial class MainWindow : Window
 
     private void UpdateSessionOverview(ArenaViewSnapshot snapshot)
     {
-        SessionOverviewMatchText.Text = DisplayStatusValue(snapshot.MatchType);
-        SessionOverviewTurnsText.Text = snapshot.TurnCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        SessionOverviewParticipantsText.Text = $"{snapshot.Agents.Count(agent => agent.Active)} agents + operator";
-        SessionOverviewTokensText.Text = FormatCompactNumber(snapshot.Messages.Sum(message => Math.Max(message.CompletionTokens, 0)));
-        SessionOverviewProviderText.Text = snapshot.ProviderOnline ? "ONLINE" : "OFFLINE";
-        SessionOverviewProviderText.Foreground = snapshot.ProviderOnline ? ResourceBrush("PrimaryBorderBrush") : ResourceBrush("DangerTextBrush");
-        var context = snapshot.Messages.Select(message => message.PromptTokens).DefaultIfEmpty(0).Max();
-        SessionOverviewContextText.Text = context > 0 ? FormatCompactNumber(context) : "-";
-        AgentPerformance.Populate(snapshot);
+        SessionOverview.UpdateSessionOverview(snapshot);
     }
 
 
@@ -1223,67 +1241,17 @@ public partial class MainWindow : Window
 
     private void UpdateTopBarStatus(ArenaViewSnapshot snapshot)
     {
-        TopMatchValue.Text = DisplayStatusValue(snapshot.MatchType);
-        TopProviderValue.Text = snapshot.ProviderOnline ? "ONLINE" : "OFFLINE";
-        TopProviderValue.Foreground = snapshot.ProviderOnline ? ResourceBrush("PrimaryBorderBrush") : ResourceBrush("DangerTextBrush");
-        TopProviderValue.ToolTip = $"Provider details - {snapshot.ProviderBaseUrl}";
-        var current = CurrentTurnAgent(snapshot);
-        TopCurrentTurnValue.Text = current?.Id.ToUpperInvariant() ?? "-";
-        TopCurrentTurnValue.Foreground = current is null ? ResourceBrush("TextBrush") : AccentForSpeaker(current.Id);
-        TopCurrentTurnValue.ToolTip = current is null
-            ? "No active turn participant."
-            : $"{DisplayStatusValue(current.Id)}: {current.Name}\nModel: {CurrentTurnModel(snapshot, current)}";
-        TopTurnsValue.Text = snapshot.TurnCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-        TopBarStatus.ToolTip = $"Session: {snapshot.SessionId}\nModel: {CurrentTurnModel(snapshot, current)}";
-        if (!_arenaBusy && _arenaRunCoordinator?.IsAutoChatRunning != true)
-        {
-            ArenaRunStatus.Text = TopRunStateSummary(snapshot, current);
-        }
-
-        UpdateSettingsProviderStatus(snapshot);
-    }
-
-    private static string TopRunStateSummary(ArenaViewSnapshot snapshot, AgentState? current)
-    {
-        var provider = snapshot.ProviderOnline ? "provider online" : "provider offline";
-        if (current is null)
-        {
-            return $"Ready: no active turn participant; {provider}.";
-        }
-
-        var model = ShortModelName(CurrentTurnModel(snapshot, current));
-        return $"Ready: next {DisplayStatusValue(current.Id)} using {model}; {provider}.";
-    }
-
-    private void UpdateSettingsProviderStatus(ArenaViewSnapshot snapshot)
-    {
-        var status = snapshot.ProviderOnline ? "ONLINE" : "OFFLINE";
-        var detail = snapshot.ProviderOnline
-            ? snapshot.ProviderModel
-            : string.IsNullOrWhiteSpace(snapshot.ProviderLastError)
-                ? snapshot.ProviderBaseUrl
-                : snapshot.ProviderLastError;
-        SettingsProviderStatusText.Text = $"Provider {status} - {detail}";
-        SettingsProviderStatusText.Foreground = snapshot.ProviderOnline
-            ? ResourceBrush("PrimaryBorderBrush")
-            : ResourceBrush("DangerTextBrush");
-        UpdateProviderHealthPopup(snapshot);
+        SessionOverview.UpdateTopBarStatus(snapshot);
     }
 
     private static AgentState? CurrentTurnAgent(ArenaViewSnapshot snapshot)
     {
-        var active = snapshot.Agents.Where(agent => agent.Active).ToArray();
-        return active.Length == 0
-            ? null
-            : active[Math.Clamp(snapshot.TurnIndex, 0, int.MaxValue) % active.Length];
+        return SessionOverviewCoordinator.CurrentTurnAgent(snapshot);
     }
 
     private static string DisplayStatusValue(string value)
     {
-        return string.IsNullOrWhiteSpace(value) || value == "-"
-            ? "-"
-            : value.Trim().ToUpperInvariant();
+        return SessionOverviewCoordinator.DisplayStatusValue(value);
     }
 
     private void PopulateTranscript(IReadOnlyList<TranscriptMessage> messages)
@@ -1767,17 +1735,7 @@ public partial class MainWindow : Window
 
     private string ProviderSetupStatus(ArenaViewSnapshot snapshot)
     {
-        if (snapshot.ProviderOnline)
-        {
-            return "Provider is online. Choose a model, then run 1 TURN.";
-        }
-
-        if (!string.IsNullOrWhiteSpace(snapshot.ProviderLastError) && snapshot.ProviderLastError != "-")
-        {
-            return snapshot.ProviderLastError;
-        }
-
-        return "Provider is offline. Start LM Studio server, then save and test.";
+        return SessionOverviewCoordinator.ProviderSetupStatus(snapshot);
     }
 
     private Border CreateSetupChip(string label, string value, Brush accent)
@@ -1802,14 +1760,7 @@ public partial class MainWindow : Window
 
     private static string CurrentTurnModel(ArenaViewSnapshot snapshot, AgentState? current)
     {
-        if (!string.IsNullOrWhiteSpace(current?.Model))
-        {
-            return current.Model;
-        }
-
-        return !string.IsNullOrWhiteSpace(snapshot.ProviderModel)
-            ? snapshot.ProviderModel
-            : "-";
+        return SessionOverviewCoordinator.CurrentTurnModel(snapshot, current);
     }
 
     private bool ShouldShowStyleFit()
