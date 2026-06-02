@@ -17,7 +17,6 @@ using AIArena.Core.Persistence;
 using AIArena.Core.Providers;
 using AIArena.Core.Services;
 using AIArena.Wpf.Controls;
-using CoreModelProviderConfig = AIArena.Core.Models.ModelProviderConfig;
 using AIArena.Wpf.Models;
 using AIArena.Wpf.Services;
 
@@ -56,6 +55,7 @@ public partial class MainWindow : Window
     private readonly InternetWorkflowCoordinator? _internetWorkflowCoordinator;
     private readonly ArenaRunCoordinator? _arenaRunCoordinator;
     private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
+    private readonly ProviderReachabilityCoordinator? _providerReachabilityCoordinator;
     private readonly TelemetryWorkflowCoordinator? _telemetryWorkflowCoordinator;
     private readonly AgentPerformanceCoordinator? _agentPerformanceCoordinator;
     private readonly SessionOverviewCoordinator? _sessionOverviewCoordinator;
@@ -127,6 +127,9 @@ public partial class MainWindow : Window
 
     private ProviderSettingsCoordinator ProviderSettings =>
         _providerSettingsCoordinator ?? throw new InvalidOperationException("Provider settings coordinator is not initialized.");
+
+    private ProviderReachabilityCoordinator ProviderReachability =>
+        _providerReachabilityCoordinator ?? throw new InvalidOperationException("Provider reachability coordinator is not initialized.");
 
     private TelemetryWorkflowCoordinator TelemetryWorkflow =>
         _telemetryWorkflowCoordinator ?? throw new InvalidOperationException("Telemetry workflow coordinator is not initialized.");
@@ -283,13 +286,13 @@ public partial class MainWindow : Window
             AccentForSpeaker,
             ShortModelName,
             DisplayStatusValue,
-            LoadSharedProviderConfigAsync,
-            (online, error, latencyMs, status) => PersistProviderReachabilityAsync(online, error, latencyMs, status),
+            () => ProviderReachability.LoadSharedConfigAsync(),
+            (online, error, latencyMs, status) => ProviderReachability.PersistAsync(online, error, latencyMs, status),
             preferredSessionId => LoadSessionsAsync(preferredSessionId),
             SaveSnapshotForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync,
-            force => RefreshProviderReachabilityAsync(force),
-            () => UpdateProviderHealthPopup());
+            force => ProviderReachability.RefreshAsync(force),
+            () => ProviderReachability.UpdatePopup());
         _wpfSettings = _wpfSettingsStore.Load();
         _scenarioWorkflowCoordinator = new ScenarioWorkflowCoordinator(
             this,
@@ -488,7 +491,34 @@ public partial class MainWindow : Window
         {
             Interval = TimeSpan.FromSeconds(3)
         };
-        _providerHealthTimer.Tick += async (_, _) => await RefreshProviderReachabilityAsync();
+        _providerHealthTimer.Tick += async (_, _) => await ProviderReachability.RefreshAsync();
+        _providerReachabilityCoordinator = new ProviderReachabilityCoordinator(
+            _coreSessionStore,
+            _providerReachabilityService,
+            _providerHealthTimer,
+            ProviderHealthPopup,
+            ProviderHealthStatusText,
+            ProviderHealthBaseUrlText,
+            ProviderHealthModelCountText,
+            ProviderHealthDefaultModelText,
+            ProviderHealthLastCheckText,
+            ProviderHealthLastErrorText,
+            ProviderHealthModelWarning,
+            ProviderHealthModelWarningText,
+            ProviderHealthTestButton,
+            ProviderHealthRefreshModelsButton,
+            ProviderBaseUrlText,
+            ProviderModelText,
+            () => _activeSession,
+            () => _arenaBusy,
+            () => _lastRenderedSnapshot,
+            () => _providerSettingsCoordinator,
+            ResourceBrush,
+            ApplyProviderStatusSnapshot,
+            UpdateTopBarStatus,
+            SetArenaRunStatus,
+            force => RefreshAdvertisedModelsAsync(force),
+            () => OpenModelProviderSettings());
         _telemetryWorkflowCoordinator = new TelemetryWorkflowCoordinator(
             TelemetryCpuValueText,
             TelemetryCpuSparkline,
@@ -543,7 +573,7 @@ public partial class MainWindow : Window
             FormatCompactNumber,
             ShortModelName,
             snapshot => AgentPerformance.Populate(snapshot),
-            UpdateProviderHealthPopup);
+            snapshot => ProviderReachability.UpdatePopup(snapshot));
         _diagnosticsWorkflowCoordinator = new DiagnosticsWorkflowCoordinator(
             _discourseDiagnostics,
             FrictionChip,
@@ -668,7 +698,7 @@ public partial class MainWindow : Window
             RunArenaBusyForCoordinatorAsync,
             SaveSnapshotForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync,
-            force => RefreshProviderReachabilityAsync(force),
+            force => ProviderReachability.RefreshAsync(force),
             SetLoadStatus,
             SetArenaRunStatus);
         InitializeAboutPanel();
@@ -685,7 +715,7 @@ public partial class MainWindow : Window
             _refreshTimer.Start();
             _providerHealthTimer.Start();
             TelemetryWorkflow.UpdateTimerState();
-            _ = RefreshProviderReachabilityAsync(force: true);
+            _ = ProviderReachability.RefreshAsync(force: true);
         };
         SourceInitialized += (_, _) => ApplyNativeChromeColor();
         Closed += (_, _) =>
@@ -1996,85 +2026,11 @@ public partial class MainWindow : Window
         TranscriptExportCoordinator.ExportTranscript();
     }
 
-    private async Task<CoreModelProviderConfig?> LoadSharedProviderConfigAsync()
+    private void ApplyProviderStatusSnapshot(CoreSessionSummary session, ArenaViewSnapshot snapshot)
     {
-        return _activeSession is null
-            ? null
-            : await _providerReachabilityService.LoadSharedConfigAsync(_activeSession.Id);
-    }
-
-    private async Task RefreshProviderReachabilityAsync(bool force = false)
-    {
-        if (_activeSession is null || (_arenaBusy && !force))
-        {
-            return;
-        }
-
-        var result = await _providerReachabilityService.RefreshAsync(_activeSession.Id);
-        if (result is null)
-        {
-            return;
-        }
-
-        _providerSettingsCoordinator?.RecordProviderReachabilityCheck(result.CheckedAt, result.ModelCount);
-        _providerHealthTimer.Interval = result.NextInterval;
-        await UpdateActiveProviderStatusOnlyAsync(result.Status);
-        UpdateProviderHealthPopup();
-    }
-
-    private async Task PersistProviderReachabilityAsync(
-        bool online,
-        string error,
-        int latencyMs,
-        string status,
-        AIArena.Core.Models.ArenaSnapshot? snapshot = null,
-        string? sessionId = null)
-    {
-        if (_activeSession is null)
-        {
-            return;
-        }
-
-        sessionId ??= _activeSession.Id;
-        var result = await _providerReachabilityService.PersistAsync(sessionId, online, error, latencyMs, status, snapshot);
-        if (result is null)
-        {
-            return;
-        }
-
-        _providerHealthTimer.Interval = result.NextInterval;
-        await UpdateActiveProviderStatusOnlyAsync(result.Status);
-        UpdateProviderHealthPopup();
-    }
-
-    private async Task UpdateActiveProviderStatusOnlyAsync(string status)
-    {
-        if (_activeSession is null)
-        {
-            return;
-        }
-
-        var latest = (await _coreSessionStore.ListSessionsAsync()).FirstOrDefault(session => session.Id == _activeSession.Id);
-        if (latest is null)
-        {
-            return;
-        }
-
-        var coreSnapshot = await _coreSessionStore.LoadSnapshotAsync(latest.Id);
-        if (coreSnapshot is null)
-        {
-            return;
-        }
-
-        var snapshot = SnapshotViewMapper.FromCore(latest, coreSnapshot);
-        _activeSession = latest;
-        _activeSnapshotWriteUtc = latest.LastModified;
+        _activeSession = session;
+        _activeSnapshotWriteUtc = session.LastModified;
         _lastRenderedSnapshot = snapshot;
-        UpdateTopBarStatus(snapshot);
-        if (!_arenaBusy)
-        {
-            ArenaRunStatus.Text = status;
-        }
     }
 
     private void SavedStateModePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -2108,19 +2064,6 @@ public partial class MainWindow : Window
         if (_savedStateCoordinator is not null)
         {
             await _savedStateCoordinator.DeleteAsync();
-        }
-    }
-
-    private static async Task RunBusyAsync(Control control, Func<Task> action)
-    {
-        control.IsEnabled = false;
-        try
-        {
-            await action();
-        }
-        finally
-        {
-            control.IsEnabled = true;
         }
     }
 
@@ -2599,84 +2542,28 @@ public partial class MainWindow : Window
 
     private void TopProviderValue_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        UpdateProviderHealthPopup();
-        ProviderHealthPopup.IsOpen = true;
+        ProviderReachability.ShowPopup();
         e.Handled = true;
     }
 
     private void ProviderHealthCloseButton_Click(object sender, RoutedEventArgs e)
     {
-        ProviderHealthPopup.IsOpen = false;
+        ProviderReachability.ClosePopup();
     }
 
     private async void ProviderHealthTestButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_providerSettingsCoordinator is not null)
-        {
-            await _providerSettingsCoordinator.TestProviderAsync(ProviderHealthTestButton);
-        }
-
-        UpdateProviderHealthPopup();
+        await ProviderReachability.TestProviderAsync();
     }
 
     private async void ProviderHealthRefreshModelsButton_Click(object sender, RoutedEventArgs e)
     {
-        await RunBusyAsync(ProviderHealthRefreshModelsButton, async () =>
-        {
-            ProviderHealthStatusText.Text = "Refreshing advertised models...";
-            await RefreshAdvertisedModelsAsync(force: true);
-        });
-        UpdateProviderHealthPopup();
+        await ProviderReachability.RefreshModelsAsync();
     }
 
     private void ProviderHealthSettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        ProviderHealthPopup.IsOpen = false;
-        OpenModelProviderSettings();
-    }
-
-    private void UpdateProviderHealthPopup(ArenaViewSnapshot? snapshot = null)
-    {
-        if (ProviderHealthStatusText is null)
-        {
-            return;
-        }
-
-        snapshot ??= _lastRenderedSnapshot;
-        var online = snapshot?.ProviderOnline == true;
-        var baseUrl = snapshot?.ProviderBaseUrl ?? ProviderBaseUrlText?.Text?.Trim() ?? "-";
-        var model = snapshot?.ProviderModel ?? ProviderModelText?.Text?.Trim() ?? "-";
-        var error = snapshot?.ProviderLastError ?? "";
-        var advertisedModels = _providerSettingsCoordinator?.AdvertisedModels ?? [];
-        var modelCount = advertisedModels.Count > 0
-            ? advertisedModels.Count
-            : _providerSettingsCoordinator?.LastProviderModelCount ?? -1;
-        var checkedAt = _providerSettingsCoordinator?.LastProviderHealthCheckedAt
-            ?? _providerSettingsCoordinator?.LastModelListCheckedAt;
-
-        ProviderHealthStatusText.Text = online ? "ONLINE" : "OFFLINE";
-        ProviderHealthStatusText.Foreground = online ? ResourceBrush("PrimaryBorderBrush") : ResourceBrush("DangerTextBrush");
-        ProviderHealthBaseUrlText.Text = string.IsNullOrWhiteSpace(baseUrl) ? "-" : baseUrl;
-        ProviderHealthModelCountText.Text = modelCount >= 0 ? modelCount.ToString(System.Globalization.CultureInfo.InvariantCulture) : "unknown";
-        ProviderHealthDefaultModelText.Text = string.IsNullOrWhiteSpace(model) || model == "-" ? "not selected" : model;
-        ProviderHealthLastCheckText.Text = checkedAt is null
-            ? "waiting"
-            : checkedAt.Value.ToLocalTime().ToString("h:mm:ss tt", System.Globalization.CultureInfo.CurrentCulture);
-        ProviderHealthLastErrorText.Text = string.IsNullOrWhiteSpace(error)
-            ? "No provider error recorded."
-            : $"Last error: {error}";
-        ProviderHealthLastErrorText.Foreground = string.IsNullOrWhiteSpace(error)
-            ? ResourceBrush("MutedTextBrush")
-            : ResourceBrush("DangerTextBrush");
-
-        var missingModel = advertisedModels.Count > 0
-            && !string.IsNullOrWhiteSpace(model)
-            && model != "-"
-            && !advertisedModels.Contains(model, StringComparer.OrdinalIgnoreCase);
-        ProviderHealthModelWarning.Visibility = missingModel ? Visibility.Visible : Visibility.Collapsed;
-        ProviderHealthModelWarningText.Text = missingModel
-            ? $"Selected default model '{model}' is not in the advertised model list. Open settings to reselect or type it manually."
-            : "";
+        ProviderReachability.OpenSettings();
     }
 
     private void TranscriptSearchText_KeyDown(object sender, KeyEventArgs e)

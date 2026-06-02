@@ -27,7 +27,8 @@ var tests = new (string Name, Action Test)[]
     ("arena run coordinator formats statuses", ArenaRunCoordinatorFormatsStatuses),
     ("arena session mutation coordinator normalizes settings", ArenaSessionMutationCoordinatorNormalizesSettings),
     ("session overview coordinator formats summaries", SessionOverviewCoordinatorFormatsSummaries),
-    ("shell ui helpers blend brushes", ShellUiHelpersBlendBrushes)
+    ("shell ui helpers blend brushes", ShellUiHelpersBlendBrushes),
+    ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState)
 };
 
 var failures = 0;
@@ -541,6 +542,41 @@ static void ShellUiHelpersBlendBrushes()
     var high = RequireSolidColor(ShellUiHelpers.BlendBrush(new SolidColorBrush(Color.FromRgb(10, 20, 30)), new SolidColorBrush(Color.FromRgb(200, 210, 220)), 2), "high clamp should return solid");
     Require(low == Color.FromRgb(10, 20, 30), "blend amount should clamp below zero");
     Require(high == Color.FromRgb(200, 210, 220), "blend amount should clamp above one");
+}
+
+static void ProviderReachabilityCoordinatorFormatsPopupState()
+{
+    var snapshot = SnapshotForOverviewTest(
+        providerOnline: false,
+        providerModel: "missing-model",
+        providerLastError: "provider offline",
+        turnIndex: 0,
+        [],
+        []);
+    var state = ProviderHealthPopupState.From(
+        snapshot,
+        "fallback-url",
+        "fallback-model",
+        ["available-model"],
+        lastProviderModelCount: -1,
+        DateTimeOffset.UtcNow,
+        null);
+
+    Require(!state.Online, "offline snapshot should format as offline");
+    Require(state.StatusText == "OFFLINE", "offline status label should remain stable");
+    Require(state.ModelCountText == "1", "advertised model count should win");
+    Require(state.DefaultModelText == "missing-model", "snapshot model should win over fallback text");
+    Require(state.ErrorText == "Last error: provider offline", "provider error should be surfaced");
+    Require(state.HasError, "provider error flag should be set");
+    Require(state.HasMissingModelWarning, "missing advertised model warning should be set");
+    Require(state.ModelWarningText == ProviderReachabilityCoordinator.ProviderModelWarning("missing-model"), "missing model warning text should remain stable");
+
+    var fallback = ProviderHealthPopupState.From(null, "", "", [], -1, null, null);
+    Require(fallback.BaseUrl == "-", "blank fallback base URL should become placeholder");
+    Require(fallback.DefaultModelText == "not selected", "blank fallback model should become not selected");
+    Require(fallback.ModelCountText == "unknown", "unknown model count should stay unknown");
+    Require(fallback.LastCheckText == "waiting", "missing timestamps should show waiting");
+    Require(!fallback.HasMissingModelWarning, "missing model warning should require advertised models");
 }
 
 static Color RequireSolidColor(Brush brush, string message)
