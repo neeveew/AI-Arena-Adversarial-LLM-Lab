@@ -33,7 +33,8 @@ var tests = new (string Name, Action Test)[]
     ("transcript view coordinator normalizes view state", TranscriptViewCoordinatorNormalizesViewState),
     ("custom match summary coordinator normalizes card text", CustomMatchSummaryCoordinatorNormalizesCardText),
     ("scenario seed inspector coordinator formats metadata", ScenarioSeedInspectorCoordinatorFormatsMetadata),
-    ("provider quick setup coordinator formats defaults", ProviderQuickSetupCoordinatorFormatsDefaults)
+    ("provider quick setup coordinator formats defaults", ProviderQuickSetupCoordinatorFormatsDefaults),
+    ("news panel coordinator summarizes internet items", NewsPanelCoordinatorSummarizesInternetItems)
 };
 
 var failures = 0;
@@ -649,6 +650,21 @@ static void ProviderQuickSetupCoordinatorFormatsDefaults()
     Require(ProviderQuickSetupCoordinator.QuickModelText(snapshot, agent) == "agent-model", "agent model should populate quick setup model first");
     Require(ProviderQuickSetupCoordinator.QuickModelText(snapshot, agent with { Model = "" }) == "shared-model", "shared provider model should backfill quick setup model");
     Require(ProviderQuickSetupCoordinator.QuickModelText(snapshot with { ProviderModel = "" }, agent with { Model = "" }) == "", "missing model should leave quick setup model blank");
+}
+
+static void NewsPanelCoordinatorSummarizesInternetItems()
+{
+    var normal = TranscriptForTest(1, "Alpha", "alpha", "message", "ok");
+    var news = TranscriptForTest(2, "News", "news", "news", "ok") with { InternetSources = ["https://example.test/a"] };
+    var approval = TranscriptForTest(3, "Tool", "internet", "internet_approval", "pending") with { InternetSources = ["https://example.test/b"] };
+    var tool = TranscriptForTest(4, "Tool", "internet", "message", "ok") with { InternetTool = "web_fetch" };
+
+    Require(!NewsPanelCoordinator.IsNewsMessage(normal), "plain transcript messages should not appear in news panel");
+    Require(NewsPanelCoordinator.IsNewsMessage(news), "news messages should appear in news panel");
+    Require(NewsPanelCoordinator.IsNewsMessage(approval), "internet approval messages should appear in news panel");
+    Require(NewsPanelCoordinator.IsNewsMessage(tool), "messages with internet tools should appear in news panel");
+    Require(NewsPanelCoordinator.SummaryText([]) == "No internet activity in this session.", "empty news summary should remain stable");
+    Require(NewsPanelCoordinator.SummaryText([news, approval, tool]) == "3 internet item(s), 2 source(s), 1 waiting for approval", "news summary should count items, sources, and pending approvals");
 }
 
 static Color RequireSolidColor(Brush brush, string message)

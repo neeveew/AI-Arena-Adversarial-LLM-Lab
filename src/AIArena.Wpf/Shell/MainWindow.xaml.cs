@@ -49,6 +49,7 @@ public partial class MainWindow : Window
     private readonly TranscriptMutationCoordinator? _transcriptMutationCoordinator;
     private readonly TranscriptCardRenderer? _transcriptCardRenderer;
     private readonly TranscriptAdjunctCoordinator? _transcriptAdjunctCoordinator;
+    private readonly NewsPanelCoordinator? _newsPanelCoordinator;
     private readonly AgentMemoryCoordinator? _agentMemoryCoordinator;
     private readonly ScenarioWorkflowCoordinator? _scenarioWorkflowCoordinator;
     private readonly OperatorTurnCoordinator? _operatorTurnCoordinator;
@@ -112,6 +113,9 @@ public partial class MainWindow : Window
 
     private TranscriptAdjunctCoordinator TranscriptAdjunct =>
         _transcriptAdjunctCoordinator ?? throw new InvalidOperationException("Transcript adjunct coordinator is not initialized.");
+
+    private NewsPanelCoordinator NewsPanelWorkflow =>
+        _newsPanelCoordinator ?? throw new InvalidOperationException("News panel coordinator is not initialized.");
 
     private AgentMemoryCoordinator AgentMemory =>
         _agentMemoryCoordinator ?? throw new InvalidOperationException("Agent memory coordinator is not initialized.");
@@ -464,6 +468,12 @@ public partial class MainWindow : Window
             visibleMessages => TranscriptInsight.ReselectLatest(visibleMessages),
             () => TranscriptInsight.ClearTurnCompareSelection(suppressAutoSeed: true, refresh: true),
             GenerateDecisionCardAsync);
+        _newsPanelCoordinator = new NewsPanelCoordinator(
+            NewsItems,
+            NewsSummaryText,
+            ShellCards,
+            TranscriptAdjunct,
+            ResourceBrush);
         _agentMemoryCoordinator = new AgentMemoryCoordinator(
             this,
             _coreSessionStore,
@@ -1107,7 +1117,7 @@ public partial class MainWindow : Window
         PopulateTranscript(snapshot.Messages);
         PopulateAgents(snapshot);
         PopulateCustomMatch(snapshot);
-        PopulateNews(snapshot.Messages);
+        NewsPanelWorkflow.Populate(snapshot.Messages);
         OperatorTurn.UpdatePrivateTargetSummary();
     }
 
@@ -1120,12 +1130,11 @@ public partial class MainWindow : Window
     private void PopulateFallbackState(string message)
     {
         TranscriptItems.Children.Clear();
-        NewsItems.Children.Clear();
         AgentPerformance.CloseDetail();
         _lastRenderedSnapshot = null;
         TranscriptItems.Children.Add(CreateCard("Transcript", message, ResourceBrush("CardBrush"), ResourceBrush("AlphaAccentBrush")));
         AgentBoard.PopulateFallback();
-        NewsItems.Children.Add(CreateCard("News", "No live snapshot data.", ResourceBrush("CardBrush"), ResourceBrush("NarratorAccentBrush")));
+        NewsPanelWorkflow.PopulateFallback();
     }
 
     private void UpdateTopBarStatus(ArenaViewSnapshot snapshot)
@@ -1259,39 +1268,6 @@ public partial class MainWindow : Window
         ScenarioWorkflow.PopulateGenerationHistory(snapshot);
         CustomMatchSummary.Populate(snapshot);
         MatchSetup.PopulateRivalryMatrix(snapshot);
-    }
-
-    private void PopulateNews(IReadOnlyList<TranscriptMessage> messages)
-    {
-        NewsItems.Children.Clear();
-        var newsMessages = messages
-            .Where(message => message.Kind.Equals("news", StringComparison.OrdinalIgnoreCase)
-                || message.Kind.StartsWith("internet", StringComparison.OrdinalIgnoreCase)
-                || !string.IsNullOrWhiteSpace(message.InternetTool)
-                || message.InternetSources.Count > 0)
-            .OrderByDescending(message => message.Turn)
-            .ToArray();
-
-        if (newsMessages.Length == 0)
-        {
-            NewsSummaryText.Text = "No internet activity in this session.";
-            NewsItems.Children.Add(CreateEmptyStateCard(
-                "News inspector",
-                "No fetched or curated news items in this session yet.",
-                ResourceBrush("NarratorAccentBrush")));
-            return;
-        }
-
-        var sourceCount = newsMessages.Sum(message => message.InternetSources.Count);
-        var pendingCount = newsMessages.Count(message => message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase)
-            && message.Status.Equals("pending", StringComparison.OrdinalIgnoreCase));
-        NewsSummaryText.Text = $"{newsMessages.Length} internet item(s), {sourceCount} source(s)"
-            + (pendingCount > 0 ? $", {pendingCount} waiting for approval" : "");
-
-        foreach (var message in newsMessages)
-        {
-            NewsItems.Children.Add(TranscriptAdjunct.CreateNewsInspectorCard(message));
-        }
     }
 
     private Border CreateCard(string title, string body, Brush background, Brush accent)
