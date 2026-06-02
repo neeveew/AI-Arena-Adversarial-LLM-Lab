@@ -60,11 +60,10 @@ public partial class MainWindow : Window
     private readonly MatchLockCoordinator? _matchLockCoordinator;
     private readonly AgentRosterCoordinator? _agentRosterCoordinator;
     private readonly MatchQualityTimelineCoordinator? _matchQualityTimelineCoordinator;
+    private readonly AgentBoardCoordinator? _agentBoardCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
     private readonly DispatcherTimer _providerHealthTimer;
-    private readonly List<Button> _agentTurnButtons = [];
-    private readonly List<Button> _narratorActionButtons = [];
     private readonly List<Button> _transcriptActionButtons = [];
     private readonly SemaphoreSlim _arenaOperationLock = new(1, 1);
     private IReadOnlyList<TranscriptMessage> _lastRenderedMessages = [];
@@ -134,6 +133,9 @@ public partial class MainWindow : Window
 
     private MatchQualityTimelineCoordinator MatchQualityTimeline =>
         _matchQualityTimelineCoordinator ?? throw new InvalidOperationException("Match quality timeline coordinator is not initialized.");
+
+    private AgentBoardCoordinator AgentBoard =>
+        _agentBoardCoordinator ?? throw new InvalidOperationException("Agent board coordinator is not initialized.");
 
     public MainWindow()
     {
@@ -401,6 +403,23 @@ public partial class MainWindow : Window
             SaveSnapshotForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync,
             SetArenaRunStatus);
+        _agentBoardCoordinator = new AgentBoardCoordinator(
+            _coreSessionStore,
+            _eventLogStore,
+            AgentItems,
+            () => _activeSession,
+            () => _arenaBusy,
+            () => _autoChatCancellation is not null,
+            ResourceBrush,
+            BlendBrush,
+            AccentForSpeaker,
+            DisplayStatusValue,
+            RunAgentTurnAsync,
+            NarrateNowButton_Click,
+            RunArenaBusyForCoordinatorAsync,
+            SaveSnapshotForCoordinatorAsync,
+            RefreshActiveSessionForCoordinatorAsync,
+            SetArenaRunStatus);
         ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
         InitializeThemePicker();
         _refreshTimer = new DispatcherTimer
@@ -443,7 +462,7 @@ public partial class MainWindow : Window
             AccentForSpeaker,
             MatchLockCoordinator.FormatParticipantTitle,
             DisplayStatusValue,
-            DisplayInlineStatus,
+            AgentBoardCoordinator.DisplayInlineStatus,
             ShortModelName,
             FormatCompactNumber,
             FormatDuration,
@@ -1118,17 +1137,11 @@ public partial class MainWindow : Window
     private void PopulateFallbackState(string message)
     {
         TranscriptItems.Children.Clear();
-        AgentItems.Children.Clear();
         NewsItems.Children.Clear();
         AgentPerformance.CloseDetail();
         _lastRenderedSnapshot = null;
-        _agentTurnButtons.Clear();
-        _narratorActionButtons.Clear();
         TranscriptItems.Children.Add(CreateCard("Transcript", message, ResourceBrush("CardBrush"), ResourceBrush("AlphaAccentBrush")));
-        AgentItems.Children.Add(CreateAgentStatusCard("Alpha", "waiting", ResourceBrush("AlphaAccentBrush")));
-        AgentItems.Children.Add(CreateAgentStatusCard("Beta", "waiting", ResourceBrush("BetaAccentBrush")));
-        AgentItems.Children.Add(CreateAgentStatusCard("Gamma", "waiting", ResourceBrush("GammaAccentBrush")));
-        AgentItems.Children.Add(CreateAgentStatusCard("Delta", "waiting", ResourceBrush("DeltaAccentBrush")));
+        AgentBoard.PopulateFallback();
         NewsItems.Children.Add(CreateCard("News", "No live snapshot data.", ResourceBrush("CardBrush"), ResourceBrush("NarratorAccentBrush")));
     }
 
@@ -1349,24 +1362,7 @@ public partial class MainWindow : Window
 
     private void PopulateAgents(ArenaViewSnapshot snapshot)
     {
-        var agents = snapshot.Agents;
-        var currentAgentId = CurrentTurnAgent(snapshot)?.Id;
-        AgentItems.Children.Clear();
-        _agentTurnButtons.Clear();
-        _narratorActionButtons.Clear();
-
-        if (agents.Count == 0)
-        {
-            AgentItems.Children.Add(CreateAgentStatusCard("No agents", "No active snapshot", ResourceBrush("ControlBorderBrush")));
-            return;
-        }
-
-        foreach (var agent in agents)
-        {
-            AgentItems.Children.Add(CreateAgentCard(agent, currentAgentId));
-        }
-
-        AgentItems.Children.Add(CreateNarratorCard(snapshot));
+        AgentBoard.Populate(snapshot, CurrentTurnAgent(snapshot)?.Id);
     }
 
     private void PopulateCustomMatch(ArenaViewSnapshot snapshot)
@@ -1826,413 +1822,6 @@ public partial class MainWindow : Window
     {
         return TranscriptCards.CreateActionButton(text, handler, enabled, kind, iconGlyph);
     }
-    private Border CreateAgentStatusCard(string title, string status, Brush accent)
-    {
-        var card = new Border
-        {
-            Background = ResourceBrush("CardBrush"),
-            BorderBrush = BlendBrush(ResourceBrush("DisabledBorderBrush"), accent, 0.35),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(8),
-            Margin = new Thickness(0, 0, 0, 6)
-        };
-
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-        var strip = new Border
-        {
-            Background = accent,
-            CornerRadius = new CornerRadius(3),
-            Margin = new Thickness(0, 0, 8, 0)
-        };
-        Grid.SetColumn(strip, 0);
-        grid.Children.Add(strip);
-
-        var text = new StackPanel { Margin = new Thickness(8, 0, 0, 0) };
-        text.Children.Add(new TextBlock
-        {
-            Text = title,
-            Foreground = ResourceBrush("TextBrush"),
-            FontWeight = FontWeights.SemiBold,
-            FontSize = 12,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            ToolTip = title
-        });
-        text.Children.Add(new TextBlock
-        {
-            Text = status,
-            Foreground = ResourceBrush("MutedTextBrush"),
-            FontSize = 11,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            ToolTip = status
-        });
-        Grid.SetColumn(text, 1);
-        grid.Children.Add(text);
-
-        card.Child = grid;
-        return card;
-    }
-
-    private Border CreateAgentCard(AgentState agent, string? currentAgentId)
-    {
-        var isActive = agent.Active;
-        var isPaused = !isActive || agent.Status.Equals("muted", StringComparison.OrdinalIgnoreCase);
-        var isCurrent = isActive && string.Equals(agent.Id, currentAgentId, StringComparison.OrdinalIgnoreCase);
-        var isWorkingStatus = IsAgentWorkingStatus(agent.Status);
-        var isRunning = isActive && isWorkingStatus;
-        var showActivitySweep = isRunning;
-        var speakerLabel = DisplayStatusValue(agent.Id);
-        var activityLabel = isRunning ? "thinking" : isCurrent ? "current" : isPaused ? "paused" : "waiting";
-        var playButton = new Button
-        {
-            Content = "▶",
-            IsEnabled = isActive && !_arenaBusy && !string.IsNullOrWhiteSpace(agent.Id),
-            Width = 30,
-            MinWidth = 30,
-            Height = 28,
-            MinHeight = 28,
-            Padding = new Thickness(0),
-            Margin = new Thickness(6, 0, 0, 0),
-            FontSize = 13,
-            Background = isActive ? ResourceBrush("PrimaryBrush") : ResourceBrush("DisabledBrush"),
-            BorderBrush = isActive ? ResourceBrush("PrimaryBorderBrush") : ResourceBrush("DisabledBorderBrush"),
-            Foreground = isActive ? Brushes.White : ResourceBrush("DisabledTextBrush"),
-            ToolTip = isActive
-                ? $"Run one turn for {agent.Name}"
-                : "Inactive: increase Active participants in App Settings to include this agent."
-        };
-        playButton.Click += async (_, _) => await RunAgentTurnAsync(agent);
-        _agentTurnButtons.Add(playButton);
-
-        var identityAccent = AccentForSpeaker(agent.Id);
-        var stateAccent = ResourceBrush("PrimaryBorderBrush");
-        var card = new Border
-        {
-            Background = isRunning
-                ? BlendBrush(ResourceBrush("InputBrush"), stateAccent, 0.18)
-                : isCurrent
-                    ? BlendBrush(ResourceBrush("InputBrush"), stateAccent, 0.1)
-                    : isPaused
-                        ? BlendBrush(ResourceBrush("InputBrush"), ResourceBrush("DisabledBorderBrush"), 0.12)
-                        : ResourceBrush("InputBrush"),
-            BorderBrush = isPaused
-                ? BlendBrush(ResourceBrush("DisabledBorderBrush"), ResourceBrush("MutedTextBrush"), 0.18)
-                : BlendBrush(ResourceBrush("DisabledBorderBrush"), isRunning || isCurrent ? stateAccent : identityAccent, 0.75),
-            BorderThickness = new Thickness(0, 1, 0, 1),
-            Padding = new Thickness(14, 8, 10, 8),
-            Margin = new Thickness(0, -1, 0, 0),
-            ClipToBounds = true
-        };
-
-        var cardLayer = new Grid();
-        if (showActivitySweep)
-        {
-            cardLayer.Children.Add(CreateAgentActivitySweep(stateAccent, isRunning));
-        }
-
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        text.Children.Add(new TextBlock
-        {
-            Text = $"{speakerLabel} - {activityLabel}",
-            Foreground = isPaused ? ResourceBrush("MutedTextBrush") : Brushes.White,
-            FontWeight = FontWeights.SemiBold,
-            FontSize = 12,
-            LineHeight = 15,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            ToolTip = agent.Name
-        });
-        var modelText = string.IsNullOrWhiteSpace(agent.Model) ? "model not set" : agent.Model;
-        text.Children.Add(new TextBlock
-        {
-            Text = modelText,
-            Foreground = isPaused
-                ? ResourceBrush("DisabledTextBrush")
-                : isRunning || isCurrent
-                ? stateAccent
-                : ResourceBrush("MutedTextBrush"),
-            FontSize = 11,
-            LineHeight = 14,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            ToolTip = $"{modelText}\n{agent.Name}"
-        });
-        Grid.SetColumn(text, 0);
-        grid.Children.Add(text);
-
-        var activityDot = new Border
-        {
-            Width = isRunning ? 8 : 6,
-            Height = isRunning ? 8 : 6,
-            CornerRadius = new CornerRadius(4),
-            Background = isPaused
-                ? ResourceBrush("DisabledBorderBrush")
-                : isRunning || isCurrent ? stateAccent : identityAccent,
-            Opacity = isRunning ? 1.0 : isCurrent ? 0.85 : isPaused ? 0.35 : 0.45,
-            Margin = new Thickness(8, 0, 4, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = activityLabel
-        };
-        Grid.SetColumn(activityDot, 1);
-        grid.Children.Add(activityDot);
-
-        var routeControls = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(2, 0, 0, 0)
-        };
-        var muteButton = CreateAgentModeButton("⏸", isActive ? "Pause agent" : "Activate paused agent", isPaused);
-        muteButton.Click += async (_, _) => await SetAgentMuteAsync(agent.Id, mute: isActive);
-        routeControls.Children.Add(muteButton);
-        var soloButton = CreateAgentModeButton("S", "Solo this agent");
-        soloButton.Click += async (_, _) => await SoloAgentAsync(agent.Id);
-        routeControls.Children.Add(soloButton);
-        Grid.SetColumn(routeControls, 2);
-        grid.Children.Add(routeControls);
-
-        Grid.SetColumn(playButton, 3);
-        grid.Children.Add(playButton);
-
-        cardLayer.Children.Add(grid);
-        card.Child = cardLayer;
-        if (!isActive)
-        {
-            card.ToolTip = "Paused: click the pause button to activate this agent.";
-        }
-
-        return card;
-    }
-
-    private Button CreateAgentModeButton(string content, string tooltip, bool highlighted = false)
-    {
-        return new Button
-        {
-            Content = content,
-            Width = 24,
-            MinWidth = 24,
-            Height = 24,
-            MinHeight = 24,
-            Padding = new Thickness(0),
-            Margin = new Thickness(3, 0, 0, 0),
-            FontSize = content == "⏸" ? 12 : 9.5,
-            FontFamily = content == "⏸" ? new FontFamily("Segoe UI Symbol") : SystemFonts.MessageFontFamily,
-            Background = highlighted ? BlendBrush(ResourceBrush("InputBrush"), ResourceBrush("BetaAccentBrush"), 0.28) : ResourceBrush("InputBrush"),
-            BorderBrush = highlighted ? ResourceBrush("BetaAccentBrush") : ResourceBrush("DisabledBorderBrush"),
-            Foreground = highlighted ? ResourceBrush("BetaAccentBrush") : ResourceBrush("MutedTextBrush"),
-            ToolTip = tooltip
-        };
-    }
-
-    private async Task SetAgentMuteAsync(string agentId, bool mute)
-    {
-        await RunArenaBusyAsync(mute ? $"Muting {agentId}..." : $"Activating {agentId}...", null, async () =>
-        {
-            if (_activeSession is null)
-            {
-                return;
-            }
-
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            var agent = snapshot?.Engine.Agents.FirstOrDefault(item => item.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase));
-            if (snapshot is null || agent is null)
-            {
-                ArenaRunStatus.Text = $"Agent {agentId} not found.";
-                return;
-            }
-
-            agent.Active = !mute;
-            if (!agent.Active)
-            {
-                agent.Status = "muted";
-            }
-            else if (agent.Status.Equals("muted", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(agent.Status))
-            {
-                agent.Status = "waiting";
-            }
-
-            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_agent_active_changed", new { Agent = agentId, Active = agent.Active });
-            await RefreshActiveSessionAsync(agent.Active ? $"{DisplayStatusValue(agentId)} activated." : $"{DisplayStatusValue(agentId)} muted.");
-        }, allowDuringAutoChat: true);
-    }
-
-    private async Task SoloAgentAsync(string agentId)
-    {
-        await RunArenaBusyAsync($"Soloing {agentId}...", null, async () =>
-        {
-            if (_activeSession is null)
-            {
-                return;
-            }
-
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (snapshot is null)
-            {
-                return;
-            }
-
-            foreach (var agent in snapshot.Engine.Agents)
-            {
-                var selected = agent.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase);
-                agent.Active = selected;
-                agent.Status = selected ? "waiting" : "muted";
-            }
-
-            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_agent_solo_enabled", new { Agent = agentId });
-            await RefreshActiveSessionAsync($"{DisplayStatusValue(agentId)} solo enabled.");
-        }, allowDuringAutoChat: true);
-    }
-
-    private Border CreateNarratorCard(ArenaViewSnapshot snapshot)
-    {
-        var accent = ResourceBrush("NarratorAccentBrush");
-        var isRunning = IsAgentWorkingStatus(snapshot.NarratorStatus);
-        var modelText = string.IsNullOrWhiteSpace(snapshot.NarratorModel) ? "model not set" : snapshot.NarratorModel;
-        var status = string.IsNullOrWhiteSpace(snapshot.NarratorStatus) ? "idle" : snapshot.NarratorStatus;
-        var buttonEnabled = !_arenaBusy || _autoChatCancellation is not null;
-        var playButton = new Button
-        {
-            Content = "▶",
-            IsEnabled = buttonEnabled,
-            Width = 30,
-            MinWidth = 30,
-            Height = 28,
-            MinHeight = 28,
-            Padding = new Thickness(0),
-            Margin = new Thickness(6, 0, 0, 0),
-            FontSize = 13,
-            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.5),
-            BorderBrush = accent,
-            Foreground = Brushes.White,
-            ToolTip = "Narrate now"
-        };
-        playButton.Click += NarrateNowButton_Click;
-        _narratorActionButtons.Add(playButton);
-
-        var card = new Border
-        {
-            Background = isRunning
-                ? BlendBrush(ResourceBrush("InputBrush"), accent, 0.18)
-                : ResourceBrush("InputBrush"),
-            BorderBrush = BlendBrush(ResourceBrush("DisabledBorderBrush"), accent, 0.58),
-            BorderThickness = new Thickness(0, 1, 0, 1),
-            Padding = new Thickness(14, 8, 10, 8),
-            Margin = new Thickness(0, -1, 0, 0),
-            ClipToBounds = true,
-            ToolTip = string.IsNullOrWhiteSpace(snapshot.NarratorPersona)
-                ? "Narrator"
-                : snapshot.NarratorPersona
-        };
-
-        var cardLayer = new Grid();
-        if (isRunning)
-        {
-            cardLayer.Children.Add(CreateAgentActivitySweep(accent, isRunning: true));
-        }
-
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        text.Children.Add(new TextBlock
-        {
-            Text = $"Narrator - {DisplayInlineStatus(status)}",
-            Foreground = Brushes.White,
-            FontWeight = FontWeights.SemiBold,
-            FontSize = 12,
-            LineHeight = 15,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            ToolTip = "Narrator"
-        });
-        text.Children.Add(new TextBlock
-        {
-            Text = modelText,
-            Foreground = isRunning ? accent : ResourceBrush("MutedTextBrush"),
-            FontSize = 11,
-            LineHeight = 14,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            ToolTip = modelText
-        });
-        Grid.SetColumn(text, 0);
-        grid.Children.Add(text);
-
-        var activityDot = new Border
-        {
-            Width = isRunning ? 8 : 6,
-            Height = isRunning ? 8 : 6,
-            CornerRadius = new CornerRadius(4),
-            Background = accent,
-            Opacity = isRunning ? 1.0 : 0.45,
-            Margin = new Thickness(8, 0, 4, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = status
-        };
-        Grid.SetColumn(activityDot, 1);
-        grid.Children.Add(activityDot);
-
-        Grid.SetColumn(playButton, 2);
-        grid.Children.Add(playButton);
-
-        cardLayer.Children.Add(grid);
-        card.Child = cardLayer;
-        return card;
-    }
-
-    private static string DisplayInlineStatus(string status)
-    {
-        return string.IsNullOrWhiteSpace(status) ? "-" : status.Trim().ToLowerInvariant();
-    }
-
-    private static bool IsAgentWorkingStatus(string status)
-    {
-        var normalized = status.Trim().ToLowerInvariant();
-        return normalized is "thinking" or "generating" or "running" or "working" or "busy";
-    }
-
-    private Border CreateAgentActivitySweep(Brush accent, bool isRunning)
-    {
-        var accentColor = BrushColor(accent, Colors.DeepSkyBlue);
-        var sweep = new Border
-        {
-            Width = 86,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            IsHitTestVisible = false,
-            Opacity = isRunning ? 0.92 : 0.56,
-            Background = new LinearGradientBrush(
-                new GradientStopCollection
-                {
-                    new(Colors.Transparent, 0),
-                    new(Color.FromArgb(isRunning ? (byte)74 : (byte)38, accentColor.R, accentColor.G, accentColor.B), 0.48),
-                    new(Colors.Transparent, 1)
-                },
-                new Point(0, 0.5),
-                new Point(1, 0.5))
-        };
-
-        var translate = new TranslateTransform(-110, 0);
-        sweep.RenderTransform = translate;
-        var animation = new DoubleAnimationUsingKeyFrames
-        {
-            RepeatBehavior = RepeatBehavior.Forever
-        };
-        animation.KeyFrames.Add(new LinearDoubleKeyFrame(-110, KeyTime.FromTimeSpan(TimeSpan.Zero)));
-        animation.KeyFrames.Add(new LinearDoubleKeyFrame(230, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(isRunning ? 1350 : 1900))));
-        animation.KeyFrames.Add(new DiscreteDoubleKeyFrame(230, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(isRunning ? 2050 : 3000))));
-        translate.BeginAnimation(TranslateTransform.XProperty, animation);
-        return sweep;
-    }
-
     private Border CreateCard(string title, string body, Brush background, Brush accent, UIElement? extraContent)
     {
         return CreateCard(CreateCardTitle(title), body, background, accent, extraContent);
@@ -3184,14 +2773,7 @@ public partial class MainWindow : Window
         SavedStateItemPicker.IsEnabled = !busy;
         SavedStateSaveButton.IsEnabled = !busy;
         SavedStateCoordinator.UpdateActionButtons();
-        foreach (var button in _agentTurnButtons)
-        {
-            button.IsEnabled = !busy;
-        }
-        foreach (var button in _narratorActionButtons)
-        {
-            button.IsEnabled = !busy || autoChatRunning;
-        }
+        AgentBoard.UpdateBusyState(busy);
         foreach (var button in _transcriptActionButtons)
         {
             button.IsEnabled = !busy && button.Tag is true;
