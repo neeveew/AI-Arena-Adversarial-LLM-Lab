@@ -49,6 +49,7 @@ public partial class MainWindow : Window
     private readonly SystemTelemetryService _systemTelemetryService = new();
     private readonly UserGuideWindowHost _userGuideWindowHost = new();
     private readonly SavedStateWorkflowCoordinator? _savedStateCoordinator;
+    private readonly TranscriptExportCoordinator? _transcriptExportCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
     private readonly DispatcherTimer _providerHealthTimer;
@@ -110,6 +111,9 @@ public partial class MainWindow : Window
 
     private SavedStateWorkflowCoordinator SavedStateCoordinator =>
         _savedStateCoordinator ?? throw new InvalidOperationException("Saved-state coordinator is not initialized.");
+
+    private TranscriptExportCoordinator TranscriptExportCoordinator =>
+        _transcriptExportCoordinator ?? throw new InvalidOperationException("Transcript export coordinator is not initialized.");
 
     private sealed record DiagnosticHistoryPoint(
         int Friction,
@@ -211,6 +215,15 @@ public partial class MainWindow : Window
             ResourceBrush,
             status => ArenaRunStatus.Text = status,
             status => LoadStatus.Text = status);
+        _transcriptExportCoordinator = new TranscriptExportCoordinator(
+            this,
+            ExportStatusText,
+            () => _activeSession,
+            () => _arenaBusy,
+            () => _lastRenderedMessages,
+            FilterTranscriptMessages,
+            status => LoadStatus.Text = status,
+            status => ArenaRunStatus.Text = status);
         _wpfSettings = _wpfSettingsStore.Load();
         ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
         InitializeThemePicker();
@@ -7246,157 +7259,17 @@ public partial class MainWindow : Window
 
     private void CopyTranscriptMessage(TranscriptMessage message)
     {
-        if (_arenaBusy)
-        {
-            return;
-        }
-
-        try
-        {
-            Clipboard.SetText(message.Text);
-            LoadStatus.Text = $"Copied turn {message.Turn}.";
-            ArenaRunStatus.Text = LoadStatus.Text;
-        }
-        catch (Exception ex)
-        {
-            LoadStatus.Text = $"Copy failed: {ex.Message}";
-            ArenaRunStatus.Text = LoadStatus.Text;
-        }
+        TranscriptExportCoordinator.CopyMessage(message);
     }
 
     private void CopyInternetUrl(TranscriptMessage message)
     {
-        if (_arenaBusy || string.IsNullOrWhiteSpace(message.InternetUrl))
-        {
-            return;
-        }
-
-        try
-        {
-            Clipboard.SetText(message.InternetUrl);
-            LoadStatus.Text = $"Copied URL from turn {message.Turn}.";
-            ArenaRunStatus.Text = LoadStatus.Text;
-        }
-        catch (Exception ex)
-        {
-            LoadStatus.Text = $"Copy URL failed: {ex.Message}";
-            ArenaRunStatus.Text = LoadStatus.Text;
-        }
+        TranscriptExportCoordinator.CopyInternetUrl(message);
     }
 
     private void ExportTranscriptButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null)
-        {
-            LoadStatus.Text = "No active session to export.";
-            ArenaRunStatus.Text = LoadStatus.Text;
-            SetExportStatus("Export unavailable", LoadStatus.Text);
-            return;
-        }
-
-        var visibleMessages = FilterTranscriptMessages(_lastRenderedMessages)
-            .OrderBy(message => message.Turn)
-            .ToArray();
-        var messages = visibleMessages.Length > 0
-            ? visibleMessages
-            : _lastRenderedMessages.OrderBy(message => message.Turn).ToArray();
-        if (messages.Length == 0)
-        {
-            LoadStatus.Text = "No transcript messages to export.";
-            ArenaRunStatus.Text = LoadStatus.Text;
-            SetExportStatus("No transcript to export", LoadStatus.Text);
-            return;
-        }
-
-        var dialog = new Microsoft.Win32.SaveFileDialog
-        {
-            Title = "Export transcript",
-            Filter = "Markdown transcript (*.md)|*.md|Text transcript (*.txt)|*.txt",
-            FileName = $"AI Arena - {SafeFilePart(_activeSession.Id)} - transcript.md",
-            AddExtension = true,
-            DefaultExt = ".md"
-        };
-        if (dialog.ShowDialog(this) != true)
-        {
-            return;
-        }
-
-        try
-        {
-            var markdown = BuildTranscriptExport(messages);
-            System.IO.File.WriteAllText(dialog.FileName, markdown);
-            var fileName = System.IO.Path.GetFileName(dialog.FileName);
-            var scope = visibleMessages.Length > 0 ? "visible" : "all";
-            LoadStatus.Text = $"Exported {messages.Length} {scope} transcript message(s) to {fileName}.";
-            ArenaRunStatus.Text = LoadStatus.Text;
-            SetExportStatus($"Exported {messages.Length} message(s)", dialog.FileName);
-        }
-        catch (Exception ex)
-        {
-            LoadStatus.Text = $"Export failed: {ex.Message}";
-            ArenaRunStatus.Text = LoadStatus.Text;
-            SetExportStatus("Export failed", LoadStatus.Text);
-        }
-    }
-
-    private void SetExportStatus(string text, string tooltip)
-    {
-        ExportStatusText.Text = text;
-        ExportStatusText.ToolTip = tooltip;
-    }
-
-    private string BuildTranscriptExport(IReadOnlyList<TranscriptMessage> messages)
-    {
-        var builder = new System.Text.StringBuilder();
-        builder.AppendLine($"# AI Arena Transcript - {_activeSession?.Id ?? "session"}");
-        builder.AppendLine();
-        builder.AppendLine($"Exported: {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz}");
-        builder.AppendLine($"Visible messages: {messages.Count}");
-        builder.AppendLine();
-
-        foreach (var message in messages)
-        {
-            builder.AppendLine($"## Turn {message.Turn} - {message.Speaker} - {message.Status}");
-            if (!string.IsNullOrWhiteSpace(message.Model))
-            {
-                builder.AppendLine($"Model: `{message.Model}`");
-            }
-
-            var stats = string.Join(
-                " | ",
-                new[]
-                {
-                    message.LatencyMs > 0 ? $"Generated: {FormatDuration(message.LatencyMs)}" : "",
-                    message.CompletionTokens > 0 ? $"Tokens: {FormatCompactNumber(message.CompletionTokens)}" : "",
-                    message.PromptTokens > 0 ? $"Context: {FormatCompactNumber(message.PromptTokens)}" : ""
-                }.Where(item => !string.IsNullOrWhiteSpace(item)));
-            if (!string.IsNullOrWhiteSpace(stats))
-            {
-                builder.AppendLine(stats);
-            }
-
-            builder.AppendLine();
-            builder.AppendLine(string.IsNullOrWhiteSpace(message.Text) ? "(empty message)" : message.Text.Trim());
-            if (!string.IsNullOrWhiteSpace(message.Reasoning))
-            {
-                builder.AppendLine();
-                builder.AppendLine("<details><summary>Model reasoning</summary>");
-                builder.AppendLine();
-                builder.AppendLine(message.Reasoning.Trim());
-                builder.AppendLine();
-                builder.AppendLine("</details>");
-            }
-
-            builder.AppendLine();
-        }
-
-        return builder.ToString();
-    }
-
-    private static string SafeFilePart(string value)
-    {
-        var invalid = System.IO.Path.GetInvalidFileNameChars();
-        return string.Concat(value.Select(character => invalid.Contains(character) ? '-' : character));
+        TranscriptExportCoordinator.ExportTranscript();
     }
 
     private async Task ApproveInternetRequestAsync(TranscriptMessage message)
