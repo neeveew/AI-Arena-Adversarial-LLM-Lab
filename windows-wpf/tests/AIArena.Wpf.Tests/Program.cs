@@ -6,7 +6,8 @@ var tests = new (string Name, Action Test)[]
     ("normalizes legacy theme and blank settings", NormalizeLegacyThemeAndBlankSettings),
     ("overwrites read-only settings file", OverwriteReadOnlySettingsFile),
     ("auto configure keeps low VRAM to one model", AutoConfigureLowVramSingleModel),
-    ("auto configure spreads high VRAM model variety", AutoConfigureHighVramVariety)
+    ("auto configure spreads high VRAM model variety", AutoConfigureHighVramVariety),
+    ("auto configure prefers useful multi GPU fit", AutoConfigurePrefersUsefulMultiGpuFit)
 };
 
 var failures = 0;
@@ -161,6 +162,35 @@ static void AutoConfigureHighVramVariety()
     Require(uniqueModels >= 3, "high VRAM variety should spread across models");
     Require(plan.Models.All(model => !model.Name.Contains("embedding", StringComparison.OrdinalIgnoreCase)), "embedding model should not be used as chat candidate");
     Require(plan.Assignments.Single(item => item.Role == "Narrator").Model.Contains("3b", StringComparison.OrdinalIgnoreCase), "narrator should use smallest model");
+}
+
+static void AutoConfigurePrefersUsefulMultiGpuFit()
+{
+    var hardware = new HardwareProbe(
+        [
+            new GpuDeviceInfo("Primary GPU", "NVIDIA", 16, 1, 4),
+            new GpuDeviceInfo("Secondary GPU", "AMD", 8, 1, 3)
+        ],
+        64,
+        18);
+    var plan = ProviderAutoConfigureService.Recommend(
+        "http://127.0.0.1:1234/v1",
+        providerOnline: true,
+        lmStudioNativeApi: true,
+        ["tiny-helper-1b-q4", "useful-alpha-3b-q4", "useful-beta-4b-q4", "useful-gamma-4b-q4", "too-large-13b-q4"],
+        hardware,
+        "balanced");
+
+    var assigned = plan.Assignments.Select(item => item.Model).ToArray();
+    var uniqueUseful = assigned
+        .Where(model => model.Contains("useful", StringComparison.OrdinalIgnoreCase))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Count();
+
+    Require(uniqueUseful >= 2, "multi-GPU balanced routing should use multiple useful small models");
+    Require(!assigned.Take(4).Any(model => model.Contains("tiny-helper", StringComparison.OrdinalIgnoreCase)), "participant routes should not prefer the tiny helper");
+    Require(!assigned.Any(model => model.Contains("too-large", StringComparison.OrdinalIgnoreCase)), "comfortable-fit routing should avoid oversized models");
+    Require(plan.Warnings.Any(warning => warning.Contains("Multi-GPU", StringComparison.OrdinalIgnoreCase)), "multi-GPU guidance note should be present");
 }
 
 static void WithTempSettingsStore(Action<WpfSettingsStore> action)

@@ -131,14 +131,18 @@ public sealed class ProviderAutoConfigureService
 
         var uniqueBudget = UniqueModelBudget(hardware, selectedStrategy);
         var smallest = profiles[0];
-        var strongest = StrongestUsableModel(profiles, hardware) ?? profiles[^1];
-        var medium = profiles[Math.Clamp(profiles.Length / 2, 0, profiles.Length - 1)];
-        var secondSmall = profiles.Length > 1 ? profiles[1] : smallest;
+        var useful = UsefulComfortableModels(profiles, hardware);
+        var defaultUseful = useful.Count > 0 ? useful[^1] : BestComfortableModel(profiles, hardware) ?? smallest;
+        var medium = useful.Count > 0
+            ? useful[Math.Clamp(useful.Count / 2, 0, useful.Count - 1)]
+            : defaultUseful;
+        var smallUseful = useful.FirstOrDefault() ?? smallest;
+        var secondUseful = useful.Count > 1 ? useful[1] : smallUseful;
         var assignments = selectedStrategy switch
         {
-            "low_vram" or "performance" or "conservative" => SingleModelAssignments(smallest, selectedStrategy),
-            "max_variety" or "absurd_lab" => VarietyAssignments(profiles, uniqueBudget),
-            _ => BalancedAssignments(strongest, medium, secondSmall, smallest, uniqueBudget)
+            "low_vram" or "performance" or "conservative" => SingleModelAssignments(defaultUseful, selectedStrategy),
+            "max_variety" or "absurd_lab" => VarietyAssignments(profiles, useful, uniqueBudget),
+            _ => BalancedAssignments(defaultUseful, medium, secondUseful, smallUseful, uniqueBudget)
         };
 
         var defaultModel = assignments.FirstOrDefault(item => item.Role.Equals("Alpha", StringComparison.OrdinalIgnoreCase))?.Model
@@ -153,6 +157,11 @@ public sealed class ProviderAutoConfigureService
         if (uniqueModels == 1)
         {
             warnings.Add("Single-model routing is recommended to avoid overloading limited VRAM.");
+        }
+
+        if (hardware.Gpus.Count > 1 && useful.Count >= 3)
+        {
+            warnings.Add("Multi-GPU setup detected: model diversity is preferred over the absolute smallest model, while keeping each recommendation inside a comfortable per-GPU fit.");
         }
 
         return new ProviderAutoConfigurePlan(
@@ -172,9 +181,9 @@ public sealed class ProviderAutoConfigureService
     {
         var reason = strategy switch
         {
-            "performance" => "smallest advertised chat model for fast, stable turns",
+            "performance" => "useful comfortable-fit model for fast, stable turns",
             "low_vram" => "single shared model to protect limited VRAM",
-            _ => "conservative single-model route"
+            _ => "conservative comfortable-fit route"
         };
         return
         [
@@ -220,15 +229,19 @@ public sealed class ProviderAutoConfigureService
         ];
     }
 
-    private static IReadOnlyList<ModelAssignmentRecommendation> VarietyAssignments(IReadOnlyList<ModelProfile> profiles, int uniqueBudget)
+    private static IReadOnlyList<ModelAssignmentRecommendation> VarietyAssignments(
+        IReadOnlyList<ModelProfile> profiles,
+        IReadOnlyList<ModelProfile> useful,
+        int uniqueBudget)
     {
         if (uniqueBudget <= 1)
         {
             return SingleModelAssignments(profiles[0], "low_vram");
         }
 
-        var byStrength = profiles
-            .OrderByDescending(profile => profile.EstimatedFootprintGb ?? 0)
+        var source = useful.Count > 0 ? useful : profiles;
+        var byStrength = source
+            .OrderByDescending(profile => EffectiveFootprint(profile))
             .ThenBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var selected = byStrength
@@ -246,24 +259,94 @@ public sealed class ProviderAutoConfigureService
             new("Beta", Pick(1).Name, "different model family or size when available"),
             new("Gamma", Pick(2).Name, "third model for disagreement pressure"),
             new("Delta", Pick(3).Name, "extra boundary-checking route"),
-            new("Narrator", profiles[0].Name, "smallest model keeps narration cheap")
+            new("Narrator", source[0].Name, "small useful model keeps narration cheap")
         ];
     }
 
-    private static ModelProfile? StrongestUsableModel(IReadOnlyList<ModelProfile> profiles, HardwareProbe hardware)
+    private static IReadOnlyList<ModelProfile> UsefulComfortableModels(IReadOnlyList<ModelProfile> profiles, HardwareProbe hardware)
     {
-        var freeVram = hardware.FreeVramGb;
-        if (freeVram is null or <= 0)
+        var target = ComfortablePerModelTargetGb(hardware);
+        var usefulFloor = UsefulModelFloorGb(hardware);
+        var fitting = profiles
+            .Where(profile => EffectiveFootprint(profile) <= target)
+            .Where(profile => EffectiveFootprint(profile) >= usefulFloor || profiles.Count <= 2)
+            .OrderBy(profile => EffectiveFootprint(profile))
+            .ThenBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (fitting.Length > 0)
         {
-            return profiles[^1];
+            return fitting;
         }
 
-        var target = freeVram.Value * 0.8;
         return profiles
-            .Where(profile => (profile.EstimatedFootprintGb ?? 0) <= target)
-            .OrderByDescending(profile => profile.EstimatedFootprintGb ?? 0)
+            .Where(profile => EffectiveFootprint(profile) <= target)
+            .OrderBy(profile => EffectiveFootprint(profile))
+            .ThenBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static ModelProfile? BestComfortableModel(IReadOnlyList<ModelProfile> profiles, HardwareProbe hardware)
+    {
+        var target = ComfortablePerModelTargetGb(hardware);
+        return profiles
+            .Where(profile => EffectiveFootprint(profile) <= target)
+            .OrderByDescending(profile => EffectiveFootprint(profile))
+            .ThenBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault()
             ?? profiles[0];
+    }
+
+    private static double ComfortablePerModelTargetGb(HardwareProbe hardware)
+    {
+        var gpuCapacities = hardware.Gpus
+            .Select(ComfortableGpuCapacityGb)
+            .Where(value => value > 0)
+            .OrderBy(value => value)
+            .ToArray();
+        if (gpuCapacities.Length > 0)
+        {
+            return gpuCapacities[0];
+        }
+
+        if (hardware.SystemRamTotalGb is double ram && ram > 0)
+        {
+            return Math.Clamp(ram * 0.18, 2.5, 8);
+        }
+
+        return 4.5;
+    }
+
+    private static double ComfortableGpuCapacityGb(GpuDeviceInfo gpu)
+    {
+        if (gpu.VramTotalGb is not double total || total <= 0)
+        {
+            return 0;
+        }
+
+        var used = gpu.VramUsedGb ?? 0;
+        var reserve = Math.Clamp(total * 0.22, 2, 5);
+        return Math.Max(1, total - used - reserve);
+    }
+
+    private static double UsefulModelFloorGb(HardwareProbe hardware)
+    {
+        if (hardware.Gpus.Count > 1 && hardware.TotalVramGb is >= 20)
+        {
+            return 2.4;
+        }
+
+        if (hardware.TotalVramGb is >= 16)
+        {
+            return 2.2;
+        }
+
+        return 0;
+    }
+
+    private static double EffectiveFootprint(ModelProfile profile)
+    {
+        return profile.EstimatedFootprintGb ?? 4.5;
     }
 
     private static int UniqueModelBudget(HardwareProbe hardware, string strategy)
@@ -286,6 +369,11 @@ public sealed class ProviderAutoConfigureService
             < 44 => 4,
             _ => 5
         };
+
+        if (gpuCount > 1 && totalVram is >= 20 && ComfortablePerModelTargetGb(hardware) >= 4)
+        {
+            budget = Math.Max(budget, 3);
+        }
 
         if (strategy.Equals("max_variety", StringComparison.OrdinalIgnoreCase)
             || strategy.Equals("absurd_lab", StringComparison.OrdinalIgnoreCase))
@@ -328,6 +416,12 @@ public sealed class ProviderAutoConfigureService
         if (uniqueModels == 1)
         {
             return $"{mode}; safe to preload the shared model.";
+        }
+
+        var target = ComfortablePerModelTargetGb(hardware);
+        if (hardware.Gpus.Count > 1 && target >= 4 && uniqueModels <= 3)
+        {
+            return $"{mode}; {uniqueModels} small/medium models should fit comfortably across detected GPUs.";
         }
 
         var totalVram = hardware.TotalVramGb;
