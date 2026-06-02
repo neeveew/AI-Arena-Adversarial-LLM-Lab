@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private readonly TranscriptInsightCoordinator? _transcriptInsightCoordinator;
     private readonly TranscriptActionCoordinator? _transcriptActionCoordinator;
     private readonly TranscriptMutationCoordinator? _transcriptMutationCoordinator;
+    private readonly TranscriptListCoordinator? _transcriptListCoordinator;
     private readonly TranscriptCardRenderer? _transcriptCardRenderer;
     private readonly TranscriptAdjunctCoordinator? _transcriptAdjunctCoordinator;
     private readonly NewsPanelCoordinator? _newsPanelCoordinator;
@@ -107,6 +108,9 @@ public partial class MainWindow : Window
 
     private TranscriptMutationCoordinator TranscriptMutations =>
         _transcriptMutationCoordinator ?? throw new InvalidOperationException("Transcript mutation coordinator is not initialized.");
+
+    private TranscriptListCoordinator TranscriptList =>
+        _transcriptListCoordinator ?? throw new InvalidOperationException("Transcript list coordinator is not initialized.");
 
     private TranscriptCardRenderer TranscriptCards =>
         _transcriptCardRenderer ?? throw new InvalidOperationException("Transcript card renderer is not initialized.");
@@ -710,6 +714,32 @@ public partial class MainWindow : Window
             label => DiagnosticsWorkflow.AccentForState(label),
             label => DiagnosticsWorkflow.AccentForEvidence(label),
             label => DiagnosticsWorkflow.AccentForRisk(label));
+        _transcriptListCoordinator = new TranscriptListCoordinator(
+            Dispatcher,
+            TranscriptItems,
+            TranscriptScrollViewer,
+            FollowChatCheckBox,
+            ShellCards,
+            TranscriptActions,
+            TranscriptSearch,
+            TranscriptInsight,
+            TranscriptCards,
+            TranscriptAdjunct,
+            AgentMemory,
+            MatchQualityTimeline,
+            ProviderQuickSetup,
+            () => _wpfSettings,
+            () => _lastRenderedSnapshot,
+            messages => _lastRenderedMessages = messages,
+            () => _transcriptViewCoordinator?.IsDiagnosticsDisplayed() == true,
+            messages => DiagnosticsWorkflow.Update(messages),
+            ShouldShowDecisionCard,
+            IsAgentSpeaker,
+            ResourceBrush,
+            AccentForSpeaker,
+            BlendBrush,
+            ShortModelName,
+            DisplayStatusValue);
         _matchSetupCoordinator = new MatchSetupCoordinator(
             _coreSessionStore,
             _eventLogStore,
@@ -1138,102 +1168,18 @@ public partial class MainWindow : Window
 
     private void PopulateTranscript(IReadOnlyList<TranscriptMessage> messages)
     {
-        _lastRenderedMessages = messages;
-        TranscriptItems.Children.Clear();
-        TranscriptActions.Clear();
-        TranscriptInsight.ClearTimelineFilterIfMissing(messages);
-
-        var visibleMessages = TranscriptSearch.FilterMessages(messages).ToArray();
-        TranscriptSearch.UpdateResultCount(visibleMessages.Length, messages.Count);
-        TranscriptSearch.UpdateSearchState();
-        if (IsDiagnosticsDisplayed())
+        if (_transcriptListCoordinator is null)
         {
-            DiagnosticsWorkflow.Update(messages);
-        }
-
-        if (messages.Count == 0)
-        {
-            if (_wpfSettings.ShowAgentMemoryNotes && _lastRenderedSnapshot is not null)
-            {
-                TranscriptItems.Children.Add(AgentMemory.CreatePanel(_lastRenderedSnapshot));
-            }
-
-            TranscriptItems.Children.Add(CreateArenaReadyCard(_lastRenderedSnapshot));
+            _lastRenderedMessages = messages;
             return;
         }
 
-        if (visibleMessages.Length == 0)
-        {
-            if (_wpfSettings.ShowMatchQualityTimeline)
-            {
-                TranscriptItems.Children.Add(MatchQualityTimeline.CreatePanel(messages));
-            }
-            if (_wpfSettings.ShowAgentMemoryNotes && _lastRenderedSnapshot is not null)
-            {
-                TranscriptItems.Children.Add(AgentMemory.CreatePanel(_lastRenderedSnapshot));
-            }
-
-            TranscriptItems.Children.Add(CreateEmptyStateCard(
-                "No transcript matches",
-                "Adjust the search text, turn preset, or speaker filters to widen the view.",
-                ResourceBrush("MutedTextBrush")));
-            return;
-        }
-
-        var retryableTurns = visibleMessages
-            .Where(message => IsAgentSpeaker(message.SpeakerId))
-            .OrderByDescending(message => message.Turn)
-            .Take(3)
-            .Select(message => message.Turn)
-            .ToHashSet();
-
-        var latestTurn = visibleMessages.Max(message => message.Turn);
-        if (_wpfSettings.ShowMatchQualityTimeline)
-        {
-            TranscriptItems.Children.Add(MatchQualityTimeline.CreatePanel(messages));
-        }
-        if (ShouldShowDecisionCard() && _lastRenderedSnapshot is not null)
-        {
-            TranscriptItems.Children.Add(TranscriptAdjunct.CreateDecisionCardPanel(_lastRenderedSnapshot));
-        }
-        if (_wpfSettings.TurnCompareMode)
-        {
-            TranscriptInsight.EnsureTurnCompareSelection(visibleMessages);
-            TranscriptItems.Children.Add(TranscriptAdjunct.CreateTurnComparePanel(visibleMessages));
-        }
-        if (_wpfSettings.ShowAgentMemoryNotes && _lastRenderedSnapshot is not null)
-        {
-            TranscriptItems.Children.Add(AgentMemory.CreatePanel(_lastRenderedSnapshot));
-        }
-        var moderatorPanel = TranscriptAdjunct.CreateAutoModeratorPanel(messages);
-        if (moderatorPanel is not null)
-        {
-            TranscriptItems.Children.Add(moderatorPanel);
-        }
-
-        foreach (var message in visibleMessages.OrderByDescending(message => message.Turn))
-        {
-            TranscriptItems.Children.Add(TranscriptCards.CreateCard(
-                message,
-                retryableTurns.Contains(message.Turn),
-                TranscriptSearch.HasActiveSearch,
-                message.Turn == latestTurn));
-        }
-
-        if (FollowChatCheckBox.IsChecked == true)
-        {
-            Dispatcher.BeginInvoke(() => TranscriptScrollViewer.ScrollToTop(), DispatcherPriority.Background);
-        }
+        TranscriptList.Populate(messages);
     }
 
     private void TranscriptDashboardGrid_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         _transcriptViewCoordinator?.UpdateDashboardLayout(e.NewSize.Width);
-    }
-
-    private bool IsDiagnosticsDisplayed()
-    {
-        return _transcriptViewCoordinator?.IsDiagnosticsDisplayed() == true;
     }
 
     private void PopulateCustomMatch(ArenaViewSnapshot snapshot)
@@ -1247,55 +1193,6 @@ public partial class MainWindow : Window
     private Border CreateCard(string title, string body, Brush background, Brush accent)
     {
         return ShellCards.CreateCard(title, body, background, accent);
-    }
-
-    private Border CreateEmptyStateCard(string title, string body, Brush accent)
-    {
-        return ShellCards.CreateEmptyStateCard(title, body, accent);
-    }
-
-    private Border CreateArenaReadyCard(ArenaViewSnapshot? snapshot)
-    {
-        var accent = ResourceBrush("AlphaAccentBrush");
-        var panel = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
-
-        if (snapshot is not null)
-        {
-            var activeAgents = snapshot.Agents.Where(agent => agent.Active).ToArray();
-            var current = CurrentTurnAgent(snapshot);
-            var setup = new WrapPanel();
-            setup.Children.Add(CreateSetupChip("Match", DisplayStatusValue(snapshot.MatchType), ResourceBrush("TextBrush")));
-            setup.Children.Add(CreateSetupChip("Agents", $"{activeAgents.Length} + narrator", ResourceBrush("PrimaryBorderBrush")));
-            setup.Children.Add(CreateSetupChip("Turn", current is null ? "-" : DisplayStatusValue(current.Id), current is null ? ResourceBrush("MutedTextBrush") : AccentForSpeaker(current.Id)));
-            setup.Children.Add(CreateSetupChip("Model", ShortModelName(SessionOverviewCoordinator.CurrentTurnModel(snapshot, current)), ResourceBrush("MutedTextBrush")));
-            panel.Children.Add(setup);
-
-            if (ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot, current))
-            {
-                panel.Children.Add(ProviderQuickSetup.CreateCard(snapshot, current));
-            }
-        }
-
-        panel.Children.Add(new TextBlock
-        {
-            Text = "Quiet state",
-            Foreground = ResourceBrush("MutedTextBrush"),
-            FontSize = 11,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 5, 0, 0)
-        });
-
-        return ShellCards.CreateCard(
-            "Arena is ready",
-            "Start with 1 TURN, AUTO CHAT, an agent turn, or write directly in Operator Turn.",
-            BlendBrush(ResourceBrush("CardBrush"), accent, 0.08),
-            accent,
-            panel);
-    }
-
-    private Border CreateSetupChip(string label, string value, Brush accent)
-    {
-        return ShellCards.CreateSetupChip(label, value, accent);
     }
 
     private bool ShouldShowStyleFit()

@@ -30,6 +30,7 @@ var tests = new (string Name, Action Test)[]
     ("shell ui helpers blend brushes", ShellUiHelpersBlendBrushes),
     ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
+    ("transcript list coordinator selects retryable turns", TranscriptListCoordinatorSelectsRetryableTurns),
     ("transcript view coordinator normalizes view state", TranscriptViewCoordinatorNormalizesViewState),
     ("custom match summary coordinator normalizes card text", CustomMatchSummaryCoordinatorNormalizesCardText),
     ("scenario seed inspector coordinator formats metadata", ScenarioSeedInspectorCoordinatorFormatsMetadata),
@@ -594,6 +595,24 @@ static void ShellNavigationCoordinatorSelectsThemes()
     Require(ShellNavigationCoordinator.SelectedThemeId(themes, "dark-green") == "dark-green", "known theme should be selected");
     Require(ShellNavigationCoordinator.SelectedThemeId(themes, "system") == "dark-blue", "system theme should fall back for picker");
     Require(ShellNavigationCoordinator.SelectedThemeId(themes, "missing") == "dark-blue", "unknown theme should fall back");
+}
+
+static void TranscriptListCoordinatorSelectsRetryableTurns()
+{
+    var messages = new[]
+    {
+        TranscriptForTest(1, "System", "system", "status", "ok"),
+        TranscriptForTest(2, "Alpha", "alpha", "message", "ok"),
+        TranscriptForTest(3, "Operator", "operator", "message", "ok"),
+        TranscriptForTest(4, "Beta", "beta", "message", "ok"),
+        TranscriptForTest(5, "Narrator", "narrator", "narration", "ok"),
+        TranscriptForTest(6, "Gamma", "gamma", "message", "ok"),
+        TranscriptForTest(7, "Delta", "delta", "message", "ok")
+    };
+
+    var retryable = TranscriptListCoordinator.RetryableTurns(messages, speakerId =>
+        speakerId is "alpha" or "beta" or "gamma" or "delta" or "epsilon" or "zeta" or "eta" or "theta");
+    Require(retryable.SetEquals([4, 6, 7]), "retryable turns should be the latest three agent-speaker turns only");
 }
 
 static void TranscriptViewCoordinatorNormalizesViewState()
