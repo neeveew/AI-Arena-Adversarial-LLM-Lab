@@ -167,14 +167,14 @@ public partial class MainWindow : Window
             () => _theme,
             () => _isRenderingSnapshot,
             () => _arenaBusy,
-            (status, action) => RunArenaBusyAsync(status, action),
+            RunArenaBusyForCoordinatorAsync,
             (session, force) => LoadSessionAsync(session, force),
             preferredSessionId => LoadSessionsAsync(preferredSessionId),
-            (snapshot, sessionId) => SaveSnapshotWithFeedbackAsync(snapshot, sessionId),
-            status => RefreshActiveSessionAsync(status),
+            SaveSnapshotForCoordinatorAsync,
+            RefreshActiveSessionForCoordinatorAsync,
             ResourceBrush,
-            status => ArenaRunStatus.Text = status,
-            status => LoadStatus.Text = status);
+            SetArenaRunStatus,
+            SetLoadStatus);
         _transcriptInsightCoordinator = new TranscriptInsightCoordinator(
             () => PopulateTranscript(_lastRenderedMessages),
             () => Dispatcher.BeginInvoke(() => TranscriptScrollViewer.ScrollToTop(), DispatcherPriority.Background));
@@ -204,8 +204,8 @@ public partial class MainWindow : Window
             () => _arenaBusy,
             () => _lastRenderedMessages,
             messages => TranscriptSearch.FilterMessages(messages),
-            status => LoadStatus.Text = status,
-            status => ArenaRunStatus.Text = status);
+            SetLoadStatus,
+            SetArenaRunStatus);
         _providerSettingsCoordinator = new ProviderSettingsCoordinator(
             this,
             _coreSessionStore,
@@ -256,8 +256,8 @@ public partial class MainWindow : Window
             LoadSharedProviderConfigAsync,
             (online, error, latencyMs, status) => PersistProviderReachabilityAsync(online, error, latencyMs, status),
             preferredSessionId => LoadSessionsAsync(preferredSessionId),
-            (snapshot, sessionId) => SaveSnapshotWithFeedbackAsync(snapshot, sessionId),
-            status => RefreshActiveSessionAsync(status),
+            SaveSnapshotForCoordinatorAsync,
+            RefreshActiveSessionForCoordinatorAsync,
             force => RefreshProviderReachabilityAsync(force),
             () => UpdateProviderHealthPopup());
         _wpfSettings = _wpfSettingsStore.Load();
@@ -282,11 +282,11 @@ public partial class MainWindow : Window
             () => _theme,
             () => _isRenderingSnapshot,
             () => _arenaBusy,
-            (status, button, action, allowDuringAutoChat) => RunArenaBusyAsync(status, button, action, allowDuringAutoChat),
-            status => RefreshActiveSessionAsync(status),
+            RunArenaBusyForCoordinatorAsync,
+            RefreshActiveSessionForCoordinatorAsync,
             preferredSessionId => LoadSessionsAsync(preferredSessionId),
-            status => LoadStatus.Text = status,
-            status => ArenaRunStatus.Text = status);
+            SetLoadStatus,
+            SetArenaRunStatus);
         _operatorTurnCoordinator = new OperatorTurnCoordinator(
             _coreSessionStore,
             _eventLogStore,
@@ -309,11 +309,11 @@ public partial class MainWindow : Window
             () => _lastRenderedSnapshot,
             () => _isRenderingSnapshot,
             ResourceBrush,
-            (status, button, action, allowDuringAutoChat) => RunArenaBusyAsync(status, button, action, allowDuringAutoChat),
-            (snapshot, sessionId) => SaveSnapshotWithFeedbackAsync(snapshot, sessionId),
-            status => RefreshActiveSessionAsync(status),
-            status => LoadStatus.Text = status,
-            status => ArenaRunStatus.Text = status);
+            RunArenaBusyForCoordinatorAsync,
+            SaveSnapshotForCoordinatorAsync,
+            RefreshActiveSessionForCoordinatorAsync,
+            SetLoadStatus,
+            SetArenaRunStatus);
         _internetWorkflowCoordinator = new InternetWorkflowCoordinator(
             this,
             _coreSessionStore,
@@ -335,11 +335,11 @@ public partial class MainWindow : Window
             () => _arenaBusy,
             () => _isRenderingSnapshot,
             ResourceBrush,
-            (status, button, action, allowDuringAutoChat) => RunArenaBusyAsync(status, button, action, allowDuringAutoChat),
-            (snapshot, sessionId) => SaveSnapshotWithFeedbackAsync(snapshot, sessionId),
-            status => RefreshActiveSessionAsync(status),
-            status => LoadStatus.Text = status,
-            status => ArenaRunStatus.Text = status);
+            RunArenaBusyForCoordinatorAsync,
+            SaveSnapshotForCoordinatorAsync,
+            RefreshActiveSessionForCoordinatorAsync,
+            SetLoadStatus,
+            SetArenaRunStatus);
         ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
         InitializeThemePicker();
         _refreshTimer = new DispatcherTimer
@@ -441,9 +441,9 @@ public partial class MainWindow : Window
             AccentForSpeaker,
             DisplayStatusValue,
             BlendBrush,
-            (status, button, action, allowDuringAutoChat) => RunArenaBusyAsync(status, button, action, allowDuringAutoChat),
-            (snapshot, sessionId) => SaveSnapshotWithFeedbackAsync(snapshot, sessionId),
-            status => RefreshActiveSessionAsync(status));
+            RunArenaBusyForCoordinatorAsync,
+            SaveSnapshotForCoordinatorAsync,
+            RefreshActiveSessionForCoordinatorAsync);
         InitializeAboutPanel();
         InitializeVisualSettings();
         ScenarioWorkflow.InitializeControls();
@@ -5274,6 +5274,36 @@ public partial class MainWindow : Window
         SaveStatusText.Text = text;
         SaveStatusText.Foreground = brush;
         SaveStatusText.ToolTip = text;
+    }
+
+    private Task RunArenaBusyForCoordinatorAsync(string status, Func<Task> action)
+    {
+        return RunArenaBusyAsync(status, action);
+    }
+
+    private Task RunArenaBusyForCoordinatorAsync(string status, Button? operationButton, Func<Task> action, bool allowDuringAutoChat)
+    {
+        return RunArenaBusyAsync(status, operationButton, action, allowDuringAutoChat);
+    }
+
+    private Task SaveSnapshotForCoordinatorAsync(AIArena.Core.Models.ArenaSnapshot snapshot, string sessionId)
+    {
+        return SaveSnapshotWithFeedbackAsync(snapshot, sessionId);
+    }
+
+    private Task RefreshActiveSessionForCoordinatorAsync(string status)
+    {
+        return RefreshActiveSessionAsync(status);
+    }
+
+    private void SetLoadStatus(string status)
+    {
+        LoadStatus.Text = status;
+    }
+
+    private void SetArenaRunStatus(string status)
+    {
+        ArenaRunStatus.Text = status;
     }
 
     private async Task RunArenaBusyAsync(string status, Func<Task> action)
