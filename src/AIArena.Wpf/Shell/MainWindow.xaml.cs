@@ -48,6 +48,7 @@ public partial class MainWindow : Window
     private readonly UserGuideWindowHost _userGuideWindowHost = new();
     private readonly SavedStateWorkflowCoordinator? _savedStateCoordinator;
     private readonly TranscriptExportCoordinator? _transcriptExportCoordinator;
+    private readonly TranscriptSearchCoordinator? _transcriptSearchCoordinator;
     private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
@@ -75,14 +76,9 @@ public partial class MainWindow : Window
     private string _transcriptDashboardLayout = "";
     private string _operatorRouteMode = "public";
     private Button? _breathingOperationButton;
-    private bool _isDraggingSearchPopup;
     private bool _turnCompareSuppressAutoSeed;
     private bool _decisionCardExpanded;
-    private int? _timelineSelectedTurnFilter;
     private string? _activeAgentPerformanceDetailId;
-    private Point _searchPopupDragStart;
-    private double _searchPopupDragStartHorizontalOffset;
-    private double _searchPopupDragStartVerticalOffset;
     private WpfSettings _wpfSettings = new();
     private ThemePalette _theme = ThemePalette.Resolve("system");
     private CancellationTokenSource? _autoChatCancellation;
@@ -103,6 +99,9 @@ public partial class MainWindow : Window
 
     private TranscriptExportCoordinator TranscriptExportCoordinator =>
         _transcriptExportCoordinator ?? throw new InvalidOperationException("Transcript export coordinator is not initialized.");
+
+    private TranscriptSearchCoordinator TranscriptSearch =>
+        _transcriptSearchCoordinator ?? throw new InvalidOperationException("Transcript search coordinator is not initialized.");
 
     private ProviderSettingsCoordinator ProviderSettings =>
         _providerSettingsCoordinator ?? throw new InvalidOperationException("Provider settings coordinator is not initialized.");
@@ -207,13 +206,32 @@ public partial class MainWindow : Window
             ResourceBrush,
             status => ArenaRunStatus.Text = status,
             status => LoadStatus.Text = status);
+        _transcriptSearchCoordinator = new TranscriptSearchCoordinator(
+            this,
+            Dispatcher,
+            TranscriptSearchPopup,
+            TranscriptSearchButton,
+            TranscriptSearchText,
+            ClearTranscriptSearchButton,
+            TranscriptSearchDragHandle,
+            TranscriptResultCountText,
+            TranscriptTurnFilterPicker,
+            TranscriptFilterSystemCheckBox,
+            TranscriptFilterAgentsCheckBox,
+            TranscriptFilterNarratorCheckBox,
+            TranscriptFilterOperatorCheckBox,
+            () => _isRenderingSnapshot,
+            ResourceBrush,
+            IsAgentSpeaker,
+            () => PopulateTranscript(_lastRenderedMessages),
+            () => Dispatcher.BeginInvoke(() => TranscriptScrollViewer.ScrollToTop(), DispatcherPriority.Background));
         _transcriptExportCoordinator = new TranscriptExportCoordinator(
             this,
             ExportStatusText,
             () => _activeSession,
             () => _arenaBusy,
             () => _lastRenderedMessages,
-            FilterTranscriptMessages,
+            messages => TranscriptSearch.FilterMessages(messages),
             status => LoadStatus.Text = status,
             status => ArenaRunStatus.Text = status);
         _providerSettingsCoordinator = new ProviderSettingsCoordinator(
@@ -1863,15 +1881,11 @@ public partial class MainWindow : Window
         _lastRenderedMessages = messages;
         TranscriptItems.Children.Clear();
         _transcriptActionButtons.Clear();
-        if (_timelineSelectedTurnFilter is int selectedTurn
-            && messages.All(message => message.Turn != selectedTurn))
-        {
-            _timelineSelectedTurnFilter = null;
-        }
+        TranscriptSearch.ClearTimelineFilterIfMissing(messages);
 
-        var visibleMessages = FilterTranscriptMessages(messages).ToArray();
-        UpdateTranscriptResultCount(visibleMessages.Length, messages.Count);
-        UpdateTranscriptSearchState();
+        var visibleMessages = TranscriptSearch.FilterMessages(messages).ToArray();
+        TranscriptSearch.UpdateResultCount(visibleMessages.Length, messages.Count);
+        TranscriptSearch.UpdateSearchState();
         if (IsDiagnosticsDisplayed())
         {
             UpdateFrictionDiagnostics(messages);
@@ -1942,7 +1956,7 @@ public partial class MainWindow : Window
             TranscriptItems.Children.Add(CreateTranscriptCard(
                 message,
                 retryableTurns.Contains(message.Turn),
-                HasActiveTranscriptSearch(),
+                TranscriptSearch.HasActiveSearch,
                 message.Turn == latestTurn));
         }
 
@@ -1950,55 +1964,6 @@ public partial class MainWindow : Window
         {
             Dispatcher.BeginInvoke(() => TranscriptScrollViewer.ScrollToTop(), DispatcherPriority.Background);
         }
-    }
-
-    private IEnumerable<TranscriptMessage> FilterTranscriptMessages(IEnumerable<TranscriptMessage> messages)
-    {
-        var search = TranscriptSearchText?.Text?.Trim() ?? "";
-        var filtered = messages.Where(TranscriptSourceEnabled);
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            filtered = filtered.Where(message => TranscriptMatchesSearch(message, search));
-        }
-
-        return ApplyTranscriptTurnFilter(filtered);
-    }
-
-    private IEnumerable<TranscriptMessage> ApplyTranscriptTurnFilter(IEnumerable<TranscriptMessage> messages)
-    {
-        var filter = (TranscriptTurnFilterPicker?.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "all";
-        var filtered = filter switch
-        {
-            "latest10" => messages.OrderByDescending(message => message.Turn).Take(10),
-            "latest25" => messages.OrderByDescending(message => message.Turn).Take(25),
-            "errors" => messages.Where(message => message.Status.Equals("error", StringComparison.OrdinalIgnoreCase)),
-            "pinned" => messages.Where(message => message.Pinned),
-            _ => messages
-        };
-        return _timelineSelectedTurnFilter is int turn
-            ? filtered.Where(message => message.Turn == turn)
-            : filtered;
-    }
-
-    private void UpdateTranscriptResultCount(int visibleCount, int totalCount)
-    {
-        if (TranscriptResultCountText is null)
-        {
-            return;
-        }
-
-        var search = CurrentTranscriptSearch();
-        var filter = (TranscriptTurnFilterPicker?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "All Turns";
-        if (_timelineSelectedTurnFilter is int turn)
-        {
-            filter = $"Turn {turn}";
-        }
-
-        TranscriptResultCountText.Text = string.IsNullOrWhiteSpace(search)
-            ? visibleCount == totalCount
-                ? $"{visibleCount} shown"
-                : $"{visibleCount} of {totalCount} - {filter}"
-            : $"{visibleCount} {(visibleCount == 1 ? "match" : "matches")} \"{TrimSearchForDisplay(search)}\"";
     }
 
     private void TranscriptDashboardGrid_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -2052,35 +2017,6 @@ public partial class MainWindow : Window
         }
 
         UpdateTelemetryTimerState();
-    }
-
-    private void UpdateTranscriptSearchState()
-    {
-        if (ClearTranscriptSearchButton is null)
-        {
-            return;
-        }
-
-        var active = HasActiveTranscriptSearch();
-        ClearTranscriptSearchButton.Opacity = active ? 1.0 : 0.45;
-        ClearTranscriptSearchButton.IsEnabled = true;
-        TranscriptSearchText.BorderBrush = active
-            ? ResourceBrush("PrimaryBorderBrush")
-            : ResourceBrush("ControlBorderBrush");
-        if (TranscriptSearchButton is not null)
-        {
-            TranscriptSearchButton.BorderBrush = active
-                ? ResourceBrush("PrimaryBorderBrush")
-                : ResourceBrush("DisabledBorderBrush");
-            TranscriptSearchButton.Foreground = active
-                ? ResourceBrush("PrimaryBorderBrush")
-                : ResourceBrush("MutedTextBrush");
-        }
-    }
-
-    private bool HasActiveTranscriptSearch()
-    {
-        return !string.IsNullOrWhiteSpace(CurrentTranscriptSearch());
     }
 
     private bool IsDiagnosticsDisplayed()
@@ -2293,56 +2229,6 @@ public partial class MainWindow : Window
         usageBar.Width = percent.HasValue && parentWidth > 0
             ? parentWidth * Math.Clamp(percent.Value / 100d, 0, 1)
             : 0;
-    }
-
-    private string CurrentTranscriptSearch()
-    {
-        return TranscriptSearchText?.Text?.Trim() ?? "";
-    }
-
-    private static string TrimSearchForDisplay(string search)
-    {
-        return search.Length <= 24 ? search : $"{search[..24]}...";
-    }
-
-    private bool TranscriptSourceEnabled(TranscriptMessage message)
-    {
-        if (message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase))
-        {
-            return TranscriptFilterOperatorCheckBox?.IsChecked == true;
-        }
-
-        if (message.SpeakerId.Equals("narrator", StringComparison.OrdinalIgnoreCase))
-        {
-            return TranscriptFilterNarratorCheckBox?.IsChecked == true;
-        }
-
-        if (IsAgentSpeaker(message.SpeakerId))
-        {
-            return TranscriptFilterAgentsCheckBox?.IsChecked == true;
-        }
-
-        return TranscriptFilterSystemCheckBox?.IsChecked == true;
-    }
-
-    private static bool TranscriptMatchesSearch(TranscriptMessage message, string search)
-    {
-        return ContainsSearch(message.Speaker, search)
-            || ContainsSearch(message.SpeakerId, search)
-            || ContainsSearch(message.Model, search)
-            || ContainsSearch(message.Status, search)
-            || ContainsSearch(message.Kind, search)
-            || ContainsSearch(message.Text, search)
-            || ContainsSearch(message.Reasoning, search)
-            || ContainsSearch(message.InternetQuery, search)
-            || ContainsSearch(message.InternetUrl, search)
-            || message.InternetSources.Any(source => ContainsSearch(source, search));
-    }
-
-    private static bool ContainsSearch(string value, string search)
-    {
-        return !string.IsNullOrWhiteSpace(value)
-            && value.Contains(search, StringComparison.OrdinalIgnoreCase);
     }
 
     private void PopulateAgents(ArenaViewSnapshot snapshot)
@@ -4117,7 +4003,7 @@ public partial class MainWindow : Window
         Grid.SetColumn(titleStack, 0);
         header.Children.Add(titleStack);
 
-        var current = _timelineSelectedTurnFilter is int turnFilter
+        var current = TranscriptSearch.TimelineSelectedTurnFilter is int turnFilter
             ? points.LastOrDefault(point => point.Turn == turnFilter) ?? points.LastOrDefault()
             : points.LastOrDefault();
         var currentIndex = current is null ? -1 : points.ToList().FindIndex(point => ReferenceEquals(point, current) || point.Turn == current.Turn);
@@ -4139,7 +4025,7 @@ public partial class MainWindow : Window
             FontWeight = FontWeights.SemiBold,
             HorizontalAlignment = HorizontalAlignment.Right
         });
-        if (_timelineSelectedTurnFilter is not null)
+        if (TranscriptSearch.TimelineSelectedTurnFilter is not null)
         {
             scoreStack.Children.Add(CreateTimelineClearButton());
         }
@@ -4194,7 +4080,7 @@ public partial class MainWindow : Window
         foreach (var point in points.TakeLast(_wpfSettings.CompactTranscriptMode ? 24 : 36))
         {
             var accent = QualityAccent(point.Quality);
-            var selected = _timelineSelectedTurnFilter == point.Turn;
+            var selected = TranscriptSearch.TimelineSelectedTurnFilter == point.Turn;
             var height = Math.Max(7, Math.Round(point.Quality / 100d * 28));
             var bar = new Border
             {
@@ -4249,15 +4135,12 @@ public partial class MainWindow : Window
 
     private void ApplyTimelineTurnFilter(int turn)
     {
-        _timelineSelectedTurnFilter = _timelineSelectedTurnFilter == turn ? null : turn;
-        PopulateTranscript(_lastRenderedMessages);
-        Dispatcher.BeginInvoke(() => TranscriptScrollViewer.ScrollToTop(), DispatcherPriority.Background);
+        TranscriptSearch.ToggleTimelineTurnFilter(turn);
     }
 
     private void ClearTimelineTurnFilter()
     {
-        _timelineSelectedTurnFilter = null;
-        PopulateTranscript(_lastRenderedMessages);
+        TranscriptSearch.ClearTimelineTurnFilter();
     }
 
     private Border CreateQualityMetric(string label, string value, Brush accent)
@@ -8547,14 +8430,7 @@ public partial class MainWindow : Window
         _isRenderingSnapshot = true;
         try
         {
-            _timelineSelectedTurnFilter = null;
-            TranscriptSearchText.Clear();
-            TranscriptSearchPopup.IsOpen = false;
-            SelectComboTag(TranscriptTurnFilterPicker, "all");
-            TranscriptFilterSystemCheckBox.IsChecked = true;
-            TranscriptFilterAgentsCheckBox.IsChecked = true;
-            TranscriptFilterNarratorCheckBox.IsChecked = true;
-            TranscriptFilterOperatorCheckBox.IsChecked = true;
+            TranscriptSearch.ClearFilters();
         }
         finally
         {
@@ -8567,35 +8443,22 @@ public partial class MainWindow : Window
 
     private void TranscriptFilter_Changed(object sender, RoutedEventArgs e)
     {
-        if (_isRenderingSnapshot || TranscriptItems is null)
+        if (_transcriptSearchCoordinator is null || TranscriptItems is null)
         {
             return;
         }
 
-        PopulateTranscript(_lastRenderedMessages);
+        _transcriptSearchCoordinator.OnFilterChanged();
     }
 
     private void ClearTranscriptSearchButton_Click(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(TranscriptSearchText.Text))
-        {
-            TranscriptSearchPopup.IsOpen = false;
-            TranscriptSearchButton.Focus();
-            return;
-        }
-
-        TranscriptSearchText.Clear();
-        TranscriptSearchText.Focus();
+        _transcriptSearchCoordinator?.ClearSearch();
     }
 
     private void TranscriptSearchButton_Click(object sender, RoutedEventArgs e)
     {
-        TranscriptSearchPopup.IsOpen = true;
-        Dispatcher.BeginInvoke(() =>
-        {
-            TranscriptSearchText.Focus();
-            TranscriptSearchText.SelectAll();
-        }, DispatcherPriority.Background);
+        _transcriptSearchCoordinator?.ShowSearch();
     }
 
     private void TopProviderValue_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -8682,14 +8545,7 @@ public partial class MainWindow : Window
 
     private void TranscriptSearchText_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Escape)
-        {
-            return;
-        }
-
-        TranscriptSearchPopup.IsOpen = false;
-        TranscriptSearchButton.Focus();
-        e.Handled = true;
+        _transcriptSearchCoordinator?.OnSearchKeyDown(e);
     }
 
     private void AgentPerformanceDetailCloseButton_Click(object sender, RoutedEventArgs e)
@@ -8699,32 +8555,17 @@ public partial class MainWindow : Window
 
     private void TranscriptSearchDragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        _isDraggingSearchPopup = true;
-        _searchPopupDragStart = e.GetPosition(this);
-        _searchPopupDragStartHorizontalOffset = TranscriptSearchPopup.HorizontalOffset;
-        _searchPopupDragStartVerticalOffset = TranscriptSearchPopup.VerticalOffset;
-        TranscriptSearchDragHandle.CaptureMouse();
-        e.Handled = true;
+        _transcriptSearchCoordinator?.OnDragMouseLeftButtonDown(e);
     }
 
     private void TranscriptSearchDragHandle_MouseMove(object sender, MouseEventArgs e)
     {
-        if (!_isDraggingSearchPopup)
-        {
-            return;
-        }
-
-        var current = e.GetPosition(this);
-        TranscriptSearchPopup.HorizontalOffset = _searchPopupDragStartHorizontalOffset + current.X - _searchPopupDragStart.X;
-        TranscriptSearchPopup.VerticalOffset = _searchPopupDragStartVerticalOffset + current.Y - _searchPopupDragStart.Y;
-        e.Handled = true;
+        _transcriptSearchCoordinator?.OnDragMouseMove(e);
     }
 
     private void TranscriptSearchDragHandle_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        _isDraggingSearchPopup = false;
-        TranscriptSearchDragHandle.ReleaseMouseCapture();
-        e.Handled = true;
+        _transcriptSearchCoordinator?.OnDragMouseLeftButtonUp(e);
     }
 
     private void UpdateNavigationTheme()
