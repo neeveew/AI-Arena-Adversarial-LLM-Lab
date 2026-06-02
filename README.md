@@ -54,14 +54,14 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
    [GitHub releases page](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases).
 2. Start LM Studio or another OpenAI-compatible provider.
 3. Open Settings, then Model Provider.
-4. Set Provider base URL. For LM Studio, use:
+4. Press Auto Configure to detect local hardware, provider capability, and advertised models.
+5. Review the recommended spread, then press Apply Recommended or choose models manually.
+6. If auto detection cannot find your provider, set Provider base URL yourself. For LM Studio, use:
 
    ```text
    http://127.0.0.1:1234/v1
    ```
 
-5. Select a default model, or type a model name manually.
-6. Optionally assign different models to Alpha, Beta, Gamma, Delta, and Narrator.
 7. Press Test Provider.
 8. Open Custom Match and use the grouped Generate, Tune, and Recent controls to create or replay a setup with Random Seed, AI Choice, or YOLO.
 9. Return to Transcript and run 1 TURN or AUTO CHAT.
@@ -106,6 +106,7 @@ If the provider is offline, AI Arena can still open sessions and display local d
 - Native Windows WPF app.
 - Shared .NET core library for arena logic, sessions, providers, diagnostics, internet tools, narration, transcript handling, match generation, and avatars.
 - OpenAI-compatible provider client.
+- GPU-aware provider auto configuration for recommending model routing. LM Studio or the provider still controls final device placement and GPU offload.
 - User data storage under `%LOCALAPPDATA%\AI Arena`, split into `configs`, `sessions`, `checkpoints`, `templates`, `exports`, `logs`, and `cache`.
 - No dependency on a specific model host.
 - No WebView/browser dashboard dependency in the active app.

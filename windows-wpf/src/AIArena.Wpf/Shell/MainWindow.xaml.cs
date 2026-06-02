@@ -37,6 +37,7 @@ public partial class MainWindow : Window
     private readonly EventLogStore _eventLogStore = new();
     private readonly ModelProviderHealthService _providerHealth = new();
     private readonly ModelPreloadService _modelPreloadService = new();
+    private readonly ProviderAutoConfigureService _providerAutoConfigureService = new();
     private readonly TranscriptService _transcriptService = new();
     private readonly TurnRunnerService _turnRunner = new();
     private readonly MatchGenerationService _matchGeneration = new();
@@ -110,6 +111,7 @@ public partial class MainWindow : Window
     private ArenaSnapshot? _lastRenderedSnapshot;
     private CoreFrictionDiagnostics? _lastDiagnostics;
     private DiagnosticSeriesSet _lastDiagnosticSeries = new(Array.Empty<DiagnosticHistoryPoint>(), 0);
+    private ProviderAutoConfigurePlan? _lastAutoConfigurePlan;
 
     private sealed record DiagnosticHistoryPoint(
         int Friction,
@@ -5654,6 +5656,241 @@ public partial class MainWindow : Window
             await RefreshAdvertisedModelsAsync(force: true);
             UpdateModelStateLabels();
         });
+    }
+
+    private async void AutoConfigureButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunBusyAsync(AutoConfigureButton, async () =>
+        {
+            ApplyAutoConfigureButton.IsEnabled = false;
+            AutoConfigureRecommendationItems.Children.Clear();
+            AutoConfigureStatusText.Foreground = ResourceBrush("MutedTextBrush");
+            AutoConfigureStatusText.Text = "Detecting GPU setup, provider capability, and advertised models...";
+            AutoConfigureHardwareText.Text = "";
+            AutoConfigureProviderText.Text = "";
+
+            var strategy = SelectedComboTag(AutoConfigureStrategyPicker, "auto");
+            var plan = await _providerAutoConfigureService.DetectAsync(ProviderBaseUrlText.Text.Trim(), strategy);
+            _lastAutoConfigurePlan = plan;
+            PopulateAutoConfigurePlan(plan);
+
+            if (plan.ProviderOnline)
+            {
+                _advertisedModels = plan.Models.Select(model => model.Name).ToArray();
+                _lastProviderModelCount = _advertisedModels.Count;
+                _lastModelListCheckedAt = DateTimeOffset.Now;
+                _isUpdatingRoleModelEditor = true;
+                try
+                {
+                    UpdateModelComboItems(ProviderModelText);
+                    foreach (var comboBox in RoleModelComboBoxes())
+                    {
+                        UpdateModelComboItems(comboBox);
+                    }
+                }
+                finally
+                {
+                    _isUpdatingRoleModelEditor = false;
+                }
+            }
+
+            UpdateProviderHealthPopup();
+        });
+    }
+
+    private async void ApplyAutoConfigureButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_lastAutoConfigurePlan is null)
+        {
+            AutoConfigureStatusText.Text = "Run Auto Configure first.";
+            return;
+        }
+
+        await RunBusyAsync(ApplyAutoConfigureButton, async () =>
+        {
+            var plan = _lastAutoConfigurePlan;
+            if (!plan.ProviderOnline || string.IsNullOrWhiteSpace(plan.DefaultModel) || plan.Assignments.Count == 0)
+            {
+                AutoConfigureStatusText.Foreground = ResourceBrush("DangerTextBrush");
+                AutoConfigureStatusText.Text = "No usable recommendation to apply.";
+                return;
+            }
+
+            if (_activeSession is null)
+            {
+                await _coreSessionStore.EnsureDefaultSessionAsync();
+                await LoadSessionsAsync("default");
+            }
+
+            _isUpdatingRoleModelEditor = true;
+            try
+            {
+                ProviderBaseUrlText.Text = plan.ProviderBaseUrl;
+                ProviderModelText.Text = plan.DefaultModel;
+                var uniqueModels = plan.Assignments
+                    .Select(item => item.Model)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Count();
+                foreach (var assignment in plan.Assignments)
+                {
+                    var key = assignment.Role.ToLowerInvariant();
+                    var model = uniqueModels <= 1 || assignment.Model.Equals(plan.DefaultModel, StringComparison.OrdinalIgnoreCase)
+                        ? ""
+                        : assignment.Model;
+                    SetRoleModelText(key, model);
+                    _roleModels[key] = model;
+                }
+            }
+            finally
+            {
+                _isUpdatingRoleModelEditor = false;
+            }
+
+            SaveRoleModelDrafts();
+            UpdateRoleModelSummary();
+            await PersistModelRoutingAsync("Auto configuration applied.", refreshModels: true);
+            PreloadModelsStatusText.Foreground = ResourceBrush("MutedTextBrush");
+            PreloadModelsStatusText.Text = plan.PreloadGuidance;
+            AutoConfigureStatusText.Foreground = ResourceBrush("AlphaAccentBrush");
+            AutoConfigureStatusText.Text = "Applied recommended model routing.";
+        });
+    }
+
+    private void PopulateAutoConfigurePlan(ProviderAutoConfigurePlan plan)
+    {
+        AutoConfigureRecommendationItems.Children.Clear();
+        AutoConfigureStatusText.Foreground = plan.ProviderOnline
+            ? ResourceBrush("AlphaAccentBrush")
+            : ResourceBrush("DangerTextBrush");
+        AutoConfigureStatusText.Text = plan.ProviderOnline
+            ? $"Detected {plan.Models.Count} chat model(s). Strategy: {DisplayAutoConfigureStrategy(plan.Strategy)}."
+            : "Provider offline or no advertised models found.";
+        AutoConfigureHardwareText.Text = FormatHardwareSummary(plan.Hardware);
+        AutoConfigureProviderText.Text = $"Provider: {plan.ProviderBaseUrl} - {(plan.LmStudioNativeApi ? "LM Studio enhanced mode" : "OpenAI-compatible mode")}. {plan.PreloadGuidance}";
+
+        foreach (var assignment in plan.Assignments)
+        {
+            AutoConfigureRecommendationItems.Children.Add(CreateAutoConfigureBadge(assignment));
+        }
+
+        foreach (var warning in plan.Warnings)
+        {
+            AutoConfigureRecommendationItems.Children.Add(CreateTextBadge("Note", warning, ResourceBrush("MutedTextBrush")));
+        }
+
+        ApplyAutoConfigureButton.IsEnabled = plan.ProviderOnline && plan.Assignments.Count > 0;
+        ProviderModelsStatus.Text = plan.ProviderOnline
+            ? $"{plan.Models.Count} advertised chat models found by Auto Configure."
+            : "Auto Configure could not reach an OpenAI-compatible provider.";
+    }
+
+    private Border CreateAutoConfigureBadge(ModelAssignmentRecommendation assignment)
+    {
+        var accent = AccentForSpeaker(assignment.Role);
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.12),
+            BorderBrush = accent,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(7, 4, 7, 5),
+            Margin = new Thickness(0, 0, 6, 6),
+            ToolTip = $"{assignment.Role}: {assignment.Model}{Environment.NewLine}{assignment.Reason}",
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = assignment.Role,
+                        Foreground = accent,
+                        FontSize = 11,
+                        FontWeight = FontWeights.SemiBold
+                    },
+                    new TextBlock
+                    {
+                        Text = ShortModelName(assignment.Model),
+                        Foreground = ResourceBrush("TextBrush"),
+                        FontSize = 11,
+                        TextTrimming = TextTrimming.CharacterEllipsis,
+                        MaxWidth = 150
+                    }
+                }
+            }
+        };
+    }
+
+    private Border CreateTextBadge(string label, string text, Brush accent)
+    {
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.1),
+            BorderBrush = ResourceBrush("ControlBorderBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(7, 4, 7, 5),
+            Margin = new Thickness(0, 0, 6, 6),
+            ToolTip = text,
+            Child = new TextBlock
+            {
+                Text = $"{label}: {text}",
+                Foreground = accent,
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                MaxWidth = 320
+            }
+        };
+    }
+
+    private static string DisplayAutoConfigureStrategy(string strategy)
+    {
+        return strategy switch
+        {
+            "low_vram" => "Low VRAM",
+            "max_variety" => "Max variety",
+            "absurd_lab" => "Absurd Lab",
+            "performance" => "Performance",
+            "conservative" => "Conservative",
+            _ => "Balanced"
+        };
+    }
+
+    private static string FormatHardwareSummary(HardwareProbe hardware)
+    {
+        var gpuSummary = hardware.Gpus.Count == 0
+            ? "GPU: none detected"
+            : "GPU: " + string.Join("; ", hardware.Gpus.Select(gpu =>
+            {
+                var vram = gpu.VramTotalGb.HasValue ? $"{gpu.VramTotalGb.Value:0.#} GB VRAM" : "VRAM unknown";
+                var used = gpu.VramUsedGb.HasValue ? $", {gpu.VramUsedGb.Value:0.#} GB used" : "";
+                return $"{gpu.Name} ({gpu.Vendor}, {vram}{used})";
+            }));
+        var ram = hardware.SystemRamTotalGb.HasValue
+            ? $"RAM: {hardware.SystemRamTotalGb.Value:0.#} GB total"
+            : "RAM: unknown";
+        return $"{gpuSummary}. {ram}.";
+    }
+
+    private void SetRoleModelText(string key, string model)
+    {
+        switch (key)
+        {
+            case "alpha":
+                AlphaRoleModelText.Text = model;
+                break;
+            case "beta":
+                BetaRoleModelText.Text = model;
+                break;
+            case "gamma":
+                GammaRoleModelText.Text = model;
+                break;
+            case "delta":
+                DeltaRoleModelText.Text = model;
+                break;
+            case "narrator":
+                NarratorRoleModelText.Text = model;
+                break;
+        }
     }
 
     private async void ApplySettingsButton_Click(object sender, RoutedEventArgs e)

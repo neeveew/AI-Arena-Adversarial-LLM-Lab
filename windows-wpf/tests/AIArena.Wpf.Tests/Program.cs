@@ -4,7 +4,9 @@ var tests = new (string Name, Action Test)[]
 {
     ("saves and reloads visual generation settings", SaveReloadVisualGenerationSettings),
     ("normalizes legacy theme and blank settings", NormalizeLegacyThemeAndBlankSettings),
-    ("overwrites read-only settings file", OverwriteReadOnlySettingsFile)
+    ("overwrites read-only settings file", OverwriteReadOnlySettingsFile),
+    ("auto configure keeps low VRAM to one model", AutoConfigureLowVramSingleModel),
+    ("auto configure spreads high VRAM model variety", AutoConfigureHighVramVariety)
 };
 
 var failures = 0;
@@ -118,6 +120,47 @@ static void OverwriteReadOnlySettingsFile()
         Require(loaded.RandomSeedPreset == "evidence_trial", "read-only overwrite did not persist preset");
         Require(loaded.RandomSeedIntensity == "sharp", "read-only overwrite did not persist intensity");
     });
+}
+
+static void AutoConfigureLowVramSingleModel()
+{
+    var hardware = new HardwareProbe(
+        [new GpuDeviceInfo("Tiny GPU", "unknown", 6, 1, 0)],
+        16,
+        8);
+    var plan = ProviderAutoConfigureService.Recommend(
+        "http://127.0.0.1:1234/v1",
+        providerOnline: true,
+        lmStudioNativeApi: true,
+        ["large-13b-q4", "small-3b-q4", "medium-7b-q4"],
+        hardware,
+        "auto");
+
+    Require(plan.ProviderOnline, "provider should stay online");
+    Require(plan.Strategy == "low_vram", "auto strategy should pick low_vram");
+    Require(plan.Assignments.Select(item => item.Model).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1, "low VRAM should use one unique model");
+    Require(plan.DefaultModel.Contains("3b", StringComparison.OrdinalIgnoreCase), "low VRAM should prefer smallest model");
+}
+
+static void AutoConfigureHighVramVariety()
+{
+    var hardware = new HardwareProbe(
+        [new GpuDeviceInfo("Big GPU", "NVIDIA", 48, 4, 2)],
+        96,
+        24);
+    var plan = ProviderAutoConfigureService.Recommend(
+        "http://127.0.0.1:1234/v1",
+        providerOnline: true,
+        lmStudioNativeApi: true,
+        ["model-a-3b-q4", "model-b-7b-q4", "model-c-13b-q4", "model-d-30b-q4", "embedding-model"],
+        hardware,
+        "max_variety");
+
+    var uniqueModels = plan.Assignments.Select(item => item.Model).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    Require(plan.Strategy == "max_variety", "explicit strategy should be honored");
+    Require(uniqueModels >= 3, "high VRAM variety should spread across models");
+    Require(plan.Models.All(model => !model.Name.Contains("embedding", StringComparison.OrdinalIgnoreCase)), "embedding model should not be used as chat candidate");
+    Require(plan.Assignments.Single(item => item.Role == "Narrator").Model.Contains("3b", StringComparison.OrdinalIgnoreCase), "narrator should use smallest model");
 }
 
 static void WithTempSettingsStore(Action<WpfSettingsStore> action)

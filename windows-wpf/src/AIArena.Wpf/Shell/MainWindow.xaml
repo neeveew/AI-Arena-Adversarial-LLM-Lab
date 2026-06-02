@@ -2469,6 +2469,86 @@
                                    Foreground="{DynamicResource MutedTextBrush}"
                                    TextWrapping="Wrap"
                                    Margin="0,0,0,8" />
+                        <Border Background="{DynamicResource PanelBrush}"
+                                BorderBrush="{DynamicResource ControlBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="10"
+                                Margin="0,0,0,10">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="8" />
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="8" />
+                                        <ColumnDefinition Width="150" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Auto configure"
+                                                   Foreground="{DynamicResource TextBrush}"
+                                                   FontWeight="SemiBold" />
+                                        <TextBlock Text="Detect hardware and provider models, then recommend a model spread."
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   FontSize="11"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,2,0,0" />
+                                    </StackPanel>
+                                    <ComboBox x:Name="AutoConfigureStrategyPicker"
+                                              Grid.Column="2"
+                                              Background="{DynamicResource InputBrush}"
+                                              Foreground="White"
+                                              BorderBrush="{DynamicResource ControlBorderBrush}"
+                                              Padding="8"
+                                              VerticalAlignment="Center"
+                                              ToolTip="Choose how aggressively AI Arena should spread models across roles.">
+                                        <ComboBoxItem Content="Auto" Tag="auto" IsSelected="True" />
+                                        <ComboBoxItem Content="Conservative" Tag="conservative" />
+                                        <ComboBoxItem Content="Balanced" Tag="balanced" />
+                                        <ComboBoxItem Content="Performance" Tag="performance" />
+                                        <ComboBoxItem Content="Max variety" Tag="max_variety" />
+                                        <ComboBoxItem Content="Low VRAM" Tag="low_vram" />
+                                        <ComboBoxItem Content="Absurd Lab" Tag="absurd_lab" />
+                                    </ComboBox>
+                                    <Button x:Name="AutoConfigureButton"
+                                            Grid.Column="4"
+                                            Content="AUTO CONFIGURE"
+                                            Click="AutoConfigureButton_Click"
+                                            Padding="8"
+                                            VerticalAlignment="Center" />
+                                </Grid>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="8" />
+                                        <ColumnDefinition Width="150" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock x:Name="AutoConfigureStatusText"
+                                                   Text="Auto configure has not run yet."
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock x:Name="AutoConfigureHardwareText"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,4,0,0" />
+                                        <TextBlock x:Name="AutoConfigureProviderText"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,4,0,0" />
+                                    </StackPanel>
+                                    <Button x:Name="ApplyAutoConfigureButton"
+                                            Grid.Column="2"
+                                            Content="APPLY RECOMMENDED"
+                                            Click="ApplyAutoConfigureButton_Click"
+                                            IsEnabled="False"
+                                            Padding="8"
+                                            VerticalAlignment="Top" />
+                                </Grid>
+                                <WrapPanel x:Name="AutoConfigureRecommendationItems"
+                                           Margin="0,0,0,2" />
+                            </StackPanel>
+                        </Border>
                         <Button x:Name="PreloadSelectedModelsButton"
                                 Content="PRELOAD SELECTED MODELS"
                                 Click="PreloadSelectedModelsButton_Click"

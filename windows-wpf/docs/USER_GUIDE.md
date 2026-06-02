@@ -9,9 +9,9 @@ The app is designed for local experimentation with model behavior. You can creat
 1. Install AI Arena from the versioned setup file.
 2. Start LM Studio or another OpenAI-compatible provider.
 3. Open Settings, then Model Provider.
-4. Set Provider base URL, usually `http://127.0.0.1:1234/v1` for LM Studio.
-5. Pick a Default model from the dropdown, or type one manually.
-6. Optionally assign different models to Alpha, Beta, Gamma, Delta, and Narrator.
+4. Press Auto Configure to detect local hardware, provider capability, and advertised models.
+5. Review the recommended model spread, then press Apply Recommended or choose models manually.
+6. Set Provider base URL yourself if auto detection cannot find the provider, usually `http://127.0.0.1:1234/v1` for LM Studio.
 7. Press Test Provider.
 8. Open Custom Match and use the Generate, Tune, and Recent controls to choose a preset, role pack, style, pressure, absurdity level, AI Choice, or YOLO.
 9. Return to Transcript and run 1 TURN or AUTO CHAT.
@@ -245,6 +245,8 @@ Settings are grouped into collapsible sections.
 - Default model: model applied when selected.
 - Participant model dropdowns: assign Alpha, Beta, Gamma, Delta, and Narrator individually.
 - Manual entry: type a model name if it is not advertised by the provider.
+- Auto Configure: detects GPU/RAM setup, checks common LM Studio/OpenAI-compatible provider URLs, estimates advertised model size from names, and recommends a conservative, balanced, performance, max variety, low VRAM, or Absurd Lab model spread.
+- Apply Recommended: writes the detected provider URL, default model, and participant model assignments into Settings. LM Studio still controls final GPU offload and device placement.
 - Preload selected models: asks the provider to load selected models when supported.
 - Timeout: maximum provider wait time.
 - Temperature: generation randomness.
