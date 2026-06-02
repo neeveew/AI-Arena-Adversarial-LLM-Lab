@@ -55,6 +55,7 @@ public partial class MainWindow : Window
     private readonly DiagnosticsWorkflowCoordinator? _diagnosticsWorkflowCoordinator;
     private readonly MatchSetupCoordinator? _matchSetupCoordinator;
     private readonly MatchLockCoordinator? _matchLockCoordinator;
+    private readonly AgentRosterCoordinator? _agentRosterCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
     private readonly DispatcherTimer _providerHealthTimer;
@@ -115,6 +116,9 @@ public partial class MainWindow : Window
 
     private MatchLockCoordinator MatchLock =>
         _matchLockCoordinator ?? throw new InvalidOperationException("Match lock coordinator is not initialized.");
+
+    private AgentRosterCoordinator AgentRoster =>
+        _agentRosterCoordinator ?? throw new InvalidOperationException("Agent roster coordinator is not initialized.");
 
     private sealed record MatchQualityPoint(
         int Turn,
@@ -454,6 +458,22 @@ public partial class MainWindow : Window
             RefreshActiveSessionForCoordinatorAsync,
             SetLoadStatus,
             SetArenaRunStatus);
+        _agentRosterCoordinator = new AgentRosterCoordinator(
+            _coreSessionStore,
+            _eventLogStore,
+            AgentCountPresetPicker,
+            AgentCountPicker,
+            ActiveParticipantsPicker,
+            ApplyAgentCountButton,
+            AgentRosterStatusText,
+            () => _isRenderingSnapshot,
+            () => _arenaBusy,
+            () => _activeSession,
+            preferredSessionId => LoadSessionsAsync(preferredSessionId),
+            RunArenaBusyForCoordinatorAsync,
+            SaveSnapshotForCoordinatorAsync,
+            RefreshActiveSessionForCoordinatorAsync,
+            SetArenaRunStatus);
         InitializeAboutPanel();
         InitializeVisualSettings();
         ScenarioWorkflow.InitializeControls();
@@ -730,50 +750,12 @@ public partial class MainWindow : Window
 
     private void AgentCountPresetPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_isRenderingSnapshot || AgentCountPicker is null || AgentCountPresetPicker is null)
-        {
-            return;
-        }
-
-        var preset = ShellUiHelpers.SelectedComboTag(AgentCountPresetPicker, "4");
-        if (!preset.Equals("custom", StringComparison.OrdinalIgnoreCase))
-        {
-            ShellUiHelpers.SelectComboTag(AgentCountPicker, preset);
-        }
+        _agentRosterCoordinator?.OnPresetChanged();
     }
 
     private async void ApplyAgentCountButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_arenaBusy)
-        {
-            return;
-        }
-
-        if (_activeSession is null)
-        {
-            await _coreSessionStore.EnsureDefaultSessionAsync();
-            await LoadSessionsAsync("default");
-        }
-
-        if (_activeSession is null)
-        {
-            ArenaRunStatus.Text = "No session is available for agent roster changes.";
-            return;
-        }
-
-        var count = SelectedAgentCount();
-        await RunArenaBusyAsync($"Resizing cast to {count} agents...", ApplyAgentCountButton, async () =>
-        {
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id) ?? SessionStore.CreateDefaultSnapshot();
-            AgentRosterService.EnsureParticipantCount(snapshot, count);
-            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_agent_roster_resized", new
-            {
-                Count = count,
-                Agents = snapshot.Engine.Agents.Where(agent => agent.Active).Select(agent => agent.Id).ToArray()
-            });
-            await RefreshActiveSessionAsync($"Agent roster resized: {count} active agents.");
-        }, allowDuringAutoChat: true);
+        await AgentRoster.ApplyAgentCountAsync();
     }
 
     private void GenerationHelpButton_Click(object sender, RoutedEventArgs e)
@@ -1023,8 +1005,7 @@ public partial class MainWindow : Window
         }
         _isRenderingSnapshot = true;
         var activeCount = snapshot.Agents.Count(agent => agent.Active);
-        ShellUiHelpers.SelectComboTag(ActiveParticipantsPicker, Math.Clamp(activeCount, 1, AgentRosterService.MaxParticipants).ToString(System.Globalization.CultureInfo.InvariantCulture));
-        SelectAgentCountControls(activeCount);
+        AgentRoster.ApplySnapshot(activeCount);
         ProviderSettings.ApplySnapshot(snapshot);
         ProviderTimeoutText.Text = snapshot.ProviderTimeout.ToString(System.Globalization.CultureInfo.InvariantCulture);
         ProviderTemperatureText.Text = snapshot.ProviderTemperature.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
@@ -4168,7 +4149,7 @@ public partial class MainWindow : Window
         privateWindow = Math.Clamp(privateWindow, 0, 60);
         notesWindow = Math.Clamp(notesWindow, 0, 60);
         internetMaxResults = Math.Clamp(internetMaxResults, 1, 10);
-        var activeParticipants = ParseActiveParticipants();
+        var activeParticipants = AgentRoster.ParseActiveParticipants();
         var internetMode = ShellUiHelpers.SelectedComboTag(InternetModePicker, "manual");
         var useInternet = UseInternetCheckBox.IsChecked == true;
         if (!useInternet)
@@ -4884,7 +4865,7 @@ public partial class MainWindow : Window
         TestProviderButton.IsEnabled = !busy;
         PreloadSelectedModelsButton.IsEnabled = !busy;
         ApplySettingsButton.IsEnabled = !busy;
-        ActiveParticipantsPicker.IsEnabled = !busy;
+        AgentRoster.UpdateBusyState(busy);
         ProviderBaseUrlText.IsEnabled = !busy;
         ProviderModelText.IsEnabled = !busy;
         AlphaRoleModelText.IsEnabled = !busy;
@@ -5593,55 +5574,6 @@ public partial class MainWindow : Window
         return AgentRosterService.IsParticipantId(speakerId);
     }
 
-
-    private void SelectAgentCountControls(int activeCount)
-    {
-        if (AgentCountPicker is null || AgentCountPresetPicker is null)
-        {
-            return;
-        }
-
-        var count = Math.Clamp(activeCount, AgentRosterService.MinParticipants, AgentRosterService.MaxParticipants);
-        ShellUiHelpers.SelectComboTag(AgentCountPicker, count.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        var preset = count switch
-        {
-            2 => "2",
-            4 => "4",
-            6 => "6",
-            8 => "8",
-            _ => "custom"
-        };
-        ShellUiHelpers.SelectComboTag(AgentCountPresetPicker, preset);
-        if (AgentRosterStatusText is not null)
-        {
-            AgentRosterStatusText.Text = count switch
-            {
-                1 => "Solo",
-                2 => "Duel",
-                4 => "Classic",
-                6 => "Council",
-                8 => "Swarm",
-                _ => "Custom"
-            };
-            AgentRosterStatusText.ToolTip = $"{count} active AI agents in this session";
-        }
-    }
-
-    private int SelectedAgentCount()
-    {
-        var selected = (AgentCountPicker.SelectedItem as ComboBoxItem)?.Tag?.ToString();
-        return int.TryParse(selected, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var count)
-            ? Math.Clamp(count, AgentRosterService.MinParticipants, AgentRosterService.MaxParticipants)
-            : 4;
-    }
-
-    private int ParseActiveParticipants()
-    {
-        var selected = (ActiveParticipantsPicker.SelectedItem as ComboBoxItem)?.Tag?.ToString();
-        return int.TryParse(selected, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var count)
-            ? Math.Clamp(count, 1, AgentRosterService.MaxParticipants)
-            : 3;
-    }
 
     private static void EnsureDeltaAgent(AIArena.Core.Models.ArenaSnapshot snapshot)
     {
