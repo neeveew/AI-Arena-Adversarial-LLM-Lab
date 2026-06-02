@@ -49,6 +49,7 @@ public partial class MainWindow : Window
     private readonly SavedStateWorkflowCoordinator? _savedStateCoordinator;
     private readonly TranscriptExportCoordinator? _transcriptExportCoordinator;
     private readonly TranscriptSearchCoordinator? _transcriptSearchCoordinator;
+    private readonly TranscriptInsightCoordinator? _transcriptInsightCoordinator;
     private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
@@ -61,7 +62,6 @@ public partial class MainWindow : Window
     private readonly List<ComboBox> _voiceControls = [];
     private readonly List<ComboBox> _pressureControls = [];
     private readonly List<RivalryMatrixControlRow> _rivalryMatrixControls = [];
-    private readonly List<TranscriptMessage> _turnCompareSelection = [];
     private readonly SemaphoreSlim _arenaOperationLock = new(1, 1);
     private IReadOnlyList<TranscriptMessage> _lastRenderedMessages = [];
     private IReadOnlyDictionary<string, string> _lastAgentPersonas = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -76,7 +76,6 @@ public partial class MainWindow : Window
     private string _transcriptDashboardLayout = "";
     private string _operatorRouteMode = "public";
     private Button? _breathingOperationButton;
-    private bool _turnCompareSuppressAutoSeed;
     private bool _decisionCardExpanded;
     private string? _activeAgentPerformanceDetailId;
     private WpfSettings _wpfSettings = new();
@@ -102,6 +101,9 @@ public partial class MainWindow : Window
 
     private TranscriptSearchCoordinator TranscriptSearch =>
         _transcriptSearchCoordinator ?? throw new InvalidOperationException("Transcript search coordinator is not initialized.");
+
+    private TranscriptInsightCoordinator TranscriptInsight =>
+        _transcriptInsightCoordinator ?? throw new InvalidOperationException("Transcript insight coordinator is not initialized.");
 
     private ProviderSettingsCoordinator ProviderSettings =>
         _providerSettingsCoordinator ?? throw new InvalidOperationException("Provider settings coordinator is not initialized.");
@@ -206,6 +208,9 @@ public partial class MainWindow : Window
             ResourceBrush,
             status => ArenaRunStatus.Text = status,
             status => LoadStatus.Text = status);
+        _transcriptInsightCoordinator = new TranscriptInsightCoordinator(
+            () => PopulateTranscript(_lastRenderedMessages),
+            () => Dispatcher.BeginInvoke(() => TranscriptScrollViewer.ScrollToTop(), DispatcherPriority.Background));
         _transcriptSearchCoordinator = new TranscriptSearchCoordinator(
             this,
             Dispatcher,
@@ -223,8 +228,8 @@ public partial class MainWindow : Window
             () => _isRenderingSnapshot,
             ResourceBrush,
             IsAgentSpeaker,
-            () => PopulateTranscript(_lastRenderedMessages),
-            () => Dispatcher.BeginInvoke(() => TranscriptScrollViewer.ScrollToTop(), DispatcherPriority.Background));
+            () => TranscriptInsight.TimelineSelectedTurnFilter,
+            () => PopulateTranscript(_lastRenderedMessages));
         _transcriptExportCoordinator = new TranscriptExportCoordinator(
             this,
             ExportStatusText,
@@ -598,12 +603,7 @@ public partial class MainWindow : Window
         }
 
         _wpfSettings.TurnCompareMode = TurnCompareCheckBox.IsChecked == true;
-        if (!_wpfSettings.TurnCompareMode)
-        {
-            _turnCompareSelection.Clear();
-        }
-
-        _turnCompareSuppressAutoSeed = false;
+        TranscriptInsight.SetTurnCompareMode(_wpfSettings.TurnCompareMode);
         _wpfSettingsStore.Save(_wpfSettings);
         if (_lastRenderedMessages.Count > 0)
         {
@@ -965,12 +965,7 @@ public partial class MainWindow : Window
         _wpfSettings.ShowAgentMemoryNotes = memory;
         _wpfSettings.TopStripMode = topStripMode;
         _wpfSettings.ShowTranscriptDiagnostics = topStripMode.Equals("diagnostics", StringComparison.OrdinalIgnoreCase);
-        if (!compare)
-        {
-            _turnCompareSelection.Clear();
-        }
-
-        _turnCompareSuppressAutoSeed = false;
+        TranscriptInsight.SetTurnCompareMode(compare);
         _wpfSettingsStore.Save(_wpfSettings);
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
         UpdateTelemetryTimerState();
@@ -1881,7 +1876,7 @@ public partial class MainWindow : Window
         _lastRenderedMessages = messages;
         TranscriptItems.Children.Clear();
         _transcriptActionButtons.Clear();
-        TranscriptSearch.ClearTimelineFilterIfMissing(messages);
+        TranscriptInsight.ClearTimelineFilterIfMissing(messages);
 
         var visibleMessages = TranscriptSearch.FilterMessages(messages).ToArray();
         TranscriptSearch.UpdateResultCount(visibleMessages.Length, messages.Count);
@@ -1938,7 +1933,7 @@ public partial class MainWindow : Window
         }
         if (_wpfSettings.TurnCompareMode)
         {
-            EnsureTurnCompareSelection(visibleMessages);
+            TranscriptInsight.EnsureTurnCompareSelection(visibleMessages);
             TranscriptItems.Children.Add(CreateTurnComparePanel(visibleMessages));
         }
         if (_wpfSettings.ShowAgentMemoryNotes && _lastRenderedSnapshot is not null)
@@ -2047,79 +2042,6 @@ public partial class MainWindow : Window
         {
             _telemetryTimer.Stop();
         }
-    }
-
-    private void EnsureTurnCompareSelection(IReadOnlyList<TranscriptMessage> visibleMessages)
-    {
-        var retained = _turnCompareSelection
-            .Where(selected => visibleMessages.Any(message => SameTranscriptMessage(message, selected)))
-            .Take(2)
-            .ToList();
-
-        if (!_turnCompareSuppressAutoSeed)
-        {
-            foreach (var message in visibleMessages
-                .Where(CanCompareTranscriptMessage)
-                .OrderByDescending(message => message.Turn)
-                .ThenByDescending(message => message.CreatedAt))
-            {
-                if (retained.Count >= 2)
-                {
-                    break;
-                }
-
-                if (!retained.Any(selected => SameTranscriptMessage(selected, message)))
-                {
-                    retained.Add(message);
-                }
-            }
-        }
-
-        _turnCompareSelection.Clear();
-        _turnCompareSelection.AddRange(retained);
-    }
-
-    private static bool CanCompareTranscriptMessage(TranscriptMessage message)
-    {
-        return message.Turn > 0 && !string.IsNullOrWhiteSpace(message.Text);
-    }
-
-    private static bool SameTranscriptMessage(TranscriptMessage left, TranscriptMessage right)
-    {
-        return left.Turn == right.Turn
-            && left.SpeakerId.Equals(right.SpeakerId, StringComparison.OrdinalIgnoreCase)
-            && Math.Abs(left.CreatedAt - right.CreatedAt) < 0.001;
-    }
-
-    private bool IsTurnSelectedForCompare(TranscriptMessage message)
-    {
-        return _turnCompareSelection.Any(selected => SameTranscriptMessage(selected, message));
-    }
-
-    private void ToggleTurnCompareMessage(TranscriptMessage message)
-    {
-        if (!CanCompareTranscriptMessage(message))
-        {
-            return;
-        }
-
-        _turnCompareSuppressAutoSeed = true;
-        var existing = _turnCompareSelection.FindIndex(selected => SameTranscriptMessage(selected, message));
-        if (existing >= 0)
-        {
-            _turnCompareSelection.RemoveAt(existing);
-        }
-        else
-        {
-            if (_turnCompareSelection.Count >= 2)
-            {
-                _turnCompareSelection.RemoveAt(0);
-            }
-
-            _turnCompareSelection.Add(message);
-        }
-
-        PopulateTranscript(_lastRenderedMessages);
     }
 
     private async Task UpdateSystemTelemetryAsync()
@@ -3590,11 +3512,11 @@ public partial class MainWindow : Window
         actions.Children.Add(ActionButton("Delete", async (_, _) => await DeleteTranscriptMessageAsync(message), canMutate, TranscriptActionKind.Danger, "\uE74D"));
         if (_wpfSettings.TurnCompareMode)
         {
-            var selectedForCompare = IsTurnSelectedForCompare(message);
+            var selectedForCompare = TranscriptInsight.IsTurnSelectedForCompare(message);
             actions.Children.Add(ActionButton(
                 selectedForCompare ? "Drop compare" : "Compare",
-                (_, _) => ToggleTurnCompareMessage(message),
-                canMutate && CanCompareTranscriptMessage(message),
+                (_, _) => TranscriptInsight.ToggleTurnCompareMessage(message),
+                canMutate && TranscriptInsightCoordinator.CanCompareMessage(message),
                 selectedForCompare ? TranscriptActionKind.Primary : TranscriptActionKind.Neutral));
         }
         if (message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase) && message.Status.Equals("pending", StringComparison.OrdinalIgnoreCase))
@@ -3631,7 +3553,7 @@ public partial class MainWindow : Window
 
     private Border CreateTurnComparePanel(IReadOnlyList<TranscriptMessage> visibleMessages)
     {
-        var selected = _turnCompareSelection.Take(2).ToArray();
+        var selected = TranscriptInsight.SelectedTurnCompareMessages.ToArray();
         var accent = ResourceBrush("BetaAccentBrush");
         var panel = new StackPanel();
 
@@ -3661,27 +3583,14 @@ public partial class MainWindow : Window
         header.Children.Add(titleStack);
 
         var actions = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        actions.Children.Add(ActionButton("Auto latest", (_, _) =>
-        {
-            _turnCompareSuppressAutoSeed = false;
-            _turnCompareSelection.Clear();
-            foreach (var message in visibleMessages
-                .Where(CanCompareTranscriptMessage)
-                .OrderByDescending(message => message.Turn)
-                .ThenByDescending(message => message.CreatedAt)
-                .Take(2))
-            {
-                _turnCompareSelection.Add(message);
-            }
-
-            PopulateTranscript(_lastRenderedMessages);
-        }, visibleMessages.Any(CanCompareTranscriptMessage)));
-        actions.Children.Add(ActionButton("Clear", (_, _) =>
-        {
-            _turnCompareSuppressAutoSeed = true;
-            _turnCompareSelection.Clear();
-            PopulateTranscript(_lastRenderedMessages);
-        }, _turnCompareSelection.Count > 0));
+        actions.Children.Add(ActionButton(
+            "Auto latest",
+            (_, _) => TranscriptInsight.ReselectLatest(visibleMessages),
+            visibleMessages.Any(TranscriptInsightCoordinator.CanCompareMessage)));
+        actions.Children.Add(ActionButton(
+            "Clear",
+            (_, _) => TranscriptInsight.ClearTurnCompareSelection(suppressAutoSeed: true, refresh: true),
+            TranscriptInsight.HasTurnCompareSelection));
         Grid.SetColumn(actions, 1);
         header.Children.Add(actions);
         panel.Children.Add(header);
@@ -4003,7 +3912,7 @@ public partial class MainWindow : Window
         Grid.SetColumn(titleStack, 0);
         header.Children.Add(titleStack);
 
-        var current = TranscriptSearch.TimelineSelectedTurnFilter is int turnFilter
+        var current = TranscriptInsight.TimelineSelectedTurnFilter is int turnFilter
             ? points.LastOrDefault(point => point.Turn == turnFilter) ?? points.LastOrDefault()
             : points.LastOrDefault();
         var currentIndex = current is null ? -1 : points.ToList().FindIndex(point => ReferenceEquals(point, current) || point.Turn == current.Turn);
@@ -4025,7 +3934,7 @@ public partial class MainWindow : Window
             FontWeight = FontWeights.SemiBold,
             HorizontalAlignment = HorizontalAlignment.Right
         });
-        if (TranscriptSearch.TimelineSelectedTurnFilter is not null)
+        if (TranscriptInsight.TimelineSelectedTurnFilter is not null)
         {
             scoreStack.Children.Add(CreateTimelineClearButton());
         }
@@ -4080,7 +3989,7 @@ public partial class MainWindow : Window
         foreach (var point in points.TakeLast(_wpfSettings.CompactTranscriptMode ? 24 : 36))
         {
             var accent = QualityAccent(point.Quality);
-            var selected = TranscriptSearch.TimelineSelectedTurnFilter == point.Turn;
+            var selected = TranscriptInsight.TimelineSelectedTurnFilter == point.Turn;
             var height = Math.Max(7, Math.Round(point.Quality / 100d * 28));
             var bar = new Border
             {
@@ -4135,12 +4044,12 @@ public partial class MainWindow : Window
 
     private void ApplyTimelineTurnFilter(int turn)
     {
-        TranscriptSearch.ToggleTimelineTurnFilter(turn);
+        TranscriptInsight.ToggleTimelineTurnFilter(turn);
     }
 
     private void ClearTimelineTurnFilter()
     {
-        TranscriptSearch.ClearTimelineTurnFilter();
+        TranscriptInsight.ClearTimelineTurnFilter();
     }
 
     private Border CreateQualityMetric(string label, string value, Brush accent)
@@ -8430,6 +8339,7 @@ public partial class MainWindow : Window
         _isRenderingSnapshot = true;
         try
         {
+            TranscriptInsight.ClearTimelineTurnFilter(refresh: false);
             TranscriptSearch.ClearFilters();
         }
         finally

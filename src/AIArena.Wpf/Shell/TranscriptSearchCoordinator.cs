@@ -26,14 +26,13 @@ internal sealed class TranscriptSearchCoordinator
     private readonly Func<bool> isRenderingSnapshot;
     private readonly Func<string, Brush> resourceBrush;
     private readonly Func<string, bool> isAgentSpeaker;
+    private readonly Func<int?> timelineTurnFilter;
     private readonly Action refreshTranscript;
-    private readonly Action scrollTranscriptToTop;
 
     private bool isDraggingSearchPopup;
     private Point searchPopupDragStart;
     private double searchPopupDragStartHorizontalOffset;
     private double searchPopupDragStartVerticalOffset;
-    private int? timelineSelectedTurnFilter;
 
     public TranscriptSearchCoordinator(
         Window owner,
@@ -52,8 +51,8 @@ internal sealed class TranscriptSearchCoordinator
         Func<bool> isRenderingSnapshot,
         Func<string, Brush> resourceBrush,
         Func<string, bool> isAgentSpeaker,
-        Action refreshTranscript,
-        Action scrollTranscriptToTop)
+        Func<int?> timelineTurnFilter,
+        Action refreshTranscript)
     {
         this.owner = owner;
         this.dispatcher = dispatcher;
@@ -71,24 +70,13 @@ internal sealed class TranscriptSearchCoordinator
         this.isRenderingSnapshot = isRenderingSnapshot;
         this.resourceBrush = resourceBrush;
         this.isAgentSpeaker = isAgentSpeaker;
+        this.timelineTurnFilter = timelineTurnFilter;
         this.refreshTranscript = refreshTranscript;
-        this.scrollTranscriptToTop = scrollTranscriptToTop;
     }
-
-    public int? TimelineSelectedTurnFilter => timelineSelectedTurnFilter;
 
     public bool HasActiveSearch => !string.IsNullOrWhiteSpace(CurrentSearch);
 
     private string CurrentSearch => searchText.Text.Trim();
-
-    public void ClearTimelineFilterIfMissing(IReadOnlyList<TranscriptMessage> messages)
-    {
-        if (timelineSelectedTurnFilter is int selectedTurn
-            && messages.All(message => message.Turn != selectedTurn))
-        {
-            timelineSelectedTurnFilter = null;
-        }
-    }
 
     public IEnumerable<TranscriptMessage> FilterMessages(IEnumerable<TranscriptMessage> messages)
     {
@@ -106,7 +94,7 @@ internal sealed class TranscriptSearchCoordinator
     {
         var search = CurrentSearch;
         var filter = (turnFilterPicker.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "All Turns";
-        if (timelineSelectedTurnFilter is int turn)
+        if (timelineTurnFilter() is int turn)
         {
             filter = $"Turn {turn}";
         }
@@ -136,7 +124,6 @@ internal sealed class TranscriptSearchCoordinator
 
     public void ClearFilters()
     {
-        timelineSelectedTurnFilter = null;
         searchText.Clear();
         searchPopup.IsOpen = false;
         SelectComboTag(turnFilterPicker, "all");
@@ -221,19 +208,6 @@ internal sealed class TranscriptSearchCoordinator
         e.Handled = true;
     }
 
-    public void ToggleTimelineTurnFilter(int turn)
-    {
-        timelineSelectedTurnFilter = timelineSelectedTurnFilter == turn ? null : turn;
-        refreshTranscript();
-        scrollTranscriptToTop();
-    }
-
-    public void ClearTimelineTurnFilter()
-    {
-        timelineSelectedTurnFilter = null;
-        refreshTranscript();
-    }
-
     private IEnumerable<TranscriptMessage> ApplyTurnFilter(IEnumerable<TranscriptMessage> messages)
     {
         var filter = (turnFilterPicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "all";
@@ -245,7 +219,7 @@ internal sealed class TranscriptSearchCoordinator
             "pinned" => messages.Where(message => message.Pinned),
             _ => messages
         };
-        return timelineSelectedTurnFilter is int turn
+        return timelineTurnFilter() is int turn
             ? filtered.Where(message => message.Turn == turn)
             : filtered;
     }
