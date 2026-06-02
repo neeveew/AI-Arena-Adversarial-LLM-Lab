@@ -8,13 +8,14 @@ using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using IOPath = System.IO.Path;
-using ShapePath = System.Windows.Shapes.Path;
 
 namespace AIArena.Wpf;
 
 internal sealed class UserGuideWindowHost
 {
+    private const string GuideWindowTitle = "AI Arena: Adversarial LLM Lab - User Guide";
     private const string SearchPlaceholderText = "Search the guide...";
 
     private static readonly string[] ThemeResourceKeys =
@@ -80,7 +81,7 @@ internal sealed class UserGuideWindowHost
         var sections = BuildUserGuideSections(guideText);
         var dialog = new Window
         {
-            Title = "AI Arena User Guide",
+            Title = GuideWindowTitle,
             Owner = owner,
             Width = 1180,
             Height = 780,
@@ -171,7 +172,7 @@ internal sealed class UserGuideWindowHost
 
         var titleText = new TextBlock
         {
-            Text = "AI Arena User Guide",
+            Text = GuideWindowTitle,
             Foreground = ResourceBrush(dialog, "TextBrush"),
             FontSize = 24,
             FontWeight = FontWeights.SemiBold,
@@ -645,51 +646,18 @@ internal sealed class UserGuideWindowHost
         {
             Width = 46,
             Height = 46,
-            Background = CreateIconTileBrush(),
+            Background = BrushFrom("#0B1528"),
             BorderBrush = BrushFrom("#203A5F"),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(9)
+            CornerRadius = new CornerRadius(9),
+            ClipToBounds = true,
+            Child = new Image
+            {
+                Source = new BitmapImage(new Uri("pack://application:,,,/Assets/ai-arena-icon.png", UriKind.Absolute)),
+                Stretch = Stretch.UniformToFill,
+                SnapsToDevicePixels = true
+            }
         };
-
-        var canvas = new Canvas
-        {
-            Width = 28,
-            Height = 28,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        tile.Child = canvas;
-
-        canvas.Children.Add(new ShapePath
-        {
-            Data = Geometry.Parse("M14,1 L26,8 L14,15 L2,8 Z"),
-            Fill = BrushFrom("#5EDCFF"),
-            Stroke = BrushFrom("#A6F4FF"),
-            StrokeThickness = 0.7,
-            Opacity = 0.9
-        });
-        canvas.Children.Add(new ShapePath
-        {
-            Data = Geometry.Parse("M2,10 L13,17 L13,27 L2,20 Z"),
-            Fill = BrushFrom("#2F7BFF"),
-            Stroke = BrushFrom("#75DFFF"),
-            StrokeThickness = 0.6,
-            Opacity = 0.9
-        });
-        canvas.Children.Add(new ShapePath
-        {
-            Data = Geometry.Parse("M26,10 L15,17 L15,27 L26,20 Z"),
-            Fill = BrushFrom("#6C55FF"),
-            Stroke = BrushFrom("#7FDFFF"),
-            StrokeThickness = 0.6,
-            Opacity = 0.86
-        });
-        canvas.Children.Add(new ShapePath
-        {
-            Data = Geometry.Parse("M14,6 L20,10 L14,14 L8,10 Z"),
-            Fill = BrushFrom("#102A52"),
-            Opacity = 0.5
-        });
 
         return tile;
     }
