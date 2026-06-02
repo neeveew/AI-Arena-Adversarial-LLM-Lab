@@ -46,6 +46,7 @@ public partial class MainWindow : Window
     private readonly TranscriptExportCoordinator? _transcriptExportCoordinator;
     private readonly TranscriptSearchCoordinator? _transcriptSearchCoordinator;
     private readonly TranscriptInsightCoordinator? _transcriptInsightCoordinator;
+    private readonly TranscriptActionCoordinator? _transcriptActionCoordinator;
     private readonly TranscriptCardRenderer? _transcriptCardRenderer;
     private readonly TranscriptAdjunctCoordinator? _transcriptAdjunctCoordinator;
     private readonly AgentMemoryCoordinator? _agentMemoryCoordinator;
@@ -64,7 +65,6 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
     private readonly DispatcherTimer _providerHealthTimer;
-    private readonly List<Button> _transcriptActionButtons = [];
     private readonly SemaphoreSlim _arenaOperationLock = new(1, 1);
     private IReadOnlyList<TranscriptMessage> _lastRenderedMessages = [];
     private IReadOnlyDictionary<string, string> _lastAgentPersonas = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -91,6 +91,9 @@ public partial class MainWindow : Window
 
     private TranscriptInsightCoordinator TranscriptInsight =>
         _transcriptInsightCoordinator ?? throw new InvalidOperationException("Transcript insight coordinator is not initialized.");
+
+    private TranscriptActionCoordinator TranscriptActions =>
+        _transcriptActionCoordinator ?? throw new InvalidOperationException("Transcript action coordinator is not initialized.");
 
     private TranscriptCardRenderer TranscriptCards =>
         _transcriptCardRenderer ?? throw new InvalidOperationException("Transcript card renderer is not initialized.");
@@ -201,6 +204,10 @@ public partial class MainWindow : Window
             messages => TranscriptSearch.FilterMessages(messages),
             SetLoadStatus,
             SetArenaRunStatus);
+        _transcriptActionCoordinator = new TranscriptActionCoordinator(
+            () => _wpfSettings.CompactTranscriptMode,
+            () => _arenaBusy,
+            ResourceBrush);
         _providerSettingsCoordinator = new ProviderSettingsCoordinator(
             this,
             _coreSessionStore,
@@ -337,8 +344,7 @@ public partial class MainWindow : Window
             SetArenaRunStatus);
         _transcriptCardRenderer = new TranscriptCardRenderer(
             () => _wpfSettings.CompactTranscriptMode,
-            () => _arenaBusy,
-            button => _transcriptActionButtons.Add(button),
+            TranscriptActions,
             ResourceBrush,
             BlendBrush,
             AccentForSpeaker,
@@ -380,7 +386,7 @@ public partial class MainWindow : Window
             diagnostic => VoiceAdherenceAccent(diagnostic),
             FormatCompactNumber,
             FormatDuration,
-            ActionButton,
+            TranscriptActions.CreateButton,
             () => PopulateTranscript(_lastRenderedMessages),
             visibleMessages => TranscriptInsight.ReselectLatest(visibleMessages),
             () => TranscriptInsight.ClearTurnCompareSelection(suppressAutoSeed: true, refresh: true),
@@ -397,7 +403,7 @@ public partial class MainWindow : Window
             AccentForSpeaker,
             ShortModelName,
             DisplayStatusValue,
-            ActionButton,
+            TranscriptActions.CreateButton,
             () => PopulateTranscript(_lastRenderedMessages),
             RunArenaBusyForCoordinatorAsync,
             SaveSnapshotForCoordinatorAsync,
@@ -1214,7 +1220,7 @@ public partial class MainWindow : Window
     {
         _lastRenderedMessages = messages;
         TranscriptItems.Children.Clear();
-        _transcriptActionButtons.Clear();
+        TranscriptActions.Clear();
         TranscriptInsight.ClearTimelineFilterIfMissing(messages);
 
         var visibleMessages = TranscriptSearch.FilterMessages(messages).ToArray();
@@ -1624,11 +1630,11 @@ public partial class MainWindow : Window
         };
 
         var actions = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
-        actions.Children.Add(ActionButton("Save + test", async (_, _) =>
+        actions.Children.Add(TranscriptActions.CreateButton("Save + test", async (_, _) =>
         {
             await ProviderSettings.SaveAndTestProviderQuickSetupAsync(baseUrlBox.Text, modelBox.Text, statusText);
         }, true, TranscriptActionKind.Primary));
-        actions.Children.Add(ActionButton("Open settings", (_, _) => OpenModelProviderSettings(baseUrlBox.Text, modelBox.Text), true));
+        actions.Children.Add(TranscriptActions.CreateButton("Open settings", (_, _) => OpenModelProviderSettings(baseUrlBox.Text, modelBox.Text), true));
 
         var fields = new Grid { Margin = new Thickness(0, 8, 0, 0) };
         fields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -1817,10 +1823,6 @@ public partial class MainWindow : Window
     private UIElement CreateInternetDetails(TranscriptMessage message)
     {
         return TranscriptCards.CreateInternetDetails(message);
-    }
-    private Button ActionButton(string text, RoutedEventHandler? handler, bool enabled, TranscriptActionKind kind = TranscriptActionKind.Neutral, string? iconGlyph = null)
-    {
-        return TranscriptCards.CreateActionButton(text, handler, enabled, kind, iconGlyph);
     }
     private Border CreateCard(string title, string body, Brush background, Brush accent, UIElement? extraContent)
     {
@@ -2774,10 +2776,7 @@ public partial class MainWindow : Window
         SavedStateSaveButton.IsEnabled = !busy;
         SavedStateCoordinator.UpdateActionButtons();
         AgentBoard.UpdateBusyState(busy);
-        foreach (var button in _transcriptActionButtons)
-        {
-            button.IsEnabled = !busy && button.Tag is true;
-        }
+        TranscriptActions.UpdateBusyState(busy);
         MatchLock.UpdateBusyState(busy);
         ArenaRunStatus.Text = status;
     }
