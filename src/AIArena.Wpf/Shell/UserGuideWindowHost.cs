@@ -214,7 +214,6 @@ internal sealed class UserGuideWindowHost
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var openFileButton = CreateGuideButton(dialog, "OPEN FILE", "\uE8E5");
         openFileButton.Click += (_, _) => Process.Start(new ProcessStartInfo
@@ -228,18 +227,6 @@ internal sealed class UserGuideWindowHost
         closeButton.Click += (_, _) => dialog.Close();
         Grid.SetColumn(closeButton, 2);
         footer.Children.Add(closeButton);
-
-        var resizeGrip = new ResizeGrip
-        {
-            Width = 22,
-            Height = 22,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Bottom,
-            Margin = new Thickness(10, 0, 0, 0),
-            Opacity = 0.45
-        };
-        Grid.SetColumn(resizeGrip, 3);
-        footer.Children.Add(resizeGrip);
         return footer;
     }
 
