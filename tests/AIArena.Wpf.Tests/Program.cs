@@ -1,5 +1,6 @@
 using AIArena.Core.Models;
 using AIArena.Wpf;
+using AIArena.Wpf.Models;
 using AIArena.Wpf.Services;
 
 var tests = new (string Name, Action Test)[]
@@ -16,7 +17,10 @@ var tests = new (string Name, Action Test)[]
     ("auto configure spreads high VRAM model variety", AutoConfigureHighVramVariety),
     ("auto configure prefers useful multi GPU fit", AutoConfigurePrefersUsefulMultiGpuFit),
     ("role style catalog normalizes labels and chips", RoleStyleCatalogNormalizesLabelsAndChips),
-    ("role style catalog formats voice adherence cues", RoleStyleCatalogFormatsVoiceAdherenceCues)
+    ("role style catalog formats voice adherence cues", RoleStyleCatalogFormatsVoiceAdherenceCues),
+    ("agent memory coordinator normalizes notes", AgentMemoryCoordinatorNormalizesNotes),
+    ("agent board coordinator formats statuses", AgentBoardCoordinatorFormatsStatuses),
+    ("transcript adjunct helpers format labels", TranscriptAdjunctHelpersFormatLabels)
 };
 
 var failures = 0;
@@ -388,6 +392,78 @@ static void RoleStyleCatalogFormatsVoiceAdherenceCues()
     Require(tooltip.Contains("Needs bullet structure.", StringComparison.OrdinalIgnoreCase), "tooltip should include summary");
     Require(tooltip.Contains("Evidence: sentence form", StringComparison.OrdinalIgnoreCase), "tooltip should include evidence");
     Require(tooltip.Contains("Missing: bullet markers", StringComparison.OrdinalIgnoreCase), "tooltip should include missing cues");
+}
+
+static void AgentMemoryCoordinatorNormalizesNotes()
+{
+    var longNote = new string('x', 450);
+    var raw = string.Join(
+        Environment.NewLine,
+        "  alpha note  ",
+        "ALPHA NOTE",
+        "",
+        longNote,
+        string.Join(Environment.NewLine, Enumerable.Range(0, 80).Select(index => $"note {index:00}")));
+
+    var notes = AgentMemoryCoordinator.NormalizeMemoryNotes(raw);
+
+    Require(notes.Count == 60, "memory notes should cap at 60 entries");
+    Require(notes[0] == "alpha note", "memory notes should trim whitespace");
+    Require(notes.Count(note => note.Equals("alpha note", StringComparison.OrdinalIgnoreCase)) == 1, "memory notes should dedupe case-insensitively");
+    Require(notes[1].Length == 400, "memory notes should truncate long lines");
+    Require(!notes.Any(string.IsNullOrWhiteSpace), "memory notes should omit blank lines");
+}
+
+static void AgentBoardCoordinatorFormatsStatuses()
+{
+    Require(AgentBoardCoordinator.DisplayInlineStatus("") == "-", "blank inline status should be placeholder");
+    Require(AgentBoardCoordinator.DisplayInlineStatus(" Thinking ") == "thinking", "inline status should trim and lower");
+    Require(AgentBoardCoordinator.IsAgentWorkingStatus("busy"), "busy should count as working");
+    Require(AgentBoardCoordinator.IsAgentWorkingStatus(" generating "), "generating should count as working");
+    Require(!AgentBoardCoordinator.IsAgentWorkingStatus("waiting"), "waiting should not count as working");
+}
+
+static void TranscriptAdjunctHelpersFormatLabels()
+{
+    var left = TranscriptForTest(4, "Alpha", "alpha", "message", "ok");
+    var right = TranscriptForTest(2, "Beta", "beta", "message", "ok");
+
+    Require(TranscriptAdjunctCoordinator.CompareSummary(left, right) == "Comparing turn 4 (Alpha) with turn 2 (Beta).", "compare summary should remain stable");
+    Require(TranscriptAdjunctCoordinator.CompareDelta(8, 3) == "+5", "positive compare delta should include plus sign");
+    Require(TranscriptAdjunctCoordinator.CompareDelta(3, 8) == "-5", "negative compare delta should use invariant formatting");
+    Require(TranscriptAdjunctCoordinator.CompareDelta(3, 3) == "0", "zero compare delta should be plain zero");
+    Require(TranscriptAdjunctCoordinator.InternetInspectorTitle(TranscriptForTest(7, "Tool", "internet", "internet_approval", "pending")) == "Approval - pending", "approval inspector title should include status");
+    Require(TranscriptAdjunctCoordinator.InternetInspectorTitle(TranscriptForTest(8, "News", "news", "news", "ok")) == "Curated news - ok", "news inspector title should include status");
+    Require(TranscriptAdjunctCoordinator.InternetInspectorTitle(TranscriptForTest(9, "Tool", "internet", "internet", "error")) == "Internet tool - error", "internet inspector title should include status");
+}
+
+static TranscriptMessage TranscriptForTest(int turn, string speaker, string speakerId, string kind, string status)
+{
+    return new TranscriptMessage(
+        turn,
+        speaker,
+        speakerId,
+        0,
+        "model",
+        0,
+        0,
+        0,
+        0,
+        status,
+        "",
+        false,
+        kind,
+        "text",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        false,
+        []);
 }
 
 static void WithTempSettingsStore(Action<WpfSettingsStore> action)
