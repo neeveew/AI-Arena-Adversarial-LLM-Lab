@@ -7,7 +7,6 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using System.Runtime.InteropServices;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
@@ -73,6 +72,7 @@ public partial class MainWindow : Window
     private readonly MatchQualityTimelineCoordinator? _matchQualityTimelineCoordinator;
     private readonly AgentBoardCoordinator? _agentBoardCoordinator;
     private readonly ArenaOperationCoordinator? _arenaOperationCoordinator;
+    private readonly AppSettingsCoordinator? _appSettingsCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
     private readonly DispatcherTimer _providerHealthTimer;
@@ -188,6 +188,9 @@ public partial class MainWindow : Window
 
     private ArenaOperationCoordinator ArenaOperations =>
         _arenaOperationCoordinator ?? throw new InvalidOperationException("Arena operation coordinator is not initialized.");
+
+    private AppSettingsCoordinator AppSettingsWorkflow =>
+        _appSettingsCoordinator ?? throw new InvalidOperationException("App settings coordinator is not initialized.");
 
     public MainWindow()
     {
@@ -545,6 +548,17 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromSeconds(5)
         };
         _modelRefreshTimer.Tick += async (_, _) => await RefreshAdvertisedModelsAsync();
+        _appSettingsCoordinator = new AppSettingsCoordinator(
+            Dispatcher,
+            ShellNavigation,
+            _modelRefreshTimer,
+            () => AppSettingsPanel.Visibility == Visibility.Visible,
+            force => RefreshAdvertisedModelsAsync(force),
+            ModelProviderSettingsExpander,
+            ProviderBaseUrlText,
+            ProviderModelText,
+            TestProviderButton,
+            SettingsGearRotate);
         _providerHealthTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromSeconds(3)
@@ -1815,8 +1829,7 @@ public partial class MainWindow : Window
 
     private void AppSettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        AnimateSettingsGear();
-        ShellNavigation.ToggleAppSettings();
+        _appSettingsCoordinator?.Toggle();
     }
 
     private void OpenReleasesButton_Click(object sender, RoutedEventArgs e)
@@ -1838,35 +1851,18 @@ public partial class MainWindow : Window
 
     private void OpenModelProviderSettings(string? baseUrl = null, string? model = null)
     {
-        if (!string.IsNullOrWhiteSpace(baseUrl))
+        if (_appSettingsCoordinator is not null)
         {
-            ProviderBaseUrlText.Text = baseUrl.Trim();
+            AppSettingsWorkflow.OpenModelProviderSettings(baseUrl, model);
+            return;
         }
 
-        if (!string.IsNullOrWhiteSpace(model))
-        {
-            ProviderModelText.Text = model.Trim();
-        }
-
-        SetAppSettingsVisible(true);
-        ModelProviderSettingsExpander.IsExpanded = true;
-        Dispatcher.BeginInvoke(() =>
-        {
-            ModelProviderSettingsExpander.BringIntoView();
-            if (string.IsNullOrWhiteSpace(ProviderModelText.Text))
-            {
-                ProviderModelText.Focus();
-            }
-            else
-            {
-                TestProviderButton.Focus();
-            }
-        }, DispatcherPriority.Background);
+        ShellNavigation.SetAppSettingsVisible(true);
     }
 
     private void CloseAppSettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        SetAppSettingsVisible(false);
+        _appSettingsCoordinator?.SetVisible(false);
     }
 
     private void VisualSettings_Changed(object sender, RoutedEventArgs e)
@@ -1966,29 +1962,10 @@ public partial class MainWindow : Window
     }
     private void SetAppSettingsVisible(bool visible)
     {
-        ShellNavigation.SetAppSettingsVisible(visible);
-        if (visible)
+        if (_appSettingsCoordinator is not null)
         {
-            _modelRefreshTimer.Start();
-            _ = RefreshAdvertisedModelsAsync(force: true);
+            AppSettingsWorkflow.SetVisible(visible);
         }
-        else
-        {
-            _modelRefreshTimer.Stop();
-        }
-    }
-
-    private void AnimateSettingsGear()
-    {
-        var animation = new DoubleAnimation(
-            SettingsGearRotate.Angle,
-            SettingsGearRotate.Angle + 120,
-            TimeSpan.FromMilliseconds(320))
-        {
-            EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut },
-            FillBehavior = FillBehavior.HoldEnd
-        };
-        SettingsGearRotate.BeginAnimation(RotateTransform.AngleProperty, animation);
     }
 
     private static bool IsAgentSpeaker(string speakerId)

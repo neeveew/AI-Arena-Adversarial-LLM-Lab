@@ -31,6 +31,7 @@ var tests = new (string Name, Action Test)[]
     ("shell ui helpers blend brushes", ShellUiHelpersBlendBrushes),
     ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
+    ("app settings coordinator selects provider focus", AppSettingsCoordinatorSelectsProviderFocus),
     ("transcript list coordinator selects retryable turns", TranscriptListCoordinatorSelectsRetryableTurns),
     ("transcript view coordinator normalizes view state", TranscriptViewCoordinatorNormalizesViewState),
     ("custom match summary coordinator normalizes card text", CustomMatchSummaryCoordinatorNormalizesCardText),
@@ -604,6 +605,13 @@ static void ShellNavigationCoordinatorSelectsThemes()
     Require(ShellNavigationCoordinator.SelectedThemeId(themes, "dark-green") == "dark-green", "known theme should be selected");
     Require(ShellNavigationCoordinator.SelectedThemeId(themes, "system") == "dark-blue", "system theme should fall back for picker");
     Require(ShellNavigationCoordinator.SelectedThemeId(themes, "missing") == "dark-blue", "unknown theme should fall back");
+}
+
+static void AppSettingsCoordinatorSelectsProviderFocus()
+{
+    Require(AppSettingsCoordinator.ShouldFocusModelPicker(""), "blank model should focus the model picker");
+    Require(AppSettingsCoordinator.ShouldFocusModelPicker("   "), "whitespace model should focus the model picker");
+    Require(!AppSettingsCoordinator.ShouldFocusModelPicker("model-a"), "configured model should focus the test button");
 }
 
 static void TranscriptListCoordinatorSelectsRetryableTurns()
