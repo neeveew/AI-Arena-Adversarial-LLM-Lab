@@ -601,11 +601,13 @@ static void TranscriptViewCoordinatorNormalizesViewState()
     Require(TranscriptViewCoordinator.CurrentAvatarStyle(new WpfSettings { AvatarStyle = "champion", ChampionAvatars = true }) == "procedural", "legacy champion avatar style should map to procedural");
     Require(TranscriptViewCoordinator.CurrentAvatarStyle(new WpfSettings { AvatarStyle = "", ChampionAvatars = false }) == "simple", "blank avatar style should fall back to simple when champion avatars are disabled");
     Require(TranscriptViewCoordinator.CurrentTopStripMode(new WpfSettings { TopStripMode = "telemetry" }) == "telemetry", "known top strip mode should be preserved");
+    Require(TranscriptViewCoordinator.CurrentTopStripMode(new WpfSettings { TopStripMode = "hidden", ShowTranscriptDiagnostics = true }) == "hidden", "known hidden top strip mode should override legacy diagnostics flag");
     Require(TranscriptViewCoordinator.CurrentTopStripMode(new WpfSettings { TopStripMode = "weird", ShowTranscriptDiagnostics = true }) == "diagnostics", "unknown top strip mode should fall back from diagnostics flag");
     Require(TranscriptViewCoordinator.CurrentViewPresetName(false, false, false, false, true, "diagnostics") == "Focused", "focused preset should be detected");
     Require(TranscriptViewCoordinator.CurrentViewPresetName(false, false, true, true, true, "diagnostics") == "Diagnostics", "diagnostics preset should be detected");
     Require(TranscriptViewCoordinator.CurrentViewPresetName(true, false, false, false, true, "diagnostics") == "Compact", "compact preset should be detected");
     Require(TranscriptViewCoordinator.CurrentViewPresetName(true, true, true, true, false, "diagnostics") == "Review", "review preset should be detected");
+    Require(TranscriptViewCoordinator.CurrentViewPresetName(false, false, false, false, false, "diagnostics") == "Custom", "modified diagnostics preset should be custom");
     Require(TranscriptViewCoordinator.CurrentViewPresetName(true, true, true, true, false, "telemetry") == "Custom", "non-diagnostics top strip should be custom");
 }
 
@@ -631,8 +633,12 @@ static void ScenarioSeedInspectorCoordinatorFormatsMetadata()
     Require(ScenarioSeedInspectorCoordinator.ShortSeedValue("123456789012345678") == "123456789012345678", "18 character seed should not be shortened");
     Require(ScenarioSeedInspectorCoordinator.ShortSeedValue("1234567890123456789") == "123456789012345...", "long seed should be shortened");
     Require(!ScenarioSeedInspectorCoordinator.ShouldShowRolePack("auto"), "auto role pack should be hidden");
+    Require(!ScenarioSeedInspectorCoordinator.ShouldShowRolePack("AUTO"), "auto role pack should hide case-insensitively");
+    Require(!ScenarioSeedInspectorCoordinator.ShouldShowRolePack("-"), "placeholder role pack should be hidden");
     Require(ScenarioSeedInspectorCoordinator.ShouldShowRolePack("absurd_lab"), "custom role pack should be visible");
     Require(!ScenarioSeedInspectorCoordinator.ShouldShowAbsurdity("grounded"), "grounded absurdity should be hidden");
+    Require(!ScenarioSeedInspectorCoordinator.ShouldShowAbsurdity("GROUNDED"), "grounded absurdity should hide case-insensitively");
+    Require(!ScenarioSeedInspectorCoordinator.ShouldShowAbsurdity("-"), "placeholder absurdity should be hidden");
     Require(ScenarioSeedInspectorCoordinator.ShouldShowAbsurdity("maximum"), "non-grounded absurdity should be visible");
 }
 
@@ -644,6 +650,7 @@ static void ProviderQuickSetupCoordinatorFormatsDefaults()
     Require(!ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot, agent), "online provider with usable model should hide quick setup");
     Require(ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot with { ProviderOnline = false }, agent), "offline provider should show quick setup");
     Require(ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot with { ProviderModel = "" }, agent with { Model = "" }), "missing shared and current model should show quick setup");
+    Require(ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot with { ProviderModel = "" }, agent), "missing shared provider model should show quick setup even when current agent has a model");
     Require(!ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot, agent with { Model = "" }), "shared model should satisfy missing current agent model");
     Require(ProviderQuickSetupCoordinator.QuickBaseUrl(snapshot with { ProviderBaseUrl = "-" }) == "http://127.0.0.1:1234/v1", "blank quick setup base URL should use LM Studio default");
     Require(ProviderQuickSetupCoordinator.QuickBaseUrl(snapshot with { ProviderBaseUrl = "http://host/v1" }) == "http://host/v1", "custom base URL should be preserved");
@@ -658,13 +665,17 @@ static void NewsPanelCoordinatorSummarizesInternetItems()
     var news = TranscriptForTest(2, "News", "news", "news", "ok") with { InternetSources = ["https://example.test/a"] };
     var approval = TranscriptForTest(3, "Tool", "internet", "internet_approval", "pending") with { InternetSources = ["https://example.test/b"] };
     var tool = TranscriptForTest(4, "Tool", "internet", "message", "ok") with { InternetTool = "web_fetch" };
+    var sourced = TranscriptForTest(5, "Alpha", "alpha", "message", "ok") with { InternetSources = ["https://example.test/c"] };
+    var resolvedApproval = approval with { Status = "ok" };
 
     Require(!NewsPanelCoordinator.IsNewsMessage(normal), "plain transcript messages should not appear in news panel");
     Require(NewsPanelCoordinator.IsNewsMessage(news), "news messages should appear in news panel");
     Require(NewsPanelCoordinator.IsNewsMessage(approval), "internet approval messages should appear in news panel");
     Require(NewsPanelCoordinator.IsNewsMessage(tool), "messages with internet tools should appear in news panel");
+    Require(NewsPanelCoordinator.IsNewsMessage(sourced), "messages with internet sources should appear in news panel");
     Require(NewsPanelCoordinator.SummaryText([]) == "No internet activity in this session.", "empty news summary should remain stable");
     Require(NewsPanelCoordinator.SummaryText([news, approval, tool]) == "3 internet item(s), 2 source(s), 1 waiting for approval", "news summary should count items, sources, and pending approvals");
+    Require(NewsPanelCoordinator.SummaryText([resolvedApproval, sourced]) == "2 internet item(s), 2 source(s)", "resolved approvals should not count as pending");
 }
 
 static Color RequireSolidColor(Brush brush, string message)
