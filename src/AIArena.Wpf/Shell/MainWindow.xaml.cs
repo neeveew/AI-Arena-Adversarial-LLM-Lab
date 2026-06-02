@@ -54,15 +54,13 @@ public partial class MainWindow : Window
     private readonly AgentPerformanceCoordinator? _agentPerformanceCoordinator;
     private readonly DiagnosticsWorkflowCoordinator? _diagnosticsWorkflowCoordinator;
     private readonly MatchSetupCoordinator? _matchSetupCoordinator;
+    private readonly MatchLockCoordinator? _matchLockCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
     private readonly DispatcherTimer _providerHealthTimer;
     private readonly List<Button> _agentTurnButtons = [];
     private readonly List<Button> _narratorActionButtons = [];
     private readonly List<Button> _transcriptActionButtons = [];
-    private readonly List<CheckBox> _lockControls = [];
-    private readonly List<ComboBox> _voiceControls = [];
-    private readonly List<ComboBox> _pressureControls = [];
     private readonly SemaphoreSlim _arenaOperationLock = new(1, 1);
     private IReadOnlyList<TranscriptMessage> _lastRenderedMessages = [];
     private IReadOnlyDictionary<string, string> _lastAgentPersonas = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -77,7 +75,6 @@ public partial class MainWindow : Window
     private WpfSettings _wpfSettings = new();
     private ThemePalette _theme = ThemePalette.Resolve("system");
     private CancellationTokenSource? _autoChatCancellation;
-    private Style? _lockToggleStyle;
     private ArenaViewSnapshot? _lastRenderedSnapshot;
 
     private SavedStateWorkflowCoordinator SavedStateCoordinator =>
@@ -116,6 +113,9 @@ public partial class MainWindow : Window
     private MatchSetupCoordinator MatchSetup =>
         _matchSetupCoordinator ?? throw new InvalidOperationException("Match setup coordinator is not initialized.");
 
+    private MatchLockCoordinator MatchLock =>
+        _matchLockCoordinator ?? throw new InvalidOperationException("Match lock coordinator is not initialized.");
+
     private sealed record MatchQualityPoint(
         int Turn,
         string Speaker,
@@ -127,20 +127,6 @@ public partial class MainWindow : Window
         string Label,
         string Body,
         string Severity);
-
-    private sealed record RoleDetailPayload(string Title, string Persona);
-
-    private static readonly string[] RoleDetailLabels =
-    [
-        "Absurd function:",
-        "Arena function:",
-        "Expertise leak:",
-        "Failure bias:",
-        "Role pressure:",
-        "Persona mixer:",
-        "Expression constraint:",
-        "Reasoning distortion:"
-    ];
 
     public MainWindow()
     {
@@ -380,7 +366,7 @@ public partial class MainWindow : Window
             AgentPerformanceDetailContent,
             ResourceBrush,
             AccentForSpeaker,
-            FormatParticipantTitle,
+            MatchLockCoordinator.FormatParticipantTitle,
             DisplayStatusValue,
             DisplayInlineStatus,
             ShortModelName,
@@ -444,6 +430,30 @@ public partial class MainWindow : Window
             RunArenaBusyForCoordinatorAsync,
             SaveSnapshotForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync);
+        _matchLockCoordinator = new MatchLockCoordinator(
+            this,
+            _coreSessionStore,
+            _eventLogStore,
+            _matchGeneration,
+            () => _activeSession,
+            () => _theme,
+            () => _arenaBusy,
+            () => _isRenderingSnapshot,
+            ResourceBrush,
+            BlendBrush,
+            NormalizeVoiceStyleTag,
+            NormalizeAgentPressureTag,
+            VoiceStyleLabel,
+            AgentPressureLabel,
+            VoiceStyleChipText,
+            AgentPressureChipText,
+            VoiceStyleOptions,
+            AgentPressureOptions,
+            RunArenaBusyForCoordinatorAsync,
+            SaveSnapshotForCoordinatorAsync,
+            RefreshActiveSessionForCoordinatorAsync,
+            SetLoadStatus,
+            SetArenaRunStatus);
         InitializeAboutPanel();
         InitializeVisualSettings();
         ScenarioWorkflow.InitializeControls();
@@ -1312,21 +1322,19 @@ public partial class MainWindow : Window
         ScenarioPreviewItems.Children.Clear();
         CastPreviewItems.Children.Clear();
         ScenarioSeedInspector.Children.Clear();
-        _lockControls.Clear();
-        _voiceControls.Clear();
-        _pressureControls.Clear();
+        MatchLock.ClearControls();
 
         PopulateScenarioSeedInspector(snapshot);
         ScenarioWorkflow.PopulateGenerationHistory(snapshot);
 
-        ScenarioPreviewItems.Children.Add(CreateLockCard(
+        ScenarioPreviewItems.Children.Add(MatchLock.CreateLockCard(
             "topic",
             "Topic",
             string.IsNullOrWhiteSpace(snapshot.ScenarioTopic) ? "No topic is set for this match yet." : snapshot.ScenarioTopic,
             ResourceBrush("CardBrush"),
             snapshot.TopicLocked ? ResourceBrush("TextBrush") : ResourceBrush("MutedTextBrush"),
             snapshot.TopicLocked));
-        ScenarioPreviewItems.Children.Add(CreateLockCard(
+        ScenarioPreviewItems.Children.Add(MatchLock.CreateLockCard(
             "global",
             "Global",
             string.IsNullOrWhiteSpace(snapshot.ScenarioGlobal) ? "No global instruction is set for this match yet." : snapshot.ScenarioGlobal,
@@ -1342,9 +1350,9 @@ public partial class MainWindow : Window
         {
             foreach (var agent in snapshot.Agents)
             {
-                CastPreviewItems.Children.Add(CreateLockCard(
+                CastPreviewItems.Children.Add(MatchLock.CreateLockCard(
                     agent.Id,
-                    FormatCastPreviewTitle(agent.Id, agent.Name),
+                    MatchLockCoordinator.FormatCastPreviewTitle(agent.Id, agent.Name),
                     string.IsNullOrWhiteSpace(agent.Persona) ? "(no persona)" : agent.Persona,
                     BlendBrush(ResourceBrush("CardBrush"), AccentForSpeaker(agent.Id), 0.16),
                     AccentForSpeaker(agent.Id),
@@ -1354,7 +1362,7 @@ public partial class MainWindow : Window
             }
         }
 
-        CastPreviewItems.Children.Add(CreateLockCard(
+        CastPreviewItems.Children.Add(MatchLock.CreateLockCard(
             "narrator",
             "Narrator",
             string.IsNullOrWhiteSpace(snapshot.NarratorPersona) ? "(no narrator persona)" : snapshot.NarratorPersona,
@@ -1680,398 +1688,6 @@ public partial class MainWindow : Window
             : "-";
     }
 
-    private Border CreateLockCard(string lockKey, string title, string body, Brush background, Brush accent, bool locked, string? voiceStyle = null, string? pressureProfile = null)
-    {
-        var lockAccent = ResourceBrush("BetaAccentBrush");
-        var isCastCard = IsAgentSpeaker(lockKey) || NormalizeMatchLockKey(lockKey) == "narrator";
-        var isAgentCard = IsAgentSpeaker(lockKey);
-        var cardAccent = locked ? lockAccent : accent;
-        var lockBox = new CheckBox
-        {
-            IsChecked = locked,
-            IsEnabled = !_arenaBusy,
-            Tag = lockKey,
-            Style = CreateLockToggleStyle(),
-            VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = locked ? "Locked. Click to unlock." : "Unlocked. Click to lock."
-        };
-        lockBox.Checked += MatchLockChanged;
-        lockBox.Unchecked += MatchLockChanged;
-        _lockControls.Add(lockBox);
-
-        var editButton = new Button
-        {
-            Content = "EDIT",
-            Tag = lockKey,
-            MinHeight = 28,
-            Padding = new Thickness(9, 3, 9, 3),
-            Margin = new Thickness(0, 0, 8, 0),
-            Background = ResourceBrush("InputBrush"),
-            BorderBrush = cardAccent,
-            Foreground = ResourceBrush("TextBrush"),
-            FontSize = 11,
-            FontWeight = FontWeights.SemiBold,
-            ToolTip = "Edit this text and lock it"
-        };
-        editButton.Click += EditLockCardButton_Click;
-
-        var header = new DockPanel { LastChildFill = true };
-        var actions = new WrapPanel
-        {
-            Orientation = Orientation.Horizontal,
-            VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(14, 0, 0, 0)
-        };
-        if (isAgentCard)
-        {
-            actions.Children.Add(CreateAgentPressurePicker(lockKey, pressureProfile ?? "", cardAccent));
-        }
-        if (isCastCard)
-        {
-            actions.Children.Add(CreateVoiceStylePicker(lockKey, voiceStyle ?? "", cardAccent));
-        }
-        if (isAgentCard && HasRoleDetails(body))
-        {
-            var detailsButton = new Button
-            {
-                Content = "?",
-                Tag = new RoleDetailPayload(title, body),
-                MinHeight = 28,
-                MinWidth = 30,
-                Padding = new Thickness(7, 3, 7, 3),
-                Margin = new Thickness(0, 0, 8, 0),
-                Background = ResourceBrush("InputBrush"),
-                BorderBrush = cardAccent,
-                Foreground = cardAccent,
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                ToolTip = "Inspect generated role constraints"
-            };
-            detailsButton.Click += RoleDetailsButton_Click;
-            actions.Children.Add(detailsButton);
-        }
-        actions.Children.Add(editButton);
-        actions.Children.Add(lockBox);
-        DockPanel.SetDock(actions, Dock.Right);
-        header.Children.Add(actions);
-
-        var titlePanel = new StackPanel { Orientation = Orientation.Horizontal };
-        titlePanel.Children.Add(new TextBlock
-        {
-            Text = title,
-            Foreground = accent,
-            FontSize = 14,
-            FontWeight = FontWeights.SemiBold,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            VerticalAlignment = VerticalAlignment.Center
-        });
-        titlePanel.Children.Add(CreateLockMetaChip(DisplayLockKey(lockKey), accent));
-        var visibleVoiceStyle = VoiceStyleChipText(voiceStyle);
-        if (isCastCard && !string.IsNullOrWhiteSpace(visibleVoiceStyle))
-        {
-            titlePanel.Children.Add(CreateLockMetaChip(visibleVoiceStyle, accent));
-        }
-        var visiblePressure = AgentPressureChipText(pressureProfile);
-        if (isAgentCard && !string.IsNullOrWhiteSpace(visiblePressure))
-        {
-            titlePanel.Children.Add(CreateLockMetaChip(visiblePressure, accent));
-        }
-        if (locked)
-        {
-            titlePanel.Children.Add(CreateLockMetaChip("Locked", lockAccent));
-        }
-        header.Children.Add(titlePanel);
-
-        var displayBody = isCastCard ? CompactCastPreviewBody(body) : body;
-        var text = new TextBlock
-        {
-            Text = displayBody,
-            Foreground = ResourceBrush("TextBrush"),
-            TextWrapping = TextWrapping.Wrap,
-            FontSize = 12,
-            LineHeight = 18,
-            MaxHeight = isCastCard ? 58 : double.PositiveInfinity,
-            Margin = new Thickness(0, 7, 0, 0),
-            ToolTip = body
-        };
-
-        var stack = new StackPanel();
-        stack.Children.Add(header);
-        stack.Children.Add(text);
-
-        var layout = new Grid();
-        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(7) });
-        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        layout.Children.Add(new Border
-        {
-            Background = cardAccent,
-            CornerRadius = new CornerRadius(4),
-            Margin = new Thickness(0, 1, 10, 1)
-        });
-        Grid.SetColumn(stack, 1);
-        layout.Children.Add(stack);
-
-        return new Border
-        {
-            Background = BlendBrush(background, accent, locked ? 0.16 : isCastCard ? 0.1 : 0.05),
-            BorderBrush = locked ? lockAccent : BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.36),
-            BorderThickness = locked ? new Thickness(2) : new Thickness(1),
-            CornerRadius = new CornerRadius(7),
-            Padding = new Thickness(10),
-            Margin = new Thickness(0, 0, isCastCard ? 0 : 10, 10),
-            Child = layout
-        };
-    }
-
-    private static bool HasRoleDetails(string persona)
-    {
-        return RoleDetailLabels.Any(label => persona.Contains(label, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static string CompactCastPreviewBody(string body)
-    {
-        if (string.IsNullOrWhiteSpace(body))
-        {
-            return body;
-        }
-
-        var firstDetailIndex = RoleDetailLabels
-            .Select(label => body.IndexOf(label, StringComparison.OrdinalIgnoreCase))
-            .Where(index => index > 0)
-            .DefaultIfEmpty(-1)
-            .Min();
-        var preview = firstDetailIndex > 0 ? body[..firstDetailIndex] : body;
-        preview = preview.Trim().Replace("\r", " ").Replace("\n", " ");
-        while (preview.Contains("  ", StringComparison.Ordinal))
-        {
-            preview = preview.Replace("  ", " ", StringComparison.Ordinal);
-        }
-
-        return preview.Length <= 300
-            ? preview
-            : $"{preview[..297].TrimEnd()}...";
-    }
-
-    private void RoleDetailsButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button { Tag: RoleDetailPayload payload })
-        {
-            return;
-        }
-
-        var window = new Window
-        {
-            Owner = this,
-            Title = $"{payload.Title} details",
-            Width = 620,
-            Height = 420,
-            MinWidth = 460,
-            MinHeight = 320,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            ResizeMode = ResizeMode.CanResize,
-            Background = ResourceBrush("PanelBrush"),
-            Foreground = ResourceBrush("TextBrush")
-        };
-        DialogChrome.ImportOwnerResources(this, window);
-        DialogChrome.ApplyImplicitControlStyles(window);
-
-        var root = new Grid
-        {
-            Background = ResourceBrush("PanelBrush"),
-            Margin = new Thickness(1)
-        };
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-        var title = new TextBlock
-        {
-            Text = payload.Title,
-            Foreground = ResourceBrush("TextBrush"),
-            FontSize = 16,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(14, 12, 14, 8)
-        };
-        root.Children.Add(title);
-
-        var details = new TextBox
-        {
-            Text = RoleDetailsText(payload.Persona),
-            IsReadOnly = true,
-            TextWrapping = TextWrapping.Wrap,
-            AcceptsReturn = true,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Background = ResourceBrush("InputBrush"),
-            Foreground = ResourceBrush("TextBrush"),
-            BorderBrush = ResourceBrush("ControlBorderBrush"),
-            Padding = new Thickness(12),
-            Margin = new Thickness(14, 0, 14, 10)
-        };
-        Grid.SetRow(details, 1);
-        root.Children.Add(details);
-
-        var close = new Button
-        {
-            Content = "CLOSE",
-            HorizontalAlignment = HorizontalAlignment.Right,
-            MinWidth = 96,
-            Margin = new Thickness(14, 0, 14, 14)
-        };
-        close.Click += (_, _) => window.Close();
-        Grid.SetRow(close, 2);
-        root.Children.Add(close);
-
-        window.Content = root;
-        window.Show();
-        window.Activate();
-    }
-
-    private static string RoleDetailsText(string persona)
-    {
-        var lines = RoleDetailLabels
-            .Select(label => ExtractRoleDetailSegment(persona, label, RoleDetailLabels))
-            .Where(line => !string.IsNullOrWhiteSpace(line))
-            .ToArray();
-        return lines.Length == 0
-            ? persona
-            : string.Join($"{Environment.NewLine}{Environment.NewLine}", lines);
-    }
-
-    private static string ExtractRoleDetailSegment(string persona, string label, IReadOnlyList<string> labels)
-    {
-        var start = persona.IndexOf(label, StringComparison.OrdinalIgnoreCase);
-        if (start < 0)
-        {
-            return "";
-        }
-
-        var valueStart = start + label.Length;
-        var next = labels
-            .Select(candidate => persona.IndexOf(candidate, valueStart, StringComparison.OrdinalIgnoreCase))
-            .Where(index => index >= 0)
-            .DefaultIfEmpty(persona.Length)
-            .Min();
-        var value = persona[valueStart..next].Trim(' ', '\r', '\n', '\t', '.');
-        return string.IsNullOrWhiteSpace(value) ? "" : $"{label} {value}";
-    }
-
-    private ComboBox CreateVoiceStylePicker(string lockKey, string voiceStyle, Brush accent)
-    {
-        var picker = new ComboBox
-        {
-            Tag = lockKey,
-            Width = 132,
-            MinHeight = 28,
-            Padding = new Thickness(6, 3, 6, 3),
-            Margin = new Thickness(0, 0, 6, 0),
-            FontSize = 11,
-            ToolTip = "Communication style for this model"
-        };
-
-        foreach (var option in VoiceStyleOptions())
-        {
-            picker.Items.Add(new ComboBoxItem { Content = option.Label, Tag = option.Tag });
-        }
-
-        ShellUiHelpers.SelectComboTag(picker, NormalizeVoiceStyleTag(voiceStyle));
-        picker.SelectionChanged += VoiceStylePicker_SelectionChanged;
-        _voiceControls.Add(picker);
-        return picker;
-    }
-
-    private ComboBox CreateAgentPressurePicker(string lockKey, string pressureProfile, Brush accent)
-    {
-        var picker = new ComboBox
-        {
-            Tag = lockKey,
-            Width = 124,
-            MinHeight = 28,
-            Padding = new Thickness(6, 3, 6, 3),
-            Margin = new Thickness(0, 0, 6, 0),
-            FontSize = 11,
-            ToolTip = "Debate pressure for this agent"
-        };
-
-        foreach (var option in AgentPressureOptions())
-        {
-            picker.Items.Add(new ComboBoxItem { Content = option.Label, Tag = option.Tag });
-        }
-
-        ShellUiHelpers.SelectComboTag(picker, NormalizeAgentPressureTag(pressureProfile));
-        picker.SelectionChanged += AgentPressurePicker_SelectionChanged;
-        _pressureControls.Add(picker);
-        return picker;
-    }
-
-    private async void VoiceStylePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_isRenderingSnapshot || _activeSession is null || sender is not ComboBox picker || picker.Tag is not string key)
-        {
-            return;
-        }
-
-        var voiceStyle = ShellUiHelpers.SelectedComboTag(picker, "default");
-        await RunArenaBusyAsync($"Updating {DisplayLockKey(key)} voice...", async () =>
-        {
-            var latest = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (latest is null)
-            {
-                LoadStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
-                return;
-            }
-
-            if (!ApplyVoiceStyle(latest, key, voiceStyle))
-            {
-                LoadStatus.Text = $"Could not update {DisplayLockKey(key)} voice.";
-                ArenaRunStatus.Text = LoadStatus.Text;
-                return;
-            }
-
-            await SaveSnapshotWithFeedbackAsync(latest, _activeSession.Id);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_match_voice_style_changed", new
-            {
-                key = NormalizeMatchLockKey(key),
-                voice_style = voiceStyle
-            });
-            RefreshActiveSession($"Updated {DisplayLockKey(key)} voice: {VoiceStyleLabel(voiceStyle)}.");
-        });
-    }
-
-    private async void AgentPressurePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_isRenderingSnapshot || _activeSession is null || sender is not ComboBox picker || picker.Tag is not string key)
-        {
-            return;
-        }
-
-        var pressure = ShellUiHelpers.SelectedComboTag(picker, "default");
-        await RunArenaBusyAsync($"Updating {DisplayLockKey(key)} pressure...", async () =>
-        {
-            var latest = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (latest is null)
-            {
-                LoadStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
-                return;
-            }
-
-            if (!ApplyAgentPressure(latest, key, pressure))
-            {
-                LoadStatus.Text = $"Could not update {DisplayLockKey(key)} pressure.";
-                ArenaRunStatus.Text = LoadStatus.Text;
-                return;
-            }
-
-            await SaveSnapshotWithFeedbackAsync(latest, _activeSession.Id);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_agent_pressure_changed", new
-            {
-                key = NormalizeMatchLockKey(key),
-                pressure_profile = pressure
-            });
-            RefreshActiveSession($"Updated {DisplayLockKey(key)} pressure: {AgentPressureLabel(pressure)}.");
-        });
-    }
-
     private static IReadOnlyList<(string Tag, string Label)> VoiceStyleOptions()
     {
         return
@@ -2244,123 +1860,6 @@ public partial class MainWindow : Window
             ? "Missing: -"
             : $"Missing: {string.Join("; ", diagnostic.Missing)}";
         return $"{diagnostic.Summary}{Environment.NewLine}{evidence}{Environment.NewLine}{missing}";
-    }
-
-    private Border CreateLockMetaChip(string text, Brush accent)
-    {
-        return new Border
-        {
-            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.08),
-            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.36),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(5, 1, 5, 1),
-            Margin = new Thickness(8, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            Child = new TextBlock
-            {
-                Text = text,
-                Foreground = accent,
-                FontSize = 10,
-                FontWeight = FontWeights.SemiBold
-            }
-        };
-    }
-
-    private static string FormatCastPreviewTitle(string id, string name)
-    {
-        return FormatParticipantTitle(id, name, uppercaseRole: false);
-    }
-
-    private static string FormatParticipantTitle(string id, string name, bool uppercaseRole)
-    {
-        var role = DisplayLockKey(id);
-        var cleaned = string.IsNullOrWhiteSpace(name) ? role : name.Trim();
-        var roleLabel = uppercaseRole ? role.ToUpperInvariant() : role;
-        var duplicatePrefix = $"{role}:";
-        if (cleaned.StartsWith(duplicatePrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            cleaned = cleaned[duplicatePrefix.Length..].Trim();
-        }
-
-        return string.IsNullOrWhiteSpace(cleaned) || cleaned.Equals(role, StringComparison.OrdinalIgnoreCase)
-            ? roleLabel
-            : $"{roleLabel}: {cleaned}";
-    }
-
-    private Style CreateLockToggleStyle()
-    {
-        if (_lockToggleStyle is not null)
-        {
-            return _lockToggleStyle;
-        }
-
-        var style = new Style(typeof(CheckBox));
-        style.Setters.Add(new Setter(Control.ForegroundProperty, ResourceBrush("MutedTextBrush")));
-        style.Setters.Add(new Setter(Control.FontWeightProperty, FontWeights.SemiBold));
-        style.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 28d));
-        style.Setters.Add(new Setter(FrameworkElement.WidthProperty, 44d));
-        style.Setters.Add(new Setter(FrameworkElement.CursorProperty, Cursors.Hand));
-
-        var template = new ControlTemplate(typeof(CheckBox));
-        var root = new FrameworkElementFactory(typeof(Grid));
-
-        var track = new FrameworkElementFactory(typeof(Border));
-        track.Name = "LockTrack";
-        track.SetValue(FrameworkElement.WidthProperty, 42d);
-        track.SetValue(FrameworkElement.HeightProperty, 22d);
-        track.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-        track.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
-        track.SetValue(Border.BackgroundProperty, ResourceBrush("InputBrush"));
-        track.SetValue(Border.BorderBrushProperty, ResourceBrush("ControlBorderBrush"));
-        track.SetValue(Border.BorderThicknessProperty, new Thickness(1));
-        track.SetValue(Border.CornerRadiusProperty, new CornerRadius(11));
-
-        var thumb = new FrameworkElementFactory(typeof(Border));
-        thumb.Name = "LockThumb";
-        thumb.SetValue(FrameworkElement.WidthProperty, 16d);
-        thumb.SetValue(FrameworkElement.HeightProperty, 16d);
-        thumb.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
-        thumb.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
-        thumb.SetValue(FrameworkElement.MarginProperty, new Thickness(3, 0, 0, 0));
-        thumb.SetValue(Border.BackgroundProperty, ResourceBrush("MutedTextBrush"));
-        thumb.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
-
-        var glyph = new FrameworkElementFactory(typeof(TextBlock));
-        glyph.Name = "LockGlyph";
-        glyph.SetValue(TextBlock.TextProperty, "\uE785");
-        glyph.SetValue(TextBlock.FontFamilyProperty, new FontFamily("Segoe MDL2 Assets"));
-        glyph.SetValue(TextBlock.FontSizeProperty, 9d);
-        glyph.SetValue(TextBlock.ForegroundProperty, ResourceBrush("DisabledBorderBrush"));
-        glyph.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-        glyph.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
-        thumb.AppendChild(glyph);
-        track.AppendChild(thumb);
-        root.AppendChild(track);
-
-        var checkedTrigger = new Trigger { Property = ToggleButton.IsCheckedProperty, Value = true };
-        checkedTrigger.Setters.Add(new Setter(Control.ForegroundProperty, ResourceBrush("TextBrush")));
-        checkedTrigger.Setters.Add(new Setter(Border.BackgroundProperty, BlendBrush(ResourceBrush("InputBrush"), ResourceBrush("BetaAccentBrush"), 0.16), "LockTrack"));
-        checkedTrigger.Setters.Add(new Setter(Border.BorderBrushProperty, ResourceBrush("BetaAccentBrush"), "LockTrack"));
-        checkedTrigger.Setters.Add(new Setter(Border.BackgroundProperty, ResourceBrush("BetaAccentBrush"), "LockThumb"));
-        checkedTrigger.Setters.Add(new Setter(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Right, "LockThumb"));
-        checkedTrigger.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(0, 0, 3, 0), "LockThumb"));
-        checkedTrigger.Setters.Add(new Setter(TextBlock.TextProperty, "\uE72E", "LockGlyph"));
-        checkedTrigger.Setters.Add(new Setter(TextBlock.ForegroundProperty, ResourceBrush("InputBrush"), "LockGlyph"));
-        template.Triggers.Add(checkedTrigger);
-
-        var hoverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-        hoverTrigger.Setters.Add(new Setter(Border.BorderBrushProperty, ResourceBrush("HoverBorderBrush"), "LockTrack"));
-        template.Triggers.Add(hoverTrigger);
-
-        var disabledTrigger = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
-        disabledTrigger.Setters.Add(new Setter(UIElement.OpacityProperty, 0.72));
-        template.Triggers.Add(disabledTrigger);
-
-        template.VisualTree = root;
-        style.Setters.Add(new Setter(Control.TemplateProperty, template));
-        _lockToggleStyle = style;
-        return style;
     }
 
     private Border CreateTranscriptCard(TranscriptMessage message, bool retryable, bool searchMatch, bool isLatest)
@@ -3265,7 +2764,7 @@ public partial class MainWindow : Window
         var title = new StackPanel();
         title.Children.Add(new TextBlock
         {
-            Text = FormatParticipantTitle(agent.Id, agent.Name, uppercaseRole: true),
+            Text = MatchLockCoordinator.FormatParticipantTitle(agent.Id, agent.Name, uppercaseRole: true),
             Foreground = accent,
             FontSize = 14,
             FontWeight = FontWeights.SemiBold,
@@ -5422,18 +4921,7 @@ public partial class MainWindow : Window
         {
             button.IsEnabled = !busy && button.Tag is true;
         }
-        foreach (var checkBox in _lockControls)
-        {
-            checkBox.IsEnabled = !busy;
-        }
-        foreach (var comboBox in _voiceControls)
-        {
-            comboBox.IsEnabled = !busy;
-        }
-        foreach (var comboBox in _pressureControls)
-        {
-            comboBox.IsEnabled = !busy;
-        }
+        MatchLock.UpdateBusyState(busy);
         ArenaRunStatus.Text = status;
     }
 
@@ -5542,187 +5030,10 @@ public partial class MainWindow : Window
         ArenaRunStatus.Text = status;
     }
 
-    private async void MatchLockChanged(object sender, RoutedEventArgs e)
-    {
-        if (_arenaBusy || _activeSession is null || sender is not CheckBox checkBox || checkBox.Tag is not string key)
-        {
-            return;
-        }
-
-        var locked = checkBox.IsChecked == true;
-        await RunArenaBusyAsync($"Updating {key} lock...", async () =>
-        {
-            await _matchGeneration.ToggleLockAsync(_activeSession.Id, key, locked);
-            RefreshActiveSession($"{key} lock {(locked ? "enabled" : "disabled")}.");
-        });
-    }
-
-    private async void EditLockCardButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_arenaBusy || _activeSession is null || sender is not Button button || button.Tag is not string key)
-        {
-            return;
-        }
-
-        var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-        if (snapshot is null)
-        {
-            LoadStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
-            ArenaRunStatus.Text = LoadStatus.Text;
-            return;
-        }
-
-        var current = CurrentMatchText(snapshot, key);
-        var edited = TextEditDialog.Show(this, _theme, $"Edit {DisplayLockKey(key)}", current);
-        if (edited is null)
-        {
-            LoadStatus.Text = "Edit cancelled.";
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(edited))
-        {
-            LoadStatus.Text = "Edit text is empty.";
-            ArenaRunStatus.Text = LoadStatus.Text;
-            return;
-        }
-
-        await RunArenaBusyAsync($"Updating {key}...", async () =>
-        {
-            var latest = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (latest is null)
-            {
-                LoadStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
-                return;
-            }
-
-            if (!ApplyMatchTextEdit(latest, key, edited))
-            {
-                LoadStatus.Text = $"Could not edit {key}.";
-                ArenaRunStatus.Text = LoadStatus.Text;
-                return;
-            }
-
-            latest.MatchLocks[NormalizeMatchLockKey(key)] = true;
-            await SaveSnapshotWithFeedbackAsync(latest, _activeSession.Id);
-            var normalizedKey = NormalizeMatchLockKey(key);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_match_text_edited", new
-            {
-                key = normalizedKey,
-                locked = true
-            });
-            RefreshActiveSession($"Updated and locked {DisplayLockKey(key)}.");
-        });
-    }
-
-    private static string CurrentMatchText(AIArena.Core.Models.ArenaSnapshot snapshot, string key)
-    {
-        return NormalizeMatchLockKey(key) switch
-        {
-            "topic" => snapshot.Engine.Steering.Topic,
-            "global" => snapshot.Engine.Steering.Global,
-            var agentId when AgentRosterService.IsParticipantId(agentId) || agentId == "narrator" =>
-                snapshot.Engine.Agents.FirstOrDefault(agent => agent.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase))?.Persona
-                ?? (agentId == "narrator" ? snapshot.Engine.Narrator.Persona : ""),
-            _ => ""
-        };
-    }
-
-    private static bool ApplyMatchTextEdit(AIArena.Core.Models.ArenaSnapshot snapshot, string key, string value)
-    {
-        var normalizedKey = NormalizeMatchLockKey(key);
-        switch (normalizedKey)
-        {
-            case "topic":
-                snapshot.Engine.Steering.Topic = value;
-                return true;
-            case "global":
-                snapshot.Engine.Steering.Global = value;
-                return true;
-            case "narrator":
-                snapshot.Engine.Narrator.Persona = value;
-                return true;
-            case var agentId when AgentRosterService.IsParticipantId(agentId):
-                var agent = snapshot.Engine.Agents.FirstOrDefault(item => item.Id.Equals(normalizedKey, StringComparison.OrdinalIgnoreCase));
-                if (agent is null)
-                {
-                    return false;
-                }
-
-                agent.Persona = value;
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    private static bool ApplyVoiceStyle(AIArena.Core.Models.ArenaSnapshot snapshot, string key, string value)
-    {
-        var normalizedKey = NormalizeMatchLockKey(key);
-        var normalizedVoice = NormalizeVoiceStyleTag(value);
-        switch (normalizedKey)
-        {
-            case "narrator":
-                snapshot.Engine.Narrator.VoiceStyle = normalizedVoice == "default" ? "" : normalizedVoice;
-                return true;
-            case var agentId when AgentRosterService.IsParticipantId(agentId):
-                var agent = snapshot.Engine.Agents.FirstOrDefault(item => item.Id.Equals(normalizedKey, StringComparison.OrdinalIgnoreCase));
-                if (agent is null)
-                {
-                    return false;
-                }
-
-                agent.VoiceStyle = normalizedVoice == "default" ? "" : normalizedVoice;
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    private static bool ApplyAgentPressure(AIArena.Core.Models.ArenaSnapshot snapshot, string key, string value)
-    {
-        var normalizedKey = NormalizeMatchLockKey(key);
-        var normalizedPressure = NormalizeAgentPressureTag(value);
-        switch (normalizedKey)
-        {
-            case var agentId when AgentRosterService.IsParticipantId(agentId):
-                var agent = snapshot.Engine.Agents.FirstOrDefault(item => item.Id.Equals(normalizedKey, StringComparison.OrdinalIgnoreCase));
-                if (agent is null)
-                {
-                    return false;
-                }
-
-                agent.PressureProfile = normalizedPressure == "default" ? "" : normalizedPressure;
-                return true;
-            default:
-                return false;
-        }
-    }
-
     private void DiagnosticDetailCloseButton_Click(object sender, RoutedEventArgs e)
     {
         DiagnosticsWorkflow.CloseDetail();
     }
-    private static string NormalizeMatchLockKey(string key)
-    {
-        var cleaned = string.IsNullOrWhiteSpace(key) ? "" : key.Trim().ToLowerInvariant();
-        return AgentRosterService.IsParticipantId(cleaned) || cleaned is "narrator" or "topic" or "global" or "scenario"
-            ? cleaned
-            : "scenario";
-    }
-
-    private static string DisplayLockKey(string key)
-    {
-        return NormalizeMatchLockKey(key) switch
-        {
-            "topic" => "Topic",
-            "global" => "Global",
-            var agentId when AgentRosterService.IsParticipantId(agentId) => AgentRosterService.DisplayName(agentId),
-            "narrator" => "Narrator",
-            _ => "Scenario"
-        };
-    }
-
     private TimeSpan AutoChatCadence()
     {
         var value = (AutoChatCadencePicker.SelectedItem as ComboBoxItem)?.Tag?.ToString();
