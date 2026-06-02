@@ -102,7 +102,7 @@ internal sealed class UserGuideWindowHost
             Background = ResourceBrush(dialog, "AppBackgroundBrush"),
             BorderBrush = ResourceBrush(dialog, "ControlBorderBrush"),
             BorderThickness = new Thickness(0),
-            Padding = new Thickness(18, 18, 18, 14)
+            Padding = new Thickness(18, 4, 18, 14)
         };
         chrome.SetResourceReference(Border.BackgroundProperty, "AppBackgroundBrush");
         chrome.SetResourceReference(Border.BorderBrushProperty, "ControlBorderBrush");
@@ -146,7 +146,11 @@ internal sealed class UserGuideWindowHost
 
     private static Grid CreateHeader(Window dialog)
     {
-        var header = new Grid { Margin = new Thickness(0, 0, 0, 12) };
+        var header = new Grid
+        {
+            Background = Brushes.Transparent,
+            Margin = new Thickness(0, 0, 0, 12)
+        };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.MouseLeftButtonDown += (_, args) => DialogChrome.DragMoveIfPossible(dialog, args);
