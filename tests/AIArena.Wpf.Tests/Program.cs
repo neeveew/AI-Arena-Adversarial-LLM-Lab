@@ -32,7 +32,8 @@ var tests = new (string Name, Action Test)[]
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
     ("transcript view coordinator normalizes view state", TranscriptViewCoordinatorNormalizesViewState),
     ("custom match summary coordinator normalizes card text", CustomMatchSummaryCoordinatorNormalizesCardText),
-    ("scenario seed inspector coordinator formats metadata", ScenarioSeedInspectorCoordinatorFormatsMetadata)
+    ("scenario seed inspector coordinator formats metadata", ScenarioSeedInspectorCoordinatorFormatsMetadata),
+    ("provider quick setup coordinator formats defaults", ProviderQuickSetupCoordinatorFormatsDefaults)
 };
 
 var failures = 0;
@@ -632,6 +633,22 @@ static void ScenarioSeedInspectorCoordinatorFormatsMetadata()
     Require(ScenarioSeedInspectorCoordinator.ShouldShowRolePack("absurd_lab"), "custom role pack should be visible");
     Require(!ScenarioSeedInspectorCoordinator.ShouldShowAbsurdity("grounded"), "grounded absurdity should be hidden");
     Require(ScenarioSeedInspectorCoordinator.ShouldShowAbsurdity("maximum"), "non-grounded absurdity should be visible");
+}
+
+static void ProviderQuickSetupCoordinatorFormatsDefaults()
+{
+    var agent = new AgentState("alpha", "Alpha", "waiting", "", "default", "default", "agent-model", true, false, []);
+    var snapshot = SnapshotForOverviewTest(true, "shared-model", "", 0, [], [agent]);
+
+    Require(!ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot, agent), "online provider with usable model should hide quick setup");
+    Require(ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot with { ProviderOnline = false }, agent), "offline provider should show quick setup");
+    Require(ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot with { ProviderModel = "" }, agent with { Model = "" }), "missing shared and current model should show quick setup");
+    Require(!ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot, agent with { Model = "" }), "shared model should satisfy missing current agent model");
+    Require(ProviderQuickSetupCoordinator.QuickBaseUrl(snapshot with { ProviderBaseUrl = "-" }) == "http://127.0.0.1:1234/v1", "blank quick setup base URL should use LM Studio default");
+    Require(ProviderQuickSetupCoordinator.QuickBaseUrl(snapshot with { ProviderBaseUrl = "http://host/v1" }) == "http://host/v1", "custom base URL should be preserved");
+    Require(ProviderQuickSetupCoordinator.QuickModelText(snapshot, agent) == "agent-model", "agent model should populate quick setup model first");
+    Require(ProviderQuickSetupCoordinator.QuickModelText(snapshot, agent with { Model = "" }) == "shared-model", "shared provider model should backfill quick setup model");
+    Require(ProviderQuickSetupCoordinator.QuickModelText(snapshot with { ProviderModel = "" }, agent with { Model = "" }) == "", "missing model should leave quick setup model blank");
 }
 
 static Color RequireSolidColor(Brush brush, string message)

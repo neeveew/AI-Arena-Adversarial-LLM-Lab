@@ -55,6 +55,7 @@ public partial class MainWindow : Window
     private readonly InternetWorkflowCoordinator? _internetWorkflowCoordinator;
     private readonly ArenaRunCoordinator? _arenaRunCoordinator;
     private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
+    private readonly ProviderQuickSetupCoordinator? _providerQuickSetupCoordinator;
     private readonly ProviderReachabilityCoordinator? _providerReachabilityCoordinator;
     private readonly TranscriptViewCoordinator? _transcriptViewCoordinator;
     private readonly TelemetryWorkflowCoordinator? _telemetryWorkflowCoordinator;
@@ -129,6 +130,9 @@ public partial class MainWindow : Window
 
     private ProviderSettingsCoordinator ProviderSettings =>
         _providerSettingsCoordinator ?? throw new InvalidOperationException("Provider settings coordinator is not initialized.");
+
+    private ProviderQuickSetupCoordinator ProviderQuickSetup =>
+        _providerQuickSetupCoordinator ?? throw new InvalidOperationException("Provider quick setup coordinator is not initialized.");
 
     private ProviderReachabilityCoordinator ProviderReachability =>
         _providerReachabilityCoordinator ?? throw new InvalidOperationException("Provider reachability coordinator is not initialized.");
@@ -307,6 +311,13 @@ public partial class MainWindow : Window
             RefreshActiveSessionForCoordinatorAsync,
             force => ProviderReachability.RefreshAsync(force),
             () => ProviderReachability.UpdatePopup());
+        _providerQuickSetupCoordinator = new ProviderQuickSetupCoordinator(
+            TranscriptActions,
+            () => ProviderSettings.AdvertisedModels,
+            ResourceBrush,
+            BlendBrush,
+            (baseUrl, model, statusText) => ProviderSettings.SaveAndTestProviderQuickSetupAsync(baseUrl, model, statusText),
+            OpenModelProviderSettings);
         _wpfSettings = _wpfSettingsStore.Load();
         _shellNavigationCoordinator = new ShellNavigationCoordinator(
             this,
@@ -1309,9 +1320,9 @@ public partial class MainWindow : Window
             setup.Children.Add(CreateSetupChip("Model", ShortModelName(CurrentTurnModel(snapshot, current)), ResourceBrush("MutedTextBrush")));
             panel.Children.Add(setup);
 
-            if (ShouldShowProviderSetup(snapshot, current))
+            if (ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot, current))
             {
-                panel.Children.Add(CreateProviderQuickSetupCard(snapshot, current));
+                panel.Children.Add(ProviderQuickSetup.CreateCard(snapshot, current));
             }
         }
 
@@ -1330,128 +1341,6 @@ public partial class MainWindow : Window
             BlendBrush(ResourceBrush("CardBrush"), accent, 0.08),
             accent,
             panel);
-    }
-
-    private bool ShouldShowProviderSetup(ArenaViewSnapshot snapshot, AgentState? current)
-    {
-        var currentModel = CurrentTurnModel(snapshot, current);
-        return !snapshot.ProviderOnline
-            || string.IsNullOrWhiteSpace(currentModel)
-            || currentModel == "-"
-            || string.IsNullOrWhiteSpace(snapshot.ProviderModel)
-            || snapshot.ProviderModel == "-";
-    }
-
-    private Border CreateProviderQuickSetupCard(ArenaViewSnapshot snapshot, AgentState? current)
-    {
-        var accent = snapshot.ProviderOnline ? ResourceBrush("BetaAccentBrush") : ResourceBrush("DangerBorderBrush");
-        var baseUrlBox = new TextBox
-        {
-            Text = string.IsNullOrWhiteSpace(snapshot.ProviderBaseUrl) || snapshot.ProviderBaseUrl == "-"
-                ? "http://127.0.0.1:1234/v1"
-                : snapshot.ProviderBaseUrl,
-            Background = ResourceBrush("InputBrush"),
-            Foreground = ResourceBrush("TextBrush"),
-            BorderBrush = ResourceBrush("ControlBorderBrush"),
-            Padding = new Thickness(8),
-            MinWidth = 230,
-            ToolTip = "OpenAI-compatible provider base URL."
-        };
-
-        var modelBox = new ComboBox
-        {
-            IsEditable = true,
-            IsTextSearchEnabled = false,
-            Text = CurrentTurnModel(snapshot, current) == "-" ? "" : CurrentTurnModel(snapshot, current),
-            Background = ResourceBrush("InputBrush"),
-            Foreground = ResourceBrush("TextBrush"),
-            BorderBrush = ResourceBrush("ControlBorderBrush"),
-            Padding = new Thickness(8),
-            MinWidth = 230,
-            ToolTip = "Pick an advertised model or type one manually."
-        };
-        foreach (var model in ProviderSettings.AdvertisedModels)
-        {
-            modelBox.Items.Add(model);
-        }
-
-        var statusText = new TextBlock
-        {
-            Text = ProviderSetupStatus(snapshot),
-            Foreground = ResourceBrush("MutedTextBrush"),
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 7, 0, 0)
-        };
-
-        var actions = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
-        actions.Children.Add(TranscriptActions.CreateButton("Save + test", async (_, _) =>
-        {
-            await ProviderSettings.SaveAndTestProviderQuickSetupAsync(baseUrlBox.Text, modelBox.Text, statusText);
-        }, true, TranscriptActionKind.Primary));
-        actions.Children.Add(TranscriptActions.CreateButton("Open settings", (_, _) => OpenModelProviderSettings(baseUrlBox.Text, modelBox.Text), true));
-
-        var fields = new Grid { Margin = new Thickness(0, 8, 0, 0) };
-        fields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        fields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
-        fields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-        var baseUrlStack = new StackPanel();
-        baseUrlStack.Children.Add(new TextBlock
-        {
-            Text = "Provider base URL",
-            Foreground = ResourceBrush("MutedTextBrush"),
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 5)
-        });
-        baseUrlStack.Children.Add(baseUrlBox);
-        fields.Children.Add(baseUrlStack);
-
-        var modelStack = new StackPanel();
-        modelStack.Children.Add(new TextBlock
-        {
-            Text = "Default model",
-            Foreground = ResourceBrush("MutedTextBrush"),
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 5)
-        });
-        modelStack.Children.Add(modelBox);
-        Grid.SetColumn(modelStack, 2);
-        fields.Children.Add(modelStack);
-
-        var panel = new StackPanel();
-        panel.Children.Add(new TextBlock
-        {
-            Text = "Provider setup",
-            Foreground = ResourceBrush("TextBrush"),
-            FontSize = 14,
-            FontWeight = FontWeights.SemiBold
-        });
-        panel.Children.Add(new TextBlock
-        {
-            Text = "Connect LM Studio or another OpenAI-compatible /v1 provider before running turns.",
-            Foreground = ResourceBrush("MutedTextBrush"),
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 3, 0, 0)
-        });
-        panel.Children.Add(fields);
-        panel.Children.Add(actions);
-        panel.Children.Add(statusText);
-
-        return new Border
-        {
-            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.1),
-            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.5),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(10),
-            Margin = new Thickness(0, 8, 0, 2),
-            Child = panel
-        };
-    }
-
-    private string ProviderSetupStatus(ArenaViewSnapshot snapshot)
-    {
-        return SessionOverviewCoordinator.ProviderSetupStatus(snapshot);
     }
 
     private Border CreateSetupChip(string label, string value, Brush accent)
