@@ -199,7 +199,7 @@ internal sealed class ProviderSettingsCoordinator
     public void ApplySnapshot(ArenaViewSnapshot snapshot)
     {
         providerBaseUrlText.Text = snapshot.ProviderBaseUrl;
-        SelectComboTag(providerPresetPicker, ProviderPresetTagForUrl(snapshot.ProviderBaseUrl));
+        ShellUiHelpers.SelectComboTag(providerPresetPicker, ProviderPresetTagForUrl(snapshot.ProviderBaseUrl));
         providerModelText.Text = snapshot.ProviderModel == "-" ? "" : snapshot.ProviderModel;
         roleModels["alpha"] = snapshot.AlphaModel;
         roleModels["beta"] = snapshot.BetaModel;
@@ -221,7 +221,7 @@ internal sealed class ProviderSettingsCoordinator
 
     public async Task ApplyProviderPresetAsync()
     {
-        var preset = SelectedComboTag(providerPresetPicker, "lm_studio");
+        var preset = ShellUiHelpers.SelectedComboTag(providerPresetPicker, "lm_studio");
         var url = ProviderPresetBaseUrl(preset);
         if (string.IsNullOrWhiteSpace(url))
         {
@@ -413,7 +413,7 @@ internal sealed class ProviderSettingsCoordinator
             autoConfigureHardwareText.Text = "";
             autoConfigureProviderText.Text = "";
 
-            var strategy = SelectedComboTag(autoConfigureStrategyPicker, "auto");
+            var strategy = ShellUiHelpers.SelectedComboTag(autoConfigureStrategyPicker, "auto");
             var plan = await providerAutoConfigureService.DetectAsync(providerBaseUrlText.Text.Trim(), strategy);
             lastAutoConfigurePlan = plan;
             PopulateAutoConfigurePlan(plan);
@@ -1059,24 +1059,7 @@ internal sealed class ProviderSettingsCoordinator
         };
     }
 
-    private static void SelectComboTag(ComboBox comboBox, string tag)
-    {
-        foreach (var item in comboBox.Items.OfType<ComboBoxItem>())
-        {
-            if (string.Equals(item.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase))
-            {
-                comboBox.SelectedItem = item;
-                return;
-            }
-        }
 
-        comboBox.SelectedIndex = comboBox.Items.Count > 0 ? 0 : -1;
-    }
-
-    private static string SelectedComboTag(ComboBox comboBox, string fallback)
-    {
-        return (comboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? fallback;
-    }
 
     private static void CommitSelectedComboBoxItem(ComboBox comboBox)
     {

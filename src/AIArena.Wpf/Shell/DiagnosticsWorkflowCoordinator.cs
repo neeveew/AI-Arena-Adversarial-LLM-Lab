@@ -481,7 +481,7 @@ internal sealed class DiagnosticsWorkflowCoordinator
         }
 
         var speaker = string.IsNullOrWhiteSpace(message.Speaker) ? displayStatusValue(message.SpeakerId) : message.Speaker;
-        return $"- T{message.Turn} {speaker}: {CompactPreview(text, 155, "(empty message)")}";
+        return $"- T{message.Turn} {speaker}: {ShellUiHelpers.CompactPreview(text, 155, "(empty message)")}";
     }
 
     private bool IsSystemMessage(TranscriptMessage message)
@@ -731,13 +731,6 @@ internal sealed class DiagnosticsWorkflowCoordinator
             : $"{metric.Label}: {string.Join("; ", metric.Details.Take(2))}";
     }
 
-    private static string CompactPreview(string? text, int maxLength, string fallback)
-    {
-        var cleaned = string.IsNullOrWhiteSpace(text)
-            ? fallback
-            : string.Join(" ", text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-        return cleaned.Length <= maxLength ? cleaned : $"{cleaned[..maxLength]}...";
-    }
 
     private sealed record DiagnosticSeriesSet(
         IReadOnlyList<DiagnosticHistoryPoint> Points,

@@ -85,8 +85,8 @@ internal sealed class MatchSetupCoordinator
             PopulateRivalryTargetPicker(targetPicker, source, agentIds);
             PopulateRivalryStancePicker(stancePicker);
             var link = links.TryGetValue(source, out var item) ? item : null;
-            SelectComboTag(targetPicker, link?.Target ?? "");
-            SelectComboTag(stancePicker, NormalizeRivalryStance(link?.Stance ?? "neutral"));
+            ShellUiHelpers.SelectComboTag(targetPicker, link?.Target ?? "");
+            ShellUiHelpers.SelectComboTag(stancePicker, NormalizeRivalryStance(link?.Stance ?? "neutral"));
         }
 
         rivalryMatrixStatusText.Text = Summary(snapshot.RivalryMatrixEnabled, snapshot.RivalryMatrix);
@@ -117,8 +117,8 @@ internal sealed class MatchSetupCoordinator
             snapshot.Engine.RivalryMatrix.Links.Clear();
             foreach (var (source, targetPicker, stancePicker) in RivalryMatrixControls())
             {
-                var target = SelectedComboTag(targetPicker, "");
-                var stance = NormalizeRivalryStance(SelectedComboTag(stancePicker, "neutral"));
+                var target = ShellUiHelpers.SelectedComboTag(targetPicker, "");
+                var stance = NormalizeRivalryStance(ShellUiHelpers.SelectedComboTag(stancePicker, "neutral"));
                 if (string.IsNullOrWhiteSpace(target) || stance.Equals("neutral", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
@@ -236,26 +236,7 @@ internal sealed class MatchSetupCoordinator
         return active == 0 ? "Relationship pressure enabled with neutral rules." : $"{active} relationship rule(s) active.";
     }
 
-    private static string SelectedComboTag(ComboBox combo, string fallback)
-    {
-        return combo.SelectedItem is ComboBoxItem item && item.Tag is not null
-            ? item.Tag.ToString() ?? fallback
-            : fallback;
-    }
 
-    private static void SelectComboTag(ComboBox combo, string value)
-    {
-        foreach (var item in combo.Items.OfType<ComboBoxItem>())
-        {
-            if ((item.Tag?.ToString() ?? "").Equals(value, StringComparison.OrdinalIgnoreCase))
-            {
-                combo.SelectedItem = item;
-                return;
-            }
-        }
-
-        combo.SelectedIndex = combo.Items.Count > 0 ? 0 : -1;
-    }
 
     private sealed record RivalryMatrixControlRow(
         string Source,

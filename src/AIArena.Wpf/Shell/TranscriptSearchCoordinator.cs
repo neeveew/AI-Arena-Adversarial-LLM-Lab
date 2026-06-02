@@ -126,7 +126,7 @@ internal sealed class TranscriptSearchCoordinator
     {
         searchText.Clear();
         searchPopup.IsOpen = false;
-        SelectComboTag(turnFilterPicker, "all");
+        ShellUiHelpers.SelectComboTag(turnFilterPicker, "all");
         systemFilter.IsChecked = true;
         agentsFilter.IsChecked = true;
         narratorFilter.IsChecked = true;
@@ -269,17 +269,4 @@ internal sealed class TranscriptSearchCoordinator
         return search.Length <= 24 ? search : $"{search[..24]}...";
     }
 
-    private static void SelectComboTag(ComboBox comboBox, string tag)
-    {
-        foreach (var item in comboBox.Items.OfType<ComboBoxItem>())
-        {
-            if (string.Equals(item.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase))
-            {
-                comboBox.SelectedItem = item;
-                return;
-            }
-        }
-
-        comboBox.SelectedIndex = comboBox.Items.Count > 0 ? 0 : -1;
-    }
 }

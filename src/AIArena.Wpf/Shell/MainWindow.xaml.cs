@@ -392,7 +392,7 @@ public partial class MainWindow : Window
             state => VoiceAdherenceAccent(state),
             diagnostic => VoiceAdherenceAccent(diagnostic),
             VoiceAdherenceTooltip,
-            CompactPreview,
+            ShellUiHelpers.CompactPreview,
             BlendBrush);
         _diagnosticsWorkflowCoordinator = new DiagnosticsWorkflowCoordinator(
             _discourseDiagnostics,
@@ -508,9 +508,9 @@ public partial class MainWindow : Window
     private void InitializeVisualSettings()
     {
         _isRenderingSnapshot = true;
-        SelectComboTag(AvatarStylePicker, CurrentAvatarStyle());
-        SelectComboTag(SystemGlyphStylePicker, _wpfSettings.SystemEventGlyphs ? "glyph" : "fallback");
-        SelectComboTag(TopStripModePicker, CurrentTopStripMode());
+        ShellUiHelpers.SelectComboTag(AvatarStylePicker, CurrentAvatarStyle());
+        ShellUiHelpers.SelectComboTag(SystemGlyphStylePicker, _wpfSettings.SystemEventGlyphs ? "glyph" : "fallback");
+        ShellUiHelpers.SelectComboTag(TopStripModePicker, CurrentTopStripMode());
         CompactTranscriptCheckBox.IsChecked = _wpfSettings.CompactTranscriptMode;
         TurnCompareCheckBox.IsChecked = _wpfSettings.TurnCompareMode;
         MatchQualityTimelineCheckBox.IsChecked = _wpfSettings.ShowMatchQualityTimeline;
@@ -526,12 +526,6 @@ public partial class MainWindow : Window
         TelemetryWorkflow.UpdateTimerState();
     }
 
-    private static string SelectedComboTag(ComboBox combo, string fallback)
-    {
-        return combo.SelectedItem is ComboBoxItem item && item.Tag is not null
-            ? item.Tag.ToString() ?? fallback
-            : fallback;
-    }
 
     private async void LoadSessions(string? preferredSessionId = null)
     {
@@ -731,10 +725,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        var preset = SelectedComboTag(AgentCountPresetPicker, "4");
+        var preset = ShellUiHelpers.SelectedComboTag(AgentCountPresetPicker, "4");
         if (!preset.Equals("custom", StringComparison.OrdinalIgnoreCase))
         {
-            SelectComboTag(AgentCountPicker, preset);
+            ShellUiHelpers.SelectComboTag(AgentCountPicker, preset);
         }
     }
 
@@ -906,7 +900,7 @@ public partial class MainWindow : Window
             MatchQualityTimelineCheckBox.IsChecked = timeline;
             MemoryNotesCheckBox.IsChecked = memory;
             FollowChatCheckBox.IsChecked = autoScroll;
-            SelectComboTag(TopStripModePicker, topStripMode);
+            ShellUiHelpers.SelectComboTag(TopStripModePicker, topStripMode);
         }
         finally
         {
@@ -1019,7 +1013,7 @@ public partial class MainWindow : Window
         }
         _isRenderingSnapshot = true;
         var activeCount = snapshot.Agents.Count(agent => agent.Active);
-        SelectComboTag(ActiveParticipantsPicker, Math.Clamp(activeCount, 1, AgentRosterService.MaxParticipants).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        ShellUiHelpers.SelectComboTag(ActiveParticipantsPicker, Math.Clamp(activeCount, 1, AgentRosterService.MaxParticipants).ToString(System.Globalization.CultureInfo.InvariantCulture));
         SelectAgentCountControls(activeCount);
         ProviderSettings.ApplySnapshot(snapshot);
         ProviderTimeoutText.Text = snapshot.ProviderTimeout.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -1058,13 +1052,6 @@ public partial class MainWindow : Window
         AgentPerformance.Populate(snapshot);
     }
 
-    private static string CompactPreview(string? text, int maxLength, string fallback)
-    {
-        var cleaned = string.IsNullOrWhiteSpace(text)
-            ? fallback
-            : string.Join(" ", text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-        return cleaned.Length <= maxLength ? cleaned : $"{cleaned[..maxLength]}...";
-    }
 
     private void PopulateFallbackState(string message)
     {
@@ -1987,7 +1974,7 @@ public partial class MainWindow : Window
             picker.Items.Add(new ComboBoxItem { Content = option.Label, Tag = option.Tag });
         }
 
-        SelectComboTag(picker, NormalizeVoiceStyleTag(voiceStyle));
+        ShellUiHelpers.SelectComboTag(picker, NormalizeVoiceStyleTag(voiceStyle));
         picker.SelectionChanged += VoiceStylePicker_SelectionChanged;
         _voiceControls.Add(picker);
         return picker;
@@ -2011,7 +1998,7 @@ public partial class MainWindow : Window
             picker.Items.Add(new ComboBoxItem { Content = option.Label, Tag = option.Tag });
         }
 
-        SelectComboTag(picker, NormalizeAgentPressureTag(pressureProfile));
+        ShellUiHelpers.SelectComboTag(picker, NormalizeAgentPressureTag(pressureProfile));
         picker.SelectionChanged += AgentPressurePicker_SelectionChanged;
         _pressureControls.Add(picker);
         return picker;
@@ -2024,7 +2011,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var voiceStyle = SelectedComboTag(picker, "default");
+        var voiceStyle = ShellUiHelpers.SelectedComboTag(picker, "default");
         await RunArenaBusyAsync($"Updating {DisplayLockKey(key)} voice...", async () =>
         {
             var latest = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
@@ -2058,7 +2045,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var pressure = SelectedComboTag(picker, "default");
+        var pressure = ShellUiHelpers.SelectedComboTag(picker, "default");
         await RunArenaBusyAsync($"Updating {DisplayLockKey(key)} pressure...", async () =>
         {
             var latest = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
@@ -4683,7 +4670,7 @@ public partial class MainWindow : Window
         notesWindow = Math.Clamp(notesWindow, 0, 60);
         internetMaxResults = Math.Clamp(internetMaxResults, 1, 10);
         var activeParticipants = ParseActiveParticipants();
-        var internetMode = SelectedComboTag(InternetModePicker, "manual");
+        var internetMode = ShellUiHelpers.SelectedComboTag(InternetModePicker, "manual");
         var useInternet = UseInternetCheckBox.IsChecked == true;
         if (!useInternet)
         {
@@ -4694,7 +4681,7 @@ public partial class MainWindow : Window
             internetMode = "auto";
         }
 
-        var internetSourceScope = SelectedComboTag(InternetSourceScopePicker, "trusted");
+        var internetSourceScope = ShellUiHelpers.SelectedComboTag(InternetSourceScopePicker, "trusted");
 
         await RunArenaBusyAsync("Applying settings...", async () =>
         {
@@ -6265,19 +6252,6 @@ public partial class MainWindow : Window
         return AgentRosterService.IsParticipantId(speakerId);
     }
 
-    private static void SelectComboTag(ComboBox comboBox, string tag)
-    {
-        foreach (var item in comboBox.Items.OfType<ComboBoxItem>())
-        {
-            if (string.Equals(item.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase))
-            {
-                comboBox.SelectedItem = item;
-                return;
-            }
-        }
-
-        comboBox.SelectedIndex = comboBox.Items.Count > 0 ? 0 : -1;
-    }
 
     private void SelectAgentCountControls(int activeCount)
     {
@@ -6287,7 +6261,7 @@ public partial class MainWindow : Window
         }
 
         var count = Math.Clamp(activeCount, AgentRosterService.MinParticipants, AgentRosterService.MaxParticipants);
-        SelectComboTag(AgentCountPicker, count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        ShellUiHelpers.SelectComboTag(AgentCountPicker, count.ToString(System.Globalization.CultureInfo.InvariantCulture));
         var preset = count switch
         {
             2 => "2",
@@ -6296,7 +6270,7 @@ public partial class MainWindow : Window
             8 => "8",
             _ => "custom"
         };
-        SelectComboTag(AgentCountPresetPicker, preset);
+        ShellUiHelpers.SelectComboTag(AgentCountPresetPicker, preset);
         if (AgentRosterStatusText is not null)
         {
             AgentRosterStatusText.Text = count switch

@@ -102,11 +102,11 @@ internal sealed class ScenarioWorkflowCoordinator
         isUpdating = true;
         try
         {
-            SelectComboTag(randomSeedPresetPicker, current.RandomSeedPreset);
-            SelectComboTag(randomSeedRolePackPicker, current.RandomSeedRolePack);
-            SelectComboTag(randomSeedStylePicker, current.RandomSeedStyle);
-            SelectComboTag(randomSeedIntensityPicker, current.RandomSeedIntensity);
-            SelectComboTag(randomSeedAbsurdityPicker, current.RandomSeedAbsurdity);
+            ShellUiHelpers.SelectComboTag(randomSeedPresetPicker, current.RandomSeedPreset);
+            ShellUiHelpers.SelectComboTag(randomSeedRolePackPicker, current.RandomSeedRolePack);
+            ShellUiHelpers.SelectComboTag(randomSeedStylePicker, current.RandomSeedStyle);
+            ShellUiHelpers.SelectComboTag(randomSeedIntensityPicker, current.RandomSeedIntensity);
+            ShellUiHelpers.SelectComboTag(randomSeedAbsurdityPicker, current.RandomSeedAbsurdity);
         }
         finally
         {
@@ -124,7 +124,7 @@ internal sealed class ScenarioWorkflowCoordinator
         }
 
         var current = settings();
-        var preset = SelectedComboTag(randomSeedPresetPicker, "manual");
+        var preset = ShellUiHelpers.SelectedComboTag(randomSeedPresetPicker, "manual");
         current.RandomSeedPreset = preset;
         if (!preset.Equals("manual", StringComparison.OrdinalIgnoreCase))
         {
@@ -132,10 +132,10 @@ internal sealed class ScenarioWorkflowCoordinator
             isUpdating = true;
             try
             {
-                SelectComboTag(randomSeedRolePackPicker, config.RolePack);
-                SelectComboTag(randomSeedStylePicker, config.Style);
-                SelectComboTag(randomSeedIntensityPicker, config.Intensity);
-                SelectComboTag(randomSeedAbsurdityPicker, config.Absurdity);
+                ShellUiHelpers.SelectComboTag(randomSeedRolePackPicker, config.RolePack);
+                ShellUiHelpers.SelectComboTag(randomSeedStylePicker, config.Style);
+                ShellUiHelpers.SelectComboTag(randomSeedIntensityPicker, config.Intensity);
+                ShellUiHelpers.SelectComboTag(randomSeedAbsurdityPicker, config.Absurdity);
             }
             finally
             {
@@ -159,16 +159,16 @@ internal sealed class ScenarioWorkflowCoordinator
         }
 
         var current = settings();
-        current.RandomSeedRolePack = SelectedComboTag(randomSeedRolePackPicker, "auto");
-        current.RandomSeedStyle = SelectedComboTag(randomSeedStylePicker, "auto");
-        current.RandomSeedIntensity = SelectedComboTag(randomSeedIntensityPicker, "normal");
-        current.RandomSeedAbsurdity = SelectedComboTag(randomSeedAbsurdityPicker, "grounded");
+        current.RandomSeedRolePack = ShellUiHelpers.SelectedComboTag(randomSeedRolePackPicker, "auto");
+        current.RandomSeedStyle = ShellUiHelpers.SelectedComboTag(randomSeedStylePicker, "auto");
+        current.RandomSeedIntensity = ShellUiHelpers.SelectedComboTag(randomSeedIntensityPicker, "normal");
+        current.RandomSeedAbsurdity = ShellUiHelpers.SelectedComboTag(randomSeedAbsurdityPicker, "grounded");
         current.RandomSeedPreset = "manual";
 
         isUpdating = true;
         try
         {
-            SelectComboTag(randomSeedPresetPicker, "manual");
+            ShellUiHelpers.SelectComboTag(randomSeedPresetPicker, "manual");
         }
         finally
         {
@@ -187,10 +187,10 @@ internal sealed class ScenarioWorkflowCoordinator
             return;
         }
 
-        var rolePack = SelectedComboTag(randomSeedRolePackPicker, "auto");
-        var style = SelectedComboTag(randomSeedStylePicker, "auto");
-        var intensity = SelectedComboTag(randomSeedIntensityPicker, "normal");
-        var absurdity = SelectedComboTag(randomSeedAbsurdityPicker, "grounded");
+        var rolePack = ShellUiHelpers.SelectedComboTag(randomSeedRolePackPicker, "auto");
+        var style = ShellUiHelpers.SelectedComboTag(randomSeedStylePicker, "auto");
+        var intensity = ShellUiHelpers.SelectedComboTag(randomSeedIntensityPicker, "normal");
+        var absurdity = ShellUiHelpers.SelectedComboTag(randomSeedAbsurdityPicker, "grounded");
         await runArenaBusyAsync($"Generating {RandomSeedOptionLabel(style, intensity, rolePack, absurdity)} random seed...", randomSeedButton, async () =>
         {
             var result = await matchGeneration.GenerateRandomSeedAsync(session.Id, style, intensity, rolePack, absurdity);
@@ -224,9 +224,9 @@ internal sealed class ScenarioWorkflowCoordinator
 
         await runArenaBusyAsync("Asking narrator for AI Choice match...", aiChoiceButton, async () =>
         {
-            var rolePack = SelectedComboTag(randomSeedRolePackPicker, "auto");
-            var intensity = SelectedComboTag(randomSeedIntensityPicker, "normal");
-            var absurdity = SelectedComboTag(randomSeedAbsurdityPicker, "grounded");
+            var rolePack = ShellUiHelpers.SelectedComboTag(randomSeedRolePackPicker, "auto");
+            var intensity = ShellUiHelpers.SelectedComboTag(randomSeedIntensityPicker, "normal");
+            var absurdity = ShellUiHelpers.SelectedComboTag(randomSeedAbsurdityPicker, "grounded");
             var result = await matchGeneration.GenerateAiChoiceAsync(session.Id, rolePack, intensity, absurdity);
             var status = result.Ok
                 ? $"AI Choice match generated: {result.Label}"
@@ -258,9 +258,9 @@ internal sealed class ScenarioWorkflowCoordinator
 
         await runArenaBusyAsync("Generating YOLO seed...", yoloScenarioButton, async () =>
         {
-            var rolePack = SelectedComboTag(randomSeedRolePackPicker, "auto");
-            var intensity = SelectedComboTag(randomSeedIntensityPicker, "normal");
-            var absurdity = SelectedComboTag(randomSeedAbsurdityPicker, "grounded");
+            var rolePack = ShellUiHelpers.SelectedComboTag(randomSeedRolePackPicker, "auto");
+            var intensity = ShellUiHelpers.SelectedComboTag(randomSeedIntensityPicker, "normal");
+            var absurdity = ShellUiHelpers.SelectedComboTag(randomSeedAbsurdityPicker, "grounded");
             var result = await matchGeneration.GenerateYoloSeedAsync(session.Id, rolePack, intensity, absurdity);
             var status = result.Ok
                 ? $"YOLO seed generated: {result.Label} - {result.Seed}"
@@ -522,24 +522,5 @@ internal sealed class ScenarioWorkflowCoordinator
         }
     }
 
-    private static string SelectedComboTag(ComboBox combo, string fallback)
-    {
-        return combo.SelectedItem is ComboBoxItem item && item.Tag is not null
-            ? item.Tag.ToString() ?? fallback
-            : fallback;
-    }
 
-    private static void SelectComboTag(ComboBox combo, string tag)
-    {
-        foreach (var item in combo.Items.OfType<ComboBoxItem>())
-        {
-            if ((item.Tag?.ToString() ?? "").Equals(tag, StringComparison.OrdinalIgnoreCase))
-            {
-                combo.SelectedItem = item;
-                return;
-            }
-        }
-
-        combo.SelectedIndex = combo.Items.Count > 0 ? 0 : -1;
-    }
 }

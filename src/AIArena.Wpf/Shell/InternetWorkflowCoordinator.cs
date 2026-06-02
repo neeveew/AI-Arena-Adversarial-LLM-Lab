@@ -105,8 +105,8 @@ internal sealed class InternetWorkflowCoordinator
     public void ApplySnapshot(ArenaViewSnapshot snapshot)
     {
         useInternetCheckBox.IsChecked = snapshot.InternetEnabled;
-        SelectComboTag(modePicker, snapshot.InternetMode);
-        SelectComboTag(sourceScopePicker, snapshot.InternetSourceScope);
+        ShellUiHelpers.SelectComboTag(modePicker, snapshot.InternetMode);
+        ShellUiHelpers.SelectComboTag(sourceScopePicker, snapshot.InternetSourceScope);
         maxResultsText.Text = snapshot.InternetMaxResults.ToString(System.Globalization.CultureInfo.InvariantCulture);
         allowParticipantRequestsCheckBox.IsChecked = snapshot.AllowParticipantInternetRequests;
         allowNarratorRequestsCheckBox.IsChecked = snapshot.AllowNarratorInternetRequests;
@@ -135,19 +135,19 @@ internal sealed class InternetWorkflowCoordinator
         isUpdating = true;
         try
         {
-            var mode = SelectedComboTag(modePicker, "manual");
+            var mode = ShellUiHelpers.SelectedComboTag(modePicker, "manual");
             if (preferToggle)
             {
                 if (useInternetCheckBox.IsChecked == true)
                 {
                     if (mode.Equals("off", StringComparison.OrdinalIgnoreCase))
                     {
-                        SelectComboTag(modePicker, "auto");
+                        ShellUiHelpers.SelectComboTag(modePicker, "auto");
                     }
                 }
                 else
                 {
-                    SelectComboTag(modePicker, "off");
+                    ShellUiHelpers.SelectComboTag(modePicker, "off");
                 }
             }
             else
@@ -166,7 +166,7 @@ internal sealed class InternetWorkflowCoordinator
     public void UpdateSettingsHint()
     {
         var useInternet = useInternetCheckBox.IsChecked == true;
-        var mode = SelectedComboTag(modePicker, "manual");
+        var mode = ShellUiHelpers.SelectedComboTag(modePicker, "manual");
         if (!useInternet || mode.Equals("off", StringComparison.OrdinalIgnoreCase))
         {
             modeHintText.Text = "Internet is disabled. Agents will not be prompted to request tools, and manual internet actions are blocked.";
@@ -428,24 +428,5 @@ internal sealed class InternetWorkflowCoordinator
         };
     }
 
-    private static string SelectedComboTag(ComboBox combo, string fallback)
-    {
-        return combo.SelectedItem is ComboBoxItem item && item.Tag is not null
-            ? item.Tag.ToString() ?? fallback
-            : fallback;
-    }
 
-    private static void SelectComboTag(ComboBox comboBox, string tag)
-    {
-        foreach (var item in comboBox.Items.OfType<ComboBoxItem>())
-        {
-            if ((item.Tag?.ToString() ?? "").Equals(tag, StringComparison.OrdinalIgnoreCase))
-            {
-                comboBox.SelectedItem = item;
-                return;
-            }
-        }
-
-        comboBox.SelectedIndex = comboBox.Items.Count > 0 ? 0 : -1;
-    }
 }

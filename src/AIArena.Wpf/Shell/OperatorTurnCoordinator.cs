@@ -322,7 +322,7 @@ internal sealed class OperatorTurnCoordinator
 
     private IEnumerable<DialogueAgent> OperatorPrivateTargets(ArenaSnapshot snapshot)
     {
-        var selected = SelectedComboTag(privateTargetPicker, "all");
+        var selected = ShellUiHelpers.SelectedComboTag(privateTargetPicker, "all");
         var agents = snapshot.Engine.Agents.Where(agent => AgentRosterService.IsParticipantId(agent.Id));
 
         return selected.Equals("all", StringComparison.OrdinalIgnoreCase)
@@ -332,7 +332,7 @@ internal sealed class OperatorTurnCoordinator
 
     private void PopulatePrivateTargetPicker(ArenaViewSnapshot snapshot)
     {
-        var selected = SelectedComboTag(privateTargetPicker, "all");
+        var selected = ShellUiHelpers.SelectedComboTag(privateTargetPicker, "all");
         privateTargetPicker.Items.Clear();
         privateTargetPicker.Items.Add(new ComboBoxItem { Content = "All active agents", Tag = "all" });
         foreach (var agent in snapshot.Agents.Where(agent => AgentRosterService.IsParticipantId(agent.Id)))
@@ -345,10 +345,10 @@ internal sealed class OperatorTurnCoordinator
             });
         }
 
-        SelectComboTag(privateTargetPicker, selected);
+        ShellUiHelpers.SelectComboTag(privateTargetPicker, selected);
         if (privateTargetPicker.SelectedIndex < 0)
         {
-            SelectComboTag(privateTargetPicker, "all");
+            ShellUiHelpers.SelectComboTag(privateTargetPicker, "all");
         }
     }
 
@@ -389,7 +389,7 @@ internal sealed class OperatorTurnCoordinator
 
     public void UpdatePrivateTargetSummary()
     {
-        var selected = SelectedComboTag(privateTargetPicker, "all");
+        var selected = ShellUiHelpers.SelectedComboTag(privateTargetPicker, "all");
         if (selected.Equals("all", StringComparison.OrdinalIgnoreCase))
         {
             var active = (lastRenderedSnapshot()?.Agents ?? [])
@@ -449,24 +449,5 @@ internal sealed class OperatorTurnCoordinator
         return string.IsNullOrWhiteSpace(value) ? "-" : value.Trim();
     }
 
-    private static string SelectedComboTag(ComboBox combo, string fallback)
-    {
-        return combo.SelectedItem is ComboBoxItem item && item.Tag is not null
-            ? item.Tag.ToString() ?? fallback
-            : fallback;
-    }
 
-    private static void SelectComboTag(ComboBox combo, string tag)
-    {
-        foreach (var item in combo.Items.OfType<ComboBoxItem>())
-        {
-            if ((item.Tag?.ToString() ?? "").Equals(tag, StringComparison.OrdinalIgnoreCase))
-            {
-                combo.SelectedItem = item;
-                return;
-            }
-        }
-
-        combo.SelectedIndex = combo.Items.Count > 0 ? 0 : -1;
-    }
 }
