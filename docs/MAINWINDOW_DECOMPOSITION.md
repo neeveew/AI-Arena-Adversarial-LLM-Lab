@@ -27,17 +27,20 @@ Feature behavior should live in focused coordinators under `src/AIArena.Wpf/Shel
 | `TranscriptCardRenderer` | individual transcript card rendering |
 | `TranscriptAdjunctCoordinator` | decision cards, diagnostics adjuncts, news inspector cards, auto-moderator panels |
 | `TranscriptViewCoordinator` | transcript visual settings, presets, dashboard layout, debug/view menus |
+| `TranscriptListCoordinator` | transcript list orchestration, ready card, empty-search state, panel ordering |
 | `NewsPanelCoordinator` | internet/news panel filtering, summaries, fallback/empty state |
 | `AgentBoardCoordinator` | active agent board rendering and agent-turn actions |
 | `AgentMemoryCoordinator` | private notes and memory-note panel workflows |
 | `AgentPerformanceCoordinator` | participant performance panel and detail popup |
 | `AgentRosterCoordinator` | active participant count controls |
+| `ArenaOperationCoordinator` | app-wide arena busy state, operation locking, control enable state, breathing buttons |
 | `ArenaRunCoordinator` | one-turn, auto-chat, narrator, retry, approval-resume run workflows |
 | `ArenaSessionMutationCoordinator` | reset/apply session settings and core snapshot mutation helpers |
 | `SessionOverviewCoordinator` | top bar, overview metrics, provider status summaries |
 | `ProviderSettingsCoordinator` | provider settings, model routing, auto-configure, preload workflows |
 | `ProviderReachabilityCoordinator` | provider health popup, refresh timer, shared provider status persistence |
 | `ProviderQuickSetupCoordinator` | ready-state provider setup card |
+| `AppSettingsCoordinator` | app settings visibility, provider settings navigation, model refresh timer, gear animation |
 | `ShellNavigationCoordinator` | theme application, navigation, settings panel visibility |
 | `TelemetryWorkflowCoordinator` | system telemetry widgets and timer state |
 | `DiagnosticsWorkflowCoordinator` | diagnostics dashboard, sparkline values, detail popup |
@@ -50,15 +53,21 @@ Feature behavior should live in focused coordinators under `src/AIArena.Wpf/Shel
 | `InternetWorkflowCoordinator` | internet settings, curated news, approval dialogs |
 | `OperatorTurnCoordinator` | operator route, template, private target, and send workflows |
 
-## Remaining MainWindow Clusters
+## Platform Helpers
 
-These areas are still reasonable future extraction candidates:
+| Helper | Owns |
+| --- | --- |
+| `WindowChromeService` | Windows DWM caption, border, and text color interop |
 
-- `PopulateTranscript`: transcript list orchestration still assembles timeline, memory, decision, compare, moderator, and message cards.
-- `CreateArenaReadyCard`: ready-state summary chips are still inline, although provider setup is extracted.
-- `SetArenaBusy` / `RunArenaBusyAsync`: app-wide busy state is still centralized and could become an operation coordinator once the remaining direct control toggles shrink.
-- provider/app settings event wrappers: most delegate cleanly, but the app settings section still owns several direct XAML enable/disable assignments.
-- WPF chrome helpers: `ApplyNativeChromeColor` and related DWM interop can move to a platform helper if more window chrome logic appears.
+## Remaining MainWindow Surface
+
+The remaining `MainWindow` code is mostly composition-root glue:
+
+- constructor wiring for services, coordinators, timers, and XAML controls
+- snapshot load/render orchestration across coordinators
+- thin XAML event handlers that delegate to coordinators
+- small status wrappers used by coordinator delegates
+- `RunArenaBusyAsync`, `SetArenaBusy`, and `OpenModelProviderSettings` compatibility wrappers for existing delegate signatures
 
 ## Guardrails
 
