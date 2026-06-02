@@ -63,6 +63,7 @@ public partial class MainWindow : Window
     private readonly DiagnosticsWorkflowCoordinator? _diagnosticsWorkflowCoordinator;
     private readonly MatchSetupCoordinator? _matchSetupCoordinator;
     private readonly MatchLockCoordinator? _matchLockCoordinator;
+    private readonly CustomMatchSummaryCoordinator? _customMatchSummaryCoordinator;
     private readonly AgentRosterCoordinator? _agentRosterCoordinator;
     private readonly ArenaSessionMutationCoordinator? _arenaSessionMutationCoordinator;
     private readonly ShellNavigationCoordinator? _shellNavigationCoordinator;
@@ -151,6 +152,9 @@ public partial class MainWindow : Window
 
     private MatchLockCoordinator MatchLock =>
         _matchLockCoordinator ?? throw new InvalidOperationException("Match lock coordinator is not initialized.");
+
+    private CustomMatchSummaryCoordinator CustomMatchSummary =>
+        _customMatchSummaryCoordinator ?? throw new InvalidOperationException("Custom match summary coordinator is not initialized.");
 
     private AgentRosterCoordinator AgentRoster =>
         _agentRosterCoordinator ?? throw new InvalidOperationException("Agent roster coordinator is not initialized.");
@@ -712,6 +716,14 @@ public partial class MainWindow : Window
             RefreshActiveSessionForCoordinatorAsync,
             SetLoadStatus,
             SetArenaRunStatus);
+        _customMatchSummaryCoordinator = new CustomMatchSummaryCoordinator(
+            ScenarioPreviewItems,
+            CastPreviewItems,
+            ShellCards,
+            MatchLock,
+            ResourceBrush,
+            AccentForSpeaker,
+            BlendBrush);
         _agentRosterCoordinator = new AgentRosterCoordinator(
             _coreSessionStore,
             _eventLogStore,
@@ -1223,58 +1235,11 @@ public partial class MainWindow : Window
 
     private void PopulateCustomMatch(ArenaViewSnapshot snapshot)
     {
-        ScenarioPreviewItems.Children.Clear();
-        CastPreviewItems.Children.Clear();
         ScenarioSeedInspector.Children.Clear();
-        MatchLock.ClearControls();
 
         PopulateScenarioSeedInspector(snapshot);
         ScenarioWorkflow.PopulateGenerationHistory(snapshot);
-
-        ScenarioPreviewItems.Children.Add(MatchLock.CreateLockCard(
-            "topic",
-            "Topic",
-            string.IsNullOrWhiteSpace(snapshot.ScenarioTopic) ? "No topic is set for this match yet." : snapshot.ScenarioTopic,
-            ResourceBrush("CardBrush"),
-            snapshot.TopicLocked ? ResourceBrush("TextBrush") : ResourceBrush("MutedTextBrush"),
-            snapshot.TopicLocked));
-        ScenarioPreviewItems.Children.Add(MatchLock.CreateLockCard(
-            "global",
-            "Global",
-            string.IsNullOrWhiteSpace(snapshot.ScenarioGlobal) ? "No global instruction is set for this match yet." : snapshot.ScenarioGlobal,
-            ResourceBrush("CardBrush"),
-            snapshot.GlobalLocked ? ResourceBrush("TextBrush") : ResourceBrush("MutedTextBrush"),
-            snapshot.GlobalLocked));
-
-        if (snapshot.Agents.Count == 0)
-        {
-            CastPreviewItems.Children.Add(CreateEmptyStateCard("Cast", "No active cast is available for this session yet.", ResourceBrush("MutedTextBrush")));
-        }
-        else
-        {
-            foreach (var agent in snapshot.Agents)
-            {
-                CastPreviewItems.Children.Add(MatchLock.CreateLockCard(
-                    agent.Id,
-                    MatchLockCoordinator.FormatCastPreviewTitle(agent.Id, agent.Name),
-                    string.IsNullOrWhiteSpace(agent.Persona) ? "(no persona)" : agent.Persona,
-                    BlendBrush(ResourceBrush("CardBrush"), AccentForSpeaker(agent.Id), 0.16),
-                    AccentForSpeaker(agent.Id),
-                    agent.Locked,
-                    agent.VoiceStyle,
-                    agent.PressureProfile));
-            }
-        }
-
-        CastPreviewItems.Children.Add(MatchLock.CreateLockCard(
-            "narrator",
-            "Narrator",
-            string.IsNullOrWhiteSpace(snapshot.NarratorPersona) ? "(no narrator persona)" : snapshot.NarratorPersona,
-            BlendBrush(ResourceBrush("CardBrush"), ResourceBrush("NarratorAccentBrush"), 0.16),
-            ResourceBrush("NarratorAccentBrush"),
-            snapshot.NarratorLocked,
-            snapshot.NarratorVoiceStyle));
-
+        CustomMatchSummary.Populate(snapshot);
         MatchSetup.PopulateRivalryMatrix(snapshot);
     }
 

@@ -30,7 +30,8 @@ var tests = new (string Name, Action Test)[]
     ("shell ui helpers blend brushes", ShellUiHelpersBlendBrushes),
     ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
-    ("transcript view coordinator normalizes view state", TranscriptViewCoordinatorNormalizesViewState)
+    ("transcript view coordinator normalizes view state", TranscriptViewCoordinatorNormalizesViewState),
+    ("custom match summary coordinator normalizes card text", CustomMatchSummaryCoordinatorNormalizesCardText)
 };
 
 var failures = 0;
@@ -603,6 +604,17 @@ static void TranscriptViewCoordinatorNormalizesViewState()
     Require(TranscriptViewCoordinator.CurrentViewPresetName(true, false, false, false, true, "diagnostics") == "Compact", "compact preset should be detected");
     Require(TranscriptViewCoordinator.CurrentViewPresetName(true, true, true, true, false, "diagnostics") == "Review", "review preset should be detected");
     Require(TranscriptViewCoordinator.CurrentViewPresetName(true, true, true, true, false, "telemetry") == "Custom", "non-diagnostics top strip should be custom");
+}
+
+static void CustomMatchSummaryCoordinatorNormalizesCardText()
+{
+    Require(CustomMatchSummaryCoordinator.ScenarioTopicText("") == "No topic is set for this match yet.", "blank topic should use empty-state copy");
+    Require(CustomMatchSummaryCoordinator.ScenarioTopicText(" Debate topic ") == " Debate topic ", "topic text should be preserved");
+    Require(CustomMatchSummaryCoordinator.ScenarioGlobalText(" ") == "No global instruction is set for this match yet.", "blank global instruction should use empty-state copy");
+    Require(CustomMatchSummaryCoordinator.AgentPersonaText("") == "(no persona)", "blank agent persona should use placeholder");
+    Require(CustomMatchSummaryCoordinator.AgentPersonaText("skeptical analyst") == "skeptical analyst", "agent persona should be preserved");
+    Require(CustomMatchSummaryCoordinator.NarratorPersonaText("") == "(no narrator persona)", "blank narrator persona should use placeholder");
+    Require(CustomMatchSummaryCoordinator.NarratorPersonaText("referee") == "referee", "narrator persona should be preserved");
 }
 
 static Color RequireSolidColor(Brush brush, string message)
