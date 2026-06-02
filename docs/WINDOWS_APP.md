@@ -53,11 +53,13 @@ User-facing feature guidance is tracked in `docs/USER_GUIDE.md`.
 
 ## Source Layout
 
-- `src/AIArena.Wpf/Shell` - main window and dialogs.
+- `src/AIArena.Wpf/Shell` - main window composition root, focused workflow coordinators, and dialogs.
 - `src/AIArena.Wpf/UI` - controls, view models, avatar helpers, and compact visual widgets.
 - `src/AIArena.Wpf/Modules` - WPF app services grouped by feature area.
 - `src/AIArena.Wpf/Platform/Windows` - Windows-specific settings, telemetry, and theme plumbing.
 - `src/AIArena.Wpf/Assets` - app icons and packaged visual assets.
+
+`docs/MAINWINDOW_DECOMPOSITION.md` tracks the WPF shell coordinator map. `MainWindow.xaml.cs` should stay a composition root for services, timers, and XAML event delegation; feature behavior should live in the Shell coordinators or platform helpers.
 
 ## Build
 
@@ -88,3 +90,15 @@ The preview executable is written to `dist\AI Arena WPF\AI Arena.exe`.
 ```
 
 The release executable and `changes.txt` are written to `dist\AI Arena - <version>\`.
+
+## Stabilization Checks
+
+```powershell
+dotnet build .\src\AIArena.Wpf\AIArena.Wpf.csproj
+dotnet run --project .\tests\AIArena.Tests\AIArena.Tests.csproj
+dotnet run --project .\tests\AIArena.Wpf.Tests\AIArena.Wpf.Tests.csproj
+.\scripts\dependency-index.ps1 -Check
+.\scripts\wpf-release-sanity.ps1 -Version "0.3.95-beta"
+```
+
+For shell refactors, also smoke-launch both the debug executable and the current release executable long enough to catch startup-time XAML/event wiring failures.

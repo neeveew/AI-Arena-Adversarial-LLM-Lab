@@ -33,6 +33,7 @@ var tests = new (string Name, Action Test)[]
     ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
     ("app settings coordinator selects provider focus", AppSettingsCoordinatorSelectsProviderFocus),
+    ("coordinator render contracts cover smoke states", CoordinatorRenderContractsCoverSmokeStates),
     ("transcript list coordinator selects retryable turns", TranscriptListCoordinatorSelectsRetryableTurns),
     ("transcript view coordinator normalizes view state", TranscriptViewCoordinatorNormalizesViewState),
     ("custom match summary coordinator normalizes card text", CustomMatchSummaryCoordinatorNormalizesCardText),
@@ -618,6 +619,43 @@ static void AppSettingsCoordinatorSelectsProviderFocus()
     Require(AppSettingsCoordinator.ShouldFocusModelPicker(""), "blank model should focus the model picker");
     Require(AppSettingsCoordinator.ShouldFocusModelPicker("   "), "whitespace model should focus the model picker");
     Require(!AppSettingsCoordinator.ShouldFocusModelPicker("model-a"), "configured model should focus the test button");
+}
+
+static void CoordinatorRenderContractsCoverSmokeStates()
+{
+    var alpha = new AgentState("alpha", "Alpha", "thinking", "", "default", "default", "alpha-model", true, false, []);
+    var beta = new AgentState("beta", "Beta", "waiting", "skeptic", "default", "default", "", true, false, []);
+    var normal = TranscriptForTest(1, "Alpha", "alpha", "message", "ok");
+    var approval = TranscriptForTest(2, "Tool", "internet", "internet_approval", "pending") with { InternetSources = ["https://example.test/a"] };
+    var news = TranscriptForTest(3, "News", "news", "news", "ok") with { InternetSources = ["https://example.test/b"] };
+    var snapshot = SnapshotForOverviewTest(
+        providerOnline: false,
+        providerModel: "",
+        providerLastError: "offline",
+        turnIndex: 1,
+        [normal, approval, news],
+        [alpha, beta])
+        with
+        {
+            ProviderBaseUrl = "-",
+            ScenarioTopic = "",
+            ScenarioGlobal = "",
+            ScenarioGeneratorSeed = "ai-choice",
+            PersonaGeneratorStyle = "yolo"
+        };
+
+    var current = SessionOverviewCoordinator.CurrentTurnAgent(snapshot);
+    var newsMessages = snapshot.Messages.Where(NewsPanelCoordinator.IsNewsMessage).ToArray();
+
+    Require(current?.Id == "beta", "current turn should select beta for turn index 1");
+    Require(SessionOverviewCoordinator.TopRunStateSummary(snapshot, current, model => model) == "Ready: next BETA using -; provider offline.", "top run summary should reflect offline provider and missing model");
+    Require(ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot, current), "offline smoke snapshot should show provider quick setup");
+    Require(ProviderQuickSetupCoordinator.QuickBaseUrl(snapshot) == "http://127.0.0.1:1234/v1", "offline smoke snapshot should use quick setup base URL fallback");
+    Require(CustomMatchSummaryCoordinator.ScenarioTopicText(snapshot.ScenarioTopic) == "No topic is set for this match yet.", "blank smoke scenario topic should use empty-state copy");
+    Require(CustomMatchSummaryCoordinator.ScenarioGlobalText(snapshot.ScenarioGlobal) == "No global instruction is set for this match yet.", "blank smoke global instruction should use empty-state copy");
+    Require(ScenarioSeedInspectorCoordinator.ScenarioSeedSource(snapshot.ScenarioGeneratorSeed, snapshot.PersonaGeneratorStyle) == "YOLO", "persona YOLO source should win in smoke seed metadata");
+    Require(NewsPanelCoordinator.SummaryText(newsMessages) == "2 internet item(s), 2 source(s), 1 waiting for approval", "smoke news summary should count approval and curated news");
+    Require(TranscriptListCoordinator.RetryableTurns(snapshot.Messages, speakerId => speakerId is "alpha" or "beta").SetEquals([1]), "smoke retryable turns should include only agent transcript messages");
 }
 
 static void TranscriptListCoordinatorSelectsRetryableTurns()
