@@ -3,6 +3,8 @@ using AIArena.Core.Services;
 using AIArena.Wpf;
 using AIArena.Wpf.Models;
 using AIArena.Wpf.Services;
+using System.Collections;
+using System.Resources;
 using System.Windows.Media;
 
 var tests = new (string Name, Action Test)[]
@@ -30,6 +32,7 @@ var tests = new (string Name, Action Test)[]
     ("session overview coordinator formats summaries", SessionOverviewCoordinatorFormatsSummaries),
     ("shell ui helpers blend brushes", ShellUiHelpersBlendBrushes),
     ("window chrome service packs color refs", WindowChromeServicePacksColorRefs),
+    ("user guide app icon resource is packaged", UserGuideAppIconResourceIsPackaged),
     ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
     ("app settings coordinator selects provider focus", AppSettingsCoordinatorSelectsProviderFocus),
@@ -566,6 +569,24 @@ static void ShellUiHelpersBlendBrushes()
 static void WindowChromeServicePacksColorRefs()
 {
     Require(WindowChromeService.ColorRef(0x11, 0x22, 0x33) == 0x00332211, "COLORREF should pack bytes as 0x00bbggrr");
+}
+
+static void UserGuideAppIconResourceIsPackaged()
+{
+    using var stream = typeof(WindowChromeService).Assembly.GetManifestResourceStream("AI Arena.g.resources");
+    Require(stream is not null, "WPF compiled resources should be present");
+
+    using var reader = new ResourceReader(stream!);
+    var resourceKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    foreach (DictionaryEntry entry in reader)
+    {
+        if (entry.Key is string key)
+        {
+            resourceKeys.Add(key);
+        }
+    }
+
+    Require(resourceKeys.Contains("assets/ai-arena-icon.png"), "user guide header icon png should be packaged");
 }
 
 static void ProviderReachabilityCoordinatorFormatsPopupState()
