@@ -48,6 +48,7 @@ public partial class MainWindow : Window
     private readonly ScenarioTemplateStore _scenarioTemplateStore = new();
     private readonly SystemTelemetryService _systemTelemetryService = new();
     private readonly UserGuideWindowHost _userGuideWindowHost = new();
+    private readonly SavedStateWorkflowCoordinator? _savedStateCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
     private readonly DispatcherTimer _providerHealthTimer;
@@ -68,11 +69,7 @@ public partial class MainWindow : Window
     private IReadOnlyDictionary<string, string> _lastAgentPersonas = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     private bool _isRefreshingModels;
     private CoreSessionSummary? _activeSession;
-    private IReadOnlyList<CoreSessionSummary> _sessionSummaries = [];
-    private IReadOnlyList<CheckpointSummary> _checkpointSummaries = [];
-    private IReadOnlyList<ScenarioTemplate> _scenarioTemplates = [];
     private DateTimeOffset _activeSnapshotWriteUtc;
-    private bool _isUpdatingSavedState;
     private bool _isSelectingTheme;
     private bool _isRenderingSnapshot;
     private bool _isUpdatingRoleModelEditor;
@@ -110,6 +107,9 @@ public partial class MainWindow : Window
     private CoreFrictionDiagnostics? _lastDiagnostics;
     private DiagnosticSeriesSet _lastDiagnosticSeries = new(Array.Empty<DiagnosticHistoryPoint>(), 0);
     private ProviderAutoConfigurePlan? _lastAutoConfigurePlan;
+
+    private SavedStateWorkflowCoordinator SavedStateCoordinator =>
+        _savedStateCoordinator ?? throw new InvalidOperationException("Saved-state coordinator is not initialized.");
 
     private sealed record DiagnosticHistoryPoint(
         int Friction,
@@ -183,6 +183,34 @@ public partial class MainWindow : Window
         InitializeComponent();
         _providerReachabilityService = new ProviderReachabilityService(_coreSessionStore, _eventLogStore, _providerHealth);
         _internetToolService = new InternetToolService(eventLogStore: _eventLogStore);
+        _savedStateCoordinator = new SavedStateWorkflowCoordinator(
+            this,
+            _coreSessionStore,
+            _eventLogStore,
+            _scenarioTemplateStore,
+            SavedStateModePicker,
+            SavedStateNameText,
+            SavedStateItemPicker,
+            SavedStateNameLabel,
+            SavedStateItemLabel,
+            SavedStateHelpText,
+            SavedStateSelectionDetails,
+            SavedStateStatus,
+            SavedStateSaveButton,
+            SavedStateLoadButton,
+            SavedStateDeleteButton,
+            () => _activeSession,
+            () => _theme,
+            () => _isRenderingSnapshot,
+            () => _arenaBusy,
+            (status, action) => RunArenaBusyAsync(status, action),
+            (session, force) => LoadSessionAsync(session, force),
+            preferredSessionId => LoadSessionsAsync(preferredSessionId),
+            (snapshot, sessionId) => SaveSnapshotWithFeedbackAsync(snapshot, sessionId),
+            status => RefreshActiveSessionAsync(status),
+            ResourceBrush,
+            status => ArenaRunStatus.Text = status,
+            status => LoadStatus.Text = status);
         _wpfSettings = _wpfSettingsStore.Load();
         ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
         InitializeThemePicker();
@@ -409,7 +437,7 @@ public partial class MainWindow : Window
             sessions = await _coreSessionStore.ListSessionsAsync();
         }
 
-        _sessionSummaries = sessions;
+        SavedStateCoordinator.SetSessions(sessions);
 
         var defaultSession = sessions.FirstOrDefault(session => session.Id.Equals(preferredSessionId, StringComparison.OrdinalIgnoreCase))
             ?? sessions.FirstOrDefault(session => session.Id.Equals(_activeSession?.Id, StringComparison.OrdinalIgnoreCase))
@@ -419,28 +447,19 @@ public partial class MainWindow : Window
         if (defaultSession is null)
         {
             LoadStatus.Text = $"No sessions found in {Path.Combine(_coreSessionStore.DataRoot, "sessions")}";
-            SetSavedStateStatus("No saved sessions found.", isDanger: true);
-            UpdateSavedStatePicker();
+            SavedStateCoordinator.SetStatus("No saved sessions found.", isDanger: true);
+            SavedStateCoordinator.UpdatePicker();
             PopulateFallbackState("No AI Arena sessions found.");
             return;
         }
 
         await LoadSessionAsync(defaultSession, force: true);
-        UpdateSavedStatePicker(defaultSession.Id);
+        SavedStateCoordinator.UpdatePicker(defaultSession.Id);
     }
 
     private void LoadScenarioTemplates(string? preferredTemplateId = null)
     {
-        _scenarioTemplates = _scenarioTemplateStore.Load();
-        if (!string.IsNullOrWhiteSpace(_scenarioTemplateStore.LastLoadWarning))
-        {
-            SetSavedStateStatus(_scenarioTemplateStore.LastLoadWarning, isDanger: true);
-        }
-
-        if (CurrentSavedStateMode().Equals("template", StringComparison.OrdinalIgnoreCase))
-        {
-            UpdateSavedStatePicker(preferredTemplateId);
-        }
+        SavedStateCoordinator.LoadScenarioTemplates(preferredTemplateId);
     }
 
     private void ShowStoreLoadWarningIfAny()
@@ -951,7 +970,7 @@ public partial class MainWindow : Window
             _activeSession = session;
             _activeSnapshotWriteUtc = session.LastModified;
             RenderSnapshot(snapshot);
-            RefreshCheckpoints();
+            SavedStateCoordinator.RefreshCheckpoints();
             LoadStatus.Text = $"Loaded read-only snapshot: {snapshot.SnapshotPath}\nAuto-refresh: 1.2s";
         }
         catch (Exception ex)
@@ -959,7 +978,7 @@ public partial class MainWindow : Window
             _activeSession = session;
             _activeSnapshotWriteUtc = session.LastModified;
             PopulateFallbackState($"Could not load snapshot: {ex.Message}");
-            ClearCheckpoints("No checkpoint data.");
+            SavedStateCoordinator.ClearCheckpoints("No checkpoint data.");
             LoadStatus.Text = $"Could not load session '{session.Id}': {ex.Message}";
         }
     }
@@ -7751,374 +7770,36 @@ public partial class MainWindow : Window
 
     private void SavedStateModePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_isRenderingSnapshot || _isUpdatingSavedState)
-        {
-            return;
-        }
-
-        UpdateSavedStatePicker();
+        _savedStateCoordinator?.OnModeSelectionChanged();
     }
 
     private void SavedStateItemPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_isRenderingSnapshot || _isUpdatingSavedState)
-        {
-            return;
-        }
-
-        UpdateSavedStateSelectionDetails();
+        _savedStateCoordinator?.OnItemSelectionChanged();
     }
 
     private async void SavedStateSaveButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null)
+        if (_savedStateCoordinator is not null)
         {
-            SetSavedStateStatus("No active session.", isDanger: true);
-            return;
-        }
-
-        var mode = CurrentSavedStateMode();
-        switch (mode)
-        {
-            case "session":
-                await SaveSessionCopyAsync();
-                break;
-            case "template":
-                await SaveScenarioTemplateAsync();
-                break;
-            default:
-                await SaveCheckpointAsync();
-                break;
+            await _savedStateCoordinator.SaveAsync();
         }
     }
 
     private async void SavedStateLoadButton_Click(object sender, RoutedEventArgs e)
     {
-        var mode = CurrentSavedStateMode();
-        switch (mode)
+        if (_savedStateCoordinator is not null)
         {
-            case "session":
-                await LoadSelectedSessionAsync();
-                break;
-            case "template":
-                await ApplySelectedTemplateAsync();
-                break;
-            default:
-                await RestoreSelectedCheckpointAsync();
-                break;
+            await _savedStateCoordinator.LoadAsync();
         }
     }
 
     private async void SavedStateDeleteButton_Click(object sender, RoutedEventArgs e)
     {
-        var mode = CurrentSavedStateMode();
-        switch (mode)
+        if (_savedStateCoordinator is not null)
         {
-            case "session":
-                await DeleteSelectedSessionAsync();
-                break;
-            case "template":
-                await DeleteSelectedTemplateAsync();
-                break;
-            default:
-                await DeleteSelectedCheckpointAsync();
-                break;
+            await _savedStateCoordinator.DeleteAsync();
         }
-    }
-
-    private async Task SaveSessionCopyAsync()
-    {
-        if (_activeSession is null)
-        {
-            SetSavedStateStatus("No active session to copy.", isDanger: true);
-            return;
-        }
-
-        var newSessionId = SessionStore.SafeSessionId(SavedStateNameText.Text);
-        if (string.IsNullOrWhiteSpace(newSessionId))
-        {
-            SetSavedStateStatus("Enter a new session name.", isDanger: true);
-            return;
-        }
-
-        if (_sessionSummaries.Any(session => session.Id.Equals(newSessionId, StringComparison.OrdinalIgnoreCase)))
-        {
-            SetSavedStateStatus($"Session already exists: {newSessionId}. Choose a different name.", isDanger: true);
-            return;
-        }
-
-        await RunArenaBusyAsync($"Creating session {newSessionId}...", async () =>
-        {
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (snapshot is null)
-            {
-                SetSavedStateStatus($"No snapshot found for session {_activeSession.Id}.", isDanger: true);
-                return;
-            }
-
-            await _coreSessionStore.CreateSessionAsync(newSessionId, snapshot);
-            await _eventLogStore.AppendAsync(newSessionId, "native_session_created", new { source = _activeSession.Id });
-            SavedStateNameText.Clear();
-            LoadSessions(newSessionId);
-            SetSavedStateStatus($"Saved session: {newSessionId}.");
-            ArenaRunStatus.Text = $"Session: {newSessionId}.";
-        });
-    }
-
-    private async Task LoadSelectedSessionAsync()
-    {
-        if (SavedStateItemPicker.SelectedItem is not CoreSessionSummary session)
-        {
-            SetSavedStateStatus("Choose a session to load.", isDanger: true);
-            return;
-        }
-
-        await LoadSessionAsync(session, force: true);
-        UpdateSavedStatePicker(session.Id);
-        SetSavedStateStatus($"Loaded session: {session.Id}.");
-    }
-
-    private async Task DeleteSelectedSessionAsync()
-    {
-        if (SavedStateItemPicker.SelectedItem is not CoreSessionSummary session)
-        {
-            SetSavedStateStatus("Choose a session to delete.", isDanger: true);
-            return;
-        }
-
-        if (session.Id.Equals("default", StringComparison.OrdinalIgnoreCase))
-        {
-            SetSavedStateStatus("Default session cannot be deleted.", isDanger: true);
-            return;
-        }
-
-        var confirm = ConfirmDialog.Show(
-            this,
-            _theme,
-            "Delete Session",
-            $"Delete session \"{session.Id}\"?\n\nThis removes the session folder and cannot be undone.",
-            "Delete",
-            tone: ConfirmDialogTone.Danger);
-        if (!confirm)
-        {
-            SetSavedStateStatus("Session delete cancelled.");
-            return;
-        }
-
-        await RunArenaBusyAsync($"Deleting session {session.Id}...", async () =>
-        {
-            var deleted = await _coreSessionStore.DeleteSessionAsync(session.Id);
-            LoadSessions("default");
-            SetSavedStateStatus(deleted ? $"Deleted session: {session.Id}." : $"Could not delete session: {session.Id}.", isDanger: !deleted);
-            ArenaRunStatus.Text = SavedStateStatus.Text;
-        });
-    }
-
-    private async Task SaveScenarioTemplateAsync()
-    {
-        if (_activeSession is null)
-        {
-            SetSavedStateStatus("No active session.", isDanger: true);
-            return;
-        }
-
-        var requestedName = SavedStateNameText.Text.Trim();
-        var existingTemplate = string.IsNullOrWhiteSpace(requestedName)
-            ? null
-            : _scenarioTemplates.FirstOrDefault(template => template.Name.Equals(requestedName, StringComparison.OrdinalIgnoreCase));
-        if (existingTemplate is not null)
-        {
-            var replace = ConfirmDialog.Show(
-                this,
-                _theme,
-                "Replace Template",
-                $"Replace template \"{existingTemplate.Name}\"?\n\nThe saved match setup will be overwritten. Transcript data is never stored in templates.",
-                "Replace",
-                tone: ConfirmDialogTone.Normal);
-            if (!replace)
-            {
-                SetSavedStateStatus("Template save cancelled.");
-                return;
-            }
-        }
-
-        await RunArenaBusyAsync("Saving match template...", async () =>
-        {
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (snapshot is null)
-            {
-                SetSavedStateStatus($"No snapshot found for session {_activeSession.Id}.", isDanger: true);
-                return;
-            }
-
-            var template = _scenarioTemplateStore.Save(SavedStateNameText.Text, snapshot);
-            SavedStateNameText.Clear();
-            LoadScenarioTemplates(template.Id);
-            SetSavedStateStatus($"Saved template: {template.Name}.");
-            ArenaRunStatus.Text = SavedStateStatus.Text;
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_scenario_template_saved", new { template.Id, template.Name });
-        });
-    }
-
-    private async Task ApplySelectedTemplateAsync()
-    {
-        if (_activeSession is null || SavedStateItemPicker.SelectedItem is not ScenarioTemplate template)
-        {
-            SetSavedStateStatus("Choose a template to load.", isDanger: true);
-            return;
-        }
-
-        var confirm = ConfirmDialog.Show(
-            this,
-            _theme,
-            "Load Template",
-            $"Load template \"{template.Name}\"?\n\nThis replaces the current match framing, cast, locks, participants, and model assignments. The current transcript stays in this session.",
-            "Load",
-            tone: ConfirmDialogTone.Normal);
-        if (!confirm)
-        {
-            SetSavedStateStatus("Template load cancelled.");
-            return;
-        }
-
-        await RunArenaBusyAsync($"Applying match template {template.Name}...", async () =>
-        {
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (snapshot is null)
-            {
-                SetSavedStateStatus($"No snapshot found for session {_activeSession.Id}.", isDanger: true);
-                return;
-            }
-
-            ScenarioTemplateStore.Apply(template, snapshot);
-            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_scenario_template_applied", new { template.Id, template.Name });
-            RefreshActiveSession($"Applied template: {template.Name}.");
-            SetSavedStateStatus($"Loaded template: {template.Name}. Transcript was preserved.");
-        });
-    }
-
-    private async Task DeleteSelectedTemplateAsync()
-    {
-        if (SavedStateItemPicker.SelectedItem is not ScenarioTemplate template)
-        {
-            SetSavedStateStatus("Choose a template to delete.", isDanger: true);
-            return;
-        }
-
-        var confirm = ConfirmDialog.Show(
-            this,
-            _theme,
-            "Delete Template",
-            $"Delete template \"{template.Name}\"?\n\nThis removes only the reusable match setup. The current arena state is not changed.",
-            "Delete",
-            tone: ConfirmDialogTone.Danger);
-        if (!confirm)
-        {
-            SetSavedStateStatus("Template delete cancelled.");
-            return;
-        }
-
-        var deleted = _scenarioTemplateStore.Delete(template.Id);
-        if (deleted && _activeSession is not null)
-        {
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_scenario_template_deleted", new { template.Id, template.Name });
-        }
-
-        LoadScenarioTemplates();
-        SetSavedStateStatus(deleted ? $"Deleted template: {template.Name}." : "Template delete failed.", isDanger: !deleted);
-        ArenaRunStatus.Text = SavedStateStatus.Text;
-    }
-
-    private async Task SaveCheckpointAsync()
-    {
-        if (_activeSession is null)
-        {
-            SetSavedStateStatus("No active session.", isDanger: true);
-            return;
-        }
-
-        await RunArenaBusyAsync("Saving checkpoint...", async () =>
-        {
-            var checkpoint = await _coreSessionStore.SaveCheckpointAsync(_activeSession.Id, SavedStateNameText.Text);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_checkpoint_saved", new { checkpoint.Id, checkpoint.Name });
-            SavedStateNameText.Clear();
-            await RefreshCheckpointsAsync(checkpoint.Id);
-            SetSavedStateStatus($"Saved checkpoint: {checkpoint.Name}.");
-            ArenaRunStatus.Text = SavedStateStatus.Text;
-        });
-    }
-
-    private async Task RestoreSelectedCheckpointAsync()
-    {
-        if (_activeSession is null || SavedStateItemPicker.SelectedItem is not CheckpointSummary checkpoint)
-        {
-            SetSavedStateStatus("Choose a checkpoint to load.", isDanger: true);
-            return;
-        }
-
-        var confirm = ConfirmDialog.Show(
-            this,
-            _theme,
-            "Load Checkpoint",
-            $"Load \"{checkpoint.Name}\"?\n\nThe current arena will return to that saved state, including transcript, cast, locks, and settings.",
-            "Load",
-            tone: ConfirmDialogTone.Danger);
-        if (!confirm)
-        {
-            SetSavedStateStatus("Checkpoint load cancelled.");
-            return;
-        }
-
-        await RunArenaBusyAsync($"Loading checkpoint {checkpoint.Name}...", async () =>
-        {
-            var restored = await _coreSessionStore.RestoreCheckpointAsync(_activeSession.Id, checkpoint.Id);
-            if (restored is null)
-            {
-                SetSavedStateStatus("Checkpoint load failed.", isDanger: true);
-                return;
-            }
-
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_checkpoint_restored", new { restored.Id, restored.Name });
-            RefreshActiveSession($"Loaded checkpoint: {restored.Name}");
-            await RefreshCheckpointsAsync(restored.Id);
-            SetSavedStateStatus($"Loaded checkpoint: {restored.Name}.");
-        });
-    }
-
-    private async Task DeleteSelectedCheckpointAsync()
-    {
-        if (_activeSession is null || SavedStateItemPicker.SelectedItem is not CheckpointSummary checkpoint)
-        {
-            SetSavedStateStatus("Choose a checkpoint to delete.", isDanger: true);
-            return;
-        }
-
-        var confirm = ConfirmDialog.Show(
-            this,
-            _theme,
-            "Delete Checkpoint",
-            $"Delete \"{checkpoint.Name}\"?\n\nThis removes only the saved checkpoint. The current arena state is not changed.",
-            "Delete",
-            tone: ConfirmDialogTone.Danger);
-        if (!confirm)
-        {
-            SetSavedStateStatus("Delete cancelled.");
-            return;
-        }
-
-        await RunArenaBusyAsync($"Deleting checkpoint {checkpoint.Name}...", async () =>
-        {
-            var deleted = await _coreSessionStore.DeleteCheckpointAsync(_activeSession.Id, checkpoint.Id);
-            if (deleted)
-            {
-                await _eventLogStore.AppendAsync(_activeSession.Id, "native_checkpoint_deleted", new { checkpoint.Id, checkpoint.Name });
-            }
-
-            await RefreshCheckpointsAsync();
-            SetSavedStateStatus(deleted ? $"Deleted checkpoint: {checkpoint.Name}." : "Checkpoint delete failed.", isDanger: !deleted);
-            ArenaRunStatus.Text = SavedStateStatus.Text;
-        });
     }
 
     private static async Task RunBusyAsync(Control control, Func<Task> action)
@@ -8277,7 +7958,7 @@ public partial class MainWindow : Window
         SavedStateNameText.IsEnabled = !busy;
         SavedStateItemPicker.IsEnabled = !busy;
         SavedStateSaveButton.IsEnabled = !busy;
-        UpdateSavedStateActionButtons();
+        SavedStateCoordinator.UpdateActionButtons();
         foreach (var button in _agentTurnButtons)
         {
             button.IsEnabled = !busy;
@@ -8408,200 +8089,6 @@ public partial class MainWindow : Window
 
         LoadStatus.Text = status;
         ArenaRunStatus.Text = status;
-    }
-
-    private void RefreshCheckpoints()
-    {
-        _ = RefreshCheckpointsAsync();
-    }
-
-    private async Task RefreshCheckpointsAsync(string? selectedCheckpointId = null)
-    {
-        if (_activeSession is null)
-        {
-            ClearCheckpoints("No active session.");
-            return;
-        }
-
-        _checkpointSummaries = await _coreSessionStore.ListCheckpointsAsync(_activeSession.Id);
-        if (CurrentSavedStateMode().Equals("checkpoint", StringComparison.OrdinalIgnoreCase))
-        {
-            UpdateSavedStatePicker(selectedCheckpointId);
-            if (_checkpointSummaries.Count == 0)
-            {
-                SetSavedStateStatus("No checkpoints saved for this session.");
-            }
-        }
-    }
-
-    private void ClearCheckpoints(string status)
-    {
-        _checkpointSummaries = [];
-        if (CurrentSavedStateMode().Equals("checkpoint", StringComparison.OrdinalIgnoreCase))
-        {
-            UpdateSavedStatePicker();
-        }
-        SetSavedStateStatus(status);
-    }
-
-    private string CurrentSavedStateMode()
-    {
-        return (SavedStateModePicker?.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "checkpoint";
-    }
-
-    private void UpdateSavedStatePicker(string? selectedId = null)
-    {
-        if (SavedStateItemPicker is null || SavedStateModePicker is null)
-        {
-            return;
-        }
-
-        _isUpdatingSavedState = true;
-        try
-        {
-            var mode = CurrentSavedStateMode();
-            SavedStateItemPicker.ItemsSource = null;
-            SavedStateItemPicker.DisplayMemberPath = "";
-
-            switch (mode)
-            {
-                case "session":
-                    SavedStateNameLabel.Text = "New session name";
-                    SavedStateItemLabel.Text = "Existing session";
-                    SavedStateHelpText.Text = "Sessions are working folders. Save copies the current setup into a fresh session, load switches sessions, and delete removes non-default sessions.";
-                    SavedStateSaveButton.Content = "SAVE";
-                    SavedStateLoadButton.Content = "LOAD";
-                    SavedStateNameText.ToolTip = "Enter a unique session name. Existing sessions are not overwritten.";
-                    SavedStateItemPicker.ToolTip = "Choose the session to load or delete.";
-                    SavedStateItemPicker.ItemsSource = _sessionSummaries;
-                    SelectSavedStateItem(selectedId, item => item is CoreSessionSummary session ? session.Id : "");
-                    SetSavedStateStatus(CountLabel(_sessionSummaries.Count, "session") + " available.");
-                    break;
-                case "template":
-                    SavedStateNameLabel.Text = "Template name";
-                    SavedStateItemLabel.Text = "Saved template";
-                    SavedStateHelpText.Text = "Templates save reusable match setup: topic, global prompt, cast, locks, participants, and model assignments. Transcript is not restored.";
-                    SavedStateSaveButton.Content = "SAVE";
-                    SavedStateLoadButton.Content = "LOAD";
-                    SavedStateNameText.ToolTip = "Leave blank for an automatic template name. Matching names ask before overwrite.";
-                    SavedStateItemPicker.ToolTip = "Choose the template to load or delete.";
-                    SavedStateItemPicker.DisplayMemberPath = "Name";
-                    SavedStateItemPicker.ItemsSource = _scenarioTemplates;
-                    SelectSavedStateItem(selectedId, item => item is ScenarioTemplate template ? template.Id : "");
-                    SetSavedStateStatus(_scenarioTemplates.Count == 0 ? "No templates saved yet." : CountLabel(_scenarioTemplates.Count, "template") + " available.");
-                    break;
-                default:
-                    SavedStateNameLabel.Text = "Checkpoint name";
-                    SavedStateItemLabel.Text = "Saved checkpoint";
-                    SavedStateHelpText.Text = "Checkpoints capture the full current session state: transcript, cast, locks, provider settings, notes, diagnostics, and turn order.";
-                    SavedStateSaveButton.Content = "SAVE";
-                    SavedStateLoadButton.Content = "LOAD";
-                    SavedStateNameText.ToolTip = "Leave blank for a timestamped checkpoint name.";
-                    SavedStateItemPicker.ToolTip = "Choose the checkpoint to load or delete.";
-                    SavedStateItemPicker.DisplayMemberPath = "Name";
-                    SavedStateItemPicker.ItemsSource = _checkpointSummaries;
-                    SelectSavedStateItem(selectedId, item => item is CheckpointSummary checkpoint ? checkpoint.Id : "");
-                    SetSavedStateStatus(_checkpointSummaries.Count == 0 ? "No checkpoints saved for this session." : CountLabel(_checkpointSummaries.Count, "checkpoint") + " available.");
-                    break;
-            }
-
-            UpdateSavedStateSelectionDetails();
-        }
-        finally
-        {
-            _isUpdatingSavedState = false;
-        }
-    }
-
-    private void SelectSavedStateItem(string? selectedId, Func<object, string> idSelector)
-    {
-        if (!string.IsNullOrWhiteSpace(selectedId))
-        {
-            foreach (var item in SavedStateItemPicker.Items)
-            {
-                if (idSelector(item).Equals(selectedId, StringComparison.OrdinalIgnoreCase))
-                {
-                    SavedStateItemPicker.SelectedItem = item;
-                    return;
-                }
-            }
-        }
-
-        SavedStateItemPicker.SelectedIndex = SavedStateItemPicker.Items.Count > 0 ? 0 : -1;
-    }
-
-    private void UpdateSavedStateSelectionDetails()
-    {
-        if (SavedStateSelectionDetails is null || SavedStateItemPicker is null)
-        {
-            return;
-        }
-
-        var mode = CurrentSavedStateMode();
-        var selected = SavedStateItemPicker.SelectedItem;
-        switch (selected)
-        {
-            case CoreSessionSummary session:
-                SavedStateSelectionDetails.Text = $"Selected session: {session.Id} | {CountLabel(session.MessageCount, "message")}, {CountLabel(session.CheckpointCount, "checkpoint")} | modified {session.LastModified.ToLocalTime():g}.";
-                SavedStateSelectionDetails.ToolTip = string.IsNullOrWhiteSpace(session.SnapshotPath)
-                    ? "Session has no snapshot yet."
-                    : session.SnapshotPath;
-                break;
-            case ScenarioTemplate template:
-                var activeAgents = template.Agents.Count(agent => agent.Active && !agent.Id.Equals("narrator", StringComparison.OrdinalIgnoreCase));
-                var lockedItems = template.Agents.Count(agent => agent.Locked) + (template.TopicLocked ? 1 : 0) + (template.GlobalLocked ? 1 : 0);
-                SavedStateSelectionDetails.Text = $"Selected template: {template.Name} | {template.MatchType} | {CountLabel(activeAgents, "active agent")} | {CountLabel(lockedItems, "lock")} | saved {template.SavedAt.ToLocalTime():g}.";
-                SavedStateSelectionDetails.ToolTip = "Loads match setup only. Transcript stays in the current session.";
-                break;
-            case CheckpointSummary checkpoint:
-                var checkpointTime = DateTimeOffset.FromUnixTimeSeconds(checkpoint.CreatedAt).ToLocalTime();
-                SavedStateSelectionDetails.Text = $"Selected checkpoint: {checkpoint.Name} | saved {checkpointTime:g} | restores full session state.";
-                SavedStateSelectionDetails.ToolTip = checkpoint.Path;
-                break;
-            default:
-                SavedStateSelectionDetails.Text = mode switch
-                {
-                    "session" => "No session selected. Save creates a fresh session from the current match setup.",
-                    "template" => "No template selected. Save stores reusable match setup without transcript data.",
-                    _ => "No checkpoint selected. Save captures the full current session state."
-                };
-                SavedStateSelectionDetails.ToolTip = null;
-                break;
-        }
-
-        UpdateSavedStateActionButtons();
-    }
-
-    private void UpdateSavedStateActionButtons()
-    {
-        if (SavedStateLoadButton is null || SavedStateDeleteButton is null || SavedStateItemPicker is null)
-        {
-            return;
-        }
-
-        var hasSelection = SavedStateItemPicker.SelectedItem is not null;
-        var selectedDefaultSession = SavedStateItemPicker.SelectedItem is CoreSessionSummary session
-            && session.Id.Equals("default", StringComparison.OrdinalIgnoreCase);
-        SavedStateLoadButton.IsEnabled = !_arenaBusy && hasSelection;
-        SavedStateDeleteButton.IsEnabled = !_arenaBusy && hasSelection && !selectedDefaultSession;
-        SavedStateDeleteButton.ToolTip = selectedDefaultSession
-            ? "Default session cannot be deleted."
-            : "Delete the selected saved item.";
-    }
-
-    private void SetSavedStateStatus(string status, bool isDanger = false)
-    {
-        SavedStateStatus.Text = $"{status} · {DateTime.Now:h:mm tt}";
-        SavedStateStatus.Foreground = isDanger ? ResourceBrush("DangerTextBrush") : ResourceBrush("MutedTextBrush");
-        if (LoadStatus is not null)
-        {
-            LoadStatus.Text = "";
-        }
-    }
-
-    private static string CountLabel(int count, string singular)
-    {
-        return count == 1 ? $"1 {singular}" : $"{count} {singular}s";
     }
 
     private async void MatchLockChanged(object sender, RoutedEventArgs e)
