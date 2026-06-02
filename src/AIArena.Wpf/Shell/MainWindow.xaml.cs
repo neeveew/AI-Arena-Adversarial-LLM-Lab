@@ -11,7 +11,6 @@ using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Threading;
 using System.Runtime.InteropServices;
-using CoreDialogueMessage = AIArena.Core.Models.DialogueMessage;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 using CoreVoiceAdherenceDiagnostic = AIArena.Core.Models.VoiceAdherenceDiagnostic;
 using AIArena.Core.Persistence;
@@ -54,6 +53,7 @@ public partial class MainWindow : Window
     private readonly ScenarioWorkflowCoordinator? _scenarioWorkflowCoordinator;
     private readonly OperatorTurnCoordinator? _operatorTurnCoordinator;
     private readonly InternetWorkflowCoordinator? _internetWorkflowCoordinator;
+    private readonly ArenaRunCoordinator? _arenaRunCoordinator;
     private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
     private readonly TelemetryWorkflowCoordinator? _telemetryWorkflowCoordinator;
     private readonly AgentPerformanceCoordinator? _agentPerformanceCoordinator;
@@ -78,7 +78,6 @@ public partial class MainWindow : Window
     private Button? _breathingOperationButton;
     private WpfSettings _wpfSettings = new();
     private ThemePalette _theme = ThemePalette.Resolve("system");
-    private CancellationTokenSource? _autoChatCancellation;
     private ArenaViewSnapshot? _lastRenderedSnapshot;
 
     private SavedStateWorkflowCoordinator SavedStateCoordinator =>
@@ -116,6 +115,9 @@ public partial class MainWindow : Window
 
     private InternetWorkflowCoordinator InternetWorkflow =>
         _internetWorkflowCoordinator ?? throw new InvalidOperationException("Internet workflow coordinator is not initialized.");
+
+    private ArenaRunCoordinator ArenaRun =>
+        _arenaRunCoordinator ?? throw new InvalidOperationException("Arena run coordinator is not initialized.");
 
     private ProviderSettingsCoordinator ProviderSettings =>
         _providerSettingsCoordinator ?? throw new InvalidOperationException("Provider settings coordinator is not initialized.");
@@ -372,7 +374,7 @@ public partial class MainWindow : Window
             FormatCompactNumber,
             TranscriptExportCoordinator.CopyMessage,
             TranscriptMutations.TogglePinMessageAsync,
-            RetryTranscriptMessageAsync,
+            message => ArenaRun.RetryTranscriptMessageAsync(message),
             TranscriptMutations.DeleteMessageAsync,
             message => InternetWorkflow.ApproveInternetRequestAsync(message),
             message => InternetWorkflow.RejectInternetRequestAsync(message),
@@ -422,18 +424,36 @@ public partial class MainWindow : Window
             SaveSnapshotForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync,
             SetArenaRunStatus);
+        _arenaRunCoordinator = new ArenaRunCoordinator(
+            _turnRunner,
+            _narratorService,
+            _arenaOperationLock,
+            AutoChatButton,
+            OneTurnButton,
+            NarrateNowButton,
+            () => _activeSession,
+            () => _arenaBusy,
+            ShouldEnforceVoiceDrift,
+            AutoChatCadence,
+            SetArenaBusy,
+            RunArenaBusyForCoordinatorAsync,
+            RefreshActiveSessionForCoordinatorAsync,
+            SetLoadStatus,
+            SetArenaRunStatus,
+            (message, resumeAutoChat) => InternetWorkflow.HandleInternetApprovalDialogAsync(message, resumeAutoChat),
+            IsAgentSpeaker);
         _agentBoardCoordinator = new AgentBoardCoordinator(
             _coreSessionStore,
             _eventLogStore,
             AgentItems,
             () => _activeSession,
             () => _arenaBusy,
-            () => _autoChatCancellation is not null,
+            () => ArenaRun.IsAutoChatRunning,
             ResourceBrush,
             BlendBrush,
             AccentForSpeaker,
             DisplayStatusValue,
-            RunAgentTurnAsync,
+            agent => ArenaRun.RunAgentTurnAsync(agent),
             NarrateNowButton_Click,
             RunArenaBusyForCoordinatorAsync,
             SaveSnapshotForCoordinatorAsync,
@@ -1179,7 +1199,7 @@ public partial class MainWindow : Window
         TopTurnsValue.Text = snapshot.TurnCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         TopBarStatus.ToolTip = $"Session: {snapshot.SessionId}\nModel: {CurrentTurnModel(snapshot, current)}";
-        if (!_arenaBusy && _autoChatCancellation is null)
+        if (!_arenaBusy && _arenaRunCoordinator?.IsAutoChatRunning != true)
         {
             ArenaRunStatus.Text = TopRunStateSummary(snapshot, current);
         }
@@ -2133,72 +2153,12 @@ public partial class MainWindow : Window
 
     private async void AutoChatButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null || _autoChatCancellation is not null)
-        {
-            return;
-        }
-
-        _autoChatCancellation = new CancellationTokenSource();
-        var token = _autoChatCancellation.Token;
-        SetArenaBusy(true, "Auto Chat running...", stopEnabled: true, AutoChatButton);
-
-        try
-        {
-            while (!token.IsCancellationRequested && _activeSession is not null)
-            {
-                await _arenaOperationLock.WaitAsync(token);
-                OneTurnResult result;
-                try
-                {
-                    result = await _turnRunner.RunOneTurnAsync(_activeSession.Id, ShouldEnforceVoiceDrift(), token);
-                }
-                finally
-                {
-                    _arenaOperationLock.Release();
-                }
-
-                var status = result.Ok && result.Message is not null
-                    ? $"Auto Chat: {result.Message.Speaker} spoke ({result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms)"
-                    : $"Auto Chat stopped: {result.Error}";
-                RefreshActiveSession(status);
-                if (!result.Ok)
-                {
-                    break;
-                }
-
-                if (result.Message is not null
-                    && result.Message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase)
-                    && result.Message.Status.Equals("pending", StringComparison.OrdinalIgnoreCase))
-                {
-                    var resolved = await InternetWorkflow.HandleInternetApprovalDialogAsync(result.Message, resumeAutoChat: true);
-                    if (!resolved)
-                    {
-                        ArenaRunStatus.Text = "Auto Chat paused for internet approval.";
-                        LoadStatus.Text = ArenaRunStatus.Text;
-                        break;
-                    }
-                }
-
-                await Task.Delay(AutoChatCadence(), token);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            ArenaRunStatus.Text = "Auto Chat stopped.";
-            LoadStatus.Text = "Auto Chat stopped.";
-        }
-        finally
-        {
-            _autoChatCancellation?.Dispose();
-            _autoChatCancellation = null;
-            SetArenaBusy(false, ArenaRunStatus.Text, stopEnabled: false);
-        }
+        await ArenaRun.StartAutoChatAsync();
     }
 
     private void StopButton_Click(object sender, RoutedEventArgs e)
     {
-        _autoChatCancellation?.Cancel();
-        ArenaRunStatus.Text = "Stopping Auto Chat...";
+        ArenaRun.StopAutoChat();
     }
 
     private async void ResetButton_Click(object sender, RoutedEventArgs e)
@@ -2292,20 +2252,7 @@ public partial class MainWindow : Window
 
     private async void NarrateNowButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null)
-        {
-            LoadStatus.Text = "No active session.";
-            return;
-        }
-
-        await RunArenaBusyAsync("Narrator thinking...", NarrateNowButton, async () =>
-        {
-            var result = await _narratorService.NarrateNowAsync(_activeSession.Id);
-            var status = result.Ok && result.Message is not null
-                ? $"Narrator added turn {result.Message.Turn} ({result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms)"
-                : $"Narrator failed: {result.Error}";
-            RefreshActiveSession(status);
-        }, allowDuringAutoChat: true);
+        await ArenaRun.NarrateNowAsync();
     }
 
     private async void CurateNewsButton_Click(object sender, RoutedEventArgs e)
@@ -2315,46 +2262,7 @@ public partial class MainWindow : Window
 
     private async void OneTurnButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null)
-        {
-            LoadStatus.Text = "No active session.";
-            return;
-        }
-
-        await RunArenaBusyAsync("Running native 1 TURN...", OneTurnButton, async () =>
-        {
-            var result = await _turnRunner.RunOneTurnAsync(_activeSession.Id, ShouldEnforceVoiceDrift());
-            var status = result.Ok && result.Message is not null
-                ? $"1 TURN complete: {result.Message.Speaker} ({result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms)"
-                : $"1 TURN failed: {result.Error}";
-            await RefreshActiveSessionAsync(status);
-            ArenaRunStatus.Text = status;
-            LoadStatus.Text = status;
-            if (result.Message is not null
-                && result.Message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase)
-                && result.Message.Status.Equals("pending", StringComparison.OrdinalIgnoreCase))
-            {
-                await InternetWorkflow.HandleInternetApprovalDialogAsync(result.Message, resumeAutoChat: false);
-            }
-        });
-    }
-
-    private async Task RunAgentTurnAsync(AgentState agent)
-    {
-        if (_activeSession is null)
-        {
-            LoadStatus.Text = "No active session.";
-            return;
-        }
-
-        await RunArenaBusyAsync($"Running {agent.Name} once...", async () =>
-        {
-            var result = await _turnRunner.RunAgentTurnAsync(_activeSession.Id, agent.Id, ShouldEnforceVoiceDrift());
-            var status = result.Ok && result.Message is not null
-                ? $"{agent.Name} one-shot complete: {result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms"
-                : $"{agent.Name} one-shot failed: {result.Error}";
-            RefreshActiveSession(status);
-        });
+        await ArenaRun.RunOneTurnAsync();
     }
 
     private async void SendTurnButton_Click(object sender, RoutedEventArgs e)
@@ -2410,23 +2318,6 @@ public partial class MainWindow : Window
     private void ExportTranscriptButton_Click(object sender, RoutedEventArgs e)
     {
         TranscriptExportCoordinator.ExportTranscript();
-    }
-
-    private async Task RetryTranscriptMessageAsync(TranscriptMessage message)
-    {
-        if (_arenaBusy || _activeSession is null || message.Turn <= 0 || !IsAgentSpeaker(message.SpeakerId))
-        {
-            return;
-        }
-
-        await RunArenaBusyAsync($"Retrying turn {message.Turn} with {message.Speaker}...", async () =>
-        {
-            var result = await _turnRunner.RetryTurnAsync(_activeSession.Id, message.Turn, message.SpeakerId, message.CreatedAt, ShouldEnforceVoiceDrift());
-            var status = result.Ok && result.Message is not null
-                ? $"Retry replaced turn {message.Turn}: {result.Message.Speaker} ({result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms)"
-                : $"Retry failed: {result.Error}";
-            RefreshActiveSession(status);
-        });
     }
 
     private async Task<CoreModelProviderConfig?> LoadSharedProviderConfigAsync()
@@ -2617,7 +2508,7 @@ public partial class MainWindow : Window
     private async Task RunArenaBusyAsync(string status, Button? operationButton, Func<Task> action, bool allowDuringAutoChat = false)
     {
         var ownsBusyState = !_arenaBusy;
-        var runsDuringAutoChat = !ownsBusyState && allowDuringAutoChat && _autoChatCancellation is not null;
+        var runsDuringAutoChat = !ownsBusyState && allowDuringAutoChat && (_arenaRunCoordinator?.IsAutoChatRunning == true);
         if (!ownsBusyState && !runsDuringAutoChat)
         {
             return;
@@ -2657,7 +2548,7 @@ public partial class MainWindow : Window
                     operationButton.IsEnabled = true;
                 }
 
-                SetBreathingOperationButton(_autoChatCancellation is not null ? AutoChatButton : null);
+                SetBreathingOperationButton(_arenaRunCoordinator?.IsAutoChatRunning == true ? AutoChatButton : null);
             }
         }
     }
@@ -2672,7 +2563,7 @@ public partial class MainWindow : Window
         _arenaBusy = busy;
         SetBreathingOperationButton(busy ? operationButton : null);
         SetButtonBreathing(StopButton, busy && stopEnabled);
-        var autoChatRunning = _autoChatCancellation is not null;
+        var autoChatRunning = _arenaRunCoordinator?.IsAutoChatRunning == true;
         AutoChatButton.IsEnabled = !busy;
         OneTurnButton.IsEnabled = !busy;
         ResetButton.IsEnabled = !busy;

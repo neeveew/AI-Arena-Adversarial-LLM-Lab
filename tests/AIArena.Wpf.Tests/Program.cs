@@ -1,4 +1,5 @@
 using AIArena.Core.Models;
+using AIArena.Core.Services;
 using AIArena.Wpf;
 using AIArena.Wpf.Models;
 using AIArena.Wpf.Services;
@@ -21,7 +22,8 @@ var tests = new (string Name, Action Test)[]
     ("agent memory coordinator normalizes notes", AgentMemoryCoordinatorNormalizesNotes),
     ("agent board coordinator formats statuses", AgentBoardCoordinatorFormatsStatuses),
     ("transcript adjunct helpers format labels", TranscriptAdjunctHelpersFormatLabels),
-    ("transcript mutation coordinator formats statuses", TranscriptMutationCoordinatorFormatsStatuses)
+    ("transcript mutation coordinator formats statuses", TranscriptMutationCoordinatorFormatsStatuses),
+    ("arena run coordinator formats statuses", ArenaRunCoordinatorFormatsStatuses)
 };
 
 var failures = 0;
@@ -451,6 +453,45 @@ static void TranscriptMutationCoordinatorFormatsStatuses()
     Require(!TranscriptMutationCoordinator.CanMutateMessage(pinned, arenaBusy: true, session), "busy arena should block transcript mutation");
     Require(!TranscriptMutationCoordinator.CanMutateMessage(pinned, arenaBusy: false, activeSession: null), "missing session should block transcript mutation");
     Require(!TranscriptMutationCoordinator.CanMutateMessage(pinned with { Turn = 0 }, arenaBusy: false, session), "non-positive turn should block transcript mutation");
+}
+
+static void ArenaRunCoordinatorFormatsStatuses()
+{
+    var message = CoreMessageForTest(5, "Alpha", "alpha", "message", "ok", "model-a", 321);
+    var approval = CoreMessageForTest(6, "Tool", "internet", "internet_approval", "pending", "tool-model", 12);
+    var completed = OneTurnResult.Completed(
+        new OneTurnPlan(true, "alpha", "Alpha", null, null, ""),
+        message,
+        new ModelCompletionResult(true, "", "model-a", "text", "", 321, 0, 0, 0, "", DateTimeOffset.UtcNow));
+    var agent = new AgentState("alpha", "Alpha", "waiting", "", "default", "default", "model-a", true, false, []);
+    var original = TranscriptForTest(5, "Alpha", "alpha", "message", "ok");
+
+    Require(ArenaRunCoordinator.AutoChatStatus(completed) == "Auto Chat: Alpha spoke (model-a, 321 ms)", "auto-chat success status should remain stable");
+    Require(ArenaRunCoordinator.OneTurnStatus(completed) == "1 TURN complete: Alpha (model-a, 321 ms)", "one-turn success status should remain stable");
+    Require(ArenaRunCoordinator.AgentTurnStatus(agent, completed) == "Alpha one-shot complete: model-a, 321 ms", "agent turn success status should remain stable");
+    Require(ArenaRunCoordinator.RetryStatus(original, completed) == "Retry replaced turn 5: Alpha (model-a, 321 ms)", "retry success status should remain stable");
+    Require(ArenaRunCoordinator.NarratorStatus(NarratorResult.Completed(message)) == "Narrator added turn 5 (model-a, 321 ms)", "narrator success status should remain stable");
+    Require(ArenaRunCoordinator.AutoChatStatus(OneTurnResult.Failed("offline")) == "Auto Chat stopped: offline", "auto-chat failure status should include error");
+    Require(ArenaRunCoordinator.IsPendingInternetApproval(approval), "pending internet approval should be detected");
+    Require(!ArenaRunCoordinator.IsPendingInternetApproval(CoreMessageForTest(6, "Tool", "internet", "internet_approval", "ok", "tool-model", 12)), "resolved internet approval should not be pending");
+}
+
+static DialogueMessage CoreMessageForTest(int turn, string speaker, string speakerId, string kind, string status, string model, int latencyMs)
+{
+    return new DialogueMessage
+    {
+        Turn = turn,
+        Speaker = speaker,
+        SpeakerId = speakerId,
+        Kind = kind,
+        Status = status,
+        Text = "text",
+        Model = new ModelMetadata
+        {
+            Model = model,
+            LatencyMs = latencyMs
+        }
+    };
 }
 
 static TranscriptMessage TranscriptForTest(int turn, string speaker, string speakerId, string kind, string status)
