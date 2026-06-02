@@ -35,6 +35,7 @@ internal sealed class TranscriptAdjunctCoordinator
     private readonly Action<IReadOnlyList<TranscriptMessage>> reselectLatestCompareTurns;
     private readonly Action clearTurnCompareSelection;
     private readonly Func<Task> generateDecisionCardAsync;
+    private readonly ShellCardFactory cardFactory;
 
     private bool decisionCardExpanded;
 
@@ -70,6 +71,7 @@ internal sealed class TranscriptAdjunctCoordinator
         this.hasTurnCompareSelection = hasTurnCompareSelection;
         this.resourceBrush = resourceBrush;
         this.blendBrush = blendBrush;
+        cardFactory = new ShellCardFactory(resourceBrush, blendBrush);
         this.accentForSpeaker = accentForSpeaker;
         this.isAgentSpeaker = isAgentSpeaker;
         this.displayStatusValue = displayStatusValue;
@@ -567,65 +569,7 @@ internal sealed class TranscriptAdjunctCoordinator
 
     private Border CreateCard(string title, string body, Brush background, Brush accent, UIElement? extraContent)
     {
-        return CreateCard(CreateCardTitle(title), body, background, accent, extraContent);
-    }
-
-    private Border CreateCard(UIElement title, string body, Brush background, Brush accent, UIElement? extraContent)
-    {
-        var border = new Border
-        {
-            Style = null,
-            Background = background,
-            BorderBrush = resourceBrush("ControlBorderBrush"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(16),
-            Margin = new Thickness(0, 0, 0, 10)
-        };
-
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(6) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-        var strip = new Border
-        {
-            Background = accent,
-            CornerRadius = new CornerRadius(8, 0, 0, 8),
-            Margin = new Thickness(-16, -16, 10, -16)
-        };
-        Grid.SetColumn(strip, 0);
-        grid.Children.Add(strip);
-
-        var stack = new StackPanel { Margin = new Thickness(12, 0, 0, 0) };
-        Grid.SetColumn(stack, 1);
-        stack.Children.Add(title);
-        stack.Children.Add(new TextBlock
-        {
-            Text = body,
-            Foreground = resourceBrush("TextBrush"),
-            TextWrapping = TextWrapping.Wrap,
-            FontSize = 15
-        });
-        if (extraContent is not null)
-        {
-            stack.Children.Add(extraContent);
-        }
-        grid.Children.Add(stack);
-
-        border.Child = grid;
-        return border;
-    }
-
-    private TextBlock CreateCardTitle(string title)
-    {
-        return new TextBlock
-        {
-            Text = title,
-            Foreground = Brushes.White,
-            FontWeight = FontWeights.SemiBold,
-            FontSize = 16,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
+        return cardFactory.CreateCard(title, body, background, accent, extraContent);
     }
 
     private Button ActionButton(string text, RoutedEventHandler? handler, bool enabled, TranscriptActionKind kind = TranscriptActionKind.Neutral, string? iconGlyph = null)

@@ -41,6 +41,7 @@ public partial class MainWindow : Window
     private readonly WpfSettingsStore _wpfSettingsStore = new();
     private readonly ScenarioTemplateStore _scenarioTemplateStore = new();
     private readonly UserGuideWindowHost _userGuideWindowHost = new();
+    private readonly ShellCardFactory? _shellCardFactory;
     private readonly SavedStateWorkflowCoordinator? _savedStateCoordinator;
     private readonly TranscriptExportCoordinator? _transcriptExportCoordinator;
     private readonly TranscriptSearchCoordinator? _transcriptSearchCoordinator;
@@ -84,6 +85,9 @@ public partial class MainWindow : Window
 
     private SavedStateWorkflowCoordinator SavedStateCoordinator =>
         _savedStateCoordinator ?? throw new InvalidOperationException("Saved-state coordinator is not initialized.");
+
+    private ShellCardFactory ShellCards =>
+        _shellCardFactory ?? throw new InvalidOperationException("Shell card factory is not initialized.");
 
     private TranscriptExportCoordinator TranscriptExportCoordinator =>
         _transcriptExportCoordinator ?? throw new InvalidOperationException("Transcript export coordinator is not initialized.");
@@ -157,6 +161,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _shellCardFactory = new ShellCardFactory(ResourceBrush, BlendBrush);
         _providerReachabilityService = new ProviderReachabilityService(_coreSessionStore, _eventLogStore, _providerHealth);
         _internetToolService = new InternetToolService(eventLogStore: _eventLogStore);
         _savedStateCoordinator = new SavedStateWorkflowCoordinator(
@@ -1559,22 +1564,12 @@ public partial class MainWindow : Window
 
     private Border CreateCard(string title, string body, Brush background, Brush accent)
     {
-        return CreateCard(title, body, background, accent, null);
+        return ShellCards.CreateCard(title, body, background, accent);
     }
 
     private Border CreateEmptyStateCard(string title, string body, Brush accent)
     {
-        var panel = new StackPanel();
-        panel.Children.Add(new TextBlock
-        {
-            Text = "Quiet state",
-            Foreground = ResourceBrush("MutedTextBrush"),
-            FontSize = 12,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 8)
-        });
-
-        return CreateCard(title, body, BlendBrush(ResourceBrush("CardBrush"), accent, 0.08), accent, panel);
+        return ShellCards.CreateEmptyStateCard(title, body, accent);
     }
 
     private Border CreateArenaReadyCard(ArenaViewSnapshot? snapshot)
@@ -1740,22 +1735,7 @@ public partial class MainWindow : Window
 
     private Border CreateSetupChip(string label, string value, Brush accent)
     {
-        return new Border
-        {
-            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.08),
-            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.35),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(6, 2, 6, 2),
-            Margin = new Thickness(0, 0, 6, 4),
-            Child = new TextBlock
-            {
-                Text = $"{label}: {value}",
-                Foreground = accent,
-                FontSize = 11,
-                FontWeight = FontWeights.SemiBold
-            }
-        };
+        return ShellCards.CreateSetupChip(label, value, accent);
     }
 
     private static string CurrentTurnModel(ArenaViewSnapshot snapshot, AgentState? current)
@@ -1817,95 +1797,14 @@ public partial class MainWindow : Window
         }, allowDuringAutoChat: true);
     }
 
-    private Border CreateTranscriptStatPill(string text, bool isInternet, bool isDanger = false, Brush? accentOverride = null, string? toolTip = null)
-    {
-        return TranscriptCards.CreateStatPill(text, isInternet, isDanger, accentOverride, toolTip);
-    }
-
-    private Expander CreateTranscriptExpander(string header, Brush accent, UIElement content)
-    {
-        return TranscriptCards.CreateExpander(header, accent, content);
-    }
-
-    private static string TranscriptSpeakerTitle(TranscriptMessage message, bool isInternet, bool isSystemEvent)
-    {
-        return TranscriptCardRenderer.TranscriptSpeakerTitle(message, isInternet, isSystemEvent);
-    }
-
     private static bool IsSystemEvent(TranscriptMessage message, bool isInternet)
     {
         return TranscriptCardRenderer.IsSystemEvent(message, isInternet);
     }
 
-    private static string DisplayTime(double createdAt)
-    {
-        return TranscriptCardRenderer.DisplayTime(createdAt);
-    }
-    private UIElement CreateInternetDetails(TranscriptMessage message)
-    {
-        return TranscriptCards.CreateInternetDetails(message);
-    }
     private Border CreateCard(string title, string body, Brush background, Brush accent, UIElement? extraContent)
     {
-        return CreateCard(CreateCardTitle(title), body, background, accent, extraContent);
-    }
-
-    private Border CreateCard(UIElement title, string body, Brush background, Brush accent, UIElement? extraContent)
-    {
-        var border = new Border
-        {
-            Style = null,
-            Background = background,
-            BorderBrush = ResourceBrush("ControlBorderBrush"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(16),
-            Margin = new Thickness(0, 0, 0, 10)
-        };
-
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(6) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-        var strip = new Border
-        {
-            Background = accent,
-            CornerRadius = new CornerRadius(8, 0, 0, 8),
-            Margin = new Thickness(-16, -16, 10, -16)
-        };
-        Grid.SetColumn(strip, 0);
-        grid.Children.Add(strip);
-
-        var stack = new StackPanel { Margin = new Thickness(12, 0, 0, 0) };
-        Grid.SetColumn(stack, 1);
-        stack.Children.Add(title);
-        stack.Children.Add(new TextBlock
-        {
-            Text = body,
-            Foreground = ResourceBrush("TextBrush"),
-            TextWrapping = TextWrapping.Wrap,
-            FontSize = 15
-        });
-        if (extraContent is not null)
-        {
-            stack.Children.Add(extraContent);
-        }
-        grid.Children.Add(stack);
-
-        border.Child = grid;
-        return border;
-    }
-
-    private TextBlock CreateCardTitle(string title)
-    {
-        return new TextBlock
-        {
-            Text = title,
-            Foreground = Brushes.White,
-            FontWeight = FontWeights.SemiBold,
-            FontSize = 16,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
+        return ShellCards.CreateCard(title, body, background, accent, extraContent);
     }
 
     private static string FormatDuration(int latencyMs)
@@ -1918,13 +1817,6 @@ public partial class MainWindow : Window
         return latencyMs < 1000
             ? $"{latencyMs} ms"
             : $"{latencyMs / 1000.0:0.0}s";
-    }
-
-    private static string FormatGeneratedTokens(TranscriptMessage message)
-    {
-        return message.CompletionTokens > 0
-            ? $"{FormatCompactNumber(message.CompletionTokens)} Tok"
-            : "Tok unknown";
     }
 
     private static string FormatCompactNumber(int value)
@@ -2591,23 +2483,7 @@ public partial class MainWindow : Window
 
     private static Brush BlendBrush(Brush baseBrush, Brush accentBrush, double accentAmount)
     {
-        var baseColor = BrushColor(baseBrush, Colors.Transparent);
-        var accentColor = BrushColor(accentBrush, baseColor);
-        var amount = Math.Clamp(accentAmount, 0, 1);
-        return new SolidColorBrush(Color.FromRgb(
-            BlendChannel(baseColor.R, accentColor.R, amount),
-            BlendChannel(baseColor.G, accentColor.G, amount),
-            BlendChannel(baseColor.B, accentColor.B, amount)));
-    }
-
-    private static Color BrushColor(Brush brush, Color fallback)
-    {
-        return brush is SolidColorBrush solid ? solid.Color : fallback;
-    }
-
-    private static byte BlendChannel(byte baseline, byte accent, double amount)
-    {
-        return (byte)Math.Round(baseline + ((accent - baseline) * amount));
+        return ShellUiHelpers.BlendBrush(baseBrush, accentBrush, accentAmount);
     }
 
     private Brush AccentForSpeaker(string speaker)

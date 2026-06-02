@@ -1178,22 +1178,6 @@ internal sealed class ProviderSettingsCoordinator
 
     private static Brush BlendBrush(Brush baseBrush, Brush accentBrush, double accentAmount)
     {
-        var baseColor = BrushColor(baseBrush, Colors.Transparent);
-        var accentColor = BrushColor(accentBrush, baseColor);
-        var amount = Math.Clamp(accentAmount, 0, 1);
-        return new SolidColorBrush(Color.FromRgb(
-            BlendChannel(baseColor.R, accentColor.R, amount),
-            BlendChannel(baseColor.G, accentColor.G, amount),
-            BlendChannel(baseColor.B, accentColor.B, amount)));
-    }
-
-    private static Color BrushColor(Brush brush, Color fallback)
-    {
-        return brush is SolidColorBrush solid ? solid.Color : fallback;
-    }
-
-    private static byte BlendChannel(byte baseline, byte accent, double amount)
-    {
-        return (byte)Math.Round(baseline + ((accent - baseline) * amount));
+        return ShellUiHelpers.BlendBrush(baseBrush, accentBrush, accentAmount);
     }
 }

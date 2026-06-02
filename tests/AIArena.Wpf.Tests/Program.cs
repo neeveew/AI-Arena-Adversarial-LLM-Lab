@@ -3,6 +3,7 @@ using AIArena.Core.Services;
 using AIArena.Wpf;
 using AIArena.Wpf.Models;
 using AIArena.Wpf.Services;
+using System.Windows.Media;
 
 var tests = new (string Name, Action Test)[]
 {
@@ -25,7 +26,8 @@ var tests = new (string Name, Action Test)[]
     ("transcript mutation coordinator formats statuses", TranscriptMutationCoordinatorFormatsStatuses),
     ("arena run coordinator formats statuses", ArenaRunCoordinatorFormatsStatuses),
     ("arena session mutation coordinator normalizes settings", ArenaSessionMutationCoordinatorNormalizesSettings),
-    ("session overview coordinator formats summaries", SessionOverviewCoordinatorFormatsSummaries)
+    ("session overview coordinator formats summaries", SessionOverviewCoordinatorFormatsSummaries),
+    ("shell ui helpers blend brushes", ShellUiHelpersBlendBrushes)
 };
 
 var failures = 0;
@@ -521,6 +523,34 @@ static void SessionOverviewCoordinatorFormatsSummaries()
     Require(SessionOverviewCoordinator.ParticipantSummary(snapshot) == "2 agents + operator", "participant summary should count active agents");
     Require(SessionOverviewCoordinator.TotalCompletionTokens(snapshot) == 40, "completion token total should ignore negative values");
     Require(SessionOverviewCoordinator.MaxPromptContext(snapshot) == 240, "prompt context should use maximum prompt tokens");
+}
+
+static void ShellUiHelpersBlendBrushes()
+{
+    var blended = ShellUiHelpers.BlendBrush(
+        new SolidColorBrush(Color.FromRgb(0, 0, 0)),
+        new SolidColorBrush(Color.FromRgb(100, 200, 255)),
+        0.5);
+    var color = RequireSolidColor(blended, "blend helper should return a solid brush");
+
+    Require(color.R == 50, "red channel should blend halfway");
+    Require(color.G == 100, "green channel should blend halfway");
+    Require(color.B == 128, "blue channel should round midpoint");
+
+    var low = RequireSolidColor(ShellUiHelpers.BlendBrush(new SolidColorBrush(Color.FromRgb(10, 20, 30)), new SolidColorBrush(Color.FromRgb(200, 210, 220)), -1), "low clamp should return solid");
+    var high = RequireSolidColor(ShellUiHelpers.BlendBrush(new SolidColorBrush(Color.FromRgb(10, 20, 30)), new SolidColorBrush(Color.FromRgb(200, 210, 220)), 2), "high clamp should return solid");
+    Require(low == Color.FromRgb(10, 20, 30), "blend amount should clamp below zero");
+    Require(high == Color.FromRgb(200, 210, 220), "blend amount should clamp above one");
+}
+
+static Color RequireSolidColor(Brush brush, string message)
+{
+    if (brush is SolidColorBrush solid)
+    {
+        return solid.Color;
+    }
+
+    throw new InvalidOperationException(message);
 }
 
 static ArenaViewSnapshot SnapshotForOverviewTest(
