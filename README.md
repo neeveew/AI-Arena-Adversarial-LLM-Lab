@@ -127,7 +127,7 @@ If the provider is offline, AI Arena can still open sessions and display local d
   - `Modules/Diagnostics`, `Modules/MatchGeneration`, `Modules/Narration`, `Modules/Transcript`, and `Modules/Avatars` - focused core features.
 - `tests/AIArena.Tests` - shared .NET smoke tests.
 - `tests/AIArena.Wpf.Tests` - WPF app smoke tests.
-- `docs` - product notes, dependency index, and user-facing guides.
+- `docs` - product notes, dependency index, user-facing guides, and the WPF shell decomposition map.
 
 ## Build
 
