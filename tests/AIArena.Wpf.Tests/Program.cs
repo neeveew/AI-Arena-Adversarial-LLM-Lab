@@ -34,6 +34,7 @@ var tests = new (string Name, Action Test)[]
     ("window chrome service packs color refs", WindowChromeServicePacksColorRefs),
     ("app icon resource is packaged", AppIconResourceIsPackaged),
     ("user guide app icon image source loads", UserGuideAppIconImageSourceLoads),
+    ("user guide header icon image source loads", UserGuideHeaderIconImageSourceLoads),
     ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
     ("app settings coordinator selects provider focus", AppSettingsCoordinatorSelectsProviderFocus),
@@ -579,15 +580,23 @@ static void AppIconResourceIsPackaged()
 
     using var reader = new ResourceReader(stream!);
     var resourceKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var guideIconBytes = -1L;
     foreach (DictionaryEntry entry in reader)
     {
         if (entry.Key is string key)
         {
             resourceKeys.Add(key);
+            if (key.Equals("assets/ai-arena-guide-icon.png", StringComparison.OrdinalIgnoreCase)
+                && entry.Value is Stream guideIconStream)
+            {
+                guideIconBytes = guideIconStream.Length;
+            }
         }
     }
 
     Require(resourceKeys.Contains("assets/ai-arena-icon.ico"), "app icon ico should be packaged");
+    Require(resourceKeys.Contains("assets/ai-arena-guide-icon.png"), "user guide compact header icon should be packaged");
+    Require(guideIconBytes is > 0 and <= 10 * 1024, "user guide compact header icon should stay under 10 KB");
 }
 
 static void UserGuideAppIconImageSourceLoads()
@@ -596,6 +605,16 @@ static void UserGuideAppIconImageSourceLoads()
 
     Require(icon.Width > 0, "user guide app icon should have a width");
     Require(icon.Height > 0, "user guide app icon should have a height");
+}
+
+static void UserGuideHeaderIconImageSourceLoads()
+{
+    var icon = UserGuideWindowHost.CreateGuideHeaderIconImageSource();
+
+    Require(icon.Width > 0, "user guide header icon should have a width");
+    Require(icon.Height > 0, "user guide header icon should have a height");
+    Require(icon.Width <= 64, "user guide header icon should stay compact");
+    Require(icon.Height <= 64, "user guide header icon should stay compact");
 }
 
 static void ProviderReachabilityCoordinatorFormatsPopupState()

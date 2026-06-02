@@ -19,6 +19,7 @@ internal sealed class UserGuideWindowHost
 {
     private const string GuideWindowTitle = "AI Arena: Adversarial LLM Lab - User Guide";
     private const string AppIconResourceKey = "assets/ai-arena-icon.ico";
+    private const string GuideHeaderIconResourceKey = "assets/ai-arena-guide-icon.png";
     private const string SearchPlaceholderText = "Search the guide...";
 
     private static readonly string[] ThemeResourceKeys =
@@ -657,7 +658,7 @@ internal sealed class UserGuideWindowHost
             ClipToBounds = true,
             Child = new Image
             {
-                Source = CreateAppIconImageSource(),
+                Source = CreateGuideHeaderIconImageSource(),
                 Stretch = Stretch.UniformToFill,
                 SnapsToDevicePixels = true
             }
@@ -668,6 +669,16 @@ internal sealed class UserGuideWindowHost
 
     internal static ImageSource CreateAppIconImageSource()
     {
+        return CreateResourceImageSource(AppIconResourceKey, new Uri("/Assets/ai-arena-icon.ico", UriKind.Relative));
+    }
+
+    internal static ImageSource CreateGuideHeaderIconImageSource()
+    {
+        return CreateResourceImageSource(GuideHeaderIconResourceKey, new Uri("/Assets/ai-arena-guide-icon.png", UriKind.Relative));
+    }
+
+    private static ImageSource CreateResourceImageSource(string resourceKey, Uri fallbackUri)
+    {
         var resourceName = $"{typeof(UserGuideWindowHost).Assembly.GetName().Name}.g.resources";
         using var resources = typeof(UserGuideWindowHost).Assembly.GetManifestResourceStream(resourceName);
         if (resources is not null)
@@ -676,7 +687,7 @@ internal sealed class UserGuideWindowHost
             foreach (DictionaryEntry entry in reader)
             {
                 if (entry.Key is not string key
-                    || !key.Equals(AppIconResourceKey, StringComparison.OrdinalIgnoreCase)
+                    || !key.Equals(resourceKey, StringComparison.OrdinalIgnoreCase)
                     || entry.Value is not Stream iconStream)
                 {
                     continue;
@@ -693,7 +704,7 @@ internal sealed class UserGuideWindowHost
             }
         }
 
-        return BitmapFrame.Create(new Uri("/Assets/ai-arena-icon.ico", UriKind.Relative));
+        return BitmapFrame.Create(fallbackUri);
     }
 
     private static Style CreateGuideListItemStyle(FrameworkElement resources)
