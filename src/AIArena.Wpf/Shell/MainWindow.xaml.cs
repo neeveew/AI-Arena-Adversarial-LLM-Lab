@@ -51,6 +51,7 @@ public partial class MainWindow : Window
     private readonly TranscriptSearchCoordinator? _transcriptSearchCoordinator;
     private readonly TranscriptInsightCoordinator? _transcriptInsightCoordinator;
     private readonly ScenarioWorkflowCoordinator? _scenarioWorkflowCoordinator;
+    private readonly OperatorTurnCoordinator? _operatorTurnCoordinator;
     private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
@@ -74,7 +75,6 @@ public partial class MainWindow : Window
     private bool _arenaBusy;
     private bool _telemetrySampleInFlight;
     private string _transcriptDashboardLayout = "";
-    private string _operatorRouteMode = "public";
     private Button? _breathingOperationButton;
     private bool _decisionCardExpanded;
     private string? _activeAgentPerformanceDetailId;
@@ -107,6 +107,9 @@ public partial class MainWindow : Window
 
     private ScenarioWorkflowCoordinator ScenarioWorkflow =>
         _scenarioWorkflowCoordinator ?? throw new InvalidOperationException("Scenario workflow coordinator is not initialized.");
+
+    private OperatorTurnCoordinator OperatorTurn =>
+        _operatorTurnCoordinator ?? throw new InvalidOperationException("Operator turn coordinator is not initialized.");
 
     private ProviderSettingsCoordinator ProviderSettings =>
         _providerSettingsCoordinator ?? throw new InvalidOperationException("Provider settings coordinator is not initialized.");
@@ -313,8 +316,6 @@ public partial class MainWindow : Window
             ReplayGenerationButton,
             ReplayNewRunButton,
             CopyGenerationSeedButton,
-            OperatorTemplatePicker,
-            OperatorTurnText,
             () => _wpfSettings,
             () => _activeSession,
             () => _theme,
@@ -323,6 +324,33 @@ public partial class MainWindow : Window
             (status, button, action, allowDuringAutoChat) => RunArenaBusyAsync(status, button, action, allowDuringAutoChat),
             status => RefreshActiveSessionAsync(status),
             preferredSessionId => LoadSessionsAsync(preferredSessionId),
+            status => LoadStatus.Text = status,
+            status => ArenaRunStatus.Text = status);
+        _operatorTurnCoordinator = new OperatorTurnCoordinator(
+            _coreSessionStore,
+            _eventLogStore,
+            _transcriptService,
+            _narratorService,
+            _wpfSettingsStore,
+            OperatorPublicRouteButton,
+            OperatorPrivateRouteButton,
+            OperatorNarratorRouteButton,
+            OperatorPrivateTargetRow,
+            OperatorPrivateTargetPicker,
+            OperatorPrivateTargetSummaryText,
+            OperatorRouteHintText,
+            OperatorTurnMeterText,
+            OperatorTemplatePicker,
+            OperatorTurnText,
+            SendTurnButton,
+            () => _wpfSettings,
+            () => _activeSession,
+            () => _lastRenderedSnapshot,
+            () => _isRenderingSnapshot,
+            ResourceBrush,
+            (status, button, action, allowDuringAutoChat) => RunArenaBusyAsync(status, button, action, allowDuringAutoChat),
+            (snapshot, sessionId) => SaveSnapshotWithFeedbackAsync(snapshot, sessionId),
+            status => RefreshActiveSessionAsync(status),
             status => LoadStatus.Text = status,
             status => ArenaRunStatus.Text = status);
         ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
@@ -350,10 +378,9 @@ public partial class MainWindow : Window
         InitializeAboutPanel();
         InitializeVisualSettings();
         ScenarioWorkflow.InitializeControls();
+        OperatorTurn.InitializeControls();
         InitializeInternetSettingsUi();
         InitializeDiagnosticExplanationTiles();
-        UpdateOperatorRouteUi();
-        UpdateOperatorTurnMeter();
         SavedStateCoordinator.LoadScenarioTemplates();
         ShowStoreLoadWarningIfAny();
         Loaded += (_, _) =>
@@ -1021,10 +1048,10 @@ public partial class MainWindow : Window
         AllowParticipantInternetCheckBox.IsChecked = snapshot.AllowParticipantInternetRequests;
         AllowNarratorInternetCheckBox.IsChecked = snapshot.AllowNarratorInternetRequests;
         RequireInternetApprovalCheckBox.IsChecked = snapshot.RequireInternetApproval;
-        PopulateOperatorPrivateTargetPicker(snapshot);
+        OperatorTurn.ApplySnapshot(snapshot);
         _isRenderingSnapshot = false;
         UpdateInternetSettingsHint();
-        UpdateOperatorPrivateTargetSummary();
+        OperatorTurn.UpdatePrivateTargetSummary();
         UpdateSessionOverview(snapshot);
         _lastAgentPersonas = snapshot.Agents
             .Where(agent => !string.IsNullOrWhiteSpace(agent.Id))
@@ -1033,7 +1060,7 @@ public partial class MainWindow : Window
         PopulateAgents(snapshot);
         PopulateCustomMatch(snapshot);
         PopulateNews(snapshot.Messages);
-        UpdateOperatorPrivateTargetSummary();
+        OperatorTurn.UpdatePrivateTargetSummary();
     }
 
     private void UpdateSessionOverview(ArenaViewSnapshot snapshot)
@@ -5971,325 +5998,52 @@ public partial class MainWindow : Window
 
     private async void SendTurnButton_Click(object sender, RoutedEventArgs e)
     {
-        await SendOperatorTurnAsync();
-    }
-
-    private async Task SendPrivateOperatorNoteAsync(string text)
-    {
-        await RunArenaBusyAsync("Sending private operator guidance...", SendTurnButton, async () =>
-        {
-            if (_activeSession is null)
-            {
-                return;
-            }
-
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (snapshot is null)
-            {
-                ArenaRunStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
-                return;
-            }
-
-            var targets = OperatorPrivateTargets(snapshot).ToArray();
-            if (targets.Length == 0)
-            {
-                ArenaRunStatus.Text = "No target agents found for private guidance.";
-                return;
-            }
-
-            var note = BuildOperatorPrivateNote(text);
-            foreach (var agent in targets)
-            {
-                agent.PrivateNotes.RemoveAll(existing => existing.Equals(note, StringComparison.OrdinalIgnoreCase));
-                agent.PrivateNotes.Add(note);
-                if (agent.PrivateNotes.Count > 60)
-                {
-                    agent.PrivateNotes.RemoveRange(0, agent.PrivateNotes.Count - 60);
-                }
-            }
-
-            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_operator_private_guidance_added", new
-            {
-                Targets = targets.Select(agent => agent.Id).ToArray(),
-                Text = text
-            });
-            OperatorTurnText.Clear();
-            await RefreshActiveSessionAsync($"Private guidance sent to {FormatOperatorTargetSummary(targets)}.");
-        }, allowDuringAutoChat: true);
-    }
-
-    private async Task AskNarratorFromOperatorAsync(string text)
-    {
-        await RunArenaBusyAsync("Asking narrator...", SendTurnButton, async () =>
-        {
-            if (_activeSession is null)
-            {
-                return;
-            }
-
-            var result = await _narratorService.AskNarratorAsync(_activeSession.Id, text);
-            var status = result.Ok && result.Message is not null
-                ? $"Narrator answered operator request at turn {result.Message.Turn}."
-                : $"Narrator request failed: {result.Error}";
-            OperatorTurnText.Clear();
-            await RefreshActiveSessionAsync(status);
-        }, allowDuringAutoChat: true);
-    }
-
-    private IEnumerable<AIArena.Core.Models.DialogueAgent> OperatorPrivateTargets(AIArena.Core.Models.ArenaSnapshot snapshot)
-    {
-        var selected = (OperatorPrivateTargetPicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "all";
-        var agents = snapshot.Engine.Agents.Where(agent => IsParticipantAgentId(agent.Id));
-
-        return selected.Equals("all", StringComparison.OrdinalIgnoreCase)
-            ? agents.Where(agent => agent.Active)
-            : agents.Where(agent => agent.Id.Equals(selected, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static bool IsParticipantAgentId(string agentId)
-    {
-        return AgentRosterService.IsParticipantId(agentId);
-    }
-
-    private static string BuildOperatorPrivateNote(string text)
-    {
-        var note = $"Operator private: {text.Trim()}";
-        return note.Length <= 400 ? note : note[..400];
-    }
-
-    private static string FormatOperatorTargetSummary(IReadOnlyCollection<AIArena.Core.Models.DialogueAgent> targets)
-    {
-        return targets.Count == 1
-            ? DisplayStatusValue(targets.First().Id)
-            : $"{targets.Count} agents";
+        await OperatorTurn.SendOperatorTurnAsync();
     }
 
     private void OperatorPublicRouteButton_Click(object sender, RoutedEventArgs e)
     {
-        SetOperatorRouteMode("public");
+        OperatorTurn.SetRouteMode("public");
     }
 
     private void OperatorPrivateRouteButton_Click(object sender, RoutedEventArgs e)
     {
-        SetOperatorRouteMode("private");
+        OperatorTurn.SetRouteMode("private");
     }
 
     private void OperatorNarratorRouteButton_Click(object sender, RoutedEventArgs e)
     {
-        SetOperatorRouteMode("narrator");
+        OperatorTurn.SetRouteMode("narrator");
     }
 
     private void OperatorPrivateTargetPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_isRenderingSnapshot)
-        {
-            return;
-        }
-
-        UpdateOperatorPrivateTargetSummary();
-    }
-
-    private void PopulateOperatorPrivateTargetPicker(ArenaViewSnapshot snapshot)
-    {
-        if (OperatorPrivateTargetPicker is null)
-        {
-            return;
-        }
-
-        var selected = (OperatorPrivateTargetPicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "all";
-        OperatorPrivateTargetPicker.Items.Clear();
-        OperatorPrivateTargetPicker.Items.Add(new ComboBoxItem { Content = "All active agents", Tag = "all" });
-        foreach (var agent in snapshot.Agents.Where(agent => IsParticipantAgentId(agent.Id)))
-        {
-            OperatorPrivateTargetPicker.Items.Add(new ComboBoxItem
-            {
-                Content = DisplayStatusValue(agent.Id),
-                Tag = agent.Id,
-                ToolTip = agent.Name
-            });
-        }
-
-        SelectComboTag(OperatorPrivateTargetPicker, selected);
-        if (OperatorPrivateTargetPicker.SelectedIndex < 0)
-        {
-            SelectComboTag(OperatorPrivateTargetPicker, "all");
-        }
+        _operatorTurnCoordinator?.OnPrivateTargetChanged();
     }
 
     private async void OperatorTurnText_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || (Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control)
-        {
-            return;
-        }
-
-        e.Handled = true;
-        await SendOperatorTurnAsync();
+        await OperatorTurn.OnTurnTextKeyDownAsync(e);
     }
 
     private void UseOperatorTemplateButton_Click(object sender, RoutedEventArgs e)
     {
-        ScenarioWorkflow.UseOperatorTemplate();
+        OperatorTurn.UseOperatorTemplate();
     }
 
     private void SaveOperatorTemplateButton_Click(object sender, RoutedEventArgs e)
     {
-        ScenarioWorkflow.SaveOperatorTemplate();
+        OperatorTurn.SaveOperatorTemplate();
     }
 
     private void DeleteOperatorTemplateButton_Click(object sender, RoutedEventArgs e)
     {
-        ScenarioWorkflow.DeleteOperatorTemplate();
-    }
-
-    private void SetOperatorRouteMode(string mode)
-    {
-        _operatorRouteMode = mode;
-        UpdateOperatorRouteUi();
-    }
-
-    private void UpdateOperatorRouteUi()
-    {
-        if (OperatorPublicRouteButton is null
-            || OperatorPrivateRouteButton is null
-            || OperatorNarratorRouteButton is null
-            || OperatorPrivateTargetRow is null
-            || SendTurnButton is null
-            || OperatorTurnText is null
-            || OperatorRouteHintText is null)
-        {
-            return;
-        }
-
-        StyleOperatorRouteButton(OperatorPublicRouteButton, _operatorRouteMode.Equals("public", StringComparison.OrdinalIgnoreCase), "OperatorAccentBrush");
-        StyleOperatorRouteButton(OperatorPrivateRouteButton, _operatorRouteMode.Equals("private", StringComparison.OrdinalIgnoreCase), "BetaAccentBrush");
-        StyleOperatorRouteButton(OperatorNarratorRouteButton, _operatorRouteMode.Equals("narrator", StringComparison.OrdinalIgnoreCase), "AssistBorderBrush");
-
-        OperatorPrivateTargetRow.Visibility = _operatorRouteMode.Equals("private", StringComparison.OrdinalIgnoreCase)
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        SendTurnButton.Content = _operatorRouteMode.Equals("narrator", StringComparison.OrdinalIgnoreCase)
-            ? "ASK NARRATOR"
-            : _operatorRouteMode.Equals("private", StringComparison.OrdinalIgnoreCase)
-                ? "SEND PRIVATE"
-                : "SEND PUBLIC";
-        OperatorTurnText.Tag = _operatorRouteMode switch
-        {
-            "private" => "Private guidance for agent memory...",
-            "narrator" => "Ask narrator...",
-            _ => "Inject public operator turn..."
-        };
-        OperatorRouteHintText.Text = _operatorRouteMode switch
-        {
-            "private" => "Private guidance is written into selected agent memory notes and is not added as a public transcript turn.",
-            "narrator" => "Narrator requests ask the observer to answer publicly without advancing the participant turn order.",
-            _ => "Public turns are visible in the transcript and become context for all agents."
-        };
-        OperatorRouteHintText.SetResourceReference(TextBlock.ForegroundProperty, _operatorRouteMode switch
-        {
-            "private" => "BetaAccentBrush",
-            "narrator" => "NarratorAccentBrush",
-            _ => "MutedTextBrush"
-        });
-        UpdateOperatorPrivateTargetSummary();
-    }
-
-    private static void StyleOperatorRouteButton(Button button, bool active, string accentBrushKey)
-    {
-        button.SetResourceReference(Control.BackgroundProperty, active ? "PrimaryBrush" : "InputBrush");
-        button.SetResourceReference(Control.BorderBrushProperty, active ? accentBrushKey : "DisabledBorderBrush");
-        button.SetResourceReference(Control.ForegroundProperty, active ? "TextBrush" : "MutedTextBrush");
+        OperatorTurn.DeleteOperatorTemplate();
     }
 
     private void OperatorTurnText_TextChanged(object sender, TextChangedEventArgs e)
     {
-        UpdateOperatorTurnMeter();
-    }
-
-    private async Task SendOperatorTurnAsync()
-    {
-        if (_activeSession is null)
-        {
-            LoadStatus.Text = "No active session.";
-            return;
-        }
-
-        var text = OperatorTurnText.Text.Trim();
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            ArenaRunStatus.Text = "Operator turn is empty.";
-            return;
-        }
-
-        if (_operatorRouteMode.Equals("private", StringComparison.OrdinalIgnoreCase))
-        {
-            await SendPrivateOperatorNoteAsync(text);
-            return;
-        }
-
-        if (_operatorRouteMode.Equals("narrator", StringComparison.OrdinalIgnoreCase))
-        {
-            await AskNarratorFromOperatorAsync(text);
-            return;
-        }
-
-        await RunArenaBusyAsync("Injecting operator turn...", SendTurnButton, async () =>
-        {
-            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-            if (snapshot is null)
-            {
-                ArenaRunStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
-                return;
-            }
-
-            var message = _transcriptService.CreateOperatorMessage(text, snapshot.Engine.TurnCount + 1);
-            snapshot.Engine.Messages.Add(message);
-            snapshot.Engine.TurnCount = message.Turn;
-            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_operator_turn_added", new { message.Turn, message.Text, Route = "public" });
-            OperatorTurnText.Clear();
-            RefreshActiveSession("Public operator turn added.");
-        }, allowDuringAutoChat: true);
-    }
-
-    private void UpdateOperatorPrivateTargetSummary()
-    {
-        if (OperatorPrivateTargetSummaryText is null || OperatorPrivateTargetPicker is null)
-        {
-            return;
-        }
-
-        var selected = (OperatorPrivateTargetPicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "all";
-        if (selected.Equals("all", StringComparison.OrdinalIgnoreCase))
-        {
-            var active = (_lastRenderedSnapshot?.Agents ?? [])
-                .Where(agent => agent.Active && IsParticipantAgentId(agent.Id))
-                .Select(agent => DisplayStatusValue(agent.Id))
-                .ToArray();
-            OperatorPrivateTargetSummaryText.Text = active.Length == 0
-                ? "No active private targets in the current snapshot."
-                : $"Writes private memory notes to {string.Join(", ", active)}; no public transcript turn.";
-            return;
-        }
-
-        OperatorPrivateTargetSummaryText.Text = $"Writes a private memory note to {DisplayStatusValue(selected)}; no public transcript turn.";
-    }
-
-    private void UpdateOperatorTurnMeter()
-    {
-        if (OperatorTurnText is null || OperatorTurnMeterText is null)
-        {
-            return;
-        }
-
-        var text = OperatorTurnText.Text?.Trim() ?? "";
-        var charCount = text.Length;
-        var tokenEstimate = charCount == 0 ? 0 : Math.Max(1, (int)Math.Ceiling(charCount / 4.0));
-        OperatorTurnMeterText.Text = $"{charCount} chars / ~{tokenEstimate} tok";
-        OperatorTurnMeterText.Foreground = charCount > 0
-            ? ResourceBrush("OperatorAccentBrush")
-            : ResourceBrush("MutedTextBrush");
+        _operatorTurnCoordinator?.UpdateTurnMeter();
     }
 
     private void CopyTranscriptMessage(TranscriptMessage message)
@@ -6815,8 +6569,7 @@ public partial class MainWindow : Window
         {
             operationButton.IsEnabled = true;
         }
-        SendTurnButton.IsEnabled = true;
-        OperatorTurnText.IsEnabled = true;
+        OperatorTurn.UpdateBusyState();
         TestProviderButton.IsEnabled = !busy;
         PreloadSelectedModelsButton.IsEnabled = !busy;
         ApplySettingsButton.IsEnabled = !busy;

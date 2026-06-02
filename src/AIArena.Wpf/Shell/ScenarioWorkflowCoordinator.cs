@@ -24,8 +24,6 @@ internal sealed class ScenarioWorkflowCoordinator
     private readonly Button replayGenerationButton;
     private readonly Button replayNewRunButton;
     private readonly Button copyGenerationSeedButton;
-    private readonly ComboBox operatorTemplatePicker;
-    private readonly TextBox operatorTurnText;
     private readonly Func<WpfSettings> settings;
     private readonly Func<CoreSessionSummary?> activeSession;
     private readonly Func<ThemePalette> theme;
@@ -55,8 +53,6 @@ internal sealed class ScenarioWorkflowCoordinator
         Button replayGenerationButton,
         Button replayNewRunButton,
         Button copyGenerationSeedButton,
-        ComboBox operatorTemplatePicker,
-        TextBox operatorTurnText,
         Func<WpfSettings> settings,
         Func<CoreSessionSummary?> activeSession,
         Func<ThemePalette> theme,
@@ -83,8 +79,6 @@ internal sealed class ScenarioWorkflowCoordinator
         this.replayGenerationButton = replayGenerationButton;
         this.replayNewRunButton = replayNewRunButton;
         this.copyGenerationSeedButton = copyGenerationSeedButton;
-        this.operatorTemplatePicker = operatorTemplatePicker;
-        this.operatorTurnText = operatorTurnText;
         this.settings = settings;
         this.activeSession = activeSession;
         this.theme = theme;
@@ -113,7 +107,6 @@ internal sealed class ScenarioWorkflowCoordinator
             SelectComboTag(randomSeedStylePicker, current.RandomSeedStyle);
             SelectComboTag(randomSeedIntensityPicker, current.RandomSeedIntensity);
             SelectComboTag(randomSeedAbsurdityPicker, current.RandomSeedAbsurdity);
-            InitializeOperatorTemplates();
         }
         finally
         {
@@ -409,92 +402,6 @@ internal sealed class ScenarioWorkflowCoordinator
         aiChoiceButton.IsEnabled = !busy || autoChatRunning;
         yoloScenarioButton.IsEnabled = !busy || autoChatRunning;
         UpdateGenerationHistoryActions();
-    }
-
-    public void UseOperatorTemplate()
-    {
-        var template = CurrentOperatorTemplateText();
-        if (string.IsNullOrWhiteSpace(template))
-        {
-            return;
-        }
-
-        operatorTurnText.Text = template;
-        operatorTurnText.Focus();
-        operatorTurnText.CaretIndex = operatorTurnText.Text.Length;
-    }
-
-    public void SaveOperatorTemplate()
-    {
-        var template = operatorTurnText.Text.Trim();
-        if (string.IsNullOrWhiteSpace(template))
-        {
-            setArenaRunStatus("Operator template is empty.");
-            return;
-        }
-
-        var current = settings();
-        current.OperatorTemplates ??= [];
-        if (!current.OperatorTemplates.Contains(template, StringComparer.OrdinalIgnoreCase))
-        {
-            current.OperatorTemplates.Insert(0, template);
-            current.OperatorTemplates = current.OperatorTemplates
-                .Where(item => !string.IsNullOrWhiteSpace(item))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(12)
-                .ToList();
-            settingsStore.Save(current);
-            InitializeOperatorTemplates(template);
-        }
-
-        operatorTemplatePicker.SelectedItem = template;
-        setArenaRunStatus("Operator template saved.");
-    }
-
-    public void DeleteOperatorTemplate()
-    {
-        var template = CurrentOperatorTemplateText();
-        if (string.IsNullOrWhiteSpace(template))
-        {
-            setArenaRunStatus("No operator template selected.");
-            return;
-        }
-
-        var current = settings();
-        current.OperatorTemplates ??= [];
-        var nextTemplates = current.OperatorTemplates
-            .Where(item => !item.Equals(template, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        if (nextTemplates.Count == current.OperatorTemplates.Count)
-        {
-            setArenaRunStatus("Operator template was already removed.");
-            return;
-        }
-
-        var nextSelection = nextTemplates.FirstOrDefault();
-        current.OperatorTemplates = nextTemplates;
-        settingsStore.Save(current);
-        InitializeOperatorTemplates(nextSelection);
-        setArenaRunStatus("Operator template deleted.");
-    }
-
-    private void InitializeOperatorTemplates(string? preferredTemplate = null)
-    {
-        var current = settings();
-        current.OperatorTemplates ??= [];
-        operatorTemplatePicker.ItemsSource = null;
-        operatorTemplatePicker.ItemsSource = current.OperatorTemplates;
-        var preferredIndex = string.IsNullOrWhiteSpace(preferredTemplate)
-            ? -1
-            : current.OperatorTemplates.FindIndex(item => item.Equals(preferredTemplate, StringComparison.OrdinalIgnoreCase));
-        operatorTemplatePicker.SelectedIndex = preferredIndex >= 0
-            ? preferredIndex
-            : current.OperatorTemplates.Count > 0 ? 0 : -1;
-    }
-
-    private string CurrentOperatorTemplateText()
-    {
-        return (operatorTemplatePicker.SelectedItem?.ToString() ?? operatorTemplatePicker.Text).Trim();
     }
 
     private void SetBothStatuses(string status)
