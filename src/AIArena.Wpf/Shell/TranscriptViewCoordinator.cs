@@ -20,6 +20,7 @@ internal sealed class TranscriptViewCoordinator
     private readonly CheckBox matchQualityTimelineCheckBox;
     private readonly CheckBox memoryNotesCheckBox;
     private readonly CheckBox decisionCardCheckBox;
+    private readonly CheckBox autoModeratorCheckBox;
     private readonly CheckBox debugControlsCheckBox;
     private readonly CheckBox styleFitCheckBox;
     private readonly CheckBox voiceDriftEnforcementCheckBox;
@@ -62,6 +63,7 @@ internal sealed class TranscriptViewCoordinator
         CheckBox matchQualityTimelineCheckBox,
         CheckBox memoryNotesCheckBox,
         CheckBox decisionCardCheckBox,
+        CheckBox autoModeratorCheckBox,
         CheckBox debugControlsCheckBox,
         CheckBox styleFitCheckBox,
         CheckBox voiceDriftEnforcementCheckBox,
@@ -101,6 +103,7 @@ internal sealed class TranscriptViewCoordinator
         this.matchQualityTimelineCheckBox = matchQualityTimelineCheckBox;
         this.memoryNotesCheckBox = memoryNotesCheckBox;
         this.decisionCardCheckBox = decisionCardCheckBox;
+        this.autoModeratorCheckBox = autoModeratorCheckBox;
         this.debugControlsCheckBox = debugControlsCheckBox;
         this.styleFitCheckBox = styleFitCheckBox;
         this.voiceDriftEnforcementCheckBox = voiceDriftEnforcementCheckBox;
@@ -143,6 +146,7 @@ internal sealed class TranscriptViewCoordinator
             matchQualityTimelineCheckBox.IsChecked = currentSettings.ShowMatchQualityTimeline;
             memoryNotesCheckBox.IsChecked = currentSettings.ShowAgentMemoryNotes;
             decisionCardCheckBox.IsChecked = currentSettings.ShowDecisionCard;
+            autoModeratorCheckBox.IsChecked = currentSettings.ShowAutoModerator;
             debugControlsCheckBox.IsChecked = currentSettings.AllowDebugControls;
             styleFitCheckBox.IsChecked = currentSettings.ShowStyleFit;
             voiceDriftEnforcementCheckBox.IsChecked = currentSettings.EnforceVoiceDrift;
@@ -232,6 +236,14 @@ internal sealed class TranscriptViewCoordinator
             decisionCardCheckBox,
             value => settings().ShowDecisionCard = value,
             shouldPopulate: () => lastRenderedSnapshot() is not null);
+    }
+
+    public void OnAutoModeratorChanged()
+    {
+        UpdateBooleanSetting(
+            autoModeratorCheckBox,
+            value => settings().ShowAutoModerator = value,
+            shouldPopulate: () => renderedMessages().Count > 0);
     }
 
     public void OnStyleFitChanged()

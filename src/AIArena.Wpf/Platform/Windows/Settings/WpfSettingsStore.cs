@@ -97,6 +97,7 @@ public sealed class WpfSettings
     public bool ShowMatchQualityTimeline { get; set; }
     public bool ShowAgentMemoryNotes { get; set; }
     public bool ShowDecisionCard { get; set; }
+    public bool ShowAutoModerator { get; set; } = true;
     public bool AllowDebugControls { get; set; }
     public bool ShowStyleFit { get; set; }
     public bool EnforceVoiceDrift { get; set; }

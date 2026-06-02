@@ -135,10 +135,13 @@ internal sealed class TranscriptListCoordinator
             transcriptItems.Children.Add(transcriptAdjunct.CreateTurnComparePanel(visibleMessages));
         }
         AddMemoryPanelIfNeeded(currentSettings, snapshot);
-        var moderatorPanel = transcriptAdjunct.CreateAutoModeratorPanel(messages);
-        if (moderatorPanel is not null)
+        if (currentSettings.ShowAutoModerator)
         {
-            transcriptItems.Children.Add(moderatorPanel);
+            var moderatorPanel = transcriptAdjunct.CreateAutoModeratorPanel(messages);
+            if (moderatorPanel is not null)
+            {
+                transcriptItems.Children.Add(moderatorPanel);
+            }
         }
 
         var retryableTurns = RetryableTurns(visibleMessages, isAgentSpeaker);

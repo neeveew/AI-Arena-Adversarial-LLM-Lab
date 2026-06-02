@@ -77,6 +77,7 @@ static void SaveReloadVisualGenerationSettings()
             TurnCompareMode = true,
             ShowMatchQualityTimeline = true,
             ShowAgentMemoryNotes = true,
+            ShowAutoModerator = false,
             AllowDebugControls = true,
             ShowStyleFit = true,
             EnforceVoiceDrift = true,
@@ -96,6 +97,7 @@ static void SaveReloadVisualGenerationSettings()
         Require(loaded.TurnCompareMode, "turn compare did not persist");
         Require(loaded.ShowMatchQualityTimeline, "quality timeline did not persist");
         Require(loaded.ShowAgentMemoryNotes, "memory notes did not persist");
+        Require(!loaded.ShowAutoModerator, "auto moderator toggle did not persist");
         Require(loaded.AllowDebugControls, "debug controls did not persist");
         Require(loaded.ShowStyleFit, "style fit did not persist");
         Require(loaded.EnforceVoiceDrift, "voice enforcement did not persist");
@@ -136,6 +138,7 @@ static void NormalizeLegacyThemeAndBlankSettings()
         Require(loaded.RandomSeedRolePack == "auto", "blank role pack should normalize");
         Require(loaded.RandomSeedAbsurdity == "grounded", "blank absurdity should normalize");
         Require(loaded.RandomSeedPreset == "manual", "blank preset should normalize");
+        Require(loaded.ShowAutoModerator, "missing auto moderator setting should default on");
         Require(loaded.OperatorTemplates.Count > 0, "null operator templates should keep default templates");
     });
 }

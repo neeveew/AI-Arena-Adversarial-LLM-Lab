@@ -602,6 +602,7 @@ public partial class MainWindow : Window
             MatchQualityTimelineCheckBox,
             MemoryNotesCheckBox,
             DecisionCardCheckBox,
+            AutoModeratorCheckBox,
             DebugControlsCheckBox,
             StyleFitCheckBox,
             VoiceDriftEnforcementCheckBox,
@@ -1039,6 +1040,11 @@ public partial class MainWindow : Window
     private void DecisionCardCheckBox_Changed(object sender, RoutedEventArgs e)
     {
         _transcriptViewCoordinator?.OnDecisionCardChanged();
+    }
+
+    private void AutoModeratorCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        _transcriptViewCoordinator?.OnAutoModeratorChanged();
     }
 
     private void StyleFitCheckBox_Changed(object sender, RoutedEventArgs e)

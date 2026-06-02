@@ -1228,6 +1228,14 @@
                                               Unchecked="DecisionCardCheckBox_Changed"
                                               Margin="0,0,0,8"
                                               ToolTip="Show compact narrator decision card" />
+                                    <CheckBox x:Name="AutoModeratorCheckBox"
+                                              Content="Auto Moderator"
+                                              Style="{StaticResource ToggleSwitchCheckBox}"
+                                              Foreground="{DynamicResource TextBrush}"
+                                              Checked="AutoModeratorCheckBox_Changed"
+                                              Unchecked="AutoModeratorCheckBox_Changed"
+                                              Margin="0,0,0,8"
+                                              ToolTip="Show suggested watch items above the transcript" />
                                     <CheckBox x:Name="StyleFitCheckBox"
                                               Content="Style fit"
                                               Style="{StaticResource ToggleSwitchCheckBox}"
