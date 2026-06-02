@@ -34,8 +34,6 @@ public partial class MainWindow : Window
     private readonly EventLogStore _eventLogStore = new();
     private readonly ModelProviderHealthService _providerHealth = new();
     private readonly ProviderReachabilityService _providerReachabilityService;
-    private readonly ModelPreloadService _modelPreloadService = new();
-    private readonly ProviderAutoConfigureService _providerAutoConfigureService = new();
     private readonly TranscriptService _transcriptService = new();
     private readonly TurnRunnerService _turnRunner = new();
     private readonly MatchGenerationService _matchGeneration = new();
@@ -50,6 +48,7 @@ public partial class MainWindow : Window
     private readonly UserGuideWindowHost _userGuideWindowHost = new();
     private readonly SavedStateWorkflowCoordinator? _savedStateCoordinator;
     private readonly TranscriptExportCoordinator? _transcriptExportCoordinator;
+    private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
     private readonly DispatcherTimer _providerHealthTimer;
@@ -62,26 +61,17 @@ public partial class MainWindow : Window
     private readonly List<ComboBox> _pressureControls = [];
     private readonly List<RivalryMatrixControlRow> _rivalryMatrixControls = [];
     private readonly List<TranscriptMessage> _turnCompareSelection = [];
-    private readonly Dictionary<string, string> _roleModels = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, ModelPreloadResult> _lastPreloadResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _arenaOperationLock = new(1, 1);
-    private IReadOnlyList<string> _advertisedModels = [];
     private IReadOnlyList<TranscriptMessage> _lastRenderedMessages = [];
     private IReadOnlyDictionary<string, string> _lastAgentPersonas = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-    private bool _isRefreshingModels;
     private CoreSessionSummary? _activeSession;
     private DateTimeOffset _activeSnapshotWriteUtc;
     private bool _isSelectingTheme;
     private bool _isRenderingSnapshot;
-    private bool _isUpdatingRoleModelEditor;
-    private bool _isPersistingModelRouting;
     private bool _isUpdatingInternetSettingsUi;
     private bool _isApplyingRandomSeedPreset;
     private bool _arenaBusy;
     private bool _telemetrySampleInFlight;
-    private int _lastProviderModelCount = -1;
-    private DateTimeOffset? _lastProviderHealthCheckedAt;
-    private DateTimeOffset? _lastModelListCheckedAt;
     private string _transcriptDashboardLayout = "";
     private string _operatorRouteMode = "public";
     private Button? _breathingOperationButton;
@@ -107,13 +97,15 @@ public partial class MainWindow : Window
     private ArenaViewSnapshot? _lastRenderedSnapshot;
     private CoreFrictionDiagnostics? _lastDiagnostics;
     private DiagnosticSeriesSet _lastDiagnosticSeries = new(Array.Empty<DiagnosticHistoryPoint>(), 0);
-    private ProviderAutoConfigurePlan? _lastAutoConfigurePlan;
 
     private SavedStateWorkflowCoordinator SavedStateCoordinator =>
         _savedStateCoordinator ?? throw new InvalidOperationException("Saved-state coordinator is not initialized.");
 
     private TranscriptExportCoordinator TranscriptExportCoordinator =>
         _transcriptExportCoordinator ?? throw new InvalidOperationException("Transcript export coordinator is not initialized.");
+
+    private ProviderSettingsCoordinator ProviderSettings =>
+        _providerSettingsCoordinator ?? throw new InvalidOperationException("Provider settings coordinator is not initialized.");
 
     private sealed record DiagnosticHistoryPoint(
         int Friction,
@@ -224,6 +216,60 @@ public partial class MainWindow : Window
             FilterTranscriptMessages,
             status => LoadStatus.Text = status,
             status => ArenaRunStatus.Text = status);
+        _providerSettingsCoordinator = new ProviderSettingsCoordinator(
+            this,
+            _coreSessionStore,
+            _eventLogStore,
+            _providerHealth,
+            new ModelPreloadService(),
+            new ProviderAutoConfigureService(_providerHealth),
+            _arenaOperationLock,
+            ProviderPresetPicker,
+            ProviderPresetStatusText,
+            ProviderBaseUrlText,
+            ProviderModelText,
+            DefaultModelStatusText,
+            AlphaRoleModelText,
+            AlphaModelStatusText,
+            BetaRoleModelText,
+            BetaModelStatusText,
+            GammaRoleModelText,
+            GammaModelStatusText,
+            DeltaRoleModelText,
+            DeltaModelStatusText,
+            NarratorRoleModelText,
+            NarratorModelStatusText,
+            RoleModelSummaryText,
+            AutoConfigureStrategyPicker,
+            AutoConfigureButton,
+            ApplyAutoConfigureButton,
+            AutoConfigureStatusText,
+            AutoConfigureHardwareText,
+            AutoConfigureProviderText,
+            AutoConfigureRecommendationItems,
+            PreloadSelectedModelsButton,
+            LoadPlanPreviewText,
+            PreloadModelsStatusText,
+            PreloadModelsItems,
+            ProviderTimeoutText,
+            ProviderTestStatus,
+            ProviderModelsStatus,
+            () => _activeSession,
+            () => _lastRenderedSnapshot,
+            () => _theme,
+            () => _isRenderingSnapshot,
+            () => AppSettingsPanel.Visibility == Visibility.Visible,
+            ResourceBrush,
+            AccentForSpeaker,
+            ShortModelName,
+            DisplayStatusValue,
+            LoadSharedProviderConfigAsync,
+            (online, error, latencyMs, status) => PersistProviderReachabilityAsync(online, error, latencyMs, status),
+            preferredSessionId => LoadSessionsAsync(preferredSessionId),
+            (snapshot, sessionId) => SaveSnapshotWithFeedbackAsync(snapshot, sessionId),
+            status => RefreshActiveSessionAsync(status),
+            force => RefreshProviderReachabilityAsync(force),
+            () => UpdateProviderHealthPopup());
         _wpfSettings = _wpfSettingsStore.Load();
         ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
         InitializeThemePicker();
@@ -1008,16 +1054,7 @@ public partial class MainWindow : Window
         var activeCount = snapshot.Agents.Count(agent => agent.Active);
         SelectComboTag(ActiveParticipantsPicker, Math.Clamp(activeCount, 1, AgentRosterService.MaxParticipants).ToString(System.Globalization.CultureInfo.InvariantCulture));
         SelectAgentCountControls(activeCount);
-        ProviderBaseUrlText.Text = snapshot.ProviderBaseUrl;
-        SelectComboTag(ProviderPresetPicker, ProviderPresetTagForUrl(snapshot.ProviderBaseUrl));
-        ProviderModelText.Text = snapshot.ProviderModel == "-" ? "" : snapshot.ProviderModel;
-        _roleModels["alpha"] = snapshot.AlphaModel;
-        _roleModels["beta"] = snapshot.BetaModel;
-        _roleModels["gamma"] = snapshot.GammaModel;
-        _roleModels["delta"] = snapshot.DeltaModel;
-        _roleModels["narrator"] = snapshot.NarratorModel;
-        UpdateRoleModelEditors();
-        UpdateRoleModelSummary();
+        ProviderSettings.ApplySnapshot(snapshot);
         ProviderTimeoutText.Text = snapshot.ProviderTimeout.ToString(System.Globalization.CultureInfo.InvariantCulture);
         ProviderTemperatureText.Text = snapshot.ProviderTemperature.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
         ProviderMaxOutputText.Text = snapshot.ProviderMaxOutputTokens.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -2832,7 +2869,7 @@ public partial class MainWindow : Window
             MinWidth = 230,
             ToolTip = "Pick an advertised model or type one manually."
         };
-        foreach (var model in _advertisedModels)
+        foreach (var model in ProviderSettings.AdvertisedModels)
         {
             modelBox.Items.Add(model);
         }
@@ -2848,7 +2885,7 @@ public partial class MainWindow : Window
         var actions = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
         actions.Children.Add(ActionButton("Save + test", async (_, _) =>
         {
-            await SaveAndTestProviderQuickSetupAsync(baseUrlBox.Text, modelBox.Text, statusText);
+            await ProviderSettings.SaveAndTestProviderQuickSetupAsync(baseUrlBox.Text, modelBox.Text, statusText);
         }, true, TranscriptActionKind.Primary));
         actions.Children.Add(ActionButton("Open settings", (_, _) => OpenModelProviderSettings(baseUrlBox.Text, modelBox.Text), true));
 
@@ -5844,448 +5881,41 @@ public partial class MainWindow : Window
 
     private async void TestProviderButton_Click(object sender, RoutedEventArgs e)
     {
-        await TestProviderAsync(TestProviderButton);
+        if (_providerSettingsCoordinator is not null)
+        {
+            await _providerSettingsCoordinator.TestProviderAsync(TestProviderButton);
+        }
     }
 
     private async void ApplyProviderPresetButton_Click(object sender, RoutedEventArgs e)
     {
-        var preset = SelectedComboTag(ProviderPresetPicker, "lm_studio");
-        var url = ProviderPresetBaseUrl(preset);
-        if (string.IsNullOrWhiteSpace(url))
+        if (_providerSettingsCoordinator is not null)
         {
-            ProviderPresetStatusText.Foreground = ResourceBrush("MutedTextBrush");
-            ProviderPresetStatusText.Text = "Manual provider selected. Type a base URL, then press Enter or Apply Settings.";
-            ProviderBaseUrlText.Focus();
-            return;
+            await _providerSettingsCoordinator.ApplyProviderPresetAsync();
         }
-
-        ProviderBaseUrlText.Text = url;
-        ProviderPresetStatusText.Foreground = ResourceBrush("AlphaAccentBrush");
-        ProviderPresetStatusText.Text = $"Provider preset applied: {url}";
-        await PersistModelRoutingAsync("Provider preset applied.", refreshModels: true);
-    }
-
-    private static string ProviderPresetBaseUrl(string preset)
-    {
-        return preset switch
-        {
-            "ollama" => "http://127.0.0.1:11434/v1",
-            "local_8000" => "http://127.0.0.1:8000/v1",
-            "lm_studio" => "http://127.0.0.1:1234/v1",
-            _ => ""
-        };
-    }
-
-    private static string ProviderPresetTagForUrl(string baseUrl)
-    {
-        var normalized = ModelProviderHealthService.NormalizeBaseUrl(baseUrl);
-        return normalized switch
-        {
-            "http://127.0.0.1:1234/v1" => "lm_studio",
-            "http://localhost:1234/v1" => "lm_studio",
-            "http://127.0.0.1:11434/v1" => "ollama",
-            "http://localhost:11434/v1" => "ollama",
-            "http://127.0.0.1:8000/v1" => "local_8000",
-            "http://localhost:8000/v1" => "local_8000",
-            _ => "manual"
-        };
-    }
-
-    private async Task TestProviderAsync(Control busyControl)
-    {
-        if (_activeSession is null)
-        {
-            ProviderTestStatus.Text = "No active session.";
-            return;
-        }
-
-        await RunBusyAsync(busyControl, async () =>
-        {
-            ProviderTestStatus.Text = "Testing provider...";
-            var config = await LoadSharedProviderConfigAsync();
-            if (config is null)
-            {
-                ProviderTestStatus.Text = "No provider config found.";
-                return;
-            }
-
-            var result = await _providerHealth.TestCompletionAsync(config);
-            _lastProviderHealthCheckedAt = result.CheckedAt;
-            if (result.Ok)
-            {
-                await PersistProviderReachabilityAsync(true, "", result.LatencyMs, "Provider online.");
-            }
-            else
-            {
-                var health = await _providerHealth.CheckAsync(ProviderReachabilityService.HealthProbeConfig(config));
-                _lastProviderHealthCheckedAt = health.CheckedAt;
-                _lastProviderModelCount = health.ModelCount;
-                await PersistProviderReachabilityAsync(
-                    health.Ok,
-                    health.Ok ? result.Error : health.Error,
-                    result.LatencyMs,
-                    health.Ok ? "Provider online; completion test failed." : "Provider offline.");
-            }
-
-            ProviderTestStatus.Text = result.Ok
-                ? $"Provider ok: {result.Model} at {result.BaseUrl}; {result.LatencyMs} ms; reply: {result.Text}"
-                : $"Provider failed: {result.Error}";
-            UpdateProviderHealthPopup();
-        });
-    }
-
-    private async Task SaveAndTestProviderQuickSetupAsync(string baseUrl, string model, TextBlock statusText)
-    {
-        if (_activeSession is null)
-        {
-            statusText.Foreground = ResourceBrush("DangerTextBrush");
-            statusText.Text = "No active session.";
-            return;
-        }
-
-        baseUrl = baseUrl.Trim();
-        model = model.Trim();
-        if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(model))
-        {
-            statusText.Foreground = ResourceBrush("DangerTextBrush");
-            statusText.Text = "Base URL and default model are required.";
-            return;
-        }
-
-        statusText.Foreground = ResourceBrush("MutedTextBrush");
-        statusText.Text = "Saving provider setup...";
-        ProviderBaseUrlText.Text = baseUrl;
-        ProviderModelText.Text = model;
-        await PersistModelRoutingAsync("Provider quick setup saved.", refreshModels: true);
-
-        var config = await LoadSharedProviderConfigAsync();
-        if (config is null)
-        {
-            statusText.Foreground = ResourceBrush("DangerTextBrush");
-            statusText.Text = "Provider setup could not be loaded after save.";
-            return;
-        }
-
-        statusText.Text = "Testing provider completion...";
-        var result = await _providerHealth.TestCompletionAsync(config);
-        if (result.Ok)
-        {
-            await PersistProviderReachabilityAsync(true, "", result.LatencyMs, "Provider online.");
-            statusText.Foreground = ResourceBrush("AlphaAccentBrush");
-            statusText.Text = $"Provider online: {result.Model}, {result.LatencyMs} ms.";
-            ProviderTestStatus.Text = $"Provider ok: {result.Model} at {result.BaseUrl}; {result.LatencyMs} ms; reply: {result.Text}";
-            RefreshActiveSession("Provider quick setup complete.");
-            return;
-        }
-
-        var health = await _providerHealth.CheckAsync(ProviderReachabilityService.HealthProbeConfig(config));
-        await PersistProviderReachabilityAsync(
-            health.Ok,
-            health.Ok ? result.Error : health.Error,
-            result.LatencyMs,
-            health.Ok ? "Provider online; completion test failed." : "Provider offline.");
-
-        statusText.Foreground = health.Ok ? ResourceBrush("BetaAccentBrush") : ResourceBrush("DangerTextBrush");
-        statusText.Text = health.Ok
-            ? $"Provider responded, but completion failed: {result.Error}"
-            : $"Provider offline: {health.Error}";
-        ProviderTestStatus.Text = result.Ok
-            ? $"Provider ok: {result.Model} at {result.BaseUrl}; {result.LatencyMs} ms; reply: {result.Text}"
-            : $"Provider failed: {result.Error}";
-        RefreshActiveSession(health.Ok ? "Provider reachable; completion test failed." : "Provider offline.");
     }
 
     private async void PreloadSelectedModelsButton_Click(object sender, RoutedEventArgs e)
     {
-        await RunBusyAsync(PreloadSelectedModelsButton, async () =>
+        if (_providerSettingsCoordinator is not null)
         {
-            SaveRoleModelDrafts();
-            var models = SelectedModelsForPreload();
-            var preview = CurrentLoadPlanPreview();
-            UpdateLoadPlanPreview();
-            if (models.Count == 0)
-            {
-                PreloadModelsStatusText.Foreground = ResourceBrush("DangerTextBrush");
-                PreloadModelsStatusText.Text = "Select a default or participant model before preloading.";
-                return;
-            }
-
-            if (preview.Status.Equals("cautious", StringComparison.OrdinalIgnoreCase))
-            {
-                var confirm = ConfirmDialog.Show(
-                    this,
-                    _theme,
-                    "Preload Selected Models",
-                    $"{FormatLoadPlanPreview(preview)}\n\nContinue with preload?",
-                    "Preload");
-                if (!confirm)
-                {
-                    PreloadModelsStatusText.Foreground = ResourceBrush("MutedTextBrush");
-                    PreloadModelsStatusText.Text = "Preload cancelled.";
-                    return;
-                }
-            }
-
-            PreloadModelsStatusText.Foreground = ResourceBrush("MutedTextBrush");
-            PreloadModelsStatusText.Text = $"Preloading {models.Count} selected model(s)...";
-            PreloadModelsItems.Children.Clear();
-
-            var results = await _modelPreloadService.PreloadAsync(ProviderBaseUrlText.Text.Trim(), models);
-            _lastPreloadResults.Clear();
-            foreach (var result in results)
-            {
-                _lastPreloadResults[result.Model] = result;
-            }
-
-            var failures = results.Count(result => result.IsFailure);
-            PreloadModelsStatusText.Foreground = failures > 0
-                ? ResourceBrush("DangerTextBrush")
-                : ResourceBrush("AlphaAccentBrush");
-            PreloadModelsStatusText.Text = $"Last preload: {DateTime.Now:h:mm:ss tt} - {results.Count} model(s), {failures} warning(s).";
-            PopulatePreloadModelBadges(results);
-            UpdateLoadPlanPreview();
-            ProviderTestStatus.Text = failures > 0
-                ? "Model preload finished with warnings. See preload telemetry."
-                : "Selected models preloaded or already available.";
-
-            await RefreshAdvertisedModelsAsync(force: true);
-            UpdateModelStateLabels();
-        });
+            await _providerSettingsCoordinator.PreloadSelectedModelsAsync();
+        }
     }
 
     private async void AutoConfigureButton_Click(object sender, RoutedEventArgs e)
     {
-        await RunBusyAsync(AutoConfigureButton, async () =>
+        if (_providerSettingsCoordinator is not null)
         {
-            ApplyAutoConfigureButton.IsEnabled = false;
-            AutoConfigureRecommendationItems.Children.Clear();
-            AutoConfigureStatusText.Foreground = ResourceBrush("MutedTextBrush");
-            AutoConfigureStatusText.Text = "Detecting GPU setup, provider capability, and advertised models...";
-            AutoConfigureHardwareText.Text = "";
-            AutoConfigureProviderText.Text = "";
-
-            var strategy = SelectedComboTag(AutoConfigureStrategyPicker, "auto");
-            var plan = await _providerAutoConfigureService.DetectAsync(ProviderBaseUrlText.Text.Trim(), strategy);
-            _lastAutoConfigurePlan = plan;
-            PopulateAutoConfigurePlan(plan);
-
-            if (plan.ProviderOnline)
-            {
-                _advertisedModels = plan.Models.Select(model => model.Name).ToArray();
-                _lastProviderModelCount = _advertisedModels.Count;
-                _lastModelListCheckedAt = DateTimeOffset.Now;
-                _isUpdatingRoleModelEditor = true;
-                try
-                {
-                    UpdateModelComboItems(ProviderModelText);
-                    foreach (var comboBox in RoleModelComboBoxes())
-                    {
-                        UpdateModelComboItems(comboBox);
-                    }
-                }
-                finally
-                {
-                    _isUpdatingRoleModelEditor = false;
-                }
-            }
-
-            UpdateProviderHealthPopup();
-        });
+            await _providerSettingsCoordinator.AutoConfigureAsync();
+        }
     }
 
     private async void ApplyAutoConfigureButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_lastAutoConfigurePlan is null)
+        if (_providerSettingsCoordinator is not null)
         {
-            AutoConfigureStatusText.Text = "Run Auto Configure first.";
-            return;
-        }
-
-        await RunBusyAsync(ApplyAutoConfigureButton, async () =>
-        {
-            var plan = _lastAutoConfigurePlan;
-            if (!plan.ProviderOnline || string.IsNullOrWhiteSpace(plan.DefaultModel) || plan.Assignments.Count == 0)
-            {
-                AutoConfigureStatusText.Foreground = ResourceBrush("DangerTextBrush");
-                AutoConfigureStatusText.Text = "No usable recommendation to apply.";
-                return;
-            }
-
-            if (_activeSession is null)
-            {
-                await _coreSessionStore.EnsureDefaultSessionAsync();
-                await LoadSessionsAsync("default");
-            }
-
-            _isUpdatingRoleModelEditor = true;
-            try
-            {
-                ProviderBaseUrlText.Text = plan.ProviderBaseUrl;
-                ProviderModelText.Text = plan.DefaultModel;
-                var uniqueModels = plan.Assignments
-                    .Select(item => item.Model)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Count();
-                foreach (var assignment in plan.Assignments)
-                {
-                    var key = assignment.Role.ToLowerInvariant();
-                    var model = uniqueModels <= 1 || assignment.Model.Equals(plan.DefaultModel, StringComparison.OrdinalIgnoreCase)
-                        ? ""
-                        : assignment.Model;
-                    SetRoleModelText(key, model);
-                    _roleModels[key] = model;
-                }
-            }
-            finally
-            {
-                _isUpdatingRoleModelEditor = false;
-            }
-
-            SaveRoleModelDrafts();
-            UpdateRoleModelSummary();
-            await PersistModelRoutingAsync("Auto configuration applied.", refreshModels: true);
-            PreloadModelsStatusText.Foreground = ResourceBrush("MutedTextBrush");
-            PreloadModelsStatusText.Text = plan.PreloadGuidance;
-            AutoConfigureStatusText.Foreground = ResourceBrush("AlphaAccentBrush");
-            AutoConfigureStatusText.Text = "Applied recommended model routing.";
-        });
-    }
-
-    private void PopulateAutoConfigurePlan(ProviderAutoConfigurePlan plan)
-    {
-        AutoConfigureRecommendationItems.Children.Clear();
-        AutoConfigureStatusText.Foreground = plan.ProviderOnline
-            ? ResourceBrush("AlphaAccentBrush")
-            : ResourceBrush("DangerTextBrush");
-        AutoConfigureStatusText.Text = plan.ProviderOnline
-            ? $"Detected {plan.Models.Count} chat model(s). Strategy: {DisplayAutoConfigureStrategy(plan.Strategy)}."
-            : "Provider offline or no advertised models found.";
-        AutoConfigureHardwareText.Text = FormatHardwareSummary(plan.Hardware);
-        AutoConfigureProviderText.Text = $"Provider: {plan.ProviderBaseUrl} - {(plan.LmStudioNativeApi ? "LM Studio enhanced mode" : "OpenAI-compatible mode")}. {plan.PreloadGuidance}";
-
-        foreach (var assignment in plan.Assignments)
-        {
-            AutoConfigureRecommendationItems.Children.Add(CreateAutoConfigureBadge(assignment));
-        }
-
-        foreach (var warning in plan.Warnings)
-        {
-            AutoConfigureRecommendationItems.Children.Add(CreateTextBadge("Note", warning, ResourceBrush("MutedTextBrush")));
-        }
-
-        ApplyAutoConfigureButton.IsEnabled = plan.ProviderOnline && plan.Assignments.Count > 0;
-        ProviderModelsStatus.Text = plan.ProviderOnline
-            ? $"{plan.Models.Count} advertised chat models found by Auto Configure."
-            : "Auto Configure could not reach an OpenAI-compatible provider.";
-        UpdateLoadPlanPreview();
-    }
-
-    private Border CreateAutoConfigureBadge(ModelAssignmentRecommendation assignment)
-    {
-        var accent = AccentForSpeaker(assignment.Role);
-        return new Border
-        {
-            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.12),
-            BorderBrush = accent,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(7, 4, 7, 5),
-            Margin = new Thickness(0, 0, 6, 6),
-            ToolTip = $"{assignment.Role}: {assignment.Model}{Environment.NewLine}{assignment.Reason}",
-            Child = new StackPanel
-            {
-                Children =
-                {
-                    new TextBlock
-                    {
-                        Text = assignment.Role,
-                        Foreground = accent,
-                        FontSize = 11,
-                        FontWeight = FontWeights.SemiBold
-                    },
-                    new TextBlock
-                    {
-                        Text = ShortModelName(assignment.Model),
-                        Foreground = ResourceBrush("TextBrush"),
-                        FontSize = 11,
-                        TextTrimming = TextTrimming.CharacterEllipsis,
-                        MaxWidth = 150
-                    }
-                }
-            }
-        };
-    }
-
-    private Border CreateTextBadge(string label, string text, Brush accent)
-    {
-        return new Border
-        {
-            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.1),
-            BorderBrush = ResourceBrush("ControlBorderBrush"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(7, 4, 7, 5),
-            Margin = new Thickness(0, 0, 6, 6),
-            ToolTip = text,
-            Child = new TextBlock
-            {
-                Text = $"{label}: {text}",
-                Foreground = accent,
-                FontSize = 11,
-                TextWrapping = TextWrapping.Wrap,
-                MaxWidth = 320
-            }
-        };
-    }
-
-    private static string DisplayAutoConfigureStrategy(string strategy)
-    {
-        return strategy switch
-        {
-            "low_vram" => "Low VRAM",
-            "max_variety" => "Max variety",
-            "absurd_lab" => "Absurd Lab",
-            "performance" => "Performance",
-            "conservative" => "Conservative",
-            _ => "Balanced"
-        };
-    }
-
-    private static string FormatHardwareSummary(HardwareProbe hardware)
-    {
-        var gpuSummary = hardware.Gpus.Count == 0
-            ? "GPU: none detected"
-            : "GPU: " + string.Join("; ", hardware.Gpus.Select(gpu =>
-            {
-                var vram = gpu.VramTotalGb.HasValue ? $"{gpu.VramTotalGb.Value:0.#} GB VRAM" : "VRAM unknown";
-                var used = gpu.VramUsedGb.HasValue ? $", {gpu.VramUsedGb.Value:0.#} GB used" : "";
-                return $"{gpu.Name} ({gpu.Vendor}, {vram}{used})";
-            }));
-        var ram = hardware.SystemRamTotalGb.HasValue
-            ? $"RAM: {hardware.SystemRamTotalGb.Value:0.#} GB total"
-            : "RAM: unknown";
-        return $"{gpuSummary}. {ram}.";
-    }
-
-    private void SetRoleModelText(string key, string model)
-    {
-        switch (key)
-        {
-            case "alpha":
-                AlphaRoleModelText.Text = model;
-                break;
-            case "beta":
-                BetaRoleModelText.Text = model;
-                break;
-            case "gamma":
-                GammaRoleModelText.Text = model;
-                break;
-            case "delta":
-                DeltaRoleModelText.Text = model;
-                break;
-            case "narrator":
-                NarratorRoleModelText.Text = model;
-                break;
+            await _providerSettingsCoordinator.ApplyAutoConfigureAsync();
         }
     }
 
@@ -6309,12 +5939,12 @@ public partial class MainWindow : Window
 
         var baseUrl = ProviderBaseUrlText.Text.Trim();
         var model = ProviderModelText.Text.Trim();
-        SaveRoleModelDrafts();
-        var alphaModel = RoleModel("alpha");
-        var betaModel = RoleModel("beta");
-        var gammaModel = RoleModel("gamma");
-        var deltaModel = RoleModel("delta");
-        var narratorModel = RoleModel("narrator");
+        ProviderSettings.SaveRoleModelDrafts();
+        var alphaModel = ProviderSettings.RoleModel("alpha");
+        var betaModel = ProviderSettings.RoleModel("beta");
+        var gammaModel = ProviderSettings.RoleModel("gamma");
+        var deltaModel = ProviderSettings.RoleModel("delta");
+        var narratorModel = ProviderSettings.RoleModel("narrator");
         if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(model))
         {
             ProviderTestStatus.Text = "Base URL and model are required.";
@@ -6403,11 +6033,11 @@ public partial class MainWindow : Window
                 LastLatencyMs = snapshot.Configs.TryGetValue("shared", out existing) ? existing.LastLatencyMs : 0,
                 LastTestOk = snapshot.Configs.TryGetValue("shared", out existing) && existing.LastTestOk
             };
-            SaveRoleModelConfig(snapshot.Configs, "alpha", alphaModel, snapshot.Configs["shared"]);
-            SaveRoleModelConfig(snapshot.Configs, "beta", betaModel, snapshot.Configs["shared"]);
-            SaveRoleModelConfig(snapshot.Configs, "gamma", gammaModel, snapshot.Configs["shared"]);
-            SaveRoleModelConfig(snapshot.Configs, "delta", deltaModel, snapshot.Configs["shared"]);
-            SaveRoleModelConfig(snapshot.Configs, "narrator", narratorModel, snapshot.Configs["shared"]);
+            ProviderSettingsCoordinator.SaveRoleModelConfig(snapshot.Configs, "alpha", alphaModel, snapshot.Configs["shared"]);
+            ProviderSettingsCoordinator.SaveRoleModelConfig(snapshot.Configs, "beta", betaModel, snapshot.Configs["shared"]);
+            ProviderSettingsCoordinator.SaveRoleModelConfig(snapshot.Configs, "gamma", gammaModel, snapshot.Configs["shared"]);
+            ProviderSettingsCoordinator.SaveRoleModelConfig(snapshot.Configs, "delta", deltaModel, snapshot.Configs["shared"]);
+            ProviderSettingsCoordinator.SaveRoleModelConfig(snapshot.Configs, "narrator", narratorModel, snapshot.Configs["shared"]);
             snapshot.Engine.TranscriptWindow = transcriptWindow;
             snapshot.Engine.PrivateWindow = privateWindow;
             snapshot.Engine.NotesWindow = notesWindow;
@@ -7575,12 +7205,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _lastProviderHealthCheckedAt = result.CheckedAt;
-        if (result.ModelCount.HasValue)
-        {
-            _lastProviderModelCount = result.ModelCount.Value;
-        }
-
+        _providerSettingsCoordinator?.RecordProviderReachabilityCheck(result.CheckedAt, result.ModelCount);
         _providerHealthTimer.Interval = result.NextInterval;
         await UpdateActiveProviderStatusOnlyAsync(result.Status);
         UpdateProviderHealthPopup();
@@ -8987,7 +8612,11 @@ public partial class MainWindow : Window
 
     private async void ProviderHealthTestButton_Click(object sender, RoutedEventArgs e)
     {
-        await TestProviderAsync(ProviderHealthTestButton);
+        if (_providerSettingsCoordinator is not null)
+        {
+            await _providerSettingsCoordinator.TestProviderAsync(ProviderHealthTestButton);
+        }
+
         UpdateProviderHealthPopup();
     }
 
@@ -9019,10 +8648,12 @@ public partial class MainWindow : Window
         var baseUrl = snapshot?.ProviderBaseUrl ?? ProviderBaseUrlText?.Text?.Trim() ?? "-";
         var model = snapshot?.ProviderModel ?? ProviderModelText?.Text?.Trim() ?? "-";
         var error = snapshot?.ProviderLastError ?? "";
-        var modelCount = _advertisedModels.Count > 0
-            ? _advertisedModels.Count
-            : _lastProviderModelCount;
-        var checkedAt = _lastProviderHealthCheckedAt ?? _lastModelListCheckedAt;
+        var advertisedModels = _providerSettingsCoordinator?.AdvertisedModels ?? [];
+        var modelCount = advertisedModels.Count > 0
+            ? advertisedModels.Count
+            : _providerSettingsCoordinator?.LastProviderModelCount ?? -1;
+        var checkedAt = _providerSettingsCoordinator?.LastProviderHealthCheckedAt
+            ?? _providerSettingsCoordinator?.LastModelListCheckedAt;
 
         ProviderHealthStatusText.Text = online ? "ONLINE" : "OFFLINE";
         ProviderHealthStatusText.Foreground = online ? ResourceBrush("PrimaryBorderBrush") : ResourceBrush("DangerTextBrush");
@@ -9039,10 +8670,10 @@ public partial class MainWindow : Window
             ? ResourceBrush("MutedTextBrush")
             : ResourceBrush("DangerTextBrush");
 
-        var missingModel = _advertisedModels.Count > 0
+        var missingModel = advertisedModels.Count > 0
             && !string.IsNullOrWhiteSpace(model)
             && model != "-"
-            && !_advertisedModels.Contains(model, StringComparer.OrdinalIgnoreCase);
+            && !advertisedModels.Contains(model, StringComparer.OrdinalIgnoreCase);
         ProviderHealthModelWarning.Visibility = missingModel ? Visibility.Visible : Visibility.Collapsed;
         ProviderHealthModelWarningText.Text = missingModel
             ? $"Selected default model '{model}' is not in the advertised model list. Open settings to reselect or type it manually."
@@ -9221,7 +8852,10 @@ public partial class MainWindow : Window
 
     private async void ProviderBaseUrlText_Commit(object sender, KeyboardFocusChangedEventArgs e)
     {
-        await PersistModelRoutingAsync("Provider base URL saved.", refreshModels: true);
+        if (_providerSettingsCoordinator is not null)
+        {
+            await _providerSettingsCoordinator.ProviderBaseUrlCommittedAsync();
+        }
     }
 
     private async void ProviderBaseUrlText_KeyDown(object sender, KeyEventArgs e)
@@ -9232,23 +8866,26 @@ public partial class MainWindow : Window
         }
 
         e.Handled = true;
-        await PersistModelRoutingAsync("Provider base URL saved.", refreshModels: true);
+        if (_providerSettingsCoordinator is not null)
+        {
+            await _providerSettingsCoordinator.ProviderBaseUrlCommittedAsync();
+        }
     }
 
     private async void ProviderModelText_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_isRenderingSnapshot || _isUpdatingRoleModelEditor)
+        if (_providerSettingsCoordinator is not null)
         {
-            return;
+            await _providerSettingsCoordinator.ProviderModelSelectionChangedAsync();
         }
-
-        CommitSelectedComboBoxItem(ProviderModelText);
-        await PersistModelRoutingAsync("Default model saved.");
     }
 
     private async void ProviderModelText_Commit(object sender, KeyboardFocusChangedEventArgs e)
     {
-        await PersistModelRoutingAsync("Default model saved.");
+        if (_providerSettingsCoordinator is not null)
+        {
+            await _providerSettingsCoordinator.ProviderModelCommittedAsync();
+        }
     }
 
     private async void ProviderModelText_KeyDown(object sender, KeyEventArgs e)
@@ -9259,129 +8896,38 @@ public partial class MainWindow : Window
         }
 
         e.Handled = true;
-        await PersistModelRoutingAsync("Default model saved.");
+        if (_providerSettingsCoordinator is not null)
+        {
+            await _providerSettingsCoordinator.ProviderModelCommittedAsync();
+        }
     }
 
     private async void ParticipantModelText_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_isRenderingSnapshot || _isUpdatingRoleModelEditor || sender is not ComboBox comboBox)
+        if (_providerSettingsCoordinator is not null && sender is ComboBox comboBox)
         {
-            return;
+            await _providerSettingsCoordinator.ParticipantModelSelectionChangedAsync(comboBox);
         }
-
-        CommitSelectedComboBoxItem(comboBox);
-        SaveRoleModelDraft(comboBox);
-        await PersistModelRoutingAsync($"{DisplayLockKey(comboBox.Tag?.ToString() ?? "")} model saved.");
     }
 
     private async void ParticipantModelText_Commit(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (sender is not ComboBox comboBox)
+        if (_providerSettingsCoordinator is not null && sender is ComboBox comboBox)
         {
-            return;
+            await _providerSettingsCoordinator.ParticipantModelCommittedAsync(comboBox);
         }
-
-        SaveRoleModelDraft(comboBox);
-        await PersistModelRoutingAsync($"{DisplayLockKey(comboBox.Tag?.ToString() ?? "")} model saved.");
     }
 
     private async void ParticipantModelText_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || sender is not ComboBox comboBox)
+        if (e.Key != Key.Enter || _providerSettingsCoordinator is null || sender is not ComboBox comboBox)
         {
             return;
         }
 
         e.Handled = true;
-        SaveRoleModelDraft(comboBox);
-        await PersistModelRoutingAsync($"{DisplayLockKey(comboBox.Tag?.ToString() ?? "")} model saved.");
+        await _providerSettingsCoordinator.ParticipantModelCommittedAsync(comboBox);
     }
-
-    private async Task PersistModelRoutingAsync(string successStatus, bool refreshModels = false)
-    {
-        if (_isRenderingSnapshot || _isUpdatingRoleModelEditor || _isPersistingModelRouting || _activeSession is null)
-        {
-            return;
-        }
-
-        var baseUrl = ProviderBaseUrlText.Text.Trim();
-        var defaultModel = ProviderModelText.Text.Trim();
-        SaveRoleModelDrafts();
-        UpdateRoleModelSummary();
-        if (string.IsNullOrWhiteSpace(baseUrl))
-        {
-            ProviderTestStatus.Text = "Provider base URL is required.";
-            return;
-        }
-
-        _isPersistingModelRouting = true;
-        try
-        {
-            await _arenaOperationLock.WaitAsync();
-            try
-            {
-                var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-                if (snapshot is null)
-                {
-                    ProviderTestStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
-                    return;
-                }
-
-                var existingShared = snapshot.Configs.TryGetValue("shared", out var shared)
-                    ? shared
-                    : new CoreModelProviderConfig();
-                var updatedShared = new CoreModelProviderConfig
-                {
-                    BaseUrl = ModelProviderHealthService.NormalizeBaseUrl(baseUrl),
-                    Model = defaultModel,
-                    Timeout = existingShared.Timeout,
-                    Temperature = existingShared.Temperature,
-                    MaxOutputTokens = existingShared.MaxOutputTokens,
-                    LastError = existingShared.LastError,
-                    LastLatencyMs = existingShared.LastLatencyMs,
-                    LastTestOk = existingShared.LastTestOk,
-                    Extra = existingShared.Extra
-                };
-
-                snapshot.Configs["shared"] = updatedShared;
-                SaveRoleModelConfig(snapshot.Configs, "alpha", RoleModel("alpha"), updatedShared);
-                SaveRoleModelConfig(snapshot.Configs, "beta", RoleModel("beta"), updatedShared);
-                SaveRoleModelConfig(snapshot.Configs, "gamma", RoleModel("gamma"), updatedShared);
-                SaveRoleModelConfig(snapshot.Configs, "delta", RoleModel("delta"), updatedShared);
-                SaveRoleModelConfig(snapshot.Configs, "narrator", RoleModel("narrator"), updatedShared);
-
-                await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-                await _eventLogStore.AppendAsync(_activeSession.Id, "native_model_routing_applied", new
-                {
-                    updatedShared.BaseUrl,
-                    updatedShared.Model,
-                    AlphaModel = RoleModel("alpha"),
-                    BetaModel = RoleModel("beta"),
-                    GammaModel = RoleModel("gamma"),
-                    DeltaModel = RoleModel("delta"),
-                    NarratorModel = RoleModel("narrator")
-                });
-            }
-            finally
-            {
-                _arenaOperationLock.Release();
-            }
-
-            await RefreshActiveSessionAsync(successStatus);
-            ProviderTestStatus.Text = successStatus;
-            if (refreshModels)
-            {
-                await RefreshAdvertisedModelsAsync(force: true);
-            }
-
-            _ = RefreshProviderReachabilityAsync(force: true);
-        }
-        finally
-        {
-            _isPersistingModelRouting = false;
-        }
-    }
-
     private void SetAppSettingsVisible(bool visible)
     {
         AppSettingsPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
@@ -9504,358 +9050,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task RefreshAdvertisedModelsAsync(bool force = false)
+    private Task RefreshAdvertisedModelsAsync(bool force = false)
     {
-        if (!force && AppSettingsPanel.Visibility != Visibility.Visible)
-        {
-            return;
-        }
-
-        if (_isRefreshingModels)
-        {
-            return;
-        }
-
-        _isRefreshingModels = true;
-        try
-        {
-            var config = new CoreModelProviderConfig
-            {
-                BaseUrl = ProviderBaseUrlText.Text.Trim(),
-                Model = ProviderModelText.Text.Trim(),
-                Timeout = int.TryParse(ProviderTimeoutText.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var timeout)
-                    ? Math.Clamp(timeout, 1, 3600)
-                    : 5,
-                Temperature = 0,
-                MaxOutputTokens = 16
-            };
-            var result = await _providerHealth.ListModelsAsync(config);
-            _lastModelListCheckedAt = result.CheckedAt;
-            if (result.Ok)
-            {
-                _advertisedModels = result.Models.OrderBy(model => model, StringComparer.OrdinalIgnoreCase).ToArray();
-                _lastProviderModelCount = _advertisedModels.Count;
-                ProviderModelsStatus.Text = $"{_advertisedModels.Count} advertised models found. Refreshes every 5s while settings are open.";
-                _isUpdatingRoleModelEditor = true;
-                try
-                {
-                    UpdateModelComboItems(ProviderModelText);
-                    foreach (var comboBox in RoleModelComboBoxes())
-                    {
-                        UpdateModelComboItems(comboBox);
-                    }
-
-                    UpdateModelStateLabels();
-                }
-                finally
-                {
-                    _isUpdatingRoleModelEditor = false;
-                }
-            }
-            else
-            {
-                ProviderModelsStatus.Text = $"Model list unavailable: {result.Error}";
-                UpdateModelStateLabels();
-            }
-            UpdateProviderHealthPopup();
-        }
-        finally
-        {
-            _isRefreshingModels = false;
-        }
+        return _providerSettingsCoordinator?.RefreshAdvertisedModelsAsync(force) ?? Task.CompletedTask;
     }
-
-    private void UpdateModelComboItems(ComboBox comboBox)
-    {
-        if (comboBox is null)
-        {
-            return;
-        }
-
-        var current = comboBox.Text;
-        var values = _advertisedModels
-            .Append(current)
-            .Where(item => !string.IsNullOrWhiteSpace(item))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        comboBox.ItemsSource = values;
-        comboBox.Text = current;
-    }
-
-    private void UpdateRoleModelEditors()
-    {
-        _isUpdatingRoleModelEditor = true;
-        try
-        {
-            foreach (var comboBox in RoleModelComboBoxes())
-            {
-                UpdateModelComboItems(comboBox);
-                comboBox.Text = RoleModel(comboBox.Tag?.ToString() ?? "");
-            }
-        }
-        finally
-        {
-            _isUpdatingRoleModelEditor = false;
-        }
-    }
-
-    private void UpdateRoleModelSummary()
-    {
-        if (RoleModelSummaryText is null)
-        {
-            return;
-        }
-
-        var defaultModel = ProviderModelText.Text.Trim();
-        var lines = new List<string>
-        {
-            $"Default: {DisplayRoleModel(defaultModel, "not selected")}",
-            $"Alpha: {DisplayParticipantModel(RoleModel("alpha"), defaultModel)}",
-            $"Beta: {DisplayParticipantModel(RoleModel("beta"), defaultModel)}",
-            $"Gamma: {DisplayParticipantModel(RoleModel("gamma"), defaultModel)}",
-            $"Delta: {DisplayParticipantModel(RoleModel("delta"), defaultModel)}",
-            $"Narrator: {DisplayParticipantModel(RoleModel("narrator"), defaultModel)}"
-        };
-        var extraAgents = (_lastRenderedSnapshot?.Agents ?? [])
-            .Where(agent => AgentRosterService.ParticipantOrder(agent.Id) >= 4)
-            .Select(agent => DisplayStatusValue(agent.Id))
-            .ToArray();
-        if (extraAgents.Length > 0)
-        {
-            lines.Insert(lines.Count - 1, $"{string.Join(", ", extraAgents)}: inherit default");
-        }
-
-        RoleModelSummaryText.Text = string.Join(Environment.NewLine, lines);
-        UpdateModelStateLabels();
-        UpdateLoadPlanPreview();
-    }
-
-    private void UpdateModelStateLabels()
-    {
-        UpdateDefaultModelStateLabel();
-        UpdateRoleModelStateLabel("alpha", AlphaModelStatusText);
-        UpdateRoleModelStateLabel("beta", BetaModelStatusText);
-        UpdateRoleModelStateLabel("gamma", GammaModelStatusText);
-        UpdateRoleModelStateLabel("delta", DeltaModelStatusText);
-        UpdateRoleModelStateLabel("narrator", NarratorModelStatusText);
-    }
-
-    private void UpdateDefaultModelStateLabel()
-    {
-        var model = ProviderModelText.Text.Trim();
-        if (string.IsNullOrWhiteSpace(model))
-        {
-            SetModelState(DefaultModelStatusText, "not selected", ResourceBrush("MutedTextBrush"));
-            return;
-        }
-
-        SetModelState(DefaultModelStatusText, ModelStateLabel(model), ModelStateBrush(model));
-    }
-
-    private void UpdateRoleModelStateLabel(string key, TextBlock target)
-    {
-        var model = RoleModel(key);
-        if (string.IsNullOrWhiteSpace(model))
-        {
-            SetModelState(target, "inherits default", ResourceBrush("MutedTextBrush"));
-            return;
-        }
-
-        SetModelState(target, ModelStateLabel(model), ModelStateBrush(model));
-    }
-
-    private string ModelStateLabel(string model)
-    {
-        if (_lastPreloadResults.TryGetValue(model, out var preload) && preload.IsFailure)
-        {
-            return "failed preload";
-        }
-
-        if (_advertisedModels.Count == 0)
-        {
-            return "selected";
-        }
-
-        return _advertisedModels.Contains(model, StringComparer.OrdinalIgnoreCase)
-            ? "selected"
-            : "unavailable";
-    }
-
-    private Brush ModelStateBrush(string model)
-    {
-        var label = ModelStateLabel(model);
-        return label switch
-        {
-            "failed preload" or "unavailable" => ResourceBrush("DangerTextBrush"),
-            "selected" => ResourceBrush("AlphaAccentBrush"),
-            _ => ResourceBrush("MutedTextBrush")
-        };
-    }
-
-    private static void SetModelState(TextBlock target, string text, Brush brush)
-    {
-        target.Text = text;
-        target.Foreground = brush;
-        target.ToolTip = text;
-    }
-
-    private void SaveRoleModelDrafts()
-    {
-        foreach (var comboBox in RoleModelComboBoxes())
-        {
-            SaveRoleModelDraft(comboBox);
-        }
-
-        UpdateRoleModelSummary();
-    }
-
-    private void SaveRoleModelDraft(ComboBox comboBox)
-    {
-        if (comboBox.Tag is string key)
-        {
-            _roleModels[key] = comboBox.Text.Trim();
-        }
-    }
-
-    private static void CommitSelectedComboBoxItem(ComboBox comboBox)
-    {
-        if (comboBox.SelectedItem is string selected)
-        {
-            comboBox.Text = selected;
-        }
-    }
-
-    private IEnumerable<ComboBox> RoleModelComboBoxes()
-    {
-        yield return AlphaRoleModelText;
-        yield return BetaRoleModelText;
-        yield return GammaRoleModelText;
-        yield return DeltaRoleModelText;
-        yield return NarratorRoleModelText;
-    }
-
-    private IReadOnlyList<string> SelectedModelsForPreload()
-    {
-        var models = new List<string>();
-        var defaultModel = ProviderModelText.Text.Trim();
-        if (!string.IsNullOrWhiteSpace(defaultModel))
-        {
-            models.Add(defaultModel);
-        }
-
-        foreach (var key in RoleModelKeys())
-        {
-            var model = RoleModel(key);
-            if (!string.IsNullOrWhiteSpace(model))
-            {
-                models.Add(model);
-            }
-        }
-
-        return models
-            .Where(model => !string.IsNullOrWhiteSpace(model))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
-
-    private ModelLoadPlanPreview CurrentLoadPlanPreview()
-    {
-        return ProviderAutoConfigureService.PreviewLoadPlan(SelectedModelsForPreload(), _lastAutoConfigurePlan?.Hardware);
-    }
-
-    private void UpdateLoadPlanPreview()
-    {
-        if (LoadPlanPreviewText is null)
-        {
-            return;
-        }
-
-        var preview = CurrentLoadPlanPreview();
-        LoadPlanPreviewText.Text = FormatLoadPlanPreview(preview);
-        LoadPlanPreviewText.Foreground = preview.Status switch
-        {
-            "comfortable" => ResourceBrush("AlphaAccentBrush"),
-            "cautious" => ResourceBrush("BetaAccentBrush"),
-            "mixed" => ResourceBrush("BetaAccentBrush"),
-            "empty" => ResourceBrush("MutedTextBrush"),
-            _ => ResourceBrush("MutedTextBrush")
-        };
-    }
-
-    private static string FormatLoadPlanPreview(ModelLoadPlanPreview preview)
-    {
-        if (preview.Models.Count == 0)
-        {
-            return preview.Guidance;
-        }
-
-        var modelNames = string.Join(", ", preview.Models.Select(model =>
-        {
-            var footprint = model.EstimatedFootprintGb is double gb ? $"{gb:0.#} GB" : "unknown size";
-            return $"{model.Name} ({footprint})";
-        }));
-        return $"Load plan: {preview.Models.Count} unique model(s), estimated {preview.EstimatedTotalFootprintGb:0.#} GB total footprint, comfortable per-model target {preview.ComfortablePerModelTargetGb:0.#} GB. Status: {preview.Status}. {preview.Guidance} Models: {modelNames}";
-    }
-
-    private static string FormatPreloadResults(IReadOnlyList<ModelPreloadResult> results)
-    {
-        return string.Join(
-            Environment.NewLine,
-            results.Select(result =>
-            {
-                if (string.IsNullOrWhiteSpace(result.Model))
-                {
-                    return $"{TitleCaseStatus(result.Status)}: {result.Detail}";
-                }
-
-                return $"{TitleCaseStatus(result.Status)}: {result.Model} - {result.Detail}";
-            }));
-    }
-
-    private static string TitleCaseStatus(string status)
-    {
-        return string.IsNullOrWhiteSpace(status)
-            ? "Status"
-            : string.Concat(status[..1].ToUpperInvariant(), status[1..]);
-    }
-
-    private void PopulatePreloadModelBadges(IReadOnlyList<ModelPreloadResult> results)
-    {
-        PreloadModelsItems.Children.Clear();
-        foreach (var result in results)
-        {
-            var accent = result.Status.ToLowerInvariant() switch
-            {
-                "loaded" or "ready" => ResourceBrush("PrimaryBorderBrush"),
-                "skipped" => ResourceBrush("MutedTextBrush"),
-                "unsupported" => ResourceBrush("BetaAccentBrush"),
-                _ => ResourceBrush("DangerTextBrush")
-            };
-            var label = string.IsNullOrWhiteSpace(result.Model)
-                ? TitleCaseStatus(result.Status)
-                : $"{ShortModelName(result.Model)} - {TitleCaseStatus(result.Status)}";
-
-            PreloadModelsItems.Children.Add(new Border
-            {
-                Background = BlendBrush(ResourceBrush("InputBrush"), accent, result.IsFailure ? 0.2 : 0.12),
-                BorderBrush = accent,
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(7, 3, 7, 4),
-                Margin = new Thickness(0, 0, 6, 6),
-                ToolTip = $"{result.Model}{Environment.NewLine}{result.Detail}",
-                Child = new TextBlock
-                {
-                    Text = label,
-                    Foreground = accent,
-                    FontSize = 12,
-                    FontWeight = FontWeights.SemiBold
-                }
-            });
-        }
-    }
-
     private static string ShortModelName(string model)
     {
         if (string.IsNullOrWhiteSpace(model))
@@ -9865,63 +9063,6 @@ public partial class MainWindow : Window
 
         var trimmed = model.Trim();
         return trimmed.Length <= 28 ? trimmed : string.Concat(trimmed.AsSpan(0, 25), "...");
-    }
-
-    private string RoleModel(string key)
-    {
-        return _roleModels.TryGetValue(key, out var model) ? model.Trim() : "";
-    }
-
-    private static IEnumerable<string> RoleModelKeys()
-    {
-        yield return "alpha";
-        yield return "beta";
-        yield return "gamma";
-        yield return "delta";
-        yield return "narrator";
-    }
-
-    private static void SaveRoleModelConfig(IDictionary<string, CoreModelProviderConfig> configs, string key, string model, CoreModelProviderConfig shared)
-    {
-        if (string.IsNullOrWhiteSpace(model))
-        {
-            configs.Remove(key);
-            return;
-        }
-
-        configs[key] = new CoreModelProviderConfig
-        {
-            BaseUrl = shared.BaseUrl,
-            Model = model,
-            Timeout = shared.Timeout,
-            Temperature = shared.Temperature,
-            MaxOutputTokens = shared.MaxOutputTokens,
-            LastError = configs.TryGetValue(key, out var existing) ? existing.LastError : "",
-            LastLatencyMs = configs.TryGetValue(key, out existing) ? existing.LastLatencyMs : 0,
-            LastTestOk = configs.TryGetValue(key, out existing) && existing.LastTestOk
-        };
-    }
-
-    private static string DisplayRoleModel(string model)
-    {
-        return DisplayRoleModel(model, "default");
-    }
-
-    private static string DisplayRoleModel(string model, string fallback)
-    {
-        return string.IsNullOrWhiteSpace(model) ? fallback : model;
-    }
-
-    private static string DisplayParticipantModel(string model, string defaultModel)
-    {
-        if (!string.IsNullOrWhiteSpace(model))
-        {
-            return model;
-        }
-
-        return string.IsNullOrWhiteSpace(defaultModel)
-            ? "default"
-            : $"default ({ShortModelName(defaultModel)})";
     }
 
     private static string DisplayInternetMode(string mode)
