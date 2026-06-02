@@ -29,7 +29,8 @@ var tests = new (string Name, Action Test)[]
     ("session overview coordinator formats summaries", SessionOverviewCoordinatorFormatsSummaries),
     ("shell ui helpers blend brushes", ShellUiHelpersBlendBrushes),
     ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState),
-    ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes)
+    ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
+    ("transcript view coordinator normalizes view state", TranscriptViewCoordinatorNormalizesViewState)
 };
 
 var failures = 0;
@@ -589,6 +590,19 @@ static void ShellNavigationCoordinatorSelectsThemes()
     Require(ShellNavigationCoordinator.SelectedThemeId(themes, "dark-green") == "dark-green", "known theme should be selected");
     Require(ShellNavigationCoordinator.SelectedThemeId(themes, "system") == "dark-blue", "system theme should fall back for picker");
     Require(ShellNavigationCoordinator.SelectedThemeId(themes, "missing") == "dark-blue", "unknown theme should fall back");
+}
+
+static void TranscriptViewCoordinatorNormalizesViewState()
+{
+    Require(TranscriptViewCoordinator.CurrentAvatarStyle(new WpfSettings { AvatarStyle = "champion", ChampionAvatars = true }) == "procedural", "legacy champion avatar style should map to procedural");
+    Require(TranscriptViewCoordinator.CurrentAvatarStyle(new WpfSettings { AvatarStyle = "", ChampionAvatars = false }) == "simple", "blank avatar style should fall back to simple when champion avatars are disabled");
+    Require(TranscriptViewCoordinator.CurrentTopStripMode(new WpfSettings { TopStripMode = "telemetry" }) == "telemetry", "known top strip mode should be preserved");
+    Require(TranscriptViewCoordinator.CurrentTopStripMode(new WpfSettings { TopStripMode = "weird", ShowTranscriptDiagnostics = true }) == "diagnostics", "unknown top strip mode should fall back from diagnostics flag");
+    Require(TranscriptViewCoordinator.CurrentViewPresetName(false, false, false, false, true, "diagnostics") == "Focused", "focused preset should be detected");
+    Require(TranscriptViewCoordinator.CurrentViewPresetName(false, false, true, true, true, "diagnostics") == "Diagnostics", "diagnostics preset should be detected");
+    Require(TranscriptViewCoordinator.CurrentViewPresetName(true, false, false, false, true, "diagnostics") == "Compact", "compact preset should be detected");
+    Require(TranscriptViewCoordinator.CurrentViewPresetName(true, true, true, true, false, "diagnostics") == "Review", "review preset should be detected");
+    Require(TranscriptViewCoordinator.CurrentViewPresetName(true, true, true, true, false, "telemetry") == "Custom", "non-diagnostics top strip should be custom");
 }
 
 static Color RequireSolidColor(Brush brush, string message)

@@ -56,6 +56,7 @@ public partial class MainWindow : Window
     private readonly ArenaRunCoordinator? _arenaRunCoordinator;
     private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
     private readonly ProviderReachabilityCoordinator? _providerReachabilityCoordinator;
+    private readonly TranscriptViewCoordinator? _transcriptViewCoordinator;
     private readonly TelemetryWorkflowCoordinator? _telemetryWorkflowCoordinator;
     private readonly AgentPerformanceCoordinator? _agentPerformanceCoordinator;
     private readonly SessionOverviewCoordinator? _sessionOverviewCoordinator;
@@ -77,7 +78,6 @@ public partial class MainWindow : Window
     private DateTimeOffset _activeSnapshotWriteUtc;
     private bool _isRenderingSnapshot;
     private bool _arenaBusy;
-    private string _transcriptDashboardLayout = "";
     private Button? _breathingOperationButton;
     private WpfSettings _wpfSettings = new();
     private ThemePalette _theme = ThemePalette.Resolve("system");
@@ -130,6 +130,9 @@ public partial class MainWindow : Window
 
     private ProviderReachabilityCoordinator ProviderReachability =>
         _providerReachabilityCoordinator ?? throw new InvalidOperationException("Provider reachability coordinator is not initialized.");
+
+    private TranscriptViewCoordinator TranscriptView =>
+        _transcriptViewCoordinator ?? throw new InvalidOperationException("Transcript view coordinator is not initialized.");
 
     private TelemetryWorkflowCoordinator TelemetryWorkflow =>
         _telemetryWorkflowCoordinator ?? throw new InvalidOperationException("Telemetry workflow coordinator is not initialized.");
@@ -539,6 +542,45 @@ public partial class MainWindow : Window
             SetArenaRunStatus,
             force => RefreshAdvertisedModelsAsync(force),
             () => OpenModelProviderSettings());
+        _transcriptViewCoordinator = new TranscriptViewCoordinator(
+            _wpfSettingsStore,
+            () => _wpfSettings,
+            () => _isRenderingSnapshot,
+            value => _isRenderingSnapshot = value,
+            AvatarStylePicker,
+            SystemGlyphStylePicker,
+            TopStripModePicker,
+            CompactTranscriptCheckBox,
+            TurnCompareCheckBox,
+            MatchQualityTimelineCheckBox,
+            MemoryNotesCheckBox,
+            DecisionCardCheckBox,
+            DebugControlsCheckBox,
+            StyleFitCheckBox,
+            VoiceDriftEnforcementCheckBox,
+            FollowChatCheckBox,
+            DebugMenuHost,
+            DebugMenuPopup,
+            ViewMenuPopup,
+            ViewActivePresetText,
+            ViewMenuButton,
+            ViewPresetFocusedButton,
+            ViewPresetDiagnosticsButton,
+            ViewPresetCompactButton,
+            ViewPresetReviewButton,
+            TranscriptDashboardGrid,
+            TranscriptDiagnosticsHost,
+            TranscriptTelemetryHost,
+            TranscriptFiltersHost,
+            () => _lastRenderedMessages,
+            () => _lastRenderedSnapshot,
+            PopulateTranscript,
+            compare => TranscriptInsight.SetTurnCompareMode(compare),
+            messages => DiagnosticsWorkflow.Update(messages),
+            () => DiagnosticsWorkflow.CloseDetail(),
+            () => _telemetryWorkflowCoordinator?.UpdateTimerState(),
+            SetLoadStatus,
+            SetArenaRunStatus);
         _telemetryWorkflowCoordinator = new TelemetryWorkflowCoordinator(
             TelemetryCpuValueText,
             TelemetryCpuSparkline,
@@ -551,9 +593,7 @@ public partial class MainWindow : Window
             TelemetryRamValueText,
             TelemetryRamDetailText,
             TelemetryRamUsageBar,
-            () => _transcriptDashboardLayout.Equals("telemetry", StringComparison.OrdinalIgnoreCase)
-                && TranscriptTelemetryHost.Visibility == Visibility.Visible
-                && TranscriptTelemetryHost.IsVisible,
+            () => TranscriptView.IsTelemetryDisplayed(),
             ResourceBrush);
         _agentPerformanceCoordinator = new AgentPerformanceCoordinator(
             _voiceStyleAdherenceService,
@@ -769,23 +809,7 @@ public partial class MainWindow : Window
 
     private void InitializeVisualSettings()
     {
-        _isRenderingSnapshot = true;
-        ShellUiHelpers.SelectComboTag(AvatarStylePicker, CurrentAvatarStyle());
-        ShellUiHelpers.SelectComboTag(SystemGlyphStylePicker, _wpfSettings.SystemEventGlyphs ? "glyph" : "fallback");
-        ShellUiHelpers.SelectComboTag(TopStripModePicker, CurrentTopStripMode());
-        CompactTranscriptCheckBox.IsChecked = _wpfSettings.CompactTranscriptMode;
-        TurnCompareCheckBox.IsChecked = _wpfSettings.TurnCompareMode;
-        MatchQualityTimelineCheckBox.IsChecked = _wpfSettings.ShowMatchQualityTimeline;
-        MemoryNotesCheckBox.IsChecked = _wpfSettings.ShowAgentMemoryNotes;
-        DecisionCardCheckBox.IsChecked = _wpfSettings.ShowDecisionCard;
-        DebugControlsCheckBox.IsChecked = _wpfSettings.AllowDebugControls;
-        StyleFitCheckBox.IsChecked = _wpfSettings.ShowStyleFit;
-        VoiceDriftEnforcementCheckBox.IsChecked = _wpfSettings.EnforceVoiceDrift;
-        _isRenderingSnapshot = false;
-        UpdateDebugControlsVisibility();
-        UpdateViewPresetState();
-        UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
-        TelemetryWorkflow.UpdateTimerState();
+        TranscriptView.InitializeControls();
     }
 
 
@@ -860,114 +884,37 @@ public partial class MainWindow : Window
 
     private void CompactTranscriptCheckBox_Changed(object sender, RoutedEventArgs e)
     {
-        if (_isRenderingSnapshot || CompactTranscriptCheckBox is null)
-        {
-            return;
-        }
-
-        _wpfSettings.CompactTranscriptMode = CompactTranscriptCheckBox.IsChecked == true;
-        _wpfSettingsStore.Save(_wpfSettings);
-        if (_lastRenderedMessages.Count > 0)
-        {
-            PopulateTranscript(_lastRenderedMessages);
-        }
-        UpdateViewPresetState();
+        _transcriptViewCoordinator?.OnCompactTranscriptChanged();
     }
 
     private void TurnCompareCheckBox_Changed(object sender, RoutedEventArgs e)
     {
-        if (_isRenderingSnapshot || TurnCompareCheckBox is null)
-        {
-            return;
-        }
-
-        _wpfSettings.TurnCompareMode = TurnCompareCheckBox.IsChecked == true;
-        TranscriptInsight.SetTurnCompareMode(_wpfSettings.TurnCompareMode);
-        _wpfSettingsStore.Save(_wpfSettings);
-        if (_lastRenderedMessages.Count > 0)
-        {
-            PopulateTranscript(_lastRenderedMessages);
-        }
-        UpdateViewPresetState();
+        _transcriptViewCoordinator?.OnTurnCompareChanged();
     }
 
     private void MatchQualityTimelineCheckBox_Changed(object sender, RoutedEventArgs e)
     {
-        if (_isRenderingSnapshot || MatchQualityTimelineCheckBox is null)
-        {
-            return;
-        }
-
-        _wpfSettings.ShowMatchQualityTimeline = MatchQualityTimelineCheckBox.IsChecked == true;
-        _wpfSettingsStore.Save(_wpfSettings);
-        if (_lastRenderedMessages.Count > 0)
-        {
-            PopulateTranscript(_lastRenderedMessages);
-        }
-        UpdateViewPresetState();
+        _transcriptViewCoordinator?.OnMatchQualityTimelineChanged();
     }
 
     private void MemoryNotesCheckBox_Changed(object sender, RoutedEventArgs e)
     {
-        if (_isRenderingSnapshot || MemoryNotesCheckBox is null)
-        {
-            return;
-        }
-
-        _wpfSettings.ShowAgentMemoryNotes = MemoryNotesCheckBox.IsChecked == true;
-        _wpfSettingsStore.Save(_wpfSettings);
-        if (_lastRenderedSnapshot is not null)
-        {
-            PopulateTranscript(_lastRenderedMessages);
-        }
-        UpdateViewPresetState();
+        _transcriptViewCoordinator?.OnMemoryNotesChanged();
     }
 
     private void DecisionCardCheckBox_Changed(object sender, RoutedEventArgs e)
     {
-        if (_isRenderingSnapshot || DecisionCardCheckBox is null)
-        {
-            return;
-        }
-
-        _wpfSettings.ShowDecisionCard = DecisionCardCheckBox.IsChecked == true;
-        _wpfSettingsStore.Save(_wpfSettings);
-        if (_lastRenderedSnapshot is not null)
-        {
-            PopulateTranscript(_lastRenderedMessages);
-        }
-        UpdateViewPresetState();
+        _transcriptViewCoordinator?.OnDecisionCardChanged();
     }
 
     private void StyleFitCheckBox_Changed(object sender, RoutedEventArgs e)
     {
-        if (_isRenderingSnapshot || StyleFitCheckBox is null)
-        {
-            return;
-        }
-
-        _wpfSettings.ShowStyleFit = StyleFitCheckBox.IsChecked == true;
-        _wpfSettingsStore.Save(_wpfSettings);
-        if (_lastRenderedMessages.Count > 0)
-        {
-            PopulateTranscript(_lastRenderedMessages);
-        }
-        UpdateViewPresetState();
+        _transcriptViewCoordinator?.OnStyleFitChanged();
     }
 
     private void VoiceDriftEnforcementCheckBox_Changed(object sender, RoutedEventArgs e)
     {
-        if (_isRenderingSnapshot || VoiceDriftEnforcementCheckBox is null)
-        {
-            return;
-        }
-
-        _wpfSettings.EnforceVoiceDrift = VoiceDriftEnforcementCheckBox.IsChecked == true;
-        _wpfSettingsStore.Save(_wpfSettings);
-        LoadStatus.Text = _wpfSettings.EnforceVoiceDrift
-            ? "Debug: voice drift enforcement enabled."
-            : "Debug: voice drift enforcement disabled.";
-        ArenaRunStatus.Text = LoadStatus.Text;
+        _transcriptViewCoordinator?.OnVoiceDriftEnforcementChanged();
     }
 
     private void RandomSeedPreset_Changed(object sender, SelectionChangedEventArgs e)
@@ -1025,177 +972,47 @@ public partial class MainWindow : Window
 
     private void FollowChatCheckBox_Changed(object sender, RoutedEventArgs e)
     {
-        if (_isRenderingSnapshot || FollowChatCheckBox is null)
-        {
-            return;
-        }
-
-        UpdateViewPresetState();
+        _transcriptViewCoordinator?.OnFollowChatChanged();
     }
 
     private void DebugMenuButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!_wpfSettings.AllowDebugControls)
-        {
-            DebugMenuPopup.IsOpen = false;
-            return;
-        }
-
-        DebugMenuPopup.IsOpen = !DebugMenuPopup.IsOpen;
+        _transcriptViewCoordinator?.ToggleDebugMenu();
     }
 
     private void UpdateDebugControlsVisibility()
     {
-        if (DebugMenuHost is null)
-        {
-            return;
-        }
-
-        var allowDebug = _wpfSettings.AllowDebugControls;
-        DebugMenuHost.Visibility = allowDebug ? Visibility.Visible : Visibility.Collapsed;
-        if (DebugMenuPopup is not null && !allowDebug)
-        {
-            DebugMenuPopup.IsOpen = false;
-        }
+        _transcriptViewCoordinator?.UpdateDebugControlsVisibility();
     }
 
     private void ViewMenuButton_Click(object sender, RoutedEventArgs e)
     {
-        ViewMenuPopup.IsOpen = !ViewMenuPopup.IsOpen;
+        _transcriptViewCoordinator?.ToggleViewMenu();
     }
 
     private void ViewPresetFocused_Click(object sender, RoutedEventArgs e)
     {
-        ApplyViewPreset(
-            compact: false,
-            compare: false,
-            timeline: false,
-            memory: false,
-            topStripMode: "diagnostics",
-            autoScroll: true);
+        _transcriptViewCoordinator?.ApplyFocusedPreset();
     }
 
     private void ViewPresetDiagnostics_Click(object sender, RoutedEventArgs e)
     {
-        ApplyViewPreset(
-            compact: false,
-            compare: false,
-            timeline: true,
-            memory: true,
-            topStripMode: "diagnostics",
-            autoScroll: true);
+        _transcriptViewCoordinator?.ApplyDiagnosticsPreset();
     }
 
     private void ViewPresetCompact_Click(object sender, RoutedEventArgs e)
     {
-        ApplyViewPreset(
-            compact: true,
-            compare: false,
-            timeline: false,
-            memory: false,
-            topStripMode: "diagnostics",
-            autoScroll: true);
+        _transcriptViewCoordinator?.ApplyCompactPreset();
     }
 
     private void ViewPresetReview_Click(object sender, RoutedEventArgs e)
     {
-        ApplyViewPreset(
-            compact: true,
-            compare: true,
-            timeline: true,
-            memory: true,
-            topStripMode: "diagnostics",
-            autoScroll: false);
-    }
-
-    private void ApplyViewPreset(
-        bool compact,
-        bool compare,
-        bool timeline,
-        bool memory,
-        string topStripMode,
-        bool autoScroll)
-    {
-        _isRenderingSnapshot = true;
-        try
-        {
-            CompactTranscriptCheckBox.IsChecked = compact;
-            TurnCompareCheckBox.IsChecked = compare;
-            MatchQualityTimelineCheckBox.IsChecked = timeline;
-            MemoryNotesCheckBox.IsChecked = memory;
-            FollowChatCheckBox.IsChecked = autoScroll;
-            ShellUiHelpers.SelectComboTag(TopStripModePicker, topStripMode);
-        }
-        finally
-        {
-            _isRenderingSnapshot = false;
-        }
-
-        _wpfSettings.CompactTranscriptMode = compact;
-        _wpfSettings.TurnCompareMode = compare;
-        _wpfSettings.ShowMatchQualityTimeline = timeline;
-        _wpfSettings.ShowAgentMemoryNotes = memory;
-        _wpfSettings.TopStripMode = topStripMode;
-        _wpfSettings.ShowTranscriptDiagnostics = topStripMode.Equals("diagnostics", StringComparison.OrdinalIgnoreCase);
-        TranscriptInsight.SetTurnCompareMode(compare);
-        _wpfSettingsStore.Save(_wpfSettings);
-        UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
-        TelemetryWorkflow.UpdateTimerState();
-        PopulateTranscript(_lastRenderedMessages);
-        UpdateViewPresetState();
-        ViewMenuPopup.IsOpen = false;
+        _transcriptViewCoordinator?.ApplyReviewPreset();
     }
 
     private void UpdateViewPresetState()
     {
-        if (ViewActivePresetText is null
-            || ViewMenuButton is null
-            || ViewPresetFocusedButton is null
-            || ViewPresetDiagnosticsButton is null
-            || ViewPresetCompactButton is null
-            || ViewPresetReviewButton is null)
-        {
-            return;
-        }
-
-        var activePreset = CurrentViewPresetName();
-        ViewActivePresetText.Text = $"Active: {activePreset}";
-        ViewMenuButton.ToolTip = $"Transcript view controls - {activePreset}";
-        StyleViewPresetButton(ViewPresetFocusedButton, activePreset.Equals("Focused", StringComparison.OrdinalIgnoreCase));
-        StyleViewPresetButton(ViewPresetDiagnosticsButton, activePreset.Equals("Diagnostics", StringComparison.OrdinalIgnoreCase));
-        StyleViewPresetButton(ViewPresetCompactButton, activePreset.Equals("Compact", StringComparison.OrdinalIgnoreCase));
-        StyleViewPresetButton(ViewPresetReviewButton, activePreset.Equals("Review", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private string CurrentViewPresetName()
-    {
-        var compact = CompactTranscriptCheckBox?.IsChecked == true;
-        var compare = TurnCompareCheckBox?.IsChecked == true;
-        var timeline = MatchQualityTimelineCheckBox?.IsChecked == true;
-        var memory = MemoryNotesCheckBox?.IsChecked == true;
-        var autoScroll = FollowChatCheckBox?.IsChecked == true;
-        var diagnostics = CurrentTopStripMode().Equals("diagnostics", StringComparison.OrdinalIgnoreCase);
-
-        if (!diagnostics)
-        {
-            return "Custom";
-        }
-
-        return (compact, compare, timeline, memory, autoScroll) switch
-        {
-            (false, false, false, false, true) => "Focused",
-            (false, false, true, true, true) => "Diagnostics",
-            (true, false, false, false, true) => "Compact",
-            (true, true, true, true, false) => "Review",
-            _ => "Custom"
-        };
-    }
-
-    private static void StyleViewPresetButton(Button button, bool isActive)
-    {
-        button.SetResourceReference(Control.BackgroundProperty, isActive ? "PrimaryBrush" : "InputBrush");
-        button.SetResourceReference(Control.BorderBrushProperty, isActive ? "PrimaryBorderBrush" : "ControlBorderBrush");
-        button.SetResourceReference(Control.ForegroundProperty, isActive ? "TextBrush" : "MutedTextBrush");
+        _transcriptViewCoordinator?.UpdateViewPresetState();
     }
 
     private async Task LoadSessionAsync(CoreSessionSummary session, bool force)
@@ -1386,62 +1203,17 @@ public partial class MainWindow : Window
 
     private void TranscriptDashboardGrid_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        UpdateTranscriptDashboardLayout(e.NewSize.Width);
+        _transcriptViewCoordinator?.UpdateDashboardLayout(e.NewSize.Width);
     }
 
     private void UpdateTranscriptDashboardLayout(double width, bool force = false)
     {
-        var mode = CurrentTopStripMode();
-        var showTopStrip = !mode.Equals("hidden", StringComparison.OrdinalIgnoreCase) && width >= 1180;
-        var showDiagnostics = showTopStrip && mode.Equals("diagnostics", StringComparison.OrdinalIgnoreCase);
-        var showTelemetry = showTopStrip && mode.Equals("telemetry", StringComparison.OrdinalIgnoreCase);
-        var layout = showDiagnostics ? "diagnostics" : showTelemetry ? "telemetry" : "hidden";
-        if (!force && layout.Equals(_transcriptDashboardLayout, StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        _transcriptDashboardLayout = layout;
-        Grid.SetRow(TranscriptDiagnosticsHost, 0);
-        Grid.SetColumn(TranscriptDiagnosticsHost, 0);
-        Grid.SetColumnSpan(TranscriptDiagnosticsHost, 1);
-        Grid.SetRow(TranscriptTelemetryHost, 0);
-        Grid.SetColumn(TranscriptTelemetryHost, 0);
-        Grid.SetColumnSpan(TranscriptTelemetryHost, 1);
-        Grid.SetRow(TranscriptFiltersHost, 0);
-        Grid.SetColumn(TranscriptFiltersHost, 1);
-        Grid.SetColumnSpan(TranscriptFiltersHost, 1);
-
-        TranscriptDiagnosticsHost.Visibility = showDiagnostics ? Visibility.Visible : Visibility.Collapsed;
-        TranscriptTelemetryHost.Visibility = showTelemetry ? Visibility.Visible : Visibility.Collapsed;
-        TranscriptDiagnosticsHost.CornerRadius = new CornerRadius(8, 0, 0, 8);
-        TranscriptTelemetryHost.CornerRadius = new CornerRadius(8, 0, 0, 8);
-        TranscriptFiltersHost.HorizontalAlignment = showTopStrip
-            ? HorizontalAlignment.Stretch
-            : HorizontalAlignment.Right;
-        TranscriptFiltersHost.CornerRadius = !showTopStrip
-            ? new CornerRadius(8)
-            : new CornerRadius(0, 8, 8, 0);
-        TranscriptFiltersHost.BorderThickness = !showTopStrip
-            ? new Thickness(1)
-            : new Thickness(0, 1, 1, 1);
-        if (showDiagnostics)
-        {
-            DiagnosticsWorkflow.Update(_lastRenderedMessages);
-        }
-        else
-        {
-            DiagnosticsWorkflow.CloseDetail();
-        }
-
-        TelemetryWorkflow.UpdateTimerState();
+        _transcriptViewCoordinator?.UpdateDashboardLayout(width, force);
     }
 
     private bool IsDiagnosticsDisplayed()
     {
-        return _transcriptDashboardLayout.Equals("diagnostics", StringComparison.OrdinalIgnoreCase)
-            && TranscriptDiagnosticsHost.Visibility == Visibility.Visible
-            && TranscriptDiagnosticsHost.IsVisible;
+        return _transcriptViewCoordinator?.IsDiagnosticsDisplayed() == true;
     }
 
     private void PopulateAgents(ArenaViewSnapshot snapshot)
@@ -2580,52 +2352,19 @@ public partial class MainWindow : Window
 
     private void VisualSettings_Changed(object sender, RoutedEventArgs e)
     {
-        if (_isRenderingSnapshot
-            || AvatarStylePicker is null
-            || SystemGlyphStylePicker is null
-            || TopStripModePicker is null
-            || DebugControlsCheckBox is null)
-        {
-            return;
-        }
-
-        var avatarStyle = (AvatarStylePicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "pack";
-        _wpfSettings.AvatarStyle = avatarStyle;
-        _wpfSettings.ChampionAvatars = avatarStyle is "pack" or "procedural";
-        _wpfSettings.SystemEventGlyphs = (SystemGlyphStylePicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() != "fallback";
-        _wpfSettings.TopStripMode = (TopStripModePicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "diagnostics";
-        _wpfSettings.ShowTranscriptDiagnostics = _wpfSettings.TopStripMode.Equals("diagnostics", StringComparison.OrdinalIgnoreCase);
-        _wpfSettings.AllowDebugControls = DebugControlsCheckBox.IsChecked == true;
-        _wpfSettingsStore.Save(_wpfSettings);
-        UpdateDebugControlsVisibility();
-        UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
-        TelemetryWorkflow.UpdateTimerState();
-        UpdateViewPresetState();
-        if (_lastRenderedMessages.Count > 0)
-        {
-            PopulateTranscript(_lastRenderedMessages);
-        }
+        _transcriptViewCoordinator?.OnVisualSettingsChanged();
     }
 
     private string CurrentAvatarStyle()
     {
-        var style = _wpfSettings.AvatarStyle?.Trim().ToLowerInvariant();
-        return style switch
-        {
-            "pack" or "procedural" or "simple" or "initials" => style,
-            "champion" => "procedural",
-            _ => _wpfSettings.ChampionAvatars ? "pack" : "simple"
-        };
+        return _transcriptViewCoordinator?.CurrentAvatarStyle()
+            ?? TranscriptViewCoordinator.CurrentAvatarStyle(_wpfSettings);
     }
 
     private string CurrentTopStripMode()
     {
-        var mode = _wpfSettings.TopStripMode?.Trim().ToLowerInvariant();
-        return mode switch
-        {
-            "diagnostics" or "telemetry" or "hidden" => mode,
-            _ => _wpfSettings.ShowTranscriptDiagnostics ? "diagnostics" : "hidden"
-        };
+        return _transcriptViewCoordinator?.CurrentTopStripMode()
+            ?? TranscriptViewCoordinator.CurrentTopStripMode(_wpfSettings);
     }
 
     private async void ProviderBaseUrlText_Commit(object sender, KeyboardFocusChangedEventArgs e)
