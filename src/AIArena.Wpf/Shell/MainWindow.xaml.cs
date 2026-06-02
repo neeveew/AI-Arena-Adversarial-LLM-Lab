@@ -50,6 +50,7 @@ public partial class MainWindow : Window
     private readonly TranscriptExportCoordinator? _transcriptExportCoordinator;
     private readonly TranscriptSearchCoordinator? _transcriptSearchCoordinator;
     private readonly TranscriptInsightCoordinator? _transcriptInsightCoordinator;
+    private readonly ScenarioWorkflowCoordinator? _scenarioWorkflowCoordinator;
     private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
@@ -70,7 +71,6 @@ public partial class MainWindow : Window
     private bool _isSelectingTheme;
     private bool _isRenderingSnapshot;
     private bool _isUpdatingInternetSettingsUi;
-    private bool _isApplyingRandomSeedPreset;
     private bool _arenaBusy;
     private bool _telemetrySampleInFlight;
     private string _transcriptDashboardLayout = "";
@@ -104,6 +104,9 @@ public partial class MainWindow : Window
 
     private TranscriptInsightCoordinator TranscriptInsight =>
         _transcriptInsightCoordinator ?? throw new InvalidOperationException("Transcript insight coordinator is not initialized.");
+
+    private ScenarioWorkflowCoordinator ScenarioWorkflow =>
+        _scenarioWorkflowCoordinator ?? throw new InvalidOperationException("Scenario workflow coordinator is not initialized.");
 
     private ProviderSettingsCoordinator ProviderSettings =>
         _providerSettingsCoordinator ?? throw new InvalidOperationException("Provider settings coordinator is not initialized.");
@@ -294,6 +297,34 @@ public partial class MainWindow : Window
             force => RefreshProviderReachabilityAsync(force),
             () => UpdateProviderHealthPopup());
         _wpfSettings = _wpfSettingsStore.Load();
+        _scenarioWorkflowCoordinator = new ScenarioWorkflowCoordinator(
+            this,
+            _matchGeneration,
+            _wpfSettingsStore,
+            RandomSeedPresetPicker,
+            RandomSeedRolePackPicker,
+            RandomSeedStylePicker,
+            RandomSeedIntensityPicker,
+            RandomSeedAbsurdityPicker,
+            RandomSeedButton,
+            AiChoiceButton,
+            YoloScenarioButton,
+            GenerationHistoryPicker,
+            ReplayGenerationButton,
+            ReplayNewRunButton,
+            CopyGenerationSeedButton,
+            OperatorTemplatePicker,
+            OperatorTurnText,
+            () => _wpfSettings,
+            () => _activeSession,
+            () => _theme,
+            () => _isRenderingSnapshot,
+            () => _arenaBusy,
+            (status, button, action, allowDuringAutoChat) => RunArenaBusyAsync(status, button, action, allowDuringAutoChat),
+            status => RefreshActiveSessionAsync(status),
+            preferredSessionId => LoadSessionsAsync(preferredSessionId),
+            status => LoadStatus.Text = status,
+            status => ArenaRunStatus.Text = status);
         ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
         InitializeThemePicker();
         _refreshTimer = new DispatcherTimer
@@ -318,12 +349,12 @@ public partial class MainWindow : Window
         _telemetryTimer.Tick += async (_, _) => await UpdateSystemTelemetryAsync();
         InitializeAboutPanel();
         InitializeVisualSettings();
-        InitializeOperatorTemplates();
+        ScenarioWorkflow.InitializeControls();
         InitializeInternetSettingsUi();
         InitializeDiagnosticExplanationTiles();
         UpdateOperatorRouteUi();
         UpdateOperatorTurnMeter();
-        LoadScenarioTemplates();
+        SavedStateCoordinator.LoadScenarioTemplates();
         ShowStoreLoadWarningIfAny();
         Loaded += (_, _) =>
         {
@@ -384,11 +415,6 @@ public partial class MainWindow : Window
         SelectComboTag(AvatarStylePicker, CurrentAvatarStyle());
         SelectComboTag(SystemGlyphStylePicker, _wpfSettings.SystemEventGlyphs ? "glyph" : "fallback");
         SelectComboTag(TopStripModePicker, CurrentTopStripMode());
-        SelectComboTag(RandomSeedPresetPicker, _wpfSettings.RandomSeedPreset);
-        SelectComboTag(RandomSeedRolePackPicker, _wpfSettings.RandomSeedRolePack);
-        SelectComboTag(RandomSeedStylePicker, _wpfSettings.RandomSeedStyle);
-        SelectComboTag(RandomSeedIntensityPicker, _wpfSettings.RandomSeedIntensity);
-        SelectComboTag(RandomSeedAbsurdityPicker, _wpfSettings.RandomSeedAbsurdity);
         CompactTranscriptCheckBox.IsChecked = _wpfSettings.CompactTranscriptMode;
         TurnCompareCheckBox.IsChecked = _wpfSettings.TurnCompareMode;
         MatchQualityTimelineCheckBox.IsChecked = _wpfSettings.ShowMatchQualityTimeline;
@@ -402,19 +428,6 @@ public partial class MainWindow : Window
         UpdateViewPresetState();
         UpdateTranscriptDashboardLayout(TranscriptDashboardGrid.ActualWidth, force: true);
         UpdateTelemetryTimerState();
-    }
-
-    private void InitializeOperatorTemplates(string? preferredTemplate = null)
-    {
-        _wpfSettings.OperatorTemplates ??= [];
-        OperatorTemplatePicker.ItemsSource = null;
-        OperatorTemplatePicker.ItemsSource = _wpfSettings.OperatorTemplates;
-        var preferredIndex = string.IsNullOrWhiteSpace(preferredTemplate)
-            ? -1
-            : _wpfSettings.OperatorTemplates.FindIndex(item => item.Equals(preferredTemplate, StringComparison.OrdinalIgnoreCase));
-        OperatorTemplatePicker.SelectedIndex = preferredIndex >= 0
-            ? preferredIndex
-            : _wpfSettings.OperatorTemplates.Count > 0 ? 0 : -1;
     }
 
     private void InitializeInternetSettingsUi()
@@ -537,11 +550,6 @@ public partial class MainWindow : Window
 
         await LoadSessionAsync(defaultSession, force: true);
         SavedStateCoordinator.UpdatePicker(defaultSession.Id);
-    }
-
-    private void LoadScenarioTemplates(string? preferredTemplateId = null)
-    {
-        SavedStateCoordinator.LoadScenarioTemplates(preferredTemplateId);
     }
 
     private void ShowStoreLoadWarningIfAny()
@@ -693,68 +701,12 @@ public partial class MainWindow : Window
 
     private void RandomSeedPreset_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (_isRenderingSnapshot || _isApplyingRandomSeedPreset || RandomSeedPresetPicker is null)
-        {
-            return;
-        }
-
-        var preset = SelectedComboTag(RandomSeedPresetPicker, "manual");
-        _wpfSettings.RandomSeedPreset = preset;
-        if (!preset.Equals("manual", StringComparison.OrdinalIgnoreCase))
-        {
-            var config = RandomSeedPresetValues(preset);
-            _isApplyingRandomSeedPreset = true;
-            try
-            {
-                SelectComboTag(RandomSeedRolePackPicker, config.RolePack);
-                SelectComboTag(RandomSeedStylePicker, config.Style);
-                SelectComboTag(RandomSeedIntensityPicker, config.Intensity);
-                SelectComboTag(RandomSeedAbsurdityPicker, config.Absurdity);
-            }
-            finally
-            {
-                _isApplyingRandomSeedPreset = false;
-            }
-
-            _wpfSettings.RandomSeedRolePack = config.RolePack;
-            _wpfSettings.RandomSeedStyle = config.Style;
-            _wpfSettings.RandomSeedIntensity = config.Intensity;
-            _wpfSettings.RandomSeedAbsurdity = config.Absurdity;
-        }
-
-        _wpfSettingsStore.Save(_wpfSettings);
+        _scenarioWorkflowCoordinator?.OnRandomSeedPresetChanged();
     }
 
     private void RandomSeedOptions_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (_isRenderingSnapshot
-            || _isApplyingRandomSeedPreset
-            || RandomSeedRolePackPicker is null
-            || RandomSeedStylePicker is null
-            || RandomSeedIntensityPicker is null
-            || RandomSeedAbsurdityPicker is null)
-        {
-            return;
-        }
-
-        _wpfSettings.RandomSeedRolePack = SelectedComboTag(RandomSeedRolePackPicker, "auto");
-        _wpfSettings.RandomSeedStyle = SelectedComboTag(RandomSeedStylePicker, "auto");
-        _wpfSettings.RandomSeedIntensity = SelectedComboTag(RandomSeedIntensityPicker, "normal");
-        _wpfSettings.RandomSeedAbsurdity = SelectedComboTag(RandomSeedAbsurdityPicker, "grounded");
-        _wpfSettings.RandomSeedPreset = "manual";
-        if (RandomSeedPresetPicker is not null)
-        {
-            _isApplyingRandomSeedPreset = true;
-            try
-            {
-                SelectComboTag(RandomSeedPresetPicker, "manual");
-            }
-            finally
-            {
-                _isApplyingRandomSeedPreset = false;
-            }
-        }
-        _wpfSettingsStore.Save(_wpfSettings);
+        _scenarioWorkflowCoordinator?.OnRandomSeedOptionsChanged();
     }
 
     private void AgentCountPresetPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -803,19 +755,6 @@ public partial class MainWindow : Window
             });
             await RefreshActiveSessionAsync($"Agent roster resized: {count} active agents.");
         }, allowDuringAutoChat: true);
-    }
-
-    private static (string RolePack, string Style, string Intensity, string Absurdity) RandomSeedPresetValues(string preset)
-    {
-        return preset switch
-        {
-            "hostile_review" => ("red_team", "adversarial", "spicy", "grounded"),
-            "evidence_trial" => ("scientific_review", "research", "sharp", "grounded"),
-            "consensus_trap" => ("balanced", "philosophical", "sharp", "odd"),
-            "chaos_room" => ("absurd_lab", "technical", "chaos", "maximum"),
-            "one_line_mayhem" => ("absurd_lab", "creative", "one_line", "maximum"),
-            _ => ("auto", "auto", "normal", "grounded")
-        };
     }
 
     private void GenerationHelpButton_Click(object sender, RoutedEventArgs e)
@@ -2185,7 +2124,7 @@ public partial class MainWindow : Window
         _pressureControls.Clear();
 
         PopulateScenarioSeedInspector(snapshot);
-        PopulateGenerationHistory(snapshot);
+        ScenarioWorkflow.PopulateGenerationHistory(snapshot);
 
         ScenarioPreviewItems.Children.Add(CreateLockCard(
             "topic",
@@ -2389,108 +2328,6 @@ public partial class MainWindow : Window
         ScenarioSeedInspector.Children.Add(CreateSetupChip("Persona style", personaStyle, ResourceBrush("MutedTextBrush")));
     }
 
-    private void PopulateGenerationHistory(ArenaViewSnapshot snapshot)
-    {
-        if (GenerationHistoryPicker is null)
-        {
-            return;
-        }
-
-        GenerationHistoryPicker.Items.Clear();
-        foreach (var item in snapshot.GenerationHistory.Take(20))
-        {
-            GenerationHistoryPicker.Items.Add(new ComboBoxItem
-            {
-                Content = GenerationHistoryLabel(item),
-                Tag = item,
-                ToolTip = GenerationHistoryTooltip(item)
-            });
-        }
-
-        if (GenerationHistoryPicker.Items.Count == 0)
-        {
-            GenerationHistoryPicker.Items.Add(new ComboBoxItem
-            {
-                Content = "No history yet",
-                IsEnabled = false
-            });
-        }
-
-        GenerationHistoryPicker.SelectedIndex = 0;
-        UpdateGenerationHistoryActions();
-    }
-
-    private void UpdateGenerationHistoryActions()
-    {
-        var hasItem = SelectedGenerationHistory() is not null;
-        if (ReplayGenerationButton is not null)
-        {
-            ReplayGenerationButton.IsEnabled = hasItem && !_arenaBusy;
-        }
-
-        if (ReplayNewRunButton is not null)
-        {
-            ReplayNewRunButton.IsEnabled = hasItem && !_arenaBusy;
-        }
-
-        if (CopyGenerationSeedButton is not null)
-        {
-            CopyGenerationSeedButton.IsEnabled = hasItem && !_arenaBusy;
-        }
-    }
-
-    private GenerationHistoryItem? SelectedGenerationHistory()
-    {
-        return GenerationHistoryPicker?.SelectedItem is ComboBoxItem { Tag: GenerationHistoryItem item }
-            ? item
-            : null;
-    }
-
-    private static string GenerationHistoryLabel(GenerationHistoryItem item)
-    {
-        var kind = item.Kind switch
-        {
-            "ai_choice" => "AI Choice",
-            "yolo" => "YOLO",
-            "random" => "Random",
-            _ => DisplayStatusValue(item.Kind)
-        };
-        var time = DisplayTime(item.CreatedAt);
-        var style = DisplayStatusValue(item.Style);
-        var pressure = item.Intensity.Equals("normal", StringComparison.OrdinalIgnoreCase)
-            ? ""
-            : $" / {item.Intensity.Replace('_', ' ')}";
-        return $"{kind} - {style}{pressure} - {ShortHistoryText(item.Topic, 32)}{(string.IsNullOrWhiteSpace(time) ? "" : $" ({time})")}";
-    }
-
-    private static string GenerationHistoryTooltip(GenerationHistoryItem item)
-    {
-        return string.Join(
-            Environment.NewLine,
-            $"Label: {DisplayStatusValue(item.Label)}",
-            $"Kind: {DisplayStatusValue(item.Kind)}",
-            $"Style: {DisplayStatusValue(item.Style)}",
-            $"Pressure: {DisplayStatusValue(item.Intensity)}",
-            $"Pack: {DisplayStatusValue(item.RolePack)}",
-            $"Absurdity: {DisplayStatusValue(item.Absurdity)}",
-            $"Scenario seed: {DisplayStatusValue(item.ScenarioSeed)}",
-            $"Persona seed: {DisplayStatusValue(item.PersonaSeed)}",
-            $"Topic: {DisplayStatusValue(item.Topic)}");
-    }
-
-    private static string ShortHistoryText(string value, int maxLength)
-    {
-        if (string.IsNullOrWhiteSpace(value) || value == "-")
-        {
-            return "-";
-        }
-
-        var singleLine = value.Trim().Replace("\r", " ").Replace("\n", " ");
-        return singleLine.Length <= maxLength
-            ? singleLine
-            : $"{singleLine[..Math.Max(0, maxLength - 3)]}...";
-    }
-
     private static string ScenarioSeedSource(string scenarioSeed, string personaStyle)
     {
         if (scenarioSeed.StartsWith("YOLO-", StringComparison.OrdinalIgnoreCase)
@@ -2517,34 +2354,6 @@ public partial class MainWindow : Window
         }
 
         return seed.Length <= 18 ? seed : $"{seed[..15]}...";
-    }
-
-    private static string RandomSeedOptionLabel(string style, string intensity, string rolePack, string absurdity)
-    {
-        static string Clean(string value) => string.IsNullOrWhiteSpace(value)
-            ? ""
-            : value.Trim().Replace('-', ' ');
-
-        var cleanStyle = Clean(style);
-        var cleanIntensity = Clean(intensity);
-        var styleLabel = cleanStyle.Equals("auto", StringComparison.OrdinalIgnoreCase)
-            ? "auto-style"
-            : cleanStyle;
-        var baseLabel = cleanIntensity.Equals("normal", StringComparison.OrdinalIgnoreCase)
-            ? styleLabel
-            : $"{styleLabel} {cleanIntensity}";
-        var pack = Clean(rolePack).Replace('_', ' ');
-        var weird = Clean(absurdity);
-        if (!string.IsNullOrWhiteSpace(pack) && !pack.Equals("auto", StringComparison.OrdinalIgnoreCase))
-        {
-            baseLabel = $"{baseLabel}, {pack}";
-        }
-        if (!string.IsNullOrWhiteSpace(weird) && !weird.Equals("grounded", StringComparison.OrdinalIgnoreCase))
-        {
-            baseLabel = $"{baseLabel}, {weird}";
-        }
-
-        return baseLabel;
     }
 
     private void PopulateNews(IReadOnlyList<TranscriptMessage> messages)
@@ -5997,180 +5806,32 @@ public partial class MainWindow : Window
 
     private async void RandomSeedButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null)
-        {
-            LoadStatus.Text = "No active session.";
-            return;
-        }
-
-        var rolePack = SelectedComboTag(RandomSeedRolePackPicker, "auto");
-        var style = SelectedComboTag(RandomSeedStylePicker, "auto");
-        var intensity = SelectedComboTag(RandomSeedIntensityPicker, "normal");
-        var absurdity = SelectedComboTag(RandomSeedAbsurdityPicker, "grounded");
-        await RunArenaBusyAsync($"Generating {RandomSeedOptionLabel(style, intensity, rolePack, absurdity)} random seed...", RandomSeedButton, async () =>
-        {
-            var result = await _matchGeneration.GenerateRandomSeedAsync(_activeSession.Id, style, intensity, rolePack, absurdity);
-            var status = result.Ok
-                ? $"Random seed match generated: {result.Label}"
-                : $"Random seed failed: {result.Error}";
-            RefreshActiveSession(status);
-        }, allowDuringAutoChat: true);
+        await ScenarioWorkflow.GenerateRandomSeedAsync();
     }
 
     private async void AiChoiceButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null)
-        {
-            LoadStatus.Text = "No active session.";
-            return;
-        }
-
-        var confirm = ConfirmDialog.Show(
-            this,
-            _theme,
-            "AI Choice",
-            "Ask the narrator model to generate an AI Choice match?\n\nThe current transcript will be preserved.",
-            "Generate",
-            tone: ConfirmDialogTone.Normal);
-        if (!confirm)
-        {
-            return;
-        }
-
-        await RunArenaBusyAsync("Asking narrator for AI Choice match...", AiChoiceButton, async () =>
-        {
-            var rolePack = SelectedComboTag(RandomSeedRolePackPicker, "auto");
-            var intensity = SelectedComboTag(RandomSeedIntensityPicker, "normal");
-            var absurdity = SelectedComboTag(RandomSeedAbsurdityPicker, "grounded");
-            var result = await _matchGeneration.GenerateAiChoiceAsync(_activeSession.Id, rolePack, intensity, absurdity);
-            var status = result.Ok
-                ? $"AI Choice match generated: {result.Label}"
-                : $"AI Choice failed: {result.Error}";
-            RefreshActiveSession(status);
-        }, allowDuringAutoChat: true);
+        await ScenarioWorkflow.GenerateAiChoiceAsync();
     }
 
     private async void YoloScenarioButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null)
-        {
-            LoadStatus.Text = "No active session.";
-            return;
-        }
-
-        var confirm = ConfirmDialog.Show(
-            this,
-            _theme,
-            "YOLO Seed",
-            "Generate a local seeded meta setup for the arena simulation?\n\nLocked fields and the current transcript will be preserved.",
-            "Generate",
-            tone: ConfirmDialogTone.Normal);
-        if (!confirm)
-        {
-            return;
-        }
-
-        await RunArenaBusyAsync("Generating YOLO seed...", YoloScenarioButton, async () =>
-        {
-            var rolePack = SelectedComboTag(RandomSeedRolePackPicker, "auto");
-            var intensity = SelectedComboTag(RandomSeedIntensityPicker, "normal");
-            var absurdity = SelectedComboTag(RandomSeedAbsurdityPicker, "grounded");
-            var result = await _matchGeneration.GenerateYoloSeedAsync(_activeSession.Id, rolePack, intensity, absurdity);
-            var status = result.Ok
-                ? $"YOLO seed generated: {result.Label} - {result.Seed}"
-                : $"YOLO seed failed: {result.Error}";
-            RefreshActiveSession(status);
-        }, allowDuringAutoChat: true);
+        await ScenarioWorkflow.GenerateYoloSeedAsync();
     }
 
     private async void ReplayGenerationButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null)
-        {
-            LoadStatus.Text = "No active session.";
-            return;
-        }
-
-        var item = SelectedGenerationHistory();
-        if (item is null)
-        {
-            LoadStatus.Text = "No generated match selected.";
-            ArenaRunStatus.Text = LoadStatus.Text;
-            return;
-        }
-
-        await RunArenaBusyAsync($"Replaying generated match: {item.Label}...", ReplayGenerationButton, async () =>
-        {
-            var result = await _matchGeneration.ReplayGenerationAsync(_activeSession.Id, item.Id);
-            var status = result.Ok
-                ? $"Replayed generated match: {item.Label}"
-                : $"Replay failed: {result.Error}";
-            RefreshActiveSession(status);
-        }, allowDuringAutoChat: true);
+        await ScenarioWorkflow.ReplayGenerationAsync();
     }
 
     private async void ReplayNewRunButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeSession is null)
-        {
-            LoadStatus.Text = "No active session.";
-            return;
-        }
-
-        var item = SelectedGenerationHistory();
-        if (item is null)
-        {
-            LoadStatus.Text = "No generated match selected.";
-            ArenaRunStatus.Text = LoadStatus.Text;
-            return;
-        }
-
-        await RunArenaBusyAsync($"Creating replay run: {item.Label}...", ReplayNewRunButton, async () =>
-        {
-            var result = await _matchGeneration.ReplayGenerationToNewSessionAsync(_activeSession.Id, item.Id);
-            if (!result.Ok)
-            {
-                RefreshActiveSession($"New replay run failed: {result.Error}");
-                return;
-            }
-
-            await LoadSessionsAsync(result.Label);
-            LoadStatus.Text = $"Created replay run: {result.Label}";
-            ArenaRunStatus.Text = $"Replay run ready: {item.Label}";
-        }, allowDuringAutoChat: true);
+        await ScenarioWorkflow.ReplayGenerationToNewRunAsync();
     }
 
     private void CopyGenerationSeedButton_Click(object sender, RoutedEventArgs e)
     {
-        var item = SelectedGenerationHistory();
-        if (item is null)
-        {
-            LoadStatus.Text = "No generated match selected.";
-            ArenaRunStatus.Text = LoadStatus.Text;
-            return;
-        }
-
-        var seed = string.IsNullOrWhiteSpace(item.ScenarioSeed) || item.ScenarioSeed == "-"
-            ? item.PersonaSeed
-            : item.ScenarioSeed;
-        if (string.IsNullOrWhiteSpace(seed) || seed == "-")
-        {
-            LoadStatus.Text = "Selected generation has no seed to copy.";
-            ArenaRunStatus.Text = LoadStatus.Text;
-            return;
-        }
-
-        try
-        {
-            Clipboard.SetText(seed);
-            LoadStatus.Text = $"Copied generation seed: {seed}";
-            ArenaRunStatus.Text = LoadStatus.Text;
-        }
-        catch (Exception ex)
-        {
-            LoadStatus.Text = $"Copy seed failed: {ex.Message}";
-            ArenaRunStatus.Text = LoadStatus.Text;
-        }
+        ScenarioWorkflow.CopyGenerationSeed();
     }
 
     private async void ApplyRivalryMatrixButton_Click(object sender, RoutedEventArgs e)
@@ -6225,7 +5886,7 @@ public partial class MainWindow : Window
 
     private void GenerationHistoryPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        UpdateGenerationHistoryActions();
+        _scenarioWorkflowCoordinator?.UpdateGenerationHistoryActions();
     }
 
     private async void NarrateNowButton_Click(object sender, RoutedEventArgs e)
@@ -6469,65 +6130,17 @@ public partial class MainWindow : Window
 
     private void UseOperatorTemplateButton_Click(object sender, RoutedEventArgs e)
     {
-        var template = (OperatorTemplatePicker.SelectedItem?.ToString() ?? OperatorTemplatePicker.Text).Trim();
-        if (string.IsNullOrWhiteSpace(template))
-        {
-            return;
-        }
-
-        OperatorTurnText.Text = template;
-        OperatorTurnText.Focus();
-        OperatorTurnText.CaretIndex = OperatorTurnText.Text.Length;
+        ScenarioWorkflow.UseOperatorTemplate();
     }
 
     private void SaveOperatorTemplateButton_Click(object sender, RoutedEventArgs e)
     {
-        var template = OperatorTurnText.Text.Trim();
-        if (string.IsNullOrWhiteSpace(template))
-        {
-            ArenaRunStatus.Text = "Operator template is empty.";
-            return;
-        }
-
-        if (!_wpfSettings.OperatorTemplates.Contains(template, StringComparer.OrdinalIgnoreCase))
-        {
-            _wpfSettings.OperatorTemplates.Insert(0, template);
-            _wpfSettings.OperatorTemplates = _wpfSettings.OperatorTemplates
-                .Where(item => !string.IsNullOrWhiteSpace(item))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(12)
-                .ToList();
-            _wpfSettingsStore.Save(_wpfSettings);
-            InitializeOperatorTemplates(template);
-        }
-
-        OperatorTemplatePicker.SelectedItem = template;
-        ArenaRunStatus.Text = "Operator template saved.";
+        ScenarioWorkflow.SaveOperatorTemplate();
     }
 
     private void DeleteOperatorTemplateButton_Click(object sender, RoutedEventArgs e)
     {
-        var template = (OperatorTemplatePicker.SelectedItem?.ToString() ?? OperatorTemplatePicker.Text).Trim();
-        if (string.IsNullOrWhiteSpace(template))
-        {
-            ArenaRunStatus.Text = "No operator template selected.";
-            return;
-        }
-
-        var nextTemplates = _wpfSettings.OperatorTemplates
-            .Where(item => !item.Equals(template, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        if (nextTemplates.Count == _wpfSettings.OperatorTemplates.Count)
-        {
-            ArenaRunStatus.Text = "Operator template was already removed.";
-            return;
-        }
-
-        var nextSelection = nextTemplates.FirstOrDefault();
-        _wpfSettings.OperatorTemplates = nextTemplates;
-        _wpfSettingsStore.Save(_wpfSettings);
-        InitializeOperatorTemplates(nextSelection);
-        ArenaRunStatus.Text = "Operator template deleted.";
+        ScenarioWorkflow.DeleteOperatorTemplate();
     }
 
     private void SetOperatorRouteMode(string mode)
@@ -7194,17 +6807,7 @@ public partial class MainWindow : Window
         AutoChatButton.IsEnabled = !busy;
         OneTurnButton.IsEnabled = !busy;
         ResetButton.IsEnabled = !busy;
-        RandomSeedButton.IsEnabled = !busy || autoChatRunning;
-        RandomSeedPresetPicker.IsEnabled = !busy;
-        RandomSeedRolePackPicker.IsEnabled = !busy;
-        RandomSeedStylePicker.IsEnabled = !busy;
-        RandomSeedIntensityPicker.IsEnabled = !busy;
-        RandomSeedAbsurdityPicker.IsEnabled = !busy;
-        GenerationHistoryPicker.IsEnabled = !busy;
-        ReplayGenerationButton.IsEnabled = !busy && SelectedGenerationHistory() is not null;
-        CopyGenerationSeedButton.IsEnabled = !busy && SelectedGenerationHistory() is not null;
-        AiChoiceButton.IsEnabled = !busy || autoChatRunning;
-        YoloScenarioButton.IsEnabled = !busy || autoChatRunning;
+        ScenarioWorkflow.UpdateBusyState(busy, autoChatRunning);
         NarrateNowButton.IsEnabled = !busy || autoChatRunning;
         CurateNewsButton.IsEnabled = !busy || autoChatRunning;
         StopButton.IsEnabled = stopEnabled;
