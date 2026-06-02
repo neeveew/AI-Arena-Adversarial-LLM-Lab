@@ -515,41 +515,41 @@
             </Setter>
         </Style>
         <Style x:Key="SearchTextBox" TargetType="TextBox">
-            <Setter Property="Background" Value="#0B151D" />
+            <Setter Property="Background" Value="#08111F" />
             <Setter Property="Foreground" Value="White" />
             <Setter Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CaretBrush" Value="White" />
             <Setter Property="SelectionBrush" Value="{DynamicResource PrimaryBorderBrush}" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="Padding" Value="10,0" />
+            <Setter Property="MinHeight" Value="62" />
+            <Setter Property="FontSize" Value="20" />
+            <Setter Property="Padding" Value="58,0,72,0" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TextBox">
                         <Border x:Name="SearchBorder"
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}">
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="9">
                             <Grid>
                                 <ScrollViewer x:Name="PART_ContentHost"
                                               Margin="{TemplateBinding Padding}"
                                               VerticalAlignment="Center" />
-                                <TextBlock Text="Search transcripts..."
+                                <TextBlock Text="Search transcripts, agents, notes..."
                                            Foreground="{DynamicResource MutedTextBrush}"
-                                           Margin="10,0"
+                                           FontSize="{TemplateBinding FontSize}"
+                                           Margin="58,0,72,0"
                                            VerticalAlignment="Center"
                                            IsHitTestVisible="False">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
                                             <Setter Property="Visibility" Value="Collapsed" />
                                             <Style.Triggers>
-                                                <MultiDataTrigger>
-                                                    <MultiDataTrigger.Conditions>
-                                                        <Condition Binding="{Binding Text, RelativeSource={RelativeSource TemplatedParent}}" Value="" />
-                                                        <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource TemplatedParent}}" Value="False" />
-                                                    </MultiDataTrigger.Conditions>
+                                                <DataTrigger Binding="{Binding Text, RelativeSource={RelativeSource TemplatedParent}}" Value="">
                                                     <Setter Property="Visibility" Value="Visible" />
-                                                </MultiDataTrigger>
+                                                </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </TextBlock.Style>
@@ -975,28 +975,33 @@
                                    VerticalAlignment="Center" />
                     </Button>
                     <Popup x:Name="TranscriptSearchPopup"
-                           PlacementTarget="{Binding ElementName=TranscriptSearchButton}"
-                           Placement="Left"
-                           HorizontalOffset="-8"
-                           VerticalOffset="-1"
+                           PlacementTarget="{Binding ElementName=TopBarStatus}"
+                           Placement="Bottom"
+                           HorizontalOffset="0"
+                           VerticalOffset="18"
                            StaysOpen="True"
-                           AllowsTransparency="True">
-                        <Border Background="{DynamicResource TopBarBrush}"
+                           AllowsTransparency="True"
+                           PopupAnimation="Fade">
+                        <Border Background="#F20A1424"
                                 BorderBrush="{DynamicResource PrimaryBorderBrush}"
                                 BorderThickness="1"
-                                CornerRadius="6"
-                                Padding="8">
-                            <Grid Width="320">
+                                CornerRadius="18"
+                                Padding="26,24,26,18">
+                            <Border.Effect>
+                                <DropShadowEffect Color="#4BA3DD"
+                                                  BlurRadius="26"
+                                                  ShadowDepth="0"
+                                                  Opacity="0.72" />
+                            </Border.Effect>
+                            <Grid Width="820">
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="10" />
-                                    <RowDefinition Height="34" />
+                                    <RowDefinition Height="8" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="38" />
-                                </Grid.ColumnDefinitions>
                                 <Border x:Name="TranscriptSearchDragHandle"
-                                        Grid.ColumnSpan="2"
+                                        Grid.Row="0"
                                         Height="8"
                                         Background="Transparent"
                                         Cursor="SizeAll"
@@ -1010,22 +1015,92 @@
                                             VerticalAlignment="Center"
                                             Background="{DynamicResource DisabledBorderBrush}" />
                                 </Border>
-                                <TextBox x:Name="TranscriptSearchText"
-                                         Grid.Row="1"
-                                         Style="{StaticResource SearchTextBox}"
-                                         TextChanged="TranscriptFilter_Changed"
-                                         KeyDown="TranscriptSearchText_KeyDown"
-                                         ToolTip="Search transcript text, speakers, models, and sources" />
-                                <Button x:Name="ClearTranscriptSearchButton"
-                                        Grid.Row="1"
-                                        Grid.Column="1"
-                                        Content="X"
-                                        Click="ClearTranscriptSearchButton_Click"
-                                        MinWidth="34"
-                                        MinHeight="34"
-                                        Padding="0"
-                                        Margin="6,0,0,0"
-                                        ToolTip="Clear search" />
+                                <Grid Grid.Row="1" Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="72" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid>
+                                        <TextBox x:Name="TranscriptSearchText"
+                                                 Style="{StaticResource SearchTextBox}"
+                                                 TextChanged="TranscriptFilter_Changed"
+                                                 KeyDown="TranscriptSearchText_KeyDown"
+                                                 ToolTip="Search transcript text, speakers, models, and sources" />
+                                        <TextBlock Text="&#xE721;"
+                                                   FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="25"
+                                                   Foreground="{DynamicResource TextBrush}"
+                                                   Opacity="0.92"
+                                                   Margin="22,0,0,0"
+                                                   HorizontalAlignment="Left"
+                                                   VerticalAlignment="Center"
+                                                   IsHitTestVisible="False" />
+                                        <Border HorizontalAlignment="Right"
+                                                VerticalAlignment="Center"
+                                                Margin="0,0,20,0"
+                                                Background="{DynamicResource TopBarBrush}"
+                                                BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="7"
+                                                Padding="10,5"
+                                                IsHitTestVisible="False">
+                                            <TextBlock Text="Esc"
+                                                       Foreground="{DynamicResource TextBrush}"
+                                                       FontSize="16"
+                                                       FontWeight="SemiBold" />
+                                        </Border>
+                                    </Grid>
+                                    <Button x:Name="ClearTranscriptSearchButton"
+                                            Grid.Column="1"
+                                            Click="ClearTranscriptSearchButton_Click"
+                                            Width="56"
+                                            MinWidth="56"
+                                            Height="56"
+                                            MinHeight="56"
+                                            Padding="0"
+                                            Margin="16,3,0,3"
+                                            Background="Transparent"
+                                            BorderBrush="{DynamicResource ControlBorderBrush}"
+                                            Foreground="{DynamicResource TextBrush}"
+                                            ToolTip="Clear and close search">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="CloseBorder"
+                                                        Background="{TemplateBinding Background}"
+                                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                                        BorderThickness="1.5"
+                                                        CornerRadius="28">
+                                                    <TextBlock Text="&#xE711;"
+                                                               FontFamily="Segoe MDL2 Assets"
+                                                               FontSize="20"
+                                                               Foreground="{TemplateBinding Foreground}"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center" />
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="CloseBorder" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
+                                                        <Setter TargetName="CloseBorder" Property="Background" Value="{DynamicResource NavHoverBrush}" />
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                    </Button>
+                                </Grid>
+                                <TextBlock Grid.Row="2"
+                                           Text="RECENT SEARCHES"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontSize="13"
+                                           FontWeight="SemiBold"
+                                           Margin="0,30,0,12" />
+                                <Border Grid.Row="3"
+                                        Background="#6608111F"
+                                        BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="8"
+                                        MinHeight="150">
+                                    <StackPanel x:Name="TranscriptRecentSearchItems" />
+                                </Border>
                             </Grid>
                         </Border>
                     </Popup>

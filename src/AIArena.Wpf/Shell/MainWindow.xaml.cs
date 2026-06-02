@@ -235,6 +235,7 @@ public partial class MainWindow : Window
             TranscriptSearchText,
             ClearTranscriptSearchButton,
             TranscriptSearchDragHandle,
+            TranscriptRecentSearchItems,
             TranscriptResultCountText,
             TranscriptTurnFilterPicker,
             TranscriptFilterSystemCheckBox,
