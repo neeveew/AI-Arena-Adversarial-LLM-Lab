@@ -64,6 +64,7 @@ public partial class MainWindow : Window
     private readonly MatchLockCoordinator? _matchLockCoordinator;
     private readonly AgentRosterCoordinator? _agentRosterCoordinator;
     private readonly ArenaSessionMutationCoordinator? _arenaSessionMutationCoordinator;
+    private readonly ShellNavigationCoordinator? _shellNavigationCoordinator;
     private readonly MatchQualityTimelineCoordinator? _matchQualityTimelineCoordinator;
     private readonly AgentBoardCoordinator? _agentBoardCoordinator;
     private readonly DispatcherTimer _refreshTimer;
@@ -74,7 +75,6 @@ public partial class MainWindow : Window
     private IReadOnlyDictionary<string, string> _lastAgentPersonas = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     private CoreSessionSummary? _activeSession;
     private DateTimeOffset _activeSnapshotWriteUtc;
-    private bool _isSelectingTheme;
     private bool _isRenderingSnapshot;
     private bool _arenaBusy;
     private string _transcriptDashboardLayout = "";
@@ -154,6 +154,9 @@ public partial class MainWindow : Window
 
     private ArenaSessionMutationCoordinator ArenaSessionMutations =>
         _arenaSessionMutationCoordinator ?? throw new InvalidOperationException("Arena session mutation coordinator is not initialized.");
+
+    private ShellNavigationCoordinator ShellNavigation =>
+        _shellNavigationCoordinator ?? throw new InvalidOperationException("Shell navigation coordinator is not initialized.");
 
     private MatchQualityTimelineCoordinator MatchQualityTimeline =>
         _matchQualityTimelineCoordinator ?? throw new InvalidOperationException("Match quality timeline coordinator is not initialized.");
@@ -294,6 +297,23 @@ public partial class MainWindow : Window
             force => ProviderReachability.RefreshAsync(force),
             () => ProviderReachability.UpdatePopup());
         _wpfSettings = _wpfSettingsStore.Load();
+        _shellNavigationCoordinator = new ShellNavigationCoordinator(
+            this,
+            _wpfSettingsStore,
+            () => _wpfSettings,
+            ThemePicker,
+            ArenaNavButton,
+            CustomMatchNavButton,
+            AppSettingsButton,
+            TranscriptPanel,
+            CustomMatchPanel,
+            NewsPanel,
+            AppSettingsPanel,
+            theme => _theme = theme,
+            ResourceBrush,
+            () => _userGuideWindowHost.RefreshTheme(this),
+            () => _activeSession is not null,
+            RefreshActiveSession);
         _scenarioWorkflowCoordinator = new ScenarioWorkflowCoordinator(
             this,
             _matchGeneration,
@@ -475,8 +495,8 @@ public partial class MainWindow : Window
             SaveSnapshotForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync,
             SetArenaRunStatus);
-        ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
-        InitializeThemePicker();
+        ShellNavigation.ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
+        ShellNavigation.InitializeThemePicker();
         _refreshTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(1200)
@@ -745,21 +765,6 @@ public partial class MainWindow : Window
 
         var plusIndex = version.IndexOf('+', StringComparison.Ordinal);
         return plusIndex > 0 ? version[..plusIndex] : version;
-    }
-
-    private void InitializeThemePicker()
-    {
-        var themeId = ThemePalette.NormalizeId(_wpfSettings.ThemeId);
-        _wpfSettings.ThemeId = themeId;
-        var themes = ThemePalette.BuiltIn
-            .Where(item => !item.Id.Equals("system", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        _isSelectingTheme = true;
-        ThemePicker.ItemsSource = themes;
-        ThemePicker.SelectedValue = themes.Any(item => item.Id == themeId)
-            ? themeId
-            : "dark-blue";
-        _isSelectingTheme = false;
     }
 
     private void InitializeVisualSettings()
@@ -2348,75 +2353,7 @@ public partial class MainWindow : Window
 
     private void ThemePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_isSelectingTheme)
-        {
-            return;
-        }
-
-        var themeId = ThemePicker.SelectedItem is ThemePalette selectedTheme
-            ? selectedTheme.Id
-            : ThemePalette.NormalizeId(ThemePicker.SelectedValue?.ToString());
-        ApplyTheme(themeId, persist: true, rerender: true);
-    }
-
-    private void ApplyTheme(string themeId, bool persist, bool rerender)
-    {
-        _theme = ThemePalette.Resolve(themeId);
-        SetBrush("AppBackgroundBrush", _theme.AppBackground);
-        SetBrush("TopBarBrush", _theme.TopBar);
-        SetBrush("PanelBrush", _theme.Panel);
-        SetBrush("CardBrush", _theme.Card);
-        SetBrush("InputBrush", _theme.Input);
-        SetBrush("TranscriptHeaderBrush", _theme.Panel);
-        SetBrush("TranscriptBodyBrush", _theme.Card);
-        SetBrush("ControlBorderBrush", _theme.Border);
-        SetBrush("TextBrush", _theme.Text);
-        SetBrush("MutedTextBrush", _theme.MutedText);
-        SetBrush("PrimaryBrush", _theme.Primary);
-        SetBrush("PrimaryBorderBrush", _theme.PrimaryBorder);
-        SetBrush("AssistBrush", _theme.Assist);
-        SetBrush("AssistBorderBrush", _theme.AssistBorder);
-        SetBrush("DangerBrush", _theme.Danger);
-        SetBrush("DangerBorderBrush", _theme.DangerBorder);
-        SetBrush("DangerTextBrush", _theme.DangerText);
-        SetBrush("DisabledBrush", _theme.Disabled);
-        SetBrush("DisabledBorderBrush", _theme.DisabledBorder);
-        SetBrush("DisabledTextBrush", _theme.DisabledText);
-        SetBrush("HoverBorderBrush", _theme.HoverBorder);
-        SetBrush("NavHoverBrush", BlendBrush(new SolidColorBrush(_theme.Input), new SolidColorBrush(_theme.PrimaryBorder), 0.18));
-        SetBrush("NavActiveBrush", BlendBrush(new SolidColorBrush(_theme.Input), new SolidColorBrush(_theme.PrimaryBorder), 0.24));
-        SetBrush("NavPressedBrush", BlendBrush(new SolidColorBrush(_theme.Input), new SolidColorBrush(_theme.PrimaryBorder), 0.12));
-        SetBrush("PressedPrimaryBrush", _theme.PressedPrimary);
-        SetBrush("OverlayBrush", _theme.Overlay);
-        SetBrush("AlphaAccentBrush", _theme.AlphaAccent);
-        SetBrush("BetaAccentBrush", _theme.BetaAccent);
-        SetBrush("GammaAccentBrush", _theme.GammaAccent);
-        SetBrush("DeltaAccentBrush", _theme.DeltaAccent);
-        SetBrush("NarratorAccentBrush", _theme.NarratorAccent);
-        SetBrush("OperatorAccentBrush", _theme.OperatorAccent);
-
-        if (persist)
-        {
-            _wpfSettings.ThemeId = _theme.Id;
-            _wpfSettingsStore.Save(_wpfSettings);
-        }
-
-        UpdateNavigationTheme();
-        _userGuideWindowHost.RefreshTheme(this);
-        if (rerender && _activeSession is not null)
-        {
-            RefreshActiveSession($"Theme applied: {_theme.Name}");
-        }
-    }
-
-    private void SetBrush(string key, Color color)
-    {
-        Resources[key] = new SolidColorBrush(color);
-    }
-
-    private void SetBrush(string key, Brush brush)
-    {
-        Resources[key] = brush;
+        ShellNavigation.OnThemeSelectionChanged();
     }
 
     private Brush ResourceBrush(string key)
@@ -2484,10 +2421,7 @@ public partial class MainWindow : Window
 
     private void ShowTranscriptPanel(bool clearFilters)
     {
-        TranscriptPanel.Visibility = Visibility.Visible;
-        CustomMatchPanel.Visibility = Visibility.Collapsed;
-        NewsPanel.Visibility = Visibility.Collapsed;
-        UpdateNavigationTheme();
+        ShellNavigation.ShowTranscriptPanel();
 
         if (clearFilters)
         {
@@ -2497,10 +2431,7 @@ public partial class MainWindow : Window
 
     private void ShowCustomMatchPanel()
     {
-        TranscriptPanel.Visibility = Visibility.Collapsed;
-        CustomMatchPanel.Visibility = Visibility.Visible;
-        NewsPanel.Visibility = Visibility.Collapsed;
-        UpdateNavigationTheme();
+        ShellNavigation.ShowCustomMatchPanel();
     }
 
     private void ClearTranscriptFilters()
@@ -2591,27 +2522,10 @@ public partial class MainWindow : Window
         _transcriptSearchCoordinator?.OnDragMouseLeftButtonUp(e);
     }
 
-    private void UpdateNavigationTheme()
-    {
-        var arenaActive = TranscriptPanel.Visibility == Visibility.Visible;
-        var customActive = CustomMatchPanel.Visibility == Visibility.Visible;
-        ApplyNavigationButtonState(ArenaNavButton, arenaActive);
-        ApplyNavigationButtonState(CustomMatchNavButton, customActive);
-    }
-
-    private void ApplyNavigationButtonState(Button button, bool active)
-    {
-        button.Background = active
-            ? ResourceBrush("NavActiveBrush")
-            : Brushes.Transparent;
-        button.BorderBrush = active ? ResourceBrush("PrimaryBorderBrush") : Brushes.Transparent;
-        button.Foreground = active ? ResourceBrush("TextBrush") : ResourceBrush("MutedTextBrush");
-    }
-
     private void AppSettingsButton_Click(object sender, RoutedEventArgs e)
     {
         AnimateSettingsGear();
-        SetAppSettingsVisible(AppSettingsPanel.Visibility != Visibility.Visible);
+        ShellNavigation.ToggleAppSettings();
     }
 
     private void OpenReleasesButton_Click(object sender, RoutedEventArgs e)
@@ -2794,8 +2708,7 @@ public partial class MainWindow : Window
     }
     private void SetAppSettingsVisible(bool visible)
     {
-        AppSettingsPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        AppSettingsButton.ToolTip = visible ? "Hide Settings" : "App Settings";
+        ShellNavigation.SetAppSettingsVisible(visible);
         if (visible)
         {
             _modelRefreshTimer.Start();

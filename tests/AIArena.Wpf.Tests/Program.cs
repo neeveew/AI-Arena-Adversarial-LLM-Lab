@@ -28,7 +28,8 @@ var tests = new (string Name, Action Test)[]
     ("arena session mutation coordinator normalizes settings", ArenaSessionMutationCoordinatorNormalizesSettings),
     ("session overview coordinator formats summaries", SessionOverviewCoordinatorFormatsSummaries),
     ("shell ui helpers blend brushes", ShellUiHelpersBlendBrushes),
-    ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState)
+    ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState),
+    ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes)
 };
 
 var failures = 0;
@@ -577,6 +578,17 @@ static void ProviderReachabilityCoordinatorFormatsPopupState()
     Require(fallback.ModelCountText == "unknown", "unknown model count should stay unknown");
     Require(fallback.LastCheckText == "waiting", "missing timestamps should show waiting");
     Require(!fallback.HasMissingModelWarning, "missing model warning should require advertised models");
+}
+
+static void ShellNavigationCoordinatorSelectsThemes()
+{
+    var themes = ThemePalette.BuiltIn
+        .Where(theme => !theme.Id.Equals("system", StringComparison.OrdinalIgnoreCase))
+        .ToArray();
+
+    Require(ShellNavigationCoordinator.SelectedThemeId(themes, "dark-green") == "dark-green", "known theme should be selected");
+    Require(ShellNavigationCoordinator.SelectedThemeId(themes, "system") == "dark-blue", "system theme should fall back for picker");
+    Require(ShellNavigationCoordinator.SelectedThemeId(themes, "missing") == "dark-blue", "unknown theme should fall back");
 }
 
 static Color RequireSolidColor(Brush brush, string message)
