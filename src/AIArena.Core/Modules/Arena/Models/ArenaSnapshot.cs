@@ -107,6 +107,9 @@ public sealed class DialogueAgent
     [JsonPropertyName("pressure_profile")]
     public string PressureProfile { get; set; } = "";
 
+    [JsonPropertyName("accent_color")]
+    public string AccentColor { get; set; } = "";
+
     [JsonPropertyName("active")]
     public bool Active { get; set; } = true;
 
@@ -343,6 +346,9 @@ public sealed class NarratorState
 
     [JsonPropertyName("last_error")]
     public string LastError { get; set; } = "";
+
+    [JsonPropertyName("accent_color")]
+    public string AccentColor { get; set; } = "";
 
     [JsonPropertyName("cadence")]
     public int Cadence { get; set; }

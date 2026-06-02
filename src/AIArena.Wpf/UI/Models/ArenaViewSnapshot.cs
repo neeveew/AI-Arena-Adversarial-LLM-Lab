@@ -30,6 +30,7 @@ public sealed record ArenaViewSnapshot(
     string NarratorStatus,
     string NarratorPersona,
     string NarratorVoiceStyle,
+    string NarratorAccentColor,
     bool NarratorLocked,
     string ProviderBaseUrl,
     int ProviderTimeout,

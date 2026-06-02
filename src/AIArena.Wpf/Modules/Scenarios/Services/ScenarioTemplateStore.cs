@@ -126,6 +126,7 @@ public sealed class ScenarioTemplateStore
             {
                 snapshot.Engine.Narrator.Persona = agentTemplate.Persona;
                 snapshot.Engine.Narrator.VoiceStyle = agentTemplate.VoiceStyle ?? "";
+                snapshot.Engine.Narrator.AccentColor = AgentAccentService.NormalizeColor(agentTemplate.AccentColor);
                 snapshot.MatchLocks["narrator"] = agentTemplate.Locked;
                 continue;
             }
@@ -141,6 +142,7 @@ public sealed class ScenarioTemplateStore
             agent.Persona = agentTemplate.Persona;
             agent.VoiceStyle = agentTemplate.VoiceStyle ?? "";
             agent.PressureProfile = agentTemplate.PressureProfile ?? "";
+            agent.AccentColor = AgentAccentService.NormalizeColor(agentTemplate.AccentColor);
             agent.Active = agentTemplate.Active;
             snapshot.MatchLocks[agentTemplate.Id] = agentTemplate.Locked;
         }
@@ -185,7 +187,8 @@ public sealed class ScenarioTemplateStore
                 agent.Active,
                 snapshot.MatchLocks.TryGetValue(agent.Id, out var locked) && locked,
                 agent.VoiceStyle,
-                agent.PressureProfile))
+                agent.PressureProfile,
+                AgentAccentService.NormalizeColor(agent.AccentColor)))
             .Append(new ScenarioTemplateAgent(
                 "narrator",
                 "Narrator",
@@ -193,7 +196,8 @@ public sealed class ScenarioTemplateStore
                 true,
                 snapshot.MatchLocks.TryGetValue("narrator", out var narratorLocked) && narratorLocked,
                 snapshot.Engine.Narrator.VoiceStyle,
-                ""))
+                "",
+                AgentAccentService.NormalizeColor(snapshot.Engine.Narrator.AccentColor)))
             .ToArray();
 
         var configs = snapshot.Configs.ToDictionary(
@@ -263,7 +267,8 @@ public sealed record ScenarioTemplateAgent(
     bool Active,
     bool Locked,
     string VoiceStyle = "",
-    string PressureProfile = "");
+    string PressureProfile = "",
+    string AccentColor = "");
 
 public sealed record ScenarioTemplateModelConfig(
     string BaseUrl,

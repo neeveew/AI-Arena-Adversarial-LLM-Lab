@@ -31,6 +31,7 @@ var tests = new (string Name, Action Test)[]
     ("arena session mutation coordinator normalizes settings", ArenaSessionMutationCoordinatorNormalizesSettings),
     ("session overview coordinator formats summaries", SessionOverviewCoordinatorFormatsSummaries),
     ("shell ui helpers blend brushes", ShellUiHelpersBlendBrushes),
+    ("agent accent service normalizes colors", AgentAccentServiceNormalizesColors),
     ("window chrome service packs color refs", WindowChromeServicePacksColorRefs),
     ("app icon resource is packaged", AppIconResourceIsPackaged),
     ("user guide app icon image source loads", UserGuideAppIconImageSourceLoads),
@@ -239,9 +240,9 @@ static void ScenarioTemplateRestoresDynamicRoster()
         GlobalLocked: false,
         Agents:
         [
-            new ScenarioTemplateAgent("alpha", "Alpha saved", "saved alpha persona", true, false, "scientific", "evidence"),
-            new ScenarioTemplateAgent("epsilon", "Epsilon saved", "saved epsilon persona", true, true, "idioms", "chaos"),
-            new ScenarioTemplateAgent("narrator", "Narrator", "saved narrator persona", true, false, "skeptical")
+            new ScenarioTemplateAgent("alpha", "Alpha saved", "saved alpha persona", true, false, "scientific", "evidence", "35d6ff"),
+            new ScenarioTemplateAgent("epsilon", "Epsilon saved", "saved epsilon persona", true, true, "idioms", "chaos", "#ff8a6a"),
+            new ScenarioTemplateAgent("narrator", "Narrator", "saved narrator persona", true, false, "skeptical", AccentColor: "#d185ce")
         ],
         ModelConfigs: new Dictionary<string, ScenarioTemplateModelConfig>(StringComparer.OrdinalIgnoreCase)
         {
@@ -257,6 +258,9 @@ static void ScenarioTemplateRestoresDynamicRoster()
     Require(snapshot.Engine.Agents.Select(agent => agent.Id).SequenceEqual(["alpha", "epsilon"]), "template should restore saved participant roster");
     Require(snapshot.Engine.Agents[1].VoiceStyle == "idioms", "dynamic agent voice was not restored");
     Require(snapshot.Engine.Agents[1].PressureProfile == "chaos", "dynamic agent pressure was not restored");
+    Require(snapshot.Engine.Agents[0].AccentColor == "#35D6FF", "agent accent color was not normalized");
+    Require(snapshot.Engine.Agents[1].AccentColor == "#FF8A6A", "dynamic agent accent color was not restored");
+    Require(snapshot.Engine.Narrator.AccentColor == "#D185CE", "narrator accent color was not restored");
     Require(snapshot.MatchLocks.TryGetValue("epsilon", out var epsilonLocked) && epsilonLocked, "dynamic agent lock was not restored");
     Require(snapshot.Engine.TurnIndex == 0, "turn index should wrap to restored participant count");
     Require(snapshot.Configs["alpha"].Model == "saved-alpha-model", "saved alpha model was not restored");
@@ -495,7 +499,7 @@ static void ArenaRunCoordinatorFormatsStatuses()
         new OneTurnPlan(true, "alpha", "Alpha", null, null, ""),
         message,
         new ModelCompletionResult(true, "", "model-a", "text", "", 321, 0, 0, 0, "", DateTimeOffset.UtcNow));
-    var agent = new AgentState("alpha", "Alpha", "waiting", "", "default", "default", "model-a", true, false, []);
+    var agent = new AgentState("alpha", "Alpha", "waiting", "", "default", "default", "", "model-a", true, false, []);
     var original = TranscriptForTest(5, "Alpha", "alpha", "message", "ok");
 
     Require(ArenaRunCoordinator.AutoChatStatus(completed) == "Auto Chat: Alpha spoke (model-a, 321 ms)", "auto-chat success status should remain stable");
@@ -525,8 +529,8 @@ static void ArenaSessionMutationCoordinatorNormalizesSettings()
 
 static void SessionOverviewCoordinatorFormatsSummaries()
 {
-    var alpha = new AgentState("alpha", "Alpha", "waiting", "", "default", "default", "", true, false, []);
-    var beta = new AgentState("beta", "Beta", "waiting", "", "default", "default", "beta-model", true, false, []);
+    var alpha = new AgentState("alpha", "Alpha", "waiting", "", "default", "default", "", "", true, false, []);
+    var beta = new AgentState("beta", "Beta", "waiting", "", "default", "default", "", "beta-model", true, false, []);
     var messages = new[]
     {
         TranscriptForTest(1, "Alpha", "alpha", "message", "ok") with { PromptTokens = 120, CompletionTokens = 40 },
@@ -569,6 +573,24 @@ static void ShellUiHelpersBlendBrushes()
     var high = RequireSolidColor(ShellUiHelpers.BlendBrush(new SolidColorBrush(Color.FromRgb(10, 20, 30)), new SolidColorBrush(Color.FromRgb(200, 210, 220)), 2), "high clamp should return solid");
     Require(low == Color.FromRgb(10, 20, 30), "blend amount should clamp below zero");
     Require(high == Color.FromRgb(200, 210, 220), "blend amount should clamp above one");
+}
+
+static void AgentAccentServiceNormalizesColors()
+{
+    Require(AgentAccentService.NormalizeColor("35d6ff") == "#35D6FF", "accent color should accept hex without hash");
+    Require(AgentAccentService.NormalizeColor("#ff8a6a") == "#FF8A6A", "accent color should normalize casing");
+    Require(AgentAccentService.NormalizeColor("not-a-color") == "", "invalid accent color should be rejected");
+
+    var custom = RequireSolidColor(
+        AgentAccentService.ResolveBrush("alpha", "#123456", AccentResourceBrush),
+        "custom accent should resolve to a solid brush");
+    Require(custom == Color.FromRgb(0x12, 0x34, 0x56), "custom accent should override default color");
+
+    var epsilon = RequireSolidColor(AgentAccentService.ResolveBrush("epsilon", "", AccentResourceBrush), "epsilon should resolve");
+    var zeta = RequireSolidColor(AgentAccentService.ResolveBrush("zeta", "", AccentResourceBrush), "zeta should resolve");
+    var eta = RequireSolidColor(AgentAccentService.ResolveBrush("eta", "", AccentResourceBrush), "eta should resolve");
+    var theta = RequireSolidColor(AgentAccentService.ResolveBrush("theta", "", AccentResourceBrush), "theta should resolve");
+    Require(new[] { epsilon, zeta, eta, theta }.Distinct().Count() == 4, "extended participants should have distinct default accents");
 }
 
 static void WindowChromeServicePacksColorRefs()
@@ -675,8 +697,8 @@ static void AppSettingsCoordinatorSelectsProviderFocus()
 
 static void CoordinatorRenderContractsCoverSmokeStates()
 {
-    var alpha = new AgentState("alpha", "Alpha", "thinking", "", "default", "default", "alpha-model", true, false, []);
-    var beta = new AgentState("beta", "Beta", "waiting", "skeptic", "default", "default", "", true, false, []);
+    var alpha = new AgentState("alpha", "Alpha", "thinking", "", "default", "default", "", "alpha-model", true, false, []);
+    var beta = new AgentState("beta", "Beta", "waiting", "skeptic", "default", "default", "", "", true, false, []);
     var normal = TranscriptForTest(1, "Alpha", "alpha", "message", "ok");
     var approval = TranscriptForTest(2, "Tool", "internet", "internet_approval", "pending") with { InternetSources = ["https://example.test/a"] };
     var news = TranscriptForTest(3, "News", "news", "news", "ok") with { InternetSources = ["https://example.test/b"] };
@@ -776,7 +798,7 @@ static void ScenarioSeedInspectorCoordinatorFormatsMetadata()
 
 static void ProviderQuickSetupCoordinatorFormatsDefaults()
 {
-    var agent = new AgentState("alpha", "Alpha", "waiting", "", "default", "default", "agent-model", true, false, []);
+    var agent = new AgentState("alpha", "Alpha", "waiting", "", "default", "default", "", "agent-model", true, false, []);
     var snapshot = SnapshotForOverviewTest(true, "shared-model", "", 0, [], [agent]);
 
     Require(!ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot, agent), "online provider with usable model should hide quick setup");
@@ -808,6 +830,20 @@ static void NewsPanelCoordinatorSummarizesInternetItems()
     Require(NewsPanelCoordinator.SummaryText([]) == "No internet activity in this session.", "empty news summary should remain stable");
     Require(NewsPanelCoordinator.SummaryText([news, approval, tool]) == "3 internet item(s), 2 source(s), 1 waiting for approval", "news summary should count items, sources, and pending approvals");
     Require(NewsPanelCoordinator.SummaryText([resolvedApproval, sourced]) == "2 internet item(s), 2 source(s)", "resolved approvals should not count as pending");
+}
+
+static Brush AccentResourceBrush(string key)
+{
+    return key switch
+    {
+        "AlphaAccentBrush" => new SolidColorBrush(Color.FromRgb(0x6E, 0xC9, 0xF1)),
+        "BetaAccentBrush" => new SolidColorBrush(Color.FromRgb(0xF1, 0xC9, 0x6B)),
+        "GammaAccentBrush" => new SolidColorBrush(Color.FromRgb(0x85, 0xD9, 0x9C)),
+        "DeltaAccentBrush" => new SolidColorBrush(Color.FromRgb(0x9E, 0xAF, 0xFF)),
+        "NarratorAccentBrush" => new SolidColorBrush(Color.FromRgb(0xD1, 0x85, 0xCE)),
+        "OperatorAccentBrush" => new SolidColorBrush(Color.FromRgb(0xD1, 0x74, 0x7B)),
+        _ => new SolidColorBrush(Color.FromRgb(0x73, 0x82, 0x94))
+    };
 }
 
 static Color RequireSolidColor(Brush brush, string message)
@@ -858,6 +894,7 @@ static ArenaViewSnapshot SnapshotForOverviewTest(
         "idle",
         "",
         "default",
+        "",
         false,
         "http://127.0.0.1:1234/v1",
         60,

@@ -31,6 +31,7 @@ internal sealed class MatchLockCoordinator
     private readonly List<CheckBox> lockControls = [];
     private readonly List<ComboBox> voiceControls = [];
     private readonly List<ComboBox> pressureControls = [];
+    private readonly List<Button> colorControls = [];
     private Style? lockToggleStyle;
 
     private static readonly string[] RoleDetailLabels =
@@ -84,6 +85,7 @@ internal sealed class MatchLockCoordinator
         lockControls.Clear();
         voiceControls.Clear();
         pressureControls.Clear();
+        colorControls.Clear();
     }
 
     public void UpdateBusyState(bool busy)
@@ -102,6 +104,11 @@ internal sealed class MatchLockCoordinator
         {
             comboBox.IsEnabled = !busy;
         }
+
+        foreach (var button in colorControls)
+        {
+            button.IsEnabled = !busy;
+        }
     }
 
     public Border CreateLockCard(
@@ -112,7 +119,8 @@ internal sealed class MatchLockCoordinator
         Brush accent,
         bool locked,
         string? voiceStyle = null,
-        string? pressureProfile = null)
+        string? pressureProfile = null,
+        string? accentColor = null)
     {
         var lockAccent = resourceBrush("BetaAccentBrush");
         var isCastCard = IsParticipant(lockKey) || NormalizeLockKey(lockKey) == "narrator";
@@ -154,6 +162,10 @@ internal sealed class MatchLockCoordinator
             VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(14, 0, 0, 0)
         };
+        if (isCastCard)
+        {
+            actions.Children.Add(CreateAccentColorButton(lockKey, accent, accentColor ?? ""));
+        }
         if (isAgentCard)
         {
             actions.Children.Add(CreateAgentPressurePicker(lockKey, pressureProfile ?? ""));
@@ -320,6 +332,38 @@ internal sealed class MatchLockCoordinator
         return picker;
     }
 
+    private Button CreateAccentColorButton(string lockKey, Brush accent, string accentColor)
+    {
+        var button = new Button
+        {
+            Tag = new AccentColorPayload(lockKey, AgentAccentService.NormalizeColor(accentColor)),
+            Width = 32,
+            MinWidth = 32,
+            Height = 28,
+            MinHeight = 28,
+            Padding = new Thickness(0),
+            Margin = new Thickness(0, 0, 6, 0),
+            Background = resourceBrush("InputBrush"),
+            BorderBrush = accent,
+            Foreground = accent,
+            ToolTip = "Customize this role color"
+        };
+        button.Content = new Border
+        {
+            Width = 15,
+            Height = 15,
+            Background = accent,
+            BorderBrush = blendBrush(resourceBrush("TextBrush"), accent, 0.72),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(3),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        button.Click += AccentColorButton_Click;
+        colorControls.Add(button);
+        return button;
+    }
+
     private ComboBox CreateAgentPressurePicker(string lockKey, string pressureProfile)
     {
         var picker = new ComboBox
@@ -342,6 +386,159 @@ internal sealed class MatchLockCoordinator
         picker.SelectionChanged += AgentPressurePicker_SelectionChanged;
         pressureControls.Add(picker);
         return picker;
+    }
+
+    private void AccentColorButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: AccentColorPayload payload } button)
+        {
+            return;
+        }
+
+        var popup = new Popup
+        {
+            PlacementTarget = button,
+            Placement = PlacementMode.Bottom,
+            StaysOpen = false,
+            AllowsTransparency = true
+        };
+
+        var root = new Border
+        {
+            Background = resourceBrush("TopBarBrush"),
+            BorderBrush = button.BorderBrush,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10),
+            Width = 238
+        };
+        var stack = new StackPanel();
+        root.Child = stack;
+
+        stack.Children.Add(new TextBlock
+        {
+            Text = $"{DisplayLockKey(payload.Key)} color",
+            Foreground = resourceBrush("TextBrush"),
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 8)
+        });
+
+        var swatches = new WrapPanel
+        {
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+        foreach (var option in AgentAccentService.PresetOptions)
+        {
+            swatches.Children.Add(CreateColorPresetButton(payload.Key, option, popup));
+        }
+        stack.Children.Add(swatches);
+
+        var hexRow = new DockPanel
+        {
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+        hexRow.Children.Add(new TextBlock
+        {
+            Text = "Hex",
+            Foreground = resourceBrush("MutedTextBrush"),
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0)
+        });
+        var hexText = new TextBox
+        {
+            Text = string.IsNullOrWhiteSpace(payload.Color) ? "" : payload.Color,
+            MinHeight = 28,
+            Padding = new Thickness(7, 3, 7, 3),
+            Background = resourceBrush("InputBrush"),
+            Foreground = resourceBrush("TextBrush"),
+            BorderBrush = resourceBrush("ControlBorderBrush"),
+            FontSize = 11,
+            ToolTip = "Use #RRGGBB"
+        };
+        DockPanel.SetDock(hexText, Dock.Right);
+        hexRow.Children.Add(hexText);
+        stack.Children.Add(hexRow);
+
+        var actions = new DockPanel { LastChildFill = false };
+        var reset = new Button
+        {
+            Content = "RESET",
+            MinHeight = 28,
+            MinWidth = 72,
+            Padding = new Thickness(8, 3, 8, 3),
+            Margin = new Thickness(0, 0, 8, 0),
+            Background = resourceBrush("InputBrush"),
+            BorderBrush = resourceBrush("ControlBorderBrush"),
+            Foreground = resourceBrush("MutedTextBrush"),
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold
+        };
+        reset.Click += async (_, _) =>
+        {
+            popup.IsOpen = false;
+            await UpdateAccentColorAsync(payload.Key, "");
+        };
+        actions.Children.Add(reset);
+
+        var apply = new Button
+        {
+            Content = "APPLY",
+            MinHeight = 28,
+            MinWidth = 78,
+            Padding = new Thickness(8, 3, 8, 3),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Background = resourceBrush("InputBrush"),
+            BorderBrush = button.BorderBrush,
+            Foreground = resourceBrush("TextBrush"),
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold
+        };
+        apply.Click += async (_, _) =>
+        {
+            popup.IsOpen = false;
+            await UpdateAccentColorAsync(payload.Key, hexText.Text);
+        };
+        DockPanel.SetDock(apply, Dock.Right);
+        actions.Children.Add(apply);
+        stack.Children.Add(actions);
+
+        popup.Child = root;
+        popup.IsOpen = true;
+        hexText.Focus();
+        hexText.SelectAll();
+    }
+
+    private Button CreateColorPresetButton(string key, AgentAccentOption option, Popup popup)
+    {
+        var brush = AgentAccentService.ResolveBrush(key, option.Hex, resourceBrush);
+        var button = new Button
+        {
+            Tag = option.Hex,
+            Width = 28,
+            MinWidth = 28,
+            Height = 28,
+            MinHeight = 28,
+            Padding = new Thickness(0),
+            Margin = new Thickness(0, 0, 6, 6),
+            Background = resourceBrush("InputBrush"),
+            BorderBrush = brush,
+            ToolTip = option.Label
+        };
+        button.Content = new Border
+        {
+            Width = 16,
+            Height = 16,
+            Background = brush,
+            CornerRadius = new CornerRadius(3)
+        };
+        button.Click += async (_, _) =>
+        {
+            popup.IsOpen = false;
+            await UpdateAccentColorAsync(key, option.Hex);
+        };
+        return button;
     }
 
     private async void VoiceStylePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -375,6 +572,49 @@ internal sealed class MatchLockCoordinator
                 voice_style = voiceStyle
             });
             await refreshActiveSessionAsync($"Updated {DisplayLockKey(key)} voice: {RoleStyleCatalog.VoiceStyleLabel(voiceStyle)}.");
+        }, false);
+    }
+
+    private async Task UpdateAccentColorAsync(string key, string value)
+    {
+        var session = activeSession();
+        if (isArenaBusy() || session is null)
+        {
+            return;
+        }
+
+        var normalized = AgentAccentService.NormalizeColor(value);
+        if (!string.IsNullOrWhiteSpace(value) && string.IsNullOrWhiteSpace(normalized))
+        {
+            SetBothStatuses("Color must be a valid #RRGGBB hex value.");
+            return;
+        }
+
+        await runArenaBusyAsync($"Updating {DisplayLockKey(key)} color...", null, async () =>
+        {
+            var latest = await sessionStore.LoadSnapshotAsync(session.Id);
+            if (latest is null)
+            {
+                setLoadStatus($"No snapshot found for session {session.Id}.");
+                return;
+            }
+
+            if (!ApplyAccentColor(latest, key, normalized))
+            {
+                SetBothStatuses($"Could not update {DisplayLockKey(key)} color.");
+                return;
+            }
+
+            await saveSnapshotWithFeedbackAsync(latest, session.Id);
+            await eventLogStore.AppendAsync(session.Id, "native_agent_accent_color_changed", new
+            {
+                key = NormalizeLockKey(key),
+                accent_color = normalized
+            });
+            var status = string.IsNullOrWhiteSpace(normalized)
+                ? $"Reset {DisplayLockKey(key)} color."
+                : $"Updated {DisplayLockKey(key)} color: {normalized}.";
+            await refreshActiveSessionAsync(status);
         }, false);
     }
 
@@ -643,6 +883,28 @@ internal sealed class MatchLockCoordinator
         }
     }
 
+    private static bool ApplyAccentColor(AIArena.Core.Models.ArenaSnapshot snapshot, string key, string value)
+    {
+        var normalizedKey = NormalizeLockKey(key);
+        switch (normalizedKey)
+        {
+            case "narrator":
+                snapshot.Engine.Narrator.AccentColor = value;
+                return true;
+            case var agentId when IsParticipant(agentId):
+                var agent = snapshot.Engine.Agents.FirstOrDefault(item => item.Id.Equals(normalizedKey, StringComparison.OrdinalIgnoreCase));
+                if (agent is null)
+                {
+                    return false;
+                }
+
+                agent.AccentColor = value;
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private Border CreateLockMetaChip(string text, Brush accent)
     {
         return new Border
@@ -809,4 +1071,5 @@ internal sealed class MatchLockCoordinator
     }
 
     private sealed record RoleDetailPayload(string Title, string Persona);
+    private sealed record AccentColorPayload(string Key, string Color);
 }

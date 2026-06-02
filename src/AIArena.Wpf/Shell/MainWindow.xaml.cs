@@ -1677,20 +1677,20 @@ public partial class MainWindow : Window
 
     private Brush AccentForSpeaker(string speaker)
     {
-        return speaker.ToLowerInvariant() switch
+        return AgentAccentService.ResolveBrush(speaker, AccentColorForSpeaker(speaker), ResourceBrush);
+    }
+
+    private string AccentColorForSpeaker(string speaker)
+    {
+        var normalized = AgentAccentService.NormalizeSpeakerId(speaker);
+        if (normalized.Equals("narrator", StringComparison.OrdinalIgnoreCase))
         {
-            "alpha" => ResourceBrush("AlphaAccentBrush"),
-            "beta" => ResourceBrush("BetaAccentBrush"),
-            "gamma" => ResourceBrush("GammaAccentBrush"),
-            "delta" => ResourceBrush("DeltaAccentBrush"),
-            "epsilon" => ResourceBrush("AssistBorderBrush"),
-            "zeta" => ResourceBrush("PrimaryBorderBrush"),
-            "eta" => BlendBrush(ResourceBrush("GammaAccentBrush"), ResourceBrush("AlphaAccentBrush"), 0.35),
-            "theta" => BlendBrush(ResourceBrush("NarratorAccentBrush"), ResourceBrush("DeltaAccentBrush"), 0.35),
-            "narrator" => ResourceBrush("NarratorAccentBrush"),
-            "operator" => ResourceBrush("OperatorAccentBrush"),
-            _ => ResourceBrush("MutedTextBrush")
-        };
+            return _lastRenderedSnapshot?.NarratorAccentColor ?? "";
+        }
+
+        return _lastRenderedSnapshot?.Agents
+            .FirstOrDefault(agent => agent.Id.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+            ?.AccentColor ?? "";
     }
 
     private void ArenaNavButton_Click(object sender, RoutedEventArgs e)

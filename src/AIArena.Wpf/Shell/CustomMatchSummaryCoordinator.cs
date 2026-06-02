@@ -102,17 +102,20 @@ internal sealed class CustomMatchSummaryCoordinator
                     accent,
                     agent.Locked,
                     agent.VoiceStyle,
-                    agent.PressureProfile));
+                    agent.PressureProfile,
+                    agent.AccentColor));
             }
         }
 
+        var narratorAccent = accentForSpeaker("narrator");
         castPreviewItems.Children.Add(matchLock.CreateLockCard(
             "narrator",
             "Narrator",
             NarratorPersonaText(snapshot.NarratorPersona),
-            blendBrush(resourceBrush("CardBrush"), resourceBrush("NarratorAccentBrush"), 0.16),
-            resourceBrush("NarratorAccentBrush"),
+            blendBrush(resourceBrush("CardBrush"), narratorAccent, 0.16),
+            narratorAccent,
             snapshot.NarratorLocked,
-            snapshot.NarratorVoiceStyle));
+            snapshot.NarratorVoiceStyle,
+            accentColor: snapshot.NarratorAccentColor));
     }
 }
