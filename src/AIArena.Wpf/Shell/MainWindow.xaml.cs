@@ -12,9 +12,6 @@ using System.Windows.Media.Effects;
 using System.Windows.Threading;
 using System.Runtime.InteropServices;
 using CoreDialogueMessage = AIArena.Core.Models.DialogueMessage;
-using CoreDiscourseTurn = AIArena.Core.Models.DiscourseTurn;
-using CoreFrictionDiagnostics = AIArena.Core.Models.FrictionDiagnostics;
-using CoreMetricDiagnostic = AIArena.Core.Models.MetricDiagnostic;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 using CoreVoiceAdherenceDiagnostic = AIArena.Core.Models.VoiceAdherenceDiagnostic;
 using AIArena.Core.Persistence;
@@ -55,6 +52,7 @@ public partial class MainWindow : Window
     private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
     private readonly TelemetryWorkflowCoordinator? _telemetryWorkflowCoordinator;
     private readonly AgentPerformanceCoordinator? _agentPerformanceCoordinator;
+    private readonly DiagnosticsWorkflowCoordinator? _diagnosticsWorkflowCoordinator;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
     private readonly DispatcherTimer _providerHealthTimer;
@@ -79,12 +77,8 @@ public partial class MainWindow : Window
     private WpfSettings _wpfSettings = new();
     private ThemePalette _theme = ThemePalette.Resolve("system");
     private CancellationTokenSource? _autoChatCancellation;
-    private const int DiagnosticHistoryLimit = 36;
-    private const int DiagnosticWindowSize = 8;
     private Style? _lockToggleStyle;
     private ArenaViewSnapshot? _lastRenderedSnapshot;
-    private CoreFrictionDiagnostics? _lastDiagnostics;
-    private DiagnosticSeriesSet _lastDiagnosticSeries = new(Array.Empty<DiagnosticHistoryPoint>(), 0);
 
     private SavedStateWorkflowCoordinator SavedStateCoordinator =>
         _savedStateCoordinator ?? throw new InvalidOperationException("Saved-state coordinator is not initialized.");
@@ -116,23 +110,8 @@ public partial class MainWindow : Window
     private AgentPerformanceCoordinator AgentPerformance =>
         _agentPerformanceCoordinator ?? throw new InvalidOperationException("Agent performance coordinator is not initialized.");
 
-    private sealed record DiagnosticHistoryPoint(
-        int Friction,
-        int Consensus,
-        int RoleDrift,
-        int UnsupportedClaims,
-        int EvidencePressure,
-        int NarrativeHeat);
-
-    private sealed record DiagnosticSeriesSet(
-        IReadOnlyList<DiagnosticHistoryPoint> Points,
-        int UnsupportedClaimsMax);
-
-    private sealed record DiagnosticExplanationSpec(
-        string Title,
-        string Meaning,
-        string OperatorNudge,
-        IReadOnlyList<string> EvidenceTerms);
+    private DiagnosticsWorkflowCoordinator DiagnosticsWorkflow =>
+        _diagnosticsWorkflowCoordinator ?? throw new InvalidOperationException("Diagnostics workflow coordinator is not initialized.");
 
     private sealed record MatchQualityPoint(
         int Turn,
@@ -417,12 +396,47 @@ public partial class MainWindow : Window
             VoiceAdherenceTooltip,
             CompactPreview,
             BlendBrush);
+        _diagnosticsWorkflowCoordinator = new DiagnosticsWorkflowCoordinator(
+            _discourseDiagnostics,
+            FrictionChip,
+            FrictionValueText,
+            FrictionTrendText,
+            ConsensusChip,
+            ConsensusValueText,
+            ConsensusTrendText,
+            ConsensusSparkline,
+            RoleDriftChip,
+            RoleDriftValueText,
+            RoleDriftTrendText,
+            RoleDriftSparkline,
+            UnsupportedClaimsChip,
+            UnsupportedClaimsValueText,
+            UnsupportedClaimsTrendText,
+            UnsupportedClaimsSparkline,
+            EvidencePressureChip,
+            EvidencePressureValueText,
+            EvidencePressureTrendText,
+            EvidencePressureSparkline,
+            NarrativeHeatChip,
+            NarrativeHeatValueText,
+            NarrativeHeatTrendText,
+            NarrativeHeatSparkline,
+            DiagnosticDetailPopup,
+            DiagnosticDetailTitleText,
+            DiagnosticDetailSubtitleText,
+            DiagnosticDetailContent,
+            () => _lastAgentPersonas,
+            () => _lastRenderedMessages,
+            ResourceBrush,
+            DisplayStatusValue,
+            IsSystemEvent,
+            BlendBrush);
         InitializeAboutPanel();
         InitializeVisualSettings();
         ScenarioWorkflow.InitializeControls();
         OperatorTurn.InitializeControls();
         InternetWorkflow.InitializeControls();
-        InitializeDiagnosticExplanationTiles();
+        DiagnosticsWorkflow.InitializeTiles();
         SavedStateCoordinator.LoadScenarioTemplates();
         ShowStoreLoadWarningIfAny();
         Loaded += (_, _) =>
@@ -1133,7 +1147,7 @@ public partial class MainWindow : Window
         TranscriptSearch.UpdateSearchState();
         if (IsDiagnosticsDisplayed())
         {
-            UpdateFrictionDiagnostics(messages);
+            DiagnosticsWorkflow.Update(messages);
         }
 
         if (messages.Count == 0)
@@ -1254,11 +1268,11 @@ public partial class MainWindow : Window
             : new Thickness(0, 1, 1, 1);
         if (showDiagnostics)
         {
-            UpdateFrictionDiagnostics(_lastRenderedMessages);
+            DiagnosticsWorkflow.Update(_lastRenderedMessages);
         }
         else
         {
-            DiagnosticDetailPopup.IsOpen = false;
+            DiagnosticsWorkflow.CloseDetail();
         }
 
         TelemetryWorkflow.UpdateTimerState();
@@ -2947,10 +2961,10 @@ public partial class MainWindow : Window
         {
             var diagnostics = current!.Diagnostics;
             var metrics = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
-            metrics.Children.Add(CreateQualityMetric("Friction", diagnostics.Friction.ToString(System.Globalization.CultureInfo.InvariantCulture), DiagnosticAccentForState(QualityFrictionLabel(diagnostics.Friction))));
-            metrics.Children.Add(CreateQualityMetric("Evidence", diagnostics.EvidencePressure.ToString(System.Globalization.CultureInfo.InvariantCulture), DiagnosticAccentForEvidence(QualityEvidenceLabel(diagnostics.EvidencePressure))));
-            metrics.Children.Add(CreateQualityMetric("Consensus", $"{diagnostics.Consensus}%", DiagnosticAccentForRisk(diagnostics.Consensus > 75 ? "High" : "Low")));
-            metrics.Children.Add(CreateQualityMetric("Drift", $"{diagnostics.RoleDrift}%", DiagnosticAccentForRisk(diagnostics.RoleDrift > 35 ? "High" : "Low")));
+            metrics.Children.Add(CreateQualityMetric("Friction", diagnostics.Friction.ToString(System.Globalization.CultureInfo.InvariantCulture), DiagnosticsWorkflow.AccentForState(QualityFrictionLabel(diagnostics.Friction))));
+            metrics.Children.Add(CreateQualityMetric("Evidence", diagnostics.EvidencePressure.ToString(System.Globalization.CultureInfo.InvariantCulture), DiagnosticsWorkflow.AccentForEvidence(QualityEvidenceLabel(diagnostics.EvidencePressure))));
+            metrics.Children.Add(CreateQualityMetric("Consensus", $"{diagnostics.Consensus}%", DiagnosticsWorkflow.AccentForRisk(diagnostics.Consensus > 75 ? "High" : "Low")));
+            metrics.Children.Add(CreateQualityMetric("Drift", $"{diagnostics.RoleDrift}%", DiagnosticsWorkflow.AccentForRisk(diagnostics.RoleDrift > 35 ? "High" : "Low")));
             metrics.Children.Add(CreateQualityMetric("Claims", diagnostics.UnsupportedClaims.ToString(System.Globalization.CultureInfo.InvariantCulture), diagnostics.UnsupportedClaims > 0 ? ResourceBrush("BetaAccentBrush") : ResourceBrush("PrimaryBorderBrush")));
             panel.Children.Add(metrics);
             panel.Children.Add(CreateQualityBars(points));
@@ -3093,7 +3107,7 @@ public partial class MainWindow : Window
     {
         var end = Math.Clamp(endExclusive, 1, orderedMessages.Count);
         var message = orderedMessages[end - 1];
-        var diagnostics = DiagnosticPointForWindow(orderedMessages, end);
+        var diagnostics = DiagnosticsWorkflow.PointForWindow(orderedMessages, end);
         var quality = QualityScore(diagnostics);
         return new MatchQualityPoint(
             message.Turn,
@@ -3239,7 +3253,7 @@ public partial class MainWindow : Window
             return [];
         }
 
-        var diagnostics = _discourseDiagnostics.Analyze(messages.Select(ToDiscourseTurn), _lastAgentPersonas);
+        var diagnostics = _discourseDiagnostics.Analyze(messages.Select(DiagnosticsWorkflowCoordinator.ToDiscourseTurn), _lastAgentPersonas);
         var alerts = new List<AutoModeratorAlert>();
         if (diagnostics.StateSeverity.Equals("danger", StringComparison.OrdinalIgnoreCase))
         {
@@ -5825,601 +5839,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private void InitializeDiagnosticExplanationTiles()
-    {
-        var tiles = new (Border Chip, string Key)[]
-        {
-            (FrictionChip, "friction"),
-            (ConsensusChip, "consensus"),
-            (RoleDriftChip, "roleDrift"),
-            (UnsupportedClaimsChip, "unsupportedClaims"),
-            (EvidencePressureChip, "evidencePressure"),
-            (NarrativeHeatChip, "narrativeHeat")
-        };
-
-        foreach (var (chip, key) in tiles)
-        {
-            chip.Tag = key;
-            chip.Cursor = Cursors.Hand;
-            chip.MouseLeftButtonUp += DiagnosticChip_MouseLeftButtonUp;
-        }
-    }
-
-    private void DiagnosticChip_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is not Border chip || chip.Tag is not string key)
-        {
-            return;
-        }
-
-        ShowDiagnosticDetail(key, chip);
-        e.Handled = true;
-    }
-
-    private void ShowDiagnosticDetail(string key, FrameworkElement target)
-    {
-        var diagnostics = _lastDiagnostics;
-        if (diagnostics is null)
-        {
-            diagnostics = _discourseDiagnostics.Analyze(_lastRenderedMessages.Select(ToDiscourseTurn), _lastAgentPersonas);
-            _lastDiagnostics = diagnostics;
-        }
-
-        if (!diagnostics.Details.TryGetValue(key, out var metric))
-        {
-            return;
-        }
-
-        var spec = DiagnosticExplanationSpecFor(key);
-        var accent = DiagnosticAccentForKey(key, diagnostics);
-        DiagnosticDetailTitleText.Text = spec.Title;
-        DiagnosticDetailTitleText.Foreground = accent;
-        DiagnosticDetailSubtitleText.Text = $"{DiagnosticCurrentValue(key, diagnostics)} - {DiagnosticWindowSummary()}";
-        DiagnosticDetailContent.Children.Clear();
-        DiagnosticDetailContent.Children.Add(CreateDiagnosticDetailSection("What it measures", spec.Meaning, accent));
-        DiagnosticDetailContent.Children.Add(CreateDiagnosticDetailSection(
-            "Current reasons",
-            DiagnosticLines(metric.Details, "No diagnostic reasons are available for this metric yet."),
-            accent));
-        DiagnosticDetailContent.Children.Add(CreateDiagnosticDetailSection(
-            "Movement",
-            DiagnosticMovementLines(key),
-            accent));
-        DiagnosticDetailContent.Children.Add(CreateDiagnosticDetailSection(
-            "Recent evidence",
-            DiagnosticEvidenceSnippets(key, spec.EvidenceTerms),
-            accent));
-        DiagnosticDetailContent.Children.Add(CreateDiagnosticDetailSection("Operator nudge", spec.OperatorNudge, accent));
-        DiagnosticDetailPopup.PlacementTarget = target;
-        DiagnosticDetailPopup.IsOpen = true;
-    }
-
     private void DiagnosticDetailCloseButton_Click(object sender, RoutedEventArgs e)
     {
-        DiagnosticDetailPopup.IsOpen = false;
+        DiagnosticsWorkflow.CloseDetail();
     }
-
-    private Border CreateDiagnosticDetailSection(string title, string body, Brush accent)
-    {
-        return CreateDiagnosticDetailSection(title, [body], accent);
-    }
-
-    private Border CreateDiagnosticDetailSection(string title, IReadOnlyList<string> lines, Brush accent)
-    {
-        var stack = new StackPanel();
-        stack.Children.Add(new TextBlock
-        {
-            Text = title,
-            Foreground = accent,
-            FontSize = 11,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 5)
-        });
-
-        foreach (var line in lines)
-        {
-            stack.Children.Add(new TextBlock
-            {
-                Text = line,
-                Foreground = ResourceBrush("TextBrush"),
-                FontSize = 11,
-                LineHeight = 15,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 3)
-            });
-        }
-
-        return new Border
-        {
-            Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.08),
-            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.34),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(5),
-            Padding = new Thickness(8),
-            Margin = new Thickness(0, 0, 0, 8),
-            Child = stack
-        };
-    }
-
-    private static IReadOnlyList<string> DiagnosticLines(IReadOnlyList<string> lines, string fallback)
-    {
-        return lines.Count == 0
-            ? [fallback]
-            : lines.Take(6).Select(line => $"- {line}").ToArray();
-    }
-
-    private IReadOnlyList<string> DiagnosticMovementLines(string key)
-    {
-        var points = _lastDiagnosticSeries.Points;
-        if (points.Count < 2)
-        {
-            return ["- Not enough diagnostic history yet. Run another turn to build movement context."];
-        }
-
-        var current = DiagnosticPointValue(points[^1], key);
-        var previous = DiagnosticPointValue(points[^2], key);
-        var delta = current - previous;
-        var movement = delta switch
-        {
-            > 0 => $"+{delta}",
-            < 0 => $"-{Math.Abs(delta)}",
-            _ => "0"
-        };
-        return
-        [
-            $"- Latest change: {movement} from the previous sparkline point.",
-            "- Sparkline history uses rolling transcript windows, so it explains direction rather than factual truth."
-        ];
-    }
-
-    private static int DiagnosticPointValue(DiagnosticHistoryPoint point, string key)
-    {
-        return key switch
-        {
-            "consensus" => point.Consensus,
-            "roleDrift" => point.RoleDrift,
-            "unsupportedClaims" => point.UnsupportedClaims,
-            "evidencePressure" => point.EvidencePressure,
-            "narrativeHeat" => point.NarrativeHeat,
-            _ => point.Friction
-        };
-    }
-
-    private IReadOnlyList<string> DiagnosticEvidenceSnippets(string key, IReadOnlyList<string> terms)
-    {
-        var snippets = _lastRenderedMessages
-            .OrderByDescending(message => message.Turn)
-            .ThenByDescending(message => message.CreatedAt)
-            .Where(message => !IsDiagnosticSystemMessage(message) && !string.IsNullOrWhiteSpace(message.Text))
-            .Select(message => DiagnosticEvidenceSnippet(message, terms))
-            .OfType<string>()
-            .Where(snippet => !string.IsNullOrWhiteSpace(snippet))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(3)
-            .ToArray();
-
-        if (snippets.Length > 0)
-        {
-            return snippets;
-        }
-
-        if (key.Equals("evidencePressure", StringComparison.OrdinalIgnoreCase))
-        {
-            return ["- No visible source, URL, quote, or transcript-reference signal was found in the recent window."];
-        }
-
-        return ["- No obvious matching transcript snippet was found in the recent window."];
-    }
-
-    private static string? DiagnosticEvidenceSnippet(TranscriptMessage message, IReadOnlyList<string> terms)
-    {
-        var text = message.Text;
-        if (terms.Count > 0 && !terms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)))
-        {
-            return null;
-        }
-
-        var speaker = string.IsNullOrWhiteSpace(message.Speaker) ? DisplayStatusValue(message.SpeakerId) : message.Speaker;
-        return $"- T{message.Turn} {speaker}: {CompactPreview(text, 155, "(empty message)")}";
-    }
-
-    private static bool IsDiagnosticSystemMessage(TranscriptMessage message)
-    {
-        var isInternet = message.Kind.Equals("internet", StringComparison.OrdinalIgnoreCase)
-            || message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase)
-            || message.Kind.StartsWith("internet", StringComparison.OrdinalIgnoreCase);
-        return IsSystemEvent(message, isInternet)
-            || message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private string DiagnosticWindowSummary()
-    {
-        var scoredTurns = _lastRenderedMessages.Count(message => !IsDiagnosticSystemMessage(message));
-        if (scoredTurns <= 0)
-        {
-            return "no scored turns yet";
-        }
-
-        return $"rolling window: last {Math.Min(DiagnosticWindowSize, scoredTurns)} scored turn(s)";
-    }
-
-    private static DiagnosticExplanationSpec DiagnosticExplanationSpecFor(string key)
-    {
-        return key switch
-        {
-            "consensus" => new DiagnosticExplanationSpec(
-                "Consensus",
-                "Estimates whether recent agent language is converging, agreeing, or challenging. Very high consensus can mean useful agreement, but it can also signal premature collapse.",
-                "Ask one agent to name the strongest unresolved objection before the group settles.",
-                ["i agree", "correct", "exactly", "building on", "however", "but", "counterargument", "assumption", "failure mode"]),
-            "roleDrift" => new DiagnosticExplanationSpec(
-                "Role Drift",
-                "Checks whether agents are still behaving like their assigned persona and role, rather than sliding into closure, administration, or another participant voice.",
-                "Restate the role contract for the drifting agent, then ask for one response in that role only.",
-                ["final synthesis", "framework stands", "i agree", "as alpha", "as beta", "as gamma", "as delta", "boundary", "constraint", "hypothesis"]),
-            "unsupportedClaims" => new DiagnosticExplanationSpec(
-                "Unsupported Claims",
-                "Counts authoritative claims, invented metrics, and certainty language that appear without visible evidence signals in the rolling window.",
-                "Ask for evidence, scope, and what would falsify the claim before letting the match advance.",
-                ["proves", "validated", "empirical", "universal", "self-evident", "only explanation", "truth", "%", "ms", "users"]),
-            "evidencePressure" => new DiagnosticExplanationSpec(
-                "Evidence Pressure",
-                "Measures visible grounding pressure: sources, URLs, transcript references, quotes with evidence markers, or explicit uncertainty language.",
-                "Ask the agents to cite the transcript, label assumptions, or request external evidence before making a stronger claim.",
-                ["according to", "source", "operator provided", "turn", "transcript", "speculative", "inference", "hypothesis", "http", "www", "\""]),
-            "narrativeHeat" => new DiagnosticExplanationSpec(
-                "Narrative Heat",
-                "Tracks dramatic or mythic language that can make a conversation feel coherent while hiding weak grounding.",
-                "Cool the frame: ask for a concrete mechanism, a boundary condition, and one plain-language restatement.",
-                ["ontology", "ontological", "emergence", "substrate", "universal law", "final synthesis", "truth", "coherence", "reality engine"]),
-            _ => new DiagnosticExplanationSpec(
-                "Friction",
-                "Summarizes the overall discourse state by combining consensus, role drift, unsupported claims, evidence pressure, and narrative heat.",
-                "If the match is too cold, invite disagreement. If it is too hot, ask for evidence and boundaries.",
-                ["however", "but", "unsupported", "evidence", "assumption", "agree", "truth", "final synthesis", "constraint"])
-        };
-    }
-
-    private string DiagnosticCurrentValue(string key, CoreFrictionDiagnostics diagnostics)
-    {
-        return key switch
-        {
-            "consensus" => $"{diagnostics.ConsensusPercent}% {diagnostics.ConsensusLabel}",
-            "roleDrift" => $"{diagnostics.RoleDriftPercent}% {diagnostics.RoleDriftLabel}",
-            "unsupportedClaims" => $"{diagnostics.UnsupportedClaimCount} {diagnostics.UnsupportedClaimSeverity}",
-            "evidencePressure" => $"{diagnostics.EvidencePressureLabel} {diagnostics.EvidencePressureScore}",
-            "narrativeHeat" => $"{diagnostics.NarrativeHeatLabel} {diagnostics.NarrativeHeatScore}",
-            _ => $"{diagnostics.StateLabel} {FrictionScore(diagnostics.StateLabel)}"
-        };
-    }
-
-    private Brush DiagnosticAccentForKey(string key, CoreFrictionDiagnostics diagnostics)
-    {
-        return key switch
-        {
-            "consensus" => DiagnosticAccentForRisk(diagnostics.ConsensusLabel),
-            "roleDrift" => DiagnosticAccentForRisk(diagnostics.RoleDriftLabel),
-            "unsupportedClaims" => DiagnosticAccentForRisk(diagnostics.UnsupportedClaimSeverity),
-            "evidencePressure" => DiagnosticAccentForEvidence(diagnostics.EvidencePressureLabel),
-            "narrativeHeat" => DiagnosticAccentForNarrative(diagnostics.NarrativeHeatLabel),
-            _ => DiagnosticAccentForState(diagnostics.StateLabel)
-        };
-    }
-
-    private void UpdateFrictionDiagnostics(IReadOnlyList<TranscriptMessage> messages)
-    {
-        var diagnostics = _discourseDiagnostics.Analyze(messages.Select(ToDiscourseTurn), _lastAgentPersonas);
-        var series = BuildDiagnosticSeries(messages);
-        _lastDiagnostics = diagnostics;
-        _lastDiagnosticSeries = series;
-        SetDiagnosticTile(
-            FrictionChip,
-            FrictionValueText,
-            FrictionTrendText,
-            null,
-            diagnostics.StateLabel,
-            FrictionScore(diagnostics.StateLabel),
-            series,
-            diagnostics.Details["friction"],
-            DiagnosticAccentForState(diagnostics.StateLabel));
-        SetDiagnosticTile(
-            ConsensusChip,
-            ConsensusValueText,
-            ConsensusTrendText,
-            ConsensusSparkline,
-            $"{diagnostics.ConsensusPercent}%",
-            diagnostics.ConsensusPercent,
-            series,
-            diagnostics.Details["consensus"],
-            DiagnosticAccentForRisk(diagnostics.ConsensusLabel));
-        SetDiagnosticTile(
-            RoleDriftChip,
-            RoleDriftValueText,
-            RoleDriftTrendText,
-            RoleDriftSparkline,
-            $"{diagnostics.RoleDriftPercent}%",
-            diagnostics.RoleDriftPercent,
-            series,
-            diagnostics.Details["roleDrift"],
-            DiagnosticAccentForRisk(diagnostics.RoleDriftLabel));
-        SetDiagnosticTile(
-            UnsupportedClaimsChip,
-            UnsupportedClaimsValueText,
-            UnsupportedClaimsTrendText,
-            UnsupportedClaimsSparkline,
-            diagnostics.UnsupportedClaimCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            diagnostics.UnsupportedClaimCount,
-            series,
-            diagnostics.Details["unsupportedClaims"],
-            DiagnosticAccentForRisk(diagnostics.UnsupportedClaimSeverity),
-            maxValue: Math.Max(4, series.UnsupportedClaimsMax));
-        SetDiagnosticTile(
-            EvidencePressureChip,
-            EvidencePressureValueText,
-            EvidencePressureTrendText,
-            EvidencePressureSparkline,
-            diagnostics.EvidencePressureLabel,
-            diagnostics.EvidencePressureScore,
-            series,
-            diagnostics.Details["evidencePressure"],
-            DiagnosticAccentForEvidence(diagnostics.EvidencePressureLabel));
-        SetDiagnosticTile(
-            NarrativeHeatChip,
-            NarrativeHeatValueText,
-            NarrativeHeatTrendText,
-            NarrativeHeatSparkline,
-            diagnostics.NarrativeHeatLabel,
-            diagnostics.NarrativeHeatScore,
-            series,
-            diagnostics.Details["narrativeHeat"],
-            DiagnosticAccentForNarrative(diagnostics.NarrativeHeatLabel));
-    }
-
-    private static CoreDiscourseTurn ToDiscourseTurn(TranscriptMessage message)
-    {
-        return new CoreDiscourseTurn(
-            message.Turn,
-            message.SpeakerId,
-            message.Speaker,
-            message.Kind,
-            message.Text,
-            message.InternetSources,
-            message.CreatedAt);
-    }
-
-    private void SetDiagnosticTile(
-        Border chip,
-        TextBlock valueText,
-        TextBlock trendText,
-        MetricSparklineControl? sparkline,
-        string value,
-        int score,
-        DiagnosticSeriesSet series,
-        CoreMetricDiagnostic metric,
-        Brush accent,
-        int maxValue = 100)
-    {
-        chip.BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), accent, 0.62);
-        chip.Background = BlendBrush(ResourceBrush("InputBrush"), accent, 0.1);
-        valueText.Text = value;
-        valueText.Foreground = accent;
-        trendText.Text = FormatDiagnosticTrend(score, PreviousDiagnosticScore(sparkline, series));
-        trendText.Foreground = BlendBrush(ResourceBrush("MutedTextBrush"), accent, 0.55);
-        if (sparkline is not null)
-        {
-            sparkline.Values = DiagnosticSeries(sparkline, series);
-            sparkline.AccentBrush = accent;
-            sparkline.MaxValue = Math.Max(1, maxValue);
-        }
-
-        chip.ToolTip = $"{DiagnosticToolTip(metric)}{Environment.NewLine}Click for a compact explanation.";
-        ToolTipService.SetShowDuration(chip, 60000);
-    }
-
-    private DiagnosticSeriesSet BuildDiagnosticSeries(IReadOnlyList<TranscriptMessage> messages)
-    {
-        var ordered = messages
-            .OrderBy(message => message.Turn)
-            .ThenBy(message => message.CreatedAt)
-            .ToArray();
-        if (ordered.Length == 0)
-        {
-            return new DiagnosticSeriesSet([], 0);
-        }
-
-        var stride = Math.Max(1, (int)Math.Ceiling(ordered.Length / (double)DiagnosticHistoryLimit));
-        var points = new List<DiagnosticHistoryPoint>();
-        for (var end = 1; end <= ordered.Length; end += stride)
-        {
-            points.Add(DiagnosticPointForWindow(ordered, end));
-        }
-
-        if (points.Count == 0 || points[^1] != DiagnosticPointForWindow(ordered, ordered.Length))
-        {
-            points.Add(DiagnosticPointForWindow(ordered, ordered.Length));
-        }
-
-        if (points.Count > DiagnosticHistoryLimit)
-        {
-            points = points.Skip(points.Count - DiagnosticHistoryLimit).ToList();
-        }
-
-        return new DiagnosticSeriesSet(
-            points,
-            points.Select(point => point.UnsupportedClaims).DefaultIfEmpty(0).Max());
-    }
-
-    private DiagnosticHistoryPoint DiagnosticPointForWindow(IReadOnlyList<TranscriptMessage> orderedMessages, int endExclusive)
-    {
-        var end = Math.Clamp(endExclusive, 1, orderedMessages.Count);
-        var start = Math.Max(0, end - DiagnosticWindowSize);
-        var window = orderedMessages
-            .Skip(start)
-            .Take(end - start)
-            .Select(ToDiscourseTurn);
-        var diagnostics = _discourseDiagnostics.Analyze(window, _lastAgentPersonas);
-        return new DiagnosticHistoryPoint(
-            FrictionScore(diagnostics.StateLabel),
-            diagnostics.ConsensusPercent,
-            diagnostics.RoleDriftPercent,
-            diagnostics.UnsupportedClaimCount,
-            diagnostics.EvidencePressureScore,
-            diagnostics.NarrativeHeatScore);
-    }
-
-    private int? PreviousDiagnosticScore(MetricSparklineControl? sparkline, DiagnosticSeriesSet series)
-    {
-        if (series.Points.Count < 2)
-        {
-            return null;
-        }
-
-        var previous = series.Points[^2];
-        if (sparkline == ConsensusSparkline)
-        {
-            return previous.Consensus;
-        }
-
-        if (sparkline == RoleDriftSparkline)
-        {
-            return previous.RoleDrift;
-        }
-
-        if (sparkline == UnsupportedClaimsSparkline)
-        {
-            return previous.UnsupportedClaims;
-        }
-
-        if (sparkline == EvidencePressureSparkline)
-        {
-            return previous.EvidencePressure;
-        }
-
-        if (sparkline == NarrativeHeatSparkline)
-        {
-            return previous.NarrativeHeat;
-        }
-
-        return previous.Friction;
-    }
-
-    private IReadOnlyList<double> DiagnosticSeries(MetricSparklineControl sparkline, DiagnosticSeriesSet series)
-    {
-        if (sparkline == ConsensusSparkline)
-        {
-            return series.Points.Select(point => (double)point.Consensus).ToArray();
-        }
-
-        if (sparkline == RoleDriftSparkline)
-        {
-            return series.Points.Select(point => (double)point.RoleDrift).ToArray();
-        }
-
-        if (sparkline == UnsupportedClaimsSparkline)
-        {
-            return series.Points.Select(point => (double)point.UnsupportedClaims).ToArray();
-        }
-
-        if (sparkline == EvidencePressureSparkline)
-        {
-            return series.Points.Select(point => (double)point.EvidencePressure).ToArray();
-        }
-
-        if (sparkline == NarrativeHeatSparkline)
-        {
-            return series.Points.Select(point => (double)point.NarrativeHeat).ToArray();
-        }
-
-        return series.Points.Select(point => (double)point.Friction).ToArray();
-    }
-
-    private static string FormatDiagnosticTrend(int current, int? previous)
-    {
-        if (previous is null)
-        {
-            return "new";
-        }
-
-        var delta = current - previous.Value;
-        if (delta == 0)
-        {
-            return "0";
-        }
-
-        return delta > 0
-            ? $"+{delta}"
-            : $"-{Math.Abs(delta)}";
-    }
-
-    private static int FrictionScore(string label)
-    {
-        return label switch
-        {
-            "Healthy" => 35,
-            "Productive Conflict" => 58,
-            "Too Cold" => 12,
-            "Harmony Risk" => 76,
-            "Theatre Risk" => 82,
-            "Evidence-Starved" => 88,
-            "Role Drift" => 74,
-            "Unsupported Claims Spike" => 86,
-            _ => 40
-        };
-    }
-
-    private static string DiagnosticToolTip(CoreMetricDiagnostic metric)
-    {
-        var details = metric.Details.Count == 0
-            ? "No detail available."
-            : string.Join(Environment.NewLine, metric.Details.Select(detail => $"- {detail}"));
-        return $"{metric.Label} ({metric.Score}){Environment.NewLine}Heuristic live discourse diagnostics, not factual correctness.{Environment.NewLine}{details}";
-    }
-
-    private Brush DiagnosticAccentForState(string label)
-    {
-        return label switch
-        {
-            "Healthy" => ResourceBrush("PrimaryBorderBrush"),
-            "Productive Conflict" => ResourceBrush("AlphaAccentBrush"),
-            "Too Cold" => ResourceBrush("BetaAccentBrush"),
-            "Harmony Risk" or "Theatre Risk" or "Evidence-Starved" or "Role Drift" or "Unsupported Claims Spike" => ResourceBrush("DangerBorderBrush"),
-            _ => ResourceBrush("MutedTextBrush")
-        };
-    }
-
-    private Brush DiagnosticAccentForRisk(string label)
-    {
-        return label switch
-        {
-            "Low" or "Healthy" => ResourceBrush("PrimaryBorderBrush"),
-            "Medium" or "Moderate" or "High" => ResourceBrush("BetaAccentBrush"),
-            "Collapse Risk" => ResourceBrush("DangerBorderBrush"),
-            _ => ResourceBrush("MutedTextBrush")
-        };
-    }
-
-    private Brush DiagnosticAccentForEvidence(string label)
-    {
-        return label switch
-        {
-            "Strong" => ResourceBrush("PrimaryBorderBrush"),
-            "Medium" => ResourceBrush("BetaAccentBrush"),
-            "Weak" => ResourceBrush("DangerBorderBrush"),
-            _ => ResourceBrush("MutedTextBrush")
-        };
-    }
-
-    private Brush DiagnosticAccentForNarrative(string label)
-    {
-        return label switch
-        {
-            "Low" => ResourceBrush("PrimaryBorderBrush"),
-            "Medium" or "Rising" => ResourceBrush("AssistBorderBrush"),
-            "High" => ResourceBrush("DangerBorderBrush"),
-            _ => ResourceBrush("MutedTextBrush")
-        };
-    }
-
     private static string NormalizeMatchLockKey(string key)
     {
         var cleaned = string.IsNullOrWhiteSpace(key) ? "" : key.Trim().ToLowerInvariant();
