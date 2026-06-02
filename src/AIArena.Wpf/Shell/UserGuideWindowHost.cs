@@ -1,6 +1,8 @@
 using AIArena.Wpf.Services;
+using System.Collections;
 using System.Diagnostics;
 using System.IO;
+using System.Resources;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -16,6 +18,7 @@ namespace AIArena.Wpf;
 internal sealed class UserGuideWindowHost
 {
     private const string GuideWindowTitle = "AI Arena: Adversarial LLM Lab - User Guide";
+    private const string AppIconResourceKey = "assets/ai-arena-icon.ico";
     private const string SearchPlaceholderText = "Search the guide...";
 
     private static readonly string[] ThemeResourceKeys =
@@ -92,7 +95,8 @@ internal sealed class UserGuideWindowHost
             ResizeMode = ResizeMode.CanResizeWithGrip,
             ShowInTaskbar = false,
             Background = BrushFrom("#08111F"),
-            Foreground = ResourceBrush(owner, "TextBrush")
+            Foreground = ResourceBrush(owner, "TextBrush"),
+            Icon = CreateAppIconImageSource()
         };
         dialog.SourceInitialized += (_, _) => WindowChromeService.ApplySubtleNativeChromeColor(dialog);
         CopyThemeResources(owner, dialog);
@@ -653,13 +657,43 @@ internal sealed class UserGuideWindowHost
             ClipToBounds = true,
             Child = new Image
             {
-                Source = new BitmapImage(new Uri("pack://application:,,,/Assets/ai-arena-icon.png", UriKind.Absolute)),
+                Source = CreateAppIconImageSource(),
                 Stretch = Stretch.UniformToFill,
                 SnapsToDevicePixels = true
             }
         };
 
         return tile;
+    }
+
+    internal static ImageSource CreateAppIconImageSource()
+    {
+        var resourceName = $"{typeof(UserGuideWindowHost).Assembly.GetName().Name}.g.resources";
+        using var resources = typeof(UserGuideWindowHost).Assembly.GetManifestResourceStream(resourceName);
+        if (resources is not null)
+        {
+            using var reader = new ResourceReader(resources);
+            foreach (DictionaryEntry entry in reader)
+            {
+                if (entry.Key is not string key
+                    || !key.Equals(AppIconResourceKey, StringComparison.OrdinalIgnoreCase)
+                    || entry.Value is not Stream iconStream)
+                {
+                    continue;
+                }
+
+                if (iconStream.CanSeek)
+                {
+                    iconStream.Position = 0;
+                }
+
+                var icon = BitmapFrame.Create(iconStream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+                icon.Freeze();
+                return icon;
+            }
+        }
+
+        return BitmapFrame.Create(new Uri("/Assets/ai-arena-icon.ico", UriKind.Relative));
     }
 
     private static Style CreateGuideListItemStyle(FrameworkElement resources)

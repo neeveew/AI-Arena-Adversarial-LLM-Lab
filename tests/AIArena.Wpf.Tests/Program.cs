@@ -32,7 +32,8 @@ var tests = new (string Name, Action Test)[]
     ("session overview coordinator formats summaries", SessionOverviewCoordinatorFormatsSummaries),
     ("shell ui helpers blend brushes", ShellUiHelpersBlendBrushes),
     ("window chrome service packs color refs", WindowChromeServicePacksColorRefs),
-    ("user guide app icon resource is packaged", UserGuideAppIconResourceIsPackaged),
+    ("app icon resource is packaged", AppIconResourceIsPackaged),
+    ("user guide app icon image source loads", UserGuideAppIconImageSourceLoads),
     ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
     ("app settings coordinator selects provider focus", AppSettingsCoordinatorSelectsProviderFocus),
@@ -571,7 +572,7 @@ static void WindowChromeServicePacksColorRefs()
     Require(WindowChromeService.ColorRef(0x11, 0x22, 0x33) == 0x00332211, "COLORREF should pack bytes as 0x00bbggrr");
 }
 
-static void UserGuideAppIconResourceIsPackaged()
+static void AppIconResourceIsPackaged()
 {
     using var stream = typeof(WindowChromeService).Assembly.GetManifestResourceStream("AI Arena.g.resources");
     Require(stream is not null, "WPF compiled resources should be present");
@@ -586,7 +587,15 @@ static void UserGuideAppIconResourceIsPackaged()
         }
     }
 
-    Require(resourceKeys.Contains("assets/ai-arena-icon.png"), "user guide header icon png should be packaged");
+    Require(resourceKeys.Contains("assets/ai-arena-icon.ico"), "app icon ico should be packaged");
+}
+
+static void UserGuideAppIconImageSourceLoads()
+{
+    var icon = UserGuideWindowHost.CreateAppIconImageSource();
+
+    Require(icon.Width > 0, "user guide app icon should have a width");
+    Require(icon.Height > 0, "user guide app icon should have a height");
 }
 
 static void ProviderReachabilityCoordinatorFormatsPopupState()
