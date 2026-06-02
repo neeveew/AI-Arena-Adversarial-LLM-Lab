@@ -94,70 +94,86 @@ internal static class GeneratedPersonaFactory
         var key = rolePack.Trim().ToLowerInvariant();
         return key switch
         {
-            "balanced" => agentId switch
-            {
-                "alpha" => "Practical strategist",
-                "beta" => "Critical reviewer",
-                "gamma" => "Evidence mapper",
-                "delta" => "Boundary tester",
-                _ => null
-            },
-            "red_team" => agentId switch
-            {
-                "alpha" => "Proposal defender",
-                "beta" => "Exploit path hunter",
-                "gamma" => "Mitigation auditor",
-                "delta" => "Abuse boundary mapper",
-                _ => null
-            },
-            "scientific_review" => agentId switch
-            {
-                "alpha" => "Hypothesis builder",
-                "beta" => "Statistical skeptic",
-                "gamma" => "Methodology critic",
-                "delta" => "Validity boundary mapper",
-                _ => null
-            },
-            "technical_architecture" => agentId switch
-            {
-                "alpha" => "Architecture proposer",
-                "beta" => "Reliability critic",
-                "gamma" => "Implementation planner",
-                "delta" => "Rollback boundary tester",
-                _ => null
-            },
-            "safety_audit" => agentId switch
-            {
-                "alpha" => "Capability advocate",
-                "beta" => "Misuse analyst",
-                "gamma" => "Verification critic",
-                "delta" => "Escalation boundary mapper",
-                _ => null
-            },
-            "legal_policy" => agentId switch
-            {
-                "alpha" => "Rights mapper",
-                "beta" => "Obligation interpreter",
-                "gamma" => "Exception reviewer",
-                "delta" => "Enforcement skeptic",
-                _ => null
-            },
-            "incident_response" => agentId switch
-            {
-                "alpha" => "Incident commander",
-                "beta" => "Root-cause analyst",
-                "gamma" => "Customer impact witness",
-                "delta" => "Prevention boundary tester",
-                _ => null
-            },
-            "product_risk" => agentId switch
-            {
-                "alpha" => "Product champion",
-                "beta" => "Trust-risk critic",
-                "gamma" => "Launch operator",
-                "delta" => "Rollback sentinel",
-                _ => null
-            },
+            "balanced" => RoleByParticipant(agentId, [
+                "Practical strategist",
+                "Critical reviewer",
+                "Evidence mapper",
+                "Boundary tester",
+                "Counterfactual scout",
+                "Systems stress tester",
+                "Human impact witness",
+                "Synthesis challenger"
+            ]),
+            "red_team" => RoleByParticipant(agentId, [
+                "Proposal defender",
+                "Exploit path hunter",
+                "Mitigation auditor",
+                "Abuse boundary mapper",
+                "Countermeasure breaker",
+                "Assumption infiltrator",
+                "User harm witness",
+                "Escalation referee"
+            ]),
+            "scientific_review" => RoleByParticipant(agentId, [
+                "Hypothesis builder",
+                "Statistical skeptic",
+                "Methodology critic",
+                "Validity boundary mapper",
+                "Replication planner",
+                "Causal inference challenger",
+                "Measurement realist",
+                "Publication-bias spotter"
+            ]),
+            "technical_architecture" => RoleByParticipant(agentId, [
+                "Architecture proposer",
+                "Reliability critic",
+                "Implementation planner",
+                "Rollback boundary tester",
+                "Dependency mapper",
+                "Latency realist",
+                "Operational runbook editor",
+                "Failure injection planner"
+            ]),
+            "safety_audit" => RoleByParticipant(agentId, [
+                "Capability advocate",
+                "Misuse analyst",
+                "Verification critic",
+                "Escalation boundary mapper",
+                "Containment reviewer",
+                "Human oversight advocate",
+                "Incident consequence witness",
+                "Safeguard stress tester"
+            ]),
+            "legal_policy" => RoleByParticipant(agentId, [
+                "Rights mapper",
+                "Obligation interpreter",
+                "Exception reviewer",
+                "Enforcement skeptic",
+                "Precedent scout",
+                "Compliance systems critic",
+                "Public interest witness",
+                "Policy synthesis challenger"
+            ]),
+            "incident_response" => RoleByParticipant(agentId, [
+                "Incident commander",
+                "Root-cause analyst",
+                "Customer impact witness",
+                "Prevention boundary tester",
+                "Recovery coordinator",
+                "Timeline auditor",
+                "Communications skeptic",
+                "Postmortem action owner"
+            ]),
+            "product_risk" => RoleByParticipant(agentId, [
+                "Product champion",
+                "Trust-risk critic",
+                "Launch operator",
+                "Rollback sentinel",
+                "Growth skeptic",
+                "Support burden forecaster",
+                "User value witness",
+                "Adoption constraint mapper"
+            ]),
             _ => null
         };
     }
@@ -173,14 +189,16 @@ internal static class GeneratedPersonaFactory
         {
             "odd" => Pick(rng, ["idioms", "cute", "poetic", "executive_brief", "hedge_uncertainty"]),
             "absurd" => Pick(rng, ["bark_only", "science_gibberish", "cute", "legal_policy", "poetic"]),
-            "maximum" => agentId switch
-            {
-                "alpha" => "bark_only",
-                "beta" => "science_gibberish",
-                "gamma" => "cute",
-                "delta" => "idioms",
-                _ => "default"
-            },
+            "maximum" => RoleByParticipant(agentId, [
+                "bark_only",
+                "science_gibberish",
+                "cute",
+                "idioms",
+                "legal_policy",
+                "poetic",
+                "socratic",
+                "executive_brief"
+            ]) ?? "default",
             _ => "default"
         };
     }
@@ -239,6 +257,12 @@ internal static class GeneratedPersonaFactory
     }
 
     private static T Pick<T>(Random rng, IReadOnlyList<T> values) => values[rng.Next(values.Count)];
+
+    private static string? RoleByParticipant(string agentId, IReadOnlyList<string> values)
+    {
+        var index = AgentRosterService.ParticipantOrder(agentId);
+        return index >= 0 && index < values.Count ? values[index] : null;
+    }
 
     private static int StableSeed(string value)
     {

@@ -35,6 +35,7 @@ var tests = new (string Name, Action Test)[]
     ("generates random seed match respecting locks", GenerateRandomSeedMatchRespectingLocks),
     ("generates requested random seed style and intensity", GenerateRequestedRandomSeedStyleAndIntensity),
     ("generates one-line pressure random seed", GenerateOneLinePressureRandomSeed),
+    ("generates random seed for dynamic agent roster", GenerateRandomSeedForDynamicAgentRoster),
     ("records and replays generation history", RecordReplayGeneratedMatchHistory),
     ("replays generation history into clean new run", ReplayGenerationHistoryIntoNewRun),
     ("generates absurd role pack voice constraints", GenerateAbsurdRolePackVoiceConstraints),
@@ -582,6 +583,28 @@ static void GenerateOneLinePressureRandomSeed()
     Require(loaded.Engine.Steering.Global.Contains("one high-signal sentence", StringComparison.OrdinalIgnoreCase), "one-line global instruction missing");
     Require(loaded.Engine.Agents.Any(agent => agent.Persona.Contains("one high-signal sentence", StringComparison.OrdinalIgnoreCase)), "one-line persona pressure missing");
     Require(File.ReadAllText(log.EventPath()).Contains("\"intensity\":\"one_line\""), "one-line intensity was not logged");
+    Directory.Delete(root, recursive: true);
+}
+
+static void GenerateRandomSeedForDynamicAgentRoster()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = SessionStore.CreateDefaultSnapshot();
+    AgentRosterService.EnsureParticipantCount(snapshot, 6);
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+
+    var service = new MatchGenerationService(sessionStore: store, eventLogStore: log);
+    var result = service.GenerateRandomSeedAsync("default", "technical", "sharp", "technical_architecture", "odd", "dynamic-six").GetAwaiter().GetResult();
+    Require(result.Ok, $"dynamic roster random seed failed: {result.Error}");
+    var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+    var activeAgents = loaded.Engine.Agents.Where(agent => agent.Active).ToArray();
+    Require(activeAgents.Length == 6, "dynamic roster active count changed");
+    Require(activeAgents.Any(agent => agent.Id == "epsilon"), "epsilon agent missing");
+    Require(activeAgents.Any(agent => agent.Id == "zeta"), "zeta agent missing");
+    Require(activeAgents.All(agent => agent.Name.Contains(":", StringComparison.Ordinal)), "not every dynamic agent received a generated role");
+    Require(loaded.GenerationHistory.Single().Match.Personas.Count(persona => persona.AgentId != "narrator") == 6, "history did not store all dynamic personas");
     Directory.Delete(root, recursive: true);
 }
 

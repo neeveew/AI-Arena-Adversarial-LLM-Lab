@@ -46,14 +46,8 @@ internal static class AbsurdRoleCatalog
 
     private static int AgentOrder(string agentId)
     {
-        return agentId.ToLowerInvariant() switch
-        {
-            "alpha" => 0,
-            "beta" => 1,
-            "gamma" => 2,
-            "delta" => 3,
-            _ => -1
-        };
+        var order = AgentRosterService.ParticipantOrder(agentId);
+        return order >= AgentRosterService.MaxParticipants ? -1 : order;
     }
 
     private static int StableSeed(string value)

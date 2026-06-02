@@ -574,9 +574,12 @@ public sealed class MatchGenerationService
 
     private static GeneratedPersona[] EnsureRequiredPersonas(IReadOnlyList<GeneratedPersona> personas, string style, string seed, IReadOnlyList<string> requiredAgentIds)
     {
+        var allowed = requiredAgentIds
+            .Append("narrator")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var output = personas
-            .Where(persona => persona.AgentId is "alpha" or "beta" or "gamma" or "delta" or "narrator")
             .Select(persona => persona with { AgentId = persona.AgentId.Trim().ToLowerInvariant() })
+            .Where(persona => allowed.Contains(persona.AgentId))
             .GroupBy(persona => persona.AgentId)
             .Select(group => group.First())
             .ToList();
@@ -640,10 +643,14 @@ public sealed class MatchGenerationService
 
     private static IReadOnlyList<string> RequiredAgentIds(ArenaSnapshot snapshot)
     {
-        var existing = snapshot.Engine.Agents.Select(agent => agent.Id.ToLowerInvariant()).Where(id => id is "alpha" or "beta" or "gamma" or "delta").ToHashSet();
-        foreach (var required in new[] { "alpha", "beta", "gamma" })
+        var existing = snapshot.Engine.Agents
+            .Where(agent => agent.Active)
+            .Select(agent => agent.Id.ToLowerInvariant())
+            .Where(AgentRosterService.IsParticipantId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (existing.Count == 0)
         {
-            existing.Add(required);
+            existing.Add("alpha");
         }
 
         return existing.OrderBy(ParticipantOrder).ToArray();
@@ -652,7 +659,7 @@ public sealed class MatchGenerationService
     private static string NormalizeLockKey(string key)
     {
         var cleaned = string.IsNullOrWhiteSpace(key) ? "" : key.Trim().ToLowerInvariant();
-        return cleaned is "alpha" or "beta" or "gamma" or "delta" or "narrator" or "topic" or "global" or "scenario"
+        return AgentRosterService.IsParticipantId(cleaned) || cleaned is "narrator" or "topic" or "global" or "scenario"
             ? cleaned
             : "scenario";
     }
@@ -672,10 +679,7 @@ public sealed class MatchGenerationService
     {
         var prefix = agentId.ToLowerInvariant() switch
         {
-            "alpha" => "Alpha",
-            "beta" => "Beta",
-            "gamma" => "Gamma",
-            "delta" => "Delta",
+            var id when AgentRosterService.IsParticipantId(id) => AgentRosterService.DisplayName(id),
             _ => agentId
         };
         return string.IsNullOrWhiteSpace(role) ? prefix : $"{prefix}: {role}";
@@ -686,10 +690,7 @@ public sealed class MatchGenerationService
         var names = RequiredAgentIds(snapshot)
             .Select(id => id switch
             {
-                "alpha" => "Alpha",
-                "beta" => "Beta",
-                "gamma" => "Gamma",
-                "delta" => "Delta",
+                var participant when AgentRosterService.IsParticipantId(participant) => AgentRosterService.DisplayName(participant),
                 _ => id
             })
             .ToArray();
@@ -711,14 +712,7 @@ public sealed class MatchGenerationService
 
     private static int ParticipantOrder(string id)
     {
-        return id switch
-        {
-            "alpha" => 0,
-            "beta" => 1,
-            "gamma" => 2,
-            "delta" => 3,
-            _ => 9
-        };
+        return AgentRosterService.ParticipantOrder(id);
     }
 }
 

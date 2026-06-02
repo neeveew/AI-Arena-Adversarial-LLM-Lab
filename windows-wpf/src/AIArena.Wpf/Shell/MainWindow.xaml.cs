@@ -59,6 +59,7 @@ public partial class MainWindow : Window
     private readonly List<CheckBox> _lockControls = [];
     private readonly List<ComboBox> _voiceControls = [];
     private readonly List<ComboBox> _pressureControls = [];
+    private readonly List<RivalryMatrixControlRow> _rivalryMatrixControls = [];
     private readonly List<TranscriptMessage> _turnCompareSelection = [];
     private readonly Dictionary<string, string> _roleModels = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ModelPreloadResult> _lastPreloadResults = new(StringComparer.OrdinalIgnoreCase);
@@ -167,6 +168,11 @@ public partial class MainWindow : Window
         IReadOnlyList<UserGuideSection> Sections,
         ListBox SectionList,
         FlowDocumentScrollViewer GuideViewer);
+
+    private sealed record RivalryMatrixControlRow(
+        string Source,
+        ComboBox Target,
+        ComboBox Stance);
 
     private sealed record RoleDetailPayload(string Title, string Persona);
 
@@ -689,6 +695,54 @@ public partial class MainWindow : Window
         _wpfSettingsStore.Save(_wpfSettings);
     }
 
+    private void AgentCountPresetPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isRenderingSnapshot || AgentCountPicker is null || AgentCountPresetPicker is null)
+        {
+            return;
+        }
+
+        var preset = SelectedComboTag(AgentCountPresetPicker, "4");
+        if (!preset.Equals("custom", StringComparison.OrdinalIgnoreCase))
+        {
+            SelectComboTag(AgentCountPicker, preset);
+        }
+    }
+
+    private async void ApplyAgentCountButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_arenaBusy)
+        {
+            return;
+        }
+
+        if (_activeSession is null)
+        {
+            await _coreSessionStore.EnsureDefaultSessionAsync();
+            await LoadSessionsAsync("default");
+        }
+
+        if (_activeSession is null)
+        {
+            ArenaRunStatus.Text = "No session is available for agent roster changes.";
+            return;
+        }
+
+        var count = SelectedAgentCount();
+        await RunArenaBusyAsync($"Resizing cast to {count} agents...", ApplyAgentCountButton, async () =>
+        {
+            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id) ?? SessionStore.CreateDefaultSnapshot();
+            AgentRosterService.EnsureParticipantCount(snapshot, count);
+            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
+            await _eventLogStore.AppendAsync(_activeSession.Id, "native_agent_roster_resized", new
+            {
+                Count = count,
+                Agents = snapshot.Engine.Agents.Where(agent => agent.Active).Select(agent => agent.Id).ToArray()
+            });
+            await RefreshActiveSessionAsync($"Agent roster resized: {count} active agents.");
+        }, allowDuringAutoChat: true);
+    }
+
     private static (string RolePack, string Style, string Intensity, string Absurdity) RandomSeedPresetValues(string preset)
     {
         return preset switch
@@ -954,7 +1008,8 @@ public partial class MainWindow : Window
         }
         _isRenderingSnapshot = true;
         var activeCount = snapshot.Agents.Count(agent => agent.Active);
-        SelectComboTag(ActiveParticipantsPicker, Math.Clamp(activeCount, 1, 4).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        SelectComboTag(ActiveParticipantsPicker, Math.Clamp(activeCount, 1, AgentRosterService.MaxParticipants).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        SelectAgentCountControls(activeCount);
         ProviderBaseUrlText.Text = snapshot.ProviderBaseUrl;
         SelectComboTag(ProviderPresetPicker, ProviderPresetTagForUrl(snapshot.ProviderBaseUrl));
         ProviderModelText.Text = snapshot.ProviderModel == "-" ? "" : snapshot.ProviderModel;
@@ -979,8 +1034,10 @@ public partial class MainWindow : Window
         AllowParticipantInternetCheckBox.IsChecked = snapshot.AllowParticipantInternetRequests;
         AllowNarratorInternetCheckBox.IsChecked = snapshot.AllowNarratorInternetRequests;
         RequireInternetApprovalCheckBox.IsChecked = snapshot.RequireInternetApproval;
+        PopulateOperatorPrivateTargetPicker(snapshot);
         _isRenderingSnapshot = false;
         UpdateInternetSettingsHint();
+        UpdateOperatorPrivateTargetSummary();
         UpdateSessionOverview(snapshot);
         _lastAgentPersonas = snapshot.Agents
             .Where(agent => !string.IsNullOrWhiteSpace(agent.Id))
@@ -2337,15 +2394,23 @@ public partial class MainWindow : Window
     private void PopulateRivalryMatrixControls(ArenaSnapshot snapshot)
     {
         RivalryMatrixEnabledCheckBox.IsChecked = snapshot.RivalryMatrixEnabled;
+        RivalryMatrixRows.Children.Clear();
+        _rivalryMatrixControls.Clear();
         var links = snapshot.RivalryMatrix
             .GroupBy(link => link.Source, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
         var agentIds = snapshot.Agents
+            .Where(agent => agent.Active)
             .Select(agent => agent.Id)
             .Where(IsAgentSpeaker)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .DefaultIfEmpty("alpha")
             .ToArray();
+
+        foreach (var source in agentIds)
+        {
+            RivalryMatrixRows.Children.Add(CreateRivalryMatrixRow(source));
+        }
 
         foreach (var (source, targetPicker, stancePicker) in RivalryMatrixControls())
         {
@@ -2359,12 +2424,53 @@ public partial class MainWindow : Window
         RivalryMatrixStatusText.Text = RivalryMatrixSummary(snapshot.RivalryMatrixEnabled, snapshot.RivalryMatrix);
     }
 
+    private Border CreateRivalryMatrixRow(string source)
+    {
+        var stack = new StackPanel { Width = 178, Margin = new Thickness(0, 0, 8, 8) };
+        stack.Children.Add(new TextBlock
+        {
+            Text = DisplayStatusValue(source),
+            Foreground = AccentForSpeaker(source),
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 5),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            ToolTip = DisplayStatusValue(source)
+        });
+
+        var target = new ComboBox
+        {
+            Tag = source,
+            Margin = new Thickness(0, 0, 0, 6),
+            Padding = new Thickness(7, 5, 7, 5),
+            FontSize = 11,
+            ToolTip = $"Relationship target for {DisplayStatusValue(source)}"
+        };
+        var stance = new ComboBox
+        {
+            Tag = source,
+            Padding = new Thickness(7, 5, 7, 5),
+            FontSize = 11,
+            ToolTip = $"Relationship stance for {DisplayStatusValue(source)}"
+        };
+        stack.Children.Add(target);
+        stack.Children.Add(stance);
+
+        _rivalryMatrixControls.Add(new RivalryMatrixControlRow(source, target, stance));
+        return new Border
+        {
+            Background = BlendBrush(ResourceBrush("InputBrush"), AccentForSpeaker(source), 0.06),
+            BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), AccentForSpeaker(source), 0.32),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(8),
+            Margin = new Thickness(0, 0, 8, 8),
+            Child = stack
+        };
+    }
+
     private IEnumerable<(string Source, ComboBox Target, ComboBox Stance)> RivalryMatrixControls()
     {
-        yield return ("alpha", AlphaRivalryTargetPicker, AlphaRivalryStancePicker);
-        yield return ("beta", BetaRivalryTargetPicker, BetaRivalryStancePicker);
-        yield return ("gamma", GammaRivalryTargetPicker, GammaRivalryStancePicker);
-        yield return ("delta", DeltaRivalryTargetPicker, DeltaRivalryStancePicker);
+        return _rivalryMatrixControls.Select(row => (row.Source, row.Target, row.Stance));
     }
 
     private void PopulateRivalryTargetPicker(ComboBox picker, string source, IReadOnlyList<string> agentIds)
@@ -6315,13 +6421,11 @@ public partial class MainWindow : Window
             snapshot.Engine.ModelRss.AllowModelRss = AllowParticipantInternetCheckBox.IsChecked == true;
             snapshot.Engine.ModelRss.AllowNarratorRequests = AllowNarratorInternetCheckBox.IsChecked == true;
             snapshot.Engine.ModelRss.RequireApproval = RequireInternetApprovalCheckBox.IsChecked == true;
-            if (activeParticipants >= 4)
-            {
-                EnsureDeltaAgent(snapshot);
-            }
+            AgentRosterService.EnsureParticipantCount(snapshot, Math.Max(activeParticipants, AgentRosterService.MinParticipants));
             for (var index = 0; index < snapshot.Engine.Agents.Count; index++)
             {
-                snapshot.Engine.Agents[index].Active = index < activeParticipants;
+                snapshot.Engine.Agents[index].Active = AgentRosterService.IsParticipantId(snapshot.Engine.Agents[index].Id)
+                    && index < activeParticipants;
             }
 
             await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
@@ -6864,10 +6968,7 @@ public partial class MainWindow : Window
 
     private static bool IsParticipantAgentId(string agentId)
     {
-        return agentId.Equals("alpha", StringComparison.OrdinalIgnoreCase)
-            || agentId.Equals("beta", StringComparison.OrdinalIgnoreCase)
-            || agentId.Equals("gamma", StringComparison.OrdinalIgnoreCase)
-            || agentId.Equals("delta", StringComparison.OrdinalIgnoreCase);
+        return AgentRosterService.IsParticipantId(agentId);
     }
 
     private static string BuildOperatorPrivateNote(string text)
@@ -6906,6 +7007,33 @@ public partial class MainWindow : Window
         }
 
         UpdateOperatorPrivateTargetSummary();
+    }
+
+    private void PopulateOperatorPrivateTargetPicker(ArenaSnapshot snapshot)
+    {
+        if (OperatorPrivateTargetPicker is null)
+        {
+            return;
+        }
+
+        var selected = (OperatorPrivateTargetPicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "all";
+        OperatorPrivateTargetPicker.Items.Clear();
+        OperatorPrivateTargetPicker.Items.Add(new ComboBoxItem { Content = "All active agents", Tag = "all" });
+        foreach (var agent in snapshot.Agents.Where(agent => IsParticipantAgentId(agent.Id)))
+        {
+            OperatorPrivateTargetPicker.Items.Add(new ComboBoxItem
+            {
+                Content = DisplayStatusValue(agent.Id),
+                Tag = agent.Id,
+                ToolTip = agent.Name
+            });
+        }
+
+        SelectComboTag(OperatorPrivateTargetPicker, selected);
+        if (OperatorPrivateTargetPicker.SelectedIndex < 0)
+        {
+            SelectComboTag(OperatorPrivateTargetPicker, "all");
+        }
     }
 
     private async void OperatorTurnText_KeyDown(object sender, KeyEventArgs e)
@@ -8645,7 +8773,7 @@ public partial class MainWindow : Window
         {
             "topic" => snapshot.Engine.Steering.Topic,
             "global" => snapshot.Engine.Steering.Global,
-            var agentId when agentId is "alpha" or "beta" or "gamma" or "delta" or "narrator" =>
+            var agentId when AgentRosterService.IsParticipantId(agentId) || agentId == "narrator" =>
                 snapshot.Engine.Agents.FirstOrDefault(agent => agent.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase))?.Persona
                 ?? (agentId == "narrator" ? snapshot.Engine.Narrator.Persona : ""),
             _ => ""
@@ -8666,10 +8794,7 @@ public partial class MainWindow : Window
             case "narrator":
                 snapshot.Engine.Narrator.Persona = value;
                 return true;
-            case "alpha":
-            case "beta":
-            case "gamma":
-            case "delta":
+            case var agentId when AgentRosterService.IsParticipantId(agentId):
                 var agent = snapshot.Engine.Agents.FirstOrDefault(item => item.Id.Equals(normalizedKey, StringComparison.OrdinalIgnoreCase));
                 if (agent is null)
                 {
@@ -8692,10 +8817,7 @@ public partial class MainWindow : Window
             case "narrator":
                 snapshot.Engine.Narrator.VoiceStyle = normalizedVoice == "default" ? "" : normalizedVoice;
                 return true;
-            case "alpha":
-            case "beta":
-            case "gamma":
-            case "delta":
+            case var agentId when AgentRosterService.IsParticipantId(agentId):
                 var agent = snapshot.Engine.Agents.FirstOrDefault(item => item.Id.Equals(normalizedKey, StringComparison.OrdinalIgnoreCase));
                 if (agent is null)
                 {
@@ -8715,10 +8837,7 @@ public partial class MainWindow : Window
         var normalizedPressure = NormalizeAgentPressureTag(value);
         switch (normalizedKey)
         {
-            case "alpha":
-            case "beta":
-            case "gamma":
-            case "delta":
+            case var agentId when AgentRosterService.IsParticipantId(agentId):
                 var agent = snapshot.Engine.Agents.FirstOrDefault(item => item.Id.Equals(normalizedKey, StringComparison.OrdinalIgnoreCase));
                 if (agent is null)
                 {
@@ -9330,7 +9449,7 @@ public partial class MainWindow : Window
     private static string NormalizeMatchLockKey(string key)
     {
         var cleaned = string.IsNullOrWhiteSpace(key) ? "" : key.Trim().ToLowerInvariant();
-        return cleaned is "alpha" or "beta" or "gamma" or "delta" or "narrator" or "topic" or "global" or "scenario"
+        return AgentRosterService.IsParticipantId(cleaned) || cleaned is "narrator" or "topic" or "global" or "scenario"
             ? cleaned
             : "scenario";
     }
@@ -9341,10 +9460,7 @@ public partial class MainWindow : Window
         {
             "topic" => "Topic",
             "global" => "Global",
-            "alpha" => "Alpha",
-            "beta" => "Beta",
-            "gamma" => "Gamma",
-            "delta" => "Delta",
+            var agentId when AgentRosterService.IsParticipantId(agentId) => AgentRosterService.DisplayName(agentId),
             "narrator" => "Narrator",
             _ => "Scenario"
         };
@@ -9465,6 +9581,10 @@ public partial class MainWindow : Window
             "beta" => ResourceBrush("BetaAccentBrush"),
             "gamma" => ResourceBrush("GammaAccentBrush"),
             "delta" => ResourceBrush("DeltaAccentBrush"),
+            "epsilon" => ResourceBrush("AssistBorderBrush"),
+            "zeta" => ResourceBrush("PrimaryBorderBrush"),
+            "eta" => BlendBrush(ResourceBrush("GammaAccentBrush"), ResourceBrush("AlphaAccentBrush"), 0.35),
+            "theta" => BlendBrush(ResourceBrush("NarratorAccentBrush"), ResourceBrush("DeltaAccentBrush"), 0.35),
             "narrator" => ResourceBrush("NarratorAccentBrush"),
             "operator" => ResourceBrush("OperatorAccentBrush"),
             _ => ResourceBrush("MutedTextBrush")
@@ -10382,10 +10502,7 @@ public partial class MainWindow : Window
 
     private static bool IsAgentSpeaker(string speakerId)
     {
-        return speakerId.Equals("alpha", StringComparison.OrdinalIgnoreCase)
-            || speakerId.Equals("beta", StringComparison.OrdinalIgnoreCase)
-            || speakerId.Equals("gamma", StringComparison.OrdinalIgnoreCase)
-            || speakerId.Equals("delta", StringComparison.OrdinalIgnoreCase);
+        return AgentRosterService.IsParticipantId(speakerId);
     }
 
     private static void SelectComboTag(ComboBox comboBox, string tag)
@@ -10402,11 +10519,52 @@ public partial class MainWindow : Window
         comboBox.SelectedIndex = comboBox.Items.Count > 0 ? 0 : -1;
     }
 
+    private void SelectAgentCountControls(int activeCount)
+    {
+        if (AgentCountPicker is null || AgentCountPresetPicker is null)
+        {
+            return;
+        }
+
+        var count = Math.Clamp(activeCount, AgentRosterService.MinParticipants, AgentRosterService.MaxParticipants);
+        SelectComboTag(AgentCountPicker, count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var preset = count switch
+        {
+            2 => "2",
+            4 => "4",
+            6 => "6",
+            8 => "8",
+            _ => "custom"
+        };
+        SelectComboTag(AgentCountPresetPicker, preset);
+        if (AgentRosterStatusText is not null)
+        {
+            AgentRosterStatusText.Text = count switch
+            {
+                1 => "Solo",
+                2 => "Duel",
+                4 => "Classic",
+                6 => "Council",
+                8 => "Swarm",
+                _ => "Custom"
+            };
+            AgentRosterStatusText.ToolTip = $"{count} active AI agents in this session";
+        }
+    }
+
+    private int SelectedAgentCount()
+    {
+        var selected = (AgentCountPicker.SelectedItem as ComboBoxItem)?.Tag?.ToString();
+        return int.TryParse(selected, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var count)
+            ? Math.Clamp(count, AgentRosterService.MinParticipants, AgentRosterService.MaxParticipants)
+            : 4;
+    }
+
     private int ParseActiveParticipants()
     {
         var selected = (ActiveParticipantsPicker.SelectedItem as ComboBoxItem)?.Tag?.ToString();
         return int.TryParse(selected, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var count)
-            ? Math.Clamp(count, 1, 4)
+            ? Math.Clamp(count, 1, AgentRosterService.MaxParticipants)
             : 3;
     }
 
@@ -10540,14 +10698,25 @@ public partial class MainWindow : Window
         }
 
         var defaultModel = ProviderModelText.Text.Trim();
-        RoleModelSummaryText.Text = string.Join(
-            Environment.NewLine,
+        var lines = new List<string>
+        {
             $"Default: {DisplayRoleModel(defaultModel, "not selected")}",
             $"Alpha: {DisplayParticipantModel(RoleModel("alpha"), defaultModel)}",
             $"Beta: {DisplayParticipantModel(RoleModel("beta"), defaultModel)}",
             $"Gamma: {DisplayParticipantModel(RoleModel("gamma"), defaultModel)}",
             $"Delta: {DisplayParticipantModel(RoleModel("delta"), defaultModel)}",
-            $"Narrator: {DisplayParticipantModel(RoleModel("narrator"), defaultModel)}");
+            $"Narrator: {DisplayParticipantModel(RoleModel("narrator"), defaultModel)}"
+        };
+        var extraAgents = (_lastRenderedSnapshot?.Agents ?? [])
+            .Where(agent => AgentRosterService.ParticipantOrder(agent.Id) >= 4)
+            .Select(agent => DisplayStatusValue(agent.Id))
+            .ToArray();
+        if (extraAgents.Length > 0)
+        {
+            lines.Insert(lines.Count - 1, $"{string.Join(", ", extraAgents)}: inherit default");
+        }
+
+        RoleModelSummaryText.Text = string.Join(Environment.NewLine, lines);
         UpdateModelStateLabels();
         UpdateLoadPlanPreview();
     }

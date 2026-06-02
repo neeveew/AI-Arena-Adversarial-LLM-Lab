@@ -23,7 +23,7 @@ internal static class ScenarioSeedGenerator
             "Surface assumptions, define terms, and keep the exchange concrete.",
             "Do not fetch external news or live data unless the operator explicitly provides it.");
         var personas = agentIds
-            .Where(id => id is "alpha" or "beta" or "gamma" or "delta")
+            .Where(AgentRosterService.IsParticipantId)
             .Select(id => GeneratedPersonaFactory.For(style, seed, id, intensity, rolePack, absurdity))
             .Append(GeneratedPersonaFactory.Narrator(style, seed, intensity))
             .ToArray();
@@ -55,7 +55,7 @@ internal static class ScenarioSeedGenerator
             demand.GlobalDemand,
             "Do not fetch external news or live data unless the operator explicitly provides it.");
         var personas = agentIds
-            .Where(id => id is "alpha" or "beta" or "gamma" or "delta")
+            .Where(AgentRosterService.IsParticipantId)
             .Select(id => GeneratedPersonaFactory.Yolo(style, seed, id, pressure.PersonaPressure, rolePack, absurdity))
             .Append(GeneratedPersonaFactory.YoloNarrator(style, seed, pressure.NarratorPressure))
             .ToArray();

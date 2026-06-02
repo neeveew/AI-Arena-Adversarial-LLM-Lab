@@ -1822,6 +1822,71 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Agents"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               FontWeight="SemiBold"
+                                               FontSize="11"
+                                               VerticalAlignment="Center" />
+                                    <TextBlock x:Name="AgentRosterStatusText"
+                                               Grid.Column="1"
+                                               Text="Classic"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               FontSize="11"
+                                               VerticalAlignment="Center"
+                                               Margin="8,0,0,0" />
+                                </Grid>
+                                <WrapPanel>
+                                    <ComboBox x:Name="AgentCountPresetPicker"
+                                              Width="112"
+                                              FontSize="11"
+                                              Padding="7,5"
+                                              MinHeight="32"
+                                              Margin="0,0,6,0"
+                                              ToolTip="Agent roster preset"
+                                              SelectionChanged="AgentCountPresetPicker_SelectionChanged">
+                                        <ComboBoxItem Content="Duel" Tag="2" />
+                                        <ComboBoxItem Content="Classic 4" Tag="4" IsSelected="True" />
+                                        <ComboBoxItem Content="Council 6" Tag="6" />
+                                        <ComboBoxItem Content="Swarm 8" Tag="8" />
+                                        <ComboBoxItem Content="Custom" Tag="custom" />
+                                    </ComboBox>
+                                    <ComboBox x:Name="AgentCountPicker"
+                                              Width="92"
+                                              FontSize="11"
+                                              Padding="7,5"
+                                              MinHeight="32"
+                                              Margin="0,0,6,0"
+                                              ToolTip="Active AI agents">
+                                        <ComboBoxItem Content="1 agent" Tag="1" />
+                                        <ComboBoxItem Content="2 agents" Tag="2" />
+                                        <ComboBoxItem Content="3 agents" Tag="3" />
+                                        <ComboBoxItem Content="4 agents" Tag="4" IsSelected="True" />
+                                        <ComboBoxItem Content="5 agents" Tag="5" />
+                                        <ComboBoxItem Content="6 agents" Tag="6" />
+                                        <ComboBoxItem Content="7 agents" Tag="7" />
+                                        <ComboBoxItem Content="8 agents" Tag="8" />
+                                    </ComboBox>
+                                    <Button x:Name="ApplyAgentCountButton"
+                                            Content="APPLY"
+                                            Click="ApplyAgentCountButton_Click"
+                                            FontSize="11"
+                                            Padding="11,6"
+                                            ToolTip="Resize the active cast for this session" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{DynamicResource CardBrush}"
+                                BorderBrush="{DynamicResource ControlBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="8"
+                                Margin="0,0,8,8">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
                                     <TextBlock Text="Recent"
                                                Foreground="{DynamicResource MutedTextBrush}"
                                                FontWeight="SemiBold"
@@ -1949,28 +2014,8 @@
                                               VerticalAlignment="Top"
                                               Margin="12,0,0,0" />
                                 </Grid>
-                                <UniformGrid Grid.Row="2" Columns="4">
-                                    <StackPanel Margin="0,0,8,0">
-                                        <TextBlock Text="Alpha" Foreground="{DynamicResource AlphaAccentBrush}" FontWeight="SemiBold" Margin="0,0,0,5" />
-                                        <ComboBox x:Name="AlphaRivalryTargetPicker" Tag="alpha" Margin="0,0,0,6" Padding="7,5" FontSize="11" />
-                                        <ComboBox x:Name="AlphaRivalryStancePicker" Tag="alpha" Padding="7,5" FontSize="11" />
-                                    </StackPanel>
-                                    <StackPanel Margin="0,0,8,0">
-                                        <TextBlock Text="Beta" Foreground="{DynamicResource BetaAccentBrush}" FontWeight="SemiBold" Margin="0,0,0,5" />
-                                        <ComboBox x:Name="BetaRivalryTargetPicker" Tag="beta" Margin="0,0,0,6" Padding="7,5" FontSize="11" />
-                                        <ComboBox x:Name="BetaRivalryStancePicker" Tag="beta" Padding="7,5" FontSize="11" />
-                                    </StackPanel>
-                                    <StackPanel Margin="0,0,8,0">
-                                        <TextBlock Text="Gamma" Foreground="{DynamicResource GammaAccentBrush}" FontWeight="SemiBold" Margin="0,0,0,5" />
-                                        <ComboBox x:Name="GammaRivalryTargetPicker" Tag="gamma" Margin="0,0,0,6" Padding="7,5" FontSize="11" />
-                                        <ComboBox x:Name="GammaRivalryStancePicker" Tag="gamma" Padding="7,5" FontSize="11" />
-                                    </StackPanel>
-                                    <StackPanel>
-                                        <TextBlock Text="Delta" Foreground="{DynamicResource DeltaAccentBrush}" FontWeight="SemiBold" Margin="0,0,0,5" />
-                                        <ComboBox x:Name="DeltaRivalryTargetPicker" Tag="delta" Margin="0,0,0,6" Padding="7,5" FontSize="11" />
-                                        <ComboBox x:Name="DeltaRivalryStancePicker" Tag="delta" Padding="7,5" FontSize="11" />
-                                    </StackPanel>
-                                </UniformGrid>
+                                <WrapPanel x:Name="RivalryMatrixRows"
+                                           Grid.Row="2" />
                                 <Grid Grid.Row="4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -2257,13 +2302,7 @@
                                       Grid.Column="1"
                                       Height="30"
                                       SelectionChanged="OperatorPrivateTargetPicker_SelectionChanged"
-                                      SelectedIndex="0">
-                                <ComboBoxItem Content="All active agents" Tag="all" IsSelected="True" />
-                                <ComboBoxItem Content="Alpha" Tag="alpha" />
-                                <ComboBoxItem Content="Beta" Tag="beta" />
-                                <ComboBoxItem Content="Gamma" Tag="gamma" />
-                                <ComboBoxItem Content="Delta" Tag="delta" />
-                            </ComboBox>
+                                      SelectedIndex="0" />
                             <TextBlock x:Name="OperatorPrivateTargetSummaryText"
                                        Grid.Row="1"
                                        Grid.Column="1"
@@ -2694,6 +2733,10 @@
                             <ComboBoxItem Content="2 active agents" Tag="2" />
                             <ComboBoxItem Content="3 active agents" Tag="3" />
                             <ComboBoxItem Content="4 active agents" Tag="4" />
+                            <ComboBoxItem Content="5 active agents" Tag="5" />
+                            <ComboBoxItem Content="6 active agents" Tag="6" />
+                            <ComboBoxItem Content="7 active agents" Tag="7" />
+                            <ComboBoxItem Content="8 active agents" Tag="8" />
                         </ComboBox>
                         <Grid Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
