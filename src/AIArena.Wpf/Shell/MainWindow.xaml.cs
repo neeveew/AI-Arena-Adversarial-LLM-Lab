@@ -1022,11 +1022,6 @@ public partial class MainWindow : Window
         _transcriptViewCoordinator?.ToggleDebugMenu();
     }
 
-    private void UpdateDebugControlsVisibility()
-    {
-        _transcriptViewCoordinator?.UpdateDebugControlsVisibility();
-    }
-
     private void ViewMenuButton_Click(object sender, RoutedEventArgs e)
     {
         _transcriptViewCoordinator?.ToggleViewMenu();
@@ -1050,11 +1045,6 @@ public partial class MainWindow : Window
     private void ViewPresetReview_Click(object sender, RoutedEventArgs e)
     {
         _transcriptViewCoordinator?.ApplyReviewPreset();
-    }
-
-    private void UpdateViewPresetState()
-    {
-        _transcriptViewCoordinator?.UpdateViewPresetState();
     }
 
     private async Task LoadSessionAsync(CoreSessionSummary session, bool force)
@@ -1110,22 +1100,16 @@ public partial class MainWindow : Window
         _isRenderingSnapshot = false;
         InternetWorkflow.UpdateSettingsHint();
         OperatorTurn.UpdatePrivateTargetSummary();
-        UpdateSessionOverview(snapshot);
+        SessionOverview.UpdateSessionOverview(snapshot);
         _lastAgentPersonas = snapshot.Agents
             .Where(agent => !string.IsNullOrWhiteSpace(agent.Id))
             .ToDictionary(agent => agent.Id, agent => agent.Persona, StringComparer.OrdinalIgnoreCase);
         PopulateTranscript(snapshot.Messages);
-        PopulateAgents(snapshot);
+        AgentBoard.Populate(snapshot, CurrentTurnAgent(snapshot)?.Id);
         PopulateCustomMatch(snapshot);
         NewsPanelWorkflow.Populate(snapshot.Messages);
         OperatorTurn.UpdatePrivateTargetSummary();
     }
-
-    private void UpdateSessionOverview(ArenaViewSnapshot snapshot)
-    {
-        SessionOverview.UpdateSessionOverview(snapshot);
-    }
-
 
     private void PopulateFallbackState(string message)
     {
@@ -1229,7 +1213,7 @@ public partial class MainWindow : Window
 
         foreach (var message in visibleMessages.OrderByDescending(message => message.Turn))
         {
-            TranscriptItems.Children.Add(CreateTranscriptCard(
+            TranscriptItems.Children.Add(TranscriptCards.CreateCard(
                 message,
                 retryableTurns.Contains(message.Turn),
                 TranscriptSearch.HasActiveSearch,
@@ -1247,19 +1231,9 @@ public partial class MainWindow : Window
         _transcriptViewCoordinator?.UpdateDashboardLayout(e.NewSize.Width);
     }
 
-    private void UpdateTranscriptDashboardLayout(double width, bool force = false)
-    {
-        _transcriptViewCoordinator?.UpdateDashboardLayout(width, force);
-    }
-
     private bool IsDiagnosticsDisplayed()
     {
         return _transcriptViewCoordinator?.IsDiagnosticsDisplayed() == true;
-    }
-
-    private void PopulateAgents(ArenaViewSnapshot snapshot)
-    {
-        AgentBoard.Populate(snapshot, CurrentTurnAgent(snapshot)?.Id);
     }
 
     private void PopulateCustomMatch(ArenaViewSnapshot snapshot)
@@ -1293,7 +1267,7 @@ public partial class MainWindow : Window
             setup.Children.Add(CreateSetupChip("Match", DisplayStatusValue(snapshot.MatchType), ResourceBrush("TextBrush")));
             setup.Children.Add(CreateSetupChip("Agents", $"{activeAgents.Length} + narrator", ResourceBrush("PrimaryBorderBrush")));
             setup.Children.Add(CreateSetupChip("Turn", current is null ? "-" : DisplayStatusValue(current.Id), current is null ? ResourceBrush("MutedTextBrush") : AccentForSpeaker(current.Id)));
-            setup.Children.Add(CreateSetupChip("Model", ShortModelName(CurrentTurnModel(snapshot, current)), ResourceBrush("MutedTextBrush")));
+            setup.Children.Add(CreateSetupChip("Model", ShortModelName(SessionOverviewCoordinator.CurrentTurnModel(snapshot, current)), ResourceBrush("MutedTextBrush")));
             panel.Children.Add(setup);
 
             if (ProviderQuickSetupCoordinator.ShouldShowProviderSetup(snapshot, current))
@@ -1311,7 +1285,7 @@ public partial class MainWindow : Window
             Margin = new Thickness(0, 5, 0, 0)
         });
 
-        return CreateCard(
+        return ShellCards.CreateCard(
             "Arena is ready",
             "Start with 1 TURN, AUTO CHAT, an agent turn, or write directly in Operator Turn.",
             BlendBrush(ResourceBrush("CardBrush"), accent, 0.08),
@@ -1322,11 +1296,6 @@ public partial class MainWindow : Window
     private Border CreateSetupChip(string label, string value, Brush accent)
     {
         return ShellCards.CreateSetupChip(label, value, accent);
-    }
-
-    private static string CurrentTurnModel(ArenaViewSnapshot snapshot, AgentState? current)
-    {
-        return SessionOverviewCoordinator.CurrentTurnModel(snapshot, current);
     }
 
     private bool ShouldShowStyleFit()
@@ -1363,11 +1332,6 @@ public partial class MainWindow : Window
         return VoiceAdherenceAccent(diagnostic.State);
     }
 
-    private Border CreateTranscriptCard(TranscriptMessage message, bool retryable, bool searchMatch, bool isLatest)
-    {
-        return TranscriptCards.CreateCard(message, retryable, searchMatch, isLatest);
-    }
-
     private async Task GenerateDecisionCardAsync()
     {
         if (_activeSession is null)
@@ -1386,11 +1350,6 @@ public partial class MainWindow : Window
     private static bool IsSystemEvent(TranscriptMessage message, bool isInternet)
     {
         return TranscriptCardRenderer.IsSystemEvent(message, isInternet);
-    }
-
-    private Border CreateCard(string title, string body, Brush background, Brush accent, UIElement? extraContent)
-    {
-        return ShellCards.CreateCard(title, body, background, accent, extraContent);
     }
 
     private static string FormatDuration(int latencyMs)
