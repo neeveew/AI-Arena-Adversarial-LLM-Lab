@@ -1,4 +1,5 @@
 using AIArena.Core.Models;
+using AIArena.Wpf;
 using AIArena.Wpf.Services;
 
 var tests = new (string Name, Action Test)[]
@@ -13,7 +14,9 @@ var tests = new (string Name, Action Test)[]
     ("provider reachability copies status metadata", ProviderReachabilityCopiesStatusMetadata),
     ("auto configure keeps low VRAM to one model", AutoConfigureLowVramSingleModel),
     ("auto configure spreads high VRAM model variety", AutoConfigureHighVramVariety),
-    ("auto configure prefers useful multi GPU fit", AutoConfigurePrefersUsefulMultiGpuFit)
+    ("auto configure prefers useful multi GPU fit", AutoConfigurePrefersUsefulMultiGpuFit),
+    ("role style catalog normalizes labels and chips", RoleStyleCatalogNormalizesLabelsAndChips),
+    ("role style catalog formats voice adherence cues", RoleStyleCatalogFormatsVoiceAdherenceCues)
 };
 
 var failures = 0;
@@ -344,6 +347,47 @@ static void AutoConfigurePrefersUsefulMultiGpuFit()
     Require(!assigned.Take(4).Any(model => model.Contains("tiny-helper", StringComparison.OrdinalIgnoreCase)), "participant routes should not prefer the tiny helper");
     Require(!assigned.Any(model => model.Contains("too-large", StringComparison.OrdinalIgnoreCase)), "comfortable-fit routing should avoid oversized models");
     Require(plan.Warnings.Any(warning => warning.Contains("Multi-GPU", StringComparison.OrdinalIgnoreCase)), "multi-GPU guidance note should be present");
+}
+
+static void RoleStyleCatalogNormalizesLabelsAndChips()
+{
+    Require(RoleStyleCatalog.NormalizeVoiceStyleTag("Plain-Language") == "plain_language", "voice style should normalize dashes");
+    Require(RoleStyleCatalog.NormalizeVoiceStyleTag("legal policy") == "legal_policy", "voice style should normalize spaces");
+    Require(RoleStyleCatalog.NormalizeVoiceStyleTag("mystery") == "default", "unknown voice style should fall back to default");
+    Require(RoleStyleCatalog.VoiceStyleChipText("default") == "", "default voice style should not render a chip");
+    Require(RoleStyleCatalog.VoiceStyleChipText("evidence-ledger") == "Voice: Evidence", "voice style chip should use display label");
+
+    Require(RoleStyleCatalog.NormalizeAgentPressureTag("Risk") == "risk", "pressure should normalize case");
+    Require(RoleStyleCatalog.NormalizeAgentPressureTag("too much") == "default", "unknown pressure should fall back to default");
+    Require(RoleStyleCatalog.AgentPressureChipText(null) == "", "default pressure should not render a chip");
+    Require(RoleStyleCatalog.AgentPressureChipText("chaos") == "Pressure: Chaos", "pressure chip should use display label");
+
+    Require(RoleStyleCatalog.IsStrictVoiceStyle("evidence ledger"), "evidence ledger should be strict");
+    Require(!RoleStyleCatalog.IsStrictVoiceStyle("idioms"), "idioms should not be strict");
+}
+
+static void RoleStyleCatalogFormatsVoiceAdherenceCues()
+{
+    Require(RoleStyleCatalog.VoiceAdherenceState(74, 1) == "strong", "74 should be strong");
+    Require(RoleStyleCatalog.VoiceAdherenceState(46, 1) == "drifting", "46 should be drifting");
+    Require(RoleStyleCatalog.VoiceAdherenceState(45, 1) == "broken", "45 should be broken");
+    Require(RoleStyleCatalog.VoiceAdherenceState(99, 0) == "none", "empty samples should be none");
+    Require(RoleStyleCatalog.VoiceAdherenceDisplayState("drifting") == "partial cues", "drifting display label should be stable");
+
+    var diagnostic = new VoiceAdherenceDiagnostic(
+        "bullet_only",
+        "Bullet-only",
+        "broken",
+        12,
+        "Needs bullet structure.",
+        ["sentence form"],
+        ["bullet markers"]);
+
+    Require(RoleStyleCatalog.VoiceAdherenceChipText(diagnostic) == "Cues: low 12", "adherence chip text should be stable");
+    var tooltip = RoleStyleCatalog.VoiceAdherenceTooltip(diagnostic);
+    Require(tooltip.Contains("Needs bullet structure.", StringComparison.OrdinalIgnoreCase), "tooltip should include summary");
+    Require(tooltip.Contains("Evidence: sentence form", StringComparison.OrdinalIgnoreCase), "tooltip should include evidence");
+    Require(tooltip.Contains("Missing: bullet markers", StringComparison.OrdinalIgnoreCase), "tooltip should include missing cues");
 }
 
 static void WithTempSettingsStore(Action<WpfSettingsStore> action)
