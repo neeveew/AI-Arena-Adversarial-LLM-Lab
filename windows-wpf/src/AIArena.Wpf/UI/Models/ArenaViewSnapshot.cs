@@ -1,6 +1,6 @@
 namespace AIArena.Wpf.Models;
 
-public sealed record ArenaSnapshot(
+public sealed record ArenaViewSnapshot(
     string SessionId,
     string SnapshotPath,
     DateTime LastWriteTimeUtc,

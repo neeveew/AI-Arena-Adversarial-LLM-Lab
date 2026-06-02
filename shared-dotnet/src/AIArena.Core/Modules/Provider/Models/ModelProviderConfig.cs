@@ -1,24 +1,25 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AIArena.Core.Providers;
 
 namespace AIArena.Core.Models;
 
 public sealed class ModelProviderConfig
 {
     [JsonPropertyName("base_url")]
-    public string BaseUrl { get; init; } = "http://127.0.0.1:1234/v1";
+    public string BaseUrl { get; init; } = ModelProviderDefaults.BaseUrl;
 
     [JsonPropertyName("model")]
     public string Model { get; init; } = "";
 
     [JsonPropertyName("timeout")]
-    public int Timeout { get; init; } = 300;
+    public int Timeout { get; init; } = ModelProviderDefaults.TimeoutSeconds;
 
     [JsonPropertyName("temperature")]
-    public double Temperature { get; init; } = 0.8;
+    public double Temperature { get; init; } = ModelProviderDefaults.Temperature;
 
     [JsonPropertyName("max_output_tokens")]
-    public int MaxOutputTokens { get; init; } = 1024;
+    public int MaxOutputTokens { get; init; } = ModelProviderDefaults.MaxOutputTokens;
 
     [JsonPropertyName("last_error")]
     public string LastError { get; init; } = "";

@@ -1,9 +1,5 @@
-using System.Diagnostics;
 using System.Globalization;
-using System.IO;
-using System.Management;
 using System.Net.Http;
-using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using AIArena.Core.Models;
 using AIArena.Core.Providers;
@@ -606,7 +602,7 @@ public sealed class ProviderAutoConfigureService
         var values = new[]
             {
                 currentProviderBaseUrl,
-                "http://127.0.0.1:1234/v1",
+                ModelProviderDefaults.BaseUrl,
                 "http://localhost:1234/v1"
             }
             .Select(NormalizeProviderBaseUrl)
@@ -614,13 +610,13 @@ public sealed class ProviderAutoConfigureService
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        return values.Length > 0 ? values : ["http://127.0.0.1:1234/v1"];
+        return values.Length > 0 ? values : [ModelProviderDefaults.BaseUrl];
     }
 
     private static string NormalizeProviderBaseUrl(string value)
     {
         var trimmed = string.IsNullOrWhiteSpace(value)
-            ? "http://127.0.0.1:1234/v1"
+            ? ModelProviderDefaults.BaseUrl
             : value.Trim().TrimEnd('/');
         if (trimmed.EndsWith("/api/v1", StringComparison.OrdinalIgnoreCase))
         {
@@ -657,8 +653,12 @@ public sealed class ProviderAutoConfigureService
 
     private static HardwareProbe DetectHardware()
     {
-        var nvidia = DetectNvidiaGpus();
-        var wmi = DetectWindowsGpus();
+        var nvidia = WindowsHardwareProbeService.DetectNvidiaGpus()
+            .Select(ToGpuDeviceInfo)
+            .ToArray();
+        var wmi = WindowsHardwareProbeService.DetectWindowsGpus()
+            .Select(ToGpuDeviceInfo)
+            .ToArray();
         var merged = new List<GpuDeviceInfo>(nvidia);
         foreach (var gpu in wmi)
         {
@@ -668,89 +668,13 @@ public sealed class ProviderAutoConfigureService
             }
         }
 
-        var memory = DetectSystemMemory();
+        var memory = WindowsHardwareProbeService.SampleMemory();
         return new HardwareProbe(merged, memory.TotalGb, memory.UsedGb);
     }
 
-    private static IReadOnlyList<GpuDeviceInfo> DetectNvidiaGpus()
+    private static GpuDeviceInfo ToGpuDeviceInfo(WindowsGpuProbe gpu)
     {
-        try
-        {
-            using var process = new Process();
-            process.StartInfo = new ProcessStartInfo
-            {
-                FileName = ResolveNvidiaSmiPath(),
-                Arguments = "--query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits",
-                CreateNoWindow = true,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
-                UseShellExecute = false
-            };
-
-            process.Start();
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            if (!process.WaitForExit(3000))
-            {
-                TryKill(process);
-                return [];
-            }
-
-            if (process.ExitCode != 0)
-            {
-                return [];
-            }
-
-            var gpus = new List<GpuDeviceInfo>();
-            foreach (var line in outputTask.GetAwaiter().GetResult().Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
-            {
-                var parts = line.Split(',').Select(part => part.Trim()).ToArray();
-                if (parts.Length < 5)
-                {
-                    continue;
-                }
-
-                double? usedGb = ParseDouble(parts[2]) is double usedMb ? usedMb / 1024d : null;
-                double? totalGb = ParseDouble(parts[3]) is double totalMb ? totalMb / 1024d : null;
-                var utilization = ParseDouble(parts[4]);
-                gpus.Add(new GpuDeviceInfo(parts[1], "NVIDIA", totalGb, usedGb, utilization));
-            }
-
-            return gpus;
-        }
-        catch
-        {
-            return [];
-        }
-    }
-
-    private static IReadOnlyList<GpuDeviceInfo> DetectWindowsGpus()
-    {
-        try
-        {
-            var gpus = new List<GpuDeviceInfo>();
-            using var searcher = new ManagementObjectSearcher(
-                "root\\CIMV2",
-                "SELECT Name, AdapterRAM FROM Win32_VideoController");
-            foreach (ManagementBaseObject adapter in searcher.Get())
-            {
-                var name = adapter["Name"]?.ToString();
-                if (string.IsNullOrWhiteSpace(name))
-                {
-                    continue;
-                }
-
-                double? vramGb = ToDouble(adapter["AdapterRAM"]) is double bytes && bytes > 0
-                    ? bytes / 1024d / 1024d / 1024d
-                    : null;
-                gpus.Add(new GpuDeviceInfo(name.Trim(), VendorFromName(name), vramGb, null, null));
-            }
-
-            return gpus;
-        }
-        catch
-        {
-            return [];
-        }
+        return new GpuDeviceInfo(gpu.Name, gpu.Vendor, gpu.VramTotalGb, gpu.VramUsedGb, gpu.UtilizationPercent);
     }
 
     private static bool SimilarGpuName(string first, string second)
@@ -759,99 +683,6 @@ public sealed class ProviderAutoConfigureService
             || second.Contains(first, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string VendorFromName(string name)
-    {
-        if (name.Contains("nvidia", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("geforce", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("rtx", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("gtx", StringComparison.OrdinalIgnoreCase))
-        {
-            return "NVIDIA";
-        }
-
-        if (name.Contains("amd", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("radeon", StringComparison.OrdinalIgnoreCase))
-        {
-            return "AMD";
-        }
-
-        if (name.Contains("intel", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("arc", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("iris", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Intel";
-        }
-
-        return "unknown";
-    }
-
-    private static ProviderAutoMemorySnapshot DetectSystemMemory()
-    {
-        var status = new ProviderAutoMemoryStatusEx();
-        status.dwLength = (uint)Marshal.SizeOf<ProviderAutoMemoryStatusEx>();
-        if (!GlobalMemoryStatusEx(ref status))
-        {
-            return new ProviderAutoMemorySnapshot(null, null);
-        }
-
-        var totalGb = status.ullTotalPhys / 1024d / 1024d / 1024d;
-        var availableGb = status.ullAvailPhys / 1024d / 1024d / 1024d;
-        return new ProviderAutoMemorySnapshot(totalGb, Math.Max(0, totalGb - availableGb));
-    }
-
-    private static string ResolveNvidiaSmiPath()
-    {
-        var systemPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-            "System32",
-            "nvidia-smi.exe");
-        return File.Exists(systemPath) ? systemPath : "nvidia-smi";
-    }
-
-    private static void TryKill(Process process)
-    {
-        try
-        {
-            process.Kill(entireProcessTree: true);
-        }
-        catch
-        {
-            // Best effort; auto configure should never leave the UI stuck.
-        }
-    }
-
-    private static double? ToDouble(object? value)
-    {
-        return value is null
-            ? null
-            : ParseDouble(Convert.ToString(value, CultureInfo.InvariantCulture));
-    }
-
-    private static double? ParseDouble(string? value)
-    {
-        return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
-            ? number
-            : null;
-    }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GlobalMemoryStatusEx(ref ProviderAutoMemoryStatusEx buffer);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ProviderAutoMemoryStatusEx
-    {
-        public uint dwLength;
-        public uint dwMemoryLoad;
-        public ulong ullTotalPhys;
-        public ulong ullAvailPhys;
-        public ulong ullTotalPageFile;
-        public ulong ullAvailPageFile;
-        public ulong ullTotalVirtual;
-        public ulong ullAvailVirtual;
-        public ulong ullAvailExtendedVirtual;
-    }
-
-    private sealed record ProviderAutoMemorySnapshot(double? TotalGb, double? UsedGb);
 }
 
 public sealed record ProviderAutoConfigurePlan(

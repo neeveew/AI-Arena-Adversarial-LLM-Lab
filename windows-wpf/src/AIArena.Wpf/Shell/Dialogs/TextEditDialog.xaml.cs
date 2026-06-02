@@ -1,5 +1,4 @@
 using System.Windows;
-using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using AIArena.Wpf.Services;
@@ -54,22 +53,12 @@ public partial class TextEditDialog : Window
         EditText.BorderBrush = border;
         EditText.Padding = new Thickness(10);
 
-        ApplyButtonStyle(CloseButton, input, border, muted);
+        DialogChrome.ApplyButtonStyle(CloseButton, input, border, muted);
         CloseButton.FontSize = 13;
         CloseButton.Padding = new Thickness(0);
         CloseButton.MinHeight = 28;
-        ApplyButtonStyle(CancelButton, input, border, text);
-        ApplyButtonStyle(ApplyButton, primary, primaryBorder, Brushes.White);
-    }
-
-    private static void ApplyButtonStyle(System.Windows.Controls.Button button, Brush background, Brush border, Brush foreground)
-    {
-        button.Background = background;
-        button.BorderBrush = border;
-        button.Foreground = foreground;
-        button.FontWeight = FontWeights.SemiBold;
-        button.Padding = new Thickness(12, 8, 12, 8);
-        button.MinHeight = 38;
+        DialogChrome.ApplyButtonStyle(CancelButton, input, border, text);
+        DialogChrome.ApplyButtonStyle(ApplyButton, primary, primaryBorder, Brushes.White);
     }
 
     private void ApplyButton_Click(object sender, RoutedEventArgs e)
@@ -87,25 +76,7 @@ public partial class TextEditDialog : Window
 
     private void DialogShell_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ButtonState == MouseButtonState.Pressed && !StartedOnButton(e.OriginalSource as DependencyObject))
-        {
-            DragMove();
-        }
-    }
-
-    private static bool StartedOnButton(DependencyObject? source)
-    {
-        while (source is not null)
-        {
-            if (source is ButtonBase or TextBoxBase)
-            {
-                return true;
-            }
-
-            source = VisualTreeHelper.GetParent(source);
-        }
-
-        return false;
+        DialogChrome.DragMoveIfPossible(this, e, ignoreTextInputs: true);
     }
 
     private static SolidColorBrush Brush(Color color)

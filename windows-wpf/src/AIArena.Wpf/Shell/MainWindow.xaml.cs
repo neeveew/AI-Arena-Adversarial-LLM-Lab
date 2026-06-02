@@ -109,7 +109,7 @@ public partial class MainWindow : Window
     private readonly List<double> _vramTelemetryHistory = [];
     private readonly List<double> _ramTelemetryHistory = [];
     private Style? _lockToggleStyle;
-    private ArenaSnapshot? _lastRenderedSnapshot;
+    private ArenaViewSnapshot? _lastRenderedSnapshot;
     private CoreFrictionDiagnostics? _lastDiagnostics;
     private DiagnosticSeriesSet _lastDiagnosticSeries = new(Array.Empty<DiagnosticHistoryPoint>(), 0);
     private ProviderAutoConfigurePlan? _lastAutoConfigurePlan;
@@ -267,6 +267,7 @@ public partial class MainWindow : Window
         UpdateOperatorRouteUi();
         UpdateOperatorTurnMeter();
         LoadScenarioTemplates();
+        ShowStoreLoadWarningIfAny();
         Loaded += (_, _) =>
         {
             LoadSessions();
@@ -484,10 +485,28 @@ public partial class MainWindow : Window
     private void LoadScenarioTemplates(string? preferredTemplateId = null)
     {
         _scenarioTemplates = _scenarioTemplateStore.Load();
+        if (!string.IsNullOrWhiteSpace(_scenarioTemplateStore.LastLoadWarning))
+        {
+            SetSavedStateStatus(_scenarioTemplateStore.LastLoadWarning, isDanger: true);
+        }
+
         if (CurrentSavedStateMode().Equals("template", StringComparison.OrdinalIgnoreCase))
         {
             UpdateSavedStatePicker(preferredTemplateId);
         }
+    }
+
+    private void ShowStoreLoadWarningIfAny()
+    {
+        var warning = new[] { _wpfSettingsStore.LastLoadWarning, _scenarioTemplateStore.LastLoadWarning }
+            .FirstOrDefault(item => !string.IsNullOrWhiteSpace(item));
+        if (string.IsNullOrWhiteSpace(warning))
+        {
+            return;
+        }
+
+        LoadStatus.Text = warning;
+        ArenaRunStatus.Text = warning;
     }
 
     private async void RefreshIfSnapshotChanged()
@@ -998,7 +1017,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void RenderSnapshot(ArenaSnapshot snapshot)
+    private void RenderSnapshot(ArenaViewSnapshot snapshot)
     {
         UpdateTopBarStatus(snapshot);
         _lastRenderedSnapshot = snapshot;
@@ -1049,7 +1068,7 @@ public partial class MainWindow : Window
         UpdateOperatorPrivateTargetSummary();
     }
 
-    private void UpdateSessionOverview(ArenaSnapshot snapshot)
+    private void UpdateSessionOverview(ArenaViewSnapshot snapshot)
     {
         SessionOverviewMatchText.Text = DisplayStatusValue(snapshot.MatchType);
         SessionOverviewTurnsText.Text = snapshot.TurnCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -1062,7 +1081,7 @@ public partial class MainWindow : Window
         PopulateAgentPerformance(snapshot);
     }
 
-    private void PopulateAgentPerformance(ArenaSnapshot snapshot)
+    private void PopulateAgentPerformance(ArenaViewSnapshot snapshot)
     {
         var openDetailId = AgentPerformanceDetailPopup.IsOpen ? _activeAgentPerformanceDetailId : null;
         FrameworkElement? refreshedDetailTarget = null;
@@ -1127,7 +1146,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private AgentPerformanceStats CreateAgentPerformanceStats(ArenaSnapshot snapshot, AgentState agent)
+    private AgentPerformanceStats CreateAgentPerformanceStats(ArenaViewSnapshot snapshot, AgentState agent)
     {
         var messages = snapshot.Messages
             .Where(message => message.SpeakerId.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)
@@ -1327,7 +1346,7 @@ public partial class MainWindow : Window
 
     private void RenderAgentPerformanceDetail(
         AgentPerformanceStats stats,
-        ArenaSnapshot snapshot,
+        ArenaViewSnapshot snapshot,
         FrameworkElement target,
         bool resetPopup)
     {
@@ -1351,7 +1370,7 @@ public partial class MainWindow : Window
         AgentPerformanceDetailContent.Children.Clear();
     }
 
-    private StackPanel CreateAgentPerformanceDetail(AgentPerformanceStats stats, ArenaSnapshot snapshot)
+    private StackPanel CreateAgentPerformanceDetail(AgentPerformanceStats stats, ArenaViewSnapshot snapshot)
     {
         var accent = AccentForSpeaker(stats.AgentId);
         var agent = FindPerformanceAgent(snapshot, stats.AgentId);
@@ -1628,7 +1647,7 @@ public partial class MainWindow : Window
         };
     }
 
-    private static AgentState? FindPerformanceAgent(ArenaSnapshot snapshot, string agentId)
+    private static AgentState? FindPerformanceAgent(ArenaViewSnapshot snapshot, string agentId)
     {
         return snapshot.Agents.FirstOrDefault(agent => agent.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase))
             ?? (agentId.Equals("narrator", StringComparison.OrdinalIgnoreCase)
@@ -1758,7 +1777,7 @@ public partial class MainWindow : Window
         NewsItems.Children.Add(CreateCard("News", "No live snapshot data.", ResourceBrush("CardBrush"), ResourceBrush("NarratorAccentBrush")));
     }
 
-    private void UpdateTopBarStatus(ArenaSnapshot snapshot)
+    private void UpdateTopBarStatus(ArenaViewSnapshot snapshot)
     {
         TopMatchValue.Text = DisplayStatusValue(snapshot.MatchType);
         TopProviderValue.Text = snapshot.ProviderOnline ? "ONLINE" : "OFFLINE";
@@ -1781,7 +1800,7 @@ public partial class MainWindow : Window
         UpdateSettingsProviderStatus(snapshot);
     }
 
-    private static string TopRunStateSummary(ArenaSnapshot snapshot, AgentState? current)
+    private static string TopRunStateSummary(ArenaViewSnapshot snapshot, AgentState? current)
     {
         var provider = snapshot.ProviderOnline ? "provider online" : "provider offline";
         if (current is null)
@@ -1793,7 +1812,7 @@ public partial class MainWindow : Window
         return $"Ready: next {DisplayStatusValue(current.Id)} using {model}; {provider}.";
     }
 
-    private void UpdateSettingsProviderStatus(ArenaSnapshot snapshot)
+    private void UpdateSettingsProviderStatus(ArenaViewSnapshot snapshot)
     {
         var status = snapshot.ProviderOnline ? "ONLINE" : "OFFLINE";
         var detail = snapshot.ProviderOnline
@@ -1808,7 +1827,7 @@ public partial class MainWindow : Window
         UpdateProviderHealthPopup(snapshot);
     }
 
-    private static AgentState? CurrentTurnAgent(ArenaSnapshot snapshot)
+    private static AgentState? CurrentTurnAgent(ArenaViewSnapshot snapshot)
     {
         var active = snapshot.Agents.Where(agent => agent.Active).ToArray();
         return active.Length == 0
@@ -2310,7 +2329,7 @@ public partial class MainWindow : Window
             && value.Contains(search, StringComparison.OrdinalIgnoreCase);
     }
 
-    private void PopulateAgents(ArenaSnapshot snapshot)
+    private void PopulateAgents(ArenaViewSnapshot snapshot)
     {
         var agents = snapshot.Agents;
         var currentAgentId = CurrentTurnAgent(snapshot)?.Id;
@@ -2332,7 +2351,7 @@ public partial class MainWindow : Window
         AgentItems.Children.Add(CreateNarratorCard(snapshot));
     }
 
-    private void PopulateCustomMatch(ArenaSnapshot snapshot)
+    private void PopulateCustomMatch(ArenaViewSnapshot snapshot)
     {
         ScenarioPreviewItems.Children.Clear();
         CastPreviewItems.Children.Clear();
@@ -2391,7 +2410,7 @@ public partial class MainWindow : Window
         PopulateRivalryMatrixControls(snapshot);
     }
 
-    private void PopulateRivalryMatrixControls(ArenaSnapshot snapshot)
+    private void PopulateRivalryMatrixControls(ArenaViewSnapshot snapshot)
     {
         RivalryMatrixEnabledCheckBox.IsChecked = snapshot.RivalryMatrixEnabled;
         RivalryMatrixRows.Children.Clear();
@@ -2516,7 +2535,7 @@ public partial class MainWindow : Window
         return active == 0 ? "Relationship pressure enabled with neutral rules." : $"{active} relationship rule(s) active.";
     }
 
-    private void PopulateScenarioSeedInspector(ArenaSnapshot snapshot)
+    private void PopulateScenarioSeedInspector(ArenaViewSnapshot snapshot)
     {
         var scenarioSeed = DisplayStatusValue(snapshot.ScenarioGeneratorSeed);
         var scenarioStyle = DisplayStatusValue(snapshot.ScenarioGeneratorStyle);
@@ -2546,7 +2565,7 @@ public partial class MainWindow : Window
         ScenarioSeedInspector.Children.Add(CreateSetupChip("Persona style", personaStyle, ResourceBrush("MutedTextBrush")));
     }
 
-    private void PopulateGenerationHistory(ArenaSnapshot snapshot)
+    private void PopulateGenerationHistory(ArenaViewSnapshot snapshot)
     {
         if (GenerationHistoryPicker is null)
         {
@@ -2757,7 +2776,7 @@ public partial class MainWindow : Window
         return CreateCard(title, body, BlendBrush(ResourceBrush("CardBrush"), accent, 0.08), accent, panel);
     }
 
-    private Border CreateArenaReadyCard(ArenaSnapshot? snapshot)
+    private Border CreateArenaReadyCard(ArenaViewSnapshot? snapshot)
     {
         var accent = ResourceBrush("AlphaAccentBrush");
         var panel = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
@@ -2796,7 +2815,7 @@ public partial class MainWindow : Window
             panel);
     }
 
-    private bool ShouldShowProviderSetup(ArenaSnapshot snapshot, AgentState? current)
+    private bool ShouldShowProviderSetup(ArenaViewSnapshot snapshot, AgentState? current)
     {
         var currentModel = CurrentTurnModel(snapshot, current);
         return !snapshot.ProviderOnline
@@ -2806,7 +2825,7 @@ public partial class MainWindow : Window
             || snapshot.ProviderModel == "-";
     }
 
-    private Border CreateProviderQuickSetupCard(ArenaSnapshot snapshot, AgentState? current)
+    private Border CreateProviderQuickSetupCard(ArenaViewSnapshot snapshot, AgentState? current)
     {
         var accent = snapshot.ProviderOnline ? ResourceBrush("BetaAccentBrush") : ResourceBrush("DangerBorderBrush");
         var baseUrlBox = new TextBox
@@ -2913,7 +2932,7 @@ public partial class MainWindow : Window
         };
     }
 
-    private string ProviderSetupStatus(ArenaSnapshot snapshot)
+    private string ProviderSetupStatus(ArenaViewSnapshot snapshot)
     {
         if (snapshot.ProviderOnline)
         {
@@ -2948,7 +2967,7 @@ public partial class MainWindow : Window
         };
     }
 
-    private static string CurrentTurnModel(ArenaSnapshot snapshot, AgentState? current)
+    private static string CurrentTurnModel(ArenaViewSnapshot snapshot, AgentState? current)
     {
         if (!string.IsNullOrWhiteSpace(current?.Model))
         {
@@ -3791,7 +3810,7 @@ public partial class MainWindow : Window
         };
     }
 
-    private Border CreateDecisionCardPanel(ArenaSnapshot snapshot)
+    private Border CreateDecisionCardPanel(ArenaViewSnapshot snapshot)
     {
         var accent = ResourceBrush("NarratorAccentBrush");
         var hasCard = !string.IsNullOrWhiteSpace(snapshot.DecisionCard);
@@ -4484,7 +4503,7 @@ public partial class MainWindow : Window
         return new AutoModeratorAlert("Voice drift", $"{summary}. Turn on debug voice enforcement or use an operator nudge if voice style matters for this run.", "watch");
     }
 
-    private Border CreateAgentMemoryPanel(ArenaSnapshot snapshot)
+    private Border CreateAgentMemoryPanel(ArenaViewSnapshot snapshot)
     {
         var accent = ResourceBrush("GammaAccentBrush");
         var panel = new StackPanel();
@@ -5614,7 +5633,7 @@ public partial class MainWindow : Window
         }, allowDuringAutoChat: true);
     }
 
-    private Border CreateNarratorCard(ArenaSnapshot snapshot)
+    private Border CreateNarratorCard(ArenaViewSnapshot snapshot)
     {
         var accent = ResourceBrush("NarratorAccentBrush");
         var isRunning = IsAgentWorkingStatus(snapshot.NarratorStatus);
@@ -7009,7 +7028,7 @@ public partial class MainWindow : Window
         UpdateOperatorPrivateTargetSummary();
     }
 
-    private void PopulateOperatorPrivateTargetPicker(ArenaSnapshot snapshot)
+    private void PopulateOperatorPrivateTargetPicker(ArenaViewSnapshot snapshot)
     {
         if (OperatorPrivateTargetPicker is null)
         {
@@ -9737,7 +9756,7 @@ public partial class MainWindow : Window
         OpenModelProviderSettings();
     }
 
-    private void UpdateProviderHealthPopup(ArenaSnapshot? snapshot = null)
+    private void UpdateProviderHealthPopup(ArenaViewSnapshot? snapshot = null)
     {
         if (ProviderHealthStatusText is null)
         {

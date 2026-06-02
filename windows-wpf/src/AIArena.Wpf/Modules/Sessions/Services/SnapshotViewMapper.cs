@@ -1,9 +1,10 @@
 using System.Text.Json;
 using AIArena.Core.Models;
+using AIArena.Core.Providers;
 using AgentState = AIArena.Wpf.Models.AgentState;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 using CoreSnapshot = AIArena.Core.Models.ArenaSnapshot;
-using RenderSnapshot = AIArena.Wpf.Models.ArenaSnapshot;
+using RenderSnapshot = AIArena.Wpf.Models.ArenaViewSnapshot;
 using GenerationHistoryItem = AIArena.Wpf.Models.GenerationHistoryItem;
 using RivalryMatrixItem = AIArena.Wpf.Models.RivalryMatrixItem;
 using TranscriptMessage = AIArena.Wpf.Models.TranscriptMessage;
@@ -47,7 +48,7 @@ public static class SnapshotViewMapper
             snapshot.Engine.Narrator.Persona,
             snapshot.Engine.Narrator.VoiceStyle,
             Locked(snapshot, "narrator"),
-            string.IsNullOrWhiteSpace(sharedConfig.BaseUrl) ? "http://127.0.0.1:1234/v1" : sharedConfig.BaseUrl,
+            string.IsNullOrWhiteSpace(sharedConfig.BaseUrl) ? ModelProviderDefaults.BaseUrl : sharedConfig.BaseUrl,
             sharedConfig.Timeout,
             sharedConfig.Temperature,
             sharedConfig.MaxOutputTokens,
@@ -104,10 +105,10 @@ public static class SnapshotViewMapper
             "",
             "",
             false,
-            "http://127.0.0.1:1234/v1",
-            300,
-            0.8,
-            1024,
+            ModelProviderDefaults.BaseUrl,
+            ModelProviderDefaults.TimeoutSeconds,
+            ModelProviderDefaults.Temperature,
+            ModelProviderDefaults.MaxOutputTokens,
             30,
             12,
             8,

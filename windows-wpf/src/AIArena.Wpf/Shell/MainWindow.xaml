@@ -296,6 +296,18 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+        <Style x:Key="RoleModelComboBox" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+            <Setter Property="IsEditable" Value="True" />
+            <Setter Property="IsTextSearchEnabled" Value="False" />
+            <Setter Property="Background" Value="{DynamicResource InputBrush}" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="Padding" Value="8" />
+            <Setter Property="ToolTip" Value="Pick an advertised provider model, type one manually, or leave blank to use default." />
+            <EventSetter Event="SelectionChanged" Handler="ParticipantModelText_SelectionChanged" />
+            <EventSetter Event="LostKeyboardFocus" Handler="ParticipantModelText_Commit" />
+            <EventSetter Event="KeyDown" Handler="ParticipantModelText_KeyDown" />
+        </Style>
         <Style x:Key="ScrollBarButton" TargetType="RepeatButton">
             <Setter Property="Focusable" Value="False" />
             <Setter Property="IsTabStop" Value="False" />
@@ -2543,80 +2555,35 @@
                                       Grid.Row="0"
                                       Grid.Column="2"
                                       Tag="alpha"
-                                      IsEditable="True"
-                                      IsTextSearchEnabled="False"
-                                      SelectionChanged="ParticipantModelText_SelectionChanged"
-                                      LostKeyboardFocus="ParticipantModelText_Commit"
-                                      KeyDown="ParticipantModelText_KeyDown"
-                                      Background="{DynamicResource InputBrush}"
-                                      Foreground="White"
-                                      BorderBrush="{DynamicResource ControlBorderBrush}"
-                                      Padding="8"
-                                      ToolTip="Pick an advertised provider model, type one manually, or leave blank to use default." />
+                                      Style="{StaticResource RoleModelComboBox}" />
                             <TextBlock x:Name="AlphaModelStatusText" Grid.Row="0" Grid.Column="4" Text="inherits default" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" TextAlignment="Right" TextWrapping="Wrap" />
                             <TextBlock Grid.Row="2" Text="Beta" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
                             <ComboBox x:Name="BetaRoleModelText"
                                       Grid.Row="2"
                                       Grid.Column="2"
                                       Tag="beta"
-                                      IsEditable="True"
-                                      IsTextSearchEnabled="False"
-                                      SelectionChanged="ParticipantModelText_SelectionChanged"
-                                      LostKeyboardFocus="ParticipantModelText_Commit"
-                                      KeyDown="ParticipantModelText_KeyDown"
-                                      Background="{DynamicResource InputBrush}"
-                                      Foreground="White"
-                                      BorderBrush="{DynamicResource ControlBorderBrush}"
-                                      Padding="8"
-                                      ToolTip="Pick an advertised provider model, type one manually, or leave blank to use default." />
+                                      Style="{StaticResource RoleModelComboBox}" />
                             <TextBlock x:Name="BetaModelStatusText" Grid.Row="2" Grid.Column="4" Text="inherits default" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" TextAlignment="Right" TextWrapping="Wrap" />
                             <TextBlock Grid.Row="4" Text="Gamma" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
                             <ComboBox x:Name="GammaRoleModelText"
                                       Grid.Row="4"
                                       Grid.Column="2"
                                       Tag="gamma"
-                                      IsEditable="True"
-                                      IsTextSearchEnabled="False"
-                                      SelectionChanged="ParticipantModelText_SelectionChanged"
-                                      LostKeyboardFocus="ParticipantModelText_Commit"
-                                      KeyDown="ParticipantModelText_KeyDown"
-                                      Background="{DynamicResource InputBrush}"
-                                      Foreground="White"
-                                      BorderBrush="{DynamicResource ControlBorderBrush}"
-                                      Padding="8"
-                                      ToolTip="Pick an advertised provider model, type one manually, or leave blank to use default." />
+                                      Style="{StaticResource RoleModelComboBox}" />
                             <TextBlock x:Name="GammaModelStatusText" Grid.Row="4" Grid.Column="4" Text="inherits default" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" TextAlignment="Right" TextWrapping="Wrap" />
                             <TextBlock Grid.Row="6" Text="Delta" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
                             <ComboBox x:Name="DeltaRoleModelText"
                                       Grid.Row="6"
                                       Grid.Column="2"
                                       Tag="delta"
-                                      IsEditable="True"
-                                      IsTextSearchEnabled="False"
-                                      SelectionChanged="ParticipantModelText_SelectionChanged"
-                                      LostKeyboardFocus="ParticipantModelText_Commit"
-                                      KeyDown="ParticipantModelText_KeyDown"
-                                      Background="{DynamicResource InputBrush}"
-                                      Foreground="White"
-                                      BorderBrush="{DynamicResource ControlBorderBrush}"
-                                      Padding="8"
-                                      ToolTip="Pick an advertised provider model, type one manually, or leave blank to use default." />
+                                      Style="{StaticResource RoleModelComboBox}" />
                             <TextBlock x:Name="DeltaModelStatusText" Grid.Row="6" Grid.Column="4" Text="inherits default" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" TextAlignment="Right" TextWrapping="Wrap" />
                             <TextBlock Grid.Row="8" Text="Narrator" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
                             <ComboBox x:Name="NarratorRoleModelText"
                                       Grid.Row="8"
                                       Grid.Column="2"
                                       Tag="narrator"
-                                      IsEditable="True"
-                                      IsTextSearchEnabled="False"
-                                      SelectionChanged="ParticipantModelText_SelectionChanged"
-                                      LostKeyboardFocus="ParticipantModelText_Commit"
-                                      KeyDown="ParticipantModelText_KeyDown"
-                                      Background="{DynamicResource InputBrush}"
-                                      Foreground="White"
-                                      BorderBrush="{DynamicResource ControlBorderBrush}"
-                                      Padding="8"
-                                      ToolTip="Pick an advertised provider model, type one manually, or leave blank to use default." />
+                                      Style="{StaticResource RoleModelComboBox}" />
                             <TextBlock x:Name="NarratorModelStatusText" Grid.Row="8" Grid.Column="4" Text="inherits default" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" TextAlignment="Right" TextWrapping="Wrap" />
                         </Grid>
                         <TextBlock Text="Model summary" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />

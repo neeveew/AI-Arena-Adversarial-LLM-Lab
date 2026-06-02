@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
+using AIArena.Core.Services;
 
 namespace AIArena.Wpf.Services;
 
@@ -10,6 +11,7 @@ public sealed class ScenarioTemplateStore
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     public string TemplatePath { get; }
+    public string LastLoadWarning { get; private set; } = "";
 
     public ScenarioTemplateStore()
     {
@@ -17,8 +19,16 @@ public sealed class ScenarioTemplateStore
         TemplatePath = NativeDataPaths.TemplatePath(dataRoot, "scenario-templates.json");
     }
 
+    public ScenarioTemplateStore(string templatePath)
+    {
+        TemplatePath = string.IsNullOrWhiteSpace(templatePath)
+            ? NativeDataPaths.TemplatePath(NativeDataPaths.DefaultDataRoot(), "scenario-templates.json")
+            : templatePath;
+    }
+
     public IReadOnlyList<ScenarioTemplate> Load()
     {
+        LastLoadWarning = "";
         if (!File.Exists(TemplatePath))
         {
             return [];
@@ -29,8 +39,9 @@ public sealed class ScenarioTemplateStore
             var json = File.ReadAllText(TemplatePath);
             return JsonSerializer.Deserialize<List<ScenarioTemplate>>(json) ?? [];
         }
-        catch
+        catch (Exception ex)
         {
+            LastLoadWarning = JsonFileRecovery.BackupCorruptFile(TemplatePath, "Scenario template", ex);
             return [];
         }
     }
@@ -89,6 +100,26 @@ public sealed class ScenarioTemplateStore
         snapshot.MatchLocks["topic"] = template.TopicLocked;
         snapshot.MatchLocks["global"] = template.GlobalLocked;
 
+        var templateParticipantIds = template.Agents
+            .Where(agent => AgentRosterService.IsParticipantId(agent.Id))
+            .Select(agent => agent.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        for (var index = snapshot.Engine.Agents.Count - 1; index >= 0; index--)
+        {
+            var agent = snapshot.Engine.Agents[index];
+            if (!AgentRosterService.IsParticipantId(agent.Id) || templateParticipantIds.Contains(agent.Id))
+            {
+                continue;
+            }
+
+            snapshot.Engine.Agents.RemoveAt(index);
+            snapshot.Configs.Remove(agent.Id);
+            snapshot.MatchLocks.Remove(agent.Id);
+            snapshot.Engine.RivalryMatrix.Links.RemoveAll(link =>
+                link.Source.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)
+                || link.Target.Equals(agent.Id, StringComparison.OrdinalIgnoreCase));
+        }
+
         foreach (var agentTemplate in template.Agents)
         {
             if (agentTemplate.Id.Equals("narrator", StringComparison.OrdinalIgnoreCase))
@@ -114,7 +145,11 @@ public sealed class ScenarioTemplateStore
             snapshot.MatchLocks[agentTemplate.Id] = agentTemplate.Locked;
         }
 
-        foreach (var roleKey in new[] { "alpha", "beta", "gamma", "delta", "narrator" })
+        snapshot.Engine.Agents.Sort((left, right) => AgentRosterService.ParticipantOrder(left.Id).CompareTo(AgentRosterService.ParticipantOrder(right.Id)));
+        var activeParticipants = snapshot.Engine.Agents.Count(agent => agent.Active && AgentRosterService.IsParticipantId(agent.Id));
+        snapshot.Engine.TurnIndex = activeParticipants > 0 ? snapshot.Engine.TurnIndex % activeParticipants : 0;
+
+        foreach (var roleKey in AgentRosterService.ParticipantIds.Append("narrator"))
         {
             if (!template.ModelConfigs.ContainsKey(roleKey))
             {
@@ -193,6 +228,7 @@ public sealed class ScenarioTemplateStore
 
     private void SaveAll(IReadOnlyList<ScenarioTemplate> templates)
     {
+        LastLoadWarning = "";
         var ordered = templates
             .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();

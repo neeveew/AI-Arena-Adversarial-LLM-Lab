@@ -36,7 +36,7 @@ public sealed class TurnRunnerService
             return new OneTurnPlan(false, "", "", null, null, "No active agents.");
         }
 
-        var config = ResolveProviderConfig(snapshot, agent.Id, out var fallbackConfig);
+        var config = ModelProviderRouting.Resolve(snapshot, agent.Id, out var fallbackConfig);
         if (config is null)
         {
             return new OneTurnPlan(false, agent.Id, agent.Name, null, null, $"No provider config for {agent.Name}.");
@@ -53,7 +53,7 @@ public sealed class TurnRunnerService
             return new OneTurnPlan(false, agentId, agentId, null, null, $"No agent found for {agentId}.");
         }
 
-        var config = ResolveProviderConfig(snapshot, agent.Id, out var fallbackConfig);
+        var config = ModelProviderRouting.Resolve(snapshot, agent.Id, out var fallbackConfig);
         if (config is null)
         {
             return new OneTurnPlan(false, agent.Id, agent.Name, null, null, $"No provider config for {agent.Name}.");
@@ -607,23 +607,6 @@ public sealed class TurnRunnerService
         return await _modelClient.CompleteChatAsync(plan.FallbackConfig, messages, cancellationToken);
     }
 
-    private static ModelProviderConfig? ResolveProviderConfig(ArenaSnapshot snapshot, string agentId, out ModelProviderConfig? fallbackConfig)
-    {
-        fallbackConfig = snapshot.Configs.TryGetValue("shared", out var shared) ? shared : null;
-        if (snapshot.Configs.TryGetValue(agentId, out var specific) && !string.IsNullOrWhiteSpace(specific.Model))
-        {
-            if (fallbackConfig is not null && string.Equals(specific.Model, fallbackConfig.Model, StringComparison.OrdinalIgnoreCase))
-            {
-                fallbackConfig = null;
-            }
-            return specific;
-        }
-
-        fallbackConfig = null;
-        return snapshot.Configs.TryGetValue("shared", out shared)
-            ? shared
-            : snapshot.Configs.Values.FirstOrDefault();
-    }
 }
 
 public sealed record OneTurnPlan(bool Ok, string AgentId, string AgentName, ModelProviderConfig? Config, ModelProviderConfig? FallbackConfig, string Error);

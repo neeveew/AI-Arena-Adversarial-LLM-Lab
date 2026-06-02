@@ -15,6 +15,7 @@ public sealed class WpfSettingsStore
     };
 
     public string SettingsPath { get; }
+    public string LastLoadWarning { get; private set; } = "";
 
     public WpfSettingsStore()
     {
@@ -31,6 +32,7 @@ public sealed class WpfSettingsStore
 
     public WpfSettings Load()
     {
+        LastLoadWarning = "";
         if (!File.Exists(SettingsPath))
         {
             return new WpfSettings();
@@ -41,14 +43,16 @@ public sealed class WpfSettingsStore
             var json = File.ReadAllText(SettingsPath);
             return Normalize(JsonSerializer.Deserialize<WpfSettings>(json) ?? new WpfSettings());
         }
-        catch
+        catch (Exception ex)
         {
+            LastLoadWarning = JsonFileRecovery.BackupCorruptFile(SettingsPath, "Settings", ex);
             return new WpfSettings();
         }
     }
 
     public void Save(WpfSettings settings)
     {
+        LastLoadWarning = "";
         Normalize(settings);
         Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
         var json = JsonSerializer.Serialize(settings, JsonOptions);

@@ -1,6 +1,8 @@
 using System.Collections;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 
 namespace AIArena.Wpf;
@@ -26,6 +28,24 @@ internal static class DialogChrome
         ApplyImplicitStyle<TextBox>(root, typeof(TextBox));
         ApplyImplicitStyle<ComboBox>(root, typeof(ComboBox));
         ApplyImplicitStyle<CheckBox>(root, typeof(CheckBox));
+    }
+
+    public static void ApplyButtonStyle(Button button, Brush background, Brush border, Brush foreground)
+    {
+        button.Background = background;
+        button.BorderBrush = border;
+        button.Foreground = foreground;
+        button.FontWeight = FontWeights.SemiBold;
+        button.Padding = new Thickness(12, 8, 12, 8);
+        button.MinHeight = 38;
+    }
+
+    public static void DragMoveIfPossible(Window window, MouseButtonEventArgs e, bool ignoreTextInputs = false)
+    {
+        if (e.ButtonState == MouseButtonState.Pressed && !StartedOnInteractiveElement(e.OriginalSource as DependencyObject, ignoreTextInputs))
+        {
+            window.DragMove();
+        }
     }
 
     private static void CopyResources(ResourceDictionary source, ResourceDictionary target)
@@ -87,5 +107,20 @@ internal static class DialogChrome
                 yield return descendant;
             }
         }
+    }
+
+    private static bool StartedOnInteractiveElement(DependencyObject? source, bool includeTextInputs)
+    {
+        while (source is not null)
+        {
+            if (source is ButtonBase || includeTextInputs && source is TextBoxBase)
+            {
+                return true;
+            }
+
+            source = VisualTreeHelper.GetParent(source);
+        }
+
+        return false;
     }
 }

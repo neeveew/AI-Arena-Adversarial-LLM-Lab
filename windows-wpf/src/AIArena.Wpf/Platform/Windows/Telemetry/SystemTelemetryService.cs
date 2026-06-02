@@ -1,8 +1,5 @@
-using System.Runtime.InteropServices;
-using System.Diagnostics;
-using System.Globalization;
-using System.IO;
 using System.Management;
+using System.Runtime.InteropServices;
 
 namespace AIArena.Wpf.Services;
 
@@ -17,7 +14,7 @@ public sealed class SystemTelemetryService
     public SystemTelemetrySample Sample()
     {
         var cpu = SampleCpuPercent();
-        var memory = SampleMemory();
+        var memory = WindowsHardwareProbeService.SampleMemory();
         var gpu = SampleGpu();
         return new SystemTelemetrySample(
             cpu,
@@ -64,21 +61,6 @@ public sealed class SystemTelemetryService
         return Math.Clamp((1d - (idleDelta / (double)total)) * 100d, 0, 100);
     }
 
-    private static MemorySnapshot SampleMemory()
-    {
-        var status = new MemoryStatusEx();
-        status.dwLength = (uint)Marshal.SizeOf<MemoryStatusEx>();
-        if (!GlobalMemoryStatusEx(ref status))
-        {
-            return new MemorySnapshot(null, null, null);
-        }
-
-        var totalGb = status.ullTotalPhys / 1024d / 1024d / 1024d;
-        var availableGb = status.ullAvailPhys / 1024d / 1024d / 1024d;
-        var usedGb = Math.Max(0, totalGb - availableGb);
-        return new MemorySnapshot(usedGb, totalGb <= 0 ? null : (usedGb / totalGb) * 100d, totalGb);
-    }
-
     private GpuSnapshot SampleGpu()
     {
         return SampleNvidiaSmiGpu() ?? SampleWindowsGpuCounters();
@@ -86,88 +68,17 @@ public sealed class SystemTelemetryService
 
     private static GpuSnapshot? SampleNvidiaSmiGpu()
     {
-        try
-        {
-            using var process = new Process();
-            process.StartInfo = new ProcessStartInfo
-            {
-                FileName = ResolveNvidiaSmiPath(),
-                Arguments = "--query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits",
-                CreateNoWindow = true,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
-                UseShellExecute = false
-            };
-
-            process.Start();
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(3000))
-            {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-                catch
-                {
-                    // Best effort only; telemetry should never disturb the UI.
-                }
-
-                return null;
-            }
-
-            _ = errorTask.GetAwaiter().GetResult();
-            if (process.ExitCode != 0)
-            {
-                return null;
-            }
-
-            var lines = outputTask.GetAwaiter().GetResult()
-                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
-            if (lines.Length == 0)
-            {
-                return null;
-            }
-
-            var names = new List<string>();
-            double usedMb = 0;
-            double totalMb = 0;
-            double utilization = 0;
-            foreach (var line in lines)
-            {
-                var parts = line.Split(',').Select(part => part.Trim()).ToArray();
-                if (parts.Length < 4)
-                {
-                    continue;
-                }
-
-                names.Add(parts[0]);
-                usedMb += ParseDouble(parts[1]) ?? 0;
-                totalMb += ParseDouble(parts[2]) ?? 0;
-                utilization += ParseDouble(parts[3]) ?? 0;
-            }
-
-            return names.Count == 0
-                ? null
-                : new GpuSnapshot(
-                    Math.Clamp(utilization, 0, 100),
-                    usedMb / 1024d,
-                    totalMb > 0 ? totalMb / 1024d : null,
-                    FormatGpuName(names));
-        }
-        catch
+        var gpus = WindowsHardwareProbeService.DetectNvidiaGpus();
+        if (gpus.Count == 0)
         {
             return null;
         }
-    }
 
-    private static string ResolveNvidiaSmiPath()
-    {
-        var systemPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-            "System32",
-            "nvidia-smi.exe");
-        return File.Exists(systemPath) ? systemPath : "nvidia-smi";
+        return new GpuSnapshot(
+            Math.Clamp(gpus.Sum(gpu => gpu.UtilizationPercent ?? 0), 0, 100),
+            gpus.Sum(gpu => gpu.VramUsedGb ?? 0),
+            gpus.Any(gpu => gpu.VramTotalGb is > 0) ? gpus.Sum(gpu => gpu.VramTotalGb ?? 0) : null,
+            FormatGpuName(gpus.Select(gpu => gpu.Name).ToArray()));
     }
 
     private GpuSnapshot SampleWindowsGpuCounters()
@@ -188,7 +99,7 @@ public sealed class SystemTelemetryService
                         continue;
                     }
 
-                    utilization += ToDouble(engine["UtilizationPercentage"]) ?? 0;
+                    utilization += WindowsHardwareProbeService.ToDouble(engine["UtilizationPercentage"]) ?? 0;
                 }
             }
 
@@ -199,7 +110,7 @@ public sealed class SystemTelemetryService
             {
                 foreach (ManagementBaseObject adapterMemory in memorySearcher.Get())
                 {
-                    dedicatedUsageBytes += ToDouble(adapterMemory["DedicatedUsage"]) ?? 0;
+                    dedicatedUsageBytes += WindowsHardwareProbeService.ToDouble(adapterMemory["DedicatedUsage"]) ?? 0;
                 }
             }
 
@@ -224,25 +135,13 @@ public sealed class SystemTelemetryService
 
         try
         {
-            var names = new List<string>();
-            double totalBytes = 0;
-            using var searcher = new ManagementObjectSearcher(
-                "root\\CIMV2",
-                "SELECT Name, AdapterRAM FROM Win32_VideoController");
-            foreach (ManagementBaseObject adapter in searcher.Get())
-            {
-                var name = adapter["Name"]?.ToString();
-                if (!string.IsNullOrWhiteSpace(name))
-                {
-                    names.Add(name);
-                }
-
-                totalBytes += ToDouble(adapter["AdapterRAM"]) ?? 0;
-            }
+            var gpus = WindowsHardwareProbeService.DetectWindowsGpus();
+            var names = gpus.Select(gpu => gpu.Name).Where(name => !string.IsNullOrWhiteSpace(name)).ToArray();
+            var totalGb = gpus.Sum(gpu => gpu.VramTotalGb ?? 0);
 
             cachedGpuAdapters = new GpuAdapterSnapshot(
                 FormatGpuName(names),
-                totalBytes > 0 ? totalBytes / 1024d / 1024d / 1024d : null);
+                totalGb > 0 ? totalGb : null);
             cachedGpuAdaptersAt = DateTime.UtcNow;
             return cachedGpuAdapters;
         }
@@ -269,20 +168,6 @@ public sealed class SystemTelemetryService
         };
     }
 
-    private static double? ToDouble(object? value)
-    {
-        return value is null
-            ? null
-            : ParseDouble(Convert.ToString(value, CultureInfo.InvariantCulture));
-    }
-
-    private static double? ParseDouble(string? value)
-    {
-        return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
-            ? number
-            : null;
-    }
-
     private static ulong ToUInt64(FileTime fileTime)
     {
         return ((ulong)fileTime.dwHighDateTime << 32) | fileTime.dwLowDateTime;
@@ -291,9 +176,6 @@ public sealed class SystemTelemetryService
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetSystemTimes(out FileTime idleTime, out FileTime kernelTime, out FileTime userTime);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GlobalMemoryStatusEx(ref MemoryStatusEx buffer);
-
     [StructLayout(LayoutKind.Sequential)]
     private struct FileTime
     {
@@ -301,21 +183,6 @@ public sealed class SystemTelemetryService
         public uint dwHighDateTime;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MemoryStatusEx
-    {
-        public uint dwLength;
-        public uint dwMemoryLoad;
-        public ulong ullTotalPhys;
-        public ulong ullAvailPhys;
-        public ulong ullTotalPageFile;
-        public ulong ullAvailPageFile;
-        public ulong ullTotalVirtual;
-        public ulong ullAvailVirtual;
-        public ulong ullAvailExtendedVirtual;
-    }
-
-    private sealed record MemorySnapshot(double? UsedGb, double? PercentUsed, double? TotalGb);
     private sealed record GpuSnapshot(double? Percent, double? VramUsedGb, double? VramTotalGb, string? Name);
     private sealed record GpuAdapterSnapshot(string? Name, double? TotalVramGb);
 }

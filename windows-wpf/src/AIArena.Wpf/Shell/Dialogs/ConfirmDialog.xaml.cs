@@ -1,5 +1,4 @@
 using System.Windows;
-using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using AIArena.Wpf.Services;
@@ -63,22 +62,12 @@ public partial class ConfirmDialog : Window
         ToneBadge.Background = badge;
         ToneText.Text = tone == ConfirmDialogTone.Danger ? "!" : "?";
 
-        ApplyButton(CloseButton, input, border, muted);
+        DialogChrome.ApplyButtonStyle(CloseButton, input, border, muted);
         CloseButton.FontSize = 13;
         CloseButton.Padding = new Thickness(0);
         CloseButton.MinHeight = 28;
-        ApplyButton(CancelButton, input, border, text);
-        ApplyButton(ConfirmButton, primary, primaryBorder, Brushes.White);
-    }
-
-    private static void ApplyButton(System.Windows.Controls.Button button, Brush background, Brush border, Brush foreground)
-    {
-        button.Background = background;
-        button.BorderBrush = border;
-        button.Foreground = foreground;
-        button.FontWeight = FontWeights.SemiBold;
-        button.Padding = new Thickness(12, 8, 12, 8);
-        button.MinHeight = 38;
+        DialogChrome.ApplyButtonStyle(CancelButton, input, border, text);
+        DialogChrome.ApplyButtonStyle(ConfirmButton, primary, primaryBorder, Brushes.White);
     }
 
     private void ConfirmButton_Click(object sender, RoutedEventArgs e)
@@ -95,25 +84,7 @@ public partial class ConfirmDialog : Window
 
     private void DialogShell_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ButtonState == MouseButtonState.Pressed && !StartedOnButton(e.OriginalSource as DependencyObject))
-        {
-            DragMove();
-        }
-    }
-
-    private static bool StartedOnButton(DependencyObject? source)
-    {
-        while (source is not null)
-        {
-            if (source is ButtonBase)
-            {
-                return true;
-            }
-
-            source = VisualTreeHelper.GetParent(source);
-        }
-
-        return false;
+        DialogChrome.DragMoveIfPossible(this, e);
     }
 
     private static SolidColorBrush Brush(Color color)

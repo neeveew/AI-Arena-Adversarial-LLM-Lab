@@ -88,7 +88,7 @@ public sealed class MatchGenerationService
             return MatchGenerationResult.Failed($"No snapshot found for session {sessionId}.");
         }
 
-        var config = ResolveProviderConfig(snapshot, "narrator", out var fallbackConfig);
+        var config = ModelProviderRouting.Resolve(snapshot, "narrator", out var fallbackConfig);
         if (config is null)
         {
             return MatchGenerationResult.Failed("No provider config for narrator.");
@@ -480,24 +480,6 @@ public sealed class MatchGenerationService
         var start = text.IndexOf('{');
         var end = text.LastIndexOf('}');
         return start >= 0 && end > start ? text[start..(end + 1)] : text;
-    }
-
-    private static ModelProviderConfig? ResolveProviderConfig(ArenaSnapshot snapshot, string agentId, out ModelProviderConfig? fallbackConfig)
-    {
-        fallbackConfig = snapshot.Configs.TryGetValue("shared", out var shared) ? shared : null;
-        if (snapshot.Configs.TryGetValue(agentId, out var specific) && !string.IsNullOrWhiteSpace(specific.Model))
-        {
-            if (fallbackConfig is not null && string.Equals(specific.Model, fallbackConfig.Model, StringComparison.OrdinalIgnoreCase))
-            {
-                fallbackConfig = null;
-            }
-            return specific;
-        }
-
-        fallbackConfig = null;
-        return snapshot.Configs.TryGetValue("shared", out shared)
-            ? shared
-            : snapshot.Configs.Values.FirstOrDefault();
     }
 
     private static string NormalizeStyle(string value)

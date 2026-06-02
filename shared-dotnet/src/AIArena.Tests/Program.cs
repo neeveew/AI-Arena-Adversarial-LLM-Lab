@@ -9,6 +9,7 @@ var tests = new (string Name, Action Test)[]
 {
     ("loads legacy snapshot shape", LoadLegacySnapshotShape),
     ("normalizes provider base urls", NormalizeProviderBaseUrls),
+    ("resolves provider routing fallbacks", ResolveProviderRoutingFallbacks),
     ("counts OpenAI-compatible model list", CountOpenAiCompatibleModels),
     ("parses OpenAI-compatible model names", ParseOpenAiCompatibleModelNames),
     ("extracts assistant completion content", ExtractAssistantCompletionContent),
@@ -25,6 +26,7 @@ var tests = new (string Name, Action Test)[]
     ("caches internet tool results briefly", CacheInternetToolResultsBriefly),
     ("loads snapshot from session store", LoadSnapshotFromSessionStore),
     ("saves snapshot through session store", SaveSnapshotThroughSessionStore),
+    ("sanitizes session ids at persistence boundaries", SanitizesSessionIdsAtPersistenceBoundaries),
     ("creates default session on empty data root", CreateDefaultSessionOnEmptyDataRoot),
     ("creates transcript message with reasoning metadata", CreateTranscriptMessageWithReasoningMetadata),
     ("reads existing reasoning metadata from snapshot", ReadExistingReasoningMetadataFromSnapshot),
@@ -110,6 +112,26 @@ static void NormalizeProviderBaseUrls()
 {
     Require(ModelProviderHealthService.NormalizeBaseUrl("http://127.0.0.1:1234") == "http://127.0.0.1:1234/v1", "LM Studio URL did not gain /v1");
     Require(ModelProviderHealthService.NormalizeBaseUrl("http://127.0.0.1:11434/v1") == "http://127.0.0.1:11434/v1", "Ollama URL should keep /v1");
+}
+
+static void ResolveProviderRoutingFallbacks()
+{
+    var snapshot = new ArenaSnapshot();
+    snapshot.Configs["shared"] = new ModelProviderConfig { Model = "default-model" };
+    snapshot.Configs["alpha"] = new ModelProviderConfig { Model = "specialist-model" };
+    snapshot.Configs["beta"] = new ModelProviderConfig { Model = "default-model" };
+
+    var alpha = ModelProviderRouting.Resolve(snapshot, "alpha", out var alphaFallback);
+    Require(alpha?.Model == "specialist-model", "specific agent config was not selected");
+    Require(alphaFallback?.Model == "default-model", "shared fallback was not preserved for distinct model");
+
+    var beta = ModelProviderRouting.Resolve(snapshot, "beta", out var betaFallback);
+    Require(beta?.Model == "default-model", "specific same-model agent config was not selected");
+    Require(betaFallback is null, "same-model fallback should be suppressed");
+
+    var gamma = ModelProviderRouting.Resolve(snapshot, "gamma", out var gammaFallback);
+    Require(gamma?.Model == "default-model", "missing agent config should use shared config");
+    Require(gammaFallback is null, "shared config should not fallback to itself");
 }
 
 static void CountOpenAiCompatibleModels()
@@ -416,6 +438,32 @@ static void SaveSnapshotThroughSessionStore()
     var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult();
     Require(loaded?.Engine.Messages.Count == 1, "saved snapshot did not reload");
     Directory.Delete(root, recursive: true);
+}
+
+static void SanitizesSessionIdsAtPersistenceBoundaries()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    try
+    {
+        var snapshot = SessionStore.CreateDefaultSnapshot();
+        store.SaveSnapshotAsync(snapshot, @"..\escape").GetAwaiter().GetResult();
+        log.AppendAsync(@"..\escape", "session_id_safety_test", new { ok = true }).GetAwaiter().GetResult();
+
+        var safeSession = SessionStore.SafeSessionId(@"..\escape");
+        Require(safeSession == "escape", "session id was not normalized as expected");
+        Require(File.Exists(Path.Combine(root, "sessions", safeSession, "snapshot.json")), "safe snapshot path missing");
+        Require(File.Exists(Path.Combine(root, "logs", "sessions", safeSession, "events.jsonl")), "safe event path missing");
+        Require(!Directory.Exists(Path.Combine(root, "escape")), "raw traversal session path was created");
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }
 
 static void CreateDefaultSessionOnEmptyDataRoot()

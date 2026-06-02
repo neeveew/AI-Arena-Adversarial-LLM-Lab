@@ -22,8 +22,7 @@ public static class NativeDataPaths
 
     public static string SessionSnapshotPath(string dataRoot, string sessionId)
     {
-        var safeSession = string.IsNullOrWhiteSpace(sessionId) ? "default" : sessionId;
-        return Path.Combine(SessionsRoot(dataRoot), safeSession, "snapshot.json");
+        return Path.Combine(SessionsRoot(dataRoot), SafeSessionId(sessionId), "snapshot.json");
     }
 
     public static string ConfigRoot(string dataRoot) => Path.Combine(dataRoot, "configs");
@@ -46,14 +45,34 @@ public static class NativeDataPaths
 
     public static string CheckpointDirectory(string dataRoot, string sessionId)
     {
-        var safeSession = string.IsNullOrWhiteSpace(sessionId) ? "default" : sessionId;
-        return Path.Combine(CheckpointsRoot(dataRoot), safeSession);
+        return Path.Combine(CheckpointsRoot(dataRoot), SafeSessionId(sessionId));
     }
 
     public static string EventPath(string dataRoot, string sessionId)
     {
-        var safeSession = string.IsNullOrWhiteSpace(sessionId) ? "default" : sessionId;
-        return Path.Combine(LogsRoot(dataRoot), "sessions", safeSession, "events.jsonl");
+        return Path.Combine(LogsRoot(dataRoot), "sessions", SafeSessionId(sessionId), "events.jsonl");
+    }
+
+    public static string SafeSessionId(string? sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return "default";
+        }
+
+        var invalid = Path.GetInvalidFileNameChars()
+            .Append(Path.DirectorySeparatorChar)
+            .Append(Path.AltDirectorySeparatorChar)
+            .ToHashSet();
+        var cleaned = new string(sessionId
+            .Trim()
+            .Select(ch => invalid.Contains(ch) || char.IsControl(ch) || char.IsWhiteSpace(ch) ? '-' : ch)
+            .ToArray())
+            .Trim('-', '.', ' ');
+
+        return string.IsNullOrWhiteSpace(cleaned) || cleaned.All(ch => ch == '.')
+            ? "default"
+            : cleaned;
     }
 
     public static void EnsureDataLayout(string dataRoot, bool migrateLegacy = true)

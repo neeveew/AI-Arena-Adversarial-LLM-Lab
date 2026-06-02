@@ -101,7 +101,7 @@ public class ModelProviderClient : IModelProviderClient
 
     public static string NormalizeBaseUrl(string value)
     {
-        var trimmed = string.IsNullOrWhiteSpace(value) ? "http://127.0.0.1:1234/v1" : value.Trim().TrimEnd('/');
+        var trimmed = string.IsNullOrWhiteSpace(value) ? ModelProviderDefaults.BaseUrl : value.Trim().TrimEnd('/');
         return trimmed.EndsWith("/v1", StringComparison.OrdinalIgnoreCase) ? trimmed : $"{trimmed}/v1";
     }
 

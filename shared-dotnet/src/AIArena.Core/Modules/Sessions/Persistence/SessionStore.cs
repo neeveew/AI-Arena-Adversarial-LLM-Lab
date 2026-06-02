@@ -354,15 +354,10 @@ public sealed class SessionStore
 
     public string CheckpointDirectory(string sessionId = "default")
     {
-        var safeSession = string.IsNullOrWhiteSpace(sessionId) ? "default" : SafeSessionId(sessionId);
-        return NativeDataPaths.CheckpointDirectory(DataRoot, safeSession);
+        return NativeDataPaths.CheckpointDirectory(DataRoot, sessionId);
     }
 
-    public static string SafeSessionId(string sessionId)
-    {
-        var cleaned = string.Join("-", sessionId.Trim().Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries));
-        return cleaned.Replace(' ', '-');
-    }
+    public static string SafeSessionId(string sessionId) => NativeDataPaths.SafeSessionId(sessionId);
 
     private string? SafeCheckpointPath(string sessionId, string checkpointId)
     {

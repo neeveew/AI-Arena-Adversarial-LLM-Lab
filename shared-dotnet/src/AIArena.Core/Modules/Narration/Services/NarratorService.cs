@@ -46,7 +46,7 @@ public sealed class NarratorService
             return DecisionCardResult.Failed($"No snapshot found for session {sessionId}.");
         }
 
-        var config = ResolveProviderConfig(snapshot, "narrator", out var fallbackConfig);
+        var config = ModelProviderRouting.Resolve(snapshot, "narrator", out var fallbackConfig);
         if (config is null)
         {
             return DecisionCardResult.Failed("No provider config for narrator.");
@@ -92,7 +92,7 @@ public sealed class NarratorService
             return NarratorResult.Failed($"No snapshot found for session {sessionId}.");
         }
 
-        var config = ResolveProviderConfig(snapshot, "narrator", out var fallbackConfig);
+        var config = ModelProviderRouting.Resolve(snapshot, "narrator", out var fallbackConfig);
         if (config is null)
         {
             return NarratorResult.Failed("No provider config for narrator.");
@@ -223,23 +223,6 @@ public sealed class NarratorService
         ];
     }
 
-    private static ModelProviderConfig? ResolveProviderConfig(ArenaSnapshot snapshot, string agentId, out ModelProviderConfig? fallbackConfig)
-    {
-        fallbackConfig = snapshot.Configs.TryGetValue("shared", out var shared) ? shared : null;
-        if (snapshot.Configs.TryGetValue(agentId, out var specific) && !string.IsNullOrWhiteSpace(specific.Model))
-        {
-            if (fallbackConfig is not null && string.Equals(specific.Model, fallbackConfig.Model, StringComparison.OrdinalIgnoreCase))
-            {
-                fallbackConfig = null;
-            }
-            return specific;
-        }
-
-        fallbackConfig = null;
-        return snapshot.Configs.TryGetValue("shared", out shared)
-            ? shared
-            : snapshot.Configs.Values.FirstOrDefault();
-    }
 }
 
 public sealed record NarratorResult(bool Ok, DialogueMessage? Message, string Error)

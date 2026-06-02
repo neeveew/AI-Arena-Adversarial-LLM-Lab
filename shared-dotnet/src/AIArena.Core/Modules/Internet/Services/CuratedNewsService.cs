@@ -48,7 +48,7 @@ public sealed partial class CuratedNewsService
             return CuratedNewsResult.Failed("Internet is off.");
         }
 
-        var config = ResolveProviderConfig(snapshot, "narrator", out var fallbackConfig);
+        var config = ModelProviderRouting.Resolve(snapshot, "narrator", out var fallbackConfig);
         if (config is null)
         {
             return CuratedNewsResult.Failed("No provider config for narrator.");
@@ -331,24 +331,6 @@ public sealed partial class CuratedNewsService
             },
             Metadata = metadata
         };
-    }
-
-    private static ModelProviderConfig? ResolveProviderConfig(ArenaSnapshot snapshot, string agentId, out ModelProviderConfig? fallbackConfig)
-    {
-        fallbackConfig = snapshot.Configs.TryGetValue("shared", out var shared) ? shared : null;
-        if (snapshot.Configs.TryGetValue(agentId, out var specific) && !string.IsNullOrWhiteSpace(specific.Model))
-        {
-            if (fallbackConfig is not null && string.Equals(specific.Model, fallbackConfig.Model, StringComparison.OrdinalIgnoreCase))
-            {
-                fallbackConfig = null;
-            }
-            return specific;
-        }
-
-        fallbackConfig = null;
-        return snapshot.Configs.TryGetValue("shared", out shared)
-            ? shared
-            : snapshot.Configs.Values.FirstOrDefault();
     }
 
     [GeneratedRegex("[\\p{L}\\p{N}][\\p{L}\\p{N}\\-']*")]

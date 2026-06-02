@@ -1,3 +1,4 @@
+using AIArena.Core.Models;
 using AIArena.Wpf.Services;
 
 var tests = new (string Name, Action Test)[]
@@ -5,6 +6,9 @@ var tests = new (string Name, Action Test)[]
     ("saves and reloads visual generation settings", SaveReloadVisualGenerationSettings),
     ("normalizes legacy theme and blank settings", NormalizeLegacyThemeAndBlankSettings),
     ("overwrites read-only settings file", OverwriteReadOnlySettingsFile),
+    ("backs up corrupt settings file", BackupCorruptSettingsFile),
+    ("backs up corrupt scenario template file", BackupCorruptScenarioTemplateFile),
+    ("scenario template restores dynamic roster", ScenarioTemplateRestoresDynamicRoster),
     ("auto configure keeps low VRAM to one model", AutoConfigureLowVramSingleModel),
     ("auto configure spreads high VRAM model variety", AutoConfigureHighVramVariety),
     ("auto configure prefers useful multi GPU fit", AutoConfigurePrefersUsefulMultiGpuFit)
@@ -121,6 +125,108 @@ static void OverwriteReadOnlySettingsFile()
         Require(loaded.RandomSeedPreset == "evidence_trial", "read-only overwrite did not persist preset");
         Require(loaded.RandomSeedIntensity == "sharp", "read-only overwrite did not persist intensity");
     });
+}
+
+static void BackupCorruptSettingsFile()
+{
+    WithTempSettingsStore(store =>
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(store.SettingsPath)!);
+        File.WriteAllText(store.SettingsPath, "{ not valid json");
+
+        var loaded = store.Load();
+        var backupPattern = $"{Path.GetFileNameWithoutExtension(store.SettingsPath)}.corrupt.*{Path.GetExtension(store.SettingsPath)}";
+        var backups = Directory.GetFiles(Path.GetDirectoryName(store.SettingsPath)!, backupPattern);
+
+        Require(loaded.ThemeId == "dark-blue", "corrupt settings should fall back to defaults");
+        Require(!File.Exists(store.SettingsPath), "corrupt settings file should be moved aside");
+        Require(backups.Length == 1, "corrupt settings backup was not created");
+        Require(store.LastLoadWarning.Contains("corrupt", StringComparison.OrdinalIgnoreCase), "settings warning was not recorded");
+    });
+}
+
+static void BackupCorruptScenarioTemplateFile()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-wpf-tests", Guid.NewGuid().ToString("N"));
+    var templatePath = Path.Combine(root, "templates", "scenario-templates.json");
+    var store = new ScenarioTemplateStore(templatePath);
+    try
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(templatePath)!);
+        File.WriteAllText(templatePath, "{ not valid json");
+
+        var loaded = store.Load();
+        var backups = Directory.GetFiles(Path.GetDirectoryName(templatePath)!, "scenario-templates.corrupt.*.json");
+
+        Require(loaded.Count == 0, "corrupt templates should fall back to empty list");
+        Require(!File.Exists(templatePath), "corrupt template file should be moved aside");
+        Require(backups.Length == 1, "corrupt template backup was not created");
+        Require(store.LastLoadWarning.Contains("corrupt", StringComparison.OrdinalIgnoreCase), "template warning was not recorded");
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+}
+
+static void ScenarioTemplateRestoresDynamicRoster()
+{
+    var snapshot = new ArenaSnapshot
+    {
+        MatchType = "technical"
+    };
+    snapshot.Engine.Agents.AddRange(
+    [
+        new DialogueAgent { Id = "alpha", Name = "Alpha", Persona = "old alpha", Active = true },
+        new DialogueAgent { Id = "beta", Name = "Beta", Persona = "old beta", Active = true },
+        new DialogueAgent { Id = "gamma", Name = "Gamma", Persona = "old gamma", Active = true },
+        new DialogueAgent { Id = "epsilon", Name = "Epsilon", Persona = "old epsilon", Active = true },
+        new DialogueAgent { Id = "zeta", Name = "Zeta", Persona = "old zeta", Active = true }
+    ]);
+    snapshot.Configs["shared"] = new ModelProviderConfig { Model = "shared-model" };
+    snapshot.Configs["alpha"] = new ModelProviderConfig { Model = "old-alpha-model" };
+    snapshot.Configs["beta"] = new ModelProviderConfig { Model = "old-beta-model" };
+    snapshot.Configs["zeta"] = new ModelProviderConfig { Model = "old-zeta-model" };
+    snapshot.Engine.TurnIndex = 4;
+
+    var template = new ScenarioTemplate(
+        "template-id",
+        "Dynamic template",
+        DateTimeOffset.Now,
+        "research",
+        "saved topic",
+        "saved global",
+        TopicLocked: true,
+        GlobalLocked: false,
+        Agents:
+        [
+            new ScenarioTemplateAgent("alpha", "Alpha saved", "saved alpha persona", true, false, "scientific", "evidence"),
+            new ScenarioTemplateAgent("epsilon", "Epsilon saved", "saved epsilon persona", true, true, "idioms", "chaos"),
+            new ScenarioTemplateAgent("narrator", "Narrator", "saved narrator persona", true, false, "skeptical")
+        ],
+        ModelConfigs: new Dictionary<string, ScenarioTemplateModelConfig>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["shared"] = new("http://127.0.0.1:1234/v1", "shared-model", 300, 0.8, 1024),
+            ["alpha"] = new("http://127.0.0.1:1234/v1", "saved-alpha-model", 300, 0.8, 1024),
+            ["epsilon"] = new("http://127.0.0.1:1234/v1", "saved-epsilon-model", 300, 0.8, 1024),
+            ["narrator"] = new("http://127.0.0.1:1234/v1", "saved-narrator-model", 300, 0.8, 1024)
+        });
+
+    ScenarioTemplateStore.Apply(template, snapshot);
+
+    Require(snapshot.MatchType == "research", "template match type was not applied");
+    Require(snapshot.Engine.Agents.Select(agent => agent.Id).SequenceEqual(["alpha", "epsilon"]), "template should restore saved participant roster");
+    Require(snapshot.Engine.Agents[1].VoiceStyle == "idioms", "dynamic agent voice was not restored");
+    Require(snapshot.Engine.Agents[1].PressureProfile == "chaos", "dynamic agent pressure was not restored");
+    Require(snapshot.MatchLocks.TryGetValue("epsilon", out var epsilonLocked) && epsilonLocked, "dynamic agent lock was not restored");
+    Require(snapshot.Engine.TurnIndex == 0, "turn index should wrap to restored participant count");
+    Require(snapshot.Configs["alpha"].Model == "saved-alpha-model", "saved alpha model was not restored");
+    Require(snapshot.Configs["epsilon"].Model == "saved-epsilon-model", "saved epsilon model was not restored");
+    Require(!snapshot.Configs.ContainsKey("beta"), "stale beta config was not removed");
+    Require(!snapshot.Configs.ContainsKey("zeta"), "stale dynamic config was not removed");
 }
 
 static void AutoConfigureLowVramSingleModel()
