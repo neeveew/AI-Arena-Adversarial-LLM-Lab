@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private readonly TranscriptSearchCoordinator? _transcriptSearchCoordinator;
     private readonly TranscriptInsightCoordinator? _transcriptInsightCoordinator;
     private readonly TranscriptActionCoordinator? _transcriptActionCoordinator;
+    private readonly TranscriptMutationCoordinator? _transcriptMutationCoordinator;
     private readonly TranscriptCardRenderer? _transcriptCardRenderer;
     private readonly TranscriptAdjunctCoordinator? _transcriptAdjunctCoordinator;
     private readonly AgentMemoryCoordinator? _agentMemoryCoordinator;
@@ -94,6 +95,9 @@ public partial class MainWindow : Window
 
     private TranscriptActionCoordinator TranscriptActions =>
         _transcriptActionCoordinator ?? throw new InvalidOperationException("Transcript action coordinator is not initialized.");
+
+    private TranscriptMutationCoordinator TranscriptMutations =>
+        _transcriptMutationCoordinator ?? throw new InvalidOperationException("Transcript mutation coordinator is not initialized.");
 
     private TranscriptCardRenderer TranscriptCards =>
         _transcriptCardRenderer ?? throw new InvalidOperationException("Transcript card renderer is not initialized.");
@@ -208,6 +212,15 @@ public partial class MainWindow : Window
             () => _wpfSettings.CompactTranscriptMode,
             () => _arenaBusy,
             ResourceBrush);
+        _transcriptMutationCoordinator = new TranscriptMutationCoordinator(
+            _coreSessionStore,
+            _eventLogStore,
+            _transcriptService,
+            () => _activeSession,
+            () => _arenaBusy,
+            SaveSnapshotForCoordinatorAsync,
+            RefreshActiveSessionForCoordinatorAsync,
+            SetLoadStatus);
         _providerSettingsCoordinator = new ProviderSettingsCoordinator(
             this,
             _coreSessionStore,
@@ -357,13 +370,13 @@ public partial class MainWindow : Window
             diagnostic => VoiceAdherenceAccent(diagnostic),
             FormatDuration,
             FormatCompactNumber,
-            CopyTranscriptMessage,
-            TogglePinTranscriptMessageAsync,
+            TranscriptExportCoordinator.CopyMessage,
+            TranscriptMutations.TogglePinMessageAsync,
             RetryTranscriptMessageAsync,
-            DeleteTranscriptMessageAsync,
+            TranscriptMutations.DeleteMessageAsync,
             message => InternetWorkflow.ApproveInternetRequestAsync(message),
             message => InternetWorkflow.RejectInternetRequestAsync(message),
-            CopyInternetUrl,
+            TranscriptExportCoordinator.CopyInternetUrl,
             IsAgentSpeaker,
             () => _wpfSettings.TurnCompareMode,
             message => TranscriptInsight.IsTurnSelectedForCompare(message),
@@ -2394,40 +2407,9 @@ public partial class MainWindow : Window
         _operatorTurnCoordinator?.UpdateTurnMeter();
     }
 
-    private void CopyTranscriptMessage(TranscriptMessage message)
-    {
-        TranscriptExportCoordinator.CopyMessage(message);
-    }
-
-    private void CopyInternetUrl(TranscriptMessage message)
-    {
-        TranscriptExportCoordinator.CopyInternetUrl(message);
-    }
-
     private void ExportTranscriptButton_Click(object sender, RoutedEventArgs e)
     {
         TranscriptExportCoordinator.ExportTranscript();
-    }
-
-    private async Task DeleteTranscriptMessageAsync(TranscriptMessage message)
-    {
-        if (_arenaBusy || _activeSession is null || message.Turn <= 0)
-        {
-            return;
-        }
-
-        await MutateTranscriptAsync($"Deleted turn {message.Turn}.", async snapshot =>
-        {
-            var deleted = _transcriptService.DeleteMessage(snapshot, message.Turn, message.SpeakerId, message.CreatedAt);
-            if (!deleted)
-            {
-                LoadStatus.Text = $"Could not find turn {message.Turn} to delete.";
-                return false;
-            }
-
-            await _eventLogStore.AppendAsync(_activeSession.Id, "native_transcript_message_deleted", new { message.Turn, message.Speaker, message.SpeakerId });
-            return true;
-        });
     }
 
     private async Task RetryTranscriptMessageAsync(TranscriptMessage message)
@@ -2445,50 +2427,6 @@ public partial class MainWindow : Window
                 : $"Retry failed: {result.Error}";
             RefreshActiveSession(status);
         });
-    }
-
-    private async Task TogglePinTranscriptMessageAsync(TranscriptMessage message)
-    {
-        if (_arenaBusy || _activeSession is null || message.Turn <= 0)
-        {
-            return;
-        }
-
-        await MutateTranscriptAsync(message.Pinned ? $"Unpinned turn {message.Turn}." : $"Pinned turn {message.Turn}.", async snapshot =>
-        {
-            var changed = _transcriptService.TogglePinned(snapshot, message.Turn, message.SpeakerId, message.CreatedAt, out var pinned);
-            if (!changed)
-            {
-                LoadStatus.Text = $"Could not find turn {message.Turn} to pin.";
-                return false;
-            }
-
-            await _eventLogStore.AppendAsync(_activeSession.Id, pinned ? "native_transcript_message_pinned" : "native_transcript_message_unpinned", new { message.Turn, message.Speaker, message.SpeakerId });
-            return true;
-        });
-    }
-
-    private async Task MutateTranscriptAsync(string successStatus, Func<AIArena.Core.Models.ArenaSnapshot, Task<bool>> mutation)
-    {
-        if (_activeSession is null)
-        {
-            return;
-        }
-
-        var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
-        if (snapshot is null)
-        {
-            LoadStatus.Text = $"No snapshot found for session {_activeSession.Id}.";
-            return;
-        }
-
-        if (!await mutation(snapshot))
-        {
-            return;
-        }
-
-        await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
-        RefreshActiveSession(successStatus);
     }
 
     private async Task<CoreModelProviderConfig?> LoadSharedProviderConfigAsync()

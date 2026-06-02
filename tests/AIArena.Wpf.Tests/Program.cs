@@ -20,7 +20,8 @@ var tests = new (string Name, Action Test)[]
     ("role style catalog formats voice adherence cues", RoleStyleCatalogFormatsVoiceAdherenceCues),
     ("agent memory coordinator normalizes notes", AgentMemoryCoordinatorNormalizesNotes),
     ("agent board coordinator formats statuses", AgentBoardCoordinatorFormatsStatuses),
-    ("transcript adjunct helpers format labels", TranscriptAdjunctHelpersFormatLabels)
+    ("transcript adjunct helpers format labels", TranscriptAdjunctHelpersFormatLabels),
+    ("transcript mutation coordinator formats statuses", TranscriptMutationCoordinatorFormatsStatuses)
 };
 
 var failures = 0;
@@ -435,6 +436,21 @@ static void TranscriptAdjunctHelpersFormatLabels()
     Require(TranscriptAdjunctCoordinator.InternetInspectorTitle(TranscriptForTest(7, "Tool", "internet", "internet_approval", "pending")) == "Approval - pending", "approval inspector title should include status");
     Require(TranscriptAdjunctCoordinator.InternetInspectorTitle(TranscriptForTest(8, "News", "news", "news", "ok")) == "Curated news - ok", "news inspector title should include status");
     Require(TranscriptAdjunctCoordinator.InternetInspectorTitle(TranscriptForTest(9, "Tool", "internet", "internet", "error")) == "Internet tool - error", "internet inspector title should include status");
+}
+
+static void TranscriptMutationCoordinatorFormatsStatuses()
+{
+    var pinned = TranscriptForTest(12, "Alpha", "alpha", "message", "ok") with { Pinned = true };
+    var unpinned = pinned with { Pinned = false };
+    var session = new SessionSummary("session", "", true, 0, 0, 0, DateTimeOffset.UtcNow);
+
+    Require(TranscriptMutationCoordinator.DeleteStatus(pinned) == "Deleted turn 12.", "delete status should remain stable");
+    Require(TranscriptMutationCoordinator.PinStatus(pinned) == "Unpinned turn 12.", "pinned status should describe unpinning");
+    Require(TranscriptMutationCoordinator.PinStatus(unpinned) == "Pinned turn 12.", "unpinned status should describe pinning");
+    Require(TranscriptMutationCoordinator.CanMutateMessage(pinned, arenaBusy: false, session), "valid message should be mutable");
+    Require(!TranscriptMutationCoordinator.CanMutateMessage(pinned, arenaBusy: true, session), "busy arena should block transcript mutation");
+    Require(!TranscriptMutationCoordinator.CanMutateMessage(pinned, arenaBusy: false, activeSession: null), "missing session should block transcript mutation");
+    Require(!TranscriptMutationCoordinator.CanMutateMessage(pinned with { Turn = 0 }, arenaBusy: false, session), "non-positive turn should block transcript mutation");
 }
 
 static TranscriptMessage TranscriptForTest(int turn, string speaker, string speakerId, string kind, string status)
