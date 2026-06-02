@@ -31,7 +31,8 @@ var tests = new (string Name, Action Test)[]
     ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
     ("transcript view coordinator normalizes view state", TranscriptViewCoordinatorNormalizesViewState),
-    ("custom match summary coordinator normalizes card text", CustomMatchSummaryCoordinatorNormalizesCardText)
+    ("custom match summary coordinator normalizes card text", CustomMatchSummaryCoordinatorNormalizesCardText),
+    ("scenario seed inspector coordinator formats metadata", ScenarioSeedInspectorCoordinatorFormatsMetadata)
 };
 
 var failures = 0;
@@ -615,6 +616,22 @@ static void CustomMatchSummaryCoordinatorNormalizesCardText()
     Require(CustomMatchSummaryCoordinator.AgentPersonaText("skeptical analyst") == "skeptical analyst", "agent persona should be preserved");
     Require(CustomMatchSummaryCoordinator.NarratorPersonaText("") == "(no narrator persona)", "blank narrator persona should use placeholder");
     Require(CustomMatchSummaryCoordinator.NarratorPersonaText("referee") == "referee", "narrator persona should be preserved");
+}
+
+static void ScenarioSeedInspectorCoordinatorFormatsMetadata()
+{
+    Require(ScenarioSeedInspectorCoordinator.ScenarioSeedSource("", "") == "Manual", "blank seed should be manual");
+    Require(ScenarioSeedInspectorCoordinator.ScenarioSeedSource("manual-seed", "") == "Random", "nonblank seed should be random");
+    Require(ScenarioSeedInspectorCoordinator.ScenarioSeedSource("ai-choice", "") == "AI Choice", "AI choice seed should be detected");
+    Require(ScenarioSeedInspectorCoordinator.ScenarioSeedSource("YOLO-123", "") == "YOLO", "YOLO seed should be detected");
+    Require(ScenarioSeedInspectorCoordinator.ScenarioSeedSource("manual", "yolo") == "YOLO", "YOLO persona style should win");
+    Require(ScenarioSeedInspectorCoordinator.ShortSeedValue("") == "-", "blank seed should become placeholder");
+    Require(ScenarioSeedInspectorCoordinator.ShortSeedValue("123456789012345678") == "123456789012345678", "18 character seed should not be shortened");
+    Require(ScenarioSeedInspectorCoordinator.ShortSeedValue("1234567890123456789") == "123456789012345...", "long seed should be shortened");
+    Require(!ScenarioSeedInspectorCoordinator.ShouldShowRolePack("auto"), "auto role pack should be hidden");
+    Require(ScenarioSeedInspectorCoordinator.ShouldShowRolePack("absurd_lab"), "custom role pack should be visible");
+    Require(!ScenarioSeedInspectorCoordinator.ShouldShowAbsurdity("grounded"), "grounded absurdity should be hidden");
+    Require(ScenarioSeedInspectorCoordinator.ShouldShowAbsurdity("maximum"), "non-grounded absurdity should be visible");
 }
 
 static Color RequireSolidColor(Brush brush, string message)

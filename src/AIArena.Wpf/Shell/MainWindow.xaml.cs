@@ -64,6 +64,7 @@ public partial class MainWindow : Window
     private readonly MatchSetupCoordinator? _matchSetupCoordinator;
     private readonly MatchLockCoordinator? _matchLockCoordinator;
     private readonly CustomMatchSummaryCoordinator? _customMatchSummaryCoordinator;
+    private readonly ScenarioSeedInspectorCoordinator? _scenarioSeedInspectorCoordinator;
     private readonly AgentRosterCoordinator? _agentRosterCoordinator;
     private readonly ArenaSessionMutationCoordinator? _arenaSessionMutationCoordinator;
     private readonly ShellNavigationCoordinator? _shellNavigationCoordinator;
@@ -155,6 +156,9 @@ public partial class MainWindow : Window
 
     private CustomMatchSummaryCoordinator CustomMatchSummary =>
         _customMatchSummaryCoordinator ?? throw new InvalidOperationException("Custom match summary coordinator is not initialized.");
+
+    private ScenarioSeedInspectorCoordinator SeedInspector =>
+        _scenarioSeedInspectorCoordinator ?? throw new InvalidOperationException("Scenario seed inspector coordinator is not initialized.");
 
     private AgentRosterCoordinator AgentRoster =>
         _agentRosterCoordinator ?? throw new InvalidOperationException("Agent roster coordinator is not initialized.");
@@ -724,6 +728,11 @@ public partial class MainWindow : Window
             ResourceBrush,
             AccentForSpeaker,
             BlendBrush);
+        _scenarioSeedInspectorCoordinator = new ScenarioSeedInspectorCoordinator(
+            ScenarioSeedInspector,
+            ShellCards,
+            ResourceBrush,
+            DisplayStatusValue);
         _agentRosterCoordinator = new AgentRosterCoordinator(
             _coreSessionStore,
             _eventLogStore,
@@ -1235,70 +1244,10 @@ public partial class MainWindow : Window
 
     private void PopulateCustomMatch(ArenaViewSnapshot snapshot)
     {
-        ScenarioSeedInspector.Children.Clear();
-
-        PopulateScenarioSeedInspector(snapshot);
+        SeedInspector.Populate(snapshot);
         ScenarioWorkflow.PopulateGenerationHistory(snapshot);
         CustomMatchSummary.Populate(snapshot);
         MatchSetup.PopulateRivalryMatrix(snapshot);
-    }
-
-    private void PopulateScenarioSeedInspector(ArenaViewSnapshot snapshot)
-    {
-        var scenarioSeed = DisplayStatusValue(snapshot.ScenarioGeneratorSeed);
-        var scenarioStyle = DisplayStatusValue(snapshot.ScenarioGeneratorStyle);
-        var scenarioIntensity = DisplayStatusValue(snapshot.ScenarioGeneratorIntensity);
-        var scenarioRolePack = DisplayStatusValue(snapshot.ScenarioGeneratorRolePack);
-        var scenarioAbsurdity = DisplayStatusValue(snapshot.ScenarioGeneratorAbsurdity);
-        var personaSeed = DisplayStatusValue(snapshot.PersonaGeneratorSeed);
-        var personaStyle = DisplayStatusValue(snapshot.PersonaGeneratorStyle);
-        var source = ScenarioSeedSource(snapshot.ScenarioGeneratorSeed, snapshot.PersonaGeneratorStyle);
-
-        ScenarioSeedInspector.Children.Add(CreateSetupChip("Source", source, ResourceBrush("PrimaryBorderBrush")));
-        ScenarioSeedInspector.Children.Add(CreateSetupChip("Scenario", ShortSeedValue(scenarioSeed), ResourceBrush("TextBrush")));
-        ScenarioSeedInspector.Children.Add(CreateSetupChip("Style", scenarioStyle, ResourceBrush("MutedTextBrush")));
-        if (scenarioIntensity != "-")
-        {
-            ScenarioSeedInspector.Children.Add(CreateSetupChip("Pressure", scenarioIntensity, ResourceBrush("BetaAccentBrush")));
-        }
-        if (scenarioRolePack != "-" && !scenarioRolePack.Equals("auto", StringComparison.OrdinalIgnoreCase))
-        {
-            ScenarioSeedInspector.Children.Add(CreateSetupChip("Pack", scenarioRolePack.Replace('_', ' '), ResourceBrush("PrimaryBorderBrush")));
-        }
-        if (scenarioAbsurdity != "-" && !scenarioAbsurdity.Equals("grounded", StringComparison.OrdinalIgnoreCase))
-        {
-            ScenarioSeedInspector.Children.Add(CreateSetupChip("Absurdity", scenarioAbsurdity, ResourceBrush("NarratorAccentBrush")));
-        }
-        ScenarioSeedInspector.Children.Add(CreateSetupChip("Personas", ShortSeedValue(personaSeed), ResourceBrush("NarratorAccentBrush")));
-        ScenarioSeedInspector.Children.Add(CreateSetupChip("Persona style", personaStyle, ResourceBrush("MutedTextBrush")));
-    }
-
-    private static string ScenarioSeedSource(string scenarioSeed, string personaStyle)
-    {
-        if (scenarioSeed.StartsWith("YOLO-", StringComparison.OrdinalIgnoreCase)
-            || personaStyle.Equals("yolo", StringComparison.OrdinalIgnoreCase))
-        {
-            return "YOLO";
-        }
-
-        if (scenarioSeed.Equals("ai-choice", StringComparison.OrdinalIgnoreCase))
-        {
-            return "AI Choice";
-        }
-
-        return string.IsNullOrWhiteSpace(scenarioSeed) || scenarioSeed == "-"
-            ? "Manual"
-            : "Random";
-    }
-
-    private static string ShortSeedValue(string seed)
-    {
-        if (string.IsNullOrWhiteSpace(seed) || seed == "-")
-        {
-            return "-";
-        }
-
-        return seed.Length <= 18 ? seed : $"{seed[..15]}...";
     }
 
     private void PopulateNews(IReadOnlyList<TranscriptMessage> messages)
