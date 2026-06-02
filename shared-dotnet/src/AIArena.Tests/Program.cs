@@ -36,6 +36,7 @@ var tests = new (string Name, Action Test)[]
     ("generates requested random seed style and intensity", GenerateRequestedRandomSeedStyleAndIntensity),
     ("generates one-line pressure random seed", GenerateOneLinePressureRandomSeed),
     ("records and replays generation history", RecordReplayGeneratedMatchHistory),
+    ("replays generation history into clean new run", ReplayGenerationHistoryIntoNewRun),
     ("generates absurd role pack voice constraints", GenerateAbsurdRolePackVoiceConstraints),
     ("absurd role library exposes wide variety", AbsurdRoleLibraryExposesWideVariety),
     ("absurd role shuffle is deterministic and varied", AbsurdRoleShuffleIsDeterministicAndVaried),
@@ -56,6 +57,7 @@ var tests = new (string Name, Action Test)[]
     ("native prompt prioritizes operator cooperation", NativePromptPrioritizesOperatorCooperation),
     ("native prompt includes selected voice style", NativePromptIncludesSelectedVoiceStyle),
     ("native prompt includes selected pressure profile", NativePromptIncludesSelectedPressureProfile),
+    ("native prompt includes relationship pressure", NativePromptIncludesRelationshipPressure),
     ("native prompt includes debug voice drift enforcement", NativePromptIncludesDebugVoiceDriftEnforcement),
     ("native prompt hides other personas", NativePromptHidesOtherPersonas),
     ("native prompt includes selected private notes", NativePromptIncludesSelectedPrivateNotes),
@@ -611,6 +613,34 @@ static void RecordReplayGeneratedMatchHistory()
     Directory.Delete(root, recursive: true);
 }
 
+static void ReplayGenerationHistoryIntoNewRun()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+
+    var service = new MatchGenerationService(sessionStore: store, eventLogStore: log);
+    var result = service.GenerateRandomSeedAsync("default", "research", "normal", "balanced", "grounded", "replay-seed").GetAwaiter().GetResult();
+    Require(result.Ok, $"random seed failed: {result.Error}");
+    var generated = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+    var history = generated.GenerationHistory.Single();
+
+    var replay = service.ReplayGenerationToNewSessionAsync("default", history.Id).GetAwaiter().GetResult();
+    Require(replay.Ok, $"new replay run failed: {replay.Error}");
+    Require(!string.IsNullOrWhiteSpace(replay.Label), "new run session id missing");
+    var replaySnapshot = store.LoadSnapshotAsync(replay.Label).GetAwaiter().GetResult()!;
+    Require(replaySnapshot.Engine.Messages.Count == 0, "new replay run should start with an empty transcript");
+    Require(replaySnapshot.Engine.TurnCount == 0, "new replay run turn count should reset");
+    Require(replaySnapshot.Engine.Steering.Topic == history.Match.Topic, "new replay run did not restore generated topic");
+    Require(replaySnapshot.GenerationHistory.Count == 2, "new replay run should preserve replay history");
+    var original = store.LoadSnapshotAsync("default").GetAwaiter().GetResult()!;
+    Require(original.Engine.Messages.Count == 1, "original run transcript should remain untouched");
+    Require(File.ReadAllText(log.EventPath(replay.Label)).Contains("native_generation_replay_run_created"), "new replay run event missing");
+    Directory.Delete(root, recursive: true);
+}
+
 static void GenerateAbsurdRolePackVoiceConstraints()
 {
     var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
@@ -1125,6 +1155,31 @@ static void NativePromptIncludesSelectedPressureProfile()
     var combinedPrompt = string.Join(Environment.NewLine, client.Requests[0].Select(item => item.Content));
     Require(combinedPrompt.Contains("Pressure profile: Evidence-first", StringComparison.OrdinalIgnoreCase), "pressure profile missing from selected agent prompt");
     Require(combinedPrompt.Contains("separate evidence, inference, assumptions", StringComparison.OrdinalIgnoreCase), "pressure rule missing from selected agent prompt");
+    Directory.Delete(root, recursive: true);
+}
+
+static void NativePromptIncludesRelationshipPressure()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    var store = new SessionStore(root);
+    var log = new EventLogStore(root);
+    var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+    snapshot.Engine.RivalryMatrix.Enabled = true;
+    snapshot.Engine.RivalryMatrix.Links.Add(new RivalryLink
+    {
+        Source = "beta",
+        Target = "alpha",
+        Stance = "challenge"
+    });
+    store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+    var client = new FakeModelProviderClient("relationship constrained reply", "native reasoning");
+    var service = new TurnRunnerService(client, store, log);
+
+    var result = service.RunOneTurnAsync().GetAwaiter().GetResult();
+    Require(result.Ok, $"turn failed: {result.Error}");
+    var combinedPrompt = string.Join(Environment.NewLine, client.Requests[0].Select(item => item.Content));
+    Require(combinedPrompt.Contains("Relationship pressure for this turn", StringComparison.OrdinalIgnoreCase), "relationship pressure heading missing");
+    Require(combinedPrompt.Contains("Alpha: challenge assumptions", StringComparison.OrdinalIgnoreCase), "challenge stance missing from selected agent prompt");
     Directory.Delete(root, recursive: true);
 }
 

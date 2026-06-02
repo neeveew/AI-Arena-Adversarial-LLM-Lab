@@ -177,6 +177,69 @@ public sealed class ProviderAutoConfigureService
             warnings);
     }
 
+    public static IReadOnlyList<ModelProfile> EstimateModelProfiles(IEnumerable<string> modelNames)
+    {
+        return modelNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(CreateModelProfile)
+            .Where(profile => profile.IsChatCandidate)
+            .OrderByDescending(profile => EffectiveFootprint(profile))
+            .ThenBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public static ModelLoadPlanPreview PreviewLoadPlan(IEnumerable<string> modelNames, HardwareProbe? hardware)
+    {
+        var models = EstimateModelProfiles(modelNames)
+            .GroupBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToArray();
+        var estimatedFootprint = models.Sum(EffectiveFootprint);
+        var heaviest = models.FirstOrDefault();
+        var target = hardware is null ? 4.5 : ComfortablePerModelTargetGb(hardware);
+        var vram = hardware?.FreeVramGb ?? hardware?.TotalVramGb;
+        var status = "unknown";
+        var guidance = "Model footprint is estimated from names; provider controls final placement.";
+
+        if (models.Length == 0)
+        {
+            return new ModelLoadPlanPreview(models, 0, 0, "empty", "No selected models to preload.");
+        }
+
+        if (heaviest is not null && EffectiveFootprint(heaviest) <= target)
+        {
+            status = "comfortable";
+            guidance = "Heaviest selected model appears inside a comfortable per-GPU fit.";
+        }
+
+        if (vram is double freeVram)
+        {
+            var reserveAdjusted = Math.Max(1, freeVram * 0.82);
+            if (estimatedFootprint > reserveAdjusted)
+            {
+                status = "cautious";
+                guidance = "Combined footprint may exceed comfortable free VRAM; preload one model at a time if LM Studio struggles.";
+            }
+            else if (models.Length > 1 && status.Equals("comfortable", StringComparison.OrdinalIgnoreCase))
+            {
+                guidance = "Selected models look comfortable for staged preload; multi-GPU placement still depends on LM Studio.";
+            }
+        }
+        else if (models.Length > 2)
+        {
+            status = "cautious";
+            guidance = "VRAM is unknown; preload cautiously with multiple unique models.";
+        }
+
+        if (models.Any(model => model.EstimatedFootprintGb is null))
+        {
+            status = status.Equals("comfortable", StringComparison.OrdinalIgnoreCase) ? "mixed" : status;
+            guidance = "One or more model sizes are unknown; check LM Studio load telemetry after preload.";
+        }
+
+        return new ModelLoadPlanPreview(models, estimatedFootprint, target, status, guidance);
+    }
+
     private static IReadOnlyList<ModelAssignmentRecommendation> SingleModelAssignments(ModelProfile model, string strategy)
     {
         var reason = strategy switch
@@ -831,5 +894,12 @@ public sealed record ModelProfile(
     double? EstimatedFootprintGb,
     string Tier,
     bool IsChatCandidate);
+
+public sealed record ModelLoadPlanPreview(
+    IReadOnlyList<ModelProfile> Models,
+    double EstimatedTotalFootprintGb,
+    double ComfortablePerModelTargetGb,
+    string Status,
+    string Guidance);
 
 public sealed record ModelAssignmentRecommendation(string Role, string Model, string Reason);

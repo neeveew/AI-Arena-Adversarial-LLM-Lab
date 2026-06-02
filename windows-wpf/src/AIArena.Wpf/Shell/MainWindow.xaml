@@ -1860,6 +1860,13 @@
                                         Padding="11,6"
                                         Margin="0,0,6,0"
                                         ToolTip="Replay the selected generated match without calling a model" />
+                                <Button x:Name="ReplayNewRunButton"
+                                        Content="NEW RUN"
+                                        Click="ReplayNewRunButton_Click"
+                                        FontSize="11"
+                                        Padding="11,6"
+                                        Margin="0,0,6,0"
+                                        ToolTip="Create a clean session from the selected generated match for comparison" />
                                 <Button x:Name="CopyGenerationSeedButton"
                                         Content="COPY SEED"
                                         Click="CopyGenerationSeedButton_Click"
@@ -1904,6 +1911,85 @@
                         <UniformGrid x:Name="ScenarioPreviewItems" Columns="2" Margin="0,0,0,18" />
                         <TextBlock Text="CAST PREVIEW" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
                         <StackPanel x:Name="CastPreviewItems" Margin="0,0,0,18" />
+                        <TextBlock Text="RELATIONSHIP MATRIX" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+                        <Border Background="{DynamicResource CardBrush}"
+                                BorderBrush="{DynamicResource ControlBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12"
+                                Margin="0,0,0,18">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="10" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="10" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Agent pressure map"
+                                                   Foreground="{DynamicResource TextBrush}"
+                                                   FontWeight="SemiBold" />
+                                        <TextBlock Text="Give each agent one relationship target and stance. This steers behavior without changing public personas."
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,2,0,0" />
+                                    </StackPanel>
+                                    <CheckBox x:Name="RivalryMatrixEnabledCheckBox"
+                                              Grid.Column="1"
+                                              Content="Enable"
+                                              Style="{StaticResource ToggleSwitchCheckBox}"
+                                              Foreground="{DynamicResource TextBrush}"
+                                              FontWeight="SemiBold"
+                                              VerticalAlignment="Top"
+                                              Margin="12,0,0,0" />
+                                </Grid>
+                                <UniformGrid Grid.Row="2" Columns="4">
+                                    <StackPanel Margin="0,0,8,0">
+                                        <TextBlock Text="Alpha" Foreground="{DynamicResource AlphaAccentBrush}" FontWeight="SemiBold" Margin="0,0,0,5" />
+                                        <ComboBox x:Name="AlphaRivalryTargetPicker" Tag="alpha" Margin="0,0,0,6" Padding="7,5" FontSize="11" />
+                                        <ComboBox x:Name="AlphaRivalryStancePicker" Tag="alpha" Padding="7,5" FontSize="11" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,8,0">
+                                        <TextBlock Text="Beta" Foreground="{DynamicResource BetaAccentBrush}" FontWeight="SemiBold" Margin="0,0,0,5" />
+                                        <ComboBox x:Name="BetaRivalryTargetPicker" Tag="beta" Margin="0,0,0,6" Padding="7,5" FontSize="11" />
+                                        <ComboBox x:Name="BetaRivalryStancePicker" Tag="beta" Padding="7,5" FontSize="11" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,8,0">
+                                        <TextBlock Text="Gamma" Foreground="{DynamicResource GammaAccentBrush}" FontWeight="SemiBold" Margin="0,0,0,5" />
+                                        <ComboBox x:Name="GammaRivalryTargetPicker" Tag="gamma" Margin="0,0,0,6" Padding="7,5" FontSize="11" />
+                                        <ComboBox x:Name="GammaRivalryStancePicker" Tag="gamma" Padding="7,5" FontSize="11" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="Delta" Foreground="{DynamicResource DeltaAccentBrush}" FontWeight="SemiBold" Margin="0,0,0,5" />
+                                        <ComboBox x:Name="DeltaRivalryTargetPicker" Tag="delta" Margin="0,0,0,6" Padding="7,5" FontSize="11" />
+                                        <ComboBox x:Name="DeltaRivalryStancePicker" Tag="delta" Padding="7,5" FontSize="11" />
+                                    </StackPanel>
+                                </UniformGrid>
+                                <Grid Grid.Row="4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="RivalryMatrixStatusText"
+                                               Text="Neutral by default."
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               TextWrapping="Wrap"
+                                               VerticalAlignment="Center" />
+                                    <Button x:Name="ApplyRivalryMatrixButton"
+                                            Grid.Column="1"
+                                            Content="APPLY MATRIX"
+                                            Click="ApplyRivalryMatrixButton_Click"
+                                            Padding="12,7"
+                                            Margin="12,0,0,0" />
+                                </Grid>
+                            </Grid>
+                        </Border>
                         <TextBlock Text="SAVED MATCH STATE" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
                         <Border Background="{DynamicResource CardBrush}"
                                 BorderBrush="{DynamicResource ControlBorderBrush}"
@@ -2324,6 +2410,36 @@
                     <StackPanel>
                 <Expander x:Name="ModelProviderSettingsExpander" Header="Model Provider" Style="{StaticResource SettingsExpander}" IsExpanded="False">
                     <StackPanel Margin="0,8,0,0">
+                        <TextBlock Text="Provider preset" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="140" />
+                            </Grid.ColumnDefinitions>
+                            <ComboBox x:Name="ProviderPresetPicker"
+                                      Background="{DynamicResource InputBrush}"
+                                      Foreground="White"
+                                      BorderBrush="{DynamicResource ControlBorderBrush}"
+                                      Padding="8"
+                                      ToolTip="Choose a common OpenAI-compatible provider base URL.">
+                                <ComboBoxItem Content="LM Studio" Tag="lm_studio" IsSelected="True" />
+                                <ComboBoxItem Content="Ollama /v1" Tag="ollama" />
+                                <ComboBoxItem Content="Local server :8000" Tag="local_8000" />
+                                <ComboBoxItem Content="Remote / manual" Tag="manual" />
+                            </ComboBox>
+                            <Button x:Name="ApplyProviderPresetButton"
+                                    Grid.Column="2"
+                                    Content="APPLY PRESET"
+                                    Click="ApplyProviderPresetButton_Click"
+                                    Padding="8"
+                                    ToolTip="Fill the provider base URL from the selected preset." />
+                        </Grid>
+                        <TextBlock x:Name="ProviderPresetStatusText"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,8"
+                                   Text="Presets only change the base URL; model selection remains yours." />
                         <TextBlock Text="Provider base URL" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="0,0,0,6" />
                         <TextBox x:Name="ProviderBaseUrlText"
                                   Background="{DynamicResource InputBrush}"
@@ -2554,6 +2670,11 @@
                                 Click="PreloadSelectedModelsButton_Click"
                                 Margin="0,0,0,8"
                                 ToolTip="Ask LM Studio to load the default model plus any participant-specific overrides." />
+                        <TextBlock x:Name="LoadPlanPreviewText"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,8"
+                                   Text="Load plan preview appears after selecting models." />
                         <TextBlock x:Name="PreloadModelsStatusText"
                                    Foreground="{DynamicResource MutedTextBrush}"
                                    TextWrapping="Wrap"

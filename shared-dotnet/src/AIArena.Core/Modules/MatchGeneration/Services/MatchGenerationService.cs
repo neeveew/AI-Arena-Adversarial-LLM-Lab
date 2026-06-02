@@ -212,6 +212,44 @@ public sealed class MatchGenerationService
         return MatchGenerationResult.Completed($"Replayed {entry.Label}", entry.ScenarioSeed, generated.Style, entry.Intensity);
     }
 
+    public async Task<MatchGenerationResult> ReplayGenerationToNewSessionAsync(string sessionId, string historyId, CancellationToken cancellationToken = default)
+    {
+        var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
+        if (snapshot is null)
+        {
+            return MatchGenerationResult.Failed($"No snapshot found for session {sessionId}.");
+        }
+
+        var entry = snapshot.GenerationHistory.FirstOrDefault(item => item.Id.Equals(historyId, StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+        {
+            return MatchGenerationResult.Failed("Generation history item not found.");
+        }
+
+        var generated = FromHistory(entry.Match);
+        ApplyGeneratedMatch(snapshot, generated, clearTranscript: true);
+        snapshot.MatchType = NormalizeStyle(generated.Style);
+        snapshot.ScenarioGenerator.Style = snapshot.MatchType;
+        snapshot.ScenarioGenerator.Seed = entry.ScenarioSeed;
+        snapshot.ScenarioGenerator.Intensity = NormalizeIntensity(entry.Intensity);
+        snapshot.ScenarioGenerator.RolePack = NormalizeRolePack(entry.RolePack);
+        snapshot.ScenarioGenerator.Absurdity = NormalizeAbsurdity(entry.Absurdity);
+        snapshot.PersonaRandomizer.Style = entry.Kind.Equals("yolo", StringComparison.OrdinalIgnoreCase)
+            ? "yolo"
+            : PersonaStyleFor(snapshot.MatchType);
+        snapshot.PersonaRandomizer.Seed = entry.PersonaSeed;
+        snapshot.PersonaRandomizer.Intensity = snapshot.ScenarioGenerator.Intensity;
+        snapshot.PersonaRandomizer.RolePack = snapshot.ScenarioGenerator.RolePack;
+        snapshot.PersonaRandomizer.Absurdity = snapshot.ScenarioGenerator.Absurdity;
+        RecordGenerationHistory(snapshot, entry.Kind, generated, entry.ScenarioSeed, entry.PersonaSeed, snapshot.ScenarioGenerator.Intensity, snapshot.ScenarioGenerator.RolePack, snapshot.ScenarioGenerator.Absurdity);
+
+        var newSessionId = await CreateUniqueReplaySessionIdAsync(entry, cancellationToken);
+        await _sessionStore.CreateSessionAsync(newSessionId, snapshot, cancellationToken);
+        await _eventLogStore.AppendAsync(newSessionId, "native_generation_replay_run_created", new { source_session = sessionId, entry.Id, entry.Kind, entry.Label, seed = entry.ScenarioSeed }, cancellationToken);
+        await _eventLogStore.AppendAsync(sessionId, "native_generation_replay_run_created", new { replay_session = newSessionId, entry.Id, entry.Kind, entry.Label, seed = entry.ScenarioSeed }, cancellationToken);
+        return MatchGenerationResult.Completed(newSessionId, entry.ScenarioSeed, generated.Style, entry.Intensity);
+    }
+
     public async Task ToggleLockAsync(string sessionId, string key, bool locked, CancellationToken cancellationToken = default)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
@@ -270,6 +308,33 @@ public sealed class MatchGenerationService
             snapshot.Engine.TurnIndex = 0;
             snapshot.Engine.LastError = "";
         }
+    }
+
+    private async Task<string> CreateUniqueReplaySessionIdAsync(GenerationHistoryEntry entry, CancellationToken cancellationToken)
+    {
+        var baseName = SessionStore.SafeSessionId($"run-{entry.Style}-{entry.ScenarioSeed}");
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            baseName = $"run-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}";
+        }
+
+        var sessions = await _sessionStore.ListSessionsAsync(cancellationToken);
+        var existing = sessions.Select(session => session.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!existing.Contains(baseName))
+        {
+            return baseName;
+        }
+
+        for (var index = 2; index < 1000; index++)
+        {
+            var candidate = $"{baseName}-{index}";
+            if (!existing.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return $"{baseName}-{Guid.NewGuid().ToString("N")[..6]}";
     }
 
     private static void RecordGenerationHistory(

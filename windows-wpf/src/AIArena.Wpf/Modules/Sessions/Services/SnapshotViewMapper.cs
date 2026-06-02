@@ -5,6 +5,7 @@ using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 using CoreSnapshot = AIArena.Core.Models.ArenaSnapshot;
 using RenderSnapshot = AIArena.Wpf.Models.ArenaSnapshot;
 using GenerationHistoryItem = AIArena.Wpf.Models.GenerationHistoryItem;
+using RivalryMatrixItem = AIArena.Wpf.Models.RivalryMatrixItem;
 using TranscriptMessage = AIArena.Wpf.Models.TranscriptMessage;
 
 namespace AIArena.Wpf.Services;
@@ -32,6 +33,8 @@ public static class SnapshotViewMapper
             DisplayValue(snapshot.PersonaRandomizer.Style),
             DisplayValue(snapshot.PersonaRandomizer.Seed),
             ParseGenerationHistory(snapshot),
+            snapshot.Engine.RivalryMatrix.Enabled,
+            ParseRivalryMatrix(snapshot),
             snapshot.Engine.TurnCount,
             snapshot.Engine.TurnIndex,
             DisplayValue(sharedConfig.Model),
@@ -86,6 +89,8 @@ public static class SnapshotViewMapper
             "-",
             "-",
             "-",
+            [],
+            false,
             [],
             0,
             0,
@@ -229,6 +234,17 @@ public static class SnapshotViewMapper
                 DisplayValue(item.PersonaSeed),
                 item.CreatedAt,
                 item.Match.Topic))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<RivalryMatrixItem> ParseRivalryMatrix(CoreSnapshot snapshot)
+    {
+        return snapshot.Engine.RivalryMatrix.Links
+            .Where(link => !string.IsNullOrWhiteSpace(link.Source) && !string.IsNullOrWhiteSpace(link.Target))
+            .Select(link => new RivalryMatrixItem(
+                link.Source.Trim().ToLowerInvariant(),
+                link.Target.Trim().ToLowerInvariant(),
+                string.IsNullOrWhiteSpace(link.Stance) ? "neutral" : link.Stance.Trim().ToLowerInvariant()))
             .ToArray();
     }
 

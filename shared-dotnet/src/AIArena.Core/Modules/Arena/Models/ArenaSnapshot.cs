@@ -71,6 +71,9 @@ public sealed class EngineSnapshot
     [JsonPropertyName("model_rss")]
     public ModelRssSettings ModelRss { get; init; } = new();
 
+    [JsonPropertyName("rivalry_matrix")]
+    public RivalryMatrixState RivalryMatrix { get; init; } = new();
+
     [JsonPropertyName("news_automation")]
     public NewsAutomationSettings NewsAutomation { get; init; } = new();
 
@@ -115,6 +118,27 @@ public sealed class DialogueAgent
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Extra { get; init; }
+}
+
+public sealed class RivalryMatrixState
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("links")]
+    public List<RivalryLink> Links { get; init; } = new();
+}
+
+public sealed class RivalryLink
+{
+    [JsonPropertyName("source")]
+    public string Source { get; set; } = "";
+
+    [JsonPropertyName("target")]
+    public string Target { get; set; } = "";
+
+    [JsonPropertyName("stance")]
+    public string Stance { get; set; } = "neutral";
 }
 
 public sealed class GenerationHistoryEntry

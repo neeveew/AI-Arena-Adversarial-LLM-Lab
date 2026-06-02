@@ -138,6 +138,11 @@ public partial class MainWindow : Window
         DiagnosticHistoryPoint Diagnostics,
         int Tokens);
 
+    private sealed record AutoModeratorAlert(
+        string Label,
+        string Body,
+        string Severity);
+
     private sealed record AgentPerformanceStats(
         string AgentId,
         string Name,
@@ -951,6 +956,7 @@ public partial class MainWindow : Window
         var activeCount = snapshot.Agents.Count(agent => agent.Active);
         SelectComboTag(ActiveParticipantsPicker, Math.Clamp(activeCount, 1, 4).ToString(System.Globalization.CultureInfo.InvariantCulture));
         ProviderBaseUrlText.Text = snapshot.ProviderBaseUrl;
+        SelectComboTag(ProviderPresetPicker, ProviderPresetTagForUrl(snapshot.ProviderBaseUrl));
         ProviderModelText.Text = snapshot.ProviderModel == "-" ? "" : snapshot.ProviderModel;
         _roleModels["alpha"] = snapshot.AlphaModel;
         _roleModels["beta"] = snapshot.BetaModel;
@@ -1833,6 +1839,11 @@ public partial class MainWindow : Window
         {
             TranscriptItems.Children.Add(CreateAgentMemoryPanel(_lastRenderedSnapshot));
         }
+        var moderatorPanel = CreateAutoModeratorPanel(messages);
+        if (moderatorPanel is not null)
+        {
+            TranscriptItems.Children.Add(moderatorPanel);
+        }
 
         foreach (var message in visibleMessages.OrderByDescending(message => message.Turn))
         {
@@ -2319,6 +2330,84 @@ public partial class MainWindow : Window
             ResourceBrush("NarratorAccentBrush"),
             snapshot.NarratorLocked,
             snapshot.NarratorVoiceStyle));
+
+        PopulateRivalryMatrixControls(snapshot);
+    }
+
+    private void PopulateRivalryMatrixControls(ArenaSnapshot snapshot)
+    {
+        RivalryMatrixEnabledCheckBox.IsChecked = snapshot.RivalryMatrixEnabled;
+        var links = snapshot.RivalryMatrix
+            .GroupBy(link => link.Source, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var agentIds = snapshot.Agents
+            .Select(agent => agent.Id)
+            .Where(IsAgentSpeaker)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .DefaultIfEmpty("alpha")
+            .ToArray();
+
+        foreach (var (source, targetPicker, stancePicker) in RivalryMatrixControls())
+        {
+            PopulateRivalryTargetPicker(targetPicker, source, agentIds);
+            PopulateRivalryStancePicker(stancePicker);
+            var link = links.TryGetValue(source, out var item) ? item : null;
+            SelectComboTag(targetPicker, link?.Target ?? "");
+            SelectComboTag(stancePicker, NormalizeRivalryStance(link?.Stance ?? "neutral"));
+        }
+
+        RivalryMatrixStatusText.Text = RivalryMatrixSummary(snapshot.RivalryMatrixEnabled, snapshot.RivalryMatrix);
+    }
+
+    private IEnumerable<(string Source, ComboBox Target, ComboBox Stance)> RivalryMatrixControls()
+    {
+        yield return ("alpha", AlphaRivalryTargetPicker, AlphaRivalryStancePicker);
+        yield return ("beta", BetaRivalryTargetPicker, BetaRivalryStancePicker);
+        yield return ("gamma", GammaRivalryTargetPicker, GammaRivalryStancePicker);
+        yield return ("delta", DeltaRivalryTargetPicker, DeltaRivalryStancePicker);
+    }
+
+    private void PopulateRivalryTargetPicker(ComboBox picker, string source, IReadOnlyList<string> agentIds)
+    {
+        picker.Items.Clear();
+        picker.Items.Add(new ComboBoxItem { Content = "No target", Tag = "" });
+        foreach (var id in agentIds.Where(id => !id.Equals(source, StringComparison.OrdinalIgnoreCase)))
+        {
+            picker.Items.Add(new ComboBoxItem { Content = DisplayStatusValue(id), Tag = id });
+        }
+    }
+
+    private static void PopulateRivalryStancePicker(ComboBox picker)
+    {
+        picker.Items.Clear();
+        picker.Items.Add(new ComboBoxItem { Content = "Neutral", Tag = "neutral" });
+        picker.Items.Add(new ComboBoxItem { Content = "Challenge", Tag = "challenge" });
+        picker.Items.Add(new ComboBoxItem { Content = "Support", Tag = "support" });
+        picker.Items.Add(new ComboBoxItem { Content = "Steelman", Tag = "steelman" });
+        picker.Items.Add(new ComboBoxItem { Content = "Cross-examine", Tag = "cross_examine" });
+        picker.Items.Add(new ComboBoxItem { Content = "Rival", Tag = "rival" });
+    }
+
+    private static string NormalizeRivalryStance(string stance)
+    {
+        var value = string.IsNullOrWhiteSpace(stance) ? "neutral" : stance.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+        return value switch
+        {
+            "challenge" or "support" or "steelman" or "cross_examine" or "rival" => value,
+            _ => "neutral"
+        };
+    }
+
+    private static string RivalryMatrixSummary(bool enabled, IReadOnlyList<RivalryMatrixItem> links)
+    {
+        var active = links.Count(link => !NormalizeRivalryStance(link.Stance).Equals("neutral", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(link.Target));
+        if (!enabled)
+        {
+            return active == 0 ? "Relationship pressure is off." : $"{active} relationship rule(s) saved, currently disabled.";
+        }
+
+        return active == 0 ? "Relationship pressure enabled with neutral rules." : $"{active} relationship rule(s) active.";
     }
 
     private void PopulateScenarioSeedInspector(ArenaSnapshot snapshot)
@@ -2388,6 +2477,11 @@ public partial class MainWindow : Window
         if (ReplayGenerationButton is not null)
         {
             ReplayGenerationButton.IsEnabled = hasItem && !_arenaBusy;
+        }
+
+        if (ReplayNewRunButton is not null)
+        {
+            ReplayNewRunButton.IsEnabled = hasItem && !_arenaBusy;
         }
 
         if (CopyGenerationSeedButton is not null)
@@ -4157,6 +4251,133 @@ public partial class MainWindow : Window
         };
     }
 
+    private Border? CreateAutoModeratorPanel(IReadOnlyList<TranscriptMessage> messages)
+    {
+        var alerts = BuildAutoModeratorAlerts(messages);
+        if (alerts.Count == 0)
+        {
+            return null;
+        }
+
+        var danger = alerts.Any(alert => alert.Severity.Equals("danger", StringComparison.OrdinalIgnoreCase));
+        var accent = danger ? ResourceBrush("DangerBorderBrush") : ResourceBrush("BetaAccentBrush");
+        var panel = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        foreach (var alert in alerts.Take(5))
+        {
+            var alertAccent = alert.Severity.Equals("danger", StringComparison.OrdinalIgnoreCase)
+                ? ResourceBrush("DangerBorderBrush")
+                : ResourceBrush("BetaAccentBrush");
+            panel.Children.Add(new Border
+            {
+                Background = BlendBrush(ResourceBrush("InputBrush"), alertAccent, 0.1),
+                BorderBrush = BlendBrush(ResourceBrush("ControlBorderBrush"), alertAccent, 0.35),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(5),
+                Padding = new Thickness(8),
+                Margin = new Thickness(0, 0, 0, 6),
+                Child = new StackPanel
+                {
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = alert.Label,
+                            Foreground = alertAccent,
+                            FontSize = 11,
+                            FontWeight = FontWeights.SemiBold
+                        },
+                        new TextBlock
+                        {
+                            Text = alert.Body,
+                            Foreground = ResourceBrush("TextBrush"),
+                            FontSize = 12,
+                            TextWrapping = TextWrapping.Wrap,
+                            Margin = new Thickness(0, 2, 0, 0)
+                        }
+                    }
+                }
+            });
+        }
+
+        return CreateCard(
+            "Auto Moderator",
+            "Suggested watch items from the current transcript window.",
+            BlendBrush(ResourceBrush("CardBrush"), accent, 0.08),
+            accent,
+            panel);
+    }
+
+    private IReadOnlyList<AutoModeratorAlert> BuildAutoModeratorAlerts(IReadOnlyList<TranscriptMessage> messages)
+    {
+        var conversation = messages
+            .Where(message => message.Kind is "message" or "" or "internet")
+            .Where(message => !message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (conversation.Length < 2)
+        {
+            return [];
+        }
+
+        var diagnostics = _discourseDiagnostics.Analyze(messages.Select(ToDiscourseTurn), _lastAgentPersonas);
+        var alerts = new List<AutoModeratorAlert>();
+        if (diagnostics.StateSeverity.Equals("danger", StringComparison.OrdinalIgnoreCase))
+        {
+            alerts.Add(new AutoModeratorAlert(diagnostics.StateLabel, "The discourse state is entering a risky pattern. Use an operator turn to demand evidence, a concrete next step, or a dissenting frame.", "danger"));
+        }
+
+        if (diagnostics.UnsupportedClaimCount > 0 && diagnostics.EvidencePressureLabel.Equals("Weak", StringComparison.OrdinalIgnoreCase))
+        {
+            alerts.Add(new AutoModeratorAlert("Evidence-starved claims", $"{diagnostics.UnsupportedClaimCount} unsupported claim marker(s) with weak evidence pressure. Ask the next agent to separate evidence, inference, and assumption.", "danger"));
+        }
+
+        if (diagnostics.ConsensusPercent >= 78)
+        {
+            alerts.Add(new AutoModeratorAlert("Consensus lock-in", $"Consensus is {diagnostics.ConsensusPercent}%. Inject a challenge or boundary-test turn before the agents converge too early.", "watch"));
+        }
+
+        if (diagnostics.RoleDriftPercent >= 38)
+        {
+            alerts.Add(new AutoModeratorAlert("Role drift", $"Role drift is {diagnostics.RoleDriftPercent}%. Remind agents to preserve their assigned persona and pressure profile.", "watch"));
+        }
+
+        if (diagnostics.NarrativeHeatScore >= 82)
+        {
+            alerts.Add(new AutoModeratorAlert("Narrative heat", $"Narrative heat is {diagnostics.NarrativeHeatLabel}. Ask for a testable claim or operational checkpoint to cool the rhetoric.", "watch"));
+        }
+
+        var voiceAlert = VoiceDriftAutoModeratorAlert(conversation);
+        if (voiceAlert is not null)
+        {
+            alerts.Add(voiceAlert);
+        }
+
+        return alerts
+            .GroupBy(alert => alert.Label, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToArray();
+    }
+
+    private AutoModeratorAlert? VoiceDriftAutoModeratorAlert(IReadOnlyList<TranscriptMessage> messages)
+    {
+        var drift = messages
+            .Where(message => IsAgentSpeaker(message.SpeakerId) || message.SpeakerId.Equals("narrator", StringComparison.OrdinalIgnoreCase))
+            .Where(message => !string.IsNullOrWhiteSpace(message.VoiceStyle))
+            .OrderByDescending(message => message.Turn)
+            .ThenByDescending(message => message.CreatedAt)
+            .Take(5)
+            .Select(message => (Message: message, Diagnostic: _voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text)))
+            .Where(item => item.Diagnostic.State is "broken" or "drifting")
+            .Take(2)
+            .ToArray();
+        if (drift.Length == 0)
+        {
+            return null;
+        }
+
+        var summary = string.Join("; ", drift.Select(item => $"{DisplayStatusValue(item.Message.SpeakerId)} {item.Diagnostic.Label}: {item.Diagnostic.State}"));
+        return new AutoModeratorAlert("Voice drift", $"{summary}. Turn on debug voice enforcement or use an operator nudge if voice style matters for this run.", "watch");
+    }
+
     private Border CreateAgentMemoryPanel(ArenaSnapshot snapshot)
     {
         var accent = ResourceBrush("GammaAccentBrush");
@@ -5522,6 +5743,50 @@ public partial class MainWindow : Window
         await TestProviderAsync(TestProviderButton);
     }
 
+    private async void ApplyProviderPresetButton_Click(object sender, RoutedEventArgs e)
+    {
+        var preset = SelectedComboTag(ProviderPresetPicker, "lm_studio");
+        var url = ProviderPresetBaseUrl(preset);
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            ProviderPresetStatusText.Foreground = ResourceBrush("MutedTextBrush");
+            ProviderPresetStatusText.Text = "Manual provider selected. Type a base URL, then press Enter or Apply Settings.";
+            ProviderBaseUrlText.Focus();
+            return;
+        }
+
+        ProviderBaseUrlText.Text = url;
+        ProviderPresetStatusText.Foreground = ResourceBrush("AlphaAccentBrush");
+        ProviderPresetStatusText.Text = $"Provider preset applied: {url}";
+        await PersistModelRoutingAsync("Provider preset applied.", refreshModels: true);
+    }
+
+    private static string ProviderPresetBaseUrl(string preset)
+    {
+        return preset switch
+        {
+            "ollama" => "http://127.0.0.1:11434/v1",
+            "local_8000" => "http://127.0.0.1:8000/v1",
+            "lm_studio" => "http://127.0.0.1:1234/v1",
+            _ => ""
+        };
+    }
+
+    private static string ProviderPresetTagForUrl(string baseUrl)
+    {
+        var normalized = ModelProviderHealthService.NormalizeBaseUrl(baseUrl);
+        return normalized switch
+        {
+            "http://127.0.0.1:1234/v1" => "lm_studio",
+            "http://localhost:1234/v1" => "lm_studio",
+            "http://127.0.0.1:11434/v1" => "ollama",
+            "http://localhost:11434/v1" => "ollama",
+            "http://127.0.0.1:8000/v1" => "local_8000",
+            "http://localhost:8000/v1" => "local_8000",
+            _ => "manual"
+        };
+    }
+
     private async Task TestProviderAsync(Control busyControl)
     {
         if (_activeSession is null)
@@ -5632,6 +5897,31 @@ public partial class MainWindow : Window
         {
             SaveRoleModelDrafts();
             var models = SelectedModelsForPreload();
+            var preview = CurrentLoadPlanPreview();
+            UpdateLoadPlanPreview();
+            if (models.Count == 0)
+            {
+                PreloadModelsStatusText.Foreground = ResourceBrush("DangerTextBrush");
+                PreloadModelsStatusText.Text = "Select a default or participant model before preloading.";
+                return;
+            }
+
+            if (preview.Status.Equals("cautious", StringComparison.OrdinalIgnoreCase))
+            {
+                var confirm = ConfirmDialog.Show(
+                    this,
+                    _theme,
+                    "Preload Selected Models",
+                    $"{FormatLoadPlanPreview(preview)}\n\nContinue with preload?",
+                    "Preload");
+                if (!confirm)
+                {
+                    PreloadModelsStatusText.Foreground = ResourceBrush("MutedTextBrush");
+                    PreloadModelsStatusText.Text = "Preload cancelled.";
+                    return;
+                }
+            }
+
             PreloadModelsStatusText.Foreground = ResourceBrush("MutedTextBrush");
             PreloadModelsStatusText.Text = $"Preloading {models.Count} selected model(s)...";
             PreloadModelsItems.Children.Clear();
@@ -5649,6 +5939,7 @@ public partial class MainWindow : Window
                 : ResourceBrush("AlphaAccentBrush");
             PreloadModelsStatusText.Text = $"Last preload: {DateTime.Now:h:mm:ss tt} - {results.Count} model(s), {failures} warning(s).";
             PopulatePreloadModelBadges(results);
+            UpdateLoadPlanPreview();
             ProviderTestStatus.Text = failures > 0
                 ? "Model preload finished with warnings. See preload telemetry."
                 : "Selected models preloaded or already available.";
@@ -5782,6 +6073,7 @@ public partial class MainWindow : Window
         ProviderModelsStatus.Text = plan.ProviderOnline
             ? $"{plan.Models.Count} advertised chat models found by Auto Configure."
             : "Auto Configure could not reach an OpenAI-compatible provider.";
+        UpdateLoadPlanPreview();
     }
 
     private Border CreateAutoConfigureBadge(ModelAssignmentRecommendation assignment)
@@ -6293,6 +6585,37 @@ public partial class MainWindow : Window
         }, allowDuringAutoChat: true);
     }
 
+    private async void ReplayNewRunButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeSession is null)
+        {
+            LoadStatus.Text = "No active session.";
+            return;
+        }
+
+        var item = SelectedGenerationHistory();
+        if (item is null)
+        {
+            LoadStatus.Text = "No generated match selected.";
+            ArenaRunStatus.Text = LoadStatus.Text;
+            return;
+        }
+
+        await RunArenaBusyAsync($"Creating replay run: {item.Label}...", ReplayNewRunButton, async () =>
+        {
+            var result = await _matchGeneration.ReplayGenerationToNewSessionAsync(_activeSession.Id, item.Id);
+            if (!result.Ok)
+            {
+                RefreshActiveSession($"New replay run failed: {result.Error}");
+                return;
+            }
+
+            await LoadSessionsAsync(result.Label);
+            LoadStatus.Text = $"Created replay run: {result.Label}";
+            ArenaRunStatus.Text = $"Replay run ready: {item.Label}";
+        }, allowDuringAutoChat: true);
+    }
+
     private void CopyGenerationSeedButton_Click(object sender, RoutedEventArgs e)
     {
         var item = SelectedGenerationHistory();
@@ -6324,6 +6647,56 @@ public partial class MainWindow : Window
             LoadStatus.Text = $"Copy seed failed: {ex.Message}";
             ArenaRunStatus.Text = LoadStatus.Text;
         }
+    }
+
+    private async void ApplyRivalryMatrixButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeSession is null)
+        {
+            RivalryMatrixStatusText.Text = "No active session.";
+            RivalryMatrixStatusText.Foreground = ResourceBrush("DangerTextBrush");
+            return;
+        }
+
+        await RunArenaBusyAsync("Applying relationship matrix...", ApplyRivalryMatrixButton, async () =>
+        {
+            var snapshot = await _coreSessionStore.LoadSnapshotAsync(_activeSession.Id);
+            if (snapshot is null)
+            {
+                RivalryMatrixStatusText.Text = $"No snapshot found for session {_activeSession.Id}.";
+                RivalryMatrixStatusText.Foreground = ResourceBrush("DangerTextBrush");
+                return;
+            }
+
+            snapshot.Engine.RivalryMatrix.Enabled = RivalryMatrixEnabledCheckBox.IsChecked == true;
+            snapshot.Engine.RivalryMatrix.Links.Clear();
+            foreach (var (source, targetPicker, stancePicker) in RivalryMatrixControls())
+            {
+                var target = SelectedComboTag(targetPicker, "");
+                var stance = NormalizeRivalryStance(SelectedComboTag(stancePicker, "neutral"));
+                if (string.IsNullOrWhiteSpace(target) || stance.Equals("neutral", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                snapshot.Engine.RivalryMatrix.Links.Add(new AIArena.Core.Models.RivalryLink
+                {
+                    Source = source,
+                    Target = target,
+                    Stance = stance
+                });
+            }
+
+            await SaveSnapshotWithFeedbackAsync(snapshot, _activeSession.Id);
+            await _eventLogStore.AppendAsync(_activeSession.Id, "native_rivalry_matrix_applied", new
+            {
+                snapshot.Engine.RivalryMatrix.Enabled,
+                links = snapshot.Engine.RivalryMatrix.Links.Select(link => new { link.Source, link.Target, link.Stance }).ToArray()
+            });
+            await RefreshActiveSessionAsync(RivalryMatrixSummary(snapshot.Engine.RivalryMatrix.Enabled, snapshot.Engine.RivalryMatrix.Links
+                .Select(link => new RivalryMatrixItem(link.Source, link.Target, link.Stance))
+                .ToArray()));
+        }, allowDuringAutoChat: true);
     }
 
     private void GenerationHistoryPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -10176,6 +10549,7 @@ public partial class MainWindow : Window
             $"Delta: {DisplayParticipantModel(RoleModel("delta"), defaultModel)}",
             $"Narrator: {DisplayParticipantModel(RoleModel("narrator"), defaultModel)}");
         UpdateModelStateLabels();
+        UpdateLoadPlanPreview();
     }
 
     private void UpdateModelStateLabels()
@@ -10304,6 +10678,45 @@ public partial class MainWindow : Window
             .Where(model => !string.IsNullOrWhiteSpace(model))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private ModelLoadPlanPreview CurrentLoadPlanPreview()
+    {
+        return ProviderAutoConfigureService.PreviewLoadPlan(SelectedModelsForPreload(), _lastAutoConfigurePlan?.Hardware);
+    }
+
+    private void UpdateLoadPlanPreview()
+    {
+        if (LoadPlanPreviewText is null)
+        {
+            return;
+        }
+
+        var preview = CurrentLoadPlanPreview();
+        LoadPlanPreviewText.Text = FormatLoadPlanPreview(preview);
+        LoadPlanPreviewText.Foreground = preview.Status switch
+        {
+            "comfortable" => ResourceBrush("AlphaAccentBrush"),
+            "cautious" => ResourceBrush("BetaAccentBrush"),
+            "mixed" => ResourceBrush("BetaAccentBrush"),
+            "empty" => ResourceBrush("MutedTextBrush"),
+            _ => ResourceBrush("MutedTextBrush")
+        };
+    }
+
+    private static string FormatLoadPlanPreview(ModelLoadPlanPreview preview)
+    {
+        if (preview.Models.Count == 0)
+        {
+            return preview.Guidance;
+        }
+
+        var modelNames = string.Join(", ", preview.Models.Select(model =>
+        {
+            var footprint = model.EstimatedFootprintGb is double gb ? $"{gb:0.#} GB" : "unknown size";
+            return $"{model.Name} ({footprint})";
+        }));
+        return $"Load plan: {preview.Models.Count} unique model(s), estimated {preview.EstimatedTotalFootprintGb:0.#} GB total footprint, comfortable per-model target {preview.ComfortablePerModelTargetGb:0.#} GB. Status: {preview.Status}. {preview.Guidance} Models: {modelNames}";
     }
 
     private static string FormatPreloadResults(IReadOnlyList<ModelPreloadResult> results)

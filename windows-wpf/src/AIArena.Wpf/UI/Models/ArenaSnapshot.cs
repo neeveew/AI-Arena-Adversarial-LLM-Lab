@@ -17,6 +17,8 @@ public sealed record ArenaSnapshot(
     string PersonaGeneratorStyle,
     string PersonaGeneratorSeed,
     IReadOnlyList<GenerationHistoryItem> GenerationHistory,
+    bool RivalryMatrixEnabled,
+    IReadOnlyList<RivalryMatrixItem> RivalryMatrix,
     int TurnCount,
     int TurnIndex,
     string ProviderModel,
@@ -51,3 +53,8 @@ public sealed record ArenaSnapshot(
     bool ProviderOnline,
     IReadOnlyList<TranscriptMessage> Messages,
     IReadOnlyList<AgentState> Agents);
+
+public sealed record RivalryMatrixItem(
+    string Source,
+    string Target,
+    string Stance);

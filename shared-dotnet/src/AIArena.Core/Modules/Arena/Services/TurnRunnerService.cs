@@ -409,6 +409,7 @@ public sealed class TurnRunnerService
         var voiceReminder = VoiceStyleInstructions.TurnReminder(agent?.VoiceStyle);
         var pressureInstruction = AgentPressureInstructions.Instruction(agent?.PressureProfile);
         var pressureReminder = AgentPressureInstructions.TurnReminder(agent?.PressureProfile);
+        var relationshipInstruction = RelationshipInstruction(snapshot, plan.AgentId);
         var cast = string.Join(
             Environment.NewLine,
             active.Select(item => item.Id == plan.AgentId
@@ -447,6 +448,7 @@ public sealed class TurnRunnerService
                     $"Topic: {topic}",
                     $"Global instruction: {global}",
                     $"Active participants:{Environment.NewLine}{cast}",
+                    relationshipInstruction,
                     string.IsNullOrWhiteSpace(privateNotes) ? "Your private memory notes: -" : $"Your private memory notes:{Environment.NewLine}{privateNotes}",
                     string.IsNullOrWhiteSpace(transcript) ? "Transcript: No public transcript yet." : $"Transcript:{Environment.NewLine}{transcript}",
                     string.IsNullOrWhiteSpace(latestOperatorRequest) ? "Latest Operator request: -" : $"Latest Operator request: {latestOperatorRequest}",
@@ -454,6 +456,54 @@ public sealed class TurnRunnerService
                     pressureReminder,
                     $"Write the next public turn for {plan.AgentName}."))
         ];
+    }
+
+    private static string RelationshipInstruction(ArenaSnapshot snapshot, string agentId)
+    {
+        if (!snapshot.Engine.RivalryMatrix.Enabled || snapshot.Engine.RivalryMatrix.Links.Count == 0)
+        {
+            return "Relationship pressure: neutral.";
+        }
+
+        var links = snapshot.Engine.RivalryMatrix.Links
+            .Where(link => link.Source.Equals(agentId, StringComparison.OrdinalIgnoreCase))
+            .Where(link => !string.IsNullOrWhiteSpace(link.Target))
+            .Where(link => !NormalizeRelationshipStance(link.Stance).Equals("neutral", StringComparison.OrdinalIgnoreCase))
+            .Select(link => $"{DisplayAgentId(link.Target)}: {RelationshipStanceInstruction(link.Stance)}")
+            .ToArray();
+        return links.Length == 0
+            ? "Relationship pressure: neutral."
+            : $"Relationship pressure for this turn:{Environment.NewLine}- {string.Join(Environment.NewLine + "- ", links)}";
+    }
+
+    private static string RelationshipStanceInstruction(string stance)
+    {
+        return NormalizeRelationshipStance(stance) switch
+        {
+            "challenge" => "challenge assumptions and require sharper evidence, while staying useful",
+            "support" => "support and extend their strongest useful point",
+            "steelman" => "steelman their position before adding your own constraint",
+            "cross_examine" => "ask one pointed test question and expose any missing premise",
+            "rival" => "act as a productive rival; seek a better alternative without dismissing substance",
+            _ => "stay neutral"
+        };
+    }
+
+    private static string NormalizeRelationshipStance(string stance)
+    {
+        var value = string.IsNullOrWhiteSpace(stance) ? "neutral" : stance.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+        return value switch
+        {
+            "challenge" or "support" or "steelman" or "cross_examine" or "rival" => value,
+            _ => "neutral"
+        };
+    }
+
+    private static string DisplayAgentId(string agentId)
+    {
+        return string.IsNullOrWhiteSpace(agentId)
+            ? "target"
+            : char.ToUpperInvariant(agentId[0]) + agentId[1..].ToLowerInvariant();
     }
 
     private static string InternetToolInstruction(ModelRssSettings settings, bool allowInternetTool)
