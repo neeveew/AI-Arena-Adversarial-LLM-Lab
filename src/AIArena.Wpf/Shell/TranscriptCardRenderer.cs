@@ -27,12 +27,9 @@ internal sealed class TranscriptCardRenderer
     private readonly Func<string> currentAvatarStyle;
     private readonly Func<bool> useChampionPortrait;
     private readonly Func<bool> useSystemGlyph;
-    private readonly Func<string, string> voiceStyleChipText;
     private readonly Func<bool> shouldShowStyleFit;
     private readonly Func<string, string, VoiceAdherenceDiagnostic> analyzeVoiceAdherence;
-    private readonly Func<VoiceAdherenceDiagnostic, string> voiceAdherenceChipText;
     private readonly Func<VoiceAdherenceDiagnostic, Brush> voiceAdherenceAccent;
-    private readonly Func<VoiceAdherenceDiagnostic, string> voiceAdherenceTooltip;
     private readonly Func<int, string> formatDuration;
     private readonly Func<int, string> formatCompactNumber;
     private readonly Action<TranscriptMessage> copyTranscriptMessage;
@@ -59,12 +56,9 @@ internal sealed class TranscriptCardRenderer
         Func<string> currentAvatarStyle,
         Func<bool> useChampionPortrait,
         Func<bool> useSystemGlyph,
-        Func<string, string> voiceStyleChipText,
         Func<bool> shouldShowStyleFit,
         Func<string, string, VoiceAdherenceDiagnostic> analyzeVoiceAdherence,
-        Func<VoiceAdherenceDiagnostic, string> voiceAdherenceChipText,
         Func<VoiceAdherenceDiagnostic, Brush> voiceAdherenceAccent,
-        Func<VoiceAdherenceDiagnostic, string> voiceAdherenceTooltip,
         Func<int, string> formatDuration,
         Func<int, string> formatCompactNumber,
         Action<TranscriptMessage> copyTranscriptMessage,
@@ -90,12 +84,9 @@ internal sealed class TranscriptCardRenderer
         this.currentAvatarStyle = currentAvatarStyle;
         this.useChampionPortrait = useChampionPortrait;
         this.useSystemGlyph = useSystemGlyph;
-        this.voiceStyleChipText = voiceStyleChipText;
         this.shouldShowStyleFit = shouldShowStyleFit;
         this.analyzeVoiceAdherence = analyzeVoiceAdherence;
-        this.voiceAdherenceChipText = voiceAdherenceChipText;
         this.voiceAdherenceAccent = voiceAdherenceAccent;
-        this.voiceAdherenceTooltip = voiceAdherenceTooltip;
         this.formatDuration = formatDuration;
         this.formatCompactNumber = formatCompactNumber;
         this.copyTranscriptMessage = copyTranscriptMessage;
@@ -632,7 +623,7 @@ internal sealed class TranscriptCardRenderer
         {
             identity.Children.Add(CreateStatPill(message.Model, isInternet));
         }
-        var voiceChip = voiceStyleChipText(message.VoiceStyle);
+        var voiceChip = RoleStyleCatalog.VoiceStyleChipText(message.VoiceStyle);
         if (!isInternet && !isSystemEvent && !string.IsNullOrWhiteSpace(voiceChip))
         {
             identity.Children.Add(CreateStatPill(voiceChip, isInternet));
@@ -640,10 +631,10 @@ internal sealed class TranscriptCardRenderer
             {
                 var voiceAdherence = analyzeVoiceAdherence(message.VoiceStyle, message.Text);
                 identity.Children.Add(CreateStatPill(
-                    voiceAdherenceChipText(voiceAdherence),
+                    RoleStyleCatalog.VoiceAdherenceChipText(voiceAdherence),
                     isInternet,
                     accentOverride: voiceAdherenceAccent(voiceAdherence),
-                    toolTip: voiceAdherenceTooltip(voiceAdherence)));
+                    toolTip: RoleStyleCatalog.VoiceAdherenceTooltip(voiceAdherence)));
             }
         }
         foreach (var pill in CreateStatPills(message, isInternet))

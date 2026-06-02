@@ -22,14 +22,6 @@ internal sealed class MatchLockCoordinator
     private readonly Func<bool> isRenderingSnapshot;
     private readonly Func<string, Brush> resourceBrush;
     private readonly Func<Brush, Brush, double, Brush> blendBrush;
-    private readonly Func<string?, string> normalizeVoiceStyleTag;
-    private readonly Func<string?, string> normalizeAgentPressureTag;
-    private readonly Func<string?, string> voiceStyleLabel;
-    private readonly Func<string?, string> agentPressureLabel;
-    private readonly Func<string?, string> voiceStyleChipText;
-    private readonly Func<string?, string> agentPressureChipText;
-    private readonly Func<IReadOnlyList<(string Tag, string Label)>> voiceStyleOptions;
-    private readonly Func<IReadOnlyList<(string Tag, string Label)>> agentPressureOptions;
     private readonly Func<string, Button?, Func<Task>, bool, Task> runArenaBusyAsync;
     private readonly Func<AIArena.Core.Models.ArenaSnapshot, string, Task> saveSnapshotWithFeedbackAsync;
     private readonly Func<string, Task> refreshActiveSessionAsync;
@@ -64,14 +56,6 @@ internal sealed class MatchLockCoordinator
         Func<bool> isRenderingSnapshot,
         Func<string, Brush> resourceBrush,
         Func<Brush, Brush, double, Brush> blendBrush,
-        Func<string?, string> normalizeVoiceStyleTag,
-        Func<string?, string> normalizeAgentPressureTag,
-        Func<string?, string> voiceStyleLabel,
-        Func<string?, string> agentPressureLabel,
-        Func<string?, string> voiceStyleChipText,
-        Func<string?, string> agentPressureChipText,
-        Func<IReadOnlyList<(string Tag, string Label)>> voiceStyleOptions,
-        Func<IReadOnlyList<(string Tag, string Label)>> agentPressureOptions,
         Func<string, Button?, Func<Task>, bool, Task> runArenaBusyAsync,
         Func<AIArena.Core.Models.ArenaSnapshot, string, Task> saveSnapshotWithFeedbackAsync,
         Func<string, Task> refreshActiveSessionAsync,
@@ -88,14 +72,6 @@ internal sealed class MatchLockCoordinator
         this.isRenderingSnapshot = isRenderingSnapshot;
         this.resourceBrush = resourceBrush;
         this.blendBrush = blendBrush;
-        this.normalizeVoiceStyleTag = normalizeVoiceStyleTag;
-        this.normalizeAgentPressureTag = normalizeAgentPressureTag;
-        this.voiceStyleLabel = voiceStyleLabel;
-        this.agentPressureLabel = agentPressureLabel;
-        this.voiceStyleChipText = voiceStyleChipText;
-        this.agentPressureChipText = agentPressureChipText;
-        this.voiceStyleOptions = voiceStyleOptions;
-        this.agentPressureOptions = agentPressureOptions;
         this.runArenaBusyAsync = runArenaBusyAsync;
         this.saveSnapshotWithFeedbackAsync = saveSnapshotWithFeedbackAsync;
         this.refreshActiveSessionAsync = refreshActiveSessionAsync;
@@ -222,12 +198,12 @@ internal sealed class MatchLockCoordinator
             VerticalAlignment = VerticalAlignment.Center
         });
         titlePanel.Children.Add(CreateLockMetaChip(DisplayLockKey(lockKey), accent));
-        var visibleVoiceStyle = voiceStyleChipText(voiceStyle);
+        var visibleVoiceStyle = RoleStyleCatalog.VoiceStyleChipText(voiceStyle);
         if (isCastCard && !string.IsNullOrWhiteSpace(visibleVoiceStyle))
         {
             titlePanel.Children.Add(CreateLockMetaChip(visibleVoiceStyle, accent));
         }
-        var visiblePressure = agentPressureChipText(pressureProfile);
+        var visiblePressure = RoleStyleCatalog.AgentPressureChipText(pressureProfile);
         if (isAgentCard && !string.IsNullOrWhiteSpace(visiblePressure))
         {
             titlePanel.Children.Add(CreateLockMetaChip(visiblePressure, accent));
@@ -333,12 +309,12 @@ internal sealed class MatchLockCoordinator
             ToolTip = "Communication style for this model"
         };
 
-        foreach (var option in voiceStyleOptions())
+        foreach (var option in RoleStyleCatalog.VoiceStyleOptions)
         {
             picker.Items.Add(new ComboBoxItem { Content = option.Label, Tag = option.Tag });
         }
 
-        ShellUiHelpers.SelectComboTag(picker, normalizeVoiceStyleTag(voiceStyle));
+        ShellUiHelpers.SelectComboTag(picker, RoleStyleCatalog.NormalizeVoiceStyleTag(voiceStyle));
         picker.SelectionChanged += VoiceStylePicker_SelectionChanged;
         voiceControls.Add(picker);
         return picker;
@@ -357,12 +333,12 @@ internal sealed class MatchLockCoordinator
             ToolTip = "Debate pressure for this agent"
         };
 
-        foreach (var option in agentPressureOptions())
+        foreach (var option in RoleStyleCatalog.AgentPressureOptions)
         {
             picker.Items.Add(new ComboBoxItem { Content = option.Label, Tag = option.Tag });
         }
 
-        ShellUiHelpers.SelectComboTag(picker, normalizeAgentPressureTag(pressureProfile));
+        ShellUiHelpers.SelectComboTag(picker, RoleStyleCatalog.NormalizeAgentPressureTag(pressureProfile));
         picker.SelectionChanged += AgentPressurePicker_SelectionChanged;
         pressureControls.Add(picker);
         return picker;
@@ -398,7 +374,7 @@ internal sealed class MatchLockCoordinator
                 key = NormalizeLockKey(key),
                 voice_style = voiceStyle
             });
-            await refreshActiveSessionAsync($"Updated {DisplayLockKey(key)} voice: {voiceStyleLabel(voiceStyle)}.");
+            await refreshActiveSessionAsync($"Updated {DisplayLockKey(key)} voice: {RoleStyleCatalog.VoiceStyleLabel(voiceStyle)}.");
         }, false);
     }
 
@@ -432,7 +408,7 @@ internal sealed class MatchLockCoordinator
                 key = NormalizeLockKey(key),
                 pressure_profile = pressure
             });
-            await refreshActiveSessionAsync($"Updated {DisplayLockKey(key)} pressure: {agentPressureLabel(pressure)}.");
+            await refreshActiveSessionAsync($"Updated {DisplayLockKey(key)} pressure: {RoleStyleCatalog.AgentPressureLabel(pressure)}.");
         }, false);
     }
 
@@ -627,7 +603,7 @@ internal sealed class MatchLockCoordinator
     private bool ApplyVoiceStyle(AIArena.Core.Models.ArenaSnapshot snapshot, string key, string value)
     {
         var normalizedKey = NormalizeLockKey(key);
-        var normalizedVoice = normalizeVoiceStyleTag(value);
+        var normalizedVoice = RoleStyleCatalog.NormalizeVoiceStyleTag(value);
         switch (normalizedKey)
         {
             case "narrator":
@@ -650,7 +626,7 @@ internal sealed class MatchLockCoordinator
     private bool ApplyAgentPressure(AIArena.Core.Models.ArenaSnapshot snapshot, string key, string value)
     {
         var normalizedKey = NormalizeLockKey(key);
-        var normalizedPressure = normalizeAgentPressureTag(value);
+        var normalizedPressure = RoleStyleCatalog.NormalizeAgentPressureTag(value);
         switch (normalizedKey)
         {
             case var agentId when IsParticipant(agentId):

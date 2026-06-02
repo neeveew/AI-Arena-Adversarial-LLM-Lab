@@ -342,12 +342,9 @@ public partial class MainWindow : Window
             CurrentAvatarStyle,
             () => _wpfSettings.ChampionAvatars,
             () => _wpfSettings.SystemEventGlyphs,
-            VoiceStyleChipText,
             ShouldShowStyleFit,
             (style, text) => _voiceStyleAdherenceService.Analyze(style, text),
-            VoiceAdherenceChipText,
             diagnostic => VoiceAdherenceAccent(diagnostic),
-            VoiceAdherenceTooltip,
             FormatDuration,
             FormatCompactNumber,
             CopyTranscriptMessage,
@@ -408,12 +405,8 @@ public partial class MainWindow : Window
             ShortModelName,
             FormatCompactNumber,
             FormatDuration,
-            VoiceStyleChipText,
-            VoiceAdherenceState,
-            VoiceAdherenceDisplayState,
             state => VoiceAdherenceAccent(state),
             diagnostic => VoiceAdherenceAccent(diagnostic),
-            VoiceAdherenceTooltip,
             ShellUiHelpers.CompactPreview,
             BlendBrush);
         _diagnosticsWorkflowCoordinator = new DiagnosticsWorkflowCoordinator(
@@ -489,14 +482,6 @@ public partial class MainWindow : Window
             () => _isRenderingSnapshot,
             ResourceBrush,
             BlendBrush,
-            NormalizeVoiceStyleTag,
-            NormalizeAgentPressureTag,
-            VoiceStyleLabel,
-            AgentPressureLabel,
-            VoiceStyleChipText,
-            AgentPressureChipText,
-            VoiceStyleOptions,
-            AgentPressureOptions,
             RunArenaBusyForCoordinatorAsync,
             SaveSnapshotForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync,
@@ -1713,93 +1698,6 @@ public partial class MainWindow : Window
             : "-";
     }
 
-    private static IReadOnlyList<(string Tag, string Label)> VoiceStyleOptions()
-    {
-        return
-        [
-            ("default", "Voice: Default"),
-            ("scientific", "Voice: Scientific"),
-            ("legal_policy", "Voice: Legal / Policy"),
-            ("plain_language", "Voice: Plain"),
-            ("idioms", "Voice: Idioms"),
-            ("cute", "Voice: Cute"),
-            ("poetic", "Voice: Poetic"),
-            ("socratic", "Voice: Socratic"),
-            ("bullet_only", "Voice: Bullet-only"),
-            ("skeptical", "Voice: Skeptical"),
-            ("executive_brief", "Voice: Executive"),
-            ("evidence_ledger", "Voice: Evidence"),
-            ("no_analogies", "Voice: No analogies"),
-            ("hedge_uncertainty", "Voice: Hedge"),
-            ("bark_only", "Voice: Bark-only"),
-            ("science_gibberish", "Voice: Science gibberish")
-        ];
-    }
-
-    private static IReadOnlyList<(string Tag, string Label)> AgentPressureOptions()
-    {
-        return
-        [
-            ("default", "Pressure: Default"),
-            ("calm", "Pressure: Calm"),
-            ("assertive", "Pressure: Assertive"),
-            ("contrarian", "Pressure: Contrarian"),
-            ("evidence", "Pressure: Evidence"),
-            ("risk", "Pressure: Risk"),
-            ("concise", "Pressure: Concise"),
-            ("expansive", "Pressure: Expansive"),
-            ("chaos", "Pressure: Chaos")
-        ];
-    }
-
-    private static string NormalizeVoiceStyleTag(string? value)
-    {
-        var cleaned = string.IsNullOrWhiteSpace(value)
-            ? "default"
-            : value.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
-        return VoiceStyleOptions().Any(option => option.Tag.Equals(cleaned, StringComparison.OrdinalIgnoreCase))
-            ? cleaned
-            : "default";
-    }
-
-    private static string VoiceStyleLabel(string? value)
-    {
-        var tag = NormalizeVoiceStyleTag(value);
-        var label = VoiceStyleOptions().First(option => option.Tag == tag).Label;
-        return label.Replace("Voice: ", "", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string VoiceStyleChipText(string? value)
-    {
-        return NormalizeVoiceStyleTag(value).Equals("default", StringComparison.OrdinalIgnoreCase)
-            ? ""
-            : $"Voice: {VoiceStyleLabel(value)}";
-    }
-
-    private static string NormalizeAgentPressureTag(string? value)
-    {
-        var cleaned = string.IsNullOrWhiteSpace(value)
-            ? "default"
-            : value.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
-        return AgentPressureOptions().Any(option => option.Tag.Equals(cleaned, StringComparison.OrdinalIgnoreCase))
-            ? cleaned
-            : "default";
-    }
-
-    private static string AgentPressureLabel(string? value)
-    {
-        var tag = NormalizeAgentPressureTag(value);
-        var label = AgentPressureOptions().First(option => option.Tag == tag).Label;
-        return label.Replace("Pressure: ", "", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string AgentPressureChipText(string? value)
-    {
-        return NormalizeAgentPressureTag(value).Equals("default", StringComparison.OrdinalIgnoreCase)
-            ? ""
-            : $"Pressure: {AgentPressureLabel(value)}";
-    }
-
     private bool ShouldShowStyleFit()
     {
         return _wpfSettings.AllowDebugControls && _wpfSettings.ShowStyleFit;
@@ -1815,48 +1713,6 @@ public partial class MainWindow : Window
         return _wpfSettings.AllowDebugControls && _wpfSettings.EnforceVoiceDrift;
     }
 
-    private static string VoiceAdherenceState(int score, int samples)
-    {
-        if (samples <= 0)
-        {
-            return "none";
-        }
-
-        return score >= 74 ? "strong" : score >= 46 ? "drifting" : "broken";
-    }
-
-    private static string VoiceAdherenceDisplayState(string state)
-    {
-        return state.Equals("strong", StringComparison.OrdinalIgnoreCase)
-            ? "strong cues"
-            : state.Equals("drifting", StringComparison.OrdinalIgnoreCase)
-                ? "partial cues"
-                : state.Equals("broken", StringComparison.OrdinalIgnoreCase)
-                    ? "low cues"
-                    : "no cues";
-    }
-
-    private static string VoiceAdherenceChipText(CoreVoiceAdherenceDiagnostic diagnostic)
-    {
-        var cue = diagnostic.State.Equals("strong", StringComparison.OrdinalIgnoreCase)
-            ? "strong"
-            : diagnostic.State.Equals("drifting", StringComparison.OrdinalIgnoreCase)
-                ? "partial"
-                : diagnostic.State.Equals("broken", StringComparison.OrdinalIgnoreCase)
-                    ? "low"
-                    : "none";
-        return $"Cues: {cue} {diagnostic.Score}";
-    }
-
-    private static bool IsStrictVoiceStyle(string? voiceStyle)
-    {
-        var normalized = NormalizeVoiceStyleTag(voiceStyle);
-        return normalized.Equals("bullet_only", StringComparison.OrdinalIgnoreCase)
-            || normalized.Equals("evidence_ledger", StringComparison.OrdinalIgnoreCase)
-            || normalized.Equals("no_analogies", StringComparison.OrdinalIgnoreCase)
-            || normalized.Equals("bark_only", StringComparison.OrdinalIgnoreCase);
-    }
-
     private Brush VoiceAdherenceAccent(string state)
     {
         return state.Equals("strong", StringComparison.OrdinalIgnoreCase)
@@ -1868,23 +1724,12 @@ public partial class MainWindow : Window
 
     private Brush VoiceAdherenceAccent(CoreVoiceAdherenceDiagnostic diagnostic)
     {
-        if (diagnostic.State.Equals("broken", StringComparison.OrdinalIgnoreCase) && IsStrictVoiceStyle(diagnostic.VoiceStyle))
+        if (diagnostic.State.Equals("broken", StringComparison.OrdinalIgnoreCase) && RoleStyleCatalog.IsStrictVoiceStyle(diagnostic.VoiceStyle))
         {
             return ResourceBrush("DangerBorderBrush");
         }
 
         return VoiceAdherenceAccent(diagnostic.State);
-    }
-
-    private static string VoiceAdherenceTooltip(CoreVoiceAdherenceDiagnostic diagnostic)
-    {
-        var evidence = diagnostic.Evidence.Count == 0
-            ? "Evidence: -"
-            : $"Evidence: {string.Join("; ", diagnostic.Evidence)}";
-        var missing = diagnostic.Missing.Count == 0
-            ? "Missing: -"
-            : $"Missing: {string.Join("; ", diagnostic.Missing)}";
-        return $"{diagnostic.Summary}{Environment.NewLine}{evidence}{Environment.NewLine}{missing}";
     }
 
     private Border CreateTranscriptCard(TranscriptMessage message, bool retryable, bool searchMatch, bool isLatest)
@@ -2096,7 +1941,7 @@ public partial class MainWindow : Window
         {
             meta.Children.Add(CreateTranscriptStatPill(message.Model, isInternet));
         }
-        var compareVoiceChip = VoiceStyleChipText(message.VoiceStyle);
+        var compareVoiceChip = RoleStyleCatalog.VoiceStyleChipText(message.VoiceStyle);
         if (!isInternet && !isSystemEvent && !string.IsNullOrWhiteSpace(compareVoiceChip))
         {
             meta.Children.Add(CreateTranscriptStatPill(compareVoiceChip, isInternet));
@@ -2104,10 +1949,10 @@ public partial class MainWindow : Window
             {
                 var compareAdherence = _voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text);
                 meta.Children.Add(CreateTranscriptStatPill(
-                    VoiceAdherenceChipText(compareAdherence),
+                    RoleStyleCatalog.VoiceAdherenceChipText(compareAdherence),
                     isInternet,
                     accentOverride: VoiceAdherenceAccent(compareAdherence),
-                    toolTip: VoiceAdherenceTooltip(compareAdherence)));
+                    toolTip: RoleStyleCatalog.VoiceAdherenceTooltip(compareAdherence)));
             }
         }
         meta.Children.Add(CreateTranscriptStatPill(FormatGeneratedTokens(message), isInternet));

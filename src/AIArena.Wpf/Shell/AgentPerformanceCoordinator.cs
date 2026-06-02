@@ -24,12 +24,8 @@ internal sealed class AgentPerformanceCoordinator
     private readonly Func<string, string> shortModelName;
     private readonly Func<int, string> formatCompactNumber;
     private readonly Func<int, string> formatDuration;
-    private readonly Func<string?, string> voiceStyleChipText;
-    private readonly Func<int, int, string> voiceAdherenceState;
-    private readonly Func<string, string> voiceAdherenceDisplayState;
     private readonly Func<string, Brush> voiceAdherenceStateAccent;
     private readonly Func<CoreVoiceAdherenceDiagnostic, Brush> voiceAdherenceDiagnosticAccent;
-    private readonly Func<CoreVoiceAdherenceDiagnostic, string> voiceAdherenceTooltip;
     private readonly Func<string?, int, string, string> compactPreview;
     private readonly Func<Brush, Brush, double, Brush> blendBrush;
 
@@ -49,12 +45,8 @@ internal sealed class AgentPerformanceCoordinator
         Func<string, string> shortModelName,
         Func<int, string> formatCompactNumber,
         Func<int, string> formatDuration,
-        Func<string?, string> voiceStyleChipText,
-        Func<int, int, string> voiceAdherenceState,
-        Func<string, string> voiceAdherenceDisplayState,
         Func<string, Brush> voiceAdherenceStateAccent,
         Func<CoreVoiceAdherenceDiagnostic, Brush> voiceAdherenceDiagnosticAccent,
-        Func<CoreVoiceAdherenceDiagnostic, string> voiceAdherenceTooltip,
         Func<string?, int, string, string> compactPreview,
         Func<Brush, Brush, double, Brush> blendBrush)
     {
@@ -70,12 +62,8 @@ internal sealed class AgentPerformanceCoordinator
         this.shortModelName = shortModelName;
         this.formatCompactNumber = formatCompactNumber;
         this.formatDuration = formatDuration;
-        this.voiceStyleChipText = voiceStyleChipText;
-        this.voiceAdherenceState = voiceAdherenceState;
-        this.voiceAdherenceDisplayState = voiceAdherenceDisplayState;
         this.voiceAdherenceStateAccent = voiceAdherenceStateAccent;
         this.voiceAdherenceDiagnosticAccent = voiceAdherenceDiagnosticAccent;
-        this.voiceAdherenceTooltip = voiceAdherenceTooltip;
         this.compactPreview = compactPreview;
         this.blendBrush = blendBrush;
     }
@@ -196,7 +184,7 @@ internal sealed class AgentPerformanceCoordinator
             empty,
             internetRequests,
             voiceScore,
-            voiceAdherenceState(voiceScore, voiceDiagnostics.Length),
+            RoleStyleCatalog.VoiceAdherenceState(voiceScore, voiceDiagnostics.Length),
             voiceDiagnostics.Length,
             activity);
     }
@@ -314,7 +302,7 @@ internal sealed class AgentPerformanceCoordinator
         }
         if (stats.VoiceAdherenceSamples > 0 && !stats.VoiceAdherenceState.Equals("strong", StringComparison.OrdinalIgnoreCase))
         {
-            alerts.Add($"style {voiceAdherenceDisplayState(stats.VoiceAdherenceState)} {stats.VoiceAdherenceScore}");
+            alerts.Add($"style {RoleStyleCatalog.VoiceAdherenceDisplayState(stats.VoiceAdherenceState)} {stats.VoiceAdherenceScore}");
         }
         if (stats.LastLatencyMs > 0)
         {
@@ -400,7 +388,7 @@ internal sealed class AgentPerformanceCoordinator
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 2, 0, 8)
         });
-        var voiceChipText = voiceStyleChipText(agent?.VoiceStyle);
+        var voiceChipText = RoleStyleCatalog.VoiceStyleChipText(agent?.VoiceStyle);
         if (!string.IsNullOrWhiteSpace(voiceChipText))
         {
             panel.Children.Add(CreateVoiceChip(voiceChipText, accent));
@@ -539,7 +527,7 @@ internal sealed class AgentPerformanceCoordinator
         var stack = new StackPanel();
         stack.Children.Add(new TextBlock
         {
-            Text = $"Style Cues: {displayStatusValue(voiceAdherenceDisplayState(stats.VoiceAdherenceState))} {stats.VoiceAdherenceScore}",
+            Text = $"Style Cues: {displayStatusValue(RoleStyleCatalog.VoiceAdherenceDisplayState(stats.VoiceAdherenceState))} {stats.VoiceAdherenceScore}",
             Foreground = accent,
             FontSize = 12,
             FontWeight = FontWeights.SemiBold,
@@ -561,13 +549,13 @@ internal sealed class AgentPerformanceCoordinator
         {
             stack.Children.Add(new TextBlock
             {
-                Text = $"Turn {diagnostic.Message.Turn}: {diagnostic.Diagnostic.Label} - {voiceAdherenceDisplayState(diagnostic.Diagnostic.State)} {diagnostic.Diagnostic.Score}",
+                Text = $"Turn {diagnostic.Message.Turn}: {diagnostic.Diagnostic.Label} - {RoleStyleCatalog.VoiceAdherenceDisplayState(diagnostic.Diagnostic.State)} {diagnostic.Diagnostic.Score}",
                 Foreground = voiceAdherenceDiagnosticAccent(diagnostic.Diagnostic),
                 FontSize = 10.5,
                 FontWeight = FontWeights.SemiBold,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 2),
-                ToolTip = voiceAdherenceTooltip(diagnostic.Diagnostic)
+                ToolTip = RoleStyleCatalog.VoiceAdherenceTooltip(diagnostic.Diagnostic)
             });
         }
 
