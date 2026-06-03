@@ -62,3 +62,15 @@ Additional startup smoke checks were run against:
 - Keep new WPF behavior inside the owning coordinator or a new focused coordinator.
 - Add pure helper coverage for display, filtering, status, and visibility decisions.
 - Use release sanity before publishing installer builds.
+
+## Progress Since Checkpoint
+
+2026-06-03:
+
+- Added the AI Collaborate navigation surface as a focused shell feature owned by `CollaborateCoordinator`.
+- Added persisted AI Collaborate history through `CollaborateHistoryStore` under `%LOCALAPPDATA%\AI Arena\configs\collaborate-history.json`.
+- Updated shell navigation to switch Collaborate-specific top bar, right rail, and left rail context.
+- Updated generated Collaborate chat surfaces to refresh against active theme resources.
+- Added selectable AI Collaborate rounds for visible multi-pass team refinement before final synthesis.
+- Renamed the left-rail Transcript entry to AI Lab and moved Custom Match into the top-rail Match Setup flyout.
+- Refreshed the generated dependency index after the new shell files landed.

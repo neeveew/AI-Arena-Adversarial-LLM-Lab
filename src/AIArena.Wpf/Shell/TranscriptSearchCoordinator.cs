@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -34,7 +35,7 @@ internal sealed class TranscriptSearchCoordinator
     private Point searchPopupDragStart;
     private double searchPopupDragStartHorizontalOffset;
     private double searchPopupDragStartVerticalOffset;
-    private readonly List<string> recentSearches = [];
+    private readonly List<RecentSearchEntry> recentSearches = [];
 
     public TranscriptSearchCoordinator(
         Window owner,
@@ -158,6 +159,13 @@ internal sealed class TranscriptSearchCoordinator
         searchButton.Focus();
     }
 
+    public void CloseSearch()
+    {
+        StoreCurrentSearch();
+        PopulateRecentSearches();
+        searchPopup.IsOpen = false;
+    }
+
     public void ShowSearch()
     {
         PopulateRecentSearches();
@@ -187,6 +195,18 @@ internal sealed class TranscriptSearchCoordinator
         StoreCurrentSearch();
         searchPopup.IsOpen = false;
         searchButton.Focus();
+        e.Handled = true;
+    }
+
+    public void OnSearchPreviewMouseDown(MouseButtonEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(searchText.Text))
+        {
+            return;
+        }
+
+        searchText.Focus();
+        searchText.CaretIndex = 0;
         e.Handled = true;
     }
 
@@ -289,8 +309,8 @@ internal sealed class TranscriptSearchCoordinator
             return;
         }
 
-        recentSearches.RemoveAll(item => item.Equals(search, StringComparison.OrdinalIgnoreCase));
-        recentSearches.Insert(0, search);
+        recentSearches.RemoveAll(item => item.Query.Equals(search, StringComparison.OrdinalIgnoreCase));
+        recentSearches.Insert(0, new RecentSearchEntry(search, DateTime.Now));
         if (recentSearches.Count > 5)
         {
             recentSearches.RemoveRange(5, recentSearches.Count - 5);
@@ -319,8 +339,9 @@ internal sealed class TranscriptSearchCoordinator
         }
     }
 
-    private Button CreateRecentSearchRow(string search, int index)
+    private Button CreateRecentSearchRow(RecentSearchEntry recentSearch, int index)
     {
+        var search = recentSearch.Query;
         var button = new Button
         {
             Background = Brushes.Transparent,
@@ -368,7 +389,7 @@ internal sealed class TranscriptSearchCoordinator
 
         var when = new TextBlock
         {
-            Text = index == 0 ? "Now" : "Recent",
+            Text = FormatRecentSearchDate(recentSearch.SavedAt),
             Foreground = resourceBrush("MutedTextBrush"),
             FontSize = 14,
             Margin = new Thickness(18, 0, 18, 0),
@@ -396,4 +417,23 @@ internal sealed class TranscriptSearchCoordinator
     {
         return search.Length <= 72 ? search : $"{search[..72]}...";
     }
+
+    private static string FormatRecentSearchDate(DateTime savedAt)
+    {
+        var date = savedAt.Date;
+        var today = DateTime.Today;
+        if (date == today)
+        {
+            return "Today";
+        }
+
+        if (date == today.AddDays(-1))
+        {
+            return "Yesterday";
+        }
+
+        return savedAt.ToString("MMM d", CultureInfo.InvariantCulture);
+    }
+
+    private sealed record RecentSearchEntry(string Query, DateTime SavedAt);
 }

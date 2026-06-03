@@ -145,8 +145,8 @@ if ($licenseText -notmatch 'Copyright © 2026 Dominik Fiala') {
 $guideText = Get-Content -LiteralPath $userGuideFile -Raw
 foreach ($requiredGuideSection in @(
     '## Quick Start',
-    '## Transcript',
-    '## Custom Match',
+    '## AI Lab',
+    '## Match Setup',
     '## Agent Performance',
     '## Licensing'
 )) {

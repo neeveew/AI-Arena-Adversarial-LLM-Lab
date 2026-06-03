@@ -13,10 +13,19 @@ internal sealed class ShellNavigationCoordinator
     private readonly ComboBox themePicker;
     private readonly Button arenaNavButton;
     private readonly Button customMatchNavButton;
+    private readonly Button collaborateNavButton;
     private readonly Button appSettingsButton;
     private readonly FrameworkElement transcriptPanel;
     private readonly FrameworkElement customMatchPanel;
+    private readonly FrameworkElement collaboratePanel;
     private readonly FrameworkElement newsPanel;
+    private readonly FrameworkElement arenaTopBarMetrics;
+    private readonly FrameworkElement collaborateTopBarMetrics;
+    private readonly FrameworkElement arenaRightRailPanel;
+    private readonly FrameworkElement collaborateRightRailPanel;
+    private readonly FrameworkElement arenaSessionOverviewPanel;
+    private readonly FrameworkElement arenaLiveAgentsPanel;
+    private readonly FrameworkElement collaborateLeftRailContextPanel;
     private readonly FrameworkElement appSettingsPanel;
     private readonly Action<ThemePalette> setTheme;
     private readonly Func<string, Brush> resourceBrush;
@@ -33,10 +42,19 @@ internal sealed class ShellNavigationCoordinator
         ComboBox themePicker,
         Button arenaNavButton,
         Button customMatchNavButton,
+        Button collaborateNavButton,
         Button appSettingsButton,
         FrameworkElement transcriptPanel,
         FrameworkElement customMatchPanel,
+        FrameworkElement collaboratePanel,
         FrameworkElement newsPanel,
+        FrameworkElement arenaTopBarMetrics,
+        FrameworkElement collaborateTopBarMetrics,
+        FrameworkElement arenaRightRailPanel,
+        FrameworkElement collaborateRightRailPanel,
+        FrameworkElement arenaSessionOverviewPanel,
+        FrameworkElement arenaLiveAgentsPanel,
+        FrameworkElement collaborateLeftRailContextPanel,
         FrameworkElement appSettingsPanel,
         Action<ThemePalette> setTheme,
         Func<string, Brush> resourceBrush,
@@ -50,10 +68,19 @@ internal sealed class ShellNavigationCoordinator
         this.themePicker = themePicker;
         this.arenaNavButton = arenaNavButton;
         this.customMatchNavButton = customMatchNavButton;
+        this.collaborateNavButton = collaborateNavButton;
         this.appSettingsButton = appSettingsButton;
         this.transcriptPanel = transcriptPanel;
         this.customMatchPanel = customMatchPanel;
+        this.collaboratePanel = collaboratePanel;
         this.newsPanel = newsPanel;
+        this.arenaTopBarMetrics = arenaTopBarMetrics;
+        this.collaborateTopBarMetrics = collaborateTopBarMetrics;
+        this.arenaRightRailPanel = arenaRightRailPanel;
+        this.collaborateRightRailPanel = collaborateRightRailPanel;
+        this.arenaSessionOverviewPanel = arenaSessionOverviewPanel;
+        this.arenaLiveAgentsPanel = arenaLiveAgentsPanel;
+        this.collaborateLeftRailContextPanel = collaborateLeftRailContextPanel;
         this.appSettingsPanel = appSettingsPanel;
         this.setTheme = setTheme;
         this.resourceBrush = resourceBrush;
@@ -145,15 +172,29 @@ internal sealed class ShellNavigationCoordinator
     {
         transcriptPanel.Visibility = Visibility.Visible;
         customMatchPanel.Visibility = Visibility.Collapsed;
+        collaboratePanel.Visibility = Visibility.Collapsed;
         newsPanel.Visibility = Visibility.Collapsed;
+        SetCollaborateChromeVisible(false);
         UpdateNavigationTheme();
     }
 
     public void ShowCustomMatchPanel()
     {
-        transcriptPanel.Visibility = Visibility.Collapsed;
+        transcriptPanel.Visibility = Visibility.Visible;
         customMatchPanel.Visibility = Visibility.Visible;
+        collaboratePanel.Visibility = Visibility.Collapsed;
         newsPanel.Visibility = Visibility.Collapsed;
+        SetCollaborateChromeVisible(false);
+        UpdateNavigationTheme();
+    }
+
+    public void ShowCollaboratePanel()
+    {
+        transcriptPanel.Visibility = Visibility.Collapsed;
+        customMatchPanel.Visibility = Visibility.Collapsed;
+        collaboratePanel.Visibility = Visibility.Visible;
+        newsPanel.Visibility = Visibility.Collapsed;
+        SetCollaborateChromeVisible(true);
         UpdateNavigationTheme();
     }
 
@@ -170,8 +211,12 @@ internal sealed class ShellNavigationCoordinator
 
     public void UpdateNavigationTheme()
     {
-        ApplyNavigationButtonState(arenaNavButton, transcriptPanel.Visibility == Visibility.Visible, resourceBrush);
-        ApplyNavigationButtonState(customMatchNavButton, customMatchPanel.Visibility == Visibility.Visible, resourceBrush);
+        ApplyNavigationButtonState(
+            arenaNavButton,
+            transcriptPanel.Visibility == Visibility.Visible || customMatchPanel.Visibility == Visibility.Visible,
+            resourceBrush);
+        ApplyNavigationButtonState(customMatchNavButton, false, resourceBrush);
+        ApplyNavigationButtonState(collaborateNavButton, collaboratePanel.Visibility == Visibility.Visible, resourceBrush);
     }
 
     internal static string SelectedThemeId(IReadOnlyList<ThemePalette> themes, string themeId)
@@ -188,6 +233,17 @@ internal sealed class ShellNavigationCoordinator
             : Brushes.Transparent;
         button.BorderBrush = active ? resourceBrush("PrimaryBorderBrush") : Brushes.Transparent;
         button.Foreground = active ? resourceBrush("TextBrush") : resourceBrush("MutedTextBrush");
+    }
+
+    private void SetCollaborateChromeVisible(bool visible)
+    {
+        arenaTopBarMetrics.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        collaborateTopBarMetrics.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        arenaRightRailPanel.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        collaborateRightRailPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        arenaSessionOverviewPanel.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        arenaLiveAgentsPanel.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        collaborateLeftRailContextPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void SetBrush(string key, Color color)

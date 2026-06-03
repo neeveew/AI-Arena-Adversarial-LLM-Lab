@@ -72,7 +72,7 @@ public sealed record ThemePalette(
             ColorFrom("#D66F72")),
         new(
             "dark-arena",
-            "Dark Arena",
+            "Dark Green",
             ColorFrom("#101916"),
             ColorFrom("#1A2621"),
             ColorFrom("#18231F"),
@@ -102,7 +102,7 @@ public sealed record ThemePalette(
             ColorFrom("#D66F72")),
         new(
             "dark-green",
-            "Dark Green",
+            "Green",
             ColorFrom("#07130F"),
             ColorFrom("#10241C"),
             ColorFrom("#10271E"),

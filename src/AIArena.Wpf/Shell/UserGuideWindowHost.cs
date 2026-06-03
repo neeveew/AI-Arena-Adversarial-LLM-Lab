@@ -67,6 +67,14 @@ internal sealed class UserGuideWindowHost
 
     private Window? _window;
 
+    public void Close()
+    {
+        if (_window is { IsVisible: true } window)
+        {
+            window.Close();
+        }
+    }
+
     public bool Show(Window owner)
     {
         if (_window is { IsVisible: true })

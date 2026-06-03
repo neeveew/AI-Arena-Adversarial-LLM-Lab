@@ -10,6 +10,8 @@ The current WPF shell includes:
 - session picker for available snapshots
 - 1.2 second read-only snapshot refresh
 - compact top bar with session/provider status, theme selector, and settings icon
+- AI Collaborate navigation surface with classic chat, team-draft/fast/critique modes, selectable collaboration rounds, Team Debate role cards, and provider/model status
+- persisted AI Collaborate chat history with left-rail reopen and right-click delete
 - native dark title bar/app border on supported Windows builds
 - settings overlay with collapsed sections and active participant count under Model Provider
 - provider health test through the configured OpenAI-compatible endpoint
@@ -25,13 +27,14 @@ The current WPF shell includes:
 - Reset clears transcript/live turn state while preserving scenario, cast, settings, and checkpoints
 - top settings icon opens a translucent roll-down overlay above the Arena panel
 - editable WPF App Settings for active participants, provider URL, default model, per-role Alpha/Beta/Gamma/Narrator models, timeout, temperature, max output, internet mode, internet source scope, requester permissions, approval requirement, and max internet results
-- top-bar Theme selector with System, Dark Arena, Dark Green, Dark Blue, and High Contrast palettes
+- top-bar Theme selector with System, Dark Green, Green, Dark Blue, and High Contrast palettes
 - persisted WPF-local settings in `%LOCALAPPDATA%\AI Arena\configs\native-wpf-settings.json`
-- Custom Match read view for scenario, cast, and lock status
-- Custom Match lock toggles for topic, global, and cast members
+- persisted AI Collaborate history in `%LOCALAPPDATA%\AI Arena\configs\collaborate-history.json`
+- Match Setup flyout inside AI Lab for scenario, cast, and lock status
+- Match Setup lock toggles for topic, global, and cast members
 - Random Seed match generation with visibly refreshed cast roles and personas
 - AI Choice match generation through the configured narrator/shared model, with fallback cast completion
-- Custom Match checkpoint save, restore, and delete controls
+- Match Setup checkpoint save, restore, and delete controls
 - Narrate Now model call into the transcript with reasoning metadata
 - Curate News injects one narrator-curated news/research transcript card when internet is enabled
 - shared internet tool contract for future model-requested `web_search`, `rss_search`, `fetch_url`, and source summarization

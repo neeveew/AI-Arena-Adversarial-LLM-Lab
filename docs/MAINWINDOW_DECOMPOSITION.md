@@ -41,13 +41,14 @@ Feature behavior should live in focused coordinators under `src/AIArena.Wpf/Shel
 | `ProviderReachabilityCoordinator` | provider health popup, refresh timer, shared provider status persistence |
 | `ProviderQuickSetupCoordinator` | ready-state provider setup card |
 | `AppSettingsCoordinator` | app settings visibility, provider settings navigation, model refresh timer, gear animation |
-| `ShellNavigationCoordinator` | theme application, navigation, settings panel visibility |
+| `ShellNavigationCoordinator` | theme application, AI Lab/AI Collaborate navigation, Match Setup flyout visibility, settings panel visibility, Collaborate chrome switching |
+| `CollaborateCoordinator` | AI Collaborate chat flow, rounds-based role orchestration, markdown rendering, recent chat restore/delete, generated theme refresh |
 | `TelemetryWorkflowCoordinator` | system telemetry widgets and timer state |
 | `DiagnosticsWorkflowCoordinator` | diagnostics dashboard, sparkline values, detail popup |
 | `MatchQualityTimelineCoordinator` | transcript quality timeline panel |
 | `ScenarioWorkflowCoordinator` | random seed, AI choice, YOLO generation, generation history |
 | `ScenarioSeedInspectorCoordinator` | scenario/persona seed metadata chips |
-| `CustomMatchSummaryCoordinator` | scenario topic/global and cast/narrator preview cards |
+| `CustomMatchSummaryCoordinator` | Match Setup scenario topic/global and cast/narrator preview cards |
 | `MatchLockCoordinator` | lock/edit controls, voice style and pressure pickers |
 | `MatchSetupCoordinator` | rivalry matrix rendering and persistence |
 | `InternetWorkflowCoordinator` | internet settings, curated news, approval dialogs |
@@ -58,6 +59,7 @@ Feature behavior should live in focused coordinators under `src/AIArena.Wpf/Shel
 | Helper | Owns |
 | --- | --- |
 | `WindowChromeService` | Windows DWM caption, border, and text color interop |
+| `CollaborateHistoryStore` | persisted AI Collaborate chat history under the app config data root |
 
 ## Remaining MainWindow Surface
 

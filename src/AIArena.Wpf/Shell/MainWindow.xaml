@@ -524,7 +524,8 @@
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="MinHeight" Value="62" />
             <Setter Property="FontSize" Value="20" />
-            <Setter Property="Padding" Value="58,0,72,0" />
+            <Setter Property="Padding" Value="52,0,72,0" />
+            <Setter Property="Tag" Value="Search transcripts, agents, notes..." />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TextBox">
@@ -537,19 +538,23 @@
                                 <ScrollViewer x:Name="PART_ContentHost"
                                               Margin="{TemplateBinding Padding}"
                                               VerticalAlignment="Center" />
-                                <TextBlock Text="Search transcripts, agents, notes..."
+                                <TextBlock Text="{TemplateBinding Tag}"
                                            Foreground="{DynamicResource MutedTextBrush}"
                                            FontSize="{TemplateBinding FontSize}"
-                                           Margin="58,0,72,0"
+                                           Margin="52,0,72,0"
                                            VerticalAlignment="Center"
                                            IsHitTestVisible="False">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
                                             <Setter Property="Visibility" Value="Collapsed" />
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding Text, RelativeSource={RelativeSource TemplatedParent}}" Value="">
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding Text, RelativeSource={RelativeSource TemplatedParent}}" Value="" />
+                                                        <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource TemplatedParent}}" Value="False" />
+                                                    </MultiDataTrigger.Conditions>
                                                     <Setter Property="Visibility" Value="Visible" />
-                                                </DataTrigger>
+                                                </MultiDataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </TextBlock.Style>
@@ -636,7 +641,7 @@
         </Grid.ColumnDefinitions>
 
         <Border Grid.RowSpan="2"
-                Background="#0B151D"
+                Background="{DynamicResource PanelBrush}"
                 BorderBrush="{DynamicResource ControlBorderBrush}"
                 BorderThickness="0,0,1,0">
             <Grid Margin="14">
@@ -659,7 +664,7 @@
                            RenderOptions.BitmapScalingMode="HighQuality"
                            VerticalAlignment="Center" />
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                        <TextBlock Text="AI Arena" Foreground="White" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="AI Arena" Foreground="{DynamicResource TextBrush}" FontSize="18" FontWeight="SemiBold" />
                         <TextBlock Text="Adversarial LLM Lab" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" />
                     </StackPanel>
                 </Grid>
@@ -670,10 +675,12 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
                     <StackPanel>
-                        <Button x:Name="ArenaNavButton" Content="Transcript" Style="{StaticResource NavButton}" Click="ArenaNavButton_Click" />
-                        <Button x:Name="CustomMatchNavButton" Content="Custom Match" Style="{StaticResource NavButton}" Click="CustomMatchNavButton_Click" />
+                        <Button x:Name="ArenaNavButton" Content="AI Lab" Style="{StaticResource NavButton}" Click="ArenaNavButton_Click" />
+                        <Button x:Name="CustomMatchNavButton" Content="Match Setup" Style="{StaticResource NavButton}" Click="CustomMatchNavButton_Click" Visibility="Collapsed" />
+                        <Button x:Name="CollaborateNavButton" Content="AI Collaborate" Style="{StaticResource NavButton}" Click="CollaborateNavButton_Click" />
                     </StackPanel>
-                    <Border Grid.Row="1"
+                    <Border x:Name="ArenaSessionOverviewPanel"
+                            Grid.Row="1"
                             Background="Transparent"
                             BorderBrush="{DynamicResource DisabledBorderBrush}"
                             BorderThickness="0,1,0,1"
@@ -693,7 +700,7 @@
                                 </Grid.RowDefinitions>
                                 <Border Style="{StaticResource SessionOverviewHotspot}"
                                         MouseLeftButtonUp="SessionOverviewMatch_MouseLeftButtonUp"
-                                        ToolTip="Open Custom Match">
+                                        ToolTip="Open Match Setup">
                                     <StackPanel>
                                         <TextBlock Text="Match" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" />
                                         <TextBlock x:Name="SessionOverviewMatchText" Text="-" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
@@ -753,7 +760,8 @@
                             </Grid>
                         </StackPanel>
                     </Border>
-                    <Border Grid.Row="2"
+                    <Border x:Name="ArenaLiveAgentsPanel"
+                            Grid.Row="2"
                             Background="Transparent"
                             BorderThickness="0"
                             Padding="0"
@@ -768,6 +776,79 @@
                                           HorizontalScrollBarVisibility="Disabled">
                                 <StackPanel x:Name="AgentItems" />
                             </ScrollViewer>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="CollaborateLeftRailContextPanel"
+                            Grid.Row="1"
+                            Grid.RowSpan="2"
+                            Visibility="Collapsed"
+                            Background="Transparent"
+                            BorderBrush="{DynamicResource DisabledBorderBrush}"
+                            BorderThickness="0,1,0,0"
+                            Padding="14,12"
+                            Margin="-14,8,-14,12">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="AI Collaborate"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center" />
+                                <Button x:Name="CollaborateNewChatButton"
+                                        Grid.Column="1"
+                                        Content="NEW"
+                                        Click="CollaborateNewChatButton_Click"
+                                        MinHeight="28"
+                                        MinWidth="50"
+                                        Padding="8,4" />
+                            </Grid>
+                            <TextBlock Text="Recent Collaborations"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       FontSize="11"
+                                       FontWeight="SemiBold"
+                                       Margin="0,4,0,8" />
+                            <Border Background="{DynamicResource InputBrush}"
+                                    BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="8"
+                                    MinHeight="124">
+                                <StackPanel x:Name="CollaborateRecentItems">
+                                    <TextBlock Text="No recent chats yet."
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               FontSize="12"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                            <TextBlock Text="Team Roles"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       FontSize="11"
+                                       FontWeight="SemiBold"
+                                       Margin="0,16,0,8" />
+                            <StackPanel>
+                                <TextBlock Text="Alpha - Draft"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontSize="12"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,5" />
+                                <TextBlock Text="Beta - Critique"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontSize="12"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,5" />
+                                <TextBlock Text="Gamma - Evidence"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontSize="12"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,5" />
+                                <TextBlock Text="Narrator - Final"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontSize="12"
+                                           FontWeight="SemiBold" />
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </Grid>
@@ -791,7 +872,7 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <Grid Height="21" VerticalAlignment="Center">
+                    <Grid x:Name="ArenaTopBarMetrics" Height="21" VerticalAlignment="Center">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="120" />
@@ -825,6 +906,69 @@
                         <TextBlock Grid.Column="8" Text="|" Foreground="{DynamicResource ControlBorderBrush}" VerticalAlignment="Center" HorizontalAlignment="Center" />
                         <TextBlock Grid.Column="9" Text="Turns:" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
                         <TextBlock x:Name="TopTurnsValue" Grid.Column="10" Text="0" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0,0,0" />
+                    </Grid>
+                    <Grid x:Name="CollaborateTopBarMetrics"
+                          Height="24"
+                          VerticalAlignment="Center"
+                          Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="128" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="142" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="AI Collaborate"
+                                   Foreground="{DynamicResource TextBrush}"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,20,0" />
+                        <TextBlock Grid.Column="1"
+                                   Text="Provider"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="12"
+                                   VerticalAlignment="Center" />
+                        <TextBlock x:Name="CollaborateTopProviderValue"
+                                   Grid.Column="2"
+                                   Text="-"
+                                   Foreground="{DynamicResource TextBrush}"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
+                                   Margin="7,0,20,0" />
+                        <TextBlock Grid.Column="3"
+                                   Text="Mode"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="12"
+                                   VerticalAlignment="Center" />
+                        <TextBlock x:Name="CollaborateTopModeValue"
+                                   Grid.Column="4"
+                                   Text="Team Draft"
+                                   Foreground="{DynamicResource TextBrush}"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
+                                   Margin="7,0,20,0" />
+                        <TextBlock Grid.Column="5"
+                                   Text="Team"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="12"
+                                   VerticalAlignment="Center" />
+                        <TextBlock x:Name="CollaborateTopTeamValue"
+                                   Grid.Column="6"
+                                   Text="4 agents"
+                                   Foreground="{DynamicResource TextBrush}"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
+                                   Margin="7,0,0,0" />
                     </Grid>
                     <Popup x:Name="ProviderHealthPopup"
                            PlacementTarget="{Binding ElementName=TopProviderValue}"
@@ -946,6 +1090,13 @@
                     </Grid>
                 </Grid>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+                    <Button x:Name="MatchSetupButton"
+                            Content="Match Setup"
+                            Click="MatchSetupButton_Click"
+                            MinHeight="34"
+                            Padding="14,6"
+                            Margin="0,0,8,0"
+                            ToolTip="Open Match Setup" />
                     <TextBlock x:Name="ExportStatusText"
                                Text=""
                                Foreground="{DynamicResource MutedTextBrush}"
@@ -977,32 +1128,40 @@
                     <Popup x:Name="TranscriptSearchPopup"
                            PlacementTarget="{Binding ElementName=TopBarStatus}"
                            Placement="Bottom"
-                           HorizontalOffset="0"
+                           HorizontalOffset="36"
                            VerticalOffset="18"
                            StaysOpen="True"
                            AllowsTransparency="True"
                            PopupAnimation="Fade">
-                        <Border Background="#F20A1424"
-                                BorderBrush="{DynamicResource PrimaryBorderBrush}"
-                                BorderThickness="1"
+                        <Border BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                                BorderThickness="1.35"
                                 CornerRadius="18"
-                                Padding="26,24,26,18">
+                                Padding="20">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#FF0B1627" Offset="0" />
+                                    <GradientStop Color="#FF071120" Offset="0.58" />
+                                    <GradientStop Color="#FF15102B" Offset="1" />
+                                </LinearGradientBrush>
+                            </Border.Background>
                             <Border.Effect>
-                                <DropShadowEffect Color="#4BA3DD"
-                                                  BlurRadius="26"
+                                <DropShadowEffect Color="#6A7DFF"
+                                                  BlurRadius="30"
                                                   ShadowDepth="0"
-                                                  Opacity="0.72" />
+                                                  Opacity="0.82" />
                             </Border.Effect>
-                            <Grid Width="820">
+                            <Grid Width="760">
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="8" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <Border x:Name="TranscriptSearchDragHandle"
                                         Grid.Row="0"
-                                        Height="8"
+                                        Height="4"
+                                        Margin="0,-10,0,14"
                                         Background="Transparent"
                                         Cursor="SizeAll"
                                         MouseLeftButtonDown="TranscriptSearchDragHandle_MouseLeftButtonDown"
@@ -1025,6 +1184,7 @@
                                                  Style="{StaticResource SearchTextBox}"
                                                  TextChanged="TranscriptFilter_Changed"
                                                  KeyDown="TranscriptSearchText_KeyDown"
+                                                 PreviewMouseDown="TranscriptSearchText_PreviewMouseDown"
                                                  ToolTip="Search transcript text, speakers, models, and sources" />
                                         <TextBlock Text="&#xE721;"
                                                    FontFamily="Segoe MDL2 Assets"
@@ -1092,15 +1252,70 @@
                                            Foreground="{DynamicResource MutedTextBrush}"
                                            FontSize="13"
                                            FontWeight="SemiBold"
-                                           Margin="0,30,0,12" />
+                                           Margin="0,28,0,12" />
                                 <Border Grid.Row="3"
-                                        Background="#6608111F"
+                                        Background="#CC08111F"
                                         BorderBrush="{DynamicResource DisabledBorderBrush}"
                                         BorderThickness="1"
                                         CornerRadius="8"
-                                        MinHeight="150">
+                                        MinHeight="230">
                                     <StackPanel x:Name="TranscriptRecentSearchItems" />
                                 </Border>
+                                <DockPanel Grid.Row="4"
+                                           Margin="0,16,0,0"
+                                           LastChildFill="False">
+                                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                                        <Border Background="#26304B67"
+                                                CornerRadius="5"
+                                                Padding="11,5"
+                                                Margin="0,0,8,0">
+                                            <TextBlock Text="/"
+                                                       Foreground="{DynamicResource TextBrush}"
+                                                       FontSize="14"
+                                                       FontWeight="SemiBold" />
+                                        </Border>
+                                        <TextBlock Text="to search"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   FontSize="13"
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,18,0" />
+                                        <Border Width="1"
+                                                Height="18"
+                                                Background="{DynamicResource DisabledBorderBrush}"
+                                                Margin="0,0,18,0" />
+                                        <Border Background="#26304B67"
+                                                CornerRadius="5"
+                                                Padding="10,5"
+                                                Margin="0,0,8,0">
+                                            <TextBlock Text="&#x2191;&#x2193;"
+                                                       FontFamily="Segoe UI Symbol"
+                                                       Foreground="{DynamicResource TextBrush}"
+                                                       FontSize="12" />
+                                        </Border>
+                                        <TextBlock Text="to navigate"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   FontSize="13"
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,18,0" />
+                                        <Border Width="1"
+                                                Height="18"
+                                                Background="{DynamicResource DisabledBorderBrush}"
+                                                Margin="0,0,18,0" />
+                                        <Border Background="#26304B67"
+                                                CornerRadius="5"
+                                                Padding="12,5"
+                                                Margin="0,0,8,0">
+                                            <TextBlock Text="&#xE751;"
+                                                       FontFamily="Segoe MDL2 Assets"
+                                                       Foreground="{DynamicResource TextBrush}"
+                                                       FontSize="12" />
+                                        </Border>
+                                        <TextBlock Text="to open"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   FontSize="13"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </DockPanel>
                             </Grid>
                         </Border>
                     </Popup>
@@ -1700,23 +1915,50 @@
                 </Grid>
             </Grid>
 
-            <Grid x:Name="CustomMatchPanel" Visibility="Collapsed">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
-                <Grid Margin="0,0,0,12">
+            <Border x:Name="CustomMatchPanel"
+                    Visibility="Collapsed"
+                    Panel.ZIndex="40"
+                    VerticalAlignment="Top"
+                    MaxHeight="820"
+                    Background="{DynamicResource PanelBrush}"
+                    BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="14">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid Margin="0,0,0,12">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <StackPanel Grid.Row="0">
-                        <TextBlock Text="Custom Match" Foreground="White" FontSize="22" FontWeight="SemiBold" />
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                        <TextBlock Text="Match Setup" Foreground="{DynamicResource TextBrush}" FontSize="22" FontWeight="SemiBold" />
                         <TextBlock Text="Review scenario framing, cast personas, and lock what should survive random generation."
                                    Foreground="{DynamicResource MutedTextBrush}"
                                    TextWrapping="Wrap" />
                         <WrapPanel x:Name="ScenarioSeedInspector" Margin="0,8,0,0" />
-                    </StackPanel>
+                        </StackPanel>
+                        <Button x:Name="CloseMatchSetupButton"
+                                Grid.Column="1"
+                                Content="X"
+                                Click="CloseMatchSetupButton_Click"
+                                Width="34"
+                                MinWidth="34"
+                                MinHeight="30"
+                                Padding="0"
+                                Margin="12,0,0,0"
+                                VerticalAlignment="Top"
+                                ToolTip="Close Match Setup" />
+                    </Grid>
                     <WrapPanel Grid.Row="1"
                                Margin="0,10,0,0"
                                HorizontalAlignment="Left"
@@ -2055,7 +2297,7 @@
                                            FontWeight="SemiBold"
                                            Margin="0,0,0,6" />
                                 <TextBlock x:Name="GenerationHelpBodyText"
-                                           Text="Choose how Custom Match generates scenarios and casts."
+                                           Text="Choose how Match Setup generates scenarios and casts."
                                            Foreground="{DynamicResource MutedTextBrush}"
                                            TextWrapping="Wrap"
                                            LineHeight="18" />
@@ -2238,6 +2480,90 @@
                     </StackPanel>
                 </ScrollViewer>
             </Grid>
+            </Border>
+
+            <Grid x:Name="CollaboratePanel" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="AI Collaborate" Foreground="White" FontSize="22" FontWeight="SemiBold" />
+                        <TextBlock x:Name="CollaborateStatusText"
+                                   Text="Ready."
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Button x:Name="CollaborateClearButton"
+                            Grid.Column="1"
+                            Content="CLEAR"
+                            Click="CollaborateClearButton_Click"
+                            Padding="12,7"
+                            Margin="12,0,0,0"
+                            VerticalAlignment="Top" />
+                </Grid>
+                <Border Grid.Row="1"
+                        Background="{DynamicResource InputBrush}"
+                        BorderBrush="{DynamicResource DisabledBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Padding="0"
+                        Margin="0,0,0,12">
+                    <ScrollViewer x:Name="CollaborateChatScrollViewer"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel x:Name="CollaborateMessageItems"
+                                    Margin="12" />
+                    </ScrollViewer>
+                </Border>
+                <Border Grid.Row="2"
+                        Background="{DynamicResource CardBrush}"
+                        BorderBrush="{DynamicResource ControlBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Padding="12"
+                        Margin="0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="58" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="CollaboratePromptText"
+                                 MinHeight="72"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 KeyDown="CollaboratePromptText_KeyDown"
+                                 Tag="Ask the team..." />
+                        <Button x:Name="CollaborateSendButton"
+                                Grid.Column="1"
+                                Click="CollaborateSendButton_Click"
+                                Background="{DynamicResource PrimaryBrush}"
+                                BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                                Margin="10,0,0,0"
+                                Width="48"
+                                Height="48"
+                                MinWidth="48"
+                                MinHeight="48"
+                                Padding="0"
+                                VerticalAlignment="Center"
+                                 ToolTip="Send">
+                            <TextBlock Text="&#x2192;"
+                                       FontFamily="Segoe UI Symbol"
+                                       FontSize="20"
+                                       FontWeight="SemiBold"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                        </Button>
+                    </Grid>
+                </Border>
+            </Grid>
 
             <Grid x:Name="NewsPanel" Visibility="Collapsed">
                 <Grid.RowDefinitions>
@@ -2263,9 +2589,10 @@
                       Grid.Row="1"
                       Grid.Column="2"
                       Margin="0,14,14,14"
-                      VerticalScrollBarVisibility="Auto"
-                      HorizontalScrollBarVisibility="Disabled">
+                       VerticalScrollBarVisibility="Auto"
+                       HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
+                <StackPanel x:Name="ArenaRightRailPanel">
                 <Border Style="{StaticResource Card}" Opacity="1" Padding="8">
                     <StackPanel>
                         <TextBlock Text="Arena Controls" Style="{StaticResource SectionTitle}" Margin="0,0,0,6" />
@@ -2482,6 +2809,57 @@
                                 Margin="0,8,0,0" />
                     </StackPanel>
                 </Border>
+
+                </StackPanel>
+                <StackPanel x:Name="CollaborateRightRailPanel"
+                            Visibility="Collapsed">
+                    <Border Style="{StaticResource Card}" Opacity="1" Padding="12">
+                        <StackPanel>
+                            <TextBlock Text="Mode" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+                            <ComboBox x:Name="CollaborateModePicker"
+                                      SelectionChanged="CollaborateModePicker_SelectionChanged"
+                                      Background="{DynamicResource InputBrush}"
+                                      Foreground="{DynamicResource TextBrush}"
+                                      BorderBrush="{DynamicResource ControlBorderBrush}"
+                                      Padding="8"
+                                      Margin="0,0,0,14">
+                                <ComboBoxItem Content="Fast" Tag="fast" />
+                                <ComboBoxItem Content="Team Draft" Tag="team" IsSelected="True" />
+                                <ComboBoxItem Content="Critique" Tag="critique" />
+                            </ComboBox>
+                            <TextBlock Text="Rounds" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+                            <ComboBox x:Name="CollaborateRoundsPicker"
+                                      SelectionChanged="CollaborateRoundsPicker_SelectionChanged"
+                                      Background="{DynamicResource InputBrush}"
+                                      Foreground="{DynamicResource TextBrush}"
+                                      BorderBrush="{DynamicResource ControlBorderBrush}"
+                                      Padding="8"
+                                      Margin="0,0,0,14"
+                                      ToolTip="Visible collaboration passes before final synthesis">
+                                <ComboBoxItem Content="1" Tag="1" IsSelected="True" />
+                                <ComboBoxItem Content="2" Tag="2" />
+                                <ComboBoxItem Content="3" Tag="3" />
+                                <ComboBoxItem Content="5" Tag="5" />
+                            </ComboBox>
+                            <TextBlock Text="Provider" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+                            <TextBlock x:Name="CollaborateProviderText"
+                                       Text="-"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,0,0,10" />
+                            <Button x:Name="CollaborateProviderSettingsButton"
+                                    Content="PROVIDER SETTINGS"
+                                    Click="CollaborateProviderSettingsButton_Click"
+                                    Padding="10,7" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource QuietCard}" Padding="12">
+                        <StackPanel>
+                            <TextBlock Text="Team" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+                            <StackPanel x:Name="CollaborateParticipantItems" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
 
             </StackPanel>
         </ScrollViewer>

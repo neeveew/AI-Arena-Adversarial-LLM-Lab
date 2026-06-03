@@ -13,8 +13,8 @@ The app is designed for local experimentation with model behavior. You can creat
 5. Review the recommended model spread, then press Apply Recommended or choose models manually.
 6. Set Provider base URL yourself if auto detection cannot find the provider, usually `http://127.0.0.1:1234/v1` for LM Studio.
 7. Press Test Provider.
-8. Open Custom Match and use the Generate, Tune, and Recent controls to choose a preset, role pack, style, pressure, absurdity level, AI Choice, or YOLO.
-9. Return to Transcript and run 1 TURN or AUTO CHAT.
+8. Open AI Lab, then use Match Setup in the top rail to choose a preset, role pack, style, pressure, absurdity level, AI Choice, or YOLO.
+9. Close Match Setup and run 1 TURN or AUTO CHAT.
 
 ## Main Concepts
 
@@ -23,16 +23,17 @@ The app is designed for local experimentation with model behavior. You can creat
 - The Operator is you. Operator messages are public instructions injected into the transcript.
 - Each participant has its own persona and model assignment.
 - Agents see public transcript context, but their private persona and memory notes are handled separately.
-- Sessions are saved locally under your Windows user profile.
+- Sessions and AI Collaborate chat history are saved locally under your Windows user profile.
 
 ## App Layout
 
-The left rail contains the app identity, navigation, session overview, and live agent status. The live agent cards show the current/waiting/thinking/idle state and can run individual agent turns.
+The left rail contains the app identity, navigation, and contextual status. In AI Lab it shows session overview and live agent status. In AI Collaborate it shows recent collaboration chats and team roles.
 
 The center area contains the active page:
 
-- Transcript: the arena conversation, diagnostics, filters, timeline, memory notes, and compare tools.
-- Custom Match: scenario preview, cast preview, locks, per-agent voice styles, pressure controls, grouped generation controls, generation history, and checkpoint/session tools.
+- AI Lab: the arena transcript, diagnostics, filters, timeline, memory notes, compare tools, and the Match Setup flyout.
+- Match Setup: a wide AI Lab flyout for scenario preview, cast preview, locks, per-agent voice styles, pressure controls, grouped generation controls, generation history, and checkpoint/session tools.
+- AI Collaborate: classic AI chat where Alpha, Beta, Gamma, and Narrator collaborate on the operator's prompt.
 
 The right rail contains:
 
@@ -40,7 +41,9 @@ The right rail contains:
 - Agent Performance.
 - Operator Turn.
 
-The top rail contains match status, provider status, current turn, turn count, export, search, View menu, optional Debug menu, theme picker, and Settings.
+In AI Collaborate, the right rail changes to Collaborate controls: mode, provider, and team model assignments.
+
+The top rail contains match status, provider status, current turn, turn count, Match Setup, export, search, View menu, optional Debug menu, theme picker, and Settings.
 
 ## Top Rail
 
@@ -49,14 +52,17 @@ The top rail contains match status, provider status, current turn, turn count, e
 - Current turn: next scheduled participant.
 - Turns: transcript turn count.
 - The second status line shows the current idle/run state. When idle, it names the next participant, selected model, and provider state.
-- Search icon: opens a draggable transcript search popup. Escape closes it.
+- Match Setup: opens the wide AI Lab setup flyout for scenario, cast, lock, generation, and saved-state controls.
+- Search icon: opens a draggable search popup. In AI Lab it searches transcript text, speakers, models, and sources. In AI Collaborate it uses collaboration-oriented placeholder text and recent searches.
 - Export icon: exports the currently visible transcript messages to Markdown.
 - View menu: toggles Compact transcript, Turn compare, Quality timeline, Memory notes, and Auto-scroll.
 - Debug menu: appears only when Settings -> Visuals -> Allow debug controls is enabled. It holds experimental transcript helpers such as Decision card and Style fit.
 - Theme: changes the app palette.
 - Gear icon: opens Settings.
 
-## Transcript
+## AI Lab
+
+AI Lab is the main arena workspace. It contains the transcript stream plus diagnostics, filters, timeline, memory notes, compare tools, and the top-rail Match Setup flyout.
 
 The transcript renders newest-first. Each message card shows:
 
@@ -155,9 +161,36 @@ Operator Turn injects your public message into the transcript. It does not advan
 
 Use this to clarify a topic, add constraints, correct the match, ask a question, or steer the agents without resetting the session.
 
-## Custom Match
+## AI Collaborate
 
-Custom Match controls the scenario and cast. The top console is grouped into Generate, Tune, and Recent so setup controls stay compact.
+AI Collaborate is a classic chat surface where the app asks a small team of model roles to work together on your prompt.
+
+Use AI Collaborate from the left rail. The center chat shows your prompt, a clearly labeled Final Answer, and a collapsible Team Debate. Team Debate groups visible role cards by round so Alpha, Beta, Gamma, and Narrator contributions stay distinct from the final answer.
+
+Modes:
+
+- Fast: asks the Narrator for a direct answer.
+- Team Draft: asks Alpha, Beta, and Gamma for draft work, then asks the Narrator to synthesize.
+- Critique: asks Alpha to draft, Beta to critique, Gamma to refine, and the Narrator to synthesize.
+
+Rounds controls how many visible team passes run before the final answer. Fast always uses one direct round. Team Draft and Critique can run 1, 2, 3, or 5 rounds, with later rounds focused on concise refinement, critique, evidence checks, and clearer next steps.
+
+Team roles:
+
+- Alpha drafts practical options and tradeoffs.
+- Beta critiques assumptions, risks, and weak conclusions.
+- Gamma maps evidence, uncertainty, and what would change the answer.
+- Narrator produces the final answer.
+
+The provider and model assignments come from the active session settings. If a role-specific model is configured, that role uses it; otherwise it falls back to the shared provider model.
+
+Recent Collaborations in the left rail reopen old AI Collaborate chats, including prompts, final answers, and Team Debate cards. Right-click a recent collaboration and choose Delete to remove it. NEW starts a blank chat while keeping saved history.
+
+AI Collaborate history is stored locally under `%LOCALAPPDATA%\AI Arena\configs\collaborate-history.json`.
+
+## Match Setup
+
+Match Setup controls the scenario and cast from a wide flyout inside AI Lab. The top console is grouped into Generate, Tune, and Recent so setup controls stay compact.
 
 - Generate chooses how to create a setup: Manual, Random Seed, AI Choice, or YOLO.
 - Tune chooses the role pack, scenario style, debate pressure, and absurdity level.
@@ -233,7 +266,7 @@ Restore points save the current transcript, cast, locks, provider settings, and 
 
 Scenario templates save match framing, cast, locks, participants, and model assignments for reuse under `%LOCALAPPDATA%\AI Arena\templates`.
 
-App settings are saved under `%LOCALAPPDATA%\AI Arena\configs`. Exports, logs, and cache files have their own folders under the same AI Arena data root.
+App settings and AI Collaborate history are saved under `%LOCALAPPDATA%\AI Arena\configs`. Exports, logs, and cache files have their own folders under the same AI Arena data root.
 
 ## Settings
 

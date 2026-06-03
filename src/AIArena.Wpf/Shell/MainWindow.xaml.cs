@@ -67,6 +67,7 @@ public partial class MainWindow : Window
     private readonly AgentRosterCoordinator? _agentRosterCoordinator;
     private readonly ArenaSessionMutationCoordinator? _arenaSessionMutationCoordinator;
     private readonly ShellNavigationCoordinator? _shellNavigationCoordinator;
+    private readonly CollaborateCoordinator? _collaborateCoordinator;
     private readonly MatchQualityTimelineCoordinator? _matchQualityTimelineCoordinator;
     private readonly AgentBoardCoordinator? _agentBoardCoordinator;
     private readonly ArenaOperationCoordinator? _arenaOperationCoordinator;
@@ -177,6 +178,9 @@ public partial class MainWindow : Window
 
     private ShellNavigationCoordinator ShellNavigation =>
         _shellNavigationCoordinator ?? throw new InvalidOperationException("Shell navigation coordinator is not initialized.");
+
+    private CollaborateCoordinator Collaborate =>
+        _collaborateCoordinator ?? throw new InvalidOperationException("Collaborate coordinator is not initialized.");
 
     private MatchQualityTimelineCoordinator MatchQualityTimeline =>
         _matchQualityTimelineCoordinator ?? throw new InvalidOperationException("Match quality timeline coordinator is not initialized.");
@@ -338,14 +342,23 @@ public partial class MainWindow : Window
             ThemePicker,
             ArenaNavButton,
             CustomMatchNavButton,
+            CollaborateNavButton,
             AppSettingsButton,
             TranscriptPanel,
             CustomMatchPanel,
+            CollaboratePanel,
             NewsPanel,
+            ArenaTopBarMetrics,
+            CollaborateTopBarMetrics,
+            ArenaRightRailPanel,
+            CollaborateRightRailPanel,
+            ArenaSessionOverviewPanel,
+            ArenaLiveAgentsPanel,
+            CollaborateLeftRailContextPanel,
             AppSettingsPanel,
             theme => _theme = theme,
             ResourceBrush,
-            () => _userGuideWindowHost.RefreshTheme(this),
+            RefreshGeneratedThemeSurfaces,
             () => _activeSession is not null,
             RefreshActiveSession);
         _scenarioWorkflowCoordinator = new ScenarioWorkflowCoordinator(
@@ -537,6 +550,27 @@ public partial class MainWindow : Window
             SetArenaRunStatus);
         ShellNavigation.ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
         ShellNavigation.InitializeThemePicker();
+        _collaborateCoordinator = new CollaborateCoordinator(
+            null,
+            Dispatcher,
+            CollaborateChatScrollViewer,
+            CollaborateMessageItems,
+            CollaboratePromptText,
+            CollaborateSendButton,
+            CollaborateClearButton,
+            CollaborateModePicker,
+            CollaborateRoundsPicker,
+            CollaborateStatusText,
+            CollaborateProviderText,
+            CollaborateTopProviderValue,
+            CollaborateTopModeValue,
+            CollaborateTopTeamValue,
+            CollaborateParticipantItems,
+            CollaborateRecentItems,
+            () => _lastRenderedSnapshot,
+            ResourceBrush,
+            SetArenaRunStatus);
+        _collaborateCoordinator.Initialize();
         _refreshTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(1200)
@@ -1207,6 +1241,7 @@ public partial class MainWindow : Window
         AgentBoard.Populate(snapshot, CurrentTurnAgent(snapshot)?.Id);
         PopulateCustomMatch(snapshot);
         NewsPanelWorkflow.Populate(snapshot.Messages);
+        _collaborateCoordinator?.RefreshProviderState();
         OperatorTurn.UpdatePrivateTargetSummary();
     }
 
@@ -1218,6 +1253,7 @@ public partial class MainWindow : Window
         TranscriptItems.Children.Add(CreateCard("Transcript", message, ResourceBrush("CardBrush"), ResourceBrush("AlphaAccentBrush")));
         AgentBoard.PopulateFallback();
         NewsPanelWorkflow.PopulateFallback();
+        _collaborateCoordinator?.RefreshProviderState();
     }
 
     private void UpdateTopBarStatus(ArenaViewSnapshot snapshot)
@@ -1512,6 +1548,7 @@ public partial class MainWindow : Window
         _activeSession = session;
         _activeSnapshotWriteUtc = session.LastModified;
         _lastRenderedSnapshot = snapshot;
+        _collaborateCoordinator?.RefreshProviderState();
     }
 
     private void SavedStateModePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1671,6 +1708,12 @@ public partial class MainWindow : Window
         return TryFindResource(key) as Brush ?? Brushes.White;
     }
 
+    private void RefreshGeneratedThemeSurfaces()
+    {
+        _userGuideWindowHost.RefreshTheme(this);
+        _collaborateCoordinator?.RefreshTheme();
+    }
+
     private static Brush BlendBrush(Brush baseBrush, Brush accentBrush, double accentAmount)
     {
         return ShellUiHelpers.BlendBrush(baseBrush, accentBrush, accentAmount);
@@ -1699,9 +1742,30 @@ public partial class MainWindow : Window
         ShowTranscriptPanel(clearFilters: false);
     }
 
+    private void MatchSetupButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (CustomMatchPanel.Visibility == Visibility.Visible)
+        {
+            CloseMatchSetupFlyout();
+            return;
+        }
+
+        ShowCustomMatchPanel();
+    }
+
+    private void CloseMatchSetupButton_Click(object sender, RoutedEventArgs e)
+    {
+        CloseMatchSetupFlyout();
+    }
+
     private void CustomMatchNavButton_Click(object sender, RoutedEventArgs e)
     {
         ShowCustomMatchPanel();
+    }
+
+    private void CollaborateNavButton_Click(object sender, RoutedEventArgs e)
+    {
+        ShowCollaboratePanel();
     }
 
     private void SessionOverviewMatch_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -1732,6 +1796,11 @@ public partial class MainWindow : Window
     private void ShowTranscriptPanel(bool clearFilters)
     {
         ShellNavigation.ShowTranscriptPanel();
+        MatchSetupButton.Visibility = Visibility.Visible;
+        MatchSetupButton.ToolTip = "Open Match Setup";
+        SetSearchContext(
+            "Search transcripts, agents, notes...",
+            "Search transcript text, speakers, models, and sources");
 
         if (clearFilters)
         {
@@ -1742,6 +1811,79 @@ public partial class MainWindow : Window
     private void ShowCustomMatchPanel()
     {
         ShellNavigation.ShowCustomMatchPanel();
+        MatchSetupButton.Visibility = Visibility.Visible;
+        MatchSetupButton.ToolTip = "Close Match Setup";
+        SetSearchContext(
+            "Search transcripts, agents, notes...",
+            "Search transcript text, speakers, models, and sources");
+    }
+
+    private void CloseMatchSetupFlyout()
+    {
+        CustomMatchPanel.Visibility = Visibility.Collapsed;
+        MatchSetupButton.ToolTip = "Open Match Setup";
+        ShellNavigation.UpdateNavigationTheme();
+    }
+
+    private void ShowCollaboratePanel()
+    {
+        ShellNavigation.ShowCollaboratePanel();
+        MatchSetupButton.Visibility = Visibility.Collapsed;
+        MatchSetupButton.ToolTip = "Open Match Setup";
+        SetSearchContext(
+            "Search AI Collaborate chats...",
+            "Search AI Collaborate prompts and saved searches");
+        Collaborate.RefreshProviderState();
+        CollaboratePromptText.Focus();
+    }
+
+    private void SetSearchContext(string placeholder, string tooltip)
+    {
+        TranscriptSearchText.Tag = placeholder;
+        TranscriptSearchText.ToolTip = tooltip;
+        TranscriptSearchButton.ToolTip = tooltip;
+    }
+
+    private async void CollaborateSendButton_Click(object sender, RoutedEventArgs e)
+    {
+        await Collaborate.SendAsync();
+    }
+
+    private void CollaborateClearButton_Click(object sender, RoutedEventArgs e)
+    {
+        Collaborate.Clear();
+    }
+
+    private void CollaborateNewChatButton_Click(object sender, RoutedEventArgs e)
+    {
+        Collaborate.Clear();
+        CollaboratePromptText.Focus();
+    }
+
+    private async void CollaboratePromptText_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await Collaborate.SendAsync();
+    }
+
+    private void CollaborateProviderSettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        OpenModelProviderSettings();
+    }
+
+    private void CollaborateModePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        _collaborateCoordinator?.RefreshProviderState();
+    }
+
+    private void CollaborateRoundsPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        _collaborateCoordinator?.RefreshProviderState();
     }
 
     private void ClearTranscriptFilters()
@@ -1778,6 +1920,8 @@ public partial class MainWindow : Window
 
     private void TranscriptSearchButton_Click(object sender, RoutedEventArgs e)
     {
+        _userGuideWindowHost.Close();
+        ProviderReachability.ClosePopup();
         _transcriptSearchCoordinator?.ShowSearch();
     }
 
@@ -1810,6 +1954,11 @@ public partial class MainWindow : Window
     private void TranscriptSearchText_KeyDown(object sender, KeyEventArgs e)
     {
         _transcriptSearchCoordinator?.OnSearchKeyDown(e);
+    }
+
+    private void TranscriptSearchText_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _transcriptSearchCoordinator?.OnSearchPreviewMouseDown(e);
     }
 
     private void AgentPerformanceDetailCloseButton_Click(object sender, RoutedEventArgs e)
@@ -1848,6 +1997,8 @@ public partial class MainWindow : Window
 
     private void OpenUserGuideButton_Click(object sender, RoutedEventArgs e)
     {
+        _transcriptSearchCoordinator?.CloseSearch();
+        ProviderReachability.ClosePopup();
         if (!_userGuideWindowHost.Show(this))
         {
             LoadStatus.Text = "User guide not found.";
