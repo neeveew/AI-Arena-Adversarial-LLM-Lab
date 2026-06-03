@@ -1,24 +1,29 @@
 # AI Arena: Adversarial LLM Lab
 
-A native Windows lab for running adversarial multi-agent conversations between local or OpenAI-compatible LLMs.
+A native Windows lab for running adversarial multi-agent conversations and collaborative AI team chats between local or OpenAI-compatible LLMs.
 
-[Download latest beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [Licence](LICENSE)
+[Download 0.4.01-beta-2](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.01-beta-2) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [Licence](LICENSE)
 
-AI Arena is not a chatbot and not just a model comparison board. It is a local adversarial multi-agent LLM lab where agents can argue, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
+AI Arena is not a chatbot and not just a model comparison board. It is a local multi-agent LLM lab where agents can debate, collaborate, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
 
-You create the cast, assign models, personas, voices, and pressure profiles, inject public operator turns, and let a separate narrator observe or summarize the match. The app includes discourse diagnostics for friction, consensus, role drift, unsupported claims, evidence pressure, and narrative heat.
+The app has two main workspaces:
 
-It is built for local experimentation with model behavior, multi-agent debate, red-team style reasoning, prompt/cast design, and AI discourse analysis.
+- **AI Lab** runs structured adversarial matches with live agents, operator turns, diagnostics, performance inspection, and transcript tooling.
+- **AI Collaborate** runs a classic collaborative AI chat where Alpha, Beta, Gamma, and Narrator work together across configurable rounds to produce a final answer.
+
+You create the cast, assign models, personas, voices, and pressure profiles, inject public operator turns, and let a separate narrator observe, summarize, or synthesize. The app includes discourse diagnostics for friction, consensus, role drift, unsupported claims, evidence pressure, and narrative heat.
+
+It is built for local experimentation with model behavior, multi-agent debate, AI collaboration, red-team style reasoning, prompt/cast design, and AI discourse analysis.
 
 ## Screenshots
 
-![AI Arena transcript view](screenshot-transcript.png)
+![AI Collaborate](docs/assets/ai-collaborate.png)
 
-Transcript, live agents, discourse diagnostics, agent performance, and performance detail inspection.
+AI Collaborate: a wide collaborative answer surface, persistent recent collaborations, configurable rounds, and a visible team setup panel.
 
-![AI Arena custom match view](screenshot-custom-match.png)
+![AI Lab transcript](docs/assets/ai-lab-transcript.png)
 
-Custom match builder with scenario framing, personas, locks, checkpoints, sessions, and operator controls.
+AI Lab: live adversarial transcript, discourse diagnostics, agent performance, performance detail inspection, operator controls, and the in-app user guide.
 
 ## Why This Exists
 
@@ -30,6 +35,11 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 
 ## Key Features
 
+- AI Lab for structured adversarial multi-agent matches.
+- AI Collaborate for collaborative multi-agent chat with final synthesis.
+- Configurable AI Collaborate rounds for deeper team drafting.
+- Persistent recent collaborations with right-click delete.
+- Distinct Alpha, Beta, Gamma, and Narrator debate cards before the final answer.
 - Alpha, Beta, Gamma, and Delta participant agents.
 - Separate Narrator layer for observation and public narration.
 - Public Operator interventions that do not advance the turn order.
@@ -44,7 +54,8 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 - Turn compare mode for side-by-side transcript inspection.
 - Match quality timeline with click-to-filter.
 - Agent performance cards with detail popups.
-- Transcript search, filters, compact mode, reasoning display, retry, delete, and Markdown export.
+- AI Lab transcript search, filters, compact mode, reasoning display, retry, delete, and Markdown export.
+- Wide Match Setup flyout for scenario framing, personas, locks, checkpoints, sessions, and operator controls.
 - Internet/news context with approval controls.
 - Native Windows/WPF interface.
 
@@ -63,8 +74,9 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
    ```
 
 7. Press Test Provider.
-8. Open Custom Match and use the grouped Generate, Tune, and Recent controls to create or replay a setup with Random Seed, AI Choice, or YOLO.
-9. Return to Transcript and run 1 TURN or AUTO CHAT.
+8. Open AI Lab, then Match Setup, to create or replay a setup with Random Seed, AI Choice, or YOLO.
+9. Run 1 TURN or AUTO CHAT to start an adversarial match.
+10. Open AI Collaborate when you want the team to produce a synthesized answer instead of running a turn-by-turn match.
 
 ## What Makes It Different
 
