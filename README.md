@@ -173,5 +173,3 @@ The generated dependency map lives at `docs/DEPENDENCY_INDEX.md`. Rebuild it wit
 AI Arena is distributed under the Shareable No-Derivatives Software Licence 1.0.
 
 You may share AI Arena freely in its original, unmodified form. You may use it privately. You may not distribute edited, modified, forked, patched, rebuilt, or derivative versions without written permission from Dominik Fiala.
-
-Copyright (c) 2026 Dominik Fiala. All rights not expressly granted remain with the author.
