@@ -1,0 +1,6 @@
+AI Arena 0.4.58-beta
+
+- Fixed Agent app creation for local-model replies that include File/Content blocks plus a fake success command such as Write-Host.
+- Prefer materialized workspace file writes when Builder supplies app files but the proposed command does not modify the workspace.
+- Persist and restore the visible Agent chat transcript for the selected workspace across app restarts.
+- Ignore AI Arena's own settings file in Agent command file-change receipts when test or portable setups place settings under the workspace.

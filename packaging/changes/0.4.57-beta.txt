@@ -1,0 +1,6 @@
+AI Arena 0.4.57-beta
+
+- Fixed Agent rescue retries so prose-only app responses are retried internally instead of pasted into the operator composer.
+- Kept manual approval intact after rescue: recovered Builder commands are staged for preview/approval, not executed silently.
+- Allowed rescue retries to replace stale unpreviewed command proposals so valid recovered commands no longer disappear behind Held.
+- Strengthened Builder instructions for vague app requests so local models choose a small safe default instead of asking clarifying questions.

@@ -13,3 +13,4 @@ TestResults/
 *.nupkg
 *.snupkg
 .DS_Store
+artifacts/

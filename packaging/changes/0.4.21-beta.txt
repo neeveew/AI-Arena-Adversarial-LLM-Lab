@@ -1,0 +1,13 @@
+AI Arena 0.4.21-beta
+
+- Added AI World lock metadata to 3D avatars and surfaced locked agents with visible badge geometry.
+- Added AI World voice-style metadata to 3D avatars and rendered non-default voice cues on styled agents.
+- Added AI World pressure-profile metadata to 3D avatars and rendered pressure bands on constrained agents.
+- Added a distinct narrator booth identity treatment so narrator turns read as ringside commentary instead of another generic robot.
+- Added richer tool activity props in the 3D arena for agents using internet/tool workflows.
+- Added internet-source activity props in the 3D arena for agents with recent sourced web activity.
+- Added error beacon props in the 3D arena for agents with warning or failure states.
+- Added compact speaker and turn headers inside AI World speech bubbles for faster live-dialogue scanning.
+- Expanded AI World inspector detail with voice style, pressure profile, and locked state.
+- Expanded AI World event chips with narrator, locked, voice, and pressure cues.
+- Added WPF regression coverage for avatar voice/pressure/lock mapping, narrator identity geometry, activity props, bubble headers, and inspector chips.

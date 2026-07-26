@@ -1,0 +1,14 @@
+# AI Arena 0.4.48-beta
+
+- Added capped Agent workspace profiling when a workspace folder is selected.
+- Detected common project signals including Node, .NET, Python, Rust, Go, static web, and git repository presence.
+- Extracted likely verify command hints from project files, including package.json build/test/lint/dev scripts.
+- Skipped cache and dependency folders such as node_modules, bin, obj, .git, .vs, .idea, and .vscode during workspace profiling.
+- Fed the workspace profile into Planner, Reviewer, and Builder prompts.
+- Added a compact work summary under Agent Terminal Output after command completion.
+- Added Copy Brief to export task, autonomy state, command result, workspace, file receipt, output excerpts, changed paths, and recent command history.
+- Added Stage Verify to prepare a verification prompt from the latest command output and generated work brief.
+- Added changed-path previews to the visible work summary line.
+- Included the generated work brief inside verification prompts.
+- Added deterministic WPF tests for workspace profile detection, package script hints, ignored dependency folders, work brief formatting, changed-path summaries, Stage Verify prompts, and XAML brief controls.
+- Updated README, user guide, Windows app notes, decomposition map, and agentic research notes for workspace profiles and work briefs.

@@ -14,18 +14,28 @@ $resolvedOutputPath = if ([System.IO.Path]::IsPathRooted($OutputPath)) {
 function Get-RelativePath {
     param([string]$Path)
 
-    $relative = [System.IO.Path]::GetRelativePath($Root, $Path)
+    $rootFullPath = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $rootFullPath = $rootFullPath + [System.IO.Path]::DirectorySeparatorChar
+    $pathFullPath = [System.IO.Path]::GetFullPath($Path)
+    $rootUri = [System.Uri]::new($rootFullPath)
+    $pathUri = [System.Uri]::new($pathFullPath)
+    if (-not $rootUri.IsBaseOf($pathUri)) {
+        return $pathFullPath.Replace('\', '/')
+    }
+
+    $relative = [System.Uri]::UnescapeDataString($rootUri.MakeRelativeUri($pathUri).ToString())
     return $relative.Replace('\', '/')
 }
 
 function Format-ListValue {
     param([string[]]$Values)
 
-    if ($Values.Count -eq 0) {
+    [string[]]$items = @($Values | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($items.Length -eq 0) {
         return "-"
     }
 
-    return ($Values | Sort-Object -Unique) -join ", "
+    return ($items | Sort-Object -Unique) -join ", "
 }
 
 function Get-ModuleName {
@@ -90,28 +100,34 @@ function Get-ConstructorDependencies {
 }
 
 $excludedPathPattern = '[\\/](bin|obj|dist|\.git)[\\/]'
-$projects = Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.csproj" -File |
+$projects = @(Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.csproj" -File |
     Where-Object { $_.FullName -notmatch $excludedPathPattern } |
-    Sort-Object FullName
+    Sort-Object FullName)
 
-$projectRows = foreach ($project in $projects) {
+$projectRows = @(foreach ($project in $projects) {
     [xml]$projectXml = Get-Content -LiteralPath $project.FullName -Raw
     $projectDir = Split-Path -Parent $project.FullName
-    $projectReferences = foreach ($reference in $projectXml.Project.ItemGroup.ProjectReference) {
+    $projectReferenceNodes = @($projectXml.SelectNodes("/*[local-name()='Project']/*[local-name()='ItemGroup']/*[local-name()='ProjectReference']"))
+    $packageReferenceNodes = @($projectXml.SelectNodes("/*[local-name()='Project']/*[local-name()='ItemGroup']/*[local-name()='PackageReference']"))
+    $resourceNodes = @($projectXml.SelectNodes("/*[local-name()='Project']/*[local-name()='ItemGroup']/*[local-name()='Resource']"))
+    $targetFrameworkNodes = @($projectXml.SelectNodes("/*[local-name()='Project']/*[local-name()='PropertyGroup']/*[local-name()='TargetFramework']"))
+    $outputTypeNodes = @($projectXml.SelectNodes("/*[local-name()='Project']/*[local-name()='PropertyGroup']/*[local-name()='OutputType']"))
+
+    $projectReferences = foreach ($reference in $projectReferenceNodes) {
         if ($reference.Include) {
             $absoluteReference = Join-Path $projectDir $reference.Include
             Get-RelativePath ([System.IO.Path]::GetFullPath($absoluteReference))
         }
     }
 
-    $packageReferences = foreach ($reference in $projectXml.Project.ItemGroup.PackageReference) {
+    $packageReferences = foreach ($reference in $packageReferenceNodes) {
         if ($reference.Include) {
             $version = if ($reference.Version) { $reference.Version } else { "floating" }
             "$($reference.Include)@$version"
         }
     }
 
-    $resources = foreach ($resource in $projectXml.Project.ItemGroup.Resource) {
+    $resources = foreach ($resource in $resourceNodes) {
         if ($resource.Include) {
             $resource.Include
         }
@@ -120,17 +136,17 @@ $projectRows = foreach ($project in $projects) {
     [pscustomobject]@{
         Name = [System.IO.Path]::GetFileNameWithoutExtension($project.Name)
         Path = Get-RelativePath $project.FullName
-        TargetFramework = ($projectXml.Project.PropertyGroup.TargetFramework | Select-Object -First 1)
-        OutputType = if ($projectXml.Project.PropertyGroup.OutputType) { ($projectXml.Project.PropertyGroup.OutputType | Select-Object -First 1) } else { "Library" }
+        TargetFramework = if ($targetFrameworkNodes.Count -gt 0) { $targetFrameworkNodes[0].InnerText } else { "-" }
+        OutputType = if ($outputTypeNodes.Count -gt 0) { $outputTypeNodes[0].InnerText } else { "Library" }
         ProjectReferences = @($projectReferences)
         PackageReferences = @($packageReferences)
         Resources = @($resources)
     }
-}
+})
 
-$sourceFiles = Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.cs" -File |
+$sourceFiles = @(Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.cs" -File |
     Where-Object { $_.FullName -notmatch $excludedPathPattern } |
-    Sort-Object FullName
+    Sort-Object FullName)
 
 $typeRows = [System.Collections.Generic.List[object]]::new()
 $typePattern = '(?m)^\s*(?:(?:public|internal|private|protected|sealed|static|abstract|partial|readonly)\s+)*(class|record(?:\s+class|\s+struct)?|interface|struct)\s+([A-Za-z_][A-Za-z0-9_]*)'
@@ -164,18 +180,18 @@ foreach ($file in $sourceFiles) {
     }
 }
 
-$duplicateTypes = $typeRows |
+$duplicateTypes = @($typeRows |
     Group-Object Name |
     Where-Object { $_.Count -gt 1 } |
-    Sort-Object Name
+    Sort-Object Name)
 
-$duplicateServices = $typeRows |
+$duplicateServices = @($typeRows |
     Where-Object IsServiceLike |
     Group-Object Name |
     Where-Object { $_.Count -gt 1 } |
-    Sort-Object Name
+    Sort-Object Name)
 
-$moduleRows = $typeRows |
+$moduleRows = @($typeRows |
     Group-Object Module |
     Sort-Object Name |
     ForEach-Object {
@@ -185,11 +201,11 @@ $moduleRows = $typeRows |
             Services = @($_.Group | Where-Object IsServiceLike).Count
             Files = @($_.Group.Path | Sort-Object -Unique).Count
         }
-    }
+    })
 
-$serviceRows = $typeRows |
+$serviceRows = @($typeRows |
     Where-Object IsServiceLike |
-    Sort-Object Module, Name
+    Sort-Object Module, Name)
 
 $lines = [System.Collections.Generic.List[string]]::new()
 $generatedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss zzz")

@@ -1,0 +1,7 @@
+- Namespaces the WPF PowerShell control plane as `ai-arena-wpf-control`, with a separate per-run token file, so WPF automation remains reliable while another AI Arena implementation is running.
+- Adds portable Match Setup v2 JSON export/import in the WPF UI and PowerShell control plane. Imports validate atomically, create a clean collision-free session, omit runtime state, and never export provider API tokens.
+- Makes Random/Wild generation seed-deterministic for the same recipe and active cast, while AI Choice/Current Topics remain exact captured-output replays with explicit replay IDs.
+- Unifies the canonical five-part scenario quality contract across Core generation, Match Setup readiness, history receipts, and PowerShell state.
+- Routes UI and PowerShell Match Setup opening through the same deterministic overlay transition and closes conflicting transient surfaces.
+- Keeps PowerShell control enabled by default in normal Settings, keeps AI World debug-only and default-off, and includes self-screenshot, Internet, provider, session, Agent, arena, and collaboration controls.
+- Publishes a self-contained Windows installer with the bundled SearXNG search backend and PowerShell helper so installed AI Arena does not require a separate .NET Desktop Runtime.

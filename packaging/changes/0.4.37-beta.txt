@@ -1,0 +1,13 @@
+AI Arena 0.4.37-beta
+Run Trace triage release.
+
+- Added a deterministic Run Trace triage model that classifies transcript trace health as Clean, Review, Watch, Repair, or Blocked.
+- Added issue category counts for pending approvals, repair spans, slow spans, high-token spans, and tool/source spans.
+- Added a trace Focus line that points operators to the highest-priority turn and span to inspect first.
+- Added a Review Queue that groups exact turn/speaker/span combinations needing follow-up.
+- Added visible Battle Review triage summary text above Run Trace metrics.
+- Added a Triage metric chip so trace health is scannable beside spans, tools, issues, and slowest span.
+- Added a visible Review Queue section in Run Trace with compact-mode limits for dense review sessions.
+- Expanded Copy Trace packets with triage summary, focus, and review queue details.
+- Tightened pending-approval detection so resolved approval spans do not inflate blocked-state counts.
+- Added deterministic tests for trace severity, focus selection, issue categories, review queues, clean traces, and copied trace packets.

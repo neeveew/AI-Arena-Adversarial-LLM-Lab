@@ -98,8 +98,8 @@ internal sealed class AgentMemoryCoordinator
         header.Children.Add(titleStack);
 
         var actions = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        actions.Children.Add(ActionButton("Refresh", (_, _) => refreshTranscript(), true));
-        actions.Children.Add(ActionButton("Clear all", async (_, _) => await ClearAllAgentMemoryNotesAsync(), noteCount > 0, TranscriptActionKind.Danger));
+        actions.Children.Add(ActionButton("Refresh", (_, _) => refreshTranscript(), true, iconGlyph: "\uE72C"));
+        actions.Children.Add(ActionButton("Clear all", async (_, _) => await ClearAllAgentMemoryNotesAsync(), noteCount > 0, TranscriptActionKind.Danger, "\uE74D"));
         Grid.SetColumn(actions, 1);
         header.Children.Add(actions);
         panel.Children.Add(header);
@@ -254,36 +254,22 @@ internal sealed class AgentMemoryCoordinator
         header.Children.Add(title);
 
         var actions = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        actions.Children.Add(ActionButton("Edit", async (_, _) => await EditAgentMemoryNotesAsync(agent), true, TranscriptActionKind.Primary));
-        actions.Children.Add(ActionButton("Clear", async (_, _) => await SaveAgentMemoryNotesAsync(agent.Id, []), agent.PrivateNotes.Count > 0, TranscriptActionKind.Danger));
+        actions.Children.Add(ActionButton("Edit", async (_, _) => await EditAgentMemoryNotesAsync(agent), true, TranscriptActionKind.Primary, "\uE70F"));
+        actions.Children.Add(ActionButton("Clear", async (_, _) => await SaveAgentMemoryNotesAsync(agent.Id, []), agent.PrivateNotes.Count > 0, TranscriptActionKind.Danger, "\uE74D"));
         Grid.SetColumn(actions, 1);
         header.Children.Add(actions);
         stack.Children.Add(header);
 
         if (agent.PrivateNotes.Count == 0)
         {
-            stack.Children.Add(new TextBlock
-            {
-                Text = "No private notes yet.",
-                Foreground = resourceBrush("MutedTextBrush"),
-                FontSize = 12,
-                FontStyle = FontStyles.Italic
-            });
+            stack.Children.Add(CreateEmptyMemoryState(accent));
         }
         else
         {
             var list = new StackPanel();
             foreach (var note in agent.PrivateNotes.Take(compactTranscriptMode() ? 4 : 6))
             {
-                list.Children.Add(new TextBlock
-                {
-                    Text = "- " + note,
-                    Foreground = resourceBrush("TextBrush"),
-                    FontSize = compactTranscriptMode() ? 12 : 13,
-                    LineHeight = compactTranscriptMode() ? 17 : 19,
-                    TextWrapping = TextWrapping.Wrap,
-                    Margin = new Thickness(0, 0, 0, 4)
-                });
+                list.Children.Add(CreateMemoryNoteRow(note, accent));
             }
 
             if (agent.PrivateNotes.Count > (compactTranscriptMode() ? 4 : 6))
@@ -310,6 +296,46 @@ internal sealed class AgentMemoryCoordinator
             Margin = new Thickness(0, 0, compactTranscriptMode() ? 0 : 8, 8),
             MinHeight = compactTranscriptMode() ? 104 : 132,
             Child = stack
+        };
+    }
+
+    private Border CreateMemoryNoteRow(string note, Brush accent)
+    {
+        return new Border
+        {
+            Background = blendBrush(resourceBrush("CardBrush"), accent, 0.08),
+            BorderBrush = blendBrush(resourceBrush("DisabledBorderBrush"), accent, 0.34),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = compactTranscriptMode() ? new Thickness(8, 5, 8, 6) : new Thickness(9, 6, 9, 7),
+            Margin = new Thickness(0, 0, 0, 6),
+            Child = new TextBlock
+            {
+                Text = note,
+                Foreground = resourceBrush("TextBrush"),
+                FontSize = compactTranscriptMode() ? 12 : 13,
+                LineHeight = compactTranscriptMode() ? 17 : 19,
+                TextWrapping = TextWrapping.Wrap
+            }
+        };
+    }
+
+    private Border CreateEmptyMemoryState(Brush accent)
+    {
+        return new Border
+        {
+            Background = blendBrush(resourceBrush("CardBrush"), accent, 0.04),
+            BorderBrush = resourceBrush("DisabledBorderBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(9, 7, 9, 8),
+            Child = new TextBlock
+            {
+                Text = "No private notes yet.",
+                Foreground = resourceBrush("MutedTextBrush"),
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap
+            }
         };
     }
 

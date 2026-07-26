@@ -1,0 +1,6 @@
+- Adds Fork Current Match to Match Setup > Saved State, creating and selecting an independent full-state branch while leaving the parent snapshot unchanged.
+- Persists direct-parent lineage, shows `Forked from <parent> at turn N`, and provides one-click Open parent navigation after restart.
+- Adds `session.fork` and `New-AIArenaSessionFork [-Name]` through the same exclusive WPF workflow used by the button; the PowerShell receipt contains only lineage IDs, revisions, counts, and time.
+- Makes fork naming atomic and collision-safe across processes, refuses occupied partial/checkpoint/log identities, rejects invalid explicit names, and cleans failed partial writes.
+- Preserves complete persisted match state—including transcript, narration, private notes, source metadata, attachments, provider configuration, locks, generation history, and next-turn position—while normalizing only transient runtime statuses.
+- Keeps the WPF PowerShell plane enabled by default, retains the self-screenshot command and bundled SearXNG Internet backend, and remains a self-contained Windows installation with no separate .NET Desktop Runtime requirement.

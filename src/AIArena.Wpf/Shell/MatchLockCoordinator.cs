@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using AIArena.Core.Persistence;
 using AIArena.Core.Services;
 using AIArena.Wpf.Services;
@@ -32,6 +33,7 @@ internal sealed class MatchLockCoordinator
     private readonly List<ComboBox> voiceControls = [];
     private readonly List<ComboBox> pressureControls = [];
     private readonly List<Button> colorControls = [];
+    private readonly List<Button> actionControls = [];
     private Style? lockToggleStyle;
 
     private static readonly string[] RoleDetailLabels =
@@ -86,6 +88,7 @@ internal sealed class MatchLockCoordinator
         voiceControls.Clear();
         pressureControls.Clear();
         colorControls.Clear();
+        actionControls.Clear();
     }
 
     public void UpdateBusyState(bool busy)
@@ -106,6 +109,11 @@ internal sealed class MatchLockCoordinator
         }
 
         foreach (var button in colorControls)
+        {
+            button.IsEnabled = !busy;
+        }
+
+        foreach (var button in actionControls)
         {
             button.IsEnabled = !busy;
         }
@@ -139,20 +147,13 @@ internal sealed class MatchLockCoordinator
         lockBox.Unchecked += MatchLockChanged;
         lockControls.Add(lockBox);
 
-        var editButton = new Button
-        {
-            Content = "EDIT",
-            Tag = lockKey,
-            MinHeight = 28,
-            Padding = new Thickness(9, 3, 9, 3),
-            Margin = new Thickness(0, 0, 8, 0),
-            Background = resourceBrush("InputBrush"),
-            BorderBrush = cardAccent,
-            Foreground = resourceBrush("TextBrush"),
-            FontSize = 11,
-            FontWeight = FontWeights.SemiBold,
-            ToolTip = "Edit this text and lock it"
-        };
+        var editButton = CreateLockCardActionButton(
+            "\uE70F",
+            "Edit",
+            lockKey,
+            blendBrush(resourceBrush("ControlBorderBrush"), cardAccent, 0.5),
+            resourceBrush("TextBrush"),
+            "Edit this text and lock it");
         editButton.Click += EditLockCardButton_Click;
 
         var header = new DockPanel { LastChildFill = true };
@@ -176,21 +177,13 @@ internal sealed class MatchLockCoordinator
         }
         if (isAgentCard && HasRoleDetails(body))
         {
-            var detailsButton = new Button
-            {
-                Content = "?",
-                Tag = new RoleDetailPayload(title, body),
-                MinHeight = 28,
-                MinWidth = 30,
-                Padding = new Thickness(7, 3, 7, 3),
-                Margin = new Thickness(0, 0, 8, 0),
-                Background = resourceBrush("InputBrush"),
-                BorderBrush = cardAccent,
-                Foreground = cardAccent,
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                ToolTip = "Inspect generated role constraints"
-            };
+            var detailsButton = CreateLockCardActionButton(
+                "\uE897",
+                "Details",
+                new RoleDetailPayload(title, body),
+                cardAccent,
+                cardAccent,
+                "Inspect generated role constraints");
             detailsButton.Click += RoleDetailsButton_Click;
             actions.Children.Add(detailsButton);
         }
@@ -249,7 +242,7 @@ internal sealed class MatchLockCoordinator
         layout.Children.Add(new Border
         {
             Background = cardAccent,
-            CornerRadius = new CornerRadius(4),
+            CornerRadius = ArenaTokens.SmallRadius,
             Margin = new Thickness(0, 1, 10, 1)
         });
         Grid.SetColumn(stack, 1);
@@ -257,14 +250,42 @@ internal sealed class MatchLockCoordinator
 
         return new Border
         {
-            Background = blendBrush(background, accent, locked ? 0.16 : isCastCard ? 0.1 : 0.05),
-            BorderBrush = locked ? lockAccent : blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.36),
+            Background = blendBrush(background, accent, locked ? 0.08 : 0.04),
+            BorderBrush = locked ? lockAccent : blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.25),
             BorderThickness = locked ? new Thickness(2) : new Thickness(1),
-            CornerRadius = new CornerRadius(7),
-            Padding = new Thickness(10),
+            CornerRadius = ArenaTokens.MediumRadius,
+            Padding = new Thickness(11),
             Margin = new Thickness(0, 0, isCastCard ? 0 : 10, 10),
             Child = layout
         };
+    }
+
+    private Button CreateLockCardActionButton(
+        string glyph,
+        string label,
+        object tag,
+        Brush border,
+        Brush foreground,
+        string tooltip)
+    {
+        var button = new Button
+        {
+            Content = CreatePopupActionContent(glyph, label),
+            Tag = tag,
+            MinHeight = 28,
+            MinWidth = label.Length > 4 ? 82 : 64,
+            Padding = new Thickness(8, 4, 9, 4),
+            Margin = new Thickness(0, 0, 8, 0),
+            Background = resourceBrush("InputBrush"),
+            BorderBrush = border,
+            Foreground = foreground,
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            Cursor = Cursors.Hand,
+            ToolTip = tooltip
+        };
+        actionControls.Add(button);
+        return button;
     }
 
     public static string FormatCastPreviewTitle(string id, string name)
@@ -355,7 +376,7 @@ internal sealed class MatchLockCoordinator
             Background = accent,
             BorderBrush = blendBrush(resourceBrush("TextBrush"), accent, 0.72),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(3),
+            CornerRadius = ArenaTokens.SmallRadius,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -405,24 +426,56 @@ internal sealed class MatchLockCoordinator
 
         var root = new Border
         {
-            Background = resourceBrush("TopBarBrush"),
+            Background = resourceBrush("PanelBrush"),
             BorderBrush = button.BorderBrush,
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(10),
-            Width = 238
+            CornerRadius = ArenaTokens.MediumRadius,
+            Padding = new Thickness(12),
+            Width = 252,
+            Effect = new DropShadowEffect
+            {
+                Color = Colors.Black,
+                Opacity = 0.35,
+                BlurRadius = 16,
+                ShadowDepth = 3
+            }
         };
         var stack = new StackPanel();
         root.Child = stack;
 
-        stack.Children.Add(new TextBlock
+        var header = new Grid { Margin = new Thickness(0, 0, 0, 10) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var heading = new StackPanel();
+        heading.Children.Add(new TextBlock
         {
             Text = $"{DisplayLockKey(payload.Key)} color",
             Foreground = resourceBrush("TextBrush"),
             FontSize = 12,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 8)
+            FontWeight = FontWeights.SemiBold
         });
+        heading.Children.Add(new TextBlock
+        {
+            Text = "Pick a preset or enter #RRGGBB.",
+            Foreground = resourceBrush("MutedTextBrush"),
+            FontSize = 11,
+            Margin = new Thickness(0, 2, 0, 0)
+        });
+        header.Children.Add(heading);
+        var preview = new Border
+        {
+            Width = 24,
+            Height = 24,
+            Background = button.BorderBrush,
+            BorderBrush = blendBrush(resourceBrush("TextBrush"), button.BorderBrush, 0.72),
+            BorderThickness = new Thickness(1),
+            CornerRadius = ArenaTokens.SmallRadius,
+            Margin = new Thickness(10, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Top
+        };
+        Grid.SetColumn(preview, 1);
+        header.Children.Add(preview);
+        stack.Children.Add(header);
 
         var swatches = new WrapPanel
         {
@@ -464,13 +517,13 @@ internal sealed class MatchLockCoordinator
         var actions = new DockPanel { LastChildFill = false };
         var reset = new Button
         {
-            Content = "RESET",
+            Content = CreatePopupActionContent("\uE72C", "Reset"),
             MinHeight = 28,
             MinWidth = 72,
             Padding = new Thickness(8, 3, 8, 3),
             Margin = new Thickness(0, 0, 8, 0),
             Background = resourceBrush("InputBrush"),
-            BorderBrush = resourceBrush("ControlBorderBrush"),
+            BorderBrush = resourceBrush("DisabledBorderBrush"),
             Foreground = resourceBrush("MutedTextBrush"),
             FontSize = 11,
             FontWeight = FontWeights.SemiBold
@@ -484,7 +537,7 @@ internal sealed class MatchLockCoordinator
 
         var apply = new Button
         {
-            Content = "APPLY",
+            Content = CreatePopupActionContent("\uE74E", "Apply"),
             MinHeight = 28,
             MinWidth = 78,
             Padding = new Thickness(8, 3, 8, 3),
@@ -531,7 +584,7 @@ internal sealed class MatchLockCoordinator
             Width = 16,
             Height = 16,
             Background = brush,
-            CornerRadius = new CornerRadius(3)
+            CornerRadius = ArenaTokens.SmallRadius
         };
         button.Click += async (_, _) =>
         {
@@ -539,6 +592,32 @@ internal sealed class MatchLockCoordinator
             await UpdateAccentColorAsync(key, option.Hex);
         };
         return button;
+    }
+
+    private StackPanel CreatePopupActionContent(string glyph, string label)
+    {
+        return new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = glyph,
+                    FontFamily = ArenaTokens.IconFontFamily,
+                    FontSize = 11,
+                    Margin = new Thickness(0, 0, 6, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                },
+                new TextBlock
+                {
+                    Text = label,
+                    FontSize = 11,
+                    FontWeight = FontWeights.SemiBold,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            }
+        };
     }
 
     private async void VoiceStylePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -735,36 +814,95 @@ internal sealed class MatchLockCoordinator
         {
             Owner = owner,
             Title = $"{payload.Title} details",
-            Width = 620,
-            Height = 420,
-            MinWidth = 460,
-            MinHeight = 320,
+            Width = 660,
+            Height = 460,
+            MinWidth = 540,
+            MinHeight = 380,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            ResizeMode = ResizeMode.CanResize,
-            Background = resourceBrush("PanelBrush"),
+            ResizeMode = ResizeMode.NoResize,
+            WindowStyle = WindowStyle.None,
+            ShowInTaskbar = false,
+            Background = Brushes.Transparent,
+            AllowsTransparency = true,
             Foreground = resourceBrush("TextBrush")
         };
         DialogChrome.ImportOwnerResources(owner, window);
-        DialogChrome.ApplyImplicitControlStyles(window);
 
-        var root = new Grid
+        var shell = new Border
         {
             Background = resourceBrush("PanelBrush"),
-            Margin = new Thickness(1)
+            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), resourceBrush("PrimaryBorderBrush"), 0.5),
+            BorderThickness = new Thickness(1),
+            CornerRadius = ArenaTokens.LargeRadius,
+            SnapsToDevicePixels = true,
+            Effect = new DropShadowEffect
+            {
+                Color = Colors.Black,
+                Opacity = 0.45,
+                BlurRadius = 18,
+                ShadowDepth = 4
+            }
         };
+
+        var root = new Grid();
+        shell.Child = root;
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
+        var header = new Border
+        {
+            Background = resourceBrush("InputBrush"),
+            CornerRadius = new CornerRadius(ArenaTokens.LargeRadiusValue - 1, ArenaTokens.LargeRadiusValue - 1, 0, 0),
+            Padding = new Thickness(18, 15, 18, 15)
+        };
+        header.MouseLeftButtonDown += (_, args) => DialogChrome.DragMoveIfPossible(window, args);
+        var headerGrid = new Grid();
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.Child = headerGrid;
+
+        var heading = new StackPanel();
         var title = new TextBlock
         {
             Text = payload.Title,
             Foreground = resourceBrush("TextBrush"),
-            FontSize = 16,
+            FontSize = 18,
             FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(14, 12, 14, 8)
+            TextTrimming = TextTrimming.CharacterEllipsis
         };
-        root.Children.Add(title);
+        var subtitle = new TextBlock
+        {
+            Text = "Persona details and generated behavior hooks",
+            Foreground = resourceBrush("MutedTextBrush"),
+            FontSize = 12,
+            Margin = new Thickness(0, 4, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        heading.Children.Add(title);
+        heading.Children.Add(subtitle);
+        headerGrid.Children.Add(heading);
+
+        var headerClose = new Button { ToolTip = "Close details" };
+        DialogChrome.ApplyCloseButtonStyle(
+            headerClose,
+            resourceBrush("InputBrush"),
+            resourceBrush("DisabledBorderBrush"),
+            resourceBrush("MutedTextBrush"));
+        headerClose.Click += (_, _) => window.Close();
+        Grid.SetColumn(headerClose, 1);
+        headerGrid.Children.Add(headerClose);
+        root.Children.Add(header);
+
+        var detailsPanel = new Border
+        {
+            Background = resourceBrush("InputBrush"),
+            BorderBrush = resourceBrush("ControlBorderBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = ArenaTokens.MediumRadius,
+            Padding = new Thickness(1),
+            Margin = new Thickness(18)
+        };
 
         var details = new TextBox
         {
@@ -774,27 +912,53 @@ internal sealed class MatchLockCoordinator
             AcceptsReturn = true,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Background = resourceBrush("InputBrush"),
+            Background = resourceBrush("PanelBrush"),
             Foreground = resourceBrush("TextBrush"),
-            BorderBrush = resourceBrush("ControlBorderBrush"),
-            Padding = new Thickness(12),
-            Margin = new Thickness(14, 0, 14, 10)
+            BorderBrush = resourceBrush("InputBrush"),
+            FontSize = 13,
+            Padding = new Thickness(12, 10, 12, 10)
         };
-        Grid.SetRow(details, 1);
-        root.Children.Add(details);
+        detailsPanel.Child = details;
+        Grid.SetRow(detailsPanel, 1);
+        root.Children.Add(detailsPanel);
+
+        var footer = new Grid
+        {
+            Margin = new Thickness(18, 0, 18, 18)
+        };
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var hint = new TextBlock
+        {
+            Text = "Read-only preview. Use Edit on the lock card to change this role.",
+            Foreground = resourceBrush("MutedTextBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        footer.Children.Add(hint);
 
         var close = new Button
         {
-            Content = "CLOSE",
-            HorizontalAlignment = HorizontalAlignment.Right,
-            MinWidth = 96,
-            Margin = new Thickness(14, 0, 14, 14)
+            Content = CreatePopupActionContent("\uE711", "Close"),
+            MinWidth = 110,
+            Margin = new Thickness(16, 0, 0, 0)
         };
+        DialogChrome.ApplyButtonStyle(
+            close,
+            resourceBrush("InputBrush"),
+            resourceBrush("DisabledBorderBrush"),
+            resourceBrush("TextBrush"));
         close.Click += (_, _) => window.Close();
-        Grid.SetRow(close, 2);
-        root.Children.Add(close);
+        Grid.SetColumn(close, 1);
+        footer.Children.Add(close);
 
-        window.Content = root;
+        Grid.SetRow(footer, 2);
+        root.Children.Add(footer);
+
+        window.Content = shell;
+        DialogChrome.ApplyImplicitControlStyles(window);
         window.Show();
         window.Activate();
     }
@@ -910,10 +1074,10 @@ internal sealed class MatchLockCoordinator
         return new Border
         {
             Background = blendBrush(resourceBrush("InputBrush"), accent, 0.08),
-            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.36),
+            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.42),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(5, 1, 5, 1),
+            CornerRadius = ArenaTokens.SmallRadius,
+            Padding = new Thickness(6, 2, 6, 2),
             Margin = new Thickness(8, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
             Child = new TextBlock
@@ -962,12 +1126,12 @@ internal sealed class MatchLockCoordinator
         thumb.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
         thumb.SetValue(FrameworkElement.MarginProperty, new Thickness(3, 0, 0, 0));
         thumb.SetValue(Border.BackgroundProperty, resourceBrush("MutedTextBrush"));
-        thumb.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
+        thumb.SetValue(Border.CornerRadiusProperty, ArenaTokens.MediumRadius);
 
         var glyph = new FrameworkElementFactory(typeof(TextBlock));
         glyph.Name = "LockGlyph";
         glyph.SetValue(TextBlock.TextProperty, "\uE785");
-        glyph.SetValue(TextBlock.FontFamilyProperty, new FontFamily("Segoe MDL2 Assets"));
+        glyph.SetValue(TextBlock.FontFamilyProperty, ArenaTokens.IconFontFamily);
         glyph.SetValue(TextBlock.FontSizeProperty, 9d);
         glyph.SetValue(TextBlock.ForegroundProperty, resourceBrush("DisabledBorderBrush"));
         glyph.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);

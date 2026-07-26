@@ -33,9 +33,15 @@ public sealed record ArenaViewSnapshot(
     string NarratorAccentColor,
     bool NarratorLocked,
     string ProviderBaseUrl,
+    string ProviderApiMode,
+    string ProviderApiToken,
     int ProviderTimeout,
     double ProviderTemperature,
     int ProviderMaxOutputTokens,
+    int ProviderContextLength,
+    string ProviderReasoning,
+    bool ProviderNativeStatefulChat,
+    int ProviderNativeIdleTtlSeconds,
     int TranscriptWindow,
     int PrivateWindow,
     int NotesWindow,
@@ -44,16 +50,22 @@ public sealed record ArenaViewSnapshot(
     double DecisionCardUpdatedAt,
     string ProviderLastError,
     bool InternetEnabled,
-    string InternetMode,
-    string InternetSourceScope,
-    int InternetMaxResults,
-    bool AllowParticipantInternetRequests,
-    bool AllowNarratorInternetRequests,
-    bool RequireInternetApproval,
-    string NewsMode,
     bool ProviderOnline,
     IReadOnlyList<TranscriptMessage> Messages,
-    IReadOnlyList<AgentState> Agents);
+    IReadOnlyList<AgentState> Agents)
+{
+    /// <summary>
+    /// Per-role generation overrides keyed by role id (alpha..delta, narrator).
+    /// A role appears here only when its persisted config differs from the shared
+    /// temperature or max output tokens; absent roles inherit shared values.
+    /// </summary>
+    public IReadOnlyDictionary<string, RoleGenerationOverride> RoleOverrides { get; init; } =
+        new Dictionary<string, RoleGenerationOverride>();
+
+    public int ProviderLastLatencyMs { get; init; }
+}
+
+public sealed record RoleGenerationOverride(double? Temperature, int? MaxOutputTokens);
 
 public sealed record RivalryMatrixItem(
     string Source,

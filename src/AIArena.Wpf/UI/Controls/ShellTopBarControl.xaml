@@ -1,0 +1,849 @@
+<UserControl x:Class="AIArena.Wpf.Controls.ShellTopBarControl"
+             x:Name="Root"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             MinHeight="48"
+             Focusable="False"
+             KeyboardNavigation.TabNavigation="Continue"
+             AutomationProperties.Name="Application status and commands">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+        <Style x:Key="TopMetricPill" TargetType="Border" BasedOn="{StaticResource Arena.Surface.Inset}">
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="InteractiveTopMetricPill" TargetType="Border" BasedOn="{StaticResource TopMetricPill}">
+            <Setter Property="Focusable" Value="True" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource Arena.FocusVisual}" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="BorderBrush" Value="{DynamicResource HoverBorderBrush}" />
+                    <Setter Property="Background" Value="{DynamicResource NavHoverBrush}" />
+                </Trigger>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="BorderBrush" Value="{DynamicResource Arena.Brush.FocusRing}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="TopMetricLabel" TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Caption}">
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="TopMetricValue" TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Label}">
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style x:Key="ToolbarGroup" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource InputBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Medium}" />
+            <Setter Property="Padding" Value="3" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="TopCompactButton" TargetType="Button" BasedOn="{StaticResource Arena.Button.Secondary}">
+            <Setter Property="MinHeight" Value="28" />
+            <Setter Property="MinWidth" Value="28" />
+            <Setter Property="Padding" Value="7,4" />
+            <Setter Property="Margin" Value="0,0,3,0" />
+        </Style>
+        <Style x:Key="TopIconButton" TargetType="Button" BasedOn="{StaticResource Arena.Button.Icon}">
+            <Setter Property="Width" Value="30" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="MinWidth" Value="30" />
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0,0,3,0" />
+        </Style>
+        <Style x:Key="FlyoutCard" TargetType="Border" BasedOn="{StaticResource Arena.Surface.Panel}">
+            <Setter Property="Background" Value="{DynamicResource TopBarBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
+            <Setter Property="Padding" Value="12" />
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect Color="#000000" BlurRadius="24" ShadowDepth="6" Opacity="0.45" />
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="FlyoutSectionLabel" TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Label}">
+            <Setter Property="Margin" Value="0,0,0,10" />
+        </Style>
+        <Style x:Key="MiniMetricCard" TargetType="Border" BasedOn="{StaticResource Arena.Surface.Inset}">
+            <Setter Property="Padding" Value="8,6" />
+        </Style>
+        <Style x:Key="MiniMetricLabel" TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Caption}" />
+        <Style x:Key="MiniMetricValue" TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Label}">
+            <Setter Property="Margin" Value="0,3,0,0" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style x:Key="CaptionButton" TargetType="Button">
+            <Setter Property="Width" Value="42" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.IconFontFamily}" />
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource Arena.FocusVisual}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="CaptionChrome" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="CaptionChrome" Property="Background" Value="{DynamicResource NavHoverBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="CaptionChrome" Property="Background" Value="{DynamicResource NavPressedBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CaptionCloseButton" TargetType="Button" BasedOn="{StaticResource CaptionButton}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="CaptionChrome" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="CaptionChrome" Property="Background" Value="#C42B1C" />
+                                <Setter Property="Foreground" Value="#FFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="CaptionChrome" Property="Background" Value="#B02015" />
+                                <Setter Property="Foreground" Value="#FFFFFF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Border Background="{DynamicResource TopBarBrush}"
+            BorderBrush="{DynamicResource ControlBorderBrush}"
+            BorderThickness="0,0,0,1"
+            SnapsToDevicePixels="True">
+        <Grid x:Name="TopBarLayoutGrid" Margin="10,4">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <!-- Reserved for the window caption buttons in both stacked and inline layouts. -->
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel x:Name="CaptionButtonsPanel"
+                        Grid.Row="0"
+                        Grid.RowSpan="2"
+                        Grid.Column="2"
+                        Orientation="Horizontal"
+                        VerticalAlignment="Top"
+                        Margin="8,-4,-10,0"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                <Button x:Name="CaptionMinimizeButton"
+                        Style="{StaticResource CaptionButton}"
+                        Click="CaptionMinimizeRequested"
+                        AutomationProperties.Name="Minimize window"
+                        ToolTip="Minimize">
+                    <TextBlock Text="&#xE921;" />
+                </Button>
+                <Button x:Name="CaptionMaximizeButton"
+                        Style="{StaticResource CaptionButton}"
+                        Click="CaptionMaximizeRequested"
+                        AutomationProperties.Name="Maximize or restore window"
+                        ToolTip="Maximize">
+                    <TextBlock x:Name="CaptionMaximizeGlyph" Text="&#xE922;" />
+                </Button>
+                <Button x:Name="CaptionCloseButton"
+                        Style="{StaticResource CaptionCloseButton}"
+                        Click="CaptionCloseRequested"
+                        AutomationProperties.Name="Close window"
+                        ToolTip="Close">
+                    <TextBlock Text="&#xE8BB;" />
+                </Button>
+            </StackPanel>
+
+            <Grid x:Name="TopBarStatus"
+                  Grid.Row="0"
+                  Grid.Column="0"
+                  VerticalAlignment="Center"
+                  WindowChrome.IsHitTestVisibleInChrome="True"
+                  ToolTipService.ShowDuration="60000">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid x:Name="ArenaTopBarMetrics" VerticalAlignment="Center">
+                    <WrapPanel VerticalAlignment="Center">
+                        <Border Style="{StaticResource TopMetricPill}" MinWidth="116">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Match" Style="{StaticResource TopMetricLabel}" />
+                                <TextBlock x:Name="TopMatchValue"
+                                           Grid.Column="1"
+                                           Text="{Binding MatchValue}"
+                                           Style="{StaticResource TopMetricValue}"
+                                           AutomationProperties.Name="Current match" />
+                            </Grid>
+                        </Border>
+                        <Border x:Name="TopProviderStatusButton"
+                                Style="{StaticResource InteractiveTopMetricPill}"
+                                MinWidth="116"
+                                ToolTip="Provider details"
+                                AutomationProperties.Name="Open provider details"
+                                AutomationProperties.HelpText="Open provider status, model availability, and connection actions."
+                                MouseLeftButtonUp="ProviderPointerActivated"
+                                KeyDown="ProviderKeyboardActivated">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Provider" Style="{StaticResource TopMetricLabel}" />
+                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <Ellipse Width="7"
+                                             Height="7"
+                                             Margin="0,0,7,0"
+                                             VerticalAlignment="Center"
+                                             Fill="{Binding TopProviderValueTarget.Foreground, ElementName=Root}" />
+                                    <TextBlock x:Name="TopProviderValue"
+                                               Text="{Binding ProviderValue}"
+                                               Foreground="{Binding TopProviderValueTarget.Foreground, ElementName=Root}"
+                                               ToolTip="{Binding TopProviderValueTarget.ToolTip, ElementName=Root}"
+                                               Style="{StaticResource TopMetricValue}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource TopMetricPill}" MinWidth="120">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Turn" Style="{StaticResource TopMetricLabel}" />
+                                <TextBlock x:Name="TopCurrentTurnValue"
+                                           Grid.Column="1"
+                                           Text="{Binding CurrentTurnValue}"
+                                           Foreground="{Binding TopCurrentTurnValueTarget.Foreground, ElementName=Root}"
+                                           ToolTip="{Binding TopCurrentTurnValueTarget.ToolTip, ElementName=Root}"
+                                           Style="{StaticResource TopMetricValue}" />
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource TopMetricPill}" MinWidth="70" Margin="0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Turns" Style="{StaticResource TopMetricLabel}" />
+                                <TextBlock x:Name="TopTurnsValue"
+                                           Grid.Column="1"
+                                           Text="{Binding TurnCountValue}"
+                                           Style="{StaticResource TopMetricValue}" />
+                            </Grid>
+                        </Border>
+                    </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="AgentTopBarMetrics" VerticalAlignment="Center" Visibility="Collapsed">
+                    <WrapPanel VerticalAlignment="Center">
+                        <Border Style="{StaticResource TopMetricPill}" MinWidth="92">
+                            <TextBlock Text="Agent workspace" Style="{StaticResource TopMetricValue}" />
+                        </Border>
+                        <Border Style="{StaticResource TopMetricPill}" MinWidth="170">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Workspace" Style="{StaticResource TopMetricLabel}" />
+                                <TextBlock x:Name="AgentTopWorkspaceValue" Grid.Column="1" Text="-" Style="{StaticResource TopMetricValue}" />
+                            </Grid>
+                        </Border>
+                        <Border x:Name="AgentTopProviderStatusButton"
+                                Style="{StaticResource InteractiveTopMetricPill}"
+                                MinWidth="158"
+                                ToolTip="Provider details"
+                                AutomationProperties.Name="Open Agent provider details"
+                                AutomationProperties.HelpText="Open provider status, model availability, and connection actions."
+                                MouseLeftButtonUp="ProviderPointerActivated"
+                                KeyDown="ProviderKeyboardActivated">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Provider" Style="{StaticResource TopMetricLabel}" />
+                                <TextBlock x:Name="AgentTopProviderValue" Grid.Column="1" Text="-" Style="{StaticResource TopMetricValue}" />
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource TopMetricPill}" MinWidth="134" Margin="0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Mode" Style="{StaticResource TopMetricLabel}" />
+                                <TextBlock x:Name="AgentTopModeValue" Grid.Column="1" Text="Manual approval" Style="{StaticResource TopMetricValue}" />
+                            </Grid>
+                        </Border>
+                    </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="CollaborateTopBarMetrics" VerticalAlignment="Center" Visibility="Collapsed">
+                    <WrapPanel VerticalAlignment="Center">
+                        <Border Style="{StaticResource TopMetricPill}" MinWidth="128">
+                            <TextBlock Text="AI Collaborate" Style="{StaticResource TopMetricValue}" />
+                        </Border>
+                        <Border x:Name="CollaborateTopProviderStatusButton"
+                                Style="{StaticResource InteractiveTopMetricPill}"
+                                MinWidth="164"
+                                ToolTip="Provider details"
+                                AutomationProperties.Name="Open Collaborate provider details"
+                                AutomationProperties.HelpText="Open provider status, model availability, and connection actions."
+                                MouseLeftButtonUp="ProviderPointerActivated"
+                                KeyDown="ProviderKeyboardActivated">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Provider" Style="{StaticResource TopMetricLabel}" />
+                                <TextBlock x:Name="CollaborateTopProviderValue" Grid.Column="1" Text="-" Style="{StaticResource TopMetricValue}" />
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource TopMetricPill}" MinWidth="148">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Mode" Style="{StaticResource TopMetricLabel}" />
+                                <TextBlock x:Name="CollaborateTopModeValue" Grid.Column="1" Text="Team Draft" Style="{StaticResource TopMetricValue}" />
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource TopMetricPill}" MinWidth="120" Margin="0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Team" Style="{StaticResource TopMetricLabel}" />
+                                <TextBlock x:Name="CollaborateTopTeamValue" Grid.Column="1" Text="4 agents" Style="{StaticResource TopMetricValue}" />
+                            </Grid>
+                        </Border>
+                    </WrapPanel>
+                </Grid>
+
+                <DockPanel Grid.Row="1"
+                           Margin="2,4,2,0"
+                           LastChildFill="True"
+                           Visibility="{Binding ShowStatusLine, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <TextBlock x:Name="SaveStatusText"
+                               DockPanel.Dock="Right"
+                               Text="Saved"
+                               Style="{StaticResource Arena.Text.Caption}"
+                               AutomationProperties.LiveSetting="Polite"
+                               Visibility="Collapsed"
+                               Margin="12,0,0,0" />
+                    <Ellipse Width="6"
+                             Height="6"
+                             Margin="0,0,8,0"
+                             Fill="{DynamicResource Arena.Brush.Info}"
+                             VerticalAlignment="Center"
+                             IsHitTestVisible="False" />
+                    <TextBlock x:Name="ArenaRunStatus"
+                               Text="{Binding ArenaStatus}"
+                               Style="{StaticResource Arena.Text.Caption}"
+                               AutomationProperties.Name="Arena status"
+                               AutomationProperties.LiveSetting="Polite"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding ArenaStatus}" />
+                </DockPanel>
+
+                <Popup x:Name="ProviderHealthPopup"
+                       PlacementTarget="{Binding ElementName=TopProviderStatusButton}"
+                       Placement="Bottom"
+                       HorizontalOffset="-68"
+                       VerticalOffset="8"
+                       StaysOpen="False"
+                       AllowsTransparency="True"
+                       PopupAnimation="Fade"
+                       Opened="ProviderPopupOpened"
+                       Closed="ProviderPopupClosed">
+                    <Border x:Name="ProviderHealthPopupContent"
+                            Style="{StaticResource FlyoutCard}"
+                            Width="380"
+                            PreviewKeyDown="ProviderPopupPreviewKeyDown"
+                            FocusManager.IsFocusScope="True"
+                            KeyboardNavigation.TabNavigation="Cycle"
+                            KeyboardNavigation.ControlTabNavigation="Cycle"
+                            KeyboardNavigation.DirectionalNavigation="Contained"
+                            AutomationProperties.Name="Provider health menu">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,14">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Provider health" Style="{StaticResource Arena.Text.Heading}" />
+                                    <TextBlock x:Name="ProviderHealthStatusText"
+                                               Text="Status unavailable"
+                                               Style="{StaticResource Arena.Text.Caption}"
+                                               AutomationProperties.LiveSetting="Polite"
+                                               Margin="0,3,0,0" />
+                                </StackPanel>
+                                <Button x:Name="ProviderHealthCloseButton"
+                                        Grid.Column="1"
+                                        Click="ProviderPopupCloseRequested"
+                                        Style="{StaticResource TopIconButton}"
+                                        Margin="8,0,0,0"
+                                        AutomationProperties.Name="Close provider health"
+                                        ToolTip="Close provider health">
+                                    <TextBlock Text="&#xE8BB;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="11" />
+                                </Button>
+                            </Grid>
+                            <UniformGrid Columns="2" Margin="0,0,0,10">
+                                <Border Style="{StaticResource MiniMetricCard}" Margin="0,0,6,6">
+                                    <StackPanel>
+                                        <TextBlock Text="Base URL" Style="{StaticResource MiniMetricLabel}" />
+                                        <TextBlock x:Name="ProviderHealthBaseUrlText" Text="-" Style="{StaticResource MiniMetricValue}" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Style="{StaticResource MiniMetricCard}" Margin="0,0,0,6">
+                                    <StackPanel>
+                                        <TextBlock Text="Models" Style="{StaticResource MiniMetricLabel}" />
+                                        <TextBlock x:Name="ProviderHealthModelCountText" Text="-" Style="{StaticResource MiniMetricValue}" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Style="{StaticResource MiniMetricCard}" Margin="0,0,6,0">
+                                    <StackPanel>
+                                        <TextBlock Text="Default model" Style="{StaticResource MiniMetricLabel}" />
+                                        <TextBlock x:Name="ProviderHealthDefaultModelText" Text="-" Style="{StaticResource MiniMetricValue}" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Style="{StaticResource MiniMetricCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Last check" Style="{StaticResource MiniMetricLabel}" />
+                                        <TextBlock x:Name="ProviderHealthLastCheckText" Text="-" Style="{StaticResource MiniMetricValue}" />
+                                    </StackPanel>
+                                </Border>
+                            </UniformGrid>
+                            <Border x:Name="ProviderHealthModelWarning"
+                                    Background="{DynamicResource DangerBrush}"
+                                    BorderBrush="{DynamicResource DangerBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="{DynamicResource Arena.Radius.Small}"
+                                    Padding="10,8"
+                                    Margin="0,0,0,10"
+                                    Visibility="Collapsed">
+                                <TextBlock x:Name="ProviderHealthModelWarningText"
+                                           Text="Selected model is not in the advertised model list."
+                                           Foreground="{DynamicResource DangerTextBrush}"
+                                           Style="{StaticResource Arena.Text.Caption}" />
+                            </Border>
+                            <TextBlock x:Name="ProviderHealthLastErrorText"
+                                       Text="-"
+                                       Style="{StaticResource Arena.Text.Caption}"
+                                       Margin="0,0,0,12" />
+                            <UniformGrid Columns="3">
+                                <Button x:Name="ProviderHealthTestButton"
+                                        Content="Test"
+                                        Click="ProviderTestRequested"
+                                        Style="{StaticResource Arena.Button.Primary}"
+                                        Margin="0,0,6,0"
+                                        AutomationProperties.Name="Test provider connection" />
+                                <Button x:Name="ProviderHealthRefreshModelsButton"
+                                        Content="Models"
+                                        Click="ProviderModelsRefreshRequested"
+                                        Style="{StaticResource Arena.Button.Secondary}"
+                                        Margin="0,0,6,0"
+                                        AutomationProperties.Name="Refresh provider models" />
+                                <Button Content="Settings"
+                                        Click="ProviderSettingsRequested"
+                                        Style="{StaticResource Arena.Button.Secondary}"
+                                        AutomationProperties.Name="Open provider settings" />
+                            </UniformGrid>
+                        </StackPanel>
+                    </Border>
+                </Popup>
+            </Grid>
+
+            <WrapPanel x:Name="TopBarCommandPanel"
+                       Grid.Row="1"
+                       Grid.Column="0"
+                       Grid.ColumnSpan="2"
+                       Orientation="Horizontal"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Center"
+                       WindowChrome.IsHitTestVisibleInChrome="True"
+                       Margin="0,8,0,0">
+                <TextBlock x:Name="ExportStatusText"
+                           Text=""
+                           AutomationProperties.LiveSetting="Polite"
+                           MaxWidth="118"
+                           Margin="0,0,10,0"
+                           VerticalAlignment="Center"
+                           TextAlignment="Right"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Caption}">
+                            <Setter Property="Visibility" Value="Visible" />
+                            <Style.Triggers>
+                                <Trigger Property="Text" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <Border x:Name="LabViewToggleGroup" Style="{StaticResource ToolbarGroup}" Visibility="Collapsed">
+                    <StackPanel Orientation="Horizontal">
+                        <Button x:Name="LabTranscriptViewButton"
+                                Content="Transcript"
+                                Tag="transcript"
+                                Click="LabViewRequested"
+                                Style="{StaticResource TopCompactButton}"
+                                AutomationProperties.Name="Show Lab transcript view"
+                                AutomationProperties.HelpText="Show the live match as a conversation transcript."
+                                ToolTip="Show the conversation transcript" />
+                        <Button x:Name="LabWorldViewButton"
+                                Content="World"
+                                Tag="world"
+                                Click="LabViewRequested"
+                                Style="{StaticResource TopCompactButton}"
+                                Margin="0"
+                                AutomationProperties.Name="Show AI World view"
+                                AutomationProperties.HelpText="Show the live match as the AI World 3D arena."
+                                ToolTip="Show the AI World 3D view of the live match" />
+                    </StackPanel>
+                </Border>
+
+                <Button x:Name="MatchSetupButton"
+                        Content="Match setup"
+                        Click="MatchSetupRequested"
+                        Style="{StaticResource Arena.Button.Primary}"
+                        MinHeight="34"
+                        Margin="0,0,6,0"
+                        AutomationProperties.Name="Open Match Setup"
+                        AutomationProperties.HelpText="Open or close the Match Setup flyout."
+                        ToolTip="Open Match Setup" />
+
+                <Border Style="{StaticResource ToolbarGroup}">
+                    <StackPanel Orientation="Horizontal">
+                        <Grid x:Name="SearchCommandHost" VerticalAlignment="Center">
+                            <Button x:Name="TranscriptSearchButton"
+                                    Click="SearchRequested"
+                                    Style="{StaticResource TopIconButton}"
+                                    AutomationProperties.Name="Search transcripts"
+                                    AutomationProperties.HelpText="Open or close transcript search."
+                                    ToolTip="Search transcripts (Ctrl+F)">
+                                <TextBlock Text="&#xE721;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="14" />
+                            </Button>
+                            <Popup x:Name="TranscriptSearchPopup"
+                                   PlacementTarget="{Binding ElementName=TopBarStatus}"
+                                   Placement="Bottom"
+                                   HorizontalOffset="36"
+                                   VerticalOffset="18"
+                                   StaysOpen="True"
+                                   AllowsTransparency="True"
+                                   PopupAnimation="Fade">
+                                <Border x:Name="TranscriptSearchPopupContent"
+                                        Style="{StaticResource FlyoutCard}"
+                                        PreviewKeyDown="SearchPopupPreviewKeyDown"
+                                        FocusManager.IsFocusScope="True"
+                                        KeyboardNavigation.TabNavigation="Cycle"
+                                        KeyboardNavigation.ControlTabNavigation="Cycle"
+                                        KeyboardNavigation.DirectionalNavigation="Contained"
+                                        AutomationProperties.Name="Transcript and collaboration search">
+                                    <Grid x:Name="TranscriptSearchPopupFrame"
+                                          MinWidth="420"
+                                          MaxWidth="760"
+                                          Width="{Binding PlacementTarget.ActualWidth, ElementName=TranscriptSearchPopup}">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Border x:Name="TranscriptSearchDragHandle"
+                                                Height="16"
+                                                Margin="0,-8,0,8"
+                                                Background="Transparent"
+                                                Cursor="SizeAll"
+                                                MouseLeftButtonDown="SearchDragStarted"
+                                                MouseMove="SearchDragMoved"
+                                                MouseLeftButtonUp="SearchDragCompleted"
+                                                LostMouseCapture="SearchDragCaptureLost"
+                                                AutomationProperties.Name="Move search panel">
+                                            <Border Width="40" Height="3" CornerRadius="2" Background="{DynamicResource ControlBorderBrush}" />
+                                        </Border>
+                                        <Grid Grid.Row="1">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox x:Name="TranscriptSearchText"
+                                                     Style="{StaticResource Arena.TextBox}"
+                                                     MinHeight="38"
+                                                     FontSize="13"
+                                                     Padding="34,6,58,6"
+                                                     TextChanged="SearchTextChanged"
+                                                     KeyDown="SearchTextKeyDown"
+                                                     PreviewMouseDown="SearchTextPointerPressed"
+                                                     AutomationProperties.Name="Search transcript"
+                                                     ToolTip="Search transcript text, speakers, models, and sources" />
+                                            <TextBlock Text="&#xE721;"
+                                                       FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                                                       FontSize="20"
+                                                       Foreground="{DynamicResource MutedTextBrush}"
+                                                       Margin="14,0,0,0"
+                                                       VerticalAlignment="Center"
+                                                       IsHitTestVisible="False" />
+                                            <Border HorizontalAlignment="Right"
+                                                    VerticalAlignment="Center"
+                                                    Margin="0,0,14,0"
+                                                    Padding="7,3"
+                                                    Background="{DynamicResource PanelBrush}"
+                                                    BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="{DynamicResource Arena.Radius.Small}"
+                                                    IsHitTestVisible="False">
+                                                <TextBlock Text="Esc" Style="{StaticResource Arena.Text.Caption}" />
+                                            </Border>
+                                            <Button x:Name="ClearTranscriptSearchButton"
+                                                    Grid.Column="1"
+                                                    Click="SearchClearRequested"
+                                                    Style="{StaticResource Arena.Button.Icon}"
+                                                    Margin="10,0,0,0"
+                                                    AutomationProperties.Name="Clear and close search"
+                                                    AutomationProperties.HelpText="Clear the active query, if any, and close the search popup."
+                                                    ToolTip="Clear and close search">
+                                                <TextBlock Text="&#xE711;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="16" />
+                                            </Button>
+                                        </Grid>
+                                        <TextBlock x:Name="TranscriptSearchResultsHeader"
+                                                   Grid.Row="2"
+                                                   Text="Recent searches"
+                                                   Style="{StaticResource Arena.Text.Label}"
+                                                   Margin="0,18,0,10" />
+                                        <Border Grid.Row="3" Style="{StaticResource Arena.Surface.Inset}" Padding="8" MinHeight="220">
+                                            <StackPanel x:Name="TranscriptRecentSearchItems" />
+                                        </Border>
+                                    </Grid>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <Button x:Name="ExportTranscriptBottomButton"
+                                Click="TranscriptExportRequested"
+                                Style="{StaticResource TopIconButton}"
+                                AutomationProperties.Name="Export transcript"
+                                AutomationProperties.HelpText="Export the current transcript to a file."
+                                ToolTip="Export transcript">
+                            <TextBlock Text="&#xE8E5;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="13" />
+                        </Button>
+                        <Button x:Name="TopUserGuideButton"
+                                Click="UserGuideRequested"
+                                Style="{StaticResource TopIconButton}"
+                                Margin="0"
+                                AutomationProperties.Name="Open user guide"
+                                AutomationProperties.HelpText="Open the AI Arena user guide."
+                                ToolTip="Open user guide">
+                            <TextBlock Text="&#xE897;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="14" />
+                        </Button>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource ToolbarGroup}">
+                    <StackPanel Orientation="Horizontal">
+                        <Grid x:Name="ViewMenuHost" VerticalAlignment="Center">
+                            <Button x:Name="ViewMenuButton"
+                                    Content="{Binding ViewButtonLabel}"
+                                    Click="ViewMenuRequested"
+                                    Style="{StaticResource TopCompactButton}"
+                                    MinWidth="104"
+                                    AutomationProperties.Name="Open transcript view menu"
+                                    AutomationProperties.HelpText="Open transcript layout presets and optional detail controls. The button label shows the active preset."
+                                    ToolTip="Transcript view controls" />
+                            <Popup x:Name="ViewMenuPopup"
+                                   PlacementTarget="{Binding ElementName=ViewMenuButton}"
+                                   Placement="Bottom"
+                                   HorizontalOffset="-176"
+                                   VerticalOffset="8"
+                                   StaysOpen="False"
+                                   Opened="ViewMenuOpened"
+                                   Closed="ViewMenuClosed"
+                                   AllowsTransparency="True"
+                                   PopupAnimation="Fade">
+                                <Border x:Name="ViewMenuPopupContent"
+                                        Style="{StaticResource FlyoutCard}"
+                                        Width="280"
+                                        PreviewKeyDown="ViewMenuPreviewKeyDown"
+                                        FocusManager.IsFocusScope="True"
+                                        KeyboardNavigation.TabNavigation="Cycle"
+                                        KeyboardNavigation.ControlTabNavigation="Cycle"
+                                        KeyboardNavigation.DirectionalNavigation="Contained"
+                                        AutomationProperties.Name="Transcript view menu">
+                                    <StackPanel>
+                                        <TextBlock Text="View" Style="{StaticResource Arena.Text.Heading}" Margin="0,0,0,12" />
+                                        <TextBlock Text="Presets" Style="{StaticResource FlyoutSectionLabel}" />
+                                        <UniformGrid Columns="2" Margin="0,0,0,10">
+                                            <Button x:Name="ViewPresetFocusedButton"
+                                                    Content="Focused"
+                                                    Click="ViewPresetFocusedRequested"
+                                                    Style="{StaticResource Arena.Button.Secondary}"
+                                                    Margin="0,0,6,6"
+                                                    AutomationProperties.HelpText="Reduce the workspace to the transcript and essential run controls."
+                                                    ToolTip="Transcript and essential controls" />
+                                            <Button x:Name="ViewPresetDiagnosticsButton"
+                                                    Content="Diagnostics"
+                                                    Click="ViewPresetDiagnosticsRequested"
+                                                    Style="{StaticResource Arena.Button.Secondary}"
+                                                    Margin="0,0,0,6"
+                                                    AutomationProperties.HelpText="Show timeline, memory, diagnostics, and follow-latest behavior."
+                                                    ToolTip="Timeline, memory, and diagnostics" />
+                                            <Button x:Name="ViewPresetCompactButton"
+                                                    Content="Compact"
+                                                    Click="ViewPresetCompactRequested"
+                                                    Style="{StaticResource Arena.Button.Secondary}"
+                                                    Margin="0,0,6,0"
+                                                    AutomationProperties.HelpText="Use a denser transcript layout for smaller windows."
+                                                    ToolTip="Dense layout for smaller windows" />
+                                            <Button x:Name="ViewPresetReviewButton"
+                                                    Content="Review"
+                                                    Click="ViewPresetReviewRequested"
+                                                    Style="{StaticResource Arena.Button.Secondary}"
+                                                    AutomationProperties.HelpText="Show review, comparison, quality, and evidence panels."
+                                                    ToolTip="Review, compare, and evidence panels" />
+                                        </UniformGrid>
+                                        <TextBlock x:Name="ViewActivePresetText" Text="Active: Custom" Style="{StaticResource Arena.Text.Caption}" Margin="0,0,0,12" />
+                                        <Separator Style="{StaticResource Arena.Separator}" Margin="0,0,0,12" />
+                                        <TextBlock Text="Optional details" Style="{StaticResource FlyoutSectionLabel}" />
+                                        <CheckBox x:Name="AgentPerformanceFullCardsCheckBox" Content="Full agent metric cards" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="FullAgentCardsChanged" Unchecked="FullAgentCardsChanged" Margin="0,0,0,6" />
+                                        <CheckBox x:Name="CompactTranscriptCheckBox" Content="Compact transcript" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="CompactTranscriptChanged" Unchecked="CompactTranscriptChanged" Margin="0,0,0,6" />
+                                        <CheckBox x:Name="TurnCompareCheckBox" Content="Turn compare" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="TurnCompareChanged" Unchecked="TurnCompareChanged" Margin="0,0,0,6" />
+                                        <CheckBox x:Name="MatchQualityTimelineCheckBox" Content="Quality timeline" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="QualityTimelineChanged" Unchecked="QualityTimelineChanged" Margin="0,0,0,6" />
+                                        <CheckBox x:Name="BattleReviewCheckBox" Content="Battle review" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="BattleReviewChanged" Unchecked="BattleReviewChanged" Margin="0,0,0,6" />
+                                        <CheckBox x:Name="MemoryNotesCheckBox" Content="Memory notes" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="MemoryNotesChanged" Unchecked="MemoryNotesChanged" Margin="0,0,0,6" />
+                                        <CheckBox x:Name="FollowChatCheckBox"
+                                                  Content="Follow latest"
+                                                  Style="{StaticResource Arena.CheckBox.Toggle}"
+                                                  Checked="FollowChatChanged"
+                                                  Unchecked="FollowChatChanged"
+                                                  IsChecked="True"
+                                                  AutomationProperties.HelpText="Keep the newest-first transcript positioned at its latest message." />
+                                    </StackPanel>
+                                </Border>
+                            </Popup>
+                        </Grid>
+
+                        <Grid x:Name="DebugMenuHost" VerticalAlignment="Center" Visibility="Collapsed">
+                            <Button x:Name="DebugMenuButton"
+                                    Content="Debug"
+                                    Click="DebugMenuRequested"
+                                    Style="{StaticResource TopCompactButton}"
+                                    Margin="0"
+                                    AutomationProperties.Name="Open debug menu"
+                                    AutomationProperties.HelpText="Open experimental diagnostics controls."
+                                    ToolTip="Experimental diagnostics" />
+                            <Popup x:Name="DebugMenuPopup"
+                                   PlacementTarget="{Binding ElementName=DebugMenuButton}"
+                                   Placement="Bottom"
+                                   HorizontalOffset="-180"
+                                   VerticalOffset="8"
+                                   StaysOpen="False"
+                                   Opened="DebugMenuOpened"
+                                   Closed="DebugMenuClosed"
+                                   AllowsTransparency="True"
+                                   PopupAnimation="Fade">
+                                <Border x:Name="DebugMenuPopupContent"
+                                        Style="{StaticResource FlyoutCard}"
+                                        Width="280"
+                                        PreviewKeyDown="DebugMenuPreviewKeyDown"
+                                        FocusManager.IsFocusScope="True"
+                                        KeyboardNavigation.TabNavigation="Cycle"
+                                        KeyboardNavigation.ControlTabNavigation="Cycle"
+                                        KeyboardNavigation.DirectionalNavigation="Contained"
+                                        AutomationProperties.Name="Debug menu">
+                                    <StackPanel>
+                                        <TextBlock Text="Experimental" Style="{StaticResource Arena.Text.Heading}" Margin="0,0,0,12" />
+                                        <CheckBox x:Name="DecisionCardCheckBox" Content="Decision card" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="DecisionCardChanged" Unchecked="DecisionCardChanged" Margin="0,0,0,6" />
+                                        <CheckBox x:Name="AutoModeratorCheckBox" Content="Auto moderator" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="AutoModeratorChanged" Unchecked="AutoModeratorChanged" Margin="0,0,0,6" />
+                                        <CheckBox x:Name="StyleFitCheckBox" Content="Style fit" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="StyleFitChanged" Unchecked="StyleFitChanged" Margin="0,0,0,6" />
+                                        <CheckBox x:Name="VoiceDriftEnforcementCheckBox" Content="Voice drift enforcement" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="VoiceDriftChanged" Unchecked="VoiceDriftChanged" Margin="0,0,0,6" />
+                                        <CheckBox x:Name="TranscriptInternetDetailsCheckBox" Content="Internet details" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="InternetDetailsChanged" Unchecked="InternetDetailsChanged" Margin="0,0,0,6" />
+                                        <CheckBox x:Name="WorldDebugCheckBox"
+                                                  Content="AI World (3D)"
+                                                  Style="{StaticResource Arena.CheckBox.Toggle}"
+                                                  Checked="WorldDebugChanged"
+                                                  Unchecked="WorldDebugChanged"
+                                                  AutomationProperties.Name="Toggle experimental AI World 3D view"
+                                                  AutomationProperties.HelpText="Show or hide the Transcript and World view selector. AI World is off by default."
+                                                  Margin="0,0,0,10" />
+                                        <TextBlock Text="Advanced diagnostics are hidden unless debug controls are enabled."
+                                                   Style="{StaticResource Arena.Text.Caption}" />
+                                    </StackPanel>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource ToolbarGroup}" Margin="0">
+                    <StackPanel Orientation="Horizontal">
+                        <Button x:Name="RightRailToggleButton"
+                                Click="RightRailToggleRequested"
+                                Style="{StaticResource TopIconButton}"
+                                AutomationProperties.Name="Toggle right rail"
+                                AutomationProperties.HelpText="Show or hide the right rail panels to give the center pane more room."
+                                ToolTip="Hide right rail">
+                            <TextBlock x:Name="RightRailToggleGlyph" Text="&#xE76C;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="13" />
+                        </Button>
+                        <Button x:Name="AppSettingsButton"
+                                Click="AppSettingsRequested"
+                                Style="{StaticResource TopIconButton}"
+                                Margin="0"
+                                AutomationProperties.Name="Open app settings"
+                                AutomationProperties.HelpText="Open provider, internet, appearance, and app behavior settings."
+                                ToolTip="App Settings">
+                            <Viewbox Width="18" Height="18">
+                                <Path x:Name="SettingsGearIcon"
+                                      Fill="{DynamicResource TextBrush}"
+                                      Stretch="Uniform"
+                                      RenderTransformOrigin="0.5,0.5"
+                                      Data="M19.43,12.98C19.47,12.66 19.5,12.34 19.5,12C19.5,11.66 19.47,11.33 19.42,11.02L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.29,4.96 19.06,5.05L16.56,6.06C16.04,5.66 15.5,5.33 14.88,5.08L14.5,2.42C14.47,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.12,5.08C8.5,5.33 7.96,5.67 7.44,6.06L4.94,5.05C4.71,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.58,11.02C4.53,11.33 4.5,11.67 4.5,12C4.5,12.33 4.53,12.66 4.58,12.98L2.46,14.63C2.27,14.78 2.22,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.71,19.04 4.94,18.95L7.44,17.94C7.96,18.34 8.5,18.67 9.12,18.92L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.47,21.82 14.5,21.58L14.88,18.92C15.5,18.67 16.04,18.33 16.56,17.94L19.06,18.95C19.29,19.04 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.98M12,15.5A3.5,3.5 0 1,1 12,8A3.5,3.5 0 0,1 12,15.5Z">
+                                    <Path.RenderTransform>
+                                        <RotateTransform x:Name="SettingsGearRotate" Angle="0" />
+                                    </Path.RenderTransform>
+                                </Path>
+                            </Viewbox>
+                        </Button>
+                    </StackPanel>
+                </Border>
+            </WrapPanel>
+        </Grid>
+    </Border>
+</UserControl>

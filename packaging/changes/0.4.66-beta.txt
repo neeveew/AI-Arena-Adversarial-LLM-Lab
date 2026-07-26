@@ -1,0 +1,7 @@
+AI Arena 0.4.66-beta
+
+- Restructure the Match Setup flyout: previews now live behind a Scenario / Cast / Relationships / Saved State tab strip so each section gets the full panel height instead of sharing one small scroll box.
+- Collapse the Generate, Tune, and Agents controls into a "Generation & Tuning" expander whose header shows the current recipe summary; the Recent actions row stays visible.
+- Keep only the title bar fixed; the readiness header, controls, and previews share one scroll surface.
+- Hide the readiness badge row and preflight checklist when every check is green; the one-line status keeps reporting readiness and the details return whenever something needs attention.
+- Render cast personas in two columns and let the Match Setup panel stretch to the window height instead of capping at 820 pixels.

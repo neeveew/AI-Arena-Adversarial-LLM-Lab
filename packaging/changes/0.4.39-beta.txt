@@ -1,0 +1,18 @@
+AI Arena 0.4.39-beta
+Standalone Agent workspace release.
+
+- Added Agent as its own top-level left-rail section, separate from AI Collaborate.
+- Added a dedicated Agent workspace view with its own center chat, left-rail context, top metrics, and right rail.
+- Added persisted workspace folder selection with visible active path and command boundary receipts.
+- Added Planner, Reviewer, and Builder model collaboration for software planning, review, progress updates, code suggestions, and command proposals.
+- Added compact prompt helpers for Plan, Breakdown, Progress, and Commands.
+- Added a command approval rail with Terminal and PowerShell modes.
+- Added command previews that show the readable invocation, working directory, and risk chips before execution.
+- Added explicit Approve and Reject controls; command execution is disabled until the current command has been previewed.
+- Added workspace boundary checks that block obvious parent-directory escapes and absolute paths outside the selected workspace.
+- Added risk detection for destructive, network/install, elevated, and long-running commands.
+- Added approved command execution with stdout, stderr, exit code, timeout state, elapsed time, and working directory in the output panel.
+- Added Agent activity cards for workspace changes, model steps, command previews, command exits, and rejected commands.
+- Persisted the Agent workspace path in WPF settings.
+- Updated README, user guide, Windows app notes, decomposition map, and research log for the new Agent section.
+- Added deterministic tests for command preview gating, workspace boundary checks, destructive-risk flags, terminal output capture, top-level Agent navigation, and Agent approval UI contracts.

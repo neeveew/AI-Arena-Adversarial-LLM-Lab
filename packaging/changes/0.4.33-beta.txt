@@ -1,0 +1,14 @@
+AI Arena 0.4.33-beta
+
+- Added Recent Collaboration health states: Ready, Needs review, Needs answer, and No trace.
+- Added visible health badges to saved collaboration rows.
+- Made recent collaboration search match health state, metric summary, and model mix.
+- Added model mix and review state to recent collaboration tooltips.
+- Added compare availability to recent collaboration tooltips and automation names.
+- Added a right-click Copy compare action when a saved chat can be compared against another open chat.
+- Added Markdown comparison packets for saved-vs-open AI Collaborate runs.
+- Included turn, trace-step, issue, token, latency, prompt, answer, memory-note, and model-count deltas in comparison packets.
+- Included saved/open model mix and latest prompt/answer snippets in comparison packets.
+- Added deterministic comparison recommendations based on trace issues and run development.
+- Added metric snapshot helpers for collaboration triage and comparison.
+- Added tests for compare markdown, health states, searchable metadata, compare availability, tooltips, and automation text.

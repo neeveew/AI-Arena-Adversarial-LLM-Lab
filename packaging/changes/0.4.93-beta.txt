@@ -1,0 +1,10 @@
+AI Arena 0.4.93-beta
+
+- Rebuilt Models & provider around a short Provider -> Default model -> Test connection path.
+- Moved saved setups, custom endpoints, role routing, recommendations, local model tools, and advanced calls into clear collapsed groups.
+- Removed the duplicate participant-count setting; Match Setup is now the only arena-roster editor.
+- Made role inheritance durable: Use default for every role now clears overrides instead of copying a model that later drifts from the default.
+- Added nested Settings search that opens exact matching groups and restores the prior layout when cleared.
+- Clarified current-session save behavior, removed the model requirement from unrelated session saves, and queued rapid provider edits instead of dropping them.
+- Reduced cramped provider forms to two fields per row and moved Agent response streaming into Agent workspace settings.
+- Updated provider labels, help text, Quick Start guidance, and troubleshooting for OpenAI-compatible, LM Studio native, and Ollama native connections.

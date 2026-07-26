@@ -1,0 +1,7 @@
+AI Arena 0.4.108-beta
+
+- Enables the token-authenticated WPF PowerShell control plane by default.
+- Moves the control-plane toggle out of Debug and into Settings -> PowerShell Control.
+- Migrates the legacy off-by-default preference once while preserving later explicit on/off choices.
+- Keeps Debug controls independent: disabling Debug no longer stops PowerShell automation.
+- Adds the authoritative root `CONTROLPLANE.md`, verifies all 69 commands are documented, and installs it beside AI Arena.

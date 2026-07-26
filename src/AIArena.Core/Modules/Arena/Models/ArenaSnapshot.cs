@@ -5,6 +5,12 @@ namespace AIArena.Core.Models;
 
 public sealed class ArenaSnapshot
 {
+    [JsonPropertyName("persistence_revision")]
+    public long PersistenceRevision { get; set; }
+
+    [JsonPropertyName("fork_lineage")]
+    public SessionForkLineage? ForkLineage { get; set; }
+
     [JsonPropertyName("configs")]
     public Dictionary<string, ModelProviderConfig> Configs { get; init; } = new();
 
@@ -28,6 +34,24 @@ public sealed class ArenaSnapshot
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Extra { get; init; }
+}
+
+public sealed class SessionForkLineage
+{
+    [JsonPropertyName("parent_session_id")]
+    public string ParentSessionId { get; init; } = "";
+
+    [JsonPropertyName("parent_persistence_revision")]
+    public long ParentPersistenceRevision { get; init; }
+
+    [JsonPropertyName("parent_turn_count")]
+    public int ParentTurnCount { get; init; }
+
+    [JsonPropertyName("parent_message_count")]
+    public int ParentMessageCount { get; init; }
+
+    [JsonPropertyName("forked_at")]
+    public long ForkedAt { get; init; }
 }
 
 public sealed class EngineSnapshot
@@ -68,14 +92,11 @@ public sealed class EngineSnapshot
     [JsonPropertyName("steering")]
     public Steering Steering { get; init; } = new();
 
-    [JsonPropertyName("model_rss")]
-    public ModelRssSettings ModelRss { get; init; } = new();
+    [JsonPropertyName("internet")]
+    public InternetSettings Internet { get; init; } = new();
 
     [JsonPropertyName("rivalry_matrix")]
     public RivalryMatrixState RivalryMatrix { get; init; } = new();
-
-    [JsonPropertyName("news_automation")]
-    public NewsAutomationSettings NewsAutomation { get; init; } = new();
 
     [JsonPropertyName("transcript_window")]
     public int TranscriptWindow { get; set; } = 30;
@@ -223,6 +244,12 @@ public sealed class DecisionCardState
 
     [JsonPropertyName("updated_at")]
     public double UpdatedAt { get; set; }
+
+    [JsonPropertyName("internet_request")]
+    public InternetToolRequest? InternetRequest { get; set; }
+
+    [JsonPropertyName("internet_result")]
+    public InternetToolResult? InternetResult { get; set; }
 }
 
 public sealed class DialogueMessage
@@ -369,52 +396,16 @@ public sealed class Steering
     public string Global { get; set; } = "";
 }
 
-public sealed class ModelRssSettings
+public sealed class InternetSettings
 {
     [JsonPropertyName("use_internet")]
     public bool UseInternet { get; set; }
 
-    [JsonPropertyName("mode")]
-    public string Mode { get; set; } = "manual";
-
-    [JsonPropertyName("allow_model_rss")]
-    public bool AllowModelRss { get; set; }
-
-    [JsonPropertyName("allow_participant_requests")]
-    public bool AllowParticipantRequests { get; set; }
-
-    [JsonPropertyName("allow_narrator_requests")]
-    public bool AllowNarratorRequests { get; set; } = true;
-
-    [JsonPropertyName("require_approval")]
-    public bool RequireApproval { get; set; }
-
-    [JsonPropertyName("source_scope")]
-    public string SourceScope { get; set; } = "trusted";
-
-    [JsonPropertyName("allow_random_internet_assist")]
-    public bool AllowRandomInternetAssist { get; set; }
-
     [JsonPropertyName("max_results")]
-    public int MaxResults { get; set; } = 1;
+    public int MaxResults { get; set; } = 5;
 
-    [JsonPropertyName("allowed_sources")]
-    public List<string> AllowedSources { get; init; } = new();
-}
-
-public sealed class NewsAutomationSettings
-{
-    [JsonPropertyName("mode")]
-    public string Mode { get; init; } = "manual";
-
-    [JsonPropertyName("cadence")]
-    public int Cadence { get; init; }
-
-    [JsonPropertyName("max_items")]
-    public int MaxItems { get; init; } = 1;
-
-    [JsonPropertyName("enabled")]
-    public bool Enabled { get; init; }
+    [JsonPropertyName("source_freshness_minutes")]
+    public int SourceFreshnessMinutes { get; set; } = 20;
 }
 
 public sealed class GeneratorState

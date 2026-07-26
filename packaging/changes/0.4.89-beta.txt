@@ -1,0 +1,10 @@
+AI Arena 0.4.89-beta
+
+- Replaces the legacy RSS and curated-news subsystem with first-class web_search and exact-page fetch_url internet tools.
+- Adds an in-app Internet diagnostic that tests local search and safe public-page fetching with actionable status details.
+- Improves Arena-owned search ranking, source diversity, freshness controls, bounded parallel fetching, and citation metadata.
+- Treats web text as untrusted evidence, blocks credential-bearing searches and URLs, prioritizes explicit page URLs, and retains source context during answer repair.
+- Hardens public fetching against private-network redirects, DNS rebinding, oversized responses, browser subrequest fan-out, unsafe background browser channels, and cancellation/disposal leaks.
+- Pins and verifies the bundled CPython and SearXNG source archives plus all Windows Python wheels before extraction or installation, and emits a hashed payload inventory.
+- Adds release and installer checksum manifests plus Optional, Required, and Disabled Authenticode signing policies.
+- Hardens agent workspace boundaries, session mutation concurrency, process shutdown, provider timeouts, and release command execution.

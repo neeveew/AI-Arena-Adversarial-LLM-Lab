@@ -1,0 +1,13 @@
+AI Arena 0.4.35-beta
+Operator command deck release.
+
+- Added a route-aware Operator Turn meter that shows draft size, token estimate, and current route.
+- Made Public, Private, and Narrator route switches refresh the Operator Turn meter immediately, even before typing.
+- Added deterministic Operator Draft receipt text for route, destination, visibility, pending approval count, prompt, and next check.
+- Added receipt tooltips and automation help to the Operator Turn meter and route hint.
+- Expanded route visibility copy so Public, Private, and Narrator routes explain who can see the staged intervention.
+- Added private destination summaries that name selected or active private-memory targets without creating public transcript noise.
+- Added route labels to the quick intervention hint, such as Evidence -> Public and Reset Roles -> Private.
+- Replaced terse quick intervention tooltips with structured intervention receipts containing route, reason, prompt, and next check.
+- Added a Scope Gate quick intervention that appears when internet approvals are pending and asks the operator to define allowed sources before approving tool results.
+- Added a Handoff quick intervention for durable decision, assumption, risk, and next-check notes before changing direction or pausing a run.

@@ -5,13 +5,18 @@ using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 
 namespace AIArena.Wpf;
 
+internal sealed record AIArenaAgentRosterResizeResult(
+    bool Ok,
+    string ErrorCode,
+    string Message,
+    int Count);
+
 internal sealed class AgentRosterCoordinator
 {
     private readonly SessionStore sessionStore;
     private readonly EventLogStore eventLogStore;
     private readonly ComboBox agentCountPresetPicker;
     private readonly ComboBox agentCountPicker;
-    private readonly ComboBox activeParticipantsPicker;
     private readonly Button applyAgentCountButton;
     private readonly TextBlock agentRosterStatusText;
     private readonly Func<bool> isRenderingSnapshot;
@@ -22,13 +27,13 @@ internal sealed class AgentRosterCoordinator
     private readonly Func<AIArena.Core.Models.ArenaSnapshot, string, Task> saveSnapshotWithFeedbackAsync;
     private readonly Func<string, Task> refreshActiveSessionAsync;
     private readonly Action<string> setArenaRunStatus;
+    private bool isUpdatingCountControls;
 
     public AgentRosterCoordinator(
         SessionStore sessionStore,
         EventLogStore eventLogStore,
         ComboBox agentCountPresetPicker,
         ComboBox agentCountPicker,
-        ComboBox activeParticipantsPicker,
         Button applyAgentCountButton,
         TextBlock agentRosterStatusText,
         Func<bool> isRenderingSnapshot,
@@ -44,7 +49,6 @@ internal sealed class AgentRosterCoordinator
         this.eventLogStore = eventLogStore;
         this.agentCountPresetPicker = agentCountPresetPicker;
         this.agentCountPicker = agentCountPicker;
-        this.activeParticipantsPicker = activeParticipantsPicker;
         this.applyAgentCountButton = applyAgentCountButton;
         this.agentRosterStatusText = agentRosterStatusText;
         this.isRenderingSnapshot = isRenderingSnapshot;
@@ -59,15 +63,20 @@ internal sealed class AgentRosterCoordinator
 
     public void ApplySnapshot(int activeCount)
     {
-        ShellUiHelpers.SelectComboTag(
-            activeParticipantsPicker,
-            Math.Clamp(activeCount, 1, AgentRosterService.MaxParticipants).ToString(System.Globalization.CultureInfo.InvariantCulture));
-        SelectAgentCountControls(activeCount);
+        isUpdatingCountControls = true;
+        try
+        {
+            SelectAgentCountControls(activeCount);
+        }
+        finally
+        {
+            isUpdatingCountControls = false;
+        }
     }
 
     public void OnPresetChanged()
     {
-        if (isRenderingSnapshot())
+        if (isRenderingSnapshot() || isUpdatingCountControls)
         {
             return;
         }
@@ -75,15 +84,56 @@ internal sealed class AgentRosterCoordinator
         var preset = ShellUiHelpers.SelectedComboTag(agentCountPresetPicker, "4");
         if (!preset.Equals("custom", StringComparison.OrdinalIgnoreCase))
         {
-            ShellUiHelpers.SelectComboTag(agentCountPicker, preset);
+            isUpdatingCountControls = true;
+            try
+            {
+                ShellUiHelpers.SelectComboTag(agentCountPicker, preset);
+                SelectAgentCountControls(SelectedAgentCount());
+            }
+            finally
+            {
+                isUpdatingCountControls = false;
+            }
+        }
+    }
+
+    public void OnExactCountChanged()
+    {
+        if (isRenderingSnapshot() || isUpdatingCountControls)
+        {
+            return;
+        }
+
+        isUpdatingCountControls = true;
+        try
+        {
+            SelectAgentCountControls(SelectedAgentCount());
+        }
+        finally
+        {
+            isUpdatingCountControls = false;
         }
     }
 
     public async Task ApplyAgentCountAsync()
     {
+        _ = await ResizeAgentCountAsync(SelectedAgentCount());
+    }
+
+    public async Task<AIArenaAgentRosterResizeResult> ResizeAgentCountAsync(int count)
+    {
+        if (count is < AgentRosterService.MinParticipants or > AgentRosterService.MaxParticipants)
+        {
+            return new AIArenaAgentRosterResizeResult(
+                false,
+                "invalid_argument",
+                $"Agent count must be between {AgentRosterService.MinParticipants} and {AgentRosterService.MaxParticipants}.",
+                count);
+        }
+
         if (isArenaBusy())
         {
-            return;
+            return new AIArenaAgentRosterResizeResult(false, "busy", "The arena is busy; the agent roster was not changed.", count);
         }
 
         var session = activeSession();
@@ -96,11 +146,12 @@ internal sealed class AgentRosterCoordinator
 
         if (session is null)
         {
-            setArenaRunStatus("No session is available for agent roster changes.");
-            return;
+            const string message = "No session is available for agent roster changes.";
+            setArenaRunStatus(message);
+            return new AIArenaAgentRosterResizeResult(false, "session_unavailable", message, count);
         }
 
-        var count = SelectedAgentCount();
+        var completed = false;
         await runArenaBusyAsync($"Resizing cast to {count} agents...", applyAgentCountButton, async () =>
         {
             var snapshot = await sessionStore.LoadSnapshotAsync(session.Id) ?? SessionStore.CreateDefaultSnapshot();
@@ -112,20 +163,16 @@ internal sealed class AgentRosterCoordinator
                 Agents = snapshot.Engine.Agents.Where(agent => agent.Active).Select(agent => agent.Id).ToArray()
             });
             await refreshActiveSessionAsync($"Agent roster resized: {count} active agents.");
+            completed = true;
         }, true);
-    }
 
-    public int ParseActiveParticipants()
-    {
-        var selected = (activeParticipantsPicker.SelectedItem as ComboBoxItem)?.Tag?.ToString();
-        return int.TryParse(selected, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var count)
-            ? Math.Clamp(count, 1, AgentRosterService.MaxParticipants)
-            : 3;
+        return completed
+            ? new AIArenaAgentRosterResizeResult(true, "", $"Agent roster resized to {count} active agent(s).", count)
+            : new AIArenaAgentRosterResizeResult(false, "operation_failed", "The agent roster resize did not complete.", count);
     }
 
     public void UpdateBusyState(bool busy)
     {
-        activeParticipantsPicker.IsEnabled = !busy;
         agentCountPresetPicker.IsEnabled = !busy;
         agentCountPicker.IsEnabled = !busy;
         applyAgentCountButton.IsEnabled = !busy;

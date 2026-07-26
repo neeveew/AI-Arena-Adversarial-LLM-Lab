@@ -19,20 +19,21 @@ Feature behavior should live in focused coordinators under `src/AIArena.Wpf/Shel
 | Coordinator | Owns |
 | --- | --- |
 | `SavedStateWorkflowCoordinator` | saved states, session templates, checkpoints |
+| `SessionForkWorkflowService` | atomic current-match branching, direct-parent audit receipts, exclusive-operation coordination, and branch selection shared by WPF and PowerShell |
 | `TranscriptSearchCoordinator` | transcript search popup, filters, drag behavior |
 | `TranscriptExportCoordinator` | transcript export/copy workflows |
 | `TranscriptInsightCoordinator` | turn compare and timeline filter state |
 | `TranscriptActionCoordinator` | transcript action button creation and busy state |
 | `TranscriptMutationCoordinator` | delete, pin, and retry-adjacent transcript mutation rules |
 | `TranscriptCardRenderer` | individual transcript card rendering |
-| `TranscriptAdjunctCoordinator` | decision cards, diagnostics adjuncts, news inspector cards, auto-moderator panels |
+| `TranscriptAdjunctCoordinator` | decision cards, diagnostics adjuncts, internet source cards, auto-moderator panels |
 | `TranscriptViewCoordinator` | transcript visual settings, presets, dashboard layout, debug/view menus |
 | `TranscriptListCoordinator` | transcript list orchestration, ready card, empty-search state, panel ordering |
-| `NewsPanelCoordinator` | internet/news panel filtering, summaries, fallback/empty state |
 | `AgentBoardCoordinator` | active agent board rendering and agent-turn actions |
 | `AgentMemoryCoordinator` | private notes and memory-note panel workflows |
 | `AgentPerformanceCoordinator` | participant performance panel and detail popup |
 | `AgentRosterCoordinator` | active participant count controls |
+| `AgentWorkspaceCoordinator` | standalone Agent workspace, Codex-inspired centered thread/composer surface, plus-menu prompt/session controls, collapsed Workspace/Advanced drawers, workspace path persistence, capped workspace profiling, software chat orchestration, Planner/Reviewer/Builder progress rows, Build Evidence and Outputs rows, fenced/XML/JSON command proposal staging for local-model replies, completed-command rail cleanup, file-snippet materialization, generated artifact suggestions, Use Artifact staging, artifact preview/check result handling, rescue prompt recovery, Auto Rescue retries, held proposal flow, action/result/warning/session-autonomy cards, command preview/workspace-session auto-approval with risky-preview manual stops, command history/replay, work brief copy, Stage Next/Repair/Retry and Stage Verify handoffs, expected no-change verification handling, loop-guarded Auto Continue, active command cancellation, terminal output copy actions, and file-change receipts |
 | `ArenaOperationCoordinator` | app-wide arena busy state, operation locking, control enable state, breathing buttons |
 | `ArenaRunCoordinator` | one-turn, auto-chat, narrator, retry, approval-resume run workflows |
 | `ArenaSessionMutationCoordinator` | reset/apply session settings and core snapshot mutation helpers |
@@ -41,17 +42,18 @@ Feature behavior should live in focused coordinators under `src/AIArena.Wpf/Shel
 | `ProviderReachabilityCoordinator` | provider health popup, refresh timer, shared provider status persistence |
 | `ProviderQuickSetupCoordinator` | ready-state provider setup card |
 | `AppSettingsCoordinator` | app settings visibility, provider settings navigation, model refresh timer, gear animation |
-| `ShellNavigationCoordinator` | theme application, AI Lab/AI Collaborate navigation, Match Setup flyout visibility, settings panel visibility, Collaborate chrome switching |
+| `ShellNavigationCoordinator` | theme application, AI Lab/AI World/Agent/AI Collaborate navigation, Match Setup flyout visibility, settings panel visibility, and section chrome switching |
 | `CollaborateCoordinator` | AI Collaborate chat flow, rounds-based role orchestration, markdown rendering, recent chat restore/delete, generated theme refresh |
 | `TelemetryWorkflowCoordinator` | system telemetry widgets and timer state |
 | `DiagnosticsWorkflowCoordinator` | diagnostics dashboard, sparkline values, detail popup |
 | `MatchQualityTimelineCoordinator` | transcript quality timeline panel |
-| `ScenarioWorkflowCoordinator` | random seed, AI choice, YOLO generation, generation history |
+| `ScenarioWorkflowCoordinator` | Random Seed, AI Choice, Current Topics, Wild Seed generation, determinism-aware history and replay controls |
 | `ScenarioSeedInspectorCoordinator` | scenario/persona seed metadata chips |
 | `CustomMatchSummaryCoordinator` | Match Setup scenario topic/global and cast/narrator preview cards |
 | `MatchLockCoordinator` | lock/edit controls, voice style and pressure pickers |
 | `MatchSetupCoordinator` | rivalry matrix rendering and persistence |
-| `InternetWorkflowCoordinator` | internet settings, curated news, approval dialogs |
+| `MatchSetupPortabilityService` | validated secret-free Match Setup v2 export, atomic clean-session import, fingerprints and receipts shared by UI and PowerShell |
+| `InternetWorkflowCoordinator` | internet enablement and local-search health |
 | `OperatorTurnCoordinator` | operator route, template, private target, and send workflows |
 
 ## Platform Helpers

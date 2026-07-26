@@ -1,0 +1,9 @@
+AI Arena 0.4.94-beta
+
+- Made the top command rail workspace-aware so Agent and AI Collaborate no longer expose controls for hidden AI Lab content.
+- Added consistent clickable provider status in AI Lab, Agent, and AI Collaborate.
+- Made Match Setup remember and restore the workspace and keyboard focus that opened it, including Escape-to-close support.
+- Preserved transcript filters when navigating through the Turns overview card.
+- Moved Theme and the master experimental-controls switch into Settings -> Visuals, freeing permanent top-rail space.
+- Changed narrow-window right-rail reveals into overlay drawers so the center workspace is no longer squeezed.
+- Reflowed Agent settings into readable two-column rows and removed the empty third row from Arena Controls.

@@ -1,0 +1,3 @@
+Control plane:
+- Added a PowerShell-accessible provider.model.set command and Set-AIArenaProviderModel helper to set the shared provider model plus Alpha, Beta, Gamma, Delta, and Narrator role models in one step.
+- Expanded provider control-plane state with per-role model fields so scripts can verify model routing without reading the UI.

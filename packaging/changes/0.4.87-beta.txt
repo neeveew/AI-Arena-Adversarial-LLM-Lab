@@ -1,0 +1,4 @@
+AI Arena 0.4.87-beta
+- Bundled SearXNG into the WPF installer as a default-checked optional component so Internet Access can work out of the box.
+- Added an app-managed SearXNG supervisor that reuses an existing local 8081 instance, starts the bundled local engine when needed, and stops only the supervised process on app exit.
+- Added a conditional SearXNG AGPL-3.0 license gate in the installer, plus installed source-offer metadata beside the bundled payload.

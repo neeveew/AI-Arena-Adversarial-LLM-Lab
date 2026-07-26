@@ -1,0 +1,5 @@
+AI Arena 0.4.79-beta
+
+- Add an opt-in Debug control plane over a local named pipe with structured status, navigation, Agent, Arena, Collaborate, export, and event-stream commands.
+- Add the PowerShell control client and a documented command map for automation and smoke testing.
+- Publish control-plane events for status changes, messages, command lifecycle, Agent file receipts/artifacts, loop guards, and provider online/offline transitions.

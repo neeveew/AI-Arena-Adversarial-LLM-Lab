@@ -1,34 +1,59 @@
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
+using AIArena.Core.Models;
+using AIArena.Core.Providers;
 
 namespace AIArena.Wpf.Services;
 
 public sealed class ModelPreloadService
 {
-    private static readonly HttpClient HttpClient = new()
+    private static readonly HttpClient SharedHttpClient = new()
     {
         Timeout = TimeSpan.FromSeconds(90)
     };
+    private readonly HttpClient httpClient;
+    private readonly LmStudioModelCatalogService catalogService;
+
+    public ModelPreloadService(
+        HttpClient? httpClient = null,
+        LmStudioModelCatalogService? catalogService = null)
+    {
+        this.httpClient = httpClient ?? SharedHttpClient;
+        this.catalogService = catalogService ?? new LmStudioModelCatalogService(this.httpClient);
+    }
 
     public async Task<IReadOnlyList<ModelPreloadResult>> PreloadAsync(
         string providerBaseUrl,
         IEnumerable<string> selectedModels,
+        string apiMode = ModelProviderApiModes.LmStudioNative,
+        string apiToken = "",
+        int contextLength = 0,
+        int nativeIdleTtlSeconds = 0,
         CancellationToken cancellationToken = default)
     {
-        var models = selectedModels
-            .Select(model => model.Trim())
-            .Where(model => !string.IsNullOrWhiteSpace(model))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        var models = NormalizeSelectedModels(selectedModels);
 
         if (models.Length == 0)
         {
             return [new ModelPreloadResult("", "skipped", "No selected models to preload.", false)];
         }
 
-        var apiBase = NormalizeLmStudioApiBase(providerBaseUrl);
-        var catalog = await TryLoadCatalogAsync(apiBase, cancellationToken);
+        var normalizedApiMode = ModelProviderApiModes.Normalize(apiMode);
+        if (normalizedApiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
+        {
+            return await PreloadOllamaAsync(providerBaseUrl, models, apiToken, contextLength, nativeIdleTtlSeconds, cancellationToken);
+        }
+
+        if (!normalizedApiMode.Equals(ModelProviderApiModes.LmStudioNative, StringComparison.OrdinalIgnoreCase))
+        {
+            return models
+                .Select(model => new ModelPreloadResult(model, "unsupported", "Model preload uses native provider lifecycle endpoints. Switch API mode to LM Studio native or Ollama native.", true))
+                .ToArray();
+        }
+
+        var apiBase = LmStudioModelCatalogService.NormalizeLmStudioApiBase(providerBaseUrl);
+        var catalog = await catalogService.TryLoadAsync(providerBaseUrl, apiToken, cancellationToken);
         if (!catalog.Ok)
         {
             return models
@@ -41,33 +66,276 @@ public sealed class ModelPreloadService
         {
             cancellationToken.ThrowIfCancellationRequested();
             var entry = catalog.Find(model);
-            var loadModel = entry?.Key ?? model;
-            if (entry?.Loaded == true)
+            var loadModel = entry?.PreferredIdentifier ?? model;
+            var effectiveContextLength = EffectiveContextLength(entry, contextLength);
+            var effectiveNativeIdleTtlSeconds = NormalizeNativeIdleTtlSeconds(nativeIdleTtlSeconds);
+            if (entry?.Loaded == true && IsLoadedWithRequestedContext(entry, effectiveContextLength))
             {
-                results.Add(new ModelPreloadResult(model, "ready", "Already loaded in LM Studio.", false));
+                results.Add(new ModelPreloadResult(model, "ready", AlreadyLoadedDetail(entry, contextLength, effectiveContextLength), false));
                 continue;
             }
 
-            results.Add(await LoadModelAsync(apiBase, model, loadModel, cancellationToken));
+            if (entry?.Loaded == true && ShouldReloadForRequestedContext(entry, effectiveContextLength))
+            {
+                var unloadResults = new List<ModelPreloadResult>();
+                if (!TryLoadedInstanceIds(entry, model, out var instanceIds))
+                {
+                    results.Add(new ModelPreloadResult(model, "failed", MissingLoadedInstanceIdDetail(entry), true));
+                    continue;
+                }
+
+                foreach (var instanceId in instanceIds)
+                {
+                    unloadResults.Add(await UnloadModelAsync(apiBase, model, instanceId, apiToken, cancellationToken));
+                }
+
+                var unloadFailures = unloadResults.Where(result => result.IsFailure).ToArray();
+                if (unloadFailures.Length > 0)
+                {
+                    results.Add(new ModelPreloadResult(model, "failed", $"Could not unload low-context instance before reload. {string.Join(" ", unloadFailures.Select(result => result.Detail))}", true));
+                    continue;
+                }
+
+                var loadResult = await LoadModelAsync(apiBase, model, loadModel, apiToken, effectiveContextLength, effectiveNativeIdleTtlSeconds, cancellationToken);
+                results.Add(loadResult.IsFailure
+                    ? ApplyContextCapDetail(loadResult, entry, contextLength, effectiveContextLength)
+                    : loadResult with
+                    {
+                        Status = "reloaded",
+                        Detail = $"{ReloadedContextDetail(entry, contextLength, effectiveContextLength)} {loadResult.Detail}"
+                    });
+                continue;
+            }
+
+            var result = await LoadModelAsync(apiBase, model, loadModel, apiToken, effectiveContextLength, effectiveNativeIdleTtlSeconds, cancellationToken);
+            results.Add(ApplyContextCapDetail(result, entry, contextLength, effectiveContextLength));
         }
 
         return results;
     }
 
-    private static async Task<ModelPreloadResult> LoadModelAsync(
+    public async Task<IReadOnlyList<ModelPreloadResult>> UnloadAsync(
+        string providerBaseUrl,
+        IEnumerable<string> selectedModels,
+        string apiMode = ModelProviderApiModes.LmStudioNative,
+        string apiToken = "",
+        CancellationToken cancellationToken = default)
+    {
+        var models = NormalizeSelectedModels(selectedModels);
+        if (models.Length == 0)
+        {
+            return [new ModelPreloadResult("", "skipped", "No selected models to unload.", false)];
+        }
+
+        var normalizedApiMode = ModelProviderApiModes.Normalize(apiMode);
+        if (normalizedApiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
+        {
+            return await UnloadOllamaAsync(providerBaseUrl, models, apiToken, cancellationToken);
+        }
+
+        if (!normalizedApiMode.Equals(ModelProviderApiModes.LmStudioNative, StringComparison.OrdinalIgnoreCase))
+        {
+            return models
+                .Select(model => new ModelPreloadResult(model, "unsupported", "Model unload uses native provider lifecycle endpoints. Switch API mode to LM Studio native or Ollama native.", true))
+                .ToArray();
+        }
+
+        var apiBase = LmStudioModelCatalogService.NormalizeLmStudioApiBase(providerBaseUrl);
+        var catalog = await catalogService.TryLoadAsync(providerBaseUrl, apiToken, cancellationToken);
+        if (!catalog.Ok)
+        {
+            return models
+                .Select(model => new ModelPreloadResult(model, "unsupported", catalog.Error, true))
+                .ToArray();
+        }
+
+        var results = new List<ModelPreloadResult>();
+        foreach (var model in models)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entry = catalog.Find(model);
+            if (entry is null)
+            {
+                results.Add(new ModelPreloadResult(model, "missing", "Model was not found in LM Studio's native catalog.", true));
+                continue;
+            }
+
+            if (!entry.Loaded)
+            {
+                results.Add(new ModelPreloadResult(model, "not loaded", "Model is already unloaded in LM Studio.", false));
+                continue;
+            }
+
+            var unloadResults = new List<ModelPreloadResult>();
+            if (!TryLoadedInstanceIds(entry, model, out var instanceIds))
+            {
+                results.Add(new ModelPreloadResult(model, "failed", MissingLoadedInstanceIdDetail(entry), true));
+                continue;
+            }
+
+            foreach (var instanceId in instanceIds)
+            {
+                unloadResults.Add(await UnloadModelAsync(apiBase, model, instanceId, apiToken, cancellationToken));
+            }
+
+            var failures = unloadResults.Where(result => result.IsFailure).ToArray();
+            results.Add(failures.Length == 0
+                ? new ModelPreloadResult(model, "unloaded", $"Unloaded {unloadResults.Count} instance(s) from LM Studio.", false)
+                : new ModelPreloadResult(model, "failed", string.Join(" ", failures.Select(result => result.Detail)), true));
+        }
+
+        return results;
+    }
+
+    private async Task<IReadOnlyList<ModelPreloadResult>> PreloadOllamaAsync(
+        string providerBaseUrl,
+        IReadOnlyList<string> models,
+        string apiToken,
+        int contextLength,
+        int nativeIdleTtlSeconds,
+        CancellationToken cancellationToken)
+    {
+        var apiBase = ModelProviderClient.NormalizeOllamaApiBase(providerBaseUrl);
+        var results = new List<ModelPreloadResult>();
+        foreach (var model in models)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var effectiveKeepAlive = NormalizeNativeIdleTtlSeconds(nativeIdleTtlSeconds);
+            results.Add(await RunOllamaLifecycleAsync(
+                apiBase,
+                model,
+                apiToken,
+                keepAlive: effectiveKeepAlive > 0 ? effectiveKeepAlive : null,
+                contextLength,
+                loadedStatus: "loaded",
+                loadedDetailPrefix: "Kept alive in Ollama",
+                cancellationToken));
+        }
+
+        return results;
+    }
+
+    private async Task<IReadOnlyList<ModelPreloadResult>> UnloadOllamaAsync(
+        string providerBaseUrl,
+        IReadOnlyList<string> models,
+        string apiToken,
+        CancellationToken cancellationToken)
+    {
+        var apiBase = ModelProviderClient.NormalizeOllamaApiBase(providerBaseUrl);
+        var results = new List<ModelPreloadResult>();
+        foreach (var model in models)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            results.Add(await RunOllamaLifecycleAsync(
+                apiBase,
+                model,
+                apiToken,
+                keepAlive: 0,
+                contextLength: 0,
+                loadedStatus: "unloaded",
+                loadedDetailPrefix: "Released from Ollama",
+                cancellationToken));
+        }
+
+        return results;
+    }
+
+    private async Task<ModelPreloadResult> RunOllamaLifecycleAsync(
+        string apiBase,
+        string model,
+        string apiToken,
+        int? keepAlive,
+        int contextLength,
+        string loadedStatus,
+        string loadedDetailPrefix,
+        CancellationToken cancellationToken)
+    {
+        var startedAt = DateTimeOffset.Now;
+        var payload = new Dictionary<string, object>
+        {
+            ["model"] = model,
+            ["stream"] = false
+        };
+        if (keepAlive.HasValue)
+        {
+            payload["keep_alive"] = keepAlive.Value;
+        }
+
+        if (contextLength > 0)
+        {
+            payload["options"] = new Dictionary<string, object>
+            {
+                ["num_ctx"] = contextLength
+            };
+        }
+
+        try
+        {
+            var endpoint = new Uri(new Uri(apiBase + "/"), "generate");
+            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+            {
+                Content = JsonContent.Create(payload)
+            };
+            ApplyAuthorization(request, apiToken);
+            using var response = await httpClient.SendAsync(request, cancellationToken);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return new ModelPreloadResult(model, "failed", FriendlyBody(body, response.ReasonPhrase), true);
+            }
+
+            var loadMs = ExtractOllamaLoadMilliseconds(body);
+            var elapsed = loadMs > 0
+                ? $"{loadMs / 1000d:0.#}s"
+                : $"{(DateTimeOffset.Now - startedAt).TotalSeconds:0.#}s";
+            var contextDetail = contextLength > 0 ? $" Context target: {contextLength:n0} tokens." : "";
+            var ttlDetail = keepAlive is > 0 ? $" Keep-alive: {keepAlive.Value:n0}s." : "";
+            return new ModelPreloadResult(model, loadedStatus, $"{loadedDetailPrefix} in {elapsed}.{contextDetail}{ttlDetail}", false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or UriFormatException)
+        {
+            return new ModelPreloadResult(model, "failed", FriendlyException(ex), true);
+        }
+    }
+
+    private async Task<ModelPreloadResult> LoadModelAsync(
         string apiBase,
         string selectedModel,
         string loadModel,
+        string apiToken,
+        int contextLength,
+        int nativeIdleTtlSeconds,
         CancellationToken cancellationToken)
     {
         var endpoint = new Uri(new Uri(apiBase + "/"), "models/load");
         var startedAt = DateTimeOffset.Now;
+        var payload = new Dictionary<string, object>
+        {
+            ["model"] = loadModel,
+            ["echo_load_config"] = true
+        };
+        if (contextLength > 0)
+        {
+            payload["context_length"] = contextLength;
+        }
+
+        if (nativeIdleTtlSeconds > 0)
+        {
+            payload["ttl"] = nativeIdleTtlSeconds;
+        }
+
         try
         {
-            using var response = await HttpClient.PostAsJsonAsync(
-                endpoint,
-                new { model = loadModel, echo_load_config = true },
-                cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+            {
+                Content = JsonContent.Create(payload)
+            };
+            ApplyAuthorization(request, apiToken);
+            using var response = await httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
@@ -80,111 +348,123 @@ public sealed class ModelPreloadService
                 : $"{(DateTimeOffset.Now - startedAt).TotalSeconds:0.#}s";
             return new ModelPreloadResult(selectedModel, "loaded", $"Loaded in {elapsed}.", false);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
             return new ModelPreloadResult(selectedModel, "failed", FriendlyException(ex), true);
         }
     }
 
-    private static async Task<ModelCatalog> TryLoadCatalogAsync(string apiBase, CancellationToken cancellationToken)
+    private async Task<ModelPreloadResult> UnloadModelAsync(
+        string apiBase,
+        string selectedModel,
+        string instanceId,
+        string apiToken,
+        CancellationToken cancellationToken)
     {
-        var endpoint = new Uri(new Uri(apiBase + "/"), "models");
+        var endpoint = new Uri(new Uri(apiBase + "/"), "models/unload");
         try
         {
-            using var response = await HttpClient.GetAsync(endpoint, cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+            {
+                Content = JsonContent.Create(new { instance_id = instanceId })
+            };
+            ApplyAuthorization(request, apiToken);
+            using var response = await httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return ModelCatalog.Failed(FriendlyBody(body, response.ReasonPhrase));
+                return new ModelPreloadResult(selectedModel, "failed", FriendlyBody(body, response.ReasonPhrase), true);
             }
 
-            return ModelCatalog.Success(ParseCatalog(body));
+            return new ModelPreloadResult(selectedModel, "unloaded", $"Unloaded instance {instanceId}.", false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
-            return ModelCatalog.Failed(FriendlyException(ex));
+            return new ModelPreloadResult(selectedModel, "failed", FriendlyException(ex), true);
         }
     }
 
-    private static IReadOnlyList<ModelCatalogEntry> ParseCatalog(string json)
+    private static string[] NormalizeSelectedModels(IEnumerable<string> selectedModels)
     {
-        using var doc = JsonDocument.Parse(json);
-        if (!TryGetArray(doc.RootElement, "models", out var models)
-            && !TryGetArray(doc.RootElement, "data", out models))
-        {
-            return [];
-        }
-
-        var entries = new List<ModelCatalogEntry>();
-        foreach (var item in models.EnumerateArray())
-        {
-            var key = FirstString(item, "key", "id", "selected_variant");
-            if (string.IsNullOrWhiteSpace(key))
-            {
-                continue;
-            }
-
-            var aliases = new[]
-                {
-                    key,
-                    FirstString(item, "id"),
-                    FirstString(item, "selected_variant"),
-                    FirstString(item, "display_name")
-                }
-                .Where(alias => !string.IsNullOrWhiteSpace(alias))
-                .Select(alias => alias!.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-
-            var loaded = IsLoaded(item);
-            entries.Add(new ModelCatalogEntry(key, aliases, loaded));
-        }
-
-        return entries;
+        return selectedModels
+            .Select(model => model.Trim())
+            .Where(model => !string.IsNullOrWhiteSpace(model))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
-    private static bool IsLoaded(JsonElement item)
+    private static bool IsLoadedWithRequestedContext(LmStudioModelInfo model, int contextLength)
     {
-        if (item.TryGetProperty("loaded_instances", out var loadedInstances)
-            && loadedInstances.ValueKind == JsonValueKind.Array
-            && loadedInstances.GetArrayLength() > 0)
+        return contextLength <= 0
+            || (model.LoadedContextLength is int loadedContext && loadedContext >= contextLength);
+    }
+
+    private static bool ShouldReloadForRequestedContext(LmStudioModelInfo model, int contextLength)
+    {
+        return contextLength > 0
+            && (model.LoadedContextLength is not int loadedContext || loadedContext < contextLength);
+    }
+
+    private static int EffectiveContextLength(LmStudioModelInfo? model, int requestedContextLength)
+    {
+        if (requestedContextLength <= 0)
+        {
+            return 0;
+        }
+
+        return model?.MaxContextLength is int maxContext && maxContext > 0
+            ? Math.Min(requestedContextLength, maxContext)
+            : requestedContextLength;
+    }
+
+    private static int NormalizeNativeIdleTtlSeconds(int nativeIdleTtlSeconds)
+    {
+        return Math.Clamp(nativeIdleTtlSeconds, 0, 86400);
+    }
+
+    private static bool TryLoadedInstanceIds(LmStudioModelInfo model, string selectedModel, out string[] instanceIds)
+    {
+        instanceIds = model.LoadedInstances
+            .Select(instance => instance.Id)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (instanceIds.Length > 0)
         {
             return true;
         }
 
-        if (item.TryGetProperty("loaded", out var loaded) && loaded.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        if (model.LoadedInstances.Count > 0)
         {
-            return loaded.GetBoolean();
+            return false;
         }
 
-        var status = FirstString(item, "status", "state");
-        return status.Contains("loaded", StringComparison.OrdinalIgnoreCase)
-            || status.Contains("running", StringComparison.OrdinalIgnoreCase)
-            || status.Contains("ready", StringComparison.OrdinalIgnoreCase);
+        var fallbackId = string.IsNullOrWhiteSpace(model.PreferredIdentifier)
+            ? selectedModel.Trim()
+            : model.PreferredIdentifier;
+        instanceIds = string.IsNullOrWhiteSpace(fallbackId) ? [] : [fallbackId];
+        return instanceIds.Length > 0;
     }
 
-    private static bool TryGetArray(JsonElement root, string propertyName, out JsonElement array)
+    private static string MissingLoadedInstanceIdDetail(LmStudioModelInfo model)
     {
-        if (root.TryGetProperty(propertyName, out array) && array.ValueKind == JsonValueKind.Array)
-        {
-            return true;
-        }
-
-        array = default;
-        return false;
+        return $"LM Studio reports {model.DisplayTitle} as loaded but did not provide a loaded instance id. Refresh the model catalog or reload the model in LM Studio before unloading.";
     }
 
-    private static string FirstString(JsonElement item, params string[] propertyNames)
+    private static void ApplyAuthorization(HttpRequestMessage request, string apiToken)
     {
-        foreach (var propertyName in propertyNames)
+        if (!string.IsNullOrWhiteSpace(apiToken))
         {
-            if (item.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String)
-            {
-                return value.GetString() ?? "";
-            }
+            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiToken.Trim()}");
         }
-
-        return "";
     }
 
     private static double ExtractLoadSeconds(string json)
@@ -201,9 +481,74 @@ public sealed class ModelPreloadService
             : 0;
     }
 
+    private static int ExtractOllamaLoadMilliseconds(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return 0;
+        }
+
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.TryGetProperty("load_duration", out var loadDuration)
+            && loadDuration.ValueKind == JsonValueKind.Number
+            && loadDuration.TryGetDouble(out var value)
+            ? Math.Max(0, (int)Math.Round(value / 1_000_000d))
+            : 0;
+    }
+
+    private static string AlreadyLoadedDetail(LmStudioModelInfo model, int requestedContextLength, int effectiveContextLength)
+    {
+        var capDetail = ContextCapDetail(model, requestedContextLength, effectiveContextLength);
+        if (model.LoadedContextLength is int context)
+        {
+            return JoinDetail(capDetail, $"Already loaded in LM Studio with {context:n0} token context.");
+        }
+
+        return JoinDetail(capDetail, "Already loaded in LM Studio.");
+    }
+
+    private static string ReloadedContextDetail(LmStudioModelInfo model, int requestedContextLength, int effectiveContextLength)
+    {
+        var target = effectiveContextLength > 0 ? effectiveContextLength : requestedContextLength;
+        var capDetail = ContextCapDetail(model, requestedContextLength, effectiveContextLength);
+        var reloadDetail = model.LoadedContextLength is int loadedContext
+            ? $"Reloaded from {loadedContext:n0} to {target:n0} token context."
+            : $"Reloaded from unknown context to {target:n0} token context.";
+        return JoinDetail(capDetail, reloadDetail);
+    }
+
+    private static ModelPreloadResult ApplyContextCapDetail(
+        ModelPreloadResult result,
+        LmStudioModelInfo? model,
+        int requestedContextLength,
+        int effectiveContextLength)
+    {
+        var capDetail = ContextCapDetail(model, requestedContextLength, effectiveContextLength);
+        return string.IsNullOrWhiteSpace(capDetail)
+            ? result
+            : result with { Detail = JoinDetail(capDetail, result.Detail) };
+    }
+
+    private static string ContextCapDetail(LmStudioModelInfo? model, int requestedContextLength, int effectiveContextLength)
+    {
+        if (requestedContextLength <= 0 || effectiveContextLength <= 0 || requestedContextLength == effectiveContextLength)
+        {
+            return "";
+        }
+
+        return model?.LoadedContextLength is int
+            ? $"Requested {requestedContextLength:n0} token context exceeds model max; using {effectiveContextLength:n0}."
+            : $"Requested {requestedContextLength:n0} token context exceeds advertised model max; using {effectiveContextLength:n0}.";
+    }
+
+    private static string JoinDetail(params string[] parts)
+    {
+        return string.Join(" ", parts.Where(part => !string.IsNullOrWhiteSpace(part)));
+    }
+
     private static string FriendlyBody(string body, string? reasonPhrase)
     {
-        var message = ExtractJsonMessage(body);
+        var message = LmStudioJsonMessageExtractor.ExtractMessage(body, "message", "error", "detail");
         if (!string.IsNullOrWhiteSpace(message))
         {
             return message;
@@ -211,80 +556,22 @@ public sealed class ModelPreloadService
 
         return !string.IsNullOrWhiteSpace(reasonPhrase)
             ? reasonPhrase
-            : "LM Studio model preload request failed.";
-    }
-
-    private static string ExtractJsonMessage(string body)
-    {
-        if (string.IsNullOrWhiteSpace(body))
-        {
-            return "";
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            return FirstString(doc.RootElement, "message", "error", "detail");
-        }
-        catch (JsonException)
-        {
-            return body.Trim();
-        }
+            : "Native model lifecycle request failed.";
     }
 
     private static string FriendlyException(Exception ex)
     {
         if (ex is TaskCanceledException)
         {
-            return "Timed out while asking LM Studio to preload the model.";
+            return "Timed out while asking the native provider to load or unload the model.";
+        }
+
+        if (ex is UriFormatException)
+        {
+            return "Invalid native provider base URL.";
         }
 
         return ex.Message;
-    }
-
-    private static string NormalizeLmStudioApiBase(string providerBaseUrl)
-    {
-        var trimmed = string.IsNullOrWhiteSpace(providerBaseUrl)
-            ? "http://127.0.0.1:1234/v1"
-            : providerBaseUrl.Trim().TrimEnd('/');
-
-        if (trimmed.EndsWith("/api/v1", StringComparison.OrdinalIgnoreCase))
-        {
-            return trimmed;
-        }
-
-        if (trimmed.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
-        {
-            trimmed = trimmed[..^3].TrimEnd('/');
-        }
-
-        return $"{trimmed}/api/v1";
-    }
-
-    private sealed record ModelCatalog(bool Ok, IReadOnlyList<ModelCatalogEntry> Entries, string Error)
-    {
-        public static ModelCatalog Success(IReadOnlyList<ModelCatalogEntry> entries)
-        {
-            return new ModelCatalog(true, entries, "");
-        }
-
-        public static ModelCatalog Failed(string error)
-        {
-            return new ModelCatalog(false, [], error);
-        }
-
-        public ModelCatalogEntry? Find(string selectedModel)
-        {
-            return Entries.FirstOrDefault(entry => entry.Matches(selectedModel));
-        }
-    }
-
-    private sealed record ModelCatalogEntry(string Key, IReadOnlyList<string> Aliases, bool Loaded)
-    {
-        public bool Matches(string selectedModel)
-        {
-            return Aliases.Any(alias => string.Equals(alias, selectedModel, StringComparison.OrdinalIgnoreCase));
-        }
     }
 }
 

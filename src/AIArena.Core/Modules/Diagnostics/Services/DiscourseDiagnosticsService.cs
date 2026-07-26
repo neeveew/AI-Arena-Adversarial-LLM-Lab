@@ -31,8 +31,15 @@ public sealed class DiscourseDiagnosticsService
     [
         "according to", "the article says", "the uploaded file says", "operator provided",
         "in turn", "from the transcript", "speculative", "inference", "analogy", "hypothesis",
-        "article", "source", "rss", "guardian", "file", "uploaded", "the transcript shows",
+        "article", "source", "guardian", "file", "uploaded", "the transcript shows",
         "directly supported"
+    ];
+
+    private static readonly string[] SourceConflictPhrases =
+    [
+        "contradicts", "contradict", "conflicts with", "conflict with", "disputes", "disputed",
+        "does not match", "inconsistent with", "different figure", "different number", "revised",
+        "denies", "rejected", "pushes back", "however", "but", "whereas", "on the other hand"
     ];
 
     private static readonly string[] NarrativePhrases =
@@ -67,6 +74,7 @@ public sealed class DiscourseDiagnosticsService
         var roleDrift = AnalyzeRoleDrift(recentConversation, personas ?? new Dictionary<string, string>());
         var unsupported = AnalyzeUnsupportedClaims(recentConversation);
         var evidence = AnalyzeEvidencePressure(recentEvidenceWindow);
+        var sourceConflicts = AnalyzeSourceConflicts(recentConversation);
         var narrative = AnalyzeNarrativeHeat(recentConversation);
         var state = FrictionState(
             recentConversation.Length,
@@ -74,6 +82,7 @@ public sealed class DiscourseDiagnosticsService
             roleDrift,
             unsupported,
             evidence,
+            sourceConflicts,
             narrative);
 
         return new FrictionDiagnostics(
@@ -96,8 +105,11 @@ public sealed class DiscourseDiagnosticsService
                 ["roleDrift"] = roleDrift,
                 ["unsupportedClaims"] = unsupported,
                 ["evidencePressure"] = evidence,
+                ["sourceConflicts"] = sourceConflicts,
                 ["narrativeHeat"] = narrative
-            });
+            },
+            sourceConflicts.Score,
+            sourceConflicts.Label);
     }
 
     private static MetricDiagnostic AnalyzeConsensus(IReadOnlyList<DiscourseTurn> turns)
@@ -264,6 +276,56 @@ public sealed class DiscourseDiagnosticsService
                 : details.Distinct(StringComparer.OrdinalIgnoreCase).Take(8).ToArray());
     }
 
+    private static MetricDiagnostic AnalyzeSourceConflicts(IReadOnlyList<DiscourseTurn> turns)
+    {
+        var sourcedTurns = turns
+            .Where(turn => Normalize(turn.SpeakerId) is not "operator")
+            .Where(turn => turn.Sources is { Count: > 0 })
+            .ToArray();
+        var details = new List<string>();
+
+        foreach (var turn in sourcedTurns)
+        {
+            var hits = MatchedPhrases(turn.Text, SourceConflictPhrases).Take(2).ToArray();
+            foreach (var hit in hits)
+            {
+                details.Add($"{DisplaySpeaker(turn)} signals sourced disagreement ({hit}) near {DisplayFirstSource(turn)}.");
+            }
+        }
+
+        foreach (var left in sourcedTurns)
+        {
+            foreach (var right in sourcedTurns)
+            {
+                if (left.Turn >= right.Turn
+                    || Normalize(left.SpeakerId).Equals(Normalize(right.SpeakerId), StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (MentionsConflictBetween(left, right) || MentionsConflictBetween(right, left))
+                {
+                    details.Add($"{DisplaySpeaker(right)} and {DisplaySpeaker(left)} have sourced claims that should be compared.");
+                }
+            }
+        }
+
+        var count = details.Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var label = count switch
+        {
+            >= 3 => "High",
+            >= 1 => "Present",
+            _ => "None"
+        };
+
+        return new MetricDiagnostic(
+            label,
+            count,
+            count == 0
+                ? ["No sourced conflict markers detected in the rolling window."]
+                : details.Distinct(StringComparer.OrdinalIgnoreCase).Take(8).ToArray());
+    }
+
     private static MetricDiagnostic AnalyzeNarrativeHeat(IReadOnlyList<DiscourseTurn> turns)
     {
         var hits = PhraseHits(turns, NarrativePhrases);
@@ -290,6 +352,7 @@ public sealed class DiscourseDiagnosticsService
         MetricDiagnostic roleDrift,
         MetricDiagnostic unsupported,
         MetricDiagnostic evidence,
+        MetricDiagnostic sourceConflicts,
         MetricDiagnostic narrative)
     {
         var productiveConflict = consensus.Details.Any(detail => detail.StartsWith("Friction:", StringComparison.OrdinalIgnoreCase))
@@ -301,6 +364,7 @@ public sealed class DiscourseDiagnosticsService
             narrative.Label == "High" && evidence.Label == "Weak" ? ("Theatre Risk", "danger", "Narrative heat is high without visible evidence support.") :
             roleDrift.Label == "High" ? ("Role Drift", "danger", "Role drift is high in the rolling window.") :
             unsupported.Label == "High" ? ("Unsupported Claims Spike", "danger", "Unsupported authoritative claims spiked.") :
+            sourceConflicts.Label is "High" or "Present" ? ("Source Conflict", "watch", "Sourced claims disagree; compare the evidence before choosing a claim.") :
             productiveConflict ? ("Productive Conflict", "watch", "Friction language is present without a high unsupported-claim spike.") :
             recentTurns < 2 ? ("Too Cold", "watch", "Too few recent turns for stable diagnostics.") :
             ("Healthy", "ok", "Signals look balanced in the rolling window.");
@@ -415,6 +479,22 @@ public sealed class DiscourseDiagnosticsService
         return details.Length == 0 ? [fallback] : details;
     }
 
+    private static bool MentionsConflictBetween(DiscourseTurn candidate, DiscourseTurn other)
+    {
+        return ContainsAny(candidate.Text, SourceConflictPhrases)
+            && ContainsAny(candidate.Text, other.Speaker, other.SpeakerId);
+    }
+
+    private static string DisplaySpeaker(DiscourseTurn turn)
+    {
+        return string.IsNullOrWhiteSpace(turn.Speaker) ? turn.SpeakerId : turn.Speaker;
+    }
+
+    private static string DisplayFirstSource(DiscourseTurn turn)
+    {
+        return turn.Sources is { Count: > 0 } ? turn.Sources[0] : "a source";
+    }
+
     private static bool ContainsAny(string text, params string[] phrases)
     {
         return phrases.Any(phrase => text.Contains(phrase, StringComparison.OrdinalIgnoreCase));
@@ -429,9 +509,7 @@ public sealed class DiscourseDiagnosticsService
     {
         var speaker = Normalize(turn.SpeakerId);
         return speaker is "system" or "internet" or "transcript"
-            || turn.Kind.Equals("internet", StringComparison.OrdinalIgnoreCase)
-            || turn.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase)
-            || turn.Kind.Equals("news", StringComparison.OrdinalIgnoreCase);
+            || turn.Kind.Equals("internet", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Normalize(string value)

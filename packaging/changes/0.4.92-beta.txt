@@ -1,0 +1,7 @@
+AI Arena 0.4.92-beta
+
+- Moved AI World behind a persisted Debug toggle that defaults off, keeping the transcript-first workspace primary.
+- Hid the Transcript and World selector until AI World is explicitly enabled from the Debug menu.
+- Returned immediately to Transcript when AI World or master debug controls are disabled.
+- Migrated old saved World sessions safely back to Transcript unless the new AI World debug gate is enabled.
+- Blocked hidden control-plane World navigation and 3D snapshot work while AI World is disabled.

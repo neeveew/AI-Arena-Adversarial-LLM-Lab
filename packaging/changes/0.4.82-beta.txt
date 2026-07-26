@@ -1,0 +1,2 @@
+Agent control plane:
+- Added agent.command.stage and Set-AIArenaAgentCommand so PowerShell can stage a command into the normal Agent preview and Approval rail without bypassing workspace validation.

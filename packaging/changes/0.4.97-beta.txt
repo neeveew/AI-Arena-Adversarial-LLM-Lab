@@ -1,0 +1,9 @@
+AI Arena 0.4.97-beta
+
+- Moved experimental AI World behind a dedicated default-off Debug toggle and prevented hidden 3D updates.
+- Added self-describing control-plane capability discovery with command categories, argument contracts, and destructive-action markers.
+- Added typed PowerShell controls for one arena turn, narration, confirmation-gated reset, right-rail visibility, transcript view presets, and Internet state/toggle/diagnostics.
+- Added a consistent post-command `state` summary to every authenticated PowerShell response, including validation failures.
+- Kept authentication failures state-free so unauthenticated callers cannot inspect the app.
+- Centralized control-plane command validation in an auditable capability catalog.
+- Updated agent-product research around durable checkpoints, human approval, resume correctness, and end-to-end traces.

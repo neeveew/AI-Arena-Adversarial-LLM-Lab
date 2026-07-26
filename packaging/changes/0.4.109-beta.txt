@@ -1,0 +1,7 @@
+AI Arena 0.4.109-beta
+
+- Promotes Agent from a Debug experiment to a default-on first-class WPF workspace.
+- Adds a normal Settings -> Agent workspace toggle that is independent of Debug controls.
+- Migrates legacy hidden Agent preferences once while preserving later explicit opt-outs.
+- Keeps PowerShell `agentWorkspaceEnabled` control available without Debug and returns actionable errors for disabled optional surfaces.
+- Leaves the experimental AI World 3D view Debug-gated and off by default.

@@ -24,4 +24,8 @@ public sealed record TranscriptMessage(
     string InternetSummary,
     string InternetCheckedAt,
     bool InternetCached,
-    IReadOnlyList<string> InternetSources);
+    IReadOnlyList<string> InternetSources,
+    double TokensPerSecond = 0,
+    int TimeToFirstTokenMs = 0,
+    string ProviderResponseId = "",
+    int ModelLoadTimeMs = 0);

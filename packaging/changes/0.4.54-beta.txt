@@ -1,0 +1,16 @@
+# AI Arena 0.4.54-beta
+
+- Reworked Agent into a more Codex-like session surface with a compact workspace strip, centered conversation lane, and bottom composer.
+- Moved Approve All and Auto Continue into the Agent composer so session autonomy can be armed where the task is sent.
+- Added Agent-specific composer, prompt-chip, autonomy-button, conversation-frame, workspace-strip, and right-rail visual styles.
+- Renamed the Agent Work Loop rail to Progress and kept Planner, Reviewer, and Builder phase state in the secondary rail.
+- Made Agent messages read more like a live transcript, with subtle status entries, right-aligned user task bubbles, and framed action/result cards.
+- Changed Agent top-mode wording to manual approval/full access session language.
+- Added Stage Next/Repair/Retry from the latest command output, work brief, artifact suggestion, and recommended next action.
+- Added risky-preview pauses under Approve All for destructive, install/network, elevated, and long-running previews.
+- Treated successful build, test, and read-only inspection commands as expected no-change results instead of false repair failures.
+- Clarified static web artifact runs as preview-launched actions rather than file-content verification checks.
+- Fed result-aware next action, latest terminal output, latest work brief, artifact suggestion, and artifact verification context into next-step and Auto Continue prompts.
+- Fixed a runtime WPF launch crash by removing forward `StaticResource` references from the new Agent composer styles.
+- Expanded WPF coverage for composer autonomy controls, Stage Next behavior, risky-preview manual stops, expected no-change verification commands, and static web preview labeling.
+- Updated README, user guide, Windows app notes, decomposition map, and research notes for the Codex-inspired Agent layout and autonomy polish.

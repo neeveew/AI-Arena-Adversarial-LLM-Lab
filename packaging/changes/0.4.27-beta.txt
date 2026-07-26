@@ -1,0 +1,12 @@
+AI Arena 0.4.27-beta
+
+- Added a Run Trace section to Battle Review so Review mode now includes a lightweight transcript-backed trace inspector.
+- Classified transcript turns into trace spans for agent model calls, narrator model calls, internet approvals, internet tool results, operator turns, and other events.
+- Added trace summary metrics for span count, model calls, tool events, issue markers, total tokens, total latency, and slowest span.
+- Added per-span issue flags for pending approvals, rejected/error spans, empty text, slow turns, high-token turns, cached tool results, and source-backed tool events.
+- Added a deterministic next trace action that tells the operator what to inspect before retrying, comparing, replaying, or copying a run as evidence.
+- Added Copy trace to Battle Review actions, producing a shareable AI Arena Run Trace packet.
+- Included recent trace spans directly in Battle Review with compact rows, status/model/token/latency summaries, and issue chips.
+- Kept Run Trace local and deterministic by deriving spans from the current transcript snapshot instead of introducing a remote tracing dependency.
+- Added WPF tests for trace span classification, model/tool/issue counts, slowest-span selection, trace packet text, and next-action prioritization.
+- Updated README, User Guide, and research notes to document the Run Trace workflow and the external trace/replay patterns behind it.

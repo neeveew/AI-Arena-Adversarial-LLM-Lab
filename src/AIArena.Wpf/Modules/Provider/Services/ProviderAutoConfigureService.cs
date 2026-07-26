@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Net.Http;
 using System.Text.RegularExpressions;
 using AIArena.Core.Models;
 using AIArena.Core.Providers;
@@ -8,31 +7,88 @@ namespace AIArena.Wpf.Services;
 
 public sealed class ProviderAutoConfigureService
 {
-    private static readonly HttpClient HttpClient = new()
-    {
-        Timeout = TimeSpan.FromSeconds(5)
-    };
-
     private readonly ModelProviderHealthService providerHealth;
+    private readonly LmStudioModelCatalogService lmStudioCatalog;
+    private readonly OllamaModelCatalogService ollamaCatalog;
 
-    public ProviderAutoConfigureService(ModelProviderHealthService? providerHealth = null)
+    public ProviderAutoConfigureService(
+        ModelProviderHealthService? providerHealth = null,
+        LmStudioModelCatalogService? lmStudioCatalog = null,
+        OllamaModelCatalogService? ollamaCatalog = null)
     {
         this.providerHealth = providerHealth ?? new ModelProviderHealthService();
+        this.lmStudioCatalog = lmStudioCatalog ?? new LmStudioModelCatalogService();
+        this.ollamaCatalog = ollamaCatalog ?? new OllamaModelCatalogService();
     }
 
     public async Task<ProviderAutoConfigurePlan> DetectAsync(
         string currentProviderBaseUrl,
         string strategy,
+        string apiMode,
+        string apiToken = "",
         CancellationToken cancellationToken = default)
     {
         var hardware = await Task.Run(DetectHardware, cancellationToken);
-        var candidates = CandidateBaseUrls(currentProviderBaseUrl);
+        var normalizedApiMode = ModelProviderApiModes.Normalize(apiMode);
+        var lmStudioNativeMode = normalizedApiMode.Equals(ModelProviderApiModes.LmStudioNative, StringComparison.OrdinalIgnoreCase);
+        var ollamaNativeMode = normalizedApiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase);
+        var nativeMode = lmStudioNativeMode || ollamaNativeMode;
+        var normalizedApiToken = apiToken.Trim();
+        var candidates = CandidateBaseUrls(currentProviderBaseUrl, normalizedApiMode);
+        if (ollamaNativeMode)
+        {
+            foreach (var candidate in candidates)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var catalog = await ollamaCatalog.TryLoadAsync(candidate, normalizedApiToken, cancellationToken);
+                if (catalog.Ok && catalog.Models.Count > 0)
+                {
+                    return Recommend(
+                        candidate,
+                        true,
+                        lmStudioNativeApi: false,
+                        catalog.Models,
+                        hardware,
+                        strategy,
+                        ModelProviderApiModes.OllamaNative);
+                }
+            }
+
+            return Recommend(
+                candidates[0],
+                false,
+                false,
+                Array.Empty<string>(),
+                hardware,
+                strategy,
+                normalizedApiMode);
+        }
+
         foreach (var candidate in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var shouldProbeNative = ShouldProbeLmStudioNative(candidate, normalizedApiMode);
+            if (shouldProbeNative)
+            {
+                var catalog = await lmStudioCatalog.TryLoadAsync(candidate, normalizedApiToken, cancellationToken);
+                if (catalog.Ok && catalog.Models.Count > 0)
+                {
+                    return Recommend(
+                        candidate,
+                        true,
+                        lmStudioNativeApi: true,
+                        catalog.Models,
+                        hardware,
+                        strategy,
+                        ModelProviderApiModes.LmStudioNative);
+                }
+            }
+
             var result = await providerHealth.ListModelsAsync(new ModelProviderConfig
             {
                 BaseUrl = candidate,
+                ApiMode = nativeMode ? ModelProviderApiModes.OpenAiCompatible : normalizedApiMode,
+                ApiToken = normalizedApiToken,
                 Timeout = 5,
                 Temperature = 0,
                 MaxOutputTokens = 16
@@ -43,23 +99,43 @@ public sealed class ProviderAutoConfigureService
                 continue;
             }
 
-            var lmStudioNative = await SupportsLmStudioNativeApiAsync(result.BaseUrl, cancellationToken);
-            return Recommend(
+            if (lmStudioNativeMode)
+            {
+                var catalog = await lmStudioCatalog.TryLoadAsync(result.BaseUrl, normalizedApiToken, cancellationToken);
+                if (catalog.Ok && catalog.Models.Count > 0)
+                {
+                    return Recommend(
+                        result.BaseUrl,
+                        true,
+                        lmStudioNativeApi: true,
+                        catalog.Models,
+                        hardware,
+                        strategy,
+                        ModelProviderApiModes.LmStudioNative);
+                }
+            }
+
+            var fallbackPlan = Recommend(
                 result.BaseUrl,
                 true,
-                lmStudioNative,
+                lmStudioNativeApi: false,
                 result.Models,
                 hardware,
-                strategy);
+                strategy,
+                normalizedApiMode);
+            return nativeMode
+                ? AddWarning(fallbackPlan, $"{ProviderModeLabel(normalizedApiMode)} metadata was unavailable, so the recommendation used the advertised /v1 model list.")
+                : fallbackPlan;
         }
 
         return Recommend(
             candidates[0],
             false,
             false,
-            [],
+            Array.Empty<string>(),
             hardware,
-            strategy);
+            strategy,
+            normalizedApiMode);
     }
 
     public static ProviderAutoConfigurePlan Recommend(
@@ -68,9 +144,9 @@ public sealed class ProviderAutoConfigureService
         bool lmStudioNativeApi,
         IEnumerable<string> modelNames,
         HardwareProbe hardware,
-        string strategy)
+        string strategy,
+        string apiMode = "")
     {
-        var selectedStrategy = NormalizeStrategy(strategy, hardware);
         var profiles = modelNames
             .Select(CreateModelProfile)
             .Where(profile => profile.IsChatCandidate)
@@ -78,10 +154,91 @@ public sealed class ProviderAutoConfigureService
             .ThenBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+        return RecommendProfiles(
+            providerBaseUrl,
+            providerOnline,
+            lmStudioNativeApi,
+            profiles,
+            hardware,
+            strategy,
+            nativeCatalogUsed: false,
+            apiMode);
+    }
+
+    public static ProviderAutoConfigurePlan Recommend(
+        string providerBaseUrl,
+        bool providerOnline,
+        bool lmStudioNativeApi,
+        IEnumerable<LmStudioModelInfo> modelInfos,
+        HardwareProbe hardware,
+        string strategy,
+        string apiMode = ModelProviderApiModes.LmStudioNative)
+    {
+        var profiles = modelInfos
+            .Select(CreateModelProfile)
+            .Where(profile => profile.IsChatCandidate)
+            .OrderBy(profile => profile.EstimatedFootprintGb ?? double.MaxValue)
+            .ThenBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return RecommendProfiles(
+            providerBaseUrl,
+            providerOnline,
+            lmStudioNativeApi,
+            profiles,
+            hardware,
+            strategy,
+            nativeCatalogUsed: true,
+            apiMode);
+    }
+
+    public static ProviderAutoConfigurePlan Recommend(
+        string providerBaseUrl,
+        bool providerOnline,
+        bool lmStudioNativeApi,
+        IEnumerable<OllamaModelInfo> modelInfos,
+        HardwareProbe hardware,
+        string strategy,
+        string apiMode = ModelProviderApiModes.OllamaNative)
+    {
+        var profiles = modelInfos
+            .Select(CreateModelProfile)
+            .Where(profile => profile.IsChatCandidate)
+            .OrderBy(profile => profile.EstimatedFootprintGb ?? double.MaxValue)
+            .ThenBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return RecommendProfiles(
+            providerBaseUrl,
+            providerOnline,
+            lmStudioNativeApi,
+            profiles,
+            hardware,
+            strategy,
+            nativeCatalogUsed: true,
+            apiMode);
+    }
+
+    private static ProviderAutoConfigurePlan RecommendProfiles(
+        string providerBaseUrl,
+        bool providerOnline,
+        bool lmStudioNativeApi,
+        IReadOnlyList<ModelProfile> profiles,
+        HardwareProbe hardware,
+        string strategy,
+        bool nativeCatalogUsed,
+        string apiMode)
+    {
+        var selectedStrategy = NormalizeStrategy(strategy, hardware);
+        var normalizedApiMode = NormalizePlanApiMode(apiMode, lmStudioNativeApi);
+        var providerModeLabel = ProviderModeLabel(normalizedApiMode);
+
         var warnings = new List<string>
         {
-            "AI Arena can recommend a model spread; LM Studio controls final GPU placement and offload.",
-            "Model footprint is estimated from model names when provider metadata is unavailable."
+            "AI Arena can recommend a model spread; the local provider controls final GPU placement and offload.",
+            nativeCatalogUsed
+                ? $"{providerModeLabel} metadata is being used for model type, load state, context, size, and capabilities."
+                : "Model footprint is estimated from model names when provider metadata is unavailable."
         };
 
         if (hardware.Gpus.Count == 0)
@@ -95,7 +252,7 @@ public sealed class ProviderAutoConfigureService
 
         if (!providerOnline)
         {
-            warnings.Add("Provider is offline or has no advertised models. Start LM Studio, then run Auto Configure again.");
+            warnings.Add("Provider is offline or has no advertised models. Start LM Studio, Ollama, or your local provider, then run Scan & recommend again.");
             return new ProviderAutoConfigurePlan(
                 providerBaseUrl,
                 false,
@@ -105,11 +262,12 @@ public sealed class ProviderAutoConfigureService
                 [],
                 "",
                 [],
-                PreloadPolicy(hardware, 0, lmStudioNativeApi),
-                warnings);
+                PreloadPolicy(hardware, 0, normalizedApiMode),
+                warnings,
+                normalizedApiMode);
         }
 
-        if (profiles.Length == 0)
+        if (profiles.Count == 0)
         {
             warnings.Add("The provider advertised models, but none looked like chat models.");
             return new ProviderAutoConfigurePlan(
@@ -121,8 +279,9 @@ public sealed class ProviderAutoConfigureService
                 [],
                 "",
                 [],
-                PreloadPolicy(hardware, 0, lmStudioNativeApi),
-                warnings);
+                PreloadPolicy(hardware, 0, normalizedApiMode),
+                warnings,
+                normalizedApiMode);
         }
 
         var uniqueBudget = UniqueModelBudget(hardware, selectedStrategy);
@@ -169,8 +328,20 @@ public sealed class ProviderAutoConfigureService
             profiles,
             defaultModel,
             assignments,
-            PreloadPolicy(hardware, uniqueModels, lmStudioNativeApi),
-            warnings);
+            PreloadPolicy(hardware, uniqueModels, normalizedApiMode),
+            warnings,
+            normalizedApiMode);
+    }
+
+    private static ProviderAutoConfigurePlan AddWarning(ProviderAutoConfigurePlan plan, string warning)
+    {
+        return plan with
+        {
+            Warnings = plan.Warnings
+                .Append(warning)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+        };
     }
 
     public static IReadOnlyList<ModelProfile> EstimateModelProfiles(IEnumerable<string> modelNames)
@@ -464,9 +635,14 @@ public sealed class ProviderAutoConfigureService
         };
     }
 
-    private static string PreloadPolicy(HardwareProbe hardware, int uniqueModels, bool lmStudioNativeApi)
+    private static string PreloadPolicy(HardwareProbe hardware, int uniqueModels, string apiMode)
     {
-        var mode = lmStudioNativeApi ? "LM Studio load API available" : "chat warm-up only";
+        var mode = ModelProviderApiModes.Normalize(apiMode) switch
+        {
+            ModelProviderApiModes.LmStudioNative => "LM Studio load API available",
+            ModelProviderApiModes.OllamaNative => "Ollama keep-alive preload available",
+            _ => "chat warm-up only"
+        };
         if (uniqueModels <= 0)
         {
             return $"{mode}; no models selected yet.";
@@ -518,6 +694,89 @@ public sealed class ProviderAutoConfigureService
         return new ModelProfile(trimmed, parameterB, quantization, footprint, tier, isChat);
     }
 
+    private static ModelProfile CreateModelProfile(LmStudioModelInfo model)
+    {
+        var identifier = model.PreferredIdentifier;
+        var parameterB = ParseParameterString(model.ParamsString) ?? EstimateParameterBillions(identifier.ToLowerInvariant());
+        var quantization = string.IsNullOrWhiteSpace(model.QuantizationName)
+            ? EstimateQuantization($"{identifier} {model.DisplayName}".ToLowerInvariant())
+            : model.QuantizationName;
+        double? footprint = model.SizeGb is double size
+            ? Math.Max(0.1, size)
+            : parameterB is null
+                ? null
+                : Math.Max(0.5, parameterB.Value * QuantizationFactor(quantization) + 0.7);
+        var tier = footprint switch
+        {
+            null => "unknown",
+            < 4 => "small",
+            < 9 => "medium",
+            < 20 => "large",
+            _ => "huge"
+        };
+
+        return new ModelProfile(
+            identifier,
+            parameterB,
+            quantization,
+            footprint,
+            tier,
+            model.IsChatModel,
+            model.DisplayName,
+            model.Type,
+            model.Architecture,
+            model.Format,
+            model.MaxContextLength,
+            model.Loaded,
+            model.Vision,
+            model.TrainedForToolUse,
+            model.ReasoningDefault,
+            model.ReasoningOptions);
+    }
+
+    private static ModelProfile CreateModelProfile(OllamaModelInfo model)
+    {
+        var identifier = model.PreferredIdentifier;
+        var parameterB = ParseParameterString(model.ParameterSize) ?? EstimateParameterBillions(identifier.ToLowerInvariant());
+        var quantization = string.IsNullOrWhiteSpace(model.QuantizationLevel)
+            ? EstimateQuantization($"{identifier} {model.Family}".ToLowerInvariant())
+            : model.QuantizationLevel;
+        double? footprint = model.SizeGb is double size
+            ? Math.Max(0.1, size)
+            : parameterB is null
+                ? null
+                : Math.Max(0.5, parameterB.Value * QuantizationFactor(quantization) + 0.7);
+        var tier = footprint switch
+        {
+            null => "unknown",
+            < 4 => "small",
+            < 9 => "medium",
+            < 20 => "large",
+            _ => "huge"
+        };
+        var type = model.Family.Contains("embed", StringComparison.OrdinalIgnoreCase)
+            ? "embedding"
+            : "llm";
+
+        return new ModelProfile(
+            identifier,
+            parameterB,
+            quantization,
+            footprint,
+            tier,
+            !type.Equals("embedding", StringComparison.OrdinalIgnoreCase),
+            identifier,
+            type,
+            model.Family,
+            model.Format,
+            model.ContextLength,
+            model.Loaded,
+            Vision: false,
+            TrainedForToolUse: false,
+            ReasoningDefault: "",
+            ReasoningOptions: []);
+    }
+
     private static double? EstimateParameterBillions(string modelName)
     {
         var match = Regex.Match(modelName, @"(?<![a-z0-9])(\d+(?:\.\d+)?)\s*b(?![a-z])", RegexOptions.IgnoreCase);
@@ -543,6 +802,24 @@ public sealed class ProviderAutoConfigureService
         }
 
         return null;
+    }
+
+    private static double? ParseParameterString(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var match = Regex.Match(value, @"(\d+(?:\.\d+)?)", RegexOptions.IgnoreCase);
+        if (!match.Success || !double.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+        {
+            return null;
+        }
+
+        return value.Contains("m", StringComparison.OrdinalIgnoreCase)
+            ? parsed / 1000d
+            : parsed;
     }
 
     private static string EstimateQuantization(string modelName)
@@ -597,12 +874,12 @@ public sealed class ProviderAutoConfigureService
         };
     }
 
-    private static IReadOnlyList<string> CandidateBaseUrls(string currentProviderBaseUrl)
+    private static IReadOnlyList<string> CandidateBaseUrls(string currentProviderBaseUrl, string apiMode)
     {
         var values = new[]
             {
                 currentProviderBaseUrl,
-                ModelProviderDefaults.BaseUrl,
+                ModelProviderApiModes.IsOllamaNative(apiMode) ? "http://127.0.0.1:11434/v1" : ModelProviderDefaults.BaseUrl,
                 "http://localhost:1234/v1"
             }
             .Select(NormalizeProviderBaseUrl)
@@ -611,6 +888,54 @@ public sealed class ProviderAutoConfigureService
             .ToArray();
 
         return values.Length > 0 ? values : [ModelProviderDefaults.BaseUrl];
+    }
+
+    private static string NormalizePlanApiMode(string apiMode, bool lmStudioNativeApi)
+    {
+        if (!string.IsNullOrWhiteSpace(apiMode))
+        {
+            return ModelProviderApiModes.Normalize(apiMode);
+        }
+
+        return lmStudioNativeApi
+            ? ModelProviderApiModes.LmStudioNative
+            : ModelProviderApiModes.OpenAiCompatible;
+    }
+
+    internal static string ProviderModeLabel(string apiMode)
+    {
+        return ModelProviderApiModes.Normalize(apiMode) switch
+        {
+            ModelProviderApiModes.LmStudioNative => "LM Studio native",
+            ModelProviderApiModes.OllamaNative => "Ollama native",
+            _ => "OpenAI-compatible"
+        };
+    }
+
+    internal static bool ShouldProbeLmStudioNative(string providerBaseUrl, string apiMode)
+    {
+        var normalizedApiMode = ModelProviderApiModes.Normalize(apiMode);
+        if (normalizedApiMode.Equals(ModelProviderApiModes.LmStudioNative, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (normalizedApiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var normalized = NormalizeProviderBaseUrl(providerBaseUrl);
+        if (!Uri.TryCreate(normalized, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        var host = uri.Host.Trim('[', ']');
+        return uri.Port == 1234
+            && (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                || host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                || host.Equals("::1", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string NormalizeProviderBaseUrl(string value)
@@ -624,31 +949,6 @@ public sealed class ProviderAutoConfigureService
         }
 
         return ModelProviderHealthService.NormalizeBaseUrl(trimmed);
-    }
-
-    private static async Task<bool> SupportsLmStudioNativeApiAsync(string providerBaseUrl, CancellationToken cancellationToken)
-    {
-        var apiBase = NormalizeLmStudioApiBase(providerBaseUrl);
-        try
-        {
-            using var response = await HttpClient.GetAsync(new Uri(new Uri(apiBase + "/"), "models"), cancellationToken);
-            return response.IsSuccessStatusCode;
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-        {
-            return false;
-        }
-    }
-
-    private static string NormalizeLmStudioApiBase(string providerBaseUrl)
-    {
-        var trimmed = NormalizeProviderBaseUrl(providerBaseUrl).TrimEnd('/');
-        if (trimmed.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
-        {
-            trimmed = trimmed[..^3].TrimEnd('/');
-        }
-
-        return $"{trimmed}/api/v1";
     }
 
     private static HardwareProbe DetectHardware()
@@ -695,7 +995,8 @@ public sealed record ProviderAutoConfigurePlan(
     string DefaultModel,
     IReadOnlyList<ModelAssignmentRecommendation> Assignments,
     string PreloadGuidance,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    string ApiMode);
 
 public sealed record HardwareProbe(
     IReadOnlyList<GpuDeviceInfo> Gpus,
@@ -724,7 +1025,83 @@ public sealed record ModelProfile(
     string Quantization,
     double? EstimatedFootprintGb,
     string Tier,
-    bool IsChatCandidate);
+    bool IsChatCandidate,
+    string DisplayName = "",
+    string Type = "",
+    string Architecture = "",
+    string Format = "",
+    int? MaxContextLength = null,
+    bool Loaded = false,
+    bool Vision = false,
+    bool TrainedForToolUse = false,
+    string ReasoningDefault = "",
+    IReadOnlyList<string>? ReasoningOptions = null)
+{
+    public string CapabilitySummary
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (Loaded)
+            {
+                parts.Add("loaded");
+            }
+
+            if (TrainedForToolUse)
+            {
+                parts.Add("tools");
+            }
+
+            if (Vision)
+            {
+                parts.Add("vision");
+            }
+
+            if (!string.IsNullOrWhiteSpace(ReasoningDefault) || ReasoningOptions?.Count > 0)
+            {
+                parts.Add($"reasoning {ReasoningDefaultOrOptions()}");
+            }
+
+            if (MaxContextLength is int context)
+            {
+                parts.Add($"{FormatContext(context)} ctx");
+            }
+
+            if (!string.IsNullOrWhiteSpace(Quantization) && !Quantization.Equals("estimated", StringComparison.OrdinalIgnoreCase))
+            {
+                parts.Add(Quantization);
+            }
+
+            if (!string.IsNullOrWhiteSpace(Format))
+            {
+                parts.Add(Format);
+            }
+
+            return parts.Count == 0 ? Tier : string.Join(" / ", parts);
+        }
+    }
+
+    public string DisplayTitle => string.IsNullOrWhiteSpace(DisplayName) ? Name : DisplayName;
+
+    private string ReasoningDefaultOrOptions()
+    {
+        if (!string.IsNullOrWhiteSpace(ReasoningDefault))
+        {
+            return ReasoningDefault;
+        }
+
+        return ReasoningOptions is { Count: > 0 }
+            ? string.Join("/", ReasoningOptions)
+            : "available";
+    }
+
+    private static string FormatContext(int context)
+    {
+        return context >= 1000
+            ? $"{context / 1000d:0.#}k"
+            : context.ToString(CultureInfo.InvariantCulture);
+    }
+}
 
 public sealed record ModelLoadPlanPreview(
     IReadOnlyList<ModelProfile> Models,

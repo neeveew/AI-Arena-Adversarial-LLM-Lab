@@ -20,12 +20,21 @@ internal sealed record DiagnosticHistoryPoint(
     int EvidencePressure,
     int NarrativeHeat);
 
+internal enum DiagnosticVisualTone
+{
+    Neutral,
+    Warning,
+    Critical
+}
+
 internal sealed class DiagnosticsWorkflowCoordinator
 {
     private const int HistoryLimit = 36;
     private const int WindowSize = 8;
 
     private readonly DiscourseDiagnosticsService discourseDiagnostics;
+    private readonly FrameworkElement metricsGrid;
+    private readonly FrameworkElement emptyState;
     private readonly Border frictionChip;
     private readonly TextBlock frictionValueText;
     private readonly TextBlock frictionTrendText;
@@ -65,6 +74,8 @@ internal sealed class DiagnosticsWorkflowCoordinator
 
     public DiagnosticsWorkflowCoordinator(
         DiscourseDiagnosticsService discourseDiagnostics,
+        FrameworkElement metricsGrid,
+        FrameworkElement emptyState,
         Border frictionChip,
         TextBlock frictionValueText,
         TextBlock frictionTrendText,
@@ -100,6 +111,8 @@ internal sealed class DiagnosticsWorkflowCoordinator
         Func<Brush, Brush, double, Brush> blendBrush)
     {
         this.discourseDiagnostics = discourseDiagnostics;
+        this.metricsGrid = metricsGrid;
+        this.emptyState = emptyState;
         this.frictionChip = frictionChip;
         this.frictionValueText = frictionValueText;
         this.frictionTrendText = frictionTrendText;
@@ -153,10 +166,24 @@ internal sealed class DiagnosticsWorkflowCoordinator
             chip.Cursor = Cursors.Hand;
             chip.MouseLeftButtonUp += DiagnosticChip_MouseLeftButtonUp;
         }
+
+        ResetTileVisuals();
     }
 
     public void Update(IReadOnlyList<TranscriptMessage> messages)
     {
+        var hasScoredTurns = HasScoredTurns(messages, IsSystemMessage);
+        metricsGrid.Visibility = hasScoredTurns ? Visibility.Visible : Visibility.Collapsed;
+        emptyState.Visibility = hasScoredTurns ? Visibility.Collapsed : Visibility.Visible;
+        if (!hasScoredTurns)
+        {
+            lastDiagnostics = null;
+            lastDiagnosticSeries = new DiagnosticSeriesSet([], 0);
+            ResetTileVisuals();
+            CloseDetail();
+            return;
+        }
+
         var diagnostics = discourseDiagnostics.Analyze(messages.Select(ToDiscourseTurn), agentPersonas());
         var series = BuildSeries(messages);
         lastDiagnostics = diagnostics;
@@ -170,7 +197,7 @@ internal sealed class DiagnosticsWorkflowCoordinator
             FrictionScore(diagnostics.StateLabel),
             series,
             diagnostics.Details["friction"],
-            AccentForState(diagnostics.StateLabel));
+            ToneForState(diagnostics.StateLabel));
         SetTile(
             consensusChip,
             consensusValueText,
@@ -180,7 +207,7 @@ internal sealed class DiagnosticsWorkflowCoordinator
             diagnostics.ConsensusPercent,
             series,
             diagnostics.Details["consensus"],
-            AccentForRisk(diagnostics.ConsensusLabel));
+            ToneForRisk(diagnostics.ConsensusLabel));
         SetTile(
             roleDriftChip,
             roleDriftValueText,
@@ -190,7 +217,7 @@ internal sealed class DiagnosticsWorkflowCoordinator
             diagnostics.RoleDriftPercent,
             series,
             diagnostics.Details["roleDrift"],
-            AccentForRisk(diagnostics.RoleDriftLabel));
+            ToneForRisk(diagnostics.RoleDriftLabel));
         SetTile(
             unsupportedClaimsChip,
             unsupportedClaimsValueText,
@@ -200,7 +227,7 @@ internal sealed class DiagnosticsWorkflowCoordinator
             diagnostics.UnsupportedClaimCount,
             series,
             diagnostics.Details["unsupportedClaims"],
-            AccentForRisk(diagnostics.UnsupportedClaimSeverity),
+            ToneForRisk(diagnostics.UnsupportedClaimSeverity),
             maxOverride: Math.Max(4, series.UnsupportedClaimsMax));
         SetTile(
             evidencePressureChip,
@@ -211,7 +238,7 @@ internal sealed class DiagnosticsWorkflowCoordinator
             diagnostics.EvidencePressureScore,
             series,
             diagnostics.Details["evidencePressure"],
-            AccentForEvidence(diagnostics.EvidencePressureLabel));
+            ToneForEvidence(diagnostics.EvidencePressureLabel));
         SetTile(
             narrativeHeatChip,
             narrativeHeatValueText,
@@ -221,7 +248,7 @@ internal sealed class DiagnosticsWorkflowCoordinator
             diagnostics.NarrativeHeatScore,
             series,
             diagnostics.Details["narrativeHeat"],
-            AccentForNarrative(diagnostics.NarrativeHeatLabel));
+            ToneForNarrative(diagnostics.NarrativeHeatLabel));
     }
 
     public void CloseDetail()
@@ -249,46 +276,61 @@ internal sealed class DiagnosticsWorkflowCoordinator
 
     public Brush AccentForState(string label)
     {
-        return label switch
-        {
-            "Healthy" => resourceBrush("PrimaryBorderBrush"),
-            "Productive Conflict" => resourceBrush("AlphaAccentBrush"),
-            "Too Cold" => resourceBrush("BetaAccentBrush"),
-            "Harmony Risk" or "Theatre Risk" or "Evidence-Starved" or "Role Drift" or "Unsupported Claims Spike" => resourceBrush("DangerBorderBrush"),
-            _ => resourceBrush("MutedTextBrush")
-        };
+        return AccentForTone(ToneForState(label));
     }
 
     public Brush AccentForRisk(string label)
     {
-        return label switch
-        {
-            "Low" or "Healthy" => resourceBrush("PrimaryBorderBrush"),
-            "Medium" or "Moderate" or "High" => resourceBrush("BetaAccentBrush"),
-            "Collapse Risk" => resourceBrush("DangerBorderBrush"),
-            _ => resourceBrush("MutedTextBrush")
-        };
+        return AccentForTone(ToneForRisk(label));
     }
 
     public Brush AccentForEvidence(string label)
     {
-        return label switch
-        {
-            "Strong" => resourceBrush("PrimaryBorderBrush"),
-            "Medium" => resourceBrush("BetaAccentBrush"),
-            "Weak" => resourceBrush("DangerBorderBrush"),
-            _ => resourceBrush("MutedTextBrush")
-        };
+        return AccentForTone(ToneForEvidence(label));
     }
 
     public Brush AccentForNarrative(string label)
     {
+        return AccentForTone(ToneForNarrative(label));
+    }
+
+    internal static DiagnosticVisualTone ToneForState(string label)
+    {
         return label switch
         {
-            "Low" => resourceBrush("PrimaryBorderBrush"),
-            "Medium" or "Rising" => resourceBrush("AssistBorderBrush"),
-            "High" => resourceBrush("DangerBorderBrush"),
-            _ => resourceBrush("MutedTextBrush")
+            "Source Conflict" => DiagnosticVisualTone.Warning,
+            "Harmony Risk" or "Theatre Risk" or "Evidence-Starved" or "Role Drift" or "Unsupported Claims Spike" => DiagnosticVisualTone.Critical,
+            _ => DiagnosticVisualTone.Neutral
+        };
+    }
+
+    internal static DiagnosticVisualTone ToneForRisk(string label)
+    {
+        return label switch
+        {
+            "Medium" or "Moderate" => DiagnosticVisualTone.Warning,
+            "High" or "Collapse Risk" => DiagnosticVisualTone.Critical,
+            _ => DiagnosticVisualTone.Neutral
+        };
+    }
+
+    internal static DiagnosticVisualTone ToneForEvidence(string label)
+    {
+        return label switch
+        {
+            "Medium" => DiagnosticVisualTone.Warning,
+            "Weak" => DiagnosticVisualTone.Critical,
+            _ => DiagnosticVisualTone.Neutral
+        };
+    }
+
+    internal static DiagnosticVisualTone ToneForNarrative(string label)
+    {
+        return label switch
+        {
+            "Medium" or "Rising" => DiagnosticVisualTone.Warning,
+            "High" => DiagnosticVisualTone.Critical,
+            _ => DiagnosticVisualTone.Neutral
         };
     }
 
@@ -302,6 +344,13 @@ internal sealed class DiagnosticsWorkflowCoordinator
             message.Text,
             message.InternetSources,
             message.CreatedAt);
+    }
+
+    internal static bool HasScoredTurns(
+        IReadOnlyList<TranscriptMessage> messages,
+        Func<TranscriptMessage, bool> isSystemMessage)
+    {
+        return messages.Any(message => !isSystemMessage(message));
     }
 
     private void DiagnosticChip_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -487,7 +536,6 @@ internal sealed class DiagnosticsWorkflowCoordinator
     private bool IsSystemMessage(TranscriptMessage message)
     {
         var isInternet = message.Kind.Equals("internet", StringComparison.OrdinalIgnoreCase)
-            || message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase)
             || message.Kind.StartsWith("internet", StringComparison.OrdinalIgnoreCase);
         return isSystemEvent(message, isInternet)
             || message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase);
@@ -576,24 +624,66 @@ internal sealed class DiagnosticsWorkflowCoordinator
         int score,
         DiagnosticSeriesSet series,
         CoreMetricDiagnostic metric,
-        Brush accent,
+        DiagnosticVisualTone tone,
         int? maxOverride = null)
     {
+        ApplyTileVisuals(chip, valueText, trendText, sparkline, tone);
         valueText.Text = display;
-        valueText.Foreground = accent;
         trendText.Text = FormatTrend(score, PreviousScore(sparkline, series));
-        trendText.Foreground = blendBrush(resourceBrush("MutedTextBrush"), accent, 0.55);
         if (sparkline is not null && series.Points.Count > 0)
         {
-            sparkline.AccentBrush = accent;
             sparkline.Values = Series(sparkline, series);
             sparkline.MaxValue = Math.Max(1, maxOverride ?? 100);
         }
 
-        chip.BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.62);
-        chip.Background = blendBrush(resourceBrush("InputBrush"), accent, 0.1);
         chip.ToolTip = $"{ToolTip(metric)}{Environment.NewLine}Click for a compact explanation.";
         ToolTipService.SetShowDuration(chip, 60000);
+    }
+
+    private void ResetTileVisuals()
+    {
+        ApplyTileVisuals(frictionChip, frictionValueText, frictionTrendText, null, DiagnosticVisualTone.Neutral);
+        ApplyTileVisuals(consensusChip, consensusValueText, consensusTrendText, consensusSparkline, DiagnosticVisualTone.Neutral);
+        ApplyTileVisuals(roleDriftChip, roleDriftValueText, roleDriftTrendText, roleDriftSparkline, DiagnosticVisualTone.Neutral);
+        ApplyTileVisuals(unsupportedClaimsChip, unsupportedClaimsValueText, unsupportedClaimsTrendText, unsupportedClaimsSparkline, DiagnosticVisualTone.Neutral);
+        ApplyTileVisuals(evidencePressureChip, evidencePressureValueText, evidencePressureTrendText, evidencePressureSparkline, DiagnosticVisualTone.Neutral);
+        ApplyTileVisuals(narrativeHeatChip, narrativeHeatValueText, narrativeHeatTrendText, narrativeHeatSparkline, DiagnosticVisualTone.Neutral);
+    }
+
+    private void ApplyTileVisuals(
+        Border chip,
+        TextBlock valueText,
+        TextBlock trendText,
+        MetricSparklineControl? sparkline,
+        DiagnosticVisualTone tone)
+    {
+        var accent = AccentForTone(tone);
+        var usesSemanticAccent = tone is not DiagnosticVisualTone.Neutral;
+        valueText.Foreground = usesSemanticAccent ? accent : resourceBrush("TextBrush");
+        trendText.Foreground = usesSemanticAccent
+            ? blendBrush(resourceBrush("MutedTextBrush"), accent, 0.55)
+            : resourceBrush("MutedTextBrush");
+        if (sparkline is not null)
+        {
+            sparkline.AccentBrush = usesSemanticAccent ? accent : resourceBrush("MutedTextBrush");
+        }
+
+        chip.BorderBrush = usesSemanticAccent
+            ? blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.62)
+            : resourceBrush("ControlBorderBrush");
+        chip.Background = usesSemanticAccent
+            ? blendBrush(resourceBrush("InputBrush"), accent, 0.1)
+            : resourceBrush("InputBrush");
+    }
+
+    private Brush AccentForTone(DiagnosticVisualTone tone)
+    {
+        return tone switch
+        {
+            DiagnosticVisualTone.Warning => resourceBrush("Arena.Brush.Warning"),
+            DiagnosticVisualTone.Critical => resourceBrush("DangerBorderBrush"),
+            _ => resourceBrush("MutedTextBrush")
+        };
     }
 
     private DiagnosticSeriesSet BuildSeries(IReadOnlyList<TranscriptMessage> messages)

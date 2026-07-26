@@ -1,9 +1,12 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using AIArena.Core.Persistence;
 using AIArena.Wpf.Models;
+using AIArena.Wpf.Services;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 
 namespace AIArena.Wpf;
@@ -26,7 +29,11 @@ internal sealed class AgentBoardCoordinator
     private readonly Func<AIArena.Core.Models.ArenaSnapshot, string, Task> saveSnapshotWithFeedbackAsync;
     private readonly Func<string, Task> refreshActiveSessionAsync;
     private readonly Action<string> setArenaRunStatus;
+    private readonly Func<bool> animationsEnabled;
     private readonly List<Button> agentTurnButtons = [];
+    private readonly List<Button> agentModeButtons = [];
+    private readonly List<MenuItem> agentModeMenuItems = [];
+    private readonly List<(Button Button, bool HasPersistentAction)> agentOverflowButtons = [];
     private readonly List<Button> narratorActionButtons = [];
 
     public AgentBoardCoordinator(
@@ -45,7 +52,8 @@ internal sealed class AgentBoardCoordinator
         Func<string, Button?, Func<Task>, bool, Task> runArenaBusyAsync,
         Func<AIArena.Core.Models.ArenaSnapshot, string, Task> saveSnapshotWithFeedbackAsync,
         Func<string, Task> refreshActiveSessionAsync,
-        Action<string> setArenaRunStatus)
+        Action<string> setArenaRunStatus,
+        Func<bool>? animationsEnabled = null)
     {
         this.sessionStore = sessionStore;
         this.eventLogStore = eventLogStore;
@@ -63,6 +71,7 @@ internal sealed class AgentBoardCoordinator
         this.saveSnapshotWithFeedbackAsync = saveSnapshotWithFeedbackAsync;
         this.refreshActiveSessionAsync = refreshActiveSessionAsync;
         this.setArenaRunStatus = setArenaRunStatus;
+        this.animationsEnabled = animationsEnabled ?? (() => SystemMotionPreferences.AnimationsEnabled);
     }
 
     public void Populate(ArenaViewSnapshot snapshot, string? currentAgentId)
@@ -99,9 +108,25 @@ internal sealed class AgentBoardCoordinator
         {
             button.IsEnabled = !busy;
         }
+        foreach (var button in agentModeButtons)
+        {
+            button.IsEnabled = ModeActionEnabled(busy, isAutoChatRunning());
+        }
+
+        var modeActionEnabled = ModeActionEnabled(busy, isAutoChatRunning());
+        foreach (var menuItem in agentModeMenuItems)
+        {
+            menuItem.IsEnabled = modeActionEnabled;
+        }
+
+        foreach (var (button, hasPersistentAction) in agentOverflowButtons)
+        {
+            button.IsEnabled = hasPersistentAction || modeActionEnabled;
+        }
+
         foreach (var button in narratorActionButtons)
         {
-            button.IsEnabled = !busy || isAutoChatRunning();
+            button.IsEnabled = ModeActionEnabled(busy, isAutoChatRunning());
         }
     }
 
@@ -109,6 +134,9 @@ internal sealed class AgentBoardCoordinator
     {
         agentItems.Children.Clear();
         agentTurnButtons.Clear();
+        agentModeButtons.Clear();
+        agentModeMenuItems.Clear();
+        agentOverflowButtons.Clear();
         narratorActionButtons.Clear();
     }
 
@@ -119,9 +147,9 @@ internal sealed class AgentBoardCoordinator
             Background = resourceBrush("CardBrush"),
             BorderBrush = blendBrush(resourceBrush("DisabledBorderBrush"), accent, 0.35),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(8),
-            Margin = new Thickness(0, 0, 0, 6)
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(10),
+            Margin = new Thickness(0, 0, 0, 8)
         };
 
         var grid = new Grid();
@@ -172,28 +200,53 @@ internal sealed class AgentBoardCoordinator
         var showActivitySweep = isRunning;
         var speakerLabel = displayStatusValue(agent.Id);
         var activityLabel = isRunning ? "thinking" : isCurrent ? "current" : isPaused ? "paused" : "waiting";
-        var playButton = new Button
-        {
-            Content = "▶",
-            IsEnabled = isActive && !isArenaBusy() && !string.IsNullOrWhiteSpace(agent.Id),
-            Width = 30,
-            MinWidth = 30,
-            Height = 28,
-            MinHeight = 28,
-            Padding = new Thickness(0),
-            Margin = new Thickness(6, 0, 0, 0),
-            FontSize = 13,
-            Background = isActive ? resourceBrush("PrimaryBrush") : resourceBrush("DisabledBrush"),
-            BorderBrush = isActive ? resourceBrush("PrimaryBorderBrush") : resourceBrush("DisabledBorderBrush"),
-            Foreground = isActive ? Brushes.White : resourceBrush("DisabledTextBrush"),
-            ToolTip = isActive
-                ? $"Run one turn for {agent.Name}"
-                : "Inactive: increase Active participants in App Settings to include this agent."
-        };
-        playButton.Click += async (_, _) => await runAgentTurnAsync(agent);
-        agentTurnButtons.Add(playButton);
-
         var identityAccent = accentForSpeaker(agent.Id);
+        var primaryActionButton = new Button
+        {
+            Content = CreateAgentButtonGlyph("\uE768", 12),
+            IsEnabled = !string.IsNullOrWhiteSpace(agent.Id)
+                && (isPaused
+                    ? ModeActionEnabled(isArenaBusy(), isAutoChatRunning())
+                    : !isArenaBusy()),
+            Width = 32,
+            MinWidth = 32,
+            Height = 32,
+            MinHeight = 32,
+            Padding = new Thickness(0),
+            Margin = new Thickness(4, 0, 0, 0),
+            FontSize = 13,
+            Background = isPaused
+                ? blendBrush(resourceBrush("InputBrush"), resourceBrush("Arena.Brush.Warning"), 0.24)
+                : isCurrent
+                    ? resourceBrush("PrimaryBrush")
+                    : blendBrush(resourceBrush("InputBrush"), identityAccent, 0.10),
+            BorderBrush = isPaused
+                ? resourceBrush("Arena.Brush.Warning")
+                : isCurrent
+                    ? resourceBrush("PrimaryBorderBrush")
+                    : blendBrush(resourceBrush("DisabledBorderBrush"), identityAccent, 0.28),
+            Foreground = isPaused ? resourceBrush("Arena.Brush.Warning") : resourceBrush("TextBrush"),
+            ToolTip = isPaused
+                ? $"Resume {agent.Name}"
+                : $"Run one turn for {agent.Name}"
+        };
+        SetButtonAutomation(
+            primaryActionButton,
+            isPaused ? $"Resume {agent.Name}" : $"Run one turn for {agent.Name}",
+            isPaused
+                ? $"Returns {agent.Name} to the active roster."
+                : $"Runs one turn for {agent.Name}.");
+        if (isPaused)
+        {
+            primaryActionButton.Click += async (_, _) => await SetAgentMuteAsync(agent.Id, mute: false);
+            agentModeButtons.Add(primaryActionButton);
+        }
+        else
+        {
+            primaryActionButton.Click += async (_, _) => await runAgentTurnAsync(agent);
+            agentTurnButtons.Add(primaryActionButton);
+        }
+
         var stateAccent = resourceBrush("PrimaryBorderBrush");
         var card = new Border
         {
@@ -206,115 +259,209 @@ internal sealed class AgentBoardCoordinator
                         : resourceBrush("InputBrush"),
             BorderBrush = isPaused
                 ? blendBrush(resourceBrush("DisabledBorderBrush"), resourceBrush("MutedTextBrush"), 0.18)
-                : blendBrush(resourceBrush("DisabledBorderBrush"), isRunning || isCurrent ? stateAccent : identityAccent, 0.75),
-            BorderThickness = new Thickness(0, 1, 0, 1),
-            Padding = new Thickness(14, 8, 10, 8),
-            Margin = new Thickness(0, -1, 0, 0),
+                : blendBrush(
+                    resourceBrush("DisabledBorderBrush"),
+                    isRunning || isCurrent ? stateAccent : identityAccent,
+                    isRunning || isCurrent ? 0.68 : 0.24),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(7, 5, 6, 5),
+            Margin = new Thickness(0, 0, 0, 5),
             ClipToBounds = true
         };
 
         var cardLayer = new Grid();
+        cardLayer.Children.Add(new Border
+        {
+            Width = 3,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Background = isPaused
+                ? resourceBrush("DisabledBorderBrush")
+                : isRunning || isCurrent ? stateAccent : identityAccent,
+            CornerRadius = new CornerRadius(7, 0, 0, 7),
+            Opacity = isPaused ? 0.55 : isRunning || isCurrent ? 0.95 : 0.72,
+            IsHitTestVisible = false
+        });
         if (showActivitySweep)
         {
             cardLayer.Children.Add(CreateAgentActivitySweep(stateAccent, isRunning));
         }
 
-        var grid = new Grid();
+        var grid = new Grid
+        {
+            Margin = new Thickness(4, 0, 0, 0)
+        };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         text.Children.Add(new TextBlock
         {
-            Text = $"{speakerLabel} - {activityLabel}",
-            Foreground = isPaused ? resourceBrush("MutedTextBrush") : Brushes.White,
+            Text = speakerLabel,
+            Foreground = resourceBrush(isPaused ? "MutedTextBrush" : "TextBrush"),
             FontWeight = FontWeights.SemiBold,
-            FontSize = 12,
-            LineHeight = 15,
+            FontSize = 11.5,
+            LineHeight = 14,
             TextTrimming = TextTrimming.CharacterEllipsis,
             ToolTip = agent.Name
         });
         var modelText = string.IsNullOrWhiteSpace(agent.Model) ? "model not set" : agent.Model;
         text.Children.Add(new TextBlock
         {
-            Text = modelText,
+            Text = $"{activityLabel}  ·  {modelText}",
             Foreground = isPaused
                 ? resourceBrush("DisabledTextBrush")
                 : isRunning || isCurrent
                 ? stateAccent
                 : resourceBrush("MutedTextBrush"),
-            FontSize = 11,
-            LineHeight = 14,
+            FontSize = 10.5,
+            LineHeight = 13,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            ToolTip = $"{modelText}\n{agent.Name}"
+            ToolTip = $"State: {activityLabel}\nModel: {modelText}\nName: {agent.Name}"
         });
         Grid.SetColumn(text, 0);
         grid.Children.Add(text);
 
-        var activityDot = new Border
-        {
-            Width = isRunning ? 8 : 6,
-            Height = isRunning ? 8 : 6,
-            CornerRadius = new CornerRadius(4),
-            Background = isPaused
-                ? resourceBrush("DisabledBorderBrush")
-                : isRunning || isCurrent ? stateAccent : identityAccent,
-            Opacity = isRunning ? 1.0 : isCurrent ? 0.85 : isPaused ? 0.35 : 0.45,
-            Margin = new Thickness(8, 0, 4, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = activityLabel
-        };
-        Grid.SetColumn(activityDot, 1);
-        grid.Children.Add(activityDot);
+        var overflowButton = CreateAgentOverflowButton(agent, isPaused);
+        Grid.SetColumn(overflowButton, 1);
+        grid.Children.Add(overflowButton);
 
-        var routeControls = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(2, 0, 0, 0)
-        };
-        var muteButton = CreateAgentModeButton("⏸", isActive ? "Pause agent" : "Activate paused agent", isPaused);
-        muteButton.Click += async (_, _) => await SetAgentMuteAsync(agent.Id, mute: isActive);
-        routeControls.Children.Add(muteButton);
-        var soloButton = CreateAgentModeButton("S", "Solo this agent");
-        soloButton.Click += async (_, _) => await SoloAgentAsync(agent.Id);
-        routeControls.Children.Add(soloButton);
-        Grid.SetColumn(routeControls, 2);
-        grid.Children.Add(routeControls);
-
-        Grid.SetColumn(playButton, 3);
-        grid.Children.Add(playButton);
+        Grid.SetColumn(primaryActionButton, 2);
+        grid.Children.Add(primaryActionButton);
 
         cardLayer.Children.Add(grid);
         card.Child = cardLayer;
         if (!isActive)
         {
-            card.ToolTip = "Paused: click the pause button to activate this agent.";
+            card.ToolTip = $"{agent.Name} is paused. Choose Resume to return this agent to the active roster.";
         }
 
         return card;
     }
 
-    private Button CreateAgentModeButton(string content, string tooltip, bool highlighted = false)
+    private Button CreateAgentOverflowButton(AgentState agent, bool isPaused)
     {
-        return new Button
+        var overflowButton = new Button
         {
-            Content = content,
-            Width = 24,
-            MinWidth = 24,
-            Height = 24,
-            MinHeight = 24,
+            Content = CreateAgentButtonGlyph("\uE712", 12),
+            Width = 32,
+            MinWidth = 32,
+            Height = 32,
+            MinHeight = 32,
             Padding = new Thickness(0),
-            Margin = new Thickness(3, 0, 0, 0),
-            FontSize = content == "⏸" ? 12 : 9.5,
-            FontFamily = content == "⏸" ? new FontFamily("Segoe UI Symbol") : SystemFonts.MessageFontFamily,
-            Background = highlighted ? blendBrush(resourceBrush("InputBrush"), resourceBrush("BetaAccentBrush"), 0.28) : resourceBrush("InputBrush"),
-            BorderBrush = highlighted ? resourceBrush("BetaAccentBrush") : resourceBrush("DisabledBorderBrush"),
-            Foreground = highlighted ? resourceBrush("BetaAccentBrush") : resourceBrush("MutedTextBrush"),
-            ToolTip = tooltip
+            Margin = new Thickness(4, 0, 0, 0),
+            Background = blendBrush(resourceBrush("InputBrush"), resourceBrush("DisabledBorderBrush"), 0.16),
+            BorderBrush = resourceBrush("DisabledBorderBrush"),
+            Foreground = resourceBrush("MutedTextBrush"),
+            ToolTip = $"More actions for {agent.Name}"
         };
+        SetButtonAutomation(
+            overflowButton,
+            $"More actions for {agent.Name}",
+            $"Opens pause, solo, and available source actions for {agent.Name}.");
+
+        var menu = new ContextMenu
+        {
+            Placement = PlacementMode.Bottom,
+            PlacementTarget = overflowButton,
+            MinWidth = 184,
+            Padding = new Thickness(3),
+            Background = resourceBrush("CardBrush"),
+            BorderBrush = resourceBrush("ControlBorderBrush"),
+            Foreground = resourceBrush("TextBrush")
+        };
+        AutomationProperties.SetName(menu, $"Actions for {agent.Name}");
+
+        if (!isPaused)
+        {
+            var pauseItem = CreateAgentModeMenuItem(
+                "Pause agent",
+                $"Pause {agent.Name}",
+                $"Pause {agent.Name} without changing other agents.");
+            pauseItem.Click += async (_, _) => await SetAgentMuteAsync(agent.Id, mute: true);
+            menu.Items.Add(pauseItem);
+        }
+
+        var soloItem = CreateAgentModeMenuItem(
+            "Solo agent",
+            $"Solo {agent.Name}",
+            $"Mute other agents and keep {agent.Name} active.");
+        soloItem.Click += async (_, _) => await SoloAgentAsync(agent.Id);
+        menu.Items.Add(soloItem);
+
+        var hasSources = agent.InternetSources is { Sources.Count: > 0 };
+        if (agent.InternetSources is { Sources.Count: > 0 } internetSources)
+        {
+            menu.Items.Add(new Separator());
+            var sourcesItem = CreateAgentMenuItem(
+                $"Internet sources ({internetSources.Sources.Count})",
+                $"Show internet sources for {agent.Name}",
+                $"Shows the sources found by {agent.Name}'s latest internet search.");
+            sourcesItem.Click += (_, _) => AgentInternetSourcesPresenter.ShowSourcesPopup(
+                overflowButton,
+                internetSources,
+                resourceBrush,
+                blendBrush);
+            menu.Items.Add(sourcesItem);
+        }
+
+        overflowButton.ContextMenu = menu;
+        overflowButton.Click += (_, e) =>
+        {
+            e.Handled = true;
+            menu.PlacementTarget = overflowButton;
+            menu.IsOpen = true;
+        };
+        menu.Opened += (_, _) => menu.Items
+            .OfType<MenuItem>()
+            .FirstOrDefault(item => item.IsEnabled)
+            ?.Focus();
+
+        agentOverflowButtons.Add((overflowButton, hasSources));
+        return overflowButton;
+    }
+
+    private MenuItem CreateAgentModeMenuItem(string header, string automationName, string helpText)
+    {
+        var menuItem = CreateAgentMenuItem(header, automationName, helpText);
+        menuItem.IsEnabled = ModeActionEnabled(isArenaBusy(), isAutoChatRunning());
+        agentModeMenuItems.Add(menuItem);
+        return menuItem;
+    }
+
+    private MenuItem CreateAgentMenuItem(string header, string automationName, string helpText)
+    {
+        var menuItem = new MenuItem
+        {
+            Header = header,
+            MinHeight = 32,
+            Padding = new Thickness(10, 4, 10, 4),
+            Foreground = resourceBrush("TextBrush"),
+            ToolTip = helpText
+        };
+        AutomationProperties.SetName(menuItem, automationName);
+        AutomationProperties.SetHelpText(menuItem, helpText);
+        return menuItem;
+    }
+
+    private static TextBlock CreateAgentButtonGlyph(string glyph, double fontSize)
+    {
+        return new TextBlock
+        {
+            Text = glyph,
+            FontFamily = ArenaTokens.IconFontFamily,
+            FontSize = fontSize,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextAlignment = TextAlignment.Center
+        };
+    }
+
+    private static void SetButtonAutomation(Button button, string name, string helpText)
+    {
+        AutomationProperties.SetName(button, name);
+        AutomationProperties.SetHelpText(button, helpText);
     }
 
     private async Task SetAgentMuteAsync(string agentId, bool mute)
@@ -389,20 +536,21 @@ internal sealed class AgentBoardCoordinator
         var buttonEnabled = !isArenaBusy() || isAutoChatRunning();
         var playButton = new Button
         {
-            Content = "▶",
+            Content = CreateAgentButtonGlyph("\uE768", 12),
             IsEnabled = buttonEnabled,
-            Width = 30,
-            MinWidth = 30,
-            Height = 28,
-            MinHeight = 28,
+            Width = 32,
+            MinWidth = 32,
+            Height = 32,
+            MinHeight = 32,
             Padding = new Thickness(0),
-            Margin = new Thickness(6, 0, 0, 0),
+            Margin = new Thickness(4, 0, 0, 0),
             FontSize = 13,
             Background = blendBrush(resourceBrush("InputBrush"), accent, 0.5),
             BorderBrush = accent,
-            Foreground = Brushes.White,
+            Foreground = resourceBrush("TextBrush"),
             ToolTip = "Narrate now"
         };
+        SetButtonAutomation(playButton, "Narrate now", "Ask the narrator to speak without advancing the participant turn order.");
         playButton.Click += narrateNowHandler;
         narratorActionButtons.Add(playButton);
 
@@ -411,10 +559,11 @@ internal sealed class AgentBoardCoordinator
             Background = isRunning
                 ? blendBrush(resourceBrush("InputBrush"), accent, 0.18)
                 : resourceBrush("InputBrush"),
-            BorderBrush = blendBrush(resourceBrush("DisabledBorderBrush"), accent, 0.58),
-            BorderThickness = new Thickness(0, 1, 0, 1),
-            Padding = new Thickness(14, 8, 10, 8),
-            Margin = new Thickness(0, -1, 0, 0),
+            BorderBrush = blendBrush(resourceBrush("DisabledBorderBrush"), accent, isRunning ? 0.68 : 0.24),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(7, 5, 6, 5),
+            Margin = new Thickness(0, 0, 0, 5),
             ClipToBounds = true,
             ToolTip = string.IsNullOrWhiteSpace(snapshot.NarratorPersona)
                 ? "Narrator"
@@ -422,21 +571,32 @@ internal sealed class AgentBoardCoordinator
         };
 
         var cardLayer = new Grid();
+        cardLayer.Children.Add(new Border
+        {
+            Width = 3,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Background = accent,
+            CornerRadius = new CornerRadius(7, 0, 0, 7),
+            Opacity = isRunning ? 0.95 : 0.72,
+            IsHitTestVisible = false
+        });
         if (isRunning)
         {
             cardLayer.Children.Add(CreateAgentActivitySweep(accent, isRunning: true));
         }
 
-        var grid = new Grid();
+        var grid = new Grid
+        {
+            Margin = new Thickness(4, 0, 0, 0)
+        };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         text.Children.Add(new TextBlock
         {
-            Text = $"Narrator - {DisplayInlineStatus(status)}",
-            Foreground = Brushes.White,
+            Text = "Narrator",
+            Foreground = resourceBrush("TextBrush"),
             FontWeight = FontWeights.SemiBold,
             FontSize = 12,
             LineHeight = 15,
@@ -445,7 +605,7 @@ internal sealed class AgentBoardCoordinator
         });
         text.Children.Add(new TextBlock
         {
-            Text = modelText,
+            Text = $"{DisplayInlineStatus(status)}  ·  {modelText}",
             Foreground = isRunning ? accent : resourceBrush("MutedTextBrush"),
             FontSize = 11,
             LineHeight = 14,
@@ -455,21 +615,7 @@ internal sealed class AgentBoardCoordinator
         Grid.SetColumn(text, 0);
         grid.Children.Add(text);
 
-        var activityDot = new Border
-        {
-            Width = isRunning ? 8 : 6,
-            Height = isRunning ? 8 : 6,
-            CornerRadius = new CornerRadius(4),
-            Background = accent,
-            Opacity = isRunning ? 1.0 : 0.45,
-            Margin = new Thickness(8, 0, 4, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = status
-        };
-        Grid.SetColumn(activityDot, 1);
-        grid.Children.Add(activityDot);
-
-        Grid.SetColumn(playButton, 2);
+        Grid.SetColumn(playButton, 1);
         grid.Children.Add(playButton);
 
         cardLayer.Children.Add(grid);
@@ -480,6 +626,16 @@ internal sealed class AgentBoardCoordinator
     public static string DisplayInlineStatus(string status)
     {
         return string.IsNullOrWhiteSpace(status) ? "-" : status.Trim().ToLowerInvariant();
+    }
+
+    internal static bool ModeActionEnabled(bool busy, bool autoChatRunning)
+    {
+        return !busy || autoChatRunning;
+    }
+
+    internal static bool ShouldAnimateActivity(bool systemAnimationsEnabled, bool isRunning)
+    {
+        return systemAnimationsEnabled && isRunning;
     }
 
     public static bool IsAgentWorkingStatus(string status)
@@ -510,6 +666,14 @@ internal sealed class AgentBoardCoordinator
 
         var translate = new TranslateTransform(-110, 0);
         sweep.RenderTransform = translate;
+        if (!ShouldAnimateActivity(animationsEnabled(), isRunning))
+        {
+            sweep.Width = 52;
+            sweep.Opacity = isRunning ? 0.28 : 0.18;
+            translate.X = 0;
+            return sweep;
+        }
+
         var animation = new DoubleAnimationUsingKeyFrames
         {
             RepeatBehavior = RepeatBehavior.Forever

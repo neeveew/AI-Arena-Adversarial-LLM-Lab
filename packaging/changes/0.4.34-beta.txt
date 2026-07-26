@@ -1,0 +1,14 @@
+AI Arena 0.4.34-beta
+
+- Added AI World pulse telemetry to the world snapshot model.
+- Added active, thinking, alert, tool, news, locked, speaking, and speaker-turn counts to AI World pulse data.
+- Added latest transcript turn and latest per-agent token totals to AI World pulse data.
+- Fixed stale AI World tool/news activity by decaying activity against latest transcript turn instead of scheduler index.
+- Updated the AI World status line to label scheduler state as next slot.
+- Added latest turn, event counts, token load, speaker, and watcher counts to the AI World status line.
+- Added AI World pulse tooltip/help text to the status line.
+- Added AI World pulse tooltip/help text to the camera badge.
+- Expanded AI World legend rows with speaker turn, last turn, and token load.
+- Expanded AI World name-tag accessibility help/status with compact live telemetry.
+- Expanded the selected-agent inspector with last-message kind/status.
+- Added deterministic tests for pulse aggregation, chronology-based activity decay, status copy, legend telemetry, name-tag telemetry, and inspector trace labels.

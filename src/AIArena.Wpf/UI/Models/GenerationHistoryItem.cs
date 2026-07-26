@@ -11,4 +11,8 @@ public sealed record GenerationHistoryItem(
     string ScenarioSeed,
     string PersonaSeed,
     double CreatedAt,
-    string Topic);
+    string Topic,
+    string Global = "",
+    string NarratorBrief = "",
+    int PersonaCount = 0,
+    string PersonaPreview = "");

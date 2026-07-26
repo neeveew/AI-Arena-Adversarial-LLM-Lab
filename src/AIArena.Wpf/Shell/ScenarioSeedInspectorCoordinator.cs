@@ -62,7 +62,7 @@ internal sealed class ScenarioSeedInspectorCoordinator
         if (seed.StartsWith("YOLO-", StringComparison.OrdinalIgnoreCase)
             || style.Equals("yolo", StringComparison.OrdinalIgnoreCase))
         {
-            return "YOLO";
+            return "Wild Seed";
         }
 
         if (seed.Equals("ai-choice", StringComparison.OrdinalIgnoreCase))

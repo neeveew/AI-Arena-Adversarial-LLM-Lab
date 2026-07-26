@@ -1,0 +1,7 @@
+AI Arena 0.4.91-beta
+
+- Fixed upgraded installations that incorrectly reported a missing .NET runtime even when .NET 10 x64 was installed.
+- Made versioned releases self-contained by default and made installer distributions require a complete private .NET Desktop Runtime.
+- Added publish-mode, runtimeconfig, and critical-runtime-file checks that reject mixed framework-dependent and self-contained payloads.
+- Separated installed program files under %LOCALAPPDATA%\Programs\AI Arena from sessions, settings, logs, exports, and other user data under %LOCALAPPDATA%\AI Arena.
+- Cleared preview output before each publish so switching runtime modes cannot retain stale files.

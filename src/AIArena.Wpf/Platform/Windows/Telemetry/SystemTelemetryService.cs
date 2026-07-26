@@ -5,11 +5,24 @@ namespace AIArena.Wpf.Services;
 
 public sealed class SystemTelemetryService
 {
+    private readonly NvidiaGpuProbeCache nvidiaGpuProbeCache;
     private ulong? previousIdle;
     private ulong? previousKernel;
     private ulong? previousUser;
     private GpuAdapterSnapshot? cachedGpuAdapters;
     private DateTime cachedGpuAdaptersAt = DateTime.MinValue;
+
+    public SystemTelemetryService()
+        : this(new NvidiaGpuProbeCache(
+            WindowsHardwareProbeService.DetectNvidiaGpus,
+            static () => DateTimeOffset.UtcNow))
+    {
+    }
+
+    internal SystemTelemetryService(NvidiaGpuProbeCache nvidiaGpuProbeCache)
+    {
+        this.nvidiaGpuProbeCache = nvidiaGpuProbeCache;
+    }
 
     public SystemTelemetrySample Sample()
     {
@@ -66,9 +79,9 @@ public sealed class SystemTelemetryService
         return SampleNvidiaSmiGpu() ?? SampleWindowsGpuCounters();
     }
 
-    private static GpuSnapshot? SampleNvidiaSmiGpu()
+    private GpuSnapshot? SampleNvidiaSmiGpu()
     {
-        var gpus = WindowsHardwareProbeService.DetectNvidiaGpus();
+        var gpus = nvidiaGpuProbeCache.Sample();
         if (gpus.Count == 0)
         {
             return null;
@@ -196,3 +209,65 @@ public sealed record SystemTelemetrySample(
     double? RamTotalGb,
     string? GpuName,
     double? VramTotalGb);
+
+internal sealed class NvidiaGpuProbeCache
+{
+    internal static readonly TimeSpan SuccessfulSampleLifetime = TimeSpan.FromSeconds(2);
+    internal static readonly TimeSpan FailedProbeRetryDelay = TimeSpan.FromSeconds(30);
+
+    private readonly Func<IReadOnlyList<WindowsGpuProbe>> probe;
+    private readonly Func<DateTimeOffset> utcNow;
+    private readonly object gate = new();
+    private IReadOnlyList<WindowsGpuProbe>? cachedSample;
+    private DateTimeOffset cachedAt = DateTimeOffset.MinValue;
+    private DateTimeOffset retryAt = DateTimeOffset.MinValue;
+
+    public NvidiaGpuProbeCache(
+        Func<IReadOnlyList<WindowsGpuProbe>> probe,
+        Func<DateTimeOffset> utcNow)
+    {
+        ArgumentNullException.ThrowIfNull(probe);
+        ArgumentNullException.ThrowIfNull(utcNow);
+        this.probe = probe;
+        this.utcNow = utcNow;
+    }
+
+    public IReadOnlyList<WindowsGpuProbe> Sample()
+    {
+        lock (gate)
+        {
+            var now = utcNow();
+            if (cachedSample is not null && now - cachedAt < SuccessfulSampleLifetime)
+            {
+                return cachedSample;
+            }
+
+            if (now < retryAt)
+            {
+                return Array.Empty<WindowsGpuProbe>();
+            }
+
+            IReadOnlyList<WindowsGpuProbe> detected;
+            try
+            {
+                detected = probe();
+            }
+            catch
+            {
+                detected = Array.Empty<WindowsGpuProbe>();
+            }
+
+            if (detected.Count == 0)
+            {
+                cachedSample = null;
+                retryAt = now + FailedProbeRetryDelay;
+                return Array.Empty<WindowsGpuProbe>();
+            }
+
+            cachedSample = detected.ToArray();
+            cachedAt = now;
+            retryAt = DateTimeOffset.MinValue;
+            return cachedSample;
+        }
+    }
+}

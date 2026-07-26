@@ -1,0 +1,10 @@
+AI Arena 0.4.63-beta
+
+- Stream Agent model responses live into the conversation so Planner, Reviewer, and Builder output appears token by token instead of after a long silent wait (LM Studio native and OpenAI-compatible providers).
+- Add a Team mode toggle to the Agent composer menu to switch between the full Planner/Reviewer/Builder loop and a faster Builder-only loop per session.
+- Recover prose-only Builder replies with a targeted JSON command-extraction call before spending an Auto Rescue retry.
+- Add an optional Agent rescue model setting used as a fallback when a role step fails or returns no usable text.
+- Show which files a staged command will write, with line and size counts, in the approval rail.
+- Keep detached preview terminal windows open after the launched command exits so startup failures stay readable.
+- Extend the command timeout to 10 minutes for commands flagged with network or install risk.
+- Pass both the head and tail of long Planner and Reviewer notes to later roles instead of hard-truncating at 1400 characters.

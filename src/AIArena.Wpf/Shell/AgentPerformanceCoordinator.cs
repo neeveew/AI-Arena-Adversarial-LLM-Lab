@@ -28,6 +28,7 @@ internal sealed class AgentPerformanceCoordinator
     private readonly Func<CoreVoiceAdherenceDiagnostic, Brush> voiceAdherenceDiagnosticAccent;
     private readonly Func<string?, int, string, string> compactPreview;
     private readonly Func<Brush, Brush, double, Brush> blendBrush;
+    private readonly Func<bool> fullCardsPreferred;
 
     private ArenaViewSnapshot? lastSnapshot;
     private string? activeDetailId;
@@ -48,8 +49,10 @@ internal sealed class AgentPerformanceCoordinator
         Func<string, Brush> voiceAdherenceStateAccent,
         Func<CoreVoiceAdherenceDiagnostic, Brush> voiceAdherenceDiagnosticAccent,
         Func<string?, int, string, string> compactPreview,
-        Func<Brush, Brush, double, Brush> blendBrush)
+        Func<Brush, Brush, double, Brush> blendBrush,
+        Func<bool>? fullCardsPreferred = null)
     {
+        this.fullCardsPreferred = fullCardsPreferred ?? (() => false);
         this.voiceStyleAdherenceService = voiceStyleAdherenceService;
         this.agentPerformanceItems = agentPerformanceItems;
         this.detailPopup = detailPopup;
@@ -89,7 +92,8 @@ internal sealed class AgentPerformanceCoordinator
                 snapshot.NarratorModel,
                 true,
                 snapshot.NarratorLocked,
-                []))
+                [],
+                LatestInternetSourcesFor(snapshot, "narrator")))
             .GroupBy(agent => agent.Id, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToArray();
@@ -99,10 +103,40 @@ internal sealed class AgentPerformanceCoordinator
             .ToArray();
 
         var maxTokens = Math.Max(1, stats.Select(item => item.Tokens).DefaultIfEmpty(0).Max());
+        var fullCards = fullCardsPreferred();
+
+        // In adaptive mode there is nothing to report before the first turn - the roster
+        // and status already live in Live Agents, so a single hint keeps the rail clean.
+        if (!fullCards && stats.All(item => item.Calls == 0) && !stats.Any(item => IsBusyStatus(item.Status)))
+        {
+            if (!string.IsNullOrWhiteSpace(openDetailId))
+            {
+                CloseDetail();
+            }
+
+            agentPerformanceItems.Children.Add(new TextBlock
+            {
+                Text = "Metrics appear after the first turn.",
+                Foreground = resourceBrush("MutedTextBrush"),
+                TextWrapping = TextWrapping.Wrap
+            });
+            return;
+        }
+
+        // Only the agent doing the work earns the full card; everyone else collapses to a
+        // slim row so the rail stays glanceable instead of five tall cards of idle zeros.
+        var lastSpeakerId = snapshot.Messages
+            .LastOrDefault(message => !string.IsNullOrWhiteSpace(message.SpeakerId)
+                && stats.Any(item => item.AgentId.Equals(message.SpeakerId, StringComparison.OrdinalIgnoreCase)))?
+            .SpeakerId ?? "";
+        var highlightId = stats.FirstOrDefault(item => IsBusyStatus(item.Status))?.AgentId ?? lastSpeakerId;
 
         foreach (var item in stats)
         {
-            var row = CreateRow(item, maxTokens);
+            var expanded = fullCards
+                || (!string.IsNullOrWhiteSpace(highlightId)
+                    && item.AgentId.Equals(highlightId, StringComparison.OrdinalIgnoreCase));
+            var row = expanded ? CreateRow(item, maxTokens) : CreateCompactRow(item);
             agentPerformanceItems.Children.Add(row);
             if (!string.IsNullOrWhiteSpace(openDetailId)
                 && item.AgentId.Equals(openDetailId, StringComparison.OrdinalIgnoreCase))
@@ -135,6 +169,14 @@ internal sealed class AgentPerformanceCoordinator
         }
     }
 
+    public void RefreshDensity()
+    {
+        if (lastSnapshot is not null)
+        {
+            Populate(lastSnapshot);
+        }
+    }
+
     public void CloseDetail()
     {
         activeDetailId = null;
@@ -159,10 +201,13 @@ internal sealed class AgentPerformanceCoordinator
         var tokens = messages.Sum(message => Math.Max(message.CompletionTokens, 0));
         var context = messages.Select(message => message.PromptTokens).DefaultIfEmpty(0).Max();
         var lastLatency = messages.LastOrDefault(message => message.LatencyMs > 0)?.LatencyMs ?? 0;
+        var averageTokensPerSecond = AverageTokensPerSecond(messages);
+        var averageTimeToFirstTokenMs = AverageTimeToFirstTokenMs(messages);
         var activity = messages
             .TakeLast(12)
             .Select(message => (double)Math.Max(1, Math.Max(message.CompletionTokens, message.TotalTokens)))
             .ToArray();
+        var internetSources = agent.InternetSources ?? LatestInternetSourcesFor(snapshot, agent.Id);
         var voiceDiagnostics = messages
             .Select(message => voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text))
             .Where(diagnostic => !diagnostic.State.Equals("none", StringComparison.OrdinalIgnoreCase))
@@ -181,102 +226,195 @@ internal sealed class AgentPerformanceCoordinator
             context,
             latencies.Length == 0 ? 0 : (int)latencies.Average(),
             lastLatency,
+            averageTokensPerSecond,
+            averageTimeToFirstTokenMs,
             failures,
             empty,
             internetRequests,
             voiceScore,
             RoleStyleCatalog.VoiceAdherenceState(voiceScore, voiceDiagnostics.Length),
             voiceDiagnostics.Length,
-            activity);
+            activity,
+            internetSources);
+    }
+
+    private static bool IsBusyStatus(string status)
+    {
+        var normalized = (status ?? "").Trim();
+        return normalized.Contains("speak", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("think", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("running", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("generating", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("responding", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private Border CreateCompactRow(AgentPerformanceStats stats)
+    {
+        var accent = accentForSpeaker(stats.AgentId);
+        var displayTitle = formatParticipantTitle(stats.AgentId, stats.Name, true);
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        grid.Children.Add(new TextBlock
+        {
+            Text = displayStatusValue(displayTitle),
+            Foreground = resourceBrush("TextBrush"),
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 11.5,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0)
+        });
+
+        var tokensText = new TextBlock
+        {
+            Text = stats.Tokens > 0 ? $"{formatCompactNumber(stats.Tokens)} tok" : "no turns yet",
+            Foreground = stats.Failures > 0
+                ? resourceBrush("DangerTextBrush")
+                : stats.Tokens > 0 ? accent : resourceBrush("MutedTextBrush"),
+            FontSize = 10.5,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        if (stats.InternetSources is { Sources.Count: > 0 } internetSources)
+        {
+            var sourceButton = AgentInternetSourcesPresenter.CreateButton(
+                internetSources,
+                resourceBrush,
+                blendBrush,
+                $"Show internet sources for {stats.Name}",
+                22);
+            sourceButton.Margin = new Thickness(0, 0, 7, 0);
+            Grid.SetColumn(sourceButton, 1);
+            grid.Children.Add(sourceButton);
+        }
+
+        Grid.SetColumn(tokensText, 2);
+        grid.Children.Add(tokensText);
+
+        // Status pills stay with the Live Agents roster; this surface is telemetry only.
+        var latencyText = new TextBlock
+        {
+            Text = stats.LastLatencyMs > 0 ? formatDuration(stats.LastLatencyMs) : "",
+            Foreground = resourceBrush("MutedTextBrush"),
+            FontSize = 10.5,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(latencyText, 3);
+        grid.Children.Add(latencyText);
+
+        var alertSummary = stats.Failures > 0
+            ? $"{displayTitle}: {stats.Failures} failed turn{(stats.Failures == 1 ? "" : "s")}. Click for details."
+            : $"{displayTitle}: click for details.";
+        var card = new Border
+        {
+            Background = blendBrush(resourceBrush("InputBrush"), accent, 0.05),
+            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.22),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(10, 6, 10, 6),
+            Margin = new Thickness(0, 0, 0, 6),
+            ToolTip = alertSummary,
+            Cursor = Cursors.Hand,
+            Child = grid
+        };
+        card.MouseLeftButtonUp += (_, e) =>
+        {
+            ShowDetail(stats, card);
+            e.Handled = true;
+        };
+
+        return card;
     }
 
     private Border CreateRow(AgentPerformanceStats stats, int maxTokens)
     {
         var accent = accentForSpeaker(stats.AgentId);
-        var grid = new Grid
-        {
-            Margin = new Thickness(0)
-        };
-        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
         var displayTitle = formatParticipantTitle(stats.AgentId, stats.Name, true);
+        var stack = new StackPanel();
+
+        var header = new Grid
+        {
+            Margin = new Thickness(0, 0, 0, 3)
+        };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
         var title = new TextBlock
         {
             Text = displayStatusValue(displayTitle),
             Foreground = resourceBrush("TextBrush"),
             FontWeight = FontWeights.SemiBold,
-            FontSize = 11,
+            FontSize = 12,
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center
         };
-        grid.Children.Add(title);
+        header.Children.Add(title);
 
-        var statusPill = CreateStatusPill(stats.Status, accent);
-        Grid.SetColumn(statusPill, 1);
-        grid.Children.Add(statusPill);
+        var headerActions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        if (stats.InternetSources is { Sources.Count: > 0 } internetSources)
+        {
+            var sourceButton = AgentInternetSourcesPresenter.CreateButton(
+                internetSources,
+                resourceBrush,
+                blendBrush,
+                $"Show internet sources for {stats.Name}",
+                23);
+            sourceButton.Margin = new Thickness(0, 0, 6, 0);
+            headerActions.Children.Add(sourceButton);
+        }
+
+        headerActions.Children.Add(CreateStatusPill(stats.Status, accent));
+        Grid.SetColumn(headerActions, 1);
+        header.Children.Add(headerActions);
+        stack.Children.Add(header);
 
         var model = new TextBlock
         {
             Text = string.IsNullOrWhiteSpace(stats.Model) ? "model not assigned" : shortModelName(stats.Model),
             Foreground = resourceBrush("MutedTextBrush"),
-            FontSize = 9,
+            FontSize = 10,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            Margin = new Thickness(0, 1, 0, 4)
+            Margin = new Thickness(0, 0, 0, 8)
         };
-        Grid.SetRow(model, 1);
-        Grid.SetColumnSpan(model, 2);
-        grid.Children.Add(model);
+        stack.Children.Add(model);
 
-        var metrics = new UniformGrid
+        var metrics = new Grid
+        {
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+        metrics.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        metrics.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        metrics.Children.Add(CreatePrimaryMetric("Tokens", formatCompactNumber(stats.Tokens), accent));
+
+        var secondaryMetrics = new UniformGrid
         {
             Rows = 1,
-            Columns = 4,
-            Margin = new Thickness(0, 0, 0, 4)
+            Columns = 3,
+            MinWidth = 174,
+            HorizontalAlignment = HorizontalAlignment.Right
         };
-        metrics.Children.Add(CreateStackedMetric("Turns", stats.Calls.ToString(System.Globalization.CultureInfo.InvariantCulture), accent));
-        metrics.Children.Add(CreateStackedMetric("Tokens", formatCompactNumber(stats.Tokens), resourceBrush("PrimaryBorderBrush")));
-        metrics.Children.Add(CreateStackedMetric("Avg", stats.AverageLatencyMs > 0 ? formatDuration(stats.AverageLatencyMs) : "-", resourceBrush("AlphaAccentBrush")));
-        metrics.Children.Add(CreateStackedMetric("Ctx", stats.Context > 0 ? formatCompactNumber(stats.Context) : "-", resourceBrush("GammaAccentBrush")));
-        Grid.SetRow(metrics, 2);
-        Grid.SetColumnSpan(metrics, 2);
-        grid.Children.Add(metrics);
+        secondaryMetrics.Children.Add(CreateInlineMetricPill("Turns", stats.Calls.ToString(System.Globalization.CultureInfo.InvariantCulture), accent));
+        secondaryMetrics.Children.Add(CreateInlineMetricPill("Speed", FormatTokensPerSecond(stats.AverageTokensPerSecond), resourceBrush("PrimaryBorderBrush")));
+        secondaryMetrics.Children.Add(CreateInlineMetricPill("Ctx", stats.Context > 0 ? formatCompactNumber(stats.Context) : "-", resourceBrush("GammaAccentBrush")));
+        Grid.SetColumn(secondaryMetrics, 1);
+        metrics.Children.Add(secondaryMetrics);
+        stack.Children.Add(metrics);
 
         var activityRow = new Grid();
         activityRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         activityRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var hasActivity = stats.Activity.Any(value => value > 0.001);
-        var tokenTrack = new Grid
-        {
-            Height = 16,
-            Margin = new Thickness(0, 0, 8, 0),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        tokenTrack.Children.Add(new Border
-        {
-            Background = blendBrush(resourceBrush("CardBrush"), accent, 0.14),
-            Height = 4,
-            CornerRadius = new CornerRadius(2),
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            Opacity = 0.9
-        });
-        tokenTrack.Children.Add(new Border
-        {
-            Background = accent,
-            Height = 4,
-            CornerRadius = new CornerRadius(2),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Opacity = stats.Tokens <= 0 ? 0.28 : 0.82,
-            Width = stats.Tokens <= 0
-                ? 10
-                : Math.Max(18, 106 * Math.Clamp(stats.Tokens / (double)maxTokens, 0.08, 1)),
-            VerticalAlignment = VerticalAlignment.Center
-        });
-        activityRow.Children.Add(tokenTrack);
+        activityRow.Children.Add(CreateTokenTrack(stats.Tokens, maxTokens, accent));
 
         FrameworkElement activityMarker = hasActivity
             ? CreateActivitySparkline(stats, accent)
@@ -284,9 +422,7 @@ internal sealed class AgentPerformanceCoordinator
         Grid.SetColumn(activityMarker, 1);
         activityRow.Children.Add(activityMarker);
 
-        Grid.SetRow(activityRow, 3);
-        Grid.SetColumnSpan(activityRow, 2);
-        grid.Children.Add(activityRow);
+        stack.Children.Add(activityRow);
 
         var alerts = new List<string>();
         if (stats.Failures > 0)
@@ -309,18 +445,22 @@ internal sealed class AgentPerformanceCoordinator
         {
             alerts.Add($"last {formatDuration(stats.LastLatencyMs)}");
         }
+        if (stats.AverageTokensPerSecond > 0)
+        {
+            alerts.Add($"{FormatTokensPerSecond(stats.AverageTokensPerSecond)} tok/s");
+        }
 
         var card = new Border
         {
             Background = blendBrush(resourceBrush("InputBrush"), accent, 0.08),
             BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.32),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(8, 6, 8, 6),
-            Margin = new Thickness(0, 0, 0, 5),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(11, 9, 11, 9),
+            Margin = new Thickness(0, 0, 0, 8),
             ToolTip = alerts.Count == 0 ? $"{displayTitle}: no warnings" : $"{displayTitle}: {string.Join(", ", alerts)}",
             Cursor = Cursors.Hand,
-            Child = grid
+            Child = stack
         };
         card.MouseLeftButtonUp += (_, e) =>
         {
@@ -329,6 +469,113 @@ internal sealed class AgentPerformanceCoordinator
         };
 
         return card;
+    }
+
+    private StackPanel CreatePrimaryMetric(string label, string value, Brush accent)
+    {
+        return new StackPanel
+        {
+            MinWidth = 74,
+            Margin = new Thickness(0, 0, 12, 0),
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = label,
+                    Foreground = resourceBrush("MutedTextBrush"),
+                    FontSize = 9,
+                    FontWeight = FontWeights.SemiBold
+                },
+                new TextBlock
+                {
+                    Text = value,
+                    Foreground = accent,
+                    FontSize = 17,
+                    FontWeight = FontWeights.SemiBold,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                }
+            }
+        };
+    }
+
+    private Border CreateInlineMetricPill(string label, string value, Brush accent)
+    {
+        return new Border
+        {
+            Background = blendBrush(resourceBrush("InputBrush"), accent, 0.07),
+            BorderBrush = blendBrush(resourceBrush("DisabledBorderBrush"), accent, 0.28),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(6, 3, 6, 4),
+            Margin = new Thickness(4, 0, 0, 0),
+            MinWidth = 52,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = label,
+                        Foreground = resourceBrush("MutedTextBrush"),
+                        FontSize = 8.5,
+                        FontWeight = FontWeights.SemiBold,
+                        TextTrimming = TextTrimming.CharacterEllipsis
+                    },
+                    new TextBlock
+                    {
+                        Text = value,
+                        Foreground = accent,
+                        FontSize = 10.5,
+                        FontWeight = FontWeights.SemiBold,
+                        TextTrimming = TextTrimming.CharacterEllipsis
+                    }
+                }
+            }
+        };
+    }
+
+    private Grid CreateTokenTrack(int tokens, int maxTokens, Brush accent)
+    {
+        var track = new Grid
+        {
+            Height = 15,
+            MinWidth = 96,
+            Margin = new Thickness(0, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        track.Children.Add(new Border
+        {
+            Background = blendBrush(resourceBrush("CardBrush"), accent, 0.16),
+            Height = 5,
+            CornerRadius = new CornerRadius(2.5),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Opacity = 0.9
+        });
+
+        var fill = new Border
+        {
+            Background = accent,
+            Height = 5,
+            CornerRadius = new CornerRadius(2.5),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Opacity = tokens <= 0 ? 0.3 : 0.86,
+            Width = tokens <= 0 ? 12 : 20,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        track.Children.Add(fill);
+
+        void UpdateFill()
+        {
+            var trackWidth = track.ActualWidth > 0 ? track.ActualWidth : 120;
+            fill.Width = tokens <= 0
+                ? Math.Min(14, trackWidth)
+                : Math.Clamp(trackWidth * Math.Clamp(tokens / (double)Math.Max(1, maxTokens), 0.08, 1), 18, trackWidth);
+        }
+
+        track.Loaded += (_, _) => UpdateFill();
+        track.SizeChanged += (_, _) => UpdateFill();
+
+        return track;
     }
 
     private void ShowDetail(AgentPerformanceStats stats, FrameworkElement target)
@@ -402,8 +649,8 @@ internal sealed class AgentPerformanceCoordinator
         var metrics = new UniformGrid
         {
             Columns = 4,
-            Rows = 2,
-            Margin = new Thickness(0, 0, 0, 10)
+            Rows = 3,
+            Margin = new Thickness(0, 0, -7, 10)
         };
         metrics.Children.Add(CreateDetailMetric("Turns", stats.Calls.ToString(System.Globalization.CultureInfo.InvariantCulture), accent));
         metrics.Children.Add(CreateDetailMetric("Tokens", formatCompactNumber(stats.Tokens), resourceBrush("PrimaryBorderBrush")));
@@ -411,6 +658,8 @@ internal sealed class AgentPerformanceCoordinator
         metrics.Children.Add(CreateDetailMetric("Memory", notesCount.ToString(System.Globalization.CultureInfo.InvariantCulture), resourceBrush("NarratorAccentBrush")));
         metrics.Children.Add(CreateDetailMetric("Avg", stats.AverageLatencyMs > 0 ? formatDuration(stats.AverageLatencyMs) : "-", resourceBrush("AlphaAccentBrush")));
         metrics.Children.Add(CreateDetailMetric("Last", stats.LastLatencyMs > 0 ? formatDuration(stats.LastLatencyMs) : "-", resourceBrush("AlphaAccentBrush")));
+        metrics.Children.Add(CreateDetailMetric("Speed", FormatTokensPerSecond(stats.AverageTokensPerSecond), resourceBrush("PrimaryBorderBrush")));
+        metrics.Children.Add(CreateDetailMetric("TTFT", stats.AverageTimeToFirstTokenMs > 0 ? formatDuration(stats.AverageTimeToFirstTokenMs) : "-", resourceBrush("BetaAccentBrush")));
         metrics.Children.Add(CreateDetailMetric("Fails", stats.Failures.ToString(System.Globalization.CultureInfo.InvariantCulture), stats.Failures > 0 ? resourceBrush("DangerTextBrush") : resourceBrush("MutedTextBrush")));
         metrics.Children.Add(CreateDetailMetric("Web", stats.InternetRequests.ToString(System.Globalization.CultureInfo.InvariantCulture), stats.InternetRequests > 0 ? resourceBrush("AssistBorderBrush") : resourceBrush("MutedTextBrush")));
         panel.Children.Add(metrics);
@@ -473,11 +722,11 @@ internal sealed class AgentPerformanceCoordinator
         return new Border
         {
             Background = blendBrush(resourceBrush("InputBrush"), accent, 0.09),
-            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.3),
+            BorderBrush = blendBrush(resourceBrush("DisabledBorderBrush"), accent, 0.32),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(6, 4, 6, 4),
-            Margin = new Thickness(0, 0, 5, 5),
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(8, 6, 8, 6),
+            Margin = new Thickness(0, 0, 7, 7),
             Child = new StackPanel
             {
                 Children =
@@ -486,13 +735,15 @@ internal sealed class AgentPerformanceCoordinator
                     {
                         Text = label,
                         Foreground = resourceBrush("MutedTextBrush"),
-                        FontSize = 8
+                        FontSize = 9,
+                        FontWeight = FontWeights.SemiBold,
+                        TextTrimming = TextTrimming.CharacterEllipsis
                     },
                     new TextBlock
                     {
                         Text = value,
                         Foreground = accent,
-                        FontSize = 11,
+                        FontSize = 12,
                         FontWeight = FontWeights.SemiBold,
                         TextTrimming = TextTrimming.CharacterEllipsis
                     }
@@ -505,10 +756,10 @@ internal sealed class AgentPerformanceCoordinator
     {
         return new Border
         {
-            Background = blendBrush(resourceBrush("InputBrush"), accent, 0.09),
+            Background = blendBrush(resourceBrush("InputBrush"), accent, 0.11),
             BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.34),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
+            CornerRadius = new CornerRadius(6),
             Padding = new Thickness(7, 3, 7, 3),
             Margin = new Thickness(0, -2, 0, 10),
             HorizontalAlignment = HorizontalAlignment.Left,
@@ -516,7 +767,7 @@ internal sealed class AgentPerformanceCoordinator
             {
                 Text = text,
                 Foreground = accent,
-                FontSize = 11,
+                FontSize = 11.5,
                 FontWeight = FontWeights.SemiBold
             }
         };
@@ -528,7 +779,7 @@ internal sealed class AgentPerformanceCoordinator
         var stack = new StackPanel();
         stack.Children.Add(new TextBlock
         {
-            Text = $"Style Cues: {displayStatusValue(RoleStyleCatalog.VoiceAdherenceDisplayState(stats.VoiceAdherenceState))} {stats.VoiceAdherenceScore}",
+            Text = $"Voice cues: {displayStatusValue(RoleStyleCatalog.VoiceAdherenceDisplayState(stats.VoiceAdherenceState))} {stats.VoiceAdherenceScore}",
             Foreground = accent,
             FontSize = 12,
             FontWeight = FontWeights.SemiBold,
@@ -565,7 +816,7 @@ internal sealed class AgentPerformanceCoordinator
             Background = blendBrush(resourceBrush("InputBrush"), accent, 0.08),
             BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.34),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(5),
+            CornerRadius = new CornerRadius(7),
             Padding = new Thickness(8),
             Margin = new Thickness(0, 0, 0, 10),
             Child = stack
@@ -597,7 +848,7 @@ internal sealed class AgentPerformanceCoordinator
             Background = resourceBrush("InputBrush"),
             BorderBrush = resourceBrush("DisabledBorderBrush"),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(5),
+            CornerRadius = new CornerRadius(7),
             Padding = new Thickness(8),
             Margin = new Thickness(0, 0, 0, 10),
             Child = stack
@@ -609,7 +860,7 @@ internal sealed class AgentPerformanceCoordinator
         var stack = new StackPanel();
         stack.Children.Add(new TextBlock
         {
-            Text = $"Turn {message.Turn} - {formatCompactNumber(message.CompletionTokens)} Tok - {formatDuration(message.LatencyMs)}",
+            Text = $"Turn {message.Turn} | {formatCompactNumber(message.CompletionTokens)} tok | {formatDuration(message.LatencyMs)}{FormatRecentTurnTelemetry(message)}",
             Foreground = accent,
             FontSize = 10,
             FontWeight = FontWeights.SemiBold
@@ -629,7 +880,7 @@ internal sealed class AgentPerformanceCoordinator
             Background = blendBrush(resourceBrush("InputBrush"), accent, 0.08),
             BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.28),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(5),
+            CornerRadius = new CornerRadius(7),
             Padding = new Thickness(8),
             Margin = new Thickness(0, 0, 0, 6),
             Child = stack
@@ -640,18 +891,20 @@ internal sealed class AgentPerformanceCoordinator
     {
         return new Border
         {
-            Background = blendBrush(resourceBrush("CardBrush"), accent, 0.12),
-            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.45),
+            Background = blendBrush(resourceBrush("InputBrush"), accent, 0.14),
+            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.42),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(4, 0, 4, 1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(7, 2, 7, 3),
             Margin = new Thickness(6, 0, 0, 0),
+            MinWidth = 42,
             Child = new TextBlock
             {
                 Text = text,
                 Foreground = accent,
-                FontSize = 9,
-                FontWeight = FontWeights.SemiBold
+                FontSize = 9.5,
+                FontWeight = FontWeights.SemiBold,
+                HorizontalAlignment = HorizontalAlignment.Center
             }
         };
     }
@@ -660,7 +913,7 @@ internal sealed class AgentPerformanceCoordinator
     {
         return new MetricSparklineControl
         {
-            Width = 74,
+            Width = 62,
             Height = 16,
             Mode = "bars",
             Values = stats.Activity,
@@ -674,7 +927,7 @@ internal sealed class AgentPerformanceCoordinator
     {
         var marker = new StackPanel
         {
-            Width = 74,
+            Width = 62,
             Height = 16,
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
@@ -690,37 +943,63 @@ internal sealed class AgentPerformanceCoordinator
                 Height = 4,
                 CornerRadius = new CornerRadius(2),
                 Background = blendBrush(resourceBrush("CardBrush"), accent, 0.28),
-                Margin = new Thickness(i == 0 ? 34 : 4, 6, 0, 0)
+                Margin = new Thickness(i == 0 ? 24 : 4, 6, 0, 0)
             });
         }
 
         return marker;
     }
 
-    private StackPanel CreateStackedMetric(string label, string value, Brush accent)
+    internal static double AverageTokensPerSecond(IEnumerable<TranscriptMessage> messages)
     {
-        return new StackPanel
+        var values = messages
+            .Select(message => message.TokensPerSecond)
+            .Where(value => value > 0)
+            .ToArray();
+        return values.Length == 0
+            ? 0
+            : Math.Round(values.Average(), 1);
+    }
+
+    internal static int AverageTimeToFirstTokenMs(IEnumerable<TranscriptMessage> messages)
+    {
+        var values = messages
+            .Select(message => message.TimeToFirstTokenMs)
+            .Where(value => value > 0)
+            .ToArray();
+        return values.Length == 0
+            ? 0
+            : (int)Math.Round(values.Average());
+    }
+
+    private static string FormatTokensPerSecond(double tokensPerSecond)
+    {
+        return tokensPerSecond > 0
+            ? tokensPerSecond.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)
+            : "-";
+    }
+
+    private string FormatRecentTurnTelemetry(TranscriptMessage message)
+    {
+        var parts = new List<string>();
+        if (message.TokensPerSecond > 0)
         {
-            Margin = new Thickness(0, 0, 4, 0),
-            Children =
-            {
-                new TextBlock
-                {
-                    Text = label,
-                    Foreground = resourceBrush("MutedTextBrush"),
-                    FontSize = 8,
-                    TextTrimming = TextTrimming.CharacterEllipsis
-                },
-                new TextBlock
-                {
-                    Text = value,
-                    Foreground = accent,
-                    FontSize = 10,
-                    FontWeight = FontWeights.SemiBold,
-                    TextTrimming = TextTrimming.CharacterEllipsis
-                }
-            }
-        };
+            parts.Add($"{FormatTokensPerSecond(message.TokensPerSecond)} tok/s");
+        }
+
+        if (message.TimeToFirstTokenMs > 0)
+        {
+            parts.Add($"ttft {formatDuration(message.TimeToFirstTokenMs)}");
+        }
+
+        if (message.ModelLoadTimeMs > 0)
+        {
+            parts.Add($"load {formatDuration(message.ModelLoadTimeMs)}");
+        }
+
+        return parts.Count == 0
+            ? ""
+            : $" | {string.Join(" | ", parts)}";
     }
 
     private static AgentState? FindAgent(ArenaViewSnapshot snapshot, string agentId)
@@ -742,6 +1021,20 @@ internal sealed class AgentPerformanceCoordinator
                 : null);
     }
 
+    private static AgentInternetSourceSummary? LatestInternetSourcesFor(ArenaViewSnapshot snapshot, string agentId)
+    {
+        var message = snapshot.Messages.LastOrDefault(message =>
+            message.InternetSources.Count > 0
+            && (message.InternetRequester.Equals(agentId, StringComparison.OrdinalIgnoreCase)
+                || message.SpeakerId.Equals(agentId, StringComparison.OrdinalIgnoreCase)));
+        return message is null
+            ? null
+            : new AgentInternetSourceSummary(
+                message.InternetQuery,
+                message.InternetCheckedAt,
+                message.InternetSources);
+    }
+
     private sealed record AgentPerformanceStats(
         string AgentId,
         string Name,
@@ -752,11 +1045,14 @@ internal sealed class AgentPerformanceCoordinator
         int Context,
         int AverageLatencyMs,
         int LastLatencyMs,
+        double AverageTokensPerSecond,
+        int AverageTimeToFirstTokenMs,
         int Failures,
         int EmptyResponses,
         int InternetRequests,
         int VoiceAdherenceScore,
         string VoiceAdherenceState,
         int VoiceAdherenceSamples,
-        IReadOnlyList<double> Activity);
+        IReadOnlyList<double> Activity,
+        AgentInternetSourceSummary? InternetSources);
 }

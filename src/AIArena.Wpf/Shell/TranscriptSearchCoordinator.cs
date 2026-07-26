@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -9,8 +10,9 @@ using AIArena.Wpf.Models;
 
 namespace AIArena.Wpf;
 
-internal sealed class TranscriptSearchCoordinator
+internal sealed class TranscriptSearchCoordinator : IDisposable
 {
+    private static readonly TimeSpan SearchDebounceDelay = TimeSpan.FromMilliseconds(150);
     private readonly Window owner;
     private readonly Dispatcher dispatcher;
     private readonly Popup searchPopup;
@@ -20,6 +22,7 @@ internal sealed class TranscriptSearchCoordinator
     private readonly FrameworkElement dragHandle;
     private readonly StackPanel recentSearchItems;
     private readonly TextBlock resultCountText;
+    private readonly TextBlock? resultListHeaderText;
     private readonly ComboBox turnFilterPicker;
     private readonly CheckBox systemFilter;
     private readonly CheckBox agentsFilter;
@@ -30,12 +33,20 @@ internal sealed class TranscriptSearchCoordinator
     private readonly Func<string, bool> isAgentSpeaker;
     private readonly Func<int?> timelineTurnFilter;
     private readonly Action refreshTranscript;
+    private readonly Action<string> collaborateSearchChanged;
+    private readonly Func<string, IReadOnlyList<CollaborateCoordinator.CollaborateSearchResult>> collaborateSearch;
+    private readonly Func<Guid, bool> openCollaborateConversation;
+    private readonly DispatcherDebouncer searchDebouncer;
 
     private bool isDraggingSearchPopup;
+    private bool isSwitchingSearchSurface;
     private Point searchPopupDragStart;
     private double searchPopupDragStartHorizontalOffset;
     private double searchPopupDragStartVerticalOffset;
     private readonly List<RecentSearchEntry> recentSearches = [];
+    private ShellSearchSurface activeSurface = ShellSearchSurface.Transcript;
+    private string transcriptSearchText = "";
+    private string collaborateSearchText = "";
 
     public TranscriptSearchCoordinator(
         Window owner,
@@ -56,7 +67,11 @@ internal sealed class TranscriptSearchCoordinator
         Func<string, Brush> resourceBrush,
         Func<string, bool> isAgentSpeaker,
         Func<int?> timelineTurnFilter,
-        Action refreshTranscript)
+        Action refreshTranscript,
+        TextBlock? resultListHeaderText = null,
+        Action<string>? collaborateSearchChanged = null,
+        Func<string, IReadOnlyList<CollaborateCoordinator.CollaborateSearchResult>>? collaborateSearch = null,
+        Func<Guid, bool>? openCollaborateConversation = null)
     {
         this.owner = owner;
         this.dispatcher = dispatcher;
@@ -67,6 +82,7 @@ internal sealed class TranscriptSearchCoordinator
         this.dragHandle = dragHandle;
         this.recentSearchItems = recentSearchItems;
         this.resultCountText = resultCountText;
+        this.resultListHeaderText = resultListHeaderText;
         this.turnFilterPicker = turnFilterPicker;
         this.systemFilter = systemFilter;
         this.agentsFilter = agentsFilter;
@@ -77,15 +93,44 @@ internal sealed class TranscriptSearchCoordinator
         this.isAgentSpeaker = isAgentSpeaker;
         this.timelineTurnFilter = timelineTurnFilter;
         this.refreshTranscript = refreshTranscript;
+        this.collaborateSearchChanged = collaborateSearchChanged ?? (_ => { });
+        this.collaborateSearch = collaborateSearch ?? (_ => []);
+        this.openCollaborateConversation = openCollaborateConversation ?? (_ => false);
+        searchDebouncer = new DispatcherDebouncer(
+            dispatcher,
+            SearchDebounceDelay,
+            ApplyFilterChange);
     }
 
     public bool HasActiveSearch => !string.IsNullOrWhiteSpace(CurrentSearch);
 
     private string CurrentSearch => searchText.Text.Trim();
 
+    private string CurrentTranscriptSearch => SearchTextForSurface(ShellSearchSurface.Transcript);
+
+    public void SetSurface(ShellSearchSurface surface, string placeholder, string tooltip)
+    {
+        CaptureActiveSearchText();
+        var restoredSearch = StoredSearchTextForSurface(surface);
+        activeSurface = surface;
+        searchText.Tag = placeholder;
+        searchText.ToolTip = tooltip;
+        searchButton.ToolTip = tooltip;
+
+        if (!string.Equals(searchText.Text, restoredSearch, StringComparison.Ordinal))
+        {
+            isSwitchingSearchSurface = true;
+            searchText.Text = restoredSearch;
+            isSwitchingSearchSurface = false;
+        }
+
+        OnFilterChanged();
+        UpdateSearchState();
+    }
+
     public IEnumerable<TranscriptMessage> FilterMessages(IEnumerable<TranscriptMessage> messages)
     {
-        var search = CurrentSearch;
+        var search = CurrentTranscriptSearch;
         var filtered = messages.Where(TranscriptSourceEnabled);
         if (!string.IsNullOrWhiteSpace(search))
         {
@@ -97,7 +142,7 @@ internal sealed class TranscriptSearchCoordinator
 
     public void UpdateResultCount(int visibleCount, int totalCount)
     {
-        var search = CurrentSearch;
+        var search = CurrentTranscriptSearch;
         var filter = (turnFilterPicker.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "All Turns";
         if (timelineTurnFilter() is int turn)
         {
@@ -113,8 +158,15 @@ internal sealed class TranscriptSearchCoordinator
 
     public void UpdateSearchState()
     {
+        UpdateSearchChrome();
+        PopulateRecentSearches();
+    }
+
+    private void UpdateSearchChrome()
+    {
+        CaptureActiveSearchText();
         var active = HasActiveSearch;
-        clearSearchButton.Opacity = active ? 1.0 : 0.45;
+        clearSearchButton.Opacity = active ? 1.0 : 0.82;
         clearSearchButton.IsEnabled = true;
         searchText.BorderBrush = active
             ? resourceBrush("PrimaryBorderBrush")
@@ -125,12 +177,16 @@ internal sealed class TranscriptSearchCoordinator
         searchButton.Foreground = active
             ? resourceBrush("PrimaryBorderBrush")
             : resourceBrush("MutedTextBrush");
-        PopulateRecentSearches();
     }
 
     public void ClearFilters()
     {
-        searchText.Clear();
+        transcriptSearchText = "";
+        if (activeSurface == ShellSearchSurface.Transcript)
+        {
+            searchText.Clear();
+        }
+
         searchPopup.IsOpen = false;
         PopulateRecentSearches();
         ShellUiHelpers.SelectComboTag(turnFilterPicker, "all");
@@ -140,10 +196,52 @@ internal sealed class TranscriptSearchCoordinator
         operatorFilter.IsChecked = true;
     }
 
-    public void OnFilterChanged()
+    public void OnFilterChanged(bool debounceTextInput = false)
     {
+        if (isSwitchingSearchSurface)
+        {
+            return;
+        }
+
+        CaptureActiveSearchText();
         if (isRenderingSnapshot())
         {
+            return;
+        }
+
+        if (debounceTextInput)
+        {
+            searchDebouncer.Schedule();
+            UpdateSearchChrome();
+            return;
+        }
+
+        FlushPendingFilterChange();
+    }
+
+    internal void FlushPendingFilterChange()
+    {
+        if (searchDebouncer.IsPending)
+        {
+            searchDebouncer.Flush();
+            return;
+        }
+
+        ApplyFilterChange();
+    }
+
+    private void ApplyFilterChange()
+    {
+        CaptureActiveSearchText();
+        if (isRenderingSnapshot())
+        {
+            return;
+        }
+
+        if (activeSurface == ShellSearchSurface.Collaborate)
+        {
+            collaborateSearchChanged(CurrentSearch);
+            UpdateSearchState();
             return;
         }
 
@@ -154,8 +252,10 @@ internal sealed class TranscriptSearchCoordinator
     {
         StoreCurrentSearch();
         searchText.Clear();
+        FlushPendingFilterChange();
         PopulateRecentSearches();
         searchPopup.IsOpen = false;
+        CancelSearchPopupDrag();
         searchButton.Focus();
     }
 
@@ -164,6 +264,19 @@ internal sealed class TranscriptSearchCoordinator
         StoreCurrentSearch();
         PopulateRecentSearches();
         searchPopup.IsOpen = false;
+        CancelSearchPopupDrag();
+    }
+
+    public void ToggleSearch()
+    {
+        if (searchPopup.IsOpen)
+        {
+            CloseSearch();
+            searchButton.Focus();
+            return;
+        }
+
+        ShowSearch();
     }
 
     public void ShowSearch()
@@ -181,6 +294,7 @@ internal sealed class TranscriptSearchCoordinator
     {
         if (e.Key == Key.Enter)
         {
+            FlushPendingFilterChange();
             StoreCurrentSearch();
             PopulateRecentSearches();
             e.Handled = true;
@@ -194,6 +308,7 @@ internal sealed class TranscriptSearchCoordinator
 
         StoreCurrentSearch();
         searchPopup.IsOpen = false;
+        CancelSearchPopupDrag();
         searchButton.Focus();
         e.Handled = true;
     }
@@ -227,6 +342,13 @@ internal sealed class TranscriptSearchCoordinator
             return;
         }
 
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            CancelSearchPopupDrag();
+            e.Handled = true;
+            return;
+        }
+
         var current = e.GetPosition(owner);
         searchPopup.HorizontalOffset = searchPopupDragStartHorizontalOffset + current.X - searchPopupDragStart.X;
         searchPopup.VerticalOffset = searchPopupDragStartVerticalOffset + current.Y - searchPopupDragStart.Y;
@@ -235,9 +357,44 @@ internal sealed class TranscriptSearchCoordinator
 
     public void OnDragMouseLeftButtonUp(MouseButtonEventArgs e)
     {
-        isDraggingSearchPopup = false;
-        dragHandle.ReleaseMouseCapture();
+        CancelSearchPopupDrag();
         e.Handled = true;
+    }
+
+    public void OnDragLostMouseCapture()
+    {
+        CancelSearchPopupDrag();
+    }
+
+    public bool DebugIsDraggingSearchPopup => isDraggingSearchPopup;
+
+    internal bool DebugIsSearchRefreshPending => searchDebouncer.IsPending;
+
+    public void Dispose()
+    {
+        searchDebouncer.Dispose();
+    }
+
+    public void DebugPrimeSearchPopupDragForTests()
+    {
+        isDraggingSearchPopup = true;
+        searchPopupDragStart = new Point(0, 0);
+        searchPopupDragStartHorizontalOffset = searchPopup.HorizontalOffset;
+        searchPopupDragStartVerticalOffset = searchPopup.VerticalOffset;
+    }
+
+    private void CancelSearchPopupDrag()
+    {
+        if (!isDraggingSearchPopup)
+        {
+            return;
+        }
+
+        isDraggingSearchPopup = false;
+        if (dragHandle.IsMouseCaptured)
+        {
+            dragHandle.ReleaseMouseCapture();
+        }
     }
 
     private IEnumerable<TranscriptMessage> ApplyTurnFilter(IEnumerable<TranscriptMessage> messages)
@@ -303,6 +460,11 @@ internal sealed class TranscriptSearchCoordinator
 
     private void StoreCurrentSearch()
     {
+        if (activeSurface != ShellSearchSurface.Transcript)
+        {
+            return;
+        }
+
         var search = CurrentSearch;
         if (string.IsNullOrWhiteSpace(search))
         {
@@ -320,16 +482,23 @@ internal sealed class TranscriptSearchCoordinator
     private void PopulateRecentSearches()
     {
         recentSearchItems.Children.Clear();
+        if (activeSurface == ShellSearchSurface.Collaborate)
+        {
+            PopulateCollaborateSearches();
+            return;
+        }
+
+        if (resultListHeaderText is not null)
+        {
+            resultListHeaderText.Text = "Recent searches";
+        }
+
         if (recentSearches.Count == 0)
         {
-            recentSearchItems.Children.Add(new TextBlock
-            {
-                Text = "Press Enter after a search to keep it here.",
-                Foreground = resourceBrush("MutedTextBrush"),
-                FontSize = 14,
-                Margin = new Thickness(18, 18, 18, 18),
-                TextWrapping = TextWrapping.Wrap
-            });
+            recentSearchItems.Children.Add(CreateEmptyState(
+                "\uE721",
+                "No recent searches yet",
+                "Press Enter after a search to keep it here."));
             return;
         }
 
@@ -344,15 +513,20 @@ internal sealed class TranscriptSearchCoordinator
         var search = recentSearch.Query;
         var button = new Button
         {
-            Background = Brushes.Transparent,
-            BorderBrush = index == 0 ? Brushes.Transparent : resourceBrush("DisabledBorderBrush"),
-            BorderThickness = new Thickness(0, index == 0 ? 0 : 1, 0, 0),
-            Padding = new Thickness(18, 0, 18, 0),
-            MinHeight = 46,
+            Background = resourceBrush("CardBrush"),
+            BorderBrush = index == 0 ? resourceBrush("PrimaryBorderBrush") : resourceBrush("DisabledBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(12, 0, 12, 0),
+            Margin = new Thickness(0, 0, 0, 8),
+            MinHeight = 48,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             FontWeight = FontWeights.Normal,
+            Foreground = resourceBrush("TextBrush"),
             ToolTip = $"Search for {search}"
         };
+        AutomationProperties.SetName(button, $"Search for {TrimRecentSearch(search)}");
+        AutomationProperties.SetHelpText(button, $"Run recent transcript search for {search}.");
+        AutomationProperties.SetItemStatus(button, index == 0 ? "most recent search" : "recent search");
         button.Click += (_, _) =>
         {
             searchText.Text = search;
@@ -369,10 +543,10 @@ internal sealed class TranscriptSearchCoordinator
         grid.Children.Add(new TextBlock
         {
             Text = "\uE81C",
-            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontFamily = ArenaTokens.IconFontFamily,
             FontSize = 16,
-            Foreground = resourceBrush("MutedTextBrush"),
-            Margin = new Thickness(0, 0, 14, 0),
+            Foreground = index == 0 ? resourceBrush("PrimaryBorderBrush") : resourceBrush("MutedTextBrush"),
+            Margin = new Thickness(0, 0, 12, 0),
             VerticalAlignment = VerticalAlignment.Center
         });
 
@@ -380,7 +554,8 @@ internal sealed class TranscriptSearchCoordinator
         {
             Text = TrimRecentSearch(search),
             Foreground = resourceBrush("TextBrush"),
-            FontSize = 16,
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis
         };
@@ -391,8 +566,9 @@ internal sealed class TranscriptSearchCoordinator
         {
             Text = FormatRecentSearchDate(recentSearch.SavedAt),
             Foreground = resourceBrush("MutedTextBrush"),
-            FontSize = 14,
-            Margin = new Thickness(18, 0, 18, 0),
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(16, 0, 14, 0),
             VerticalAlignment = VerticalAlignment.Center
         };
         Grid.SetColumn(when, 2);
@@ -401,8 +577,8 @@ internal sealed class TranscriptSearchCoordinator
         var open = new TextBlock
         {
             Text = "\uE8A7",
-            FontFamily = new FontFamily("Segoe MDL2 Assets"),
-            FontSize = 15,
+            FontFamily = ArenaTokens.IconFontFamily,
+            FontSize = 13,
             Foreground = resourceBrush("MutedTextBrush"),
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -413,9 +589,202 @@ internal sealed class TranscriptSearchCoordinator
         return button;
     }
 
+    private void PopulateCollaborateSearches()
+    {
+        var search = CurrentSearch;
+        var results = collaborateSearch(search);
+        if (resultListHeaderText is not null)
+        {
+            resultListHeaderText.Text = string.IsNullOrWhiteSpace(search)
+                ? "Recent AI Collaborate chats"
+                : "Matching AI Collaborate chats";
+        }
+
+        if (results.Count == 0)
+        {
+            recentSearchItems.Children.Add(CreateEmptyState(
+                "\uE8D4",
+                string.IsNullOrWhiteSpace(search) ? "No recent chats yet" : "No matching chats",
+                string.IsNullOrWhiteSpace(search)
+                    ? "Saved AI Collaborate chats will appear here."
+                    : "Try another prompt, answer, model, role, or memory note."));
+            return;
+        }
+
+        for (var index = 0; index < results.Count; index++)
+        {
+            recentSearchItems.Children.Add(CreateCollaborateSearchRow(results[index], index));
+        }
+    }
+
+    private Button CreateCollaborateSearchRow(CollaborateCoordinator.CollaborateSearchResult result, int index)
+    {
+        var button = new Button
+        {
+            Background = resourceBrush("CardBrush"),
+            BorderBrush = index == 0 ? resourceBrush("PrimaryBorderBrush") : resourceBrush("DisabledBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(12, 8, 12, 8),
+            Margin = new Thickness(0, 0, 0, 8),
+            MinHeight = 62,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            FontWeight = FontWeights.Normal,
+            Foreground = resourceBrush("TextBrush"),
+            ToolTip = result.Snippet
+        };
+        var matchDetail = string.IsNullOrWhiteSpace(CurrentSearch)
+            ? "recent chat"
+            : $"{result.MatchCount.ToString(CultureInfo.InvariantCulture)} {(result.MatchCount == 1 ? "hit" : "hits")}";
+        AutomationProperties.SetName(button, $"Open AI Collaborate chat {TrimRecentSearch(result.Title)}, {matchDetail}");
+        AutomationProperties.SetHelpText(button, string.IsNullOrWhiteSpace(result.Snippet)
+            ? "Open this saved AI Collaborate chat."
+            : TrimAutomationText(result.Snippet, 160));
+        AutomationProperties.SetItemStatus(button, matchDetail);
+        button.Click += (_, _) =>
+        {
+            if (openCollaborateConversation(result.Id))
+            {
+                searchPopup.IsOpen = false;
+            }
+        };
+
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        grid.Children.Add(new TextBlock
+        {
+            Text = "\uE8D4",
+            FontFamily = ArenaTokens.IconFontFamily,
+            FontSize = 16,
+            Foreground = index == 0 ? resourceBrush("PrimaryBorderBrush") : resourceBrush("MutedTextBrush"),
+            Margin = new Thickness(0, 2, 12, 0),
+            VerticalAlignment = VerticalAlignment.Top
+        });
+
+        var content = new StackPanel
+        {
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        content.Children.Add(new TextBlock
+        {
+            Text = result.Title,
+            Foreground = resourceBrush("TextBrush"),
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = result.Snippet,
+            Foreground = resourceBrush("MutedTextBrush"),
+            FontSize = 11.5,
+            Margin = new Thickness(0, 3, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        Grid.SetColumn(content, 1);
+        grid.Children.Add(content);
+
+        var meta = new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(CurrentSearch)
+                ? FormatRecentSearchDate(result.UpdatedAt.LocalDateTime)
+                : $"{result.MatchCount.ToString(CultureInfo.InvariantCulture)} {(result.MatchCount == 1 ? "hit" : "hits")}",
+            Foreground = resourceBrush("MutedTextBrush"),
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(16, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(meta, 2);
+        grid.Children.Add(meta);
+
+        button.Content = grid;
+        return button;
+    }
+
+    private Border CreateEmptyState(string icon, string title, string body)
+    {
+        return new Border
+        {
+            Background = resourceBrush("CardBrush"),
+            BorderBrush = resourceBrush("DisabledBorderBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(16, 14, 16, 14),
+            Margin = new Thickness(0),
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = icon,
+                        FontFamily = ArenaTokens.IconFontFamily,
+                        Foreground = resourceBrush("MutedTextBrush"),
+                        FontSize = 18,
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        Margin = new Thickness(0, 0, 0, 8)
+                    },
+                    new TextBlock
+                    {
+                        Text = title,
+                        Foreground = resourceBrush("TextBrush"),
+                        FontSize = 14,
+                        FontWeight = FontWeights.SemiBold
+                    },
+                    new TextBlock
+                    {
+                        Text = body,
+                        Foreground = resourceBrush("MutedTextBrush"),
+                        FontSize = 12,
+                        Margin = new Thickness(0, 4, 0, 0),
+                        TextWrapping = TextWrapping.Wrap
+                    }
+                }
+            }
+        };
+    }
+
+    private void CaptureActiveSearchText()
+    {
+        if (activeSurface == ShellSearchSurface.Collaborate)
+        {
+            collaborateSearchText = searchText.Text;
+            return;
+        }
+
+        transcriptSearchText = searchText.Text;
+    }
+
+    private string SearchTextForSurface(ShellSearchSurface surface)
+    {
+        return (activeSurface == surface
+            ? searchText.Text
+            : surface == ShellSearchSurface.Collaborate
+                ? collaborateSearchText
+                : transcriptSearchText).Trim();
+    }
+
+    private string StoredSearchTextForSurface(ShellSearchSurface surface)
+    {
+        return (surface == ShellSearchSurface.Collaborate
+            ? collaborateSearchText
+            : transcriptSearchText).Trim();
+    }
+
     private static string TrimRecentSearch(string search)
     {
         return search.Length <= 72 ? search : $"{search[..72]}...";
+    }
+
+    private static string TrimAutomationText(string text, int maxLength)
+    {
+        var trimmed = text.Trim();
+        return trimmed.Length <= maxLength
+            ? trimmed
+            : $"{trimmed[..Math.Max(0, maxLength - 3)]}...";
     }
 
     private static string FormatRecentSearchDate(DateTime savedAt)
@@ -436,4 +805,10 @@ internal sealed class TranscriptSearchCoordinator
     }
 
     private sealed record RecentSearchEntry(string Query, DateTime SavedAt);
+}
+
+internal enum ShellSearchSurface
+{
+    Transcript,
+    Collaborate
 }

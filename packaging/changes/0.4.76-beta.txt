@@ -1,0 +1,3 @@
+AI Arena 0.4.76-beta
+
+- Tighten button sizing app-wide for denser layouts: reduced horizontal padding, min-heights, and inter-button spacing across the shared button styles so more buttons fit per row. Font sizes are unchanged to preserve legibility; the savings come from padding and margins.

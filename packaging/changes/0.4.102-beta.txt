@@ -1,0 +1,6 @@
+AI Arena 0.4.102-beta
+
+- Adds typed PowerShell mutation for safe transcript, review, voice, and optional-surface preferences.
+- Every authenticated PowerShell response includes a fresh post-command app-state summary, including error responses.
+- Extracts the Settings control-plane command family from MainWindow into a focused handler for easier audit and debugging.
+- Keeps master Debug and control-plane enablement under direct UI control; automation cannot grant itself access or sever its own connection.

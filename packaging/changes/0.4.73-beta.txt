@@ -1,0 +1,4 @@
+AI Arena 0.4.73-beta
+
+- Add speaker accent lighting to AI World: one of the stage lights now eases toward the active speaker's accent colour so each turn reads as an event, returning to neutral when no one is speaking.
+- Turn the back-row arena towers into a live token skyline: each tower reflects an active agent's latest token load and is capped in that agent's accent colour, so the skyline grows as the debate runs. Tower heights are quantized to keep the shared mesh cache efficient.

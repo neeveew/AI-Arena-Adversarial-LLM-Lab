@@ -1,0 +1,5 @@
+AI Arena 0.4.71-beta
+
+- Reshape the AI World robots into sleeker sci-fi androids: rounded dome heads with a glowing visor, a domed chassis cap, spherical shoulders, an antenna orb, and a chest core that lights up in the agent's accent colour (new sphere and cylinder mesh primitives, cached and frozen like the existing box meshes).
+- Add data pylons inside the arena and register them, plus the central console, as a static obstacle map so agents navigate around solid objects instead of clipping through them.
+- Replace the aimless wander loop with goal-directed movement: the speaking agent walks up to the central dais to take the podium, listeners gather in a loose arc facing it, and idle agents settle at stable perimeter stations. Travel eases smoothly even when the speaker changes.

@@ -1,0 +1,17 @@
+AI Arena 0.4.31-beta
+
+- Split Match Setup readiness into blocker and warning categories.
+- Added Setup blocked status copy for hard preflight blockers.
+- Added Ready with warnings status copy for nonblocking setup risks.
+- Added readiness tooltip sections for run summary, blockers, and warnings.
+- Added a State readiness badge for Ready, Warnings, Blocked, and Awaiting session states.
+- Added an Agents readiness badge for active cast count.
+- Added a Provider readiness badge that reports Online, Offline, or Error.
+- Added provider offline/error readiness warnings with visible error detail.
+- Added a Personas readiness badge that reports blank active agent personas.
+- Added blank active agent persona warnings.
+- Added a Narrator readiness badge that reports Briefed or Blank.
+- Added blank narrator persona warnings.
+- Added a Matrix readiness badge that reports neutral, active rule count, or missing active rules.
+- Added a History readiness badge for replayable setup history count.
+- Added tests for ready, warning-only, and blocked setup reports plus readiness badge payloads and XAML accessibility.

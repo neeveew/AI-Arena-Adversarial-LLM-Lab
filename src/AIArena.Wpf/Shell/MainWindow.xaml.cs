@@ -1,12 +1,16 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.IO;
 using System.Reflection;
+using System.Text.Json;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using AIArena.Core.Models;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 using CoreVoiceAdherenceDiagnostic = AIArena.Core.Models.VoiceAdherenceDiagnostic;
 using AIArena.Core.Persistence;
@@ -18,26 +22,55 @@ using AIArena.Wpf.Services;
 
 namespace AIArena.Wpf;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Window, IAIArenaControlTarget
 {
     private const string ReleasesUrl = "https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases";
+    private const double RightRailExpandedWidth = 320;
+    internal const double SupportedMinimumWindowWidth = 960;
+    internal const double SupportedMinimumWindowHeight = 540;
+    internal const double RightRailAutoCollapseWidth = 1200;
+    internal const double TopBarInlineMinWidth = 1180;
+    internal const double NavigationRailCompactWidth = 184;
+    internal const double NavigationRailStandardWidth = 208;
+    internal const double NavigationRailComfortableWidth = 224;
+    internal const double NavigationRailStandardMinWindowWidth = 1500;
+    internal const double NavigationRailComfortableMinWindowWidth = 1920;
+    internal const double RightRailCompactWidth = 220;
+    internal const double RightRailFullWidthMinWindowWidth = 1500;
+    private static readonly TimeSpan VoiceTtsSaveDebounceDelay = TimeSpan.FromMilliseconds(250);
     private readonly SessionStore _coreSessionStore = new();
     private readonly EventLogStore _eventLogStore = new();
     private readonly ModelProviderHealthService _providerHealth = new();
     private readonly ProviderReachabilityService _providerReachabilityService;
+    private readonly ProviderConfigurationControlService _providerConfigurationControlService;
+    private readonly ProviderRuntimeService _providerRuntimeService;
+    private readonly ModelProviderClient _modelClient;
     private readonly TranscriptService _transcriptService = new();
-    private readonly TurnRunnerService _turnRunner = new();
-    private readonly MatchGenerationService _matchGeneration = new();
-    private readonly NarratorService _narratorService = new();
+    private readonly TurnRunnerService _turnRunner;
+    private readonly MatchGenerationService _matchGeneration;
+    private readonly NarratorService _narratorService;
     private readonly DiscourseDiagnosticsService _discourseDiagnostics = new();
     private readonly VoiceStyleAdherenceService _voiceStyleAdherenceService = new();
     private readonly InternetToolService _internetToolService;
-    private readonly CuratedNewsService _curatedNewsService = new();
     private readonly WpfSettingsStore _wpfSettingsStore = new();
     private readonly ScenarioTemplateStore _scenarioTemplateStore = new();
+    private readonly VoiceNarrationService _voiceNarrationService = new();
     private readonly UserGuideWindowHost _userGuideWindowHost = new();
     private readonly ShellCardFactory? _shellCardFactory;
     private readonly SavedStateWorkflowCoordinator? _savedStateCoordinator;
+    private readonly SavedStateControlService _savedStateControlService;
+    private readonly SessionForkWorkflowService _sessionForkWorkflowService;
+    private readonly ShellOverlayControlService _shellOverlayControlService;
+    private readonly ScenarioGenerationControlService _scenarioGenerationControlService;
+    private readonly RivalryMatrixControlService _rivalryMatrixControlService;
+    private readonly MatchSetupPortabilityService _matchSetupPortabilityService;
+    private readonly AppPreferenceControlService _appPreferenceControlService;
+    private readonly AIArenaSettingsControlHandler _settingsControlHandler;
+    private readonly AIArenaMatchSetupControlHandler _matchSetupControlHandler;
+    private readonly AIArenaSessionForkControlHandler _sessionForkControlHandler;
+    private readonly AIArenaCollaborateControlHandler _collaborateControlHandler;
+    private readonly AIArenaProviderControlHandler _providerControlHandler;
+    private readonly AIArenaAppControlHandler _appControlHandler;
     private readonly TranscriptExportCoordinator? _transcriptExportCoordinator;
     private readonly TranscriptSearchCoordinator? _transcriptSearchCoordinator;
     private readonly TranscriptInsightCoordinator? _transcriptInsightCoordinator;
@@ -46,7 +79,6 @@ public partial class MainWindow : Window
     private readonly TranscriptListCoordinator? _transcriptListCoordinator;
     private readonly TranscriptCardRenderer? _transcriptCardRenderer;
     private readonly TranscriptAdjunctCoordinator? _transcriptAdjunctCoordinator;
-    private readonly NewsPanelCoordinator? _newsPanelCoordinator;
     private readonly AgentMemoryCoordinator? _agentMemoryCoordinator;
     private readonly ScenarioWorkflowCoordinator? _scenarioWorkflowCoordinator;
     private readonly OperatorTurnCoordinator? _operatorTurnCoordinator;
@@ -68,20 +100,51 @@ public partial class MainWindow : Window
     private readonly ArenaSessionMutationCoordinator? _arenaSessionMutationCoordinator;
     private readonly ShellNavigationCoordinator? _shellNavigationCoordinator;
     private readonly CollaborateCoordinator? _collaborateCoordinator;
+    private readonly AgentWorkspaceCoordinator? _agentWorkspaceCoordinator;
     private readonly MatchQualityTimelineCoordinator? _matchQualityTimelineCoordinator;
     private readonly AgentBoardCoordinator? _agentBoardCoordinator;
     private readonly ArenaOperationCoordinator? _arenaOperationCoordinator;
     private readonly AppSettingsCoordinator? _appSettingsCoordinator;
+    private readonly AIArenaControlPlaneEventHub _controlPlaneEvents = new();
+    private AIArenaControlPlaneHost? _controlPlaneHost;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _modelRefreshTimer;
     private readonly DispatcherTimer _providerHealthTimer;
+    private readonly DispatcherDebouncer _voiceTtsSettingsSaveDebouncer;
     private readonly SemaphoreSlim _arenaOperationLock = new(1, 1);
     private IReadOnlyList<TranscriptMessage> _lastRenderedMessages = [];
     private IReadOnlyDictionary<string, string> _lastAgentPersonas = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     private CoreSessionSummary? _activeSession;
     private DateTimeOffset _activeSnapshotWriteUtc;
+    private bool _snapshotRefreshInProgress;
     private bool _isRenderingSnapshot;
     private bool _arenaBusy;
+    private bool _isUpdatingVoiceTtsSettings = true;
+    private bool _isUpdatingWorldDebug;
+    private bool _isUpdatingAgentWorkspace;
+    private bool _isUpdatingControlPlane;
+    private bool _rightRailAutoCollapseActive;
+    private bool _rightRailNarrowRevealRequested;
+    private bool _rightRailWidthCollapseLatched;
+    private bool _topBarStacked = true;
+    private bool _shutdownInProgress;
+    private bool _shutdownReady;
+    private IInputElement? _settingsFocusReturnTarget;
+    private IInputElement? _viewMenuFocusReturnTarget;
+    private IInputElement? _debugMenuFocusReturnTarget;
+    private IInputElement? _providerHealthFocusReturnTarget;
+    private IInputElement? _matchSetupFocusReturnTarget;
+    private ShellSurface _activeShellSurface = ShellSurface.Lab;
+    private ShellSurface _matchSetupReturnSurface = ShellSurface.Lab;
+    private string _matchSetupSection = "scenario";
+    private readonly Dictionary<Expander, bool> _settingsExpansionBeforeSearch = [];
+    private bool _settingsSearchActive;
+    private readonly Dictionary<string, string> _sessionSettingsBaseline = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<string, string>> _sessionSettingsDrafts = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, string>? _unboundSessionSettingsDraft;
+    private bool _sessionSettingsTrackingAttached;
+    private bool _restoringSessionSettingsDraft;
+    private string _trackedSessionSettingsSessionId = "";
     private WpfSettings _wpfSettings = new();
     private ThemePalette _theme = ThemePalette.Resolve("system");
     private ArenaViewSnapshot? _lastRenderedSnapshot;
@@ -115,9 +178,6 @@ public partial class MainWindow : Window
 
     private TranscriptAdjunctCoordinator TranscriptAdjunct =>
         _transcriptAdjunctCoordinator ?? throw new InvalidOperationException("Transcript adjunct coordinator is not initialized.");
-
-    private NewsPanelCoordinator NewsPanelWorkflow =>
-        _newsPanelCoordinator ?? throw new InvalidOperationException("News panel coordinator is not initialized.");
 
     private AgentMemoryCoordinator AgentMemory =>
         _agentMemoryCoordinator ?? throw new InvalidOperationException("Agent memory coordinator is not initialized.");
@@ -182,6 +242,9 @@ public partial class MainWindow : Window
     private CollaborateCoordinator Collaborate =>
         _collaborateCoordinator ?? throw new InvalidOperationException("Collaborate coordinator is not initialized.");
 
+    private AgentWorkspaceCoordinator AgentWorkspace =>
+        _agentWorkspaceCoordinator ?? throw new InvalidOperationException("Agent workspace coordinator is not initialized.");
+
     private MatchQualityTimelineCoordinator MatchQualityTimeline =>
         _matchQualityTimelineCoordinator ?? throw new InvalidOperationException("Match quality timeline coordinator is not initialized.");
 
@@ -197,9 +260,56 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _voiceTtsSettingsSaveDebouncer = new DispatcherDebouncer(
+            Dispatcher,
+            VoiceTtsSaveDebounceDelay,
+            () => SaveVoiceTtsSettings("Voice TTS level saved."));
         _shellCardFactory = new ShellCardFactory(ResourceBrush, BlendBrush);
         _providerReachabilityService = new ProviderReachabilityService(_coreSessionStore, _eventLogStore, _providerHealth);
-        _internetToolService = new InternetToolService(eventLogStore: _eventLogStore);
+        _providerConfigurationControlService = new ProviderConfigurationControlService(
+            _coreSessionStore,
+            _eventLogStore,
+            _arenaOperationLock,
+            () => _activeSession,
+            () => _arenaBusy,
+            async (status, refreshModels, cancellationToken) =>
+            {
+                await RefreshActiveSessionAsync(status, cancellationToken);
+                if (refreshModels)
+                {
+                    await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
+                }
+
+                await ProviderReachability.RefreshAsync(force: true, cancellationToken);
+            });
+        _providerRuntimeService = new ProviderRuntimeService(
+            _coreSessionStore,
+            _providerHealth,
+            _providerReachabilityService);
+        _appControlHandler = new AIArenaAppControlHandler(
+            new AIArenaScreenshotControlService(this, _coreSessionStore.DataRoot),
+            _controlPlaneEvents,
+            ShowScreenshotReceipt);
+        _modelClient = new ModelProviderClient();
+        _internetToolService = new InternetToolService(
+            new LocalInternetToolProvider(ensureSearchBackendAsync: EnsureInternetBackendForSearchAsync),
+            _eventLogStore);
+        _turnRunner = new TurnRunnerService(_modelClient, _coreSessionStore, _eventLogStore, _transcriptService, _internetToolService);
+        _matchGeneration = new MatchGenerationService(_modelClient, _coreSessionStore, _eventLogStore, _internetToolService);
+        _narratorService = new NarratorService(_modelClient, _coreSessionStore, _eventLogStore, _transcriptService, _internetToolService);
+        _sessionForkWorkflowService = new SessionForkWorkflowService(
+            _coreSessionStore,
+            _eventLogStore,
+            () => _activeSession,
+            () => _arenaBusy,
+            (status, action) => RunArenaBusyForCoordinatorAsync(
+                status,
+                operationButton: null,
+                action,
+                allowDuringAutoChat: false),
+            (sessionId, cancellationToken) => LoadSessionsAsync(sessionId, cancellationToken),
+            (eventName, message, data) => _controlPlaneEvents.Publish(eventName, message, data));
+        _sessionForkControlHandler = new AIArenaSessionForkControlHandler(_sessionForkWorkflowService);
         _savedStateCoordinator = new SavedStateWorkflowCoordinator(
             this,
             _coreSessionStore,
@@ -216,6 +326,11 @@ public partial class MainWindow : Window
             SavedStateSaveButton,
             SavedStateLoadButton,
             SavedStateDeleteButton,
+            ForkCurrentMatchButton,
+            ForkLineageReceipt,
+            ForkLineageText,
+            OpenForkParentButton,
+            _sessionForkWorkflowService,
             () => _activeSession,
             () => _theme,
             () => _isRenderingSnapshot,
@@ -228,9 +343,38 @@ public partial class MainWindow : Window
             ResourceBrush,
             SetArenaRunStatus,
             SetLoadStatus);
+        _savedStateControlService = new SavedStateControlService(
+            _coreSessionStore,
+            _eventLogStore,
+            () => _activeSession,
+            LoadSessionAsync,
+            LoadSessionsAsync,
+            RefreshActiveSessionForProviderAsync);
+        _scenarioGenerationControlService = new ScenarioGenerationControlService(
+            _matchGeneration,
+            _coreSessionStore,
+            () => _wpfSettings,
+            () => _activeSession,
+            (status, action) => RunArenaBusyForCoordinatorAsync(status, null, action, true),
+            RefreshActiveSessionForProviderAsync,
+            LoadSessionsAsync);
+        _rivalryMatrixControlService = new RivalryMatrixControlService(
+            _coreSessionStore,
+            _eventLogStore,
+            () => _activeSession,
+            () => _arenaBusy,
+            (status, action) => RunArenaBusyForCoordinatorAsync(status, null, action, true),
+            RefreshActiveSessionForProviderAsync);
+        _matchSetupPortabilityService = new MatchSetupPortabilityService(
+            _coreSessionStore,
+            _eventLogStore,
+            () => _activeSession,
+            () => _arenaBusy,
+            LoadSessionsAsync,
+            _arenaOperationLock);
         _transcriptInsightCoordinator = new TranscriptInsightCoordinator(
             () => PopulateTranscript(_lastRenderedMessages),
-            () => Dispatcher.BeginInvoke(() => TranscriptScrollViewer.ScrollToTop(), DispatcherPriority.Background));
+            () => Dispatcher.BeginInvoke(() => TranscriptItems.ScrollToTop(), DispatcherPriority.Background));
         _transcriptSearchCoordinator = new TranscriptSearchCoordinator(
             this,
             Dispatcher,
@@ -250,7 +394,11 @@ public partial class MainWindow : Window
             ResourceBrush,
             IsAgentSpeaker,
             () => TranscriptInsight.TimelineSelectedTurnFilter,
-            () => PopulateTranscript(_lastRenderedMessages));
+            () => PopulateTranscript(_lastRenderedMessages),
+            TranscriptSearchResultsHeader,
+            query => Collaborate.UpdateRecentSearch(query),
+            query => Collaborate.SearchConversations(query),
+            id => Collaborate.TryOpenConversation(id));
         _transcriptExportCoordinator = new TranscriptExportCoordinator(
             this,
             ExportStatusText,
@@ -278,12 +426,16 @@ public partial class MainWindow : Window
             _coreSessionStore,
             _eventLogStore,
             _providerHealth,
+            _providerRuntimeService,
             new ModelPreloadService(),
+            new LmStudioModelDownloadService(),
             new ProviderAutoConfigureService(_providerHealth),
             _arenaOperationLock,
             ProviderPresetPicker,
             ProviderPresetStatusText,
+            ProviderApiModePicker,
             ProviderBaseUrlText,
+            ProviderApiTokenBox,
             ProviderModelText,
             DefaultModelStatusText,
             AlphaRoleModelText,
@@ -305,10 +457,20 @@ public partial class MainWindow : Window
             AutoConfigureProviderText,
             AutoConfigureRecommendationItems,
             PreloadSelectedModelsButton,
+            UnloadSelectedModelsButton,
             LoadPlanPreviewText,
             PreloadModelsStatusText,
             PreloadModelsItems,
+            DownloadModelText,
+            DownloadQuantizationPicker,
+            DownloadModelButton,
+            CheckDownloadStatusButton,
+            DownloadModelStatusText,
             ProviderTimeoutText,
+            ProviderContextLengthText,
+            ProviderReasoningPicker,
+            ProviderNativeStatefulChatCheckBox,
+            ProviderNativeIdleTtlText,
             ProviderTestStatus,
             ProviderModelsStatus,
             () => _activeSession,
@@ -316,25 +478,32 @@ public partial class MainWindow : Window
             () => _theme,
             () => _isRenderingSnapshot,
             () => AppSettingsPanel.Visibility == Visibility.Visible,
+            () => _arenaBusy,
             ResourceBrush,
             AccentForSpeaker,
             ShortModelName,
             DisplayStatusValue,
-            () => ProviderReachability.LoadSharedConfigAsync(),
-            (online, error, latencyMs, status) => ProviderReachability.PersistAsync(online, error, latencyMs, status),
-            preferredSessionId => LoadSessionsAsync(preferredSessionId),
-            SaveSnapshotForCoordinatorAsync,
-            RefreshActiveSessionForCoordinatorAsync,
-            force => ProviderReachability.RefreshAsync(force),
-            () => ProviderReachability.UpdatePopup());
+            (preferredSessionId, cancellationToken) => LoadSessionsAsync(preferredSessionId, cancellationToken),
+            SaveSnapshotForProviderAsync,
+            RefreshActiveSessionForProviderAsync,
+            (force, cancellationToken) => ProviderReachability.RefreshAsync(force, cancellationToken),
+            () => ProviderReachability.UpdatePopup(),
+            RoleGenerationOverrideFor);
         _providerQuickSetupCoordinator = new ProviderQuickSetupCoordinator(
             TranscriptActions,
             () => ProviderSettings.AdvertisedModels,
             ResourceBrush,
             BlendBrush,
-            (baseUrl, model, statusText) => ProviderSettings.SaveAndTestProviderQuickSetupAsync(baseUrl, model, statusText),
+            (baseUrl, model, statusText) => RunProviderCommitSafelyAsync(
+                (coordinator, cancellationToken) => coordinator.SaveAndTestProviderQuickSetupAsync(
+                    baseUrl,
+                    model,
+                    statusText,
+                    cancellationToken)),
             OpenModelProviderSettings);
         _wpfSettings = _wpfSettingsStore.Load();
+        InitializeAgentAndStreamingSettingsFields();
+        ShowMatchSetupSection("scenario");
         _shellNavigationCoordinator = new ShellNavigationCoordinator(
             this,
             _wpfSettingsStore,
@@ -342,18 +511,23 @@ public partial class MainWindow : Window
             ThemePicker,
             ArenaNavButton,
             CustomMatchNavButton,
+            AgentNavButton,
             CollaborateNavButton,
             AppSettingsButton,
             TranscriptPanel,
             CustomMatchPanel,
+            AgentWorldPanel,
+            AgentWorkspacePanel,
             CollaboratePanel,
-            NewsPanel,
             ArenaTopBarMetrics,
+            AgentTopBarMetrics,
             CollaborateTopBarMetrics,
             ArenaRightRailPanel,
+            AgentRightRailPanel,
             CollaborateRightRailPanel,
             ArenaSessionOverviewPanel,
             ArenaLiveAgentsPanel,
+            AgentLeftRailContextPanel,
             CollaborateLeftRailContextPanel,
             AppSettingsPanel,
             theme => _theme = theme,
@@ -361,6 +535,80 @@ public partial class MainWindow : Window
             RefreshGeneratedThemeSurfaces,
             () => _activeSession is not null,
             RefreshActiveSession);
+        _agentWorkspaceCoordinator = new AgentWorkspaceCoordinator(
+            this,
+            Dispatcher,
+            _wpfSettingsStore,
+            () => _wpfSettings,
+            null,
+            AgentWorkspacePathText,
+            AgentWorkspaceBrowseButton,
+            AgentWorkspaceApplyButton,
+            AgentWorkspaceStatusText,
+            AgentWorkspaceBoundaryText,
+            AgentLeftWorkspacePathText,
+            AgentLeftBoundaryText,
+            AgentLeftRoleItems,
+            AgentTopWorkspaceValue,
+            AgentTopProviderValue,
+            AgentTopModeValue,
+            AgentChatScrollViewer,
+            AgentMessageItems,
+            AgentPromptText,
+            AgentPlanPromptButton,
+            AgentBreakdownPromptButton,
+            AgentProgressPromptButton,
+            AgentCommandPromptButton,
+            AgentBuildAppPromptButton,
+            AgentNextStepPromptButton,
+            AgentVerifyPromptButton,
+            AgentRescueCommandButton,
+            AgentSendButton,
+            AgentStopButton,
+            AgentClearButton,
+            AgentPromptBudgetText,
+            AgentStatusText,
+            AgentPhaseSummaryText,
+            AgentPhaseItems,
+            AgentBuildEvidenceSummaryText,
+            AgentBuildEvidenceItems,
+            AgentActivityItems,
+            AgentCommandShellPicker,
+            AgentCommandText,
+            AgentCommandPreviewButton,
+            AgentCommandRunButton,
+            AgentCommandRejectButton,
+            AgentCommandStopButton,
+            AgentCommandCopyButton,
+            AgentCommandClearButton,
+            AgentCommandUseHeldButton,
+            AgentCommandApproveAllButton,
+            AgentCommandApproveAllStatusText,
+            AgentCommandAutoContinueButton,
+            AgentCommandAutoContinueStatusText,
+            AgentCommandApprovalText,
+            AgentCommandRiskItems,
+            AgentCommandOutputText,
+            AgentCommandStatusText,
+            AgentCommandSourceText,
+            AgentCommandCopyOutputButton,
+            AgentCommandCopyReceiptButton,
+            AgentCommandWorkSummaryText,
+            AgentCommandCopyBriefButton,
+            AgentCommandStageVerifyButton,
+            AgentCommandHistorySummaryText,
+            AgentCommandHistoryItems,
+            AgentCommandReplayLastButton,
+            AgentCommandCopyHistoryButton,
+            () => _lastRenderedSnapshot,
+            ResourceBrush,
+            SetArenaRunStatus,
+            AgentCommandStageArtifactButton,
+            AgentCommandStageNextButton,
+            AgentOutputSummaryText,
+            AgentOutputItems,
+            (type, message, data) => _controlPlaneEvents.Publish(type, message, data),
+            runbookMetaText: AgentRunbookMetaText);
         _scenarioWorkflowCoordinator = new ScenarioWorkflowCoordinator(
             this,
             _matchGeneration,
@@ -370,28 +618,45 @@ public partial class MainWindow : Window
             RandomSeedStylePicker,
             RandomSeedIntensityPicker,
             RandomSeedAbsurdityPicker,
+            SetupReadinessStatusText,
+            SetupReadinessBadgeItems,
+            SetupReadinessChecklistItems,
+            CopyCurrentSetupBriefButton,
+            CopyCurrentSetupSpecButton,
+            GenerationPresetStatusText,
             RandomSeedButton,
             AiChoiceButton,
+            CurrentTopicsButton,
             YoloScenarioButton,
+            GenerationHistoryFilterPicker,
             GenerationHistoryPicker,
+            GenerationHistoryStatusText,
             ReplayGenerationButton,
             ReplayNewRunButton,
             CopyGenerationSeedButton,
+            CopyGenerationBriefButton,
+            CopyGenerationSpecButton,
+            CopyGenerationDiffButton,
+            CopyGenerationRubricButton,
             () => _wpfSettings,
             () => _activeSession,
             () => _theme,
+            ResourceBrush,
+            BlendBrush,
             () => _isRenderingSnapshot,
             () => _arenaBusy,
             RunArenaBusyForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync,
             preferredSessionId => LoadSessionsAsync(preferredSessionId),
             SetLoadStatus,
-            SetArenaRunStatus);
+            SetArenaRunStatus,
+            RunArenaBusyForCoordinatorAsync);
         _operatorTurnCoordinator = new OperatorTurnCoordinator(
             _coreSessionStore,
             _eventLogStore,
             _transcriptService,
             _narratorService,
+            _discourseDiagnostics,
             _wpfSettingsStore,
             OperatorPublicRouteButton,
             OperatorPrivateRouteButton,
@@ -401,7 +666,17 @@ public partial class MainWindow : Window
             OperatorPrivateTargetSummaryText,
             OperatorRouteHintText,
             OperatorTurnMeterText,
+            OperatorQuickInterventionHintText,
+            [
+                OperatorQuickInterventionAButton,
+                OperatorQuickInterventionBButton,
+                OperatorQuickInterventionCButton,
+                OperatorQuickInterventionDButton
+            ],
             OperatorTemplatePicker,
+            UseOperatorTemplateButton,
+            SaveOperatorTemplateButton,
+            DeleteOperatorTemplateButton,
             OperatorTurnText,
             SendTurnButton,
             () => _wpfSettings,
@@ -413,33 +688,16 @@ public partial class MainWindow : Window
             SaveSnapshotForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync,
             SetLoadStatus,
-            SetArenaRunStatus);
+            SetArenaRunStatus,
+            SpeakNarratorMessage);
         _internetWorkflowCoordinator = new InternetWorkflowCoordinator(
-            this,
-            _coreSessionStore,
-            _eventLogStore,
-            _transcriptService,
-            _internetToolService,
-            _curatedNewsService,
             UseInternetCheckBox,
-            InternetModePicker,
-            InternetModeHintText,
-            InternetSourceScopePicker,
-            InternetMaxResultsText,
-            AllowParticipantInternetCheckBox,
-            AllowNarratorInternetCheckBox,
-            RequireInternetApprovalCheckBox,
-            CurateNewsButton,
-            () => _activeSession,
-            () => _theme,
-            () => _arenaBusy,
-            () => _isRenderingSnapshot,
+            InternetHintText,
+            InternetBackendStatusText,
+            TestInternetButton,
+            InternetDiagnosticResultText,
             ResourceBrush,
-            RunArenaBusyForCoordinatorAsync,
-            SaveSnapshotForCoordinatorAsync,
-            RefreshActiveSessionForCoordinatorAsync,
-            SetLoadStatus,
-            SetArenaRunStatus);
+            persistInternetSettingAsync: PersistInternetSettingForActiveSessionAsync);
         _transcriptCardRenderer = new TranscriptCardRenderer(
             () => _wpfSettings.CompactTranscriptMode,
             TranscriptActions,
@@ -459,14 +717,16 @@ public partial class MainWindow : Window
             TranscriptMutations.TogglePinMessageAsync,
             message => ArenaRun.RetryTranscriptMessageAsync(message),
             TranscriptMutations.DeleteMessageAsync,
-            message => InternetWorkflow.ApproveInternetRequestAsync(message),
-            message => InternetWorkflow.RejectInternetRequestAsync(message),
             TranscriptExportCoordinator.CopyInternetUrl,
             IsAgentSpeaker,
             () => _wpfSettings.TurnCompareMode,
             message => TranscriptInsight.IsTurnSelectedForCompare(message),
             TranscriptInsightCoordinator.CanCompareMessage,
-            message => TranscriptInsight.ToggleTurnCompareMessage(message));
+            message => TranscriptInsight.ToggleTurnCompareMessage(message),
+            CanSpeakTranscriptMessage,
+            SpeakTranscriptMessage,
+            () => _wpfSettings.AllowDebugControls && _wpfSettings.ShowTranscriptInternetDetails,
+            () => TranscriptViewCoordinator.ShouldShowPerformanceMetadata(_wpfSettings));
         _transcriptAdjunctCoordinator = new TranscriptAdjunctCoordinator(
             _discourseDiagnostics,
             _voiceStyleAdherenceService,
@@ -489,12 +749,6 @@ public partial class MainWindow : Window
             visibleMessages => TranscriptInsight.ReselectLatest(visibleMessages),
             () => TranscriptInsight.ClearTurnCompareSelection(suppressAutoSeed: true, refresh: true),
             GenerateDecisionCardAsync);
-        _newsPanelCoordinator = new NewsPanelCoordinator(
-            NewsItems,
-            NewsSummaryText,
-            ShellCards,
-            TranscriptAdjunct,
-            ResourceBrush);
         _agentMemoryCoordinator = new AgentMemoryCoordinator(
             this,
             _coreSessionStore,
@@ -529,8 +783,9 @@ public partial class MainWindow : Window
             RefreshActiveSessionForCoordinatorAsync,
             SetLoadStatus,
             SetArenaRunStatus,
-            (message, resumeAutoChat) => InternetWorkflow.HandleInternetApprovalDialogAsync(message, resumeAutoChat),
-            IsAgentSpeaker);
+            IsAgentSpeaker,
+            SpeakNarratorMessage,
+            RunArenaBusyForCoordinatorAsync);
         _agentBoardCoordinator = new AgentBoardCoordinator(
             _coreSessionStore,
             _eventLogStore,
@@ -550,13 +805,21 @@ public partial class MainWindow : Window
             SetArenaRunStatus);
         ShellNavigation.ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: false);
         ShellNavigation.InitializeThemePicker();
+        _agentWorkspaceCoordinator.Initialize();
         _collaborateCoordinator = new CollaborateCoordinator(
             null,
             Dispatcher,
             CollaborateChatScrollViewer,
             CollaborateMessageItems,
             CollaboratePromptText,
+            CollaboratePlanPromptButton,
+            CollaborateCritiquePromptButton,
+            CollaborateShipPromptButton,
+            CollaborateExplainPromptButton,
+            CollaboratePromptBudgetText,
+            CollaborateContextReceiptButton,
             CollaborateSendButton,
+            CollaborateStopButton,
             CollaborateClearButton,
             CollaborateModePicker,
             CollaborateRoundsPicker,
@@ -567,6 +830,19 @@ public partial class MainWindow : Window
             CollaborateTopTeamValue,
             CollaborateParticipantItems,
             CollaborateRecentItems,
+            CollaborateNewChatButton,
+            CollaborateProviderSettingsButton,
+            CollaborateToolDocumentItems,
+            CollaborateAddDocumentButton,
+            CollaborateClearDocumentsButton,
+            CollaborateCalculatorText,
+            CollaborateRunCalculatorButton,
+            CollaborateClearCalculationsButton,
+            CollaborateCalculationItems,
+            CollaborateMemoryText,
+            CollaborateSaveMemoryButton,
+            CollaborateClearMemoryButton,
+            CollaborateMemoryItems,
             () => _lastRenderedSnapshot,
             ResourceBrush,
             SetArenaRunStatus);
@@ -580,23 +856,55 @@ public partial class MainWindow : Window
         {
             Interval = TimeSpan.FromSeconds(5)
         };
-        _modelRefreshTimer.Tick += async (_, _) => await RefreshAdvertisedModelsAsync();
+        _modelRefreshTimer.Tick += async (_, _) =>
+        {
+            if (AppSettingsPanel.Visibility != Visibility.Visible || !ModelProviderSettingsExpander.IsExpanded)
+            {
+                return;
+            }
+
+            await RunTrackedBackgroundOperationSafelyAsync(
+                "provider model refresh",
+                cancellationToken => RefreshAdvertisedModelsAsync(cancellationToken: cancellationToken));
+        };
         _appSettingsCoordinator = new AppSettingsCoordinator(
             Dispatcher,
             ShellNavigation,
             _modelRefreshTimer,
             () => AppSettingsPanel.Visibility == Visibility.Visible,
-            force => RefreshAdvertisedModelsAsync(force),
+            force => RunTrackedBackgroundOperationSafelyAsync(
+                "provider model refresh",
+                cancellationToken => RefreshAdvertisedModelsAsync(force, cancellationToken)),
             ModelProviderSettingsExpander,
             ProviderBaseUrlText,
             ProviderModelText,
             TestProviderButton,
             SettingsGearRotate);
+        _shellOverlayControlService = new ShellOverlayControlService(
+            BuildMatchSetupControlState,
+            OpenMatchSetupFromControlPlane,
+            CloseMatchSetupFlyout,
+            ShowMatchSetupSection,
+            BuildSettingsControlState,
+            () => AppSettingsWorkflow.SetVisible(true),
+            CloseAppSettings,
+            query => SettingsSearchText.Text = query);
+        _appPreferenceControlService = new AppPreferenceControlService(
+            _wpfSettingsStore,
+            () => _wpfSettings,
+            ApplyPreferenceControlChanges,
+            BuildSettingsControlState);
+        _settingsControlHandler = new AIArenaSettingsControlHandler(
+            _shellOverlayControlService,
+            _appPreferenceControlService,
+            _controlPlaneEvents);
         _providerHealthTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromSeconds(3)
         };
-        _providerHealthTimer.Tick += async (_, _) => await ProviderReachability.RefreshAsync();
+        _providerHealthTimer.Tick += async (_, _) => await RunTrackedBackgroundOperationSafelyAsync(
+            "provider health refresh",
+            cancellationToken => ProviderReachability.RefreshAsync(cancellationToken: cancellationToken));
         _providerReachabilityCoordinator = new ProviderReachabilityCoordinator(
             _coreSessionStore,
             _providerReachabilityService,
@@ -619,10 +927,9 @@ public partial class MainWindow : Window
             () => _lastRenderedSnapshot,
             () => _providerSettingsCoordinator,
             ResourceBrush,
-            ApplyProviderStatusSnapshot,
-            UpdateTopBarStatus,
+            ApplyProviderStatusProjection,
             SetArenaRunStatus,
-            force => RefreshAdvertisedModelsAsync(force),
+            (force, cancellationToken) => RefreshAdvertisedModelsAsync(force, cancellationToken),
             () => OpenModelProviderSettings());
         _transcriptViewCoordinator = new TranscriptViewCoordinator(
             _wpfSettingsStore,
@@ -635,12 +942,14 @@ public partial class MainWindow : Window
             CompactTranscriptCheckBox,
             TurnCompareCheckBox,
             MatchQualityTimelineCheckBox,
+            BattleReviewCheckBox,
             MemoryNotesCheckBox,
             DecisionCardCheckBox,
             AutoModeratorCheckBox,
             DebugControlsCheckBox,
             StyleFitCheckBox,
             VoiceDriftEnforcementCheckBox,
+            TranscriptInternetDetailsCheckBox,
             FollowChatCheckBox,
             DebugMenuHost,
             DebugMenuPopup,
@@ -653,7 +962,9 @@ public partial class MainWindow : Window
             ViewPresetReviewButton,
             TranscriptDashboardGrid,
             TranscriptDiagnosticsHost,
+            TranscriptDiagnosticsGrid,
             TranscriptTelemetryHost,
+            TranscriptTelemetryGrid,
             TranscriptFiltersHost,
             () => _lastRenderedMessages,
             () => _lastRenderedSnapshot,
@@ -694,7 +1005,8 @@ public partial class MainWindow : Window
             state => VoiceAdherenceAccent(state),
             diagnostic => VoiceAdherenceAccent(diagnostic),
             ShellUiHelpers.CompactPreview,
-            BlendBrush);
+            BlendBrush,
+            () => _wpfSettings.AgentPerformanceFullCards);
         _sessionOverviewCoordinator = new SessionOverviewCoordinator(
             SessionOverviewMatchText,
             SessionOverviewTurnsText,
@@ -719,6 +1031,8 @@ public partial class MainWindow : Window
             snapshot => ProviderReachability.UpdatePopup(snapshot));
         _diagnosticsWorkflowCoordinator = new DiagnosticsWorkflowCoordinator(
             _discourseDiagnostics,
+            TranscriptDiagnosticsGrid,
+            TranscriptDiagnosticsEmptyState,
             FrictionChip,
             FrictionValueText,
             FrictionTrendText,
@@ -767,7 +1081,6 @@ public partial class MainWindow : Window
         _transcriptListCoordinator = new TranscriptListCoordinator(
             Dispatcher,
             TranscriptItems,
-            TranscriptScrollViewer,
             FollowChatCheckBox,
             ShellCards,
             TranscriptActions,
@@ -777,7 +1090,6 @@ public partial class MainWindow : Window
             TranscriptAdjunct,
             AgentMemory,
             MatchQualityTimeline,
-            ProviderQuickSetup,
             () => _wpfSettings,
             () => _lastRenderedSnapshot,
             messages => _lastRenderedMessages = messages,
@@ -787,16 +1099,24 @@ public partial class MainWindow : Window
             IsAgentSpeaker,
             ResourceBrush,
             AccentForSpeaker,
-            BlendBrush,
             ShortModelName,
-            DisplayStatusValue);
+            DisplayStatusValue,
+            () => ArenaRun.RunOneTurnAsync(),
+            ShowCustomMatchPanel,
+            () => OpenModelProviderSettings(),
+            ClearTranscriptFilters);
         _matchSetupCoordinator = new MatchSetupCoordinator(
             _coreSessionStore,
             _eventLogStore,
             RivalryMatrixEnabledCheckBox,
             RivalryMatrixRows,
+            RivalryMatrixPreviewItems,
+            RivalryMatrixInsightText,
             RivalryMatrixStatusText,
             ApplyRivalryMatrixButton,
+            ClearRivalryMatrixButton,
+            RivalryMatrixPatternPicker,
+            ApplyRivalryMatrixPatternButton,
             () => _activeSession,
             ResourceBrush,
             AccentForSpeaker,
@@ -839,7 +1159,6 @@ public partial class MainWindow : Window
             _eventLogStore,
             AgentCountPresetPicker,
             AgentCountPicker,
-            ActiveParticipantsPicker,
             ApplyAgentCountButton,
             AgentRosterStatusText,
             () => _isRenderingSnapshot,
@@ -850,27 +1169,29 @@ public partial class MainWindow : Window
             SaveSnapshotForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync,
             SetArenaRunStatus);
+        _matchSetupControlHandler = new AIArenaMatchSetupControlHandler(
+            _shellOverlayControlService,
+            count => AgentRoster.ResizeAgentCountAsync(count),
+            _rivalryMatrixControlService,
+            _matchSetupPortabilityService,
+            _controlPlaneEvents);
+        _collaborateControlHandler = new AIArenaCollaborateControlHandler(Collaborate, _controlPlaneEvents);
+        _providerControlHandler = new AIArenaProviderControlHandler(
+            _providerConfigurationControlService,
+            _providerRuntimeService,
+            () => _activeSession,
+            RefreshActiveSessionForProviderAsync,
+            _controlPlaneEvents);
         _arenaSessionMutationCoordinator = new ArenaSessionMutationCoordinator(
             this,
             _coreSessionStore,
             _eventLogStore,
-            ProviderSettings,
-            AgentRoster,
-            ProviderBaseUrlText,
-            ProviderModelText,
             ProviderTimeoutText,
             ProviderTemperatureText,
             ProviderMaxOutputText,
             ContextTranscriptWindowText,
             ContextPrivateWindowText,
             ContextNotesWindowText,
-            UseInternetCheckBox,
-            InternetModePicker,
-            InternetSourceScopePicker,
-            InternetMaxResultsText,
-            AllowParticipantInternetCheckBox,
-            AllowNarratorInternetCheckBox,
-            RequireInternetApprovalCheckBox,
             ProviderTestStatus,
             ResetButton,
             () => _activeSession,
@@ -880,7 +1201,6 @@ public partial class MainWindow : Window
             RunArenaBusyForCoordinatorAsync,
             SaveSnapshotForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync,
-            force => ProviderReachability.RefreshAsync(force),
             SetLoadStatus,
             SetArenaRunStatus);
         _arenaOperationCoordinator = new ArenaOperationCoordinator(
@@ -895,8 +1215,14 @@ public partial class MainWindow : Window
             [
                 TestProviderButton,
                 PreloadSelectedModelsButton,
+                UnloadSelectedModelsButton,
+                DownloadModelText,
+                DownloadQuantizationPicker,
+                DownloadModelButton,
                 ApplySettingsButton,
                 ProviderBaseUrlText,
+                ProviderApiModePicker,
+                ProviderApiTokenBox,
                 ProviderModelText,
                 AlphaRoleModelText,
                 BetaRoleModelText,
@@ -906,6 +1232,10 @@ public partial class MainWindow : Window
                 ProviderTimeoutText,
                 ProviderTemperatureText,
                 ProviderMaxOutputText,
+                ProviderContextLengthText,
+                ProviderReasoningPicker,
+                ProviderNativeStatefulChatCheckBox,
+                ProviderNativeIdleTtlText,
                 ContextTranscriptWindowText,
                 ContextPrivateWindowText,
                 ContextNotesWindowText,
@@ -924,37 +1254,171 @@ public partial class MainWindow : Window
             value => _arenaBusy = value,
             () => _arenaRunCoordinator?.IsAutoChatRunning == true,
             (busy, autoChatRunning) => ScenarioWorkflow.UpdateBusyState(busy, autoChatRunning),
-            (busy, autoChatRunning) => InternetWorkflow.UpdateBusyState(busy, autoChatRunning),
-            () => OperatorTurn.UpdateBusyState(),
+            (busy, autoChatRunning) =>
+            {
+                InternetWorkflow.UpdateBusyState(busy, autoChatRunning);
+            },
+            (busy, autoChatRunning) => OperatorTurn.UpdateBusyState(busy, autoChatRunning),
             busy => AgentRoster.UpdateBusyState(busy),
             () => SavedStateCoordinator.UpdateActionButtons(),
             busy => AgentBoard.UpdateBusyState(busy),
             busy => TranscriptActions.UpdateBusyState(busy),
-            busy => MatchLock.UpdateBusyState(busy));
+            busy => MatchLock.UpdateBusyState(busy),
+            busy => MatchSetup.UpdateBusyState(busy),
+            () =>
+            {
+                _providerSettingsCoordinator?.UpdateNativeLifecycleControls();
+                RefreshSessionSettingsPendingState();
+            },
+            readinessStatus: ArenaControlReadinessText);
         InitializeAboutPanel();
         InitializeVisualSettings();
+        ApplyLabViewMode(_wpfSettings.LabViewMode, persist: false);
+        ApplyRightRailCollapsed();
+        InitializeVoiceTtsSettings();
         ScenarioWorkflow.InitializeControls();
         OperatorTurn.InitializeControls();
         InternetWorkflow.InitializeControls();
         DiagnosticsWorkflow.InitializeTiles();
         SavedStateCoordinator.LoadScenarioTemplates();
         ShowStoreLoadWarningIfAny();
+        _controlPlaneHost = new AIArenaControlPlaneHost(this, _controlPlaneEvents);
+        _ = RefreshControlPlaneHostAsync();
+        SystemThemePreferences.PreferenceChanged += OnSystemThemePreferenceChanged;
+        SystemMotionPreferences.PreferenceChanged += OnSystemMotionPreferenceChanged;
         Loaded += (_, _) =>
         {
             LoadSessions();
             _refreshTimer.Start();
             _providerHealthTimer.Start();
             TelemetryWorkflow.UpdateTimerState();
-            _ = ProviderReachability.RefreshAsync(force: true);
+            _ = RunTrackedBackgroundOperationSafelyAsync(
+                "initial provider health refresh",
+                cancellationToken => ProviderReachability.RefreshAsync(force: true, cancellationToken));
         };
         SourceInitialized += (_, _) => WindowChromeService.ApplyNativeChromeColor(this);
+        StateChanged += (_, _) => ApplyMaximizedChromePadding();
+        _voiceNarrationService.SpeakingChanged += () => Dispatcher.BeginInvoke(UpdateVoiceToggleButton);
+        Closing += MainWindow_Closing;
         Closed += (_, _) =>
         {
+            SystemThemePreferences.PreferenceChanged -= OnSystemThemePreferenceChanged;
+            SystemMotionPreferences.PreferenceChanged -= OnSystemMotionPreferenceChanged;
             _refreshTimer.Stop();
             _modelRefreshTimer.Stop();
             _providerHealthTimer.Stop();
+            _voiceTtsSettingsSaveDebouncer.Flush();
+            _voiceTtsSettingsSaveDebouncer.Dispose();
             TelemetryWorkflow.Stop();
+            _transcriptSearchCoordinator?.Dispose();
+            _agentWorkspaceCoordinator?.Dispose();
+            _voiceNarrationService.Dispose();
+            _matchGeneration.Dispose();
+            _narratorService.Dispose();
+            _internetToolService.Dispose();
+            InternetWorkflow.Dispose();
+            _controlPlaneHost?.Dispose();
         };
+    }
+
+    private async void MainWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        if (_shutdownReady)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        if (_shutdownInProgress)
+        {
+            return;
+        }
+
+        PreserveCurrentSessionSettingsDraft();
+        if (HasPendingSessionSettings()
+            && !ConfirmDialog.Show(
+                this,
+                _theme,
+                "Unapplied session changes",
+                "Advanced model-call or context-window edits have not been applied. Exiting now will discard those drafts.",
+                "Discard and exit",
+                "Keep app open",
+                ConfirmDialogTone.Danger))
+        {
+            return;
+        }
+
+        _shutdownInProgress = true;
+        _refreshTimer.Stop();
+        _modelRefreshTimer.Stop();
+        _providerHealthTimer.Stop();
+        _arenaOperationCoordinator?.RequestShutdown();
+        try
+        {
+            if (_arenaRunCoordinator is not null)
+            {
+                try
+                {
+                    await _arenaRunCoordinator.StopAutoChatAsync();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Auto-chat shutdown failed: {ex}");
+                }
+            }
+
+            if (_arenaOperationCoordinator is not null)
+            {
+                try
+                {
+                    await _arenaOperationCoordinator.DrainAsync();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Arena-operation shutdown failed: {ex}");
+                }
+            }
+
+            if (_controlPlaneHost is not null)
+            {
+                try
+                {
+                    _controlPlaneHost.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Control-plane disposal failed: {ex}");
+                }
+
+                try
+                {
+                    await _controlPlaneHost.StopAsync();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Control-plane shutdown failed: {ex}");
+                }
+            }
+        }
+        finally
+        {
+            _shutdownReady = true;
+            _shutdownInProgress = false;
+            ScheduleCloseAfterCleanup(Dispatcher, Close);
+        }
+    }
+
+    internal static void ScheduleCloseAfterCleanup(Dispatcher dispatcher, Action close)
+    {
+        ArgumentNullException.ThrowIfNull(dispatcher);
+        ArgumentNullException.ThrowIfNull(close);
+
+        if (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        _ = dispatcher.BeginInvoke(close, DispatcherPriority.Normal);
     }
 
     private void InitializeAboutPanel()
@@ -964,6 +1428,839 @@ public partial class MainWindow : Window
             .InformationalVersion;
         AboutVersionText.Text = $"Version {CleanDisplayVersion(version)}";
         OpenReleasesButton.ToolTip = ReleasesUrl;
+    }
+
+    bool IAIArenaControlTarget.IsControlPlaneEnabled => IsControlPlaneEnabled;
+
+    private bool IsControlPlaneEnabled => _wpfSettings.EnableControlPlane;
+
+    async Task<AIArenaControlResponse> IAIArenaControlTarget.ExecuteControlCommandAsync(
+        AIArenaControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        return await AIArenaControlDispatcher.InvokeAsync(
+            Dispatcher,
+            () => ExecuteControlCommandWithStateOnUiThreadAsync(request, cancellationToken),
+            cancellationToken);
+    }
+
+    private async Task<AIArenaControlResponse> ExecuteControlCommandWithStateOnUiThreadAsync(
+        AIArenaControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        var response = await ExecuteControlCommandOnUiThreadAsync(request, cancellationToken);
+        return response with { State = BuildControlPlaneStateSummary() };
+    }
+
+    private async Task<AIArenaControlResponse> ExecuteControlCommandOnUiThreadAsync(
+        AIArenaControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsControlPlaneEnabled)
+        {
+            return AIArenaControlResponse.Error(
+                request,
+                "control_plane_disabled",
+                "AI Arena control plane is disabled. Enable it in Settings > PowerShell Control first.");
+        }
+
+        if (!AIArenaControlCommands.IsKnown(request.Command))
+        {
+            return AIArenaControlResponse.Error(request, "unknown_command", $"Unknown control command '{request.Command}'.");
+        }
+
+        if (_settingsControlHandler.CanHandle(request.Command))
+        {
+            return _settingsControlHandler.Execute(request);
+        }
+
+        if (_appControlHandler.CanHandle(request.Command))
+        {
+            return await RunTrackedControlOperationAsync(
+                operationCancellationToken => _appControlHandler.ExecuteAsync(request, operationCancellationToken),
+                cancellationToken);
+        }
+
+        if (_providerControlHandler.CanHandle(request.Command))
+        {
+            return await RunProviderControlOperationAsync(request, cancellationToken);
+        }
+
+        if (_matchSetupControlHandler.CanHandle(request.Command))
+        {
+            return await _matchSetupControlHandler.ExecuteAsync(request, cancellationToken);
+        }
+
+        if (_sessionForkControlHandler.CanHandle(request.Command))
+        {
+            return await _sessionForkControlHandler.ExecuteAsync(request, cancellationToken);
+        }
+
+        if (_collaborateControlHandler.CanHandle(request.Command))
+        {
+            return await _collaborateControlHandler.ExecuteAsync(request);
+        }
+
+        switch (request.Command)
+        {
+            case AIArenaControlCommands.Capabilities:
+                return AIArenaControlResponse.Success(
+                    request,
+                    "Control-plane capabilities captured.",
+                    new { SchemaVersion = 1, Commands = AIArenaControlCapabilityCatalog.All });
+            case AIArenaControlCommands.Status:
+            case AIArenaControlCommands.Snapshot:
+                return AIArenaControlResponse.Success(request, "Snapshot captured.", BuildControlPlaneSnapshot());
+            case AIArenaControlCommands.NavigationSelect:
+                {
+                    var view = RequiredStringArg(request, "view");
+                    if (string.IsNullOrWhiteSpace(view))
+                    {
+                        return AIArenaControlResponse.Error(request, "missing_argument", "navigation.select requires args.view.");
+                    }
+
+                    var normalizedView = view.Trim().ToLowerInvariant();
+                    if (normalizedView == "agent" && !IsAgentWorkspaceEnabled(_wpfSettings))
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "feature_disabled",
+                            "Agent workspace is hidden. Enable it in Settings -> Agent workspace or with settings.update.");
+                    }
+
+                    if (normalizedView is "world" or "ai.world" && !IsWorldDebugEnabled(_wpfSettings))
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "feature_disabled",
+                            "AI World is disabled. Enable Debug controls and AI World (3D) before selecting it.");
+                    }
+
+                    if (!SelectControlPlaneView(view))
+                    {
+                        return AIArenaControlResponse.Error(request, "invalid_argument", $"Unknown navigation view '{view}'.");
+                    }
+
+                    _controlPlaneEvents.Publish("navigation.changed", "AI Arena view changed.", new { view = SelectedControlPlaneView() });
+                    return AIArenaControlResponse.Success(request, "AI Arena view changed.", BuildControlPlaneSnapshot());
+                }
+            case AIArenaControlCommands.NavigationThemeSet:
+                {
+                    var theme = RequiredStringArg(request, "theme");
+                    if (string.IsNullOrWhiteSpace(theme))
+                    {
+                        theme = RequiredStringArg(request, "themeId");
+                    }
+
+                    if (string.IsNullOrWhiteSpace(theme))
+                    {
+                        return AIArenaControlResponse.Error(request, "missing_argument", "navigation.theme.set requires args.theme or args.themeId.");
+                    }
+
+                    var themeId = ThemePalette.NormalizeId(theme);
+                    ShellNavigation.ApplyTheme(themeId, persist: true, rerender: true);
+                    _controlPlaneEvents.Publish("navigation.theme.changed", "AI Arena theme changed.", new { theme = themeId });
+                    return AIArenaControlResponse.Success(request, "AI Arena theme changed.", BuildControlPlaneSnapshot());
+                }
+            case AIArenaControlCommands.NavigationProviderFocus:
+                OpenModelProviderSettings(
+                    OptionalStringArg(request, "baseUrl"),
+                    OptionalStringArg(request, "model"));
+                _controlPlaneEvents.Publish("navigation.provider.focused", "Provider settings focused.");
+                return AIArenaControlResponse.Success(request, "Provider settings focused.", BuildControlPlaneSnapshot());
+            case AIArenaControlCommands.NavigationRailSet:
+                {
+                    var state = RequiredStringArg(request, "state");
+                    if (!ControlSetRightRail(state))
+                    {
+                        return AIArenaControlResponse.Error(request, "invalid_argument", "navigation.rail.set requires args.state: show, hide, or toggle.");
+                    }
+
+                    _controlPlaneEvents.Publish("navigation.rail.changed", "Right rail visibility changed.", BuildRightRailControlState());
+                    return AIArenaControlResponse.Success(request, "Right rail visibility changed.", BuildRightRailControlState());
+                }
+            case AIArenaControlCommands.ViewPresetSet:
+                {
+                    var preset = AIArenaControlPlaneProtocol.NormalizeCommand(RequiredStringArg(request, "preset"));
+                    switch (preset)
+                    {
+                        case "focused":
+                            _transcriptViewCoordinator?.ApplyFocusedPreset();
+                            break;
+                        case "diagnostics":
+                            _transcriptViewCoordinator?.ApplyDiagnosticsPreset();
+                            break;
+                        case "compact":
+                            _transcriptViewCoordinator?.ApplyCompactPreset();
+                            break;
+                        case "review":
+                            _transcriptViewCoordinator?.ApplyReviewPreset();
+                            break;
+                        default:
+                            return AIArenaControlResponse.Error(request, "invalid_argument", "view.preset.set requires args.preset: focused, diagnostics, compact, or review.");
+                    }
+
+                    _controlPlaneEvents.Publish("view.preset.changed", "Transcript view preset changed.", new { preset });
+                    return AIArenaControlResponse.Success(request, "Transcript view preset changed.", new { preset });
+                }
+            case AIArenaControlCommands.MatchGenerationState:
+                return AIArenaControlResponse.Success(
+                    request,
+                    "Match generation state captured.",
+                    await _scenarioGenerationControlService.CaptureAsync(cancellationToken));
+            case AIArenaControlCommands.MatchGenerateRandom:
+                return MatchGenerationControlResponse(
+                    request,
+                    await _scenarioGenerationControlService.GenerateAsync(
+                        "random",
+                        GenerationOptionsFromRequest(request),
+                        cancellationToken));
+            case AIArenaControlCommands.MatchGenerateAi:
+                return MatchGenerationControlResponse(
+                    request,
+                    await _scenarioGenerationControlService.GenerateAsync(
+                        "ai",
+                        GenerationOptionsFromRequest(request),
+                        cancellationToken));
+            case AIArenaControlCommands.MatchGenerateCurrent:
+                return MatchGenerationControlResponse(
+                    request,
+                    await _scenarioGenerationControlService.GenerateAsync(
+                        "current",
+                        GenerationOptionsFromRequest(request),
+                        cancellationToken));
+            case AIArenaControlCommands.MatchGenerateWild:
+                if (!OptionalBoolArg(request, "confirm"))
+                {
+                    return AIArenaControlResponse.Error(
+                        request,
+                        "confirmation_required",
+                        "match.generate.wild requires args.confirm=true because it makes a broad setup change.");
+                }
+
+                return MatchGenerationControlResponse(
+                    request,
+                    await _scenarioGenerationControlService.GenerateAsync(
+                        "wild",
+                        GenerationOptionsFromRequest(request),
+                        cancellationToken));
+            case AIArenaControlCommands.MatchReplay:
+                return MatchGenerationControlResponse(
+                    request,
+                    await _scenarioGenerationControlService.ReplayAsync(
+                        RequiredStringArg(request, "id"),
+                        newSession: false,
+                        cancellationToken));
+            case AIArenaControlCommands.MatchReplayNew:
+                return MatchGenerationControlResponse(
+                    request,
+                    await _scenarioGenerationControlService.ReplayAsync(
+                        RequiredStringArg(request, "id"),
+                        newSession: true,
+                        cancellationToken));
+            case AIArenaControlCommands.SessionState:
+                return AIArenaControlResponse.Success(
+                    request,
+                    "Saved-state inventory captured.",
+                    await _savedStateControlService.CaptureAsync(cancellationToken));
+            case AIArenaControlCommands.SessionSelect:
+                return SavedStateControlResponse(
+                    request,
+                    await _savedStateControlService.SelectSessionAsync(RequiredStringArg(request, "id"), cancellationToken));
+            case AIArenaControlCommands.SessionCreate:
+                return SavedStateControlResponse(
+                    request,
+                    await _savedStateControlService.CreateSessionAsync(RequiredStringArg(request, "name"), cancellationToken));
+            case AIArenaControlCommands.SessionCheckpointCreate:
+                return SavedStateControlResponse(
+                    request,
+                    await _savedStateControlService.SaveCheckpointAsync(OptionalStringArg(request, "name") ?? "", cancellationToken));
+            case AIArenaControlCommands.SessionCheckpointRestore:
+                if (!OptionalBoolArg(request, "confirm"))
+                {
+                    return AIArenaControlResponse.Error(
+                        request,
+                        "confirmation_required",
+                        "session.checkpoint.restore requires args.confirm=true because it replaces the active session state.");
+                }
+
+                return SavedStateControlResponse(
+                    request,
+                    await _savedStateControlService.RestoreCheckpointAsync(RequiredStringArg(request, "id"), cancellationToken));
+            case AIArenaControlCommands.AgentState:
+                return AIArenaControlResponse.Success(request, "Agent state captured.", AgentWorkspace.ControlState);
+            case AIArenaControlCommands.AgentCommandState:
+                return AIArenaControlResponse.Success(request, "Agent command state captured.", BuildAgentCommandControlState());
+            case AIArenaControlCommands.AgentWorkBrief:
+                return AIArenaControlResponse.Success(request, "Agent work brief captured.", BuildAgentWorkControlState());
+            case AIArenaControlCommands.AgentBuildEvidence:
+                return AIArenaControlResponse.Success(request, "Agent build evidence captured.", BuildAgentWorkControlState());
+            case AIArenaControlCommands.AgentOutputs:
+                return AIArenaControlResponse.Success(request, "Agent outputs captured.", BuildAgentOutputControlState());
+            case AIArenaControlCommands.AgentRunbookState:
+                return AIArenaControlResponse.Success(request, "Agent runbook captured.", AgentWorkspace.ControlRunbookState);
+            case AIArenaControlCommands.AgentRunbookResume:
+                if (!AgentWorkspace.ControlResumeRunbook())
+                {
+                    return AIArenaControlResponse.Error(request, "not_available", "No Agent runbook is available to resume.");
+                }
+
+                _controlPlaneEvents.Publish("agent.runbook.resumed", "Agent runbook resume requested.", AgentWorkspace.ControlRunbookState);
+                return AIArenaControlResponse.Success(request, "Agent runbook resume requested.", AgentWorkspace.ControlRunbookState);
+            case AIArenaControlCommands.AgentRunbookCheckpoint:
+                {
+                    var summary = RequiredStringArg(request, "summary");
+                    if (string.IsNullOrWhiteSpace(summary))
+                    {
+                        return AIArenaControlResponse.Error(request, "missing_argument", "agent.runbook.checkpoint requires args.summary.");
+                    }
+
+                    if (!AgentWorkspace.ControlAddRunbookCheckpoint(OptionalStringArg(request, "kind") ?? "operator", summary))
+                    {
+                        return AIArenaControlResponse.Error(request, "not_available", "No Agent runbook is available to checkpoint.");
+                    }
+
+                    _controlPlaneEvents.Publish("agent.runbook.checkpointed", "Agent runbook checkpoint added.", AgentWorkspace.ControlRunbookState);
+                    return AIArenaControlResponse.Success(request, "Agent runbook checkpoint added.", AgentWorkspace.ControlRunbookState);
+                }
+            case AIArenaControlCommands.AgentWorkspaceSet:
+                {
+                    var path = RequiredStringArg(request, "path");
+                    if (string.IsNullOrWhiteSpace(path))
+                    {
+                        return AIArenaControlResponse.Error(request, "missing_argument", "agent.workspace.set requires args.path.");
+                    }
+
+                    AgentWorkspace.ControlSetWorkspace(path);
+                    _controlPlaneEvents.Publish("agent.workspace.changed", "Agent workspace changed.", new { path = AgentWorkspace.DebugWorkspacePath });
+                    return AIArenaControlResponse.Success(request, "Agent workspace updated.", AgentWorkspace.ControlState);
+                }
+            case AIArenaControlCommands.AgentSend:
+                {
+                    var prompt = RequiredStringArg(request, "prompt");
+                    if (string.IsNullOrWhiteSpace(prompt))
+                    {
+                        return AIArenaControlResponse.Error(request, "missing_argument", "agent.send requires args.prompt.");
+                    }
+
+                    await AgentWorkspace.ControlSendAsync(prompt);
+                    _controlPlaneEvents.Publish("agent.prompt.sent", "Agent prompt sent.", new { promptLength = prompt.Length });
+                    return AIArenaControlResponse.Success(request, "Agent prompt sent.", AgentWorkspace.ControlState);
+                }
+            case AIArenaControlCommands.AgentApprove:
+                await AgentWorkspace.ControlApproveAsync();
+                _controlPlaneEvents.Publish("agent.command.approved", "Agent command approved.");
+                return AIArenaControlResponse.Success(request, "Agent command approval requested.", AgentWorkspace.ControlState);
+            case AIArenaControlCommands.AgentReject:
+                AgentWorkspace.ControlReject();
+                _controlPlaneEvents.Publish("agent.command.rejected", "Agent command rejected.");
+                return AIArenaControlResponse.Success(request, "Agent command reject requested.", AgentWorkspace.ControlState);
+            case AIArenaControlCommands.AgentStop:
+                AgentWorkspace.ControlStop();
+                _controlPlaneEvents.Publish("agent.stop.requested", "Agent stop requested.");
+                return AIArenaControlResponse.Success(request, "Agent stop requested.", AgentWorkspace.ControlState);
+            case AIArenaControlCommands.AgentStageNext:
+                AgentWorkspace.ControlStageNext();
+                _controlPlaneEvents.Publish("agent.prompt.staged", "Agent next-step prompt staged.", new { stage = "next" });
+                return AIArenaControlResponse.Success(request, "Agent next-step prompt staged.", AgentWorkspace.ControlState);
+            case AIArenaControlCommands.AgentStageVerify:
+                AgentWorkspace.ControlStageVerify();
+                _controlPlaneEvents.Publish("agent.prompt.staged", "Agent verify prompt staged.", new { stage = "verify" });
+                return AIArenaControlResponse.Success(request, "Agent verify prompt staged.", AgentWorkspace.ControlState);
+            case AIArenaControlCommands.AgentStageArtifact:
+                AgentWorkspace.ControlStageArtifact();
+                _controlPlaneEvents.Publish("agent.prompt.staged", "Agent artifact prompt staged.", new { stage = "artifact" });
+                return AIArenaControlResponse.Success(request, "Agent artifact prompt staged.", AgentWorkspace.ControlState);
+            case AIArenaControlCommands.AgentCommandStage:
+                {
+                    var command = RequiredStringArg(request, "command");
+                    if (string.IsNullOrWhiteSpace(command))
+                    {
+                        return AIArenaControlResponse.Error(request, "missing_argument", "agent.command.stage requires args.command.");
+                    }
+
+                    AgentWorkspace.ControlStageCommand(command, OptionalStringArg(request, "shell") ?? "PowerShell");
+                    _controlPlaneEvents.Publish("agent.command.staged", "Agent command staged from control plane.", new { commandLength = command.Length });
+                    return AIArenaControlResponse.Success(request, "Agent command staged.", AgentWorkspace.ControlState);
+                }
+            case AIArenaControlCommands.ArenaStart:
+                _ = ArenaRun.StartAutoChatAsync();
+                _controlPlaneEvents.Publish("arena.run.started", "Arena auto-chat start requested.");
+                return AIArenaControlResponse.Success(request, "Arena auto-chat start requested.", BuildControlPlaneSnapshot());
+            case AIArenaControlCommands.ArenaStop:
+                ArenaRun.StopAutoChat();
+                _controlPlaneEvents.Publish("arena.run.stopped", "Arena auto-chat stop requested.");
+                return AIArenaControlResponse.Success(request, "Arena auto-chat stop requested.", BuildControlPlaneSnapshot());
+            case AIArenaControlCommands.ArenaTurn:
+                await ArenaRun.RunOneTurnAsync();
+                _controlPlaneEvents.Publish("arena.turn.completed", "Arena one-turn request completed.");
+                return AIArenaControlResponse.Success(request, "Arena one-turn request completed.", BuildControlPlaneSnapshot());
+            case AIArenaControlCommands.ArenaNarrate:
+                await ArenaRun.NarrateNowAsync();
+                _controlPlaneEvents.Publish("arena.narration.completed", "Arena narration request completed.");
+                return AIArenaControlResponse.Success(request, "Arena narration request completed.", BuildControlPlaneSnapshot());
+            case AIArenaControlCommands.ArenaReset:
+                if (!OptionalBoolArg(request, "confirm"))
+                {
+                    return AIArenaControlResponse.Error(request, "confirmation_required", "arena.reset requires args.confirm=true because it clears the current transcript and live state.");
+                }
+
+                await ArenaSessionMutations.ControlResetArenaAsync();
+                _controlPlaneEvents.Publish("arena.reset.completed", "Arena reset request completed.");
+                return AIArenaControlResponse.Success(request, "Arena reset request completed.", BuildControlPlaneSnapshot());
+            case AIArenaControlCommands.ArenaOperatorSend:
+                {
+                    var prompt = RequiredStringArg(request, "prompt");
+                    if (string.IsNullOrWhiteSpace(prompt))
+                    {
+                        return AIArenaControlResponse.Error(request, "missing_argument", "arena.operator.send requires args.prompt.");
+                    }
+
+                    var requestedRoute = OptionalStringArg(request, "route") ?? "public";
+                    if (!OperatorTurnCoordinator.TryNormalizeOperatorRoute(requestedRoute, out var route))
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "invalid_argument",
+                            "arena.operator.send args.route must be public, private, or narrator.");
+                    }
+
+                    await OperatorTurn.ControlSendAsync(prompt, route);
+                    _controlPlaneEvents.Publish("arena.operator.sent", "Operator message sent.", new { promptLength = prompt.Length });
+                    return AIArenaControlResponse.Success(request, "Operator message sent.", BuildControlPlaneSnapshot());
+                }
+            case AIArenaControlCommands.InternetState:
+                return AIArenaControlResponse.Success(request, "Internet state captured.", InternetWorkflow.ControlState);
+            case AIArenaControlCommands.InternetSet:
+                {
+                    var enabledText = RequiredStringArg(request, "enabled");
+                    if (!bool.TryParse(enabledText, out var enabled))
+                    {
+                        return AIArenaControlResponse.Error(request, "invalid_argument", "internet.set requires args.enabled: true or false.");
+                    }
+
+                    await InternetWorkflow.ControlSetEnabledAsync(enabled);
+                    _controlPlaneEvents.Publish("internet.changed", "Internet setting changed.", InternetWorkflow.ControlState);
+                    return AIArenaControlResponse.Success(request, "Internet setting changed.", InternetWorkflow.ControlState);
+                }
+            case AIArenaControlCommands.InternetTest:
+                await InternetWorkflow.TestInternetAsync();
+                _controlPlaneEvents.Publish("internet.test.completed", "Internet diagnostic completed.", InternetWorkflow.ControlState);
+                return AIArenaControlResponse.Success(request, "Internet diagnostic completed.", InternetWorkflow.ControlState);
+            case AIArenaControlCommands.ExportTranscript:
+                return AIArenaControlResponse.Success(request, "Transcript export captured.", BuildTranscriptControlExport());
+            case AIArenaControlCommands.ExportSession:
+                return AIArenaControlResponse.Success(request, "Session export captured.", BuildSessionControlExport());
+            case AIArenaControlCommands.ExportReceipts:
+                return AIArenaControlResponse.Success(request, "Receipts export captured.", BuildReceiptControlExport());
+            default:
+                return AIArenaControlResponse.Error(
+                    request,
+                    "not_implemented",
+                    $"Command '{request.Command}' is reserved in the control-plane schema but is not wired yet.");
+        }
+    }
+
+    private void ShowScreenshotReceipt(AIArenaScreenshotControlResult result)
+    {
+        var fileName = Path.GetFileName(result.Path);
+        SaveStatusText.Text = $"Screenshot saved: {fileName}";
+        SaveStatusText.Visibility = Visibility.Visible;
+        SaveStatusText.ToolTip = result.Path;
+        AutomationProperties.SetName(SaveStatusText, "Screenshot capture receipt");
+        AutomationProperties.SetHelpText(
+            SaveStatusText,
+            $"AI Arena saved a screenshot to {result.Path} at {result.CapturedAt:HH:mm:ss}.");
+        AutomationProperties.SetLiveSetting(SaveStatusText, AutomationLiveSetting.Polite);
+        ShellTopBar.Presentation.SetTransientStatusVisible(true);
+        _ = HideScreenshotReceiptAsync(SaveStatusText.Text);
+    }
+
+    private async Task HideScreenshotReceiptAsync(string receiptText)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(4));
+        await Dispatcher.InvokeAsync(() =>
+        {
+            if (!SaveStatusText.Text.Equals(receiptText, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            SaveStatusText.Visibility = Visibility.Collapsed;
+            ShellTopBar.Presentation.SetTransientStatusVisible(false);
+        });
+    }
+
+    private AIArenaControlSnapshot BuildControlPlaneSnapshot()
+    {
+        return new AIArenaControlSnapshot(
+            ArenaRunStatus.Text,
+            SelectedControlPlaneView(),
+            _wpfSettings.ThemeId,
+            IsControlPlaneEnabled,
+            AgentWorkspace.ControlState,
+            BuildProviderControlState());
+    }
+
+    private AIArenaControlResponse SavedStateControlResponse(
+        AIArenaControlRequest request,
+        AIArenaSavedStateControlResult result)
+    {
+        if (!result.Ok)
+        {
+            return AIArenaControlResponse.Error(request, result.ErrorCode, result.Message, result.State);
+        }
+
+        _controlPlaneEvents.Publish("session.saved-state.changed", result.Message, result.State);
+        return AIArenaControlResponse.Success(request, result.Message, result.State);
+    }
+
+    private AIArenaControlResponse MatchGenerationControlResponse(
+        AIArenaControlRequest request,
+        AIArenaMatchGenerationControlResult result)
+    {
+        if (!result.Ok)
+        {
+            return AIArenaControlResponse.Error(request, result.ErrorCode, result.Message, result.Data);
+        }
+
+        _controlPlaneEvents.Publish("match.generation.changed", result.Message, result.Data);
+        return AIArenaControlResponse.Success(request, result.Message, result.Data);
+    }
+
+    private static AIArenaMatchGenerationOptions GenerationOptionsFromRequest(AIArenaControlRequest request)
+    {
+        return new AIArenaMatchGenerationOptions(
+            OptionalStringArg(request, "style") ?? "",
+            OptionalStringArg(request, "intensity") ?? "",
+            OptionalStringArg(request, "rolePack") ?? "",
+            OptionalStringArg(request, "absurdity") ?? "",
+            OptionalStringArg(request, "seed") ?? "",
+            OptionalStringArg(request, "prompt") ?? "",
+            OptionalStringArg(request, "query") ?? "");
+    }
+
+    private AIArenaMatchSetupControlState BuildMatchSetupControlState()
+    {
+        var snapshot = _lastRenderedSnapshot;
+        return new AIArenaMatchSetupControlState(
+            CustomMatchPanel.Visibility == Visibility.Visible,
+            _matchSetupSection,
+            _matchSetupReturnSurface.ToString().ToLowerInvariant(),
+            _activeSession?.Id ?? "",
+            snapshot?.MatchType ?? "",
+            snapshot?.ScenarioTopic ?? "",
+            snapshot?.Agents.Count(agent => agent.Active) ?? 0,
+            _arenaBusy);
+    }
+
+    private AIArenaSettingsControlState BuildSettingsControlState()
+    {
+        return new AIArenaSettingsControlState(
+            AppSettingsPanel.Visibility == Visibility.Visible,
+            SettingsSearchText.Text.Trim(),
+            _wpfSettings.ThemeId,
+            _wpfSettings.CompactTranscriptMode,
+            _wpfSettings.FollowTranscript,
+            _wpfSettings.TopStripMode,
+            _wpfSettings.TurnCompareMode,
+            _wpfSettings.ShowMatchQualityTimeline,
+            _wpfSettings.ShowBattleReview,
+            _wpfSettings.ShowAgentMemoryNotes,
+            _wpfSettings.ShowDecisionCard,
+            _wpfSettings.ShowAutoModerator,
+            _wpfSettings.ShowStyleFit,
+            _wpfSettings.ShowTranscriptInternetDetails,
+            _wpfSettings.RightRailCollapsed,
+            _wpfSettings.AllowDebugControls,
+            IsWorldDebugEnabled(_wpfSettings),
+            IsAgentWorkspaceEnabled(_wpfSettings),
+            IsControlPlaneEnabled,
+            _wpfSettings.VoiceTtsEnabled);
+    }
+
+    private object BuildControlPlaneStateSummary()
+    {
+        var railCollapsed = IsRightRailEffectivelyCollapsed(
+            _wpfSettings.RightRailCollapsed,
+            _rightRailAutoCollapseActive,
+            _rightRailNarrowRevealRequested,
+            _rightRailWidthCollapseLatched);
+        var provider = BuildProviderControlState();
+        return new
+        {
+            View = SelectedControlPlaneView(),
+            Theme = _wpfSettings.ThemeId,
+            SessionId = _activeSession?.Id ?? "",
+            ArenaStatus = ArenaRunStatus.Text,
+            InternetEnabled = InternetWorkflow.IsEnabled,
+            RightRail = railCollapsed ? "collapsed" : "expanded",
+            MatchSetupOpen = CustomMatchPanel.Visibility == Visibility.Visible,
+            MatchSetupSection = _matchSetupSection,
+            GenerationHistoryCount = _lastRenderedSnapshot?.GenerationHistory.Count ?? 0,
+            SettingsOpen = AppSettingsPanel.Visibility == Visibility.Visible,
+            SettingsQuery = SettingsSearchText.Text.Trim(),
+            ProviderOnline = provider.Online,
+            ProviderModel = provider.Model,
+            AgentStatus = AgentWorkspace.ControlState.Status,
+            AgentRunbookId = AgentWorkspace.ControlRunbookId,
+            AgentRunbookStatus = AgentWorkspace.ControlRunbookStatus,
+            CollaborateStatus = Collaborate.ControlState.Status
+        };
+    }
+
+    private AIArenaAgentCommandControlState BuildAgentCommandControlState()
+    {
+        var state = AgentWorkspace.ControlState;
+        return new AIArenaAgentCommandControlState(
+            state.Command,
+            state.CommandSource,
+            state.CommandStatus,
+            state.CanApprove,
+            state.CanReject,
+            state.CanStopCommand);
+    }
+
+    private AIArenaAgentWorkControlState BuildAgentWorkControlState()
+    {
+        var state = AgentWorkspace.ControlState;
+        return new AIArenaAgentWorkControlState(
+            state.Workspace,
+            state.Status,
+            state.LatestWorkBrief,
+            state.BuildEvidence,
+            state.ArtifactSuggestion,
+            state.ArtifactVerification);
+    }
+
+    private AIArenaAgentOutputControlState BuildAgentOutputControlState()
+    {
+        var state = AgentWorkspace.ControlState;
+        return new AIArenaAgentOutputControlState(
+            state.OutputSummary,
+            state.ArtifactSuggestion,
+            state.ArtifactVerification);
+    }
+
+    private AIArenaProviderControlState BuildProviderControlState()
+    {
+        var snapshot = _lastRenderedSnapshot;
+        if (snapshot is null)
+        {
+            return ProviderConfigurationControlService.EmptyState(_activeSession?.Id ?? "");
+        }
+
+        var roles = ProviderConfigurationControlService.RoleKeys.Select(role =>
+        {
+            var effectiveModel = role switch
+            {
+                "alpha" => snapshot.AlphaModel,
+                "beta" => snapshot.BetaModel,
+                "gamma" => snapshot.GammaModel,
+                "delta" => snapshot.DeltaModel,
+                _ => snapshot.NarratorModel
+            };
+            var configuredModel = effectiveModel.Equals(snapshot.ProviderModel, StringComparison.OrdinalIgnoreCase)
+                ? ""
+                : effectiveModel;
+            var generationOverride = snapshot.RoleOverrides.TryGetValue(role, out var roleOverride)
+                ? roleOverride
+                : null;
+            return new AIArenaProviderRoleControlState(
+                role,
+                configuredModel,
+                effectiveModel,
+                string.IsNullOrWhiteSpace(configuredModel),
+                generationOverride?.Temperature,
+                generationOverride?.MaxOutputTokens);
+        }).ToArray();
+        var advertisedModels = _providerSettingsCoordinator?.AdvertisedModels ?? [];
+        return new AIArenaProviderControlState(
+            snapshot.ProviderOnline,
+            snapshot.ProviderModel,
+            snapshot.AlphaModel,
+            snapshot.BetaModel,
+            snapshot.GammaModel,
+            snapshot.DeltaModel,
+            snapshot.NarratorModel,
+            ProviderConfigurationControlService.SanitizeError(snapshot.ProviderLastError, snapshot.ProviderApiToken))
+        {
+            SessionId = snapshot.SessionId,
+            Configured = !string.IsNullOrWhiteSpace(snapshot.ProviderBaseUrl),
+            BaseUrl = ProviderConfigurationControlService.SanitizeBaseUrl(snapshot.ProviderBaseUrl),
+            ApiMode = ModelProviderApiModes.Normalize(snapshot.ProviderApiMode),
+            ApiTokenConfigured = !string.IsNullOrEmpty(snapshot.ProviderApiToken),
+            TimeoutSeconds = snapshot.ProviderTimeout,
+            Temperature = snapshot.ProviderTemperature,
+            MaxOutputTokens = snapshot.ProviderMaxOutputTokens,
+            ContextLength = snapshot.ProviderContextLength,
+            Reasoning = string.IsNullOrWhiteSpace(snapshot.ProviderReasoning) ? "default" : snapshot.ProviderReasoning,
+            NativeStatefulChat = snapshot.ProviderNativeStatefulChat,
+            NativeIdleTtlSeconds = snapshot.ProviderNativeIdleTtlSeconds,
+            LastTestOk = snapshot.ProviderOnline,
+            LastLatencyMs = snapshot.ProviderLastLatencyMs,
+            LastHealthCheckedAt = _providerSettingsCoordinator?.LastProviderHealthCheckedAt,
+            LastModelListCheckedAt = _providerSettingsCoordinator?.LastModelListCheckedAt,
+            AdvertisedModelCount = _providerSettingsCoordinator is { LastProviderModelCount: >= 0 } settings
+                ? settings.LastProviderModelCount
+                : null,
+            AdvertisedModels = advertisedModels,
+            Roles = roles
+        };
+    }
+
+    private AIArenaTranscriptExportControlState BuildTranscriptControlExport()
+    {
+        var sessionId = _activeSession?.Id ?? "";
+        var messages = _lastRenderedMessages
+            .OrderBy(message => message.Turn)
+            .ToArray();
+        var markdown = string.IsNullOrWhiteSpace(sessionId) || messages.Length == 0
+            ? ""
+            : TranscriptExportCoordinator.BuildTranscriptExport(sessionId, messages);
+        return new AIArenaTranscriptExportControlState(sessionId, messages.Length, markdown);
+    }
+
+    private AIArenaSessionExportControlState BuildSessionControlExport()
+    {
+        return new AIArenaSessionExportControlState(
+            _activeSession?.Id ?? "",
+            ArenaRunStatus.Text,
+            SelectedControlPlaneView(),
+            _lastRenderedSnapshot?.ProviderModel ?? "",
+            _lastRenderedMessages.Count,
+            AgentWorkspace.ControlState,
+            Collaborate.ControlState);
+    }
+
+    private AIArenaReceiptExportControlState BuildReceiptControlExport()
+    {
+        var agent = AgentWorkspace.ControlState;
+        var provider = BuildProviderControlState();
+        var providerReadiness = provider.Online
+            ? $"Online: {provider.Model}"
+            : string.IsNullOrWhiteSpace(provider.LastError) ? "Offline" : $"Offline: {provider.LastError}";
+        return new AIArenaReceiptExportControlState(
+            _activeSession?.Id ?? "",
+            agent.BuildEvidence,
+            agent.OutputSummary,
+            Collaborate.ControlState.Status,
+            providerReadiness);
+    }
+
+    private bool SelectControlPlaneView(string view)
+    {
+        switch (AIArenaControlPlaneProtocol.NormalizeCommand(view))
+        {
+            case "arena":
+            case "lab":
+            case "transcript":
+                AppSettingsWorkflow.SetVisible(false);
+                ShowTranscriptPanel(clearFilters: false);
+                return true;
+            case "custom-match":
+            case "custom.match":
+            case "match":
+                OpenMatchSetupFromControlPlane();
+                return true;
+            case "world":
+            case "ai.world":
+                if (!IsWorldDebugEnabled(_wpfSettings))
+                {
+                    return false;
+                }
+
+                AppSettingsWorkflow.SetVisible(false);
+                ShowWorldPanel();
+                return true;
+            case "agent":
+                if (!IsAgentWorkspaceEnabled(_wpfSettings))
+                {
+                    return false;
+                }
+
+                AppSettingsWorkflow.SetVisible(false);
+                ShowAgentPanel();
+                return true;
+            case "collaborate":
+            case "ai.collaborate":
+                AppSettingsWorkflow.SetVisible(false);
+                ShowCollaboratePanel();
+                return true;
+            case "settings":
+                AppSettingsWorkflow.SetVisible(true);
+                return true;
+            case "provider":
+            case "provider.settings":
+                OpenModelProviderSettings();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private string SelectedControlPlaneView()
+    {
+        if (AppSettingsPanel.Visibility == Visibility.Visible)
+        {
+            return "settings";
+        }
+
+        if (AgentWorkspacePanel.Visibility == Visibility.Visible)
+        {
+            return "agent";
+        }
+
+        if (CollaboratePanel.Visibility == Visibility.Visible)
+        {
+            return "collaborate";
+        }
+
+        if (CustomMatchPanel.Visibility == Visibility.Visible)
+        {
+            return "custom-match";
+        }
+
+        return AgentWorldPanel.Visibility == Visibility.Visible ? "world" : "arena";
+    }
+
+    private static string RequiredStringArg(AIArenaControlRequest request, string name)
+    {
+        return AIArenaControlArguments.String(request, name);
+    }
+
+    private static string? OptionalStringArg(AIArenaControlRequest request, string name)
+    {
+        return AIArenaControlArguments.OptionalString(request, name);
+    }
+
+    private static bool OptionalBoolArg(AIArenaControlRequest request, string name)
+    {
+        return AIArenaControlArguments.TryOptionalBool(request, name, out var value)
+            && value == true;
+    }
+
+    private async Task RefreshControlPlaneHostAsync()
+    {
+        var host = _controlPlaneHost;
+        if (host is null)
+        {
+            return;
+        }
+
+        if (IsControlPlaneEnabled)
+        {
+            await host.StartIfEnabledAsync();
+            if (IsControlPlaneEnabled && host.IsRunning)
+            {
+                _controlPlaneEvents.Publish("control.enabled", "AI Arena control plane enabled.");
+            }
+
+            return;
+        }
+
+        await host.StopAsync();
     }
 
     private static string CleanDisplayVersion(string? version)
@@ -980,6 +2277,232 @@ public partial class MainWindow : Window
     private void InitializeVisualSettings()
     {
         TranscriptView.InitializeControls();
+        _isUpdatingWorldDebug = true;
+        _isUpdatingAgentWorkspace = true;
+        _isUpdatingControlPlane = true;
+        try
+        {
+            WorldDebugCheckBox.IsChecked = IsWorldDebugEnabled(_wpfSettings);
+            AgentWorkspaceCheckBox.IsChecked = IsAgentWorkspaceEnabled(_wpfSettings);
+            ControlPlaneCheckBox.IsChecked = IsControlPlaneEnabled;
+        }
+        finally
+        {
+            _isUpdatingWorldDebug = false;
+            _isUpdatingAgentWorkspace = false;
+            _isUpdatingControlPlane = false;
+        }
+
+        ApplyWorldDebugVisibility(persistIfForcedOff: false);
+        ApplyAgentWorkspaceVisibility();
+        ApplyControlPlaneToggleState();
+    }
+
+    private void ApplyPreferenceControlChanges()
+    {
+        InitializeVisualSettings();
+        InitializeVoiceTtsSettings();
+        if (!_wpfSettings.VoiceTtsEnabled)
+        {
+            _voiceNarrationService.Stop();
+        }
+
+        if (_lastRenderedMessages.Count > 0)
+        {
+            PopulateTranscript(_lastRenderedMessages);
+        }
+    }
+
+    private void InitializeVoiceTtsSettings()
+    {
+        _isUpdatingVoiceTtsSettings = true;
+        try
+        {
+            VoiceTtsEnabledCheckBox.IsChecked = _wpfSettings.VoiceTtsEnabled;
+            VoiceTtsAutoNarratorCheckBox.IsChecked = _wpfSettings.VoiceTtsAutoNarrator;
+            PopulateVoiceTtsVoices();
+            VoiceTtsRateSlider.Value = _wpfSettings.VoiceTtsRate;
+            VoiceTtsVolumeSlider.Value = _wpfSettings.VoiceTtsVolume;
+        }
+        finally
+        {
+            _isUpdatingVoiceTtsSettings = false;
+        }
+
+        UpdateVoiceTtsUi("Voice TTS ready.");
+    }
+
+    private void PopulateVoiceTtsVoices()
+    {
+        var selected = _wpfSettings.VoiceTtsVoiceName;
+        VoiceTtsVoicePicker.Items.Clear();
+        VoiceTtsVoicePicker.Items.Add(new ComboBoxItem
+        {
+            Content = "Windows default voice",
+            Tag = "",
+            ToolTip = "Use the current Windows default speech voice"
+        });
+
+        foreach (var voiceName in _voiceNarrationService.InstalledVoiceNames())
+        {
+            VoiceTtsVoicePicker.Items.Add(new ComboBoxItem
+            {
+                Content = voiceName,
+                Tag = voiceName,
+                ToolTip = voiceName
+            });
+        }
+
+        ShellUiHelpers.SelectComboTag(VoiceTtsVoicePicker, selected);
+        if (VoiceTtsVoicePicker.SelectedIndex < 0)
+        {
+            ShellUiHelpers.SelectComboTag(VoiceTtsVoicePicker, "");
+            _wpfSettings.VoiceTtsVoiceName = "";
+        }
+    }
+
+    private void PersistVoiceTtsSettings(string status)
+    {
+        if (_isUpdatingVoiceTtsSettings || VoiceTtsStatusText is null)
+        {
+            return;
+        }
+
+        CaptureVoiceTtsSettings();
+        _voiceTtsSettingsSaveDebouncer.Cancel();
+        SaveVoiceTtsSettings(status);
+        if (!_wpfSettings.VoiceTtsEnabled)
+        {
+            _voiceNarrationService.Stop();
+        }
+    }
+
+    private void CaptureVoiceTtsSettings()
+    {
+        _wpfSettings.VoiceTtsEnabled = VoiceTtsEnabledCheckBox.IsChecked == true;
+        _wpfSettings.VoiceTtsAutoNarrator = VoiceTtsAutoNarratorCheckBox.IsChecked == true;
+        _wpfSettings.VoiceTtsVoiceName = ShellUiHelpers.SelectedComboTag(VoiceTtsVoicePicker, "");
+        _wpfSettings.VoiceTtsRate = VoiceNarrationService.NormalizeRate((int)Math.Round(VoiceTtsRateSlider.Value));
+        _wpfSettings.VoiceTtsVolume = VoiceNarrationService.NormalizeVolume((int)Math.Round(VoiceTtsVolumeSlider.Value));
+    }
+
+    private void SaveVoiceTtsSettings(string status)
+    {
+        try
+        {
+            _wpfSettingsStore.Save(_wpfSettings);
+            UpdateVoiceTtsUi(status);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            VoiceTtsStatusText.Text = $"Voice settings could not be saved: {ex.Message}";
+        }
+    }
+
+    private void UpdateVoiceTtsUi(string status)
+    {
+        var enabled = _wpfSettings.VoiceTtsEnabled;
+        VoiceTtsAutoNarratorCheckBox.IsEnabled = enabled;
+        VoiceTtsVoicePicker.IsEnabled = enabled;
+        VoiceTtsRateSlider.IsEnabled = enabled;
+        VoiceTtsVolumeSlider.IsEnabled = enabled;
+        TestVoiceTtsButton.IsEnabled = enabled;
+        VoiceTtsRateValueText.Text = _wpfSettings.VoiceTtsRate.ToString("+#;-#;0");
+        VoiceTtsVolumeValueText.Text = $"{_wpfSettings.VoiceTtsVolume}%";
+        VoiceTtsStatusText.Text = enabled
+            ? status
+            : "Local Windows voice playback is off.";
+    }
+
+    private VoiceNarrationOptions CurrentVoiceNarrationOptions()
+    {
+        return new VoiceNarrationOptions(
+            _wpfSettings.VoiceTtsVoiceName,
+            _wpfSettings.VoiceTtsRate,
+            _wpfSettings.VoiceTtsVolume);
+    }
+
+    private void SpeakNarratorMessage(DialogueMessage message)
+    {
+        if (!_wpfSettings.VoiceTtsEnabled || !_wpfSettings.VoiceTtsAutoNarrator)
+        {
+            return;
+        }
+
+        if (!message.SpeakerId.Equals("narrator", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        SpeakVoiceTts(message.Text, $"Reading narrator turn {message.Turn}.");
+    }
+
+    private void SpeakVoiceTts(string text, string startedStatus)
+    {
+        if (!_wpfSettings.VoiceTtsEnabled)
+        {
+            var disabledStatus = "Voice TTS is off. Enable it in Settings > Voice TTS.";
+            UpdateVoiceTtsUi(disabledStatus);
+            SetArenaRunStatus(disabledStatus);
+            return;
+        }
+
+        var result = _voiceNarrationService.Speak(text, CurrentVoiceNarrationOptions());
+        var status = result.Ok ? $"{startedStatus} {result.Status}" : result.Status;
+        UpdateVoiceTtsUi(status);
+        SetArenaRunStatus(status);
+    }
+
+    private bool CanSpeakTranscriptMessage(TranscriptMessage message)
+    {
+        return TranscriptCardRenderer.CanSpeakMessage(message);
+    }
+
+    private void SpeakTranscriptMessage(TranscriptMessage message)
+    {
+        var speaker = string.IsNullOrWhiteSpace(message.Speaker) ? message.SpeakerId : message.Speaker;
+        var label = message.Turn > 0 ? $"Reading turn {message.Turn}." : "Reading transcript card.";
+        SpeakVoiceTts($"{speaker}: {message.Text}", label);
+    }
+
+    private void VoiceTtsSettings_Changed(object sender, RoutedEventArgs e)
+    {
+        PersistVoiceTtsSettings("Voice TTS settings saved.");
+    }
+
+    private void VoiceTtsVoicePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        PersistVoiceTtsSettings("Voice TTS voice saved.");
+    }
+
+    private void VoiceTtsSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_isUpdatingVoiceTtsSettings || VoiceTtsStatusText is null)
+        {
+            return;
+        }
+
+        CaptureVoiceTtsSettings();
+        UpdateVoiceTtsUi("Voice TTS level adjusted.");
+        _voiceTtsSettingsSaveDebouncer.Schedule();
+    }
+
+    private void TestVoiceTtsButton_Click(object sender, RoutedEventArgs e)
+    {
+        PersistVoiceTtsSettings("Voice TTS settings saved.");
+        SpeakVoiceTts("AI Arena voice narration is ready.", "Playing voice test.");
+    }
+
+    private void StopVoiceTtsButton_Click(object sender, RoutedEventArgs e)
+    {
+        StopVoicePlayback();
+    }
+
+    private void StopVoicePlayback()
+    {
+        _voiceNarrationService.Stop();
+        UpdateVoiceTtsUi("Voice playback stopped.");
+        SetArenaRunStatus("Voice playback stopped.");
     }
 
 
@@ -988,13 +2511,15 @@ public partial class MainWindow : Window
         await LoadSessionsAsync(preferredSessionId);
     }
 
-    private async Task LoadSessionsAsync(string? preferredSessionId = null)
+    private async Task LoadSessionsAsync(
+        string? preferredSessionId = null,
+        CancellationToken cancellationToken = default)
     {
-        var sessions = await _coreSessionStore.ListSessionsAsync();
+        var sessions = await _coreSessionStore.ListSessionsAsync(cancellationToken);
         if (sessions.Count == 0)
         {
-            await _coreSessionStore.EnsureDefaultSessionAsync();
-            sessions = await _coreSessionStore.ListSessionsAsync();
+            await _coreSessionStore.EnsureDefaultSessionAsync(cancellationToken);
+            sessions = await _coreSessionStore.ListSessionsAsync(cancellationToken);
         }
 
         SavedStateCoordinator.SetSessions(sessions);
@@ -1008,12 +2533,13 @@ public partial class MainWindow : Window
         {
             LoadStatus.Text = $"No sessions found in {Path.Combine(_coreSessionStore.DataRoot, "sessions")}";
             SavedStateCoordinator.SetStatus("No saved sessions found.", isDanger: true);
+            SavedStateCoordinator.ApplyForkLineage(null);
             SavedStateCoordinator.UpdatePicker();
             PopulateFallbackState("No AI Arena sessions found.");
             return;
         }
 
-        await LoadSessionAsync(defaultSession, force: true);
+        await LoadSessionAsync(defaultSession, force: true, cancellationToken);
         SavedStateCoordinator.UpdatePicker(defaultSession.Id);
     }
 
@@ -1032,23 +2558,72 @@ public partial class MainWindow : Window
 
     private async void RefreshIfSnapshotChanged()
     {
-        if (_activeSession is null)
+        if (_snapshotRefreshInProgress)
         {
-            await LoadSessionsAsync();
             return;
         }
 
-        var sessions = await _coreSessionStore.ListSessionsAsync();
-        var latestSession = sessions.FirstOrDefault(session => session.Id == _activeSession.Id);
-        if (latestSession is null)
+        _snapshotRefreshInProgress = true;
+        try
         {
-            await LoadSessionsAsync();
-            return;
-        }
+            if (_activeSession is null)
+            {
+                await LoadSessionsAsync();
+                return;
+            }
 
-        if (latestSession.LastModified != _activeSnapshotWriteUtc)
+            var observedWriteTime = TryGetSessionDirectoryLastModified(_activeSession.SnapshotPath);
+            if (!SnapshotRefreshRequiresSessionScan(_activeSnapshotWriteUtc, observedWriteTime))
+            {
+                return;
+            }
+
+            if (observedWriteTime is not null)
+            {
+                await LoadSessionAsync(_activeSession with { LastModified = observedWriteTime.Value }, force: true);
+                return;
+            }
+
+            var latestSession = (await _coreSessionStore.ListSessionsAsync())
+                .FirstOrDefault(session => session.Id == _activeSession.Id);
+            if (latestSession is null)
+            {
+                await LoadSessionsAsync();
+                return;
+            }
+
+            if (latestSession.LastModified != _activeSnapshotWriteUtc)
+            {
+                await LoadSessionAsync(latestSession, force: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            await LoadSessionAsync(latestSession, force: true);
+            LoadStatus.Text = $"Snapshot auto-refresh paused: {ex.Message}";
+        }
+        finally
+        {
+            _snapshotRefreshInProgress = false;
+        }
+    }
+
+    internal static bool SnapshotRefreshRequiresSessionScan(DateTimeOffset knownWriteTime, DateTimeOffset? observedWriteTime)
+    {
+        return observedWriteTime is null || observedWriteTime.Value != knownWriteTime;
+    }
+
+    internal static DateTimeOffset? TryGetSessionDirectoryLastModified(string snapshotPath)
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(snapshotPath);
+            return string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)
+                ? null
+                : new DateTimeOffset(Directory.GetLastWriteTime(directory));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
         }
     }
 
@@ -1065,6 +2640,11 @@ public partial class MainWindow : Window
     private void MatchQualityTimelineCheckBox_Changed(object sender, RoutedEventArgs e)
     {
         _transcriptViewCoordinator?.OnMatchQualityTimelineChanged();
+    }
+
+    private void BattleReviewCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        _transcriptViewCoordinator?.OnBattleReviewChanged();
     }
 
     private void MemoryNotesCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -1092,6 +2672,71 @@ public partial class MainWindow : Window
         _transcriptViewCoordinator?.OnVoiceDriftEnforcementChanged();
     }
 
+    private void TranscriptInternetDetailsCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        _transcriptViewCoordinator?.OnTranscriptInternetDetailsChanged();
+    }
+
+    private void WorldDebugCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isUpdatingWorldDebug)
+        {
+            return;
+        }
+
+        _wpfSettings.ShowWorldDebug = _wpfSettings.AllowDebugControls
+            && WorldDebugCheckBox.IsChecked == true;
+        if (!IsWorldDebugEnabled(_wpfSettings))
+        {
+            _wpfSettings.LabViewMode = "transcript";
+        }
+
+        _wpfSettingsStore.Save(_wpfSettings);
+        ApplyWorldDebugVisibility(persistIfForcedOff: false);
+        var status = IsWorldDebugEnabled(_wpfSettings)
+            ? "Debug: AI World 3D view enabled."
+            : "Debug: AI World 3D view disabled; using Transcript.";
+        SetLoadStatus(status);
+        SetArenaRunStatus(status);
+    }
+
+    private void AgentWorkspaceCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isUpdatingAgentWorkspace)
+        {
+            return;
+        }
+
+        _wpfSettings.ShowAgentWorkspace = AgentWorkspaceCheckBox.IsChecked == true;
+        _wpfSettings.AgentWorkspacePreferenceVersion = 1;
+        _wpfSettingsStore.Save(_wpfSettings);
+        ApplyAgentWorkspaceVisibility();
+        var status = IsAgentWorkspaceEnabled(_wpfSettings)
+            ? "Agent workspace shown in navigation."
+            : "Agent workspace hidden from navigation.";
+        SetLoadStatus(status);
+        SetArenaRunStatus(status);
+    }
+
+    private async void ControlPlaneCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isUpdatingControlPlane)
+        {
+            return;
+        }
+
+        _wpfSettings.EnableControlPlane = ControlPlaneCheckBox.IsChecked == true;
+        _wpfSettings.ControlPlanePreferenceVersion = 1;
+        _wpfSettingsStore.Save(_wpfSettings);
+        ApplyControlPlaneToggleState();
+        await RefreshControlPlaneHostAsync();
+        var status = IsControlPlaneEnabled
+            ? "PowerShell control plane enabled."
+            : "PowerShell control plane disabled.";
+        SetLoadStatus(status);
+        SetArenaRunStatus(status);
+    }
+
     private void RandomSeedPreset_Changed(object sender, SelectionChangedEventArgs e)
     {
         _scenarioWorkflowCoordinator?.OnRandomSeedPresetChanged();
@@ -1105,6 +2750,11 @@ public partial class MainWindow : Window
     private void AgentCountPresetPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         _agentRosterCoordinator?.OnPresetChanged();
+    }
+
+    private void AgentCountPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        _agentRosterCoordinator?.OnExactCountChanged();
     }
 
     private async void ApplyAgentCountButton_Click(object sender, RoutedEventArgs e)
@@ -1123,6 +2773,8 @@ public partial class MainWindow : Window
         GenerationHelpTitleText.Text = title;
         GenerationHelpBodyText.Text = body;
         GenerationHelpPopup.IsOpen = false;
+        GenerationHelpPopup.PlacementTarget = sender as UIElement;
+        GenerationHelpPopup.Placement = PlacementMode.Bottom;
         GenerationHelpPopup.IsOpen = true;
     }
 
@@ -1132,13 +2784,13 @@ public partial class MainWindow : Window
         {
             "generate" => (
                 "Generate",
-                "Manual keeps your current tune settings. Random Seed is deterministic and local. AI Choice asks the configured model to build a match. YOLO creates a seeded meta scenario and cast while respecting locks."),
+                "Manual keeps your current tune settings. Random Seed is deterministic and local. AI Choice asks the configured model to build a match. Wild Seed creates a bolder local scenario and cast while respecting locks."),
             "tune" => (
                 "Tune",
                 "Role pack chooses the cast family. Style chooses the scenario domain. Pressure changes how hard the debate pushes. Absurdity mixes expertise, expression constraints, and reasoning distortions."),
             "recent" => (
                 "Recent",
-                "Recent stores generated setups in the session snapshot. Replay restores the selected setup without another model call. Copy Seed copies the scenario seed for sharing or reruns."),
+                "Recent stores generated setups in the session snapshot. Filter narrows the list by generator type. Replay restores the selected setup, New Run creates a clean comparison run, and Copy Seed, Copy Brief, Copy Spec, Copy Diff, or Rubric share review-ready setup details. Lock warnings show what the current match may preserve during replay."),
             _ => (
                 "Custom Match",
                 "Use generation controls to create scenario/cast setups, then lock anything you want to preserve before generating again.")
@@ -1152,12 +2804,707 @@ public partial class MainWindow : Window
 
     private void DebugMenuButton_Click(object sender, RoutedEventArgs e)
     {
+        _debugMenuFocusReturnTarget = DebugMenuButton;
         _transcriptViewCoordinator?.ToggleDebugMenu();
     }
 
     private void ViewMenuButton_Click(object sender, RoutedEventArgs e)
     {
+        _viewMenuFocusReturnTarget = ViewMenuButton;
         _transcriptViewCoordinator?.ToggleViewMenu();
+    }
+
+    private void ViewMenuPopup_Opened(object? sender, EventArgs e)
+    {
+        _viewMenuFocusReturnTarget ??= Keyboard.FocusedElement ?? ViewMenuButton;
+        DebugMenuPopup.IsOpen = false;
+        ProviderReachability.ClosePopup();
+        _transcriptSearchCoordinator?.CloseSearch();
+        FocusOverlayEntry(ViewMenuPopup, ViewPresetFocusedButton);
+    }
+
+    private void ViewMenuPopup_Closed(object? sender, EventArgs e)
+    {
+        var returnTarget = _viewMenuFocusReturnTarget;
+        _viewMenuFocusReturnTarget = null;
+        RestoreOverlayFocus(returnTarget, ViewMenuButton, () => !ViewMenuPopup.IsOpen);
+    }
+
+    private void ViewMenuPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        ClosePopupOnEscape(ViewMenuPopup, e);
+    }
+
+    private void DebugMenuPopup_Opened(object? sender, EventArgs e)
+    {
+        _debugMenuFocusReturnTarget ??= Keyboard.FocusedElement ?? DebugMenuButton;
+        ViewMenuPopup.IsOpen = false;
+        ProviderReachability.ClosePopup();
+        _transcriptSearchCoordinator?.CloseSearch();
+        FocusOverlayEntry(DebugMenuPopup, DecisionCardCheckBox);
+    }
+
+    private void DebugMenuPopup_Closed(object? sender, EventArgs e)
+    {
+        var returnTarget = _debugMenuFocusReturnTarget;
+        _debugMenuFocusReturnTarget = null;
+        RestoreOverlayFocus(returnTarget, DebugMenuButton, () => !DebugMenuPopup.IsOpen);
+    }
+
+    private void DebugMenuPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        ClosePopupOnEscape(DebugMenuPopup, e);
+    }
+
+    private static void ClosePopupOnEscape(Popup popup, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape || !popup.IsOpen)
+        {
+            return;
+        }
+
+        popup.IsOpen = false;
+        e.Handled = true;
+    }
+
+    private void AgentComposerMenuButton_Click(object sender, RoutedEventArgs e)
+    {
+        AgentComposerControlsPopup.IsOpen = !AgentComposerControlsPopup.IsOpen;
+    }
+
+    private void AgentComposerMenuAction_Click(object sender, RoutedEventArgs e)
+    {
+        AgentComposerControlsPopup.IsOpen = false;
+        if (ReferenceEquals(sender, AgentClearButton))
+        {
+            AgentTeamModeButton.Content = "Team: Full";
+        }
+    }
+
+    private void MatchSetupSectionTab_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button && button.Tag is string tag)
+        {
+            ShowMatchSetupSection(tag);
+        }
+    }
+
+    private bool ShowMatchSetupSection(string tag)
+    {
+        var normalized = (tag ?? "").Trim().ToLowerInvariant();
+        var sections = new (string Tag, Button Button, UIElement Section)[]
+        {
+            ("scenario", MatchSetupScenarioTabButton, MatchSetupScenarioSection),
+            ("cast", MatchSetupCastTabButton, MatchSetupCastSection),
+            ("matrix", MatchSetupMatrixTabButton, MatchSetupMatrixSection),
+            ("saved", MatchSetupSavedTabButton, MatchSetupSavedSection)
+        };
+        if (!sections.Any(section => section.Tag.Equals(normalized, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        foreach (var (sectionTag, button, section) in sections)
+        {
+            var active = sectionTag.Equals(normalized, StringComparison.OrdinalIgnoreCase);
+            section.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
+            button.BorderBrush = ResourceBrush(active ? "PrimaryBorderBrush" : "ControlBorderBrush");
+            button.Foreground = ResourceBrush(active ? "TextBrush" : "MutedTextBrush");
+            button.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
+        }
+
+        _matchSetupSection = normalized;
+        return true;
+    }
+
+    private void AgentClearHistoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        _agentWorkspaceCoordinator?.Clear();
+        AgentTeamModeButton.Content = "Team: Full";
+    }
+
+    // Starts true so checkbox/text events raised while InitializeComponent applies XAML
+    // defaults can never save the not-yet-loaded settings object over the real file.
+    // InitializeAgentAndStreamingSettingsFields clears it once loaded values are applied.
+    private bool _suppressAgentSettingsHandlers = true;
+
+    private void InitializeAgentAndStreamingSettingsFields()
+    {
+        _suppressAgentSettingsHandlers = true;
+        try
+        {
+            AgentRescueModelText.Text = _wpfSettings.AgentRescueModel;
+            StreamModelResponsesCheckBox.IsChecked = _wpfSettings.StreamModelResponses;
+            AgentBuilderOnlyDefaultCheckBox.IsChecked = _wpfSettings.AgentBuilderOnlyDefault;
+            AgentPlannerReviewerTokensText.Text = _wpfSettings.AgentPlannerReviewerMaxTokens.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            AgentBuilderTokensText.Text = _wpfSettings.AgentBuilderMaxTokens.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            AgentRescueAttemptsText.Text = _wpfSettings.AgentAutoRescueAttempts.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            AgentCommandTimeoutText.Text = _wpfSettings.AgentCommandTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            AgentTeamModeButton.Content = _wpfSettings.AgentBuilderOnlyDefault ? "Team: Builder only" : "Team: Full";
+            AgentPerformanceFullCardsCheckBox.IsChecked = _wpfSettings.AgentPerformanceFullCards;
+            RefreshProviderProfilePicker();
+        }
+        finally
+        {
+            _suppressAgentSettingsHandlers = false;
+        }
+    }
+
+    private void AgentRescueModelText_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_suppressAgentSettingsHandlers)
+        {
+            return;
+        }
+
+        var value = AgentRescueModelText.Text.Trim();
+        if (value.Equals(_wpfSettings.AgentRescueModel, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _wpfSettings.AgentRescueModel = value;
+        _wpfSettingsStore.Save(_wpfSettings);
+    }
+
+    private void StreamModelResponsesCheckBox_CheckedChanged(object sender, RoutedEventArgs e)
+    {
+        if (_suppressAgentSettingsHandlers || _wpfSettings is null)
+        {
+            return;
+        }
+
+        _wpfSettings.StreamModelResponses = StreamModelResponsesCheckBox.IsChecked == true;
+        _wpfSettingsStore.Save(_wpfSettings);
+    }
+
+    private void AgentSettingsCheckBox_CheckedChanged(object sender, RoutedEventArgs e)
+    {
+        if (_suppressAgentSettingsHandlers || _wpfSettings is null)
+        {
+            return;
+        }
+
+        _wpfSettings.AgentBuilderOnlyDefault = AgentBuilderOnlyDefaultCheckBox.IsChecked == true;
+        _wpfSettingsStore.Save(_wpfSettings);
+        AgentSettingsStatusText.Text = _wpfSettings.AgentBuilderOnlyDefault
+            ? "New Agent sessions start in Builder-only mode."
+            : "New Agent sessions start with the full Planner, Reviewer, and Builder team.";
+    }
+
+    private void AgentSettingsField_Commit(object sender, RoutedEventArgs e)
+    {
+        if (_suppressAgentSettingsHandlers)
+        {
+            return;
+        }
+
+        var notes = new List<string>();
+        _wpfSettings.AgentPlannerReviewerMaxTokens = CommitClampedAgentField(AgentPlannerReviewerTokensText, _wpfSettings.AgentPlannerReviewerMaxTokens, 256, 32768, "Planner/Reviewer tokens", notes);
+        _wpfSettings.AgentBuilderMaxTokens = CommitClampedAgentField(AgentBuilderTokensText, _wpfSettings.AgentBuilderMaxTokens, 256, 32768, "Builder tokens", notes);
+        _wpfSettings.AgentAutoRescueAttempts = CommitClampedAgentField(AgentRescueAttemptsText, _wpfSettings.AgentAutoRescueAttempts, 0, 5, "Rescue attempts", notes);
+        _wpfSettings.AgentCommandTimeoutSeconds = CommitClampedAgentField(AgentCommandTimeoutText, _wpfSettings.AgentCommandTimeoutSeconds, 10, 3600, "Command timeout", notes);
+        _wpfSettingsStore.Save(_wpfSettings);
+        AgentSettingsStatusText.Text = notes.Count == 0
+            ? "Agent settings saved."
+            : $"Saved with corrections: {string.Join("; ", notes)}.";
+    }
+
+    private static int CommitClampedAgentField(TextBox field, int currentValue, int min, int max, string label, List<string> notes)
+    {
+        if (!int.TryParse(field.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+        {
+            field.Text = currentValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            notes.Add($"{label} must be a whole number; kept {currentValue}");
+            return currentValue;
+        }
+
+        var clamped = Math.Clamp(parsed, min, max);
+        if (clamped != parsed)
+        {
+            notes.Add($"{label} adjusted to {clamped} (allowed {min}-{max})");
+        }
+
+        field.Text = clamped.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return clamped;
+    }
+
+    private void ResetAgentSettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        var defaults = new WpfSettings();
+        _wpfSettings.AgentBuilderOnlyDefault = defaults.AgentBuilderOnlyDefault;
+        _wpfSettings.AgentPlannerReviewerMaxTokens = defaults.AgentPlannerReviewerMaxTokens;
+        _wpfSettings.AgentBuilderMaxTokens = defaults.AgentBuilderMaxTokens;
+        _wpfSettings.AgentAutoRescueAttempts = defaults.AgentAutoRescueAttempts;
+        _wpfSettings.AgentCommandTimeoutSeconds = defaults.AgentCommandTimeoutSeconds;
+        _wpfSettings.AgentRescueModel = defaults.AgentRescueModel;
+        _wpfSettingsStore.Save(_wpfSettings);
+        InitializeAgentAndStreamingSettingsFields();
+        AgentSettingsStatusText.Text = "Agent settings restored to defaults.";
+    }
+
+    private (TextBox? Temperature, TextBox? MaxOutputTokens) RoleOverrideBoxes(string key)
+    {
+        return key.ToLowerInvariant() switch
+        {
+            "alpha" => (AlphaTempOverrideText, AlphaMaxOverrideText),
+            "beta" => (BetaTempOverrideText, BetaMaxOverrideText),
+            "gamma" => (GammaTempOverrideText, GammaMaxOverrideText),
+            "delta" => (DeltaTempOverrideText, DeltaMaxOverrideText),
+            "narrator" => (NarratorTempOverrideText, NarratorMaxOverrideText),
+            _ => (null, null)
+        };
+    }
+
+    private (double? Temperature, int? MaxOutputTokens) RoleGenerationOverrideFor(string key)
+    {
+        var (temperatureBox, maxOutputBox) = RoleOverrideBoxes(key);
+        double? temperature = null;
+        if (temperatureBox is not null
+            && double.TryParse(temperatureBox.Text.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsedTemperature))
+        {
+            temperature = Math.Clamp(parsedTemperature, 0, 2);
+        }
+
+        int? maxOutputTokens = null;
+        if (maxOutputBox is not null
+            && int.TryParse(maxOutputBox.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedMaxOutput))
+        {
+            maxOutputTokens = Math.Clamp(parsedMaxOutput, 1, 32768);
+        }
+
+        return (temperature, maxOutputTokens);
+    }
+
+    private void ApplyRoleOverrideFields(ArenaViewSnapshot snapshot)
+    {
+        foreach (var key in new[] { "alpha", "beta", "gamma", "delta", "narrator" })
+        {
+            var (temperatureBox, maxOutputBox) = RoleOverrideBoxes(key);
+            if (temperatureBox is null || maxOutputBox is null)
+            {
+                continue;
+            }
+
+            snapshot.RoleOverrides.TryGetValue(key, out var roleOverride);
+            temperatureBox.Text = roleOverride?.Temperature?.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) ?? "";
+            maxOutputBox.Text = roleOverride?.MaxOutputTokens?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
+        }
+    }
+
+    private async void RoleOverrideText_Commit(object sender, RoutedEventArgs e)
+    {
+        if (_isRenderingSnapshot)
+        {
+            return;
+        }
+
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.PersistModelRoutingAsync(
+                "Role generation overrides saved.",
+                cancellationToken: cancellationToken));
+    }
+
+    private async void UseDefaultModelForAllRolesButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.UseDefaultModelForAllRolesAsync(cancellationToken));
+    }
+
+    private async void TestAllRolesButton_Click(object sender, RoutedEventArgs e)
+    {
+        TestAllRolesButton.IsEnabled = false;
+        try
+        {
+            await RunProviderCommitSafelyAsync(
+                (coordinator, cancellationToken) => coordinator.TestAllRolesAsync(cancellationToken));
+        }
+        finally
+        {
+            TestAllRolesButton.IsEnabled = true;
+        }
+    }
+
+    private void RefreshProviderProfilePicker(string? selectName = null)
+    {
+        ProviderProfilePicker.Items.Clear();
+        foreach (var profile in _wpfSettings.ProviderProfiles.OrderBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            ProviderProfilePicker.Items.Add(profile.Name);
+        }
+
+        if (!string.IsNullOrWhiteSpace(selectName))
+        {
+            ProviderProfilePicker.Text = selectName;
+        }
+    }
+
+    private void SaveProviderProfileButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_providerSettingsCoordinator is null)
+        {
+            return;
+        }
+
+        var name = ProviderProfilePicker.Text.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            ProviderProfileStatusText.Text = "Type a setup name before saving.";
+            return;
+        }
+
+        var (baseUrl, apiMode, model, roleModels) = _providerSettingsCoordinator.CaptureProviderProfile();
+        var profile = new WpfProviderProfile
+        {
+            Name = name,
+            BaseUrl = baseUrl,
+            ApiMode = apiMode,
+            Model = model,
+            AlphaModel = roleModels.GetValueOrDefault("alpha", ""),
+            BetaModel = roleModels.GetValueOrDefault("beta", ""),
+            GammaModel = roleModels.GetValueOrDefault("gamma", ""),
+            DeltaModel = roleModels.GetValueOrDefault("delta", ""),
+            NarratorModel = roleModels.GetValueOrDefault("narrator", "")
+        };
+        _wpfSettings.ProviderProfiles.RemoveAll(existing => existing.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        _wpfSettings.ProviderProfiles.Add(profile);
+        _wpfSettingsStore.Save(_wpfSettings);
+        RefreshProviderProfilePicker(name);
+        ProviderProfileStatusText.Text = $"Setup '{name}' saved with {model} and the current role routing.";
+    }
+
+    private async void ApplyProviderProfileButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_providerSettingsCoordinator is null)
+        {
+            return;
+        }
+
+        var name = ProviderProfilePicker.Text.Trim();
+        var profile = _wpfSettings.ProviderProfiles.FirstOrDefault(existing => existing.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (profile is null)
+        {
+            ProviderProfileStatusText.Text = string.IsNullOrWhiteSpace(name)
+                ? "Pick a saved setup to use."
+                : $"No setup named '{name}'.";
+            return;
+        }
+
+        var roleModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["alpha"] = profile.AlphaModel,
+            ["beta"] = profile.BetaModel,
+            ["gamma"] = profile.GammaModel,
+            ["delta"] = profile.DeltaModel,
+            ["narrator"] = profile.NarratorModel
+        };
+        await RunProviderCommitSafelyAsync(async (coordinator, cancellationToken) =>
+        {
+            await coordinator.ApplyProviderProfileAsync(
+                profile.BaseUrl,
+                profile.ApiMode,
+                profile.Model,
+                roleModels,
+                profile.Name,
+                cancellationToken);
+            ProviderProfileStatusText.Text = $"Setup '{profile.Name}' is now in use.";
+        });
+    }
+
+    private void DeleteProviderProfileButton_Click(object sender, RoutedEventArgs e)
+    {
+        var name = ProviderProfilePicker.Text.Trim();
+        var removed = _wpfSettings.ProviderProfiles.RemoveAll(existing => existing.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (removed == 0)
+        {
+            ProviderProfileStatusText.Text = string.IsNullOrWhiteSpace(name)
+                ? "Pick a saved setup to delete."
+                : $"No setup named '{name}'.";
+            return;
+        }
+
+        _wpfSettingsStore.Save(_wpfSettings);
+        RefreshProviderProfilePicker();
+        ProviderProfilePicker.Text = "";
+        ProviderProfileStatusText.Text = $"Setup '{name}' deleted.";
+    }
+
+    private void SettingsSearchText_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        var query = SettingsSearchText.Text.Trim();
+        var allExpanders = new List<Expander>();
+        CollectSettingsExpanders(SettingsSectionsPanel, allExpanders);
+
+        if (string.IsNullOrEmpty(query))
+        {
+            SettingsSearchFeedbackPanel.Visibility = Visibility.Collapsed;
+            SettingsSearchFeedbackText.Text = "";
+            foreach (var expander in allExpanders)
+            {
+                expander.Visibility = Visibility.Visible;
+            }
+
+            if (_settingsSearchActive)
+            {
+                RestoreSettingsExpansion(allExpanders, _settingsExpansionBeforeSearch);
+
+                _settingsExpansionBeforeSearch.Clear();
+                _settingsSearchActive = false;
+            }
+
+            return;
+        }
+
+        if (!_settingsSearchActive)
+        {
+            _settingsExpansionBeforeSearch.Clear();
+            foreach (var expander in allExpanders)
+            {
+                _settingsExpansionBeforeSearch[expander] = expander.IsExpanded;
+            }
+
+            _settingsSearchActive = true;
+        }
+
+        var matchCount = 0;
+        foreach (var child in SettingsSectionsPanel.Children)
+        {
+            if (child is not Expander expander)
+            {
+                continue;
+            }
+
+            var matches = SettingsNodeMatches(expander, query);
+            expander.Visibility = matches ? Visibility.Visible : Visibility.Collapsed;
+            expander.IsExpanded = matches;
+            if (matches)
+            {
+                matchCount++;
+                ApplyNestedSettingsSearch(expander.Content, query);
+            }
+        }
+
+        SettingsSearchFeedbackText.Text = matchCount == 0
+            ? $"No settings match \u201c{query}\u201d."
+            : $"{matchCount} {(matchCount == 1 ? "section" : "sections")} match \u201c{query}\u201d.";
+        SettingsSearchFeedbackPanel.Visibility = Visibility.Visible;
+    }
+
+    private void SettingsSearchClearButton_Click(object sender, RoutedEventArgs e)
+    {
+        SettingsSearchText.Clear();
+        SettingsSearchText.Focus();
+    }
+
+    internal static bool SettingsNodeMatches(object? node, string query)
+    {
+        var texts = new List<string>();
+        CollectLogicalText(node, texts);
+        return texts.Any(text => text.Contains(query, StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal static void ApplyNestedSettingsSearch(object? node, string query)
+    {
+        switch (node)
+        {
+            case null:
+                return;
+            case Expander expander:
+                var matches = SettingsNodeMatches(expander, query);
+                expander.Visibility = matches ? Visibility.Visible : Visibility.Collapsed;
+                expander.IsExpanded = matches;
+                if (matches)
+                {
+                    ApplyNestedSettingsSearch(expander.Content, query);
+                }
+
+                return;
+            case Panel panel:
+                foreach (var child in panel.Children)
+                {
+                    ApplyNestedSettingsSearch(child, query);
+                }
+
+                return;
+            case ItemsControl items:
+                foreach (var item in items.Items)
+                {
+                    ApplyNestedSettingsSearch(item, query);
+                }
+
+                return;
+            case ContentControl content:
+                ApplyNestedSettingsSearch(content.Content, query);
+                return;
+            case Decorator decorator:
+                ApplyNestedSettingsSearch(decorator.Child, query);
+                return;
+        }
+    }
+
+    internal static void CollectSettingsExpanders(object? node, List<Expander> sink)
+    {
+        switch (node)
+        {
+            case null:
+                return;
+            case Expander expander:
+                sink.Add(expander);
+                CollectSettingsExpanders(expander.Content, sink);
+                return;
+            case Panel panel:
+                foreach (var child in panel.Children)
+                {
+                    CollectSettingsExpanders(child, sink);
+                }
+
+                return;
+            case ItemsControl items:
+                foreach (var item in items.Items)
+                {
+                    CollectSettingsExpanders(item, sink);
+                }
+
+                return;
+            case ContentControl content:
+                CollectSettingsExpanders(content.Content, sink);
+                return;
+            case Decorator decorator:
+                CollectSettingsExpanders(decorator.Child, sink);
+                return;
+        }
+    }
+
+    internal static void RestoreSettingsExpansion(
+        IEnumerable<Expander> expanders,
+        IReadOnlyDictionary<Expander, bool> priorExpansion)
+    {
+        foreach (var expander in expanders)
+        {
+            expander.Visibility = Visibility.Visible;
+            if (priorExpansion.TryGetValue(expander, out var wasExpanded))
+            {
+                expander.IsExpanded = wasExpanded;
+            }
+        }
+    }
+
+    private static void CollectLogicalText(object? node, List<string> sink)
+    {
+        switch (node)
+        {
+            case null:
+                return;
+            case string text:
+                sink.Add(text);
+                return;
+            case TextBlock textBlock:
+                sink.Add(textBlock.Text);
+                return;
+            case HeaderedContentControl headered:
+                CollectLogicalText(headered.Header, sink);
+                CollectLogicalText(headered.Content, sink);
+                return;
+            case ItemsControl items:
+                foreach (var item in items.Items)
+                {
+                    CollectLogicalText(item, sink);
+                }
+
+                return;
+            case ContentControl content:
+                CollectLogicalText(content.Content, sink);
+                return;
+            case Panel panel:
+                foreach (var child in panel.Children)
+                {
+                    CollectLogicalText(child, sink);
+                }
+
+                return;
+            case Decorator decorator:
+                CollectLogicalText(decorator.Child, sink);
+                return;
+        }
+    }
+
+    private static readonly System.Text.Json.JsonSerializerOptions SettingsTransferJsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true
+    };
+
+    private void ExportSettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Filter = "JSON files (*.json)|*.json",
+            FileName = $"ai-arena-settings-{DateTime.Now:yyyyMMdd-HHmmss}.json"
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(_wpfSettings, SettingsTransferJsonOptions);
+            var clone = System.Text.Json.JsonSerializer.Deserialize<WpfSettings>(json, SettingsTransferJsonOptions) ?? new WpfSettings();
+            clone.AgentWorkspaceMessages = [];
+            File.WriteAllText(dialog.FileName, System.Text.Json.JsonSerializer.Serialize(clone, SettingsTransferJsonOptions));
+            SettingsTransferStatusText.Text = $"Settings exported to {dialog.FileName}.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            SettingsTransferStatusText.Text = $"Export failed: {ex.Message}";
+        }
+    }
+
+    private void ImportSettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = "JSON files (*.json)|*.json"
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var imported = System.Text.Json.JsonSerializer.Deserialize<WpfSettings>(File.ReadAllText(dialog.FileName), SettingsTransferJsonOptions);
+            if (imported is null)
+            {
+                SettingsTransferStatusText.Text = "Import failed: the file did not contain AI Arena settings.";
+                return;
+            }
+
+            // Keep the local Agent conversation; imports carry behavior, not history.
+            imported.AgentWorkspaceMessages = _wpfSettings.AgentWorkspaceMessages;
+            _wpfSettingsStore.Save(imported);
+            _wpfSettings = _wpfSettingsStore.Load();
+            InitializeAgentAndStreamingSettingsFields();
+            RefreshProviderProfilePicker();
+            ShellNavigation.ApplyTheme(_wpfSettings.ThemeId, persist: false, rerender: true);
+            SettingsTransferStatusText.Text = "Settings imported. Some visual options apply after restart.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            SettingsTransferStatusText.Text = $"Import failed: {ex.Message}";
+        }
+    }
+
+    private void AgentTeamModeButton_Click(object sender, RoutedEventArgs e)
+    {
+        AgentComposerControlsPopup.IsOpen = false;
+        if (_agentWorkspaceCoordinator is null)
+        {
+            return;
+        }
+
+        var builderOnly = _agentWorkspaceCoordinator.ToggleBuilderOnlyMode();
+        AgentTeamModeButton.Content = builderOnly ? "Team: Builder only" : "Team: Full";
     }
 
     private void ViewPresetFocused_Click(object sender, RoutedEventArgs e)
@@ -1180,7 +3527,10 @@ public partial class MainWindow : Window
         _transcriptViewCoordinator?.ApplyReviewPreset();
     }
 
-    private async Task LoadSessionAsync(CoreSessionSummary session, bool force)
+    private async Task LoadSessionAsync(
+        CoreSessionSummary session,
+        bool force,
+        CancellationToken cancellationToken = default)
     {
         if (!force && session.LastModified == _activeSnapshotWriteUtc)
         {
@@ -1189,20 +3539,29 @@ public partial class MainWindow : Window
 
         try
         {
-            var coreSnapshot = await _coreSessionStore.LoadSnapshotAsync(session.Id);
+            var coreSnapshot = await _coreSessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
+            var currentSession = coreSnapshot is null
+                ? session
+                : session with { MessageCount = coreSnapshot.Engine.Messages.Count };
             var snapshot = coreSnapshot is null
-                ? SnapshotViewMapper.Empty(session, "No snapshot file.")
-                : SnapshotViewMapper.FromCore(session, coreSnapshot);
-            _activeSession = session;
-            _activeSnapshotWriteUtc = session.LastModified;
+                ? SnapshotViewMapper.Empty(currentSession, "No snapshot file.")
+                : SnapshotViewMapper.FromCore(currentSession, coreSnapshot);
+            _activeSession = currentSession;
+            _activeSnapshotWriteUtc = currentSession.LastModified;
+            SavedStateCoordinator.ApplyForkLineage(coreSnapshot?.ForkLineage);
             RenderSnapshot(snapshot);
             SavedStateCoordinator.RefreshCheckpoints();
-            LoadStatus.Text = $"Loaded read-only snapshot: {snapshot.SnapshotPath}\nAuto-refresh: 1.2s";
+            LoadStatus.Text = $"Loaded session: {snapshot.SnapshotPath}\nExternal-change refresh: 1.2s";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             _activeSession = session;
             _activeSnapshotWriteUtc = session.LastModified;
+            SavedStateCoordinator.ApplyForkLineage(null);
             PopulateFallbackState($"Could not load snapshot: {ex.Message}");
             SavedStateCoordinator.ClearCheckpoints("No checkpoint data.");
             LoadStatus.Text = $"Could not load session '{session.Id}': {ex.Message}";
@@ -1211,26 +3570,44 @@ public partial class MainWindow : Window
 
     private void RenderSnapshot(ArenaViewSnapshot snapshot)
     {
+        PreserveCurrentSessionSettingsDraft();
         UpdateTopBarStatus(snapshot);
         _lastRenderedSnapshot = snapshot;
+        var arenaReadiness = ArenaOperationCoordinator.EvaluateReadiness(snapshot);
+        ArenaOperations.UpdateReadiness(arenaReadiness);
         if (!_arenaBusy)
         {
-            ArenaRunStatus.Text = snapshot.ProviderOnline ? "Ready." : "Provider offline. Check LM Studio or the provider base URL.";
+            ArenaRunStatus.Text = arenaReadiness.CanRun ? "Ready." : arenaReadiness.Message;
         }
         _isRenderingSnapshot = true;
-        var activeCount = snapshot.Agents.Count(agent => agent.Active);
-        AgentRoster.ApplySnapshot(activeCount);
-        ProviderSettings.ApplySnapshot(snapshot);
-        ProviderTimeoutText.Text = snapshot.ProviderTimeout.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        ProviderTemperatureText.Text = snapshot.ProviderTemperature.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-        ProviderMaxOutputText.Text = snapshot.ProviderMaxOutputTokens.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        ContextTranscriptWindowText.Text = snapshot.TranscriptWindow.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        ContextPrivateWindowText.Text = snapshot.PrivateWindow.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        ContextNotesWindowText.Text = snapshot.NotesWindow.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        ContextSummaryText.Text = string.IsNullOrWhiteSpace(snapshot.Summary) ? "No summary has been generated for this session." : snapshot.Summary;
-        InternetWorkflow.ApplySnapshot(snapshot);
-        OperatorTurn.ApplySnapshot(snapshot);
-        _isRenderingSnapshot = false;
+        try
+        {
+            var activeCount = snapshot.Agents.Count(agent => agent.Active);
+            AgentRoster.ApplySnapshot(activeCount);
+            ProviderSettings.ApplySnapshot(snapshot);
+            ApplyRoleOverrideFields(snapshot);
+            ProviderTimeoutText.Text = snapshot.ProviderTimeout.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            ProviderTemperatureText.Text = snapshot.ProviderTemperature.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+            ProviderMaxOutputText.Text = snapshot.ProviderMaxOutputTokens.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            ProviderContextLengthText.Text = snapshot.ProviderContextLength.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            ShellUiHelpers.SelectComboTag(ProviderReasoningPicker, ModelProviderReasoningModes.Normalize(snapshot.ProviderReasoning));
+            ProviderNativeStatefulChatCheckBox.IsChecked = snapshot.ProviderNativeStatefulChat;
+            ProviderNativeIdleTtlText.Text = snapshot.ProviderNativeIdleTtlSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            ContextTranscriptWindowText.Text = snapshot.TranscriptWindow.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            ContextPrivateWindowText.Text = snapshot.PrivateWindow.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            ContextNotesWindowText.Text = snapshot.NotesWindow.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            ContextSummaryText.Text = string.IsNullOrWhiteSpace(snapshot.Summary) ? "No summary has been generated for this session." : snapshot.Summary;
+            InternetWorkflow.ApplySnapshot(snapshot);
+            OperatorTurn.ApplySnapshot(snapshot);
+            ApplyWorldSnapshotIfVisible(snapshot);
+        }
+        finally
+        {
+            _isRenderingSnapshot = false;
+        }
+
+        ReconcileSessionSettingsAfterSnapshot(_activeSession?.Id ?? "");
+
         InternetWorkflow.UpdateSettingsHint();
         OperatorTurn.UpdatePrivateTargetSummary();
         SessionOverview.UpdateSessionOverview(snapshot);
@@ -1240,19 +3617,20 @@ public partial class MainWindow : Window
         PopulateTranscript(snapshot.Messages);
         AgentBoard.Populate(snapshot, CurrentTurnAgent(snapshot)?.Id);
         PopulateCustomMatch(snapshot);
-        NewsPanelWorkflow.Populate(snapshot.Messages);
         _collaborateCoordinator?.RefreshProviderState();
         OperatorTurn.UpdatePrivateTargetSummary();
     }
 
     private void PopulateFallbackState(string message)
     {
-        TranscriptItems.Children.Clear();
         AgentPerformance.CloseDetail();
         _lastRenderedSnapshot = null;
-        TranscriptItems.Children.Add(CreateCard("Transcript", message, ResourceBrush("CardBrush"), ResourceBrush("AlphaAccentBrush")));
+        ArenaOperations.UpdateReadiness(new ArenaActionReadiness(false, "Load a valid session before running the arena."));
+        TranscriptItems.ItemsSource = new object[]
+        {
+            CreateCard("Transcript", message, ResourceBrush("CardBrush"), ResourceBrush("AlphaAccentBrush"))
+        };
         AgentBoard.PopulateFallback();
-        NewsPanelWorkflow.PopulateFallback();
         _collaborateCoordinator?.RefreshProviderState();
     }
 
@@ -1273,13 +3651,16 @@ public partial class MainWindow : Window
 
     private void PopulateTranscript(IReadOnlyList<TranscriptMessage> messages)
     {
+        PublishTranscriptMessageEvents(messages);
         if (_transcriptListCoordinator is null)
         {
             _lastRenderedMessages = messages;
+            _transcriptExportCoordinator?.RefreshExportScopeStatus();
             return;
         }
 
         TranscriptList.Populate(messages);
+        TranscriptExportCoordinator.RefreshExportScopeStatus();
     }
 
     private void TranscriptDashboardGrid_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -1302,12 +3683,12 @@ public partial class MainWindow : Window
 
     private bool ShouldShowStyleFit()
     {
-        return _wpfSettings.AllowDebugControls && _wpfSettings.ShowStyleFit;
+        return _wpfSettings.ShowStyleFit && (_wpfSettings.AllowDebugControls || _wpfSettings.ShowBattleReview);
     }
 
     private bool ShouldShowDecisionCard()
     {
-        return _wpfSettings.AllowDebugControls && _wpfSettings.ShowDecisionCard;
+        return _wpfSettings.ShowDecisionCard && (_wpfSettings.AllowDebugControls || _wpfSettings.ShowBattleReview);
     }
 
     private bool ShouldEnforceVoiceDrift()
@@ -1318,9 +3699,9 @@ public partial class MainWindow : Window
     private Brush VoiceAdherenceAccent(string state)
     {
         return state.Equals("strong", StringComparison.OrdinalIgnoreCase)
-            ? ResourceBrush("GammaAccentBrush")
+            ? ResourceBrush("Arena.Brush.Success")
             : state.Equals("drifting", StringComparison.OrdinalIgnoreCase)
-                ? ResourceBrush("BetaAccentBrush")
+                ? ResourceBrush("Arena.Brush.Warning")
                 : ResourceBrush("MutedTextBrush");
     }
 
@@ -1375,47 +3756,59 @@ public partial class MainWindow : Window
 
     private async void TestProviderButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_providerSettingsCoordinator is not null)
-        {
-            await _providerSettingsCoordinator.TestProviderAsync(TestProviderButton);
-        }
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.TestProviderAsync(TestProviderButton, cancellationToken));
     }
 
     private async void ApplyProviderPresetButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_providerSettingsCoordinator is not null)
-        {
-            await _providerSettingsCoordinator.ApplyProviderPresetAsync();
-        }
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.ApplyProviderPresetAsync(cancellationToken));
     }
 
     private async void PreloadSelectedModelsButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_providerSettingsCoordinator is not null)
-        {
-            await _providerSettingsCoordinator.PreloadSelectedModelsAsync();
-        }
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.PreloadSelectedModelsAsync(cancellationToken));
+    }
+
+    private async void UnloadSelectedModelsButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.UnloadSelectedModelsAsync(cancellationToken));
+    }
+
+    private async void DownloadModelButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.DownloadModelAsync(cancellationToken));
+    }
+
+    private async void CheckDownloadStatusButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.CheckDownloadStatusAsync(cancellationToken));
     }
 
     private async void AutoConfigureButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_providerSettingsCoordinator is not null)
-        {
-            await _providerSettingsCoordinator.AutoConfigureAsync();
-        }
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.AutoConfigureAsync(cancellationToken));
     }
 
     private async void ApplyAutoConfigureButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_providerSettingsCoordinator is not null)
-        {
-            await _providerSettingsCoordinator.ApplyAutoConfigureAsync();
-        }
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.ApplyAutoConfigureAsync(cancellationToken));
     }
 
     private async void ApplySettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        await ArenaSessionMutations.ApplySettingsAsync();
+        if (await ArenaSessionMutations.ApplySettingsAsync())
+        {
+            ResetSessionSettingsBaseline();
+            SettingsPendingChangesText.Text = "Session changes saved.";
+        }
     }
 
     private async void AutoChatButton_Click(object sender, RoutedEventArgs e)
@@ -1443,6 +3836,11 @@ public partial class MainWindow : Window
         await ScenarioWorkflow.GenerateAiChoiceAsync();
     }
 
+    private async void CurrentTopicsButton_Click(object sender, RoutedEventArgs e)
+    {
+        await ScenarioWorkflow.GenerateCurrentTopicsSeedAsync();
+    }
+
     private async void YoloScenarioButton_Click(object sender, RoutedEventArgs e)
     {
         await ScenarioWorkflow.GenerateYoloSeedAsync();
@@ -1463,14 +3861,106 @@ public partial class MainWindow : Window
         ScenarioWorkflow.CopyGenerationSeed();
     }
 
+    private void CopyGenerationBriefButton_Click(object sender, RoutedEventArgs e)
+    {
+        ScenarioWorkflow.CopyGenerationBrief();
+    }
+
+    private void CopyGenerationSpecButton_Click(object sender, RoutedEventArgs e)
+    {
+        ScenarioWorkflow.CopyGenerationSpec();
+    }
+
+    private void CopyGenerationDiffButton_Click(object sender, RoutedEventArgs e)
+    {
+        ScenarioWorkflow.CopyGenerationDiff();
+    }
+
+    private void CopyGenerationRubricButton_Click(object sender, RoutedEventArgs e)
+    {
+        ScenarioWorkflow.CopyGenerationRubric();
+    }
+
+    private void CopyCurrentSetupBriefButton_Click(object sender, RoutedEventArgs e)
+    {
+        ScenarioWorkflow.CopyCurrentSetupBrief();
+    }
+
+    private async void CopyCurrentSetupSpecButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var result = await _matchSetupPortabilityService.ExportAsync();
+            if (!result.Ok || result.State is null)
+            {
+                SetLoadStatus(result.Message);
+                SetArenaRunStatus(result.Message);
+                return;
+            }
+
+            var status = ScenarioWorkflowCoordinator.TrySetClipboardText(result.State.Json)
+                ? $"Copied portable Match Setup JSON ({result.State.Fingerprint[..12]})."
+                : "Copy portable Match Setup JSON failed because the clipboard is busy.";
+            SetLoadStatus(status);
+            SetArenaRunStatus(status);
+        }
+        catch (Exception ex)
+        {
+            var status = ArenaOperationCoordinator.OperationFailureStatus(ex);
+            SetLoadStatus(status);
+            SetArenaRunStatus(status);
+        }
+    }
+
+    private async void ImportCurrentSetupSpecButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ShellClipboard.TryGetText(out var json))
+        {
+            const string status = "Clipboard does not contain readable Match Setup JSON.";
+            SetLoadStatus(status);
+            SetArenaRunStatus(status);
+            return;
+        }
+
+        try
+        {
+            var result = await _matchSetupPortabilityService.ImportAsync(json, "");
+            var detail = result.Receipt?.Warnings.FirstOrDefault();
+            var statusText = string.IsNullOrWhiteSpace(detail) ? result.Message : $"{result.Message} {detail}";
+            SetLoadStatus(statusText);
+            SetArenaRunStatus(statusText);
+        }
+        catch (Exception ex)
+        {
+            var status = ArenaOperationCoordinator.OperationFailureStatus(ex);
+            SetLoadStatus(status);
+            SetArenaRunStatus(status);
+        }
+    }
+
     private async void ApplyRivalryMatrixButton_Click(object sender, RoutedEventArgs e)
     {
         await MatchSetup.ApplyRivalryMatrixAsync();
     }
 
+    private void ClearRivalryMatrixButton_Click(object sender, RoutedEventArgs e)
+    {
+        MatchSetup.ClearDraftRivalryMatrix();
+    }
+
+    private void ApplyRivalryMatrixPatternButton_Click(object sender, RoutedEventArgs e)
+    {
+        MatchSetup.ApplyRivalryMatrixPatternDraft();
+    }
+
     private void GenerationHistoryPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        _scenarioWorkflowCoordinator?.UpdateGenerationHistoryActions();
+        _scenarioWorkflowCoordinator?.OnGenerationHistorySelectionChanged();
+    }
+
+    private void GenerationHistoryFilterPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        _scenarioWorkflowCoordinator?.OnGenerationHistoryFilterChanged();
     }
 
     private async void NarrateNowButton_Click(object sender, RoutedEventArgs e)
@@ -1478,9 +3968,453 @@ public partial class MainWindow : Window
         await ArenaRun.NarrateNowAsync();
     }
 
-    private async void CurateNewsButton_Click(object sender, RoutedEventArgs e)
+    private void SpeakLatestNarratorButton_Click(object sender, RoutedEventArgs e)
     {
-        await InternetWorkflow.CurateNewsAsync();
+        if (_voiceNarrationService.IsSpeaking)
+        {
+            StopVoicePlayback();
+            UpdateVoiceToggleButton();
+            return;
+        }
+
+        var narratorMessage = _lastRenderedMessages
+            .LastOrDefault(message => message.SpeakerId.Equals("narrator", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(message.Text));
+        if (narratorMessage is null)
+        {
+            SetArenaRunStatus("No narrator turn is available to speak.");
+            return;
+        }
+
+        SpeakTranscriptMessage(narratorMessage);
+        UpdateVoiceToggleButton();
+    }
+
+    private void AgentPerformanceFullCardsCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressAgentSettingsHandlers)
+        {
+            return;
+        }
+
+        _wpfSettings.AgentPerformanceFullCards = AgentPerformanceFullCardsCheckBox.IsChecked == true;
+        _wpfSettingsStore.Save(_wpfSettings);
+        _agentPerformanceCoordinator?.RefreshDensity();
+    }
+
+    private void RightRailToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_rightRailAutoCollapseActive)
+        {
+            if (_wpfSettings.RightRailCollapsed)
+            {
+                _wpfSettings.RightRailCollapsed = false;
+                _wpfSettingsStore.Save(_wpfSettings);
+                _rightRailNarrowRevealRequested = true;
+                _rightRailWidthCollapseLatched = false;
+            }
+            else
+            {
+                _rightRailNarrowRevealRequested = !_rightRailNarrowRevealRequested;
+                if (_rightRailNarrowRevealRequested)
+                {
+                    _rightRailWidthCollapseLatched = false;
+                }
+            }
+        }
+        else if (_rightRailWidthCollapseLatched)
+        {
+            _rightRailWidthCollapseLatched = false;
+            _rightRailNarrowRevealRequested = false;
+            _wpfSettings.RightRailCollapsed = false;
+            _wpfSettingsStore.Save(_wpfSettings);
+        }
+        else
+        {
+            _rightRailNarrowRevealRequested = false;
+            _wpfSettings.RightRailCollapsed = !_wpfSettings.RightRailCollapsed;
+            _wpfSettingsStore.Save(_wpfSettings);
+        }
+
+        ApplyRightRailCollapsed();
+    }
+
+    private bool ControlSetRightRail(string state)
+    {
+        var requested = AIArenaControlPlaneProtocol.NormalizeCommand(state);
+        var collapsed = IsRightRailEffectivelyCollapsed(
+            _wpfSettings.RightRailCollapsed,
+            _rightRailAutoCollapseActive,
+            _rightRailNarrowRevealRequested,
+            _rightRailWidthCollapseLatched);
+        if (requested == "toggle")
+        {
+            requested = collapsed ? "show" : "hide";
+        }
+
+        switch (requested)
+        {
+            case "show":
+            case "expanded":
+                _rightRailWidthCollapseLatched = false;
+                _wpfSettings.RightRailCollapsed = false;
+                _rightRailNarrowRevealRequested = _rightRailAutoCollapseActive;
+                break;
+            case "hide":
+            case "collapsed":
+                _rightRailWidthCollapseLatched = false;
+                _wpfSettings.RightRailCollapsed = true;
+                _rightRailNarrowRevealRequested = false;
+                break;
+            default:
+                return false;
+        }
+
+        _wpfSettingsStore.Save(_wpfSettings);
+        ApplyRightRailCollapsed();
+        return true;
+    }
+
+    private object BuildRightRailControlState()
+    {
+        var collapsed = IsRightRailEffectivelyCollapsed(
+            _wpfSettings.RightRailCollapsed,
+            _rightRailAutoCollapseActive,
+            _rightRailNarrowRevealRequested,
+            _rightRailWidthCollapseLatched);
+        return new
+        {
+            State = collapsed ? "collapsed" : "expanded",
+            Preference = _wpfSettings.RightRailCollapsed ? "collapsed" : "expanded",
+            AutoCollapse = _rightRailAutoCollapseActive,
+            Overlay = ShouldOverlayRightRail(_rightRailAutoCollapseActive, collapsed)
+        };
+    }
+
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape && CloseTopmostShellOverlay())
+        {
+            e.Handled = true;
+            return;
+        }
+
+        base.OnPreviewKeyDown(e);
+    }
+
+    private bool CloseTopmostShellOverlay()
+    {
+        if (AppSettingsPanel.Visibility == Visibility.Visible)
+        {
+            CloseAppSettings();
+            return true;
+        }
+
+        if (ProviderHealthPopup.IsOpen)
+        {
+            ProviderReachability.ClosePopup();
+            return true;
+        }
+
+        if (TranscriptSearchPopup.IsOpen)
+        {
+            _transcriptSearchCoordinator?.CloseSearch();
+            TranscriptSearchButton.Focus();
+            return true;
+        }
+
+        if (DebugMenuPopup.IsOpen)
+        {
+            DebugMenuPopup.IsOpen = false;
+            return true;
+        }
+
+        if (ViewMenuPopup.IsOpen)
+        {
+            ViewMenuPopup.IsOpen = false;
+            return true;
+        }
+
+        if (CustomMatchPanel.Visibility == Visibility.Visible)
+        {
+            CloseMatchSetupFlyout();
+            return true;
+        }
+
+        return false;
+    }
+
+    private void FocusOverlayEntry(Popup popup, UIElement entry)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (popup.IsOpen && entry.IsVisible && entry.IsEnabled)
+            {
+                entry.Focus();
+            }
+        }, DispatcherPriority.Input);
+    }
+
+    private void RestoreOverlayFocus(
+        IInputElement? preferredTarget,
+        UIElement fallbackTarget,
+        Func<bool> overlayRemainsClosed)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (!overlayRemainsClosed())
+            {
+                return;
+            }
+
+            if (preferredTarget is UIElement { IsVisible: true, IsEnabled: true } preferredElement
+                && preferredElement.Focusable)
+            {
+                Keyboard.Focus(preferredElement);
+                return;
+            }
+
+            if (fallbackTarget.IsVisible && fallbackTarget.IsEnabled)
+            {
+                fallbackTarget.Focus();
+            }
+        }, DispatcherPriority.Input);
+    }
+
+    private void ApplyMaximizedChromePadding()
+    {
+        // With WindowChrome the maximized client area overhangs the monitor by the
+        // resize border plus the fixed frame; padding the root keeps edge content
+        // visible and clickable.
+        var overhang = SystemParameters.WindowResizeBorderThickness;
+        RootLayout.Margin = WindowState == WindowState.Maximized
+            ? new Thickness(
+                overhang.Left + 3,
+                overhang.Top + 3,
+                overhang.Right + 3,
+                overhang.Bottom + 3)
+            : new Thickness(0);
+    }
+
+    private void MainWindow_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        NavigationRailColumn.Width = new GridLength(ResolveNavigationRailWidth(e.NewSize.Width));
+        ArenaControlGrid.Columns = ResolveArenaControlColumns(ResolveRightRailDockWidth(e.NewSize.Width));
+        ApplyTopBarLayout(ShouldStackTopBar(e.NewSize.Width));
+        var autoCollapse = ShouldAutoCollapseRightRail(e.NewSize.Width);
+        if (autoCollapse != _rightRailAutoCollapseActive)
+        {
+            if (autoCollapse)
+            {
+                _rightRailWidthCollapseLatched = true;
+            }
+
+            _rightRailAutoCollapseActive = autoCollapse;
+            _rightRailNarrowRevealRequested = false;
+        }
+
+        ApplyRightRailCollapsed(e.NewSize.Width);
+    }
+
+    private void ApplyTopBarLayout(bool stacked)
+    {
+        if (_topBarStacked == stacked)
+        {
+            return;
+        }
+
+        _topBarStacked = stacked;
+        Grid.SetRow(TopBarStatus, 0);
+        Grid.SetColumn(TopBarStatus, 0);
+        Grid.SetColumnSpan(TopBarStatus, stacked ? 2 : 1);
+        Grid.SetRow(TopBarCommandPanel, stacked ? 1 : 0);
+        Grid.SetColumn(TopBarCommandPanel, stacked ? 0 : 1);
+        Grid.SetColumnSpan(TopBarCommandPanel, stacked ? 2 : 1);
+        TopBarCommandPanel.Margin = stacked
+            ? new Thickness(0, 6, 0, 0)
+            : new Thickness(14, 0, 0, 0);
+    }
+
+    internal static bool ShouldStackTopBar(double windowWidth)
+    {
+        return !double.IsFinite(windowWidth)
+            || windowWidth <= 0
+            || windowWidth < TopBarInlineMinWidth;
+    }
+
+    internal static double ResolveNavigationRailWidth(double windowWidth)
+    {
+        if (!double.IsFinite(windowWidth) || windowWidth <= 0)
+        {
+            return NavigationRailStandardWidth;
+        }
+
+        if (windowWidth >= NavigationRailComfortableMinWindowWidth)
+        {
+            return NavigationRailComfortableWidth;
+        }
+
+        if (windowWidth >= NavigationRailStandardMinWindowWidth)
+        {
+            var comfortableProgress = Math.Clamp(
+                (windowWidth - NavigationRailStandardMinWindowWidth)
+                / (NavigationRailComfortableMinWindowWidth - NavigationRailStandardMinWindowWidth),
+                0,
+                1);
+            return NavigationRailStandardWidth
+                + ((NavigationRailComfortableWidth - NavigationRailStandardWidth) * comfortableProgress);
+        }
+
+        var progress = Math.Clamp(
+            (windowWidth - SupportedMinimumWindowWidth)
+            / (NavigationRailStandardMinWindowWidth - SupportedMinimumWindowWidth),
+            0,
+            1);
+        return NavigationRailCompactWidth
+            + ((NavigationRailStandardWidth - NavigationRailCompactWidth) * progress);
+    }
+
+    private void ApplyRightRailCollapsed()
+    {
+        ApplyRightRailCollapsed(ActualWidth);
+    }
+
+    private void ApplyRightRailCollapsed(double windowWidth)
+    {
+        var collapsed = IsRightRailEffectivelyCollapsed(
+            _wpfSettings.RightRailCollapsed,
+            _rightRailAutoCollapseActive,
+            _rightRailNarrowRevealRequested,
+            _rightRailWidthCollapseLatched);
+        var overlay = ShouldOverlayRightRail(_rightRailAutoCollapseActive, collapsed);
+        var restoreFocusAfterCollapse = collapsed && RightRailScrollViewer.IsKeyboardFocusWithin;
+        RightRailColumn.Width = collapsed || overlay
+            ? new GridLength(0)
+            : new GridLength(ResolveRightRailDockWidth(windowWidth));
+        RightRailScrollViewer.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        ApplyRightRailPresentation(overlay, windowWidth);
+        RightRailToggleGlyph.Text = collapsed ? "" : "";
+        var temporaryLayout = _rightRailAutoCollapseActive && !_wpfSettings.RightRailCollapsed;
+        RightRailToggleButton.ToolTip = collapsed
+            ? temporaryLayout ? "Show right rail temporarily" : "Show right rail"
+            : temporaryLayout ? "Hide temporarily revealed right rail" : "Hide right rail";
+        AutomationProperties.SetName(
+            RightRailToggleButton,
+            collapsed ? "Show right rail" : "Hide right rail");
+        AutomationProperties.SetHelpText(
+            RightRailToggleButton,
+            collapsed
+                ? "Show the right rail panels to inspect supporting details."
+                : "Hide the right rail panels to give the center workspace more room.");
+        AutomationProperties.SetItemStatus(
+            RightRailToggleButton,
+            collapsed ? "collapsed" : "expanded");
+
+        if (restoreFocusAfterCollapse)
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (RightRailScrollViewer.Visibility == Visibility.Collapsed
+                    && RightRailToggleButton.IsVisible
+                    && RightRailToggleButton.IsEnabled)
+                {
+                    Keyboard.Focus(RightRailToggleButton);
+                }
+            }, DispatcherPriority.Input);
+        }
+    }
+
+    internal static double ResolveRightRailDockWidth(double windowWidth)
+    {
+        if (!double.IsFinite(windowWidth) || windowWidth <= 0)
+        {
+            return RightRailExpandedWidth;
+        }
+
+        var progress = Math.Clamp(
+            (windowWidth - SupportedMinimumWindowWidth)
+            / (RightRailFullWidthMinWindowWidth - SupportedMinimumWindowWidth),
+            0,
+            1);
+        return RightRailCompactWidth
+            + ((RightRailExpandedWidth - RightRailCompactWidth) * progress);
+    }
+
+    internal static double ResolveExpandedCenterWorkspaceWidth(double windowWidth)
+    {
+        if (!double.IsFinite(windowWidth) || windowWidth <= 0)
+        {
+            return 0;
+        }
+
+        return Math.Max(
+            0,
+            windowWidth - ResolveNavigationRailWidth(windowWidth) - ResolveRightRailDockWidth(windowWidth));
+    }
+
+    internal static int ResolveArenaControlColumns(double rightRailWidth)
+    {
+        return double.IsFinite(rightRailWidth) && rightRailWidth < 320 ? 2 : 3;
+    }
+
+    private void ApplyRightRailPresentation(bool overlay, double windowWidth)
+    {
+        Grid.SetColumn(RightRailScrollViewer, overlay ? 1 : 2);
+        Grid.SetColumnSpan(RightRailScrollViewer, overlay ? 2 : 1);
+        Panel.SetZIndex(RightRailScrollViewer, overlay ? 12 : 0);
+        RightRailScrollViewer.Width = overlay ? ResolveRightRailDockWidth(windowWidth) : double.NaN;
+        RightRailScrollViewer.HorizontalAlignment = overlay
+            ? HorizontalAlignment.Right
+            : HorizontalAlignment.Stretch;
+        RightRailScrollViewer.Background = overlay
+            ? ResourceBrush("PanelBrush")
+            : Brushes.Transparent;
+        RightRailScrollViewer.BorderBrush = overlay
+            ? ResourceBrush("ControlBorderBrush")
+            : Brushes.Transparent;
+        RightRailScrollViewer.BorderThickness = overlay
+            ? new Thickness(1, 0, 0, 0)
+            : new Thickness(0);
+        RightRailScrollViewer.Padding = overlay
+            ? new Thickness(10, 0, 0, 0)
+            : new Thickness(0);
+    }
+
+    internal static bool ShouldAutoCollapseRightRail(double windowWidth)
+    {
+        return double.IsFinite(windowWidth)
+            && windowWidth > 0
+            && windowWidth < RightRailAutoCollapseWidth;
+    }
+
+    internal static bool IsRightRailEffectivelyCollapsed(
+        bool userCollapsed,
+        bool autoCollapseActive,
+        bool narrowRevealRequested,
+        bool widthCollapseLatched = false)
+    {
+        if (userCollapsed)
+        {
+            return true;
+        }
+
+        return autoCollapseActive
+            ? !narrowRevealRequested
+            : widthCollapseLatched;
+    }
+
+    internal static bool ShouldOverlayRightRail(bool autoCollapseActive, bool collapsed)
+    {
+        return autoCollapseActive && !collapsed;
+    }
+
+    private void UpdateVoiceToggleButton()
+    {
+        var speaking = _voiceNarrationService.IsSpeaking;
+        VoiceToggleIcon.Text = speaking ? "" : "";
+        VoiceToggleLabel.Text = speaking ? "Stop Voice" : "Speak";
+        SpeakLatestNarratorButton.Tag = speaking ? "speaking" : null;
+        SpeakLatestNarratorButton.ToolTip = speaking ? "Stop voice playback" : "Speak latest narrator turn";
     }
 
     private async void OneTurnButton_Click(object sender, RoutedEventArgs e)
@@ -1540,15 +4474,79 @@ public partial class MainWindow : Window
 
     private void ExportTranscriptButton_Click(object sender, RoutedEventArgs e)
     {
+        if (CollaboratePanel.Visibility == Visibility.Visible)
+        {
+            Collaborate.ExportCurrentConversation(this);
+            return;
+        }
+
         TranscriptExportCoordinator.ExportTranscript();
     }
 
-    private void ApplyProviderStatusSnapshot(CoreSessionSummary session, ArenaViewSnapshot snapshot)
+    private void ApplyProviderStatusProjection(CoreSessionSummary session, ArenaViewSnapshot snapshot)
     {
+        PublishProviderTransition(snapshot);
         _activeSession = session;
         _activeSnapshotWriteUtc = session.LastModified;
         _lastRenderedSnapshot = snapshot;
+        var arenaReadiness = ArenaOperationCoordinator.EvaluateReadiness(snapshot);
+        ArenaOperations.UpdateReadiness(arenaReadiness);
+        if (!_arenaBusy)
+        {
+            ArenaRunStatus.Text = arenaReadiness.CanRun ? "Ready." : arenaReadiness.Message;
+        }
+        UpdateTopBarStatus(snapshot);
+        SessionOverview.UpdateSessionOverview(snapshot);
+        PopulateTranscript(snapshot.Messages);
         _collaborateCoordinator?.RefreshProviderState();
+        _agentWorkspaceCoordinator?.RefreshProviderState();
+    }
+
+    private void PublishTranscriptMessageEvents(IReadOnlyList<TranscriptMessage> messages)
+    {
+        var previousMaxTurn = _lastRenderedMessages
+            .Select(message => message.Turn)
+            .DefaultIfEmpty(0)
+            .Max();
+        foreach (var message in messages.Where(item => item.Turn > previousMaxTurn).OrderBy(item => item.Turn))
+        {
+            _controlPlaneEvents.Publish(
+                "message.added",
+                "Transcript message added.",
+                new
+                {
+                    message.Turn,
+                    message.Speaker,
+                    message.SpeakerId,
+                    message.Status,
+                    TextLength = message.Text?.Length ?? 0
+                });
+        }
+    }
+
+    private void PublishProviderTransition(ArenaViewSnapshot snapshot)
+    {
+        var previous = _lastRenderedSnapshot;
+        var online = snapshot.ProviderOnline;
+        var changed = previous is null || previous.ProviderOnline != online;
+        var errorChanged = previous is not null
+            && !string.Equals(previous.ProviderLastError, snapshot.ProviderLastError, StringComparison.Ordinal);
+        if (!changed && !errorChanged)
+        {
+            return;
+        }
+
+        _controlPlaneEvents.Publish(
+            online ? "provider.online" : "provider.offline",
+            online ? "Provider is online." : "Provider is offline.",
+            new
+            {
+                snapshot.ProviderModel,
+                ProviderBaseUrl = ProviderConfigurationControlService.SanitizeBaseUrl(snapshot.ProviderBaseUrl),
+                ProviderLastError = ProviderConfigurationControlService.SanitizeError(
+                    snapshot.ProviderLastError,
+                    snapshot.ProviderApiToken)
+            });
     }
 
     private void SavedStateModePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1585,12 +4583,31 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task SaveSnapshotWithFeedbackAsync(AIArena.Core.Models.ArenaSnapshot snapshot, string sessionId)
+    private async void ForkCurrentMatchButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_savedStateCoordinator is not null)
+        {
+            await _savedStateCoordinator.ForkCurrentAsync();
+        }
+    }
+
+    private async void OpenForkParentButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_savedStateCoordinator is not null)
+        {
+            await _savedStateCoordinator.OpenParentAsync();
+        }
+    }
+
+    private async Task SaveSnapshotWithFeedbackAsync(
+        AIArena.Core.Models.ArenaSnapshot snapshot,
+        string sessionId,
+        CancellationToken cancellationToken = default)
     {
         SetSaveStatus("Saving...", ResourceBrush("MutedTextBrush"));
         try
         {
-            await _coreSessionStore.SaveSnapshotAsync(snapshot, sessionId);
+            await _coreSessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
             SetSaveStatus($"Saved {DateTime.Now:h:mm tt}", ResourceBrush("AlphaAccentBrush"));
         }
         catch (Exception ex)
@@ -1617,9 +4634,90 @@ public partial class MainWindow : Window
         return RunArenaBusyAsync(status, operationButton, action, allowDuringAutoChat);
     }
 
+    private static async Task EnsureInternetBackendForSearchAsync(CancellationToken cancellationToken)
+    {
+        if (Application.Current is not App app)
+        {
+            return;
+        }
+
+        var status = await app.EnsureInternetSearchAsync(cancellationToken);
+        if (!status.Started && !status.AlreadyRunning)
+        {
+            throw new InvalidOperationException(status.Message);
+        }
+    }
+
+    private Task PersistInternetSettingForActiveSessionAsync(
+        string sessionId,
+        bool enabled,
+        CancellationToken workflowCancellationToken)
+    {
+        var operationCoordinator = _arenaOperationCoordinator;
+        if (operationCoordinator is null || string.IsNullOrWhiteSpace(sessionId) || _shutdownInProgress)
+        {
+            return Task.FromException(new OperationCanceledException("Internet setting cannot be saved while the app is shutting down or no session is active."));
+        }
+
+        return operationCoordinator.TrackAsync(async shutdownCancellationToken =>
+        {
+            using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                workflowCancellationToken,
+                shutdownCancellationToken);
+            var cancellationToken = linkedCancellation.Token;
+            var operationLockTaken = false;
+            try
+            {
+                await _arenaOperationLock.WaitAsync(cancellationToken);
+                operationLockTaken = true;
+                SetSaveStatus("Saving Internet setting...", ResourceBrush("MutedTextBrush"));
+                var saved = await InternetWorkflowCoordinator.PersistSessionSettingAsync(
+                    _coreSessionStore,
+                    _eventLogStore,
+                    sessionId,
+                    enabled,
+                    cancellationToken);
+                if (!saved)
+                {
+                    throw new InvalidOperationException($"Session '{sessionId}' could not be loaded.");
+                }
+
+                if (_activeSession?.Id.Equals(sessionId, StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    SetSaveStatus($"Saved {DateTime.Now:h:mm tt}", ResourceBrush("AlphaAccentBrush"));
+                }
+            }
+            finally
+            {
+                if (operationLockTaken)
+                {
+                    _arenaOperationLock.Release();
+                }
+            }
+
+        });
+    }
+
+    private Task RunArenaBusyForCoordinatorAsync(
+        string status,
+        Button? operationButton,
+        Func<CancellationToken, Task> action,
+        bool allowDuringAutoChat)
+    {
+        return ArenaOperations.RunAsync(status, operationButton, action, allowDuringAutoChat);
+    }
+
     private Task SaveSnapshotForCoordinatorAsync(AIArena.Core.Models.ArenaSnapshot snapshot, string sessionId)
     {
         return SaveSnapshotWithFeedbackAsync(snapshot, sessionId);
+    }
+
+    private Task SaveSnapshotForProviderAsync(
+        AIArena.Core.Models.ArenaSnapshot snapshot,
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        return SaveSnapshotWithFeedbackAsync(snapshot, sessionId, cancellationToken);
     }
 
     private Task RefreshActiveSessionForCoordinatorAsync(string status)
@@ -1627,14 +4725,21 @@ public partial class MainWindow : Window
         return RefreshActiveSessionAsync(status);
     }
 
+    private Task RefreshActiveSessionForProviderAsync(string status, CancellationToken cancellationToken)
+    {
+        return RefreshActiveSessionAsync(status, cancellationToken);
+    }
+
     private void SetLoadStatus(string status)
     {
         LoadStatus.Text = status;
+        _controlPlaneEvents.Publish("status.changed", status, new { surface = "load" });
     }
 
     private void SetArenaRunStatus(string status)
     {
         ArenaRunStatus.Text = status;
+        _controlPlaneEvents.Publish("status.changed", status, new { surface = "arena" });
     }
 
     private async Task RunArenaBusyAsync(string status, Func<Task> action)
@@ -1669,17 +4774,22 @@ public partial class MainWindow : Window
         await RefreshActiveSessionAsync(status);
     }
 
-    private async Task RefreshActiveSessionAsync(string status)
+    private async Task RefreshActiveSessionAsync(
+        string status,
+        CancellationToken cancellationToken = default)
     {
         if (_activeSession is null)
         {
             return;
         }
 
-        var latest = (await _coreSessionStore.ListSessionsAsync()).FirstOrDefault(session => session.Id == _activeSession.Id);
+        var observedWriteTime = TryGetSessionDirectoryLastModified(_activeSession.SnapshotPath);
+        var latest = observedWriteTime is null
+            ? (await _coreSessionStore.ListSessionsAsync(cancellationToken)).FirstOrDefault(session => session.Id == _activeSession.Id)
+            : _activeSession with { LastModified = observedWriteTime.Value };
         if (latest is not null)
         {
-            await LoadSessionAsync(latest, force: true);
+            await LoadSessionAsync(latest, force: true, cancellationToken);
         }
 
         LoadStatus.Text = status;
@@ -1703,6 +4813,55 @@ public partial class MainWindow : Window
         ShellNavigation.OnThemeSelectionChanged();
     }
 
+    private void OnSystemThemePreferenceChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        var propertyName = e.PropertyName;
+        if (!ShouldReapplySystemTheme(_wpfSettings.ThemeId, propertyName)
+            || Dispatcher.HasShutdownStarted)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (!Dispatcher.HasShutdownStarted
+                    && ShouldReapplySystemTheme(_wpfSettings.ThemeId, propertyName))
+                {
+                    ShellNavigation.ApplyTheme("system", persist: false, rerender: true);
+                }
+            },
+            DispatcherPriority.Background);
+    }
+
+    private void OnSystemMotionPreferenceChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!SystemMotionPreferences.IsAnimationPreferenceChange(e.PropertyName)
+            || Dispatcher.HasShutdownStarted)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (Dispatcher.HasShutdownStarted)
+                {
+                    return;
+                }
+
+                _arenaOperationCoordinator?.RefreshMotionPreference();
+                _appSettingsCoordinator?.RefreshMotionPreference();
+            },
+            DispatcherPriority.Background);
+    }
+
+    internal static bool ShouldReapplySystemTheme(string? themeId, string? propertyName)
+    {
+        return string.Equals(themeId?.Trim(), "system", StringComparison.OrdinalIgnoreCase)
+            && SystemThemePreferences.IsThemePreferenceChange(propertyName);
+    }
+
     private Brush ResourceBrush(string key)
     {
         return TryFindResource(key) as Brush ?? Brushes.White;
@@ -1712,6 +4871,7 @@ public partial class MainWindow : Window
     {
         _userGuideWindowHost.RefreshTheme(this);
         _collaborateCoordinator?.RefreshTheme();
+        _agentWorkspaceCoordinator?.RefreshTheme();
     }
 
     private static Brush BlendBrush(Brush baseBrush, Brush accentBrush, double accentAmount)
@@ -1739,7 +4899,7 @@ public partial class MainWindow : Window
 
     private void ArenaNavButton_Click(object sender, RoutedEventArgs e)
     {
-        ShowTranscriptPanel(clearFilters: false);
+        ApplyLabViewMode(_wpfSettings.LabViewMode, persist: false);
     }
 
     private void MatchSetupButton_Click(object sender, RoutedEventArgs e)
@@ -1763,6 +4923,64 @@ public partial class MainWindow : Window
         ShowCustomMatchPanel();
     }
 
+    private void LabViewToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button && button.Tag is string tag)
+        {
+            ApplyLabViewMode(tag, persist: true);
+        }
+    }
+
+    private void ApplyLabViewMode(string mode, bool persist)
+    {
+        var world = IsWorldDebugEnabled(_wpfSettings)
+            && "world".Equals(mode, StringComparison.OrdinalIgnoreCase);
+        if (world)
+        {
+            ShowWorldPanel();
+        }
+        else
+        {
+            ShowTranscriptPanel(clearFilters: false);
+        }
+
+        var normalized = world ? "world" : "transcript";
+        if (!_wpfSettings.LabViewMode.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+        {
+            _wpfSettings.LabViewMode = normalized;
+            if (persist)
+            {
+                _wpfSettingsStore.Save(_wpfSettings);
+            }
+        }
+    }
+
+    private void UpdateLabViewToggle()
+    {
+        var world = AgentWorldPanel.Visibility == Visibility.Visible;
+        StyleLabViewButton(LabTranscriptViewButton, !world);
+        StyleLabViewButton(LabWorldViewButton, world);
+    }
+
+    private void StyleLabViewButton(Button button, bool active)
+    {
+        button.BorderBrush = ResourceBrush(active ? "PrimaryBorderBrush" : "ControlBorderBrush");
+        button.Foreground = ResourceBrush(active ? "TextBrush" : "MutedTextBrush");
+        button.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
+    }
+
+    private void AgentNavButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!IsAgentWorkspaceEnabled(_wpfSettings))
+        {
+            ApplyAgentWorkspaceVisibility();
+            SetLoadStatus("Enable Agent workspace in Settings to show it in navigation.");
+            return;
+        }
+
+        ShowAgentPanel();
+    }
+
     private void CollaborateNavButton_Click(object sender, RoutedEventArgs e)
     {
         ShowCollaboratePanel();
@@ -1776,15 +4994,21 @@ public partial class MainWindow : Window
 
     private void SessionOverviewTurns_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        ShowTranscriptPanel(clearFilters: true);
+        ShowTranscriptPanel(clearFilters: false);
         e.Handled = true;
     }
 
     private void SessionOverviewPerformance_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        RevealAgentPerformance();
+        e.Handled = true;
+    }
+
+    private void RevealAgentPerformance()
+    {
+        AgentPerformanceExpander.IsExpanded = true;
         AgentPerformanceCard.BringIntoView();
         Dispatcher.BeginInvoke(() => AgentPerformanceCard.BringIntoView(), DispatcherPriority.Background);
-        e.Handled = true;
     }
 
     private void SessionOverviewProvider_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -1793,14 +5017,43 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    private void SessionOverviewHotspot_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (!IsKeyboardActivationKey(e.Key) || sender is not FrameworkElement { Tag: string action })
+        {
+            return;
+        }
+
+        switch (action)
+        {
+            case "match":
+                ShowCustomMatchPanel();
+                break;
+            case "turns":
+                ShowTranscriptPanel(clearFilters: false);
+                break;
+            case "performance":
+                RevealAgentPerformance();
+                break;
+            case "provider":
+                OpenModelProviderSettings();
+                break;
+            default:
+                return;
+        }
+
+        e.Handled = true;
+    }
+
     private void ShowTranscriptPanel(bool clearFilters)
     {
+        var previousSurface = _activeShellSurface;
         ShellNavigation.ShowTranscriptPanel();
-        MatchSetupButton.Visibility = Visibility.Visible;
-        MatchSetupButton.ToolTip = "Open Match Setup";
-        SetSearchContext(
-            "Search transcripts, agents, notes...",
-            "Search transcript text, speakers, models, and sources");
+        _activeShellSurface = ShellSurface.Lab;
+        ApplyShellCommandState(_activeShellSurface);
+        UpdateLabViewToggleVisibility();
+        UpdateLabViewToggle();
+        ResetRightRailAfterSurfaceChange(previousSurface);
 
         if (clearFilters)
         {
@@ -1810,38 +5063,283 @@ public partial class MainWindow : Window
 
     private void ShowCustomMatchPanel()
     {
+        var opening = CustomMatchPanel.Visibility != Visibility.Visible;
+        if (opening)
+        {
+            _matchSetupReturnSurface = _activeShellSurface == ShellSurface.MatchSetup
+                ? ShellSurface.Lab
+                : _activeShellSurface;
+            _matchSetupFocusReturnTarget = Keyboard.FocusedElement ?? MatchSetupButton;
+        }
+
         ShellNavigation.ShowCustomMatchPanel();
-        MatchSetupButton.Visibility = Visibility.Visible;
-        MatchSetupButton.ToolTip = "Close Match Setup";
-        SetSearchContext(
-            "Search transcripts, agents, notes...",
-            "Search transcript text, speakers, models, and sources");
+        _activeShellSurface = ShellSurface.MatchSetup;
+        ApplyShellCommandState(_activeShellSurface);
+        UpdateLabViewToggleVisibility();
+        UpdateLabViewToggle();
+        if (opening)
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (CustomMatchPanel.Visibility == Visibility.Visible)
+                {
+                    CloseMatchSetupButton.Focus();
+                }
+            }, DispatcherPriority.Input);
+        }
+    }
+
+    private void OpenMatchSetupFromControlPlane()
+    {
+        var wasOpen = CustomMatchPanel.Visibility == Visibility.Visible;
+        var settingsReturnTarget = AppSettingsPanel.Visibility == Visibility.Visible
+            ? _settingsFocusReturnTarget
+            : null;
+
+        AppSettingsWorkflow.SetVisible(false);
+        CloseNamedTransientShellFlyouts();
+        ShowCustomMatchPanel();
+
+        if (!wasOpen && settingsReturnTarget is not null)
+        {
+            _matchSetupFocusReturnTarget = settingsReturnTarget;
+        }
+    }
+
+    private void CloseNamedTransientShellFlyouts()
+    {
+        _providerReachabilityCoordinator?.ClosePopup();
+        _transcriptSearchCoordinator?.CloseSearch();
+        ViewMenuPopup.IsOpen = false;
+        DebugMenuPopup.IsOpen = false;
+        _diagnosticsWorkflowCoordinator?.CloseDetail();
+        GenerationHelpPopup.IsOpen = false;
+        AgentComposerControlsPopup.IsOpen = false;
+        _agentPerformanceCoordinator?.CloseDetail();
+    }
+
+    private void ShowWorldPanel()
+    {
+        if (!IsWorldDebugEnabled(_wpfSettings))
+        {
+            ShowTranscriptPanel(clearFilters: false);
+            return;
+        }
+
+        var previousSurface = _activeShellSurface;
+        ShellNavigation.ShowWorldPanel();
+        _activeShellSurface = ShellSurface.World;
+        ApplyShellCommandState(_activeShellSurface);
+        UpdateLabViewToggleVisibility();
+        UpdateLabViewToggle();
+        ResetRightRailAfterSurfaceChange(previousSurface);
+
+        if (_lastRenderedSnapshot is { } snapshot)
+        {
+            ApplyWorldSnapshotIfVisible(snapshot);
+        }
+    }
+
+    private void ShowAgentPanel()
+    {
+        if (!IsAgentWorkspaceEnabled(_wpfSettings))
+        {
+            ApplyAgentWorkspaceVisibility();
+            return;
+        }
+
+        var previousSurface = _activeShellSurface;
+        ShellNavigation.ShowAgentPanel();
+        _activeShellSurface = ShellSurface.Agent;
+        ApplyShellCommandState(_activeShellSurface);
+        LabViewToggleGroup.Visibility = Visibility.Collapsed;
+        ResetRightRailAfterSurfaceChange(previousSurface);
+        AgentWorkspace.RefreshProviderState();
+        AgentPromptText.Focus();
+    }
+
+    private void ApplyWorldSnapshotIfVisible(ArenaViewSnapshot snapshot)
+    {
+        if (ShouldApplyWorldSnapshot(AgentWorldPanel.Visibility, IsWorldDebugEnabled(_wpfSettings)))
+        {
+            AgentWorld3D.ApplySnapshot(snapshot);
+        }
+    }
+
+    internal static bool ShouldApplyWorldSnapshot(Visibility agentWorldPanelVisibility, bool worldDebugEnabled)
+    {
+        return worldDebugEnabled && agentWorldPanelVisibility == Visibility.Visible;
     }
 
     private void CloseMatchSetupFlyout()
     {
-        CustomMatchPanel.Visibility = Visibility.Collapsed;
-        MatchSetupButton.ToolTip = "Open Match Setup";
-        ShellNavigation.UpdateNavigationTheme();
+        if (CustomMatchPanel.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+
+        var returnSurface = _matchSetupReturnSurface;
+        var returnTarget = _matchSetupFocusReturnTarget;
+        _matchSetupFocusReturnTarget = null;
+        _matchSetupReturnSurface = ShellSurface.Lab;
+
+        switch (returnSurface)
+        {
+            case ShellSurface.World when IsWorldDebugEnabled(_wpfSettings):
+                ShowWorldPanel();
+                break;
+            case ShellSurface.Agent when IsAgentWorkspaceEnabled(_wpfSettings):
+                ShowAgentPanel();
+                break;
+            case ShellSurface.Collaborate:
+                ShowCollaboratePanel();
+                break;
+            default:
+                ShowTranscriptPanel(clearFilters: false);
+                break;
+        }
+
+        RestoreOverlayFocus(
+            returnTarget,
+            MatchSetupButton,
+            () => CustomMatchPanel.Visibility != Visibility.Visible);
     }
 
     private void ShowCollaboratePanel()
     {
+        var previousSurface = _activeShellSurface;
         ShellNavigation.ShowCollaboratePanel();
-        MatchSetupButton.Visibility = Visibility.Collapsed;
-        MatchSetupButton.ToolTip = "Open Match Setup";
-        SetSearchContext(
-            "Search AI Collaborate chats...",
-            "Search AI Collaborate prompts and saved searches");
+        _activeShellSurface = ShellSurface.Collaborate;
+        ApplyShellCommandState(_activeShellSurface);
+        LabViewToggleGroup.Visibility = Visibility.Collapsed;
+        ResetRightRailAfterSurfaceChange(previousSurface);
         Collaborate.RefreshProviderState();
         CollaboratePromptText.Focus();
     }
 
-    private void SetSearchContext(string placeholder, string tooltip)
+    private void CollaborateToolSection_Expanded(object sender, RoutedEventArgs e)
     {
-        TranscriptSearchText.Tag = placeholder;
-        TranscriptSearchText.ToolTip = tooltip;
-        TranscriptSearchButton.ToolTip = tooltip;
+        if (!IsLoaded || sender is not Expander activeSection)
+        {
+            return;
+        }
+
+        foreach (var section in new[]
+                 {
+                     CollaborateDocumentsExpander,
+                     CollaborateCalculatorExpander,
+                     CollaborateMemoryExpander
+                 })
+        {
+            if (!ReferenceEquals(section, activeSection))
+            {
+                section.IsExpanded = false;
+            }
+        }
+    }
+
+    private void ApplyShellCommandState(ShellSurface surface)
+    {
+        var state = ShellCommandState.For(surface);
+        SetMatchSetupButtonState(state.ShowMatchSetup, open: false);
+        SearchCommandHost.Visibility = state.ShowSearch ? Visibility.Visible : Visibility.Collapsed;
+        ExportTranscriptBottomButton.Visibility = state.ShowExport ? Visibility.Visible : Visibility.Collapsed;
+        ViewMenuHost.Visibility = state.ShowView ? Visibility.Visible : Visibility.Collapsed;
+
+        if (!state.ShowSearch)
+        {
+            _transcriptSearchCoordinator?.CloseSearch();
+        }
+
+        if (!state.ShowView)
+        {
+            ViewMenuPopup.IsOpen = false;
+        }
+
+        if (state.ShowSearch)
+        {
+            var collaborate = surface == ShellSurface.Collaborate;
+            SetSearchContext(
+                collaborate ? ShellSearchSurface.Collaborate : ShellSearchSurface.Transcript,
+                collaborate ? "Search AI Collaborate chats..." : "Search transcripts, agents, notes...",
+                state.SearchHelpText);
+            AutomationProperties.SetName(TranscriptSearchButton, state.SearchAutomationName);
+            AutomationProperties.SetHelpText(TranscriptSearchButton, state.SearchHelpText);
+        }
+
+        if (state.ShowExport)
+        {
+            SetExportContext(surface == ShellSurface.Collaborate);
+            AutomationProperties.SetName(ExportTranscriptBottomButton, state.ExportAutomationName);
+            AutomationProperties.SetHelpText(ExportTranscriptBottomButton, state.ExportHelpText);
+        }
+        else
+        {
+            ExportStatusText.Text = "";
+        }
+    }
+
+    private void ResetRightRailAfterSurfaceChange(ShellSurface previousSurface)
+    {
+        if (previousSurface == _activeShellSurface || previousSurface == ShellSurface.MatchSetup)
+        {
+            return;
+        }
+
+        RightRailScrollViewer.ScrollToTop();
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (RightRailScrollViewer.Visibility == Visibility.Visible)
+            {
+                RightRailScrollViewer.ScrollToTop();
+            }
+        }, DispatcherPriority.Background);
+    }
+
+    private void SetMatchSetupButtonState(bool visible, bool open)
+    {
+        MatchSetupButton.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        MatchSetupButton.Content = open ? "Close Setup" : "Match Setup";
+        MatchSetupButton.ToolTip = open ? "Close Match Setup" : "Open Match Setup";
+        AutomationProperties.SetName(MatchSetupButton, open ? "Close Match Setup" : "Open Match Setup");
+        AutomationProperties.SetHelpText(
+            MatchSetupButton,
+            open ? "Close the Match Setup flyout." : "Open the Match Setup flyout.");
+    }
+
+    private void SetSearchContext(ShellSearchSurface surface, string placeholder, string tooltip)
+    {
+        if (_transcriptSearchCoordinator is null)
+        {
+            TranscriptSearchText.Tag = placeholder;
+            TranscriptSearchText.ToolTip = tooltip;
+            TranscriptSearchButton.ToolTip = tooltip;
+            return;
+        }
+
+        TranscriptSearch.SetSurface(surface, placeholder, tooltip);
+    }
+
+    private void SetExportContext(bool collaborate)
+    {
+        if (collaborate)
+        {
+            ExportStatusText.Text = "Export: chat";
+            ExportStatusText.ToolTip = "Export the current AI Collaborate chat, run reviews, memory notes, and team traces.";
+            ExportTranscriptBottomButton.ToolTip = "Export AI Collaborate chat";
+            AutomationProperties.SetName(ExportTranscriptBottomButton, "Export AI Collaborate chat");
+            AutomationProperties.SetHelpText(
+                ExportTranscriptBottomButton,
+                "Export the current AI Collaborate chat with run reviews and team trace steps.");
+            return;
+        }
+
+        ExportTranscriptBottomButton.ToolTip = "Export transcript";
+        AutomationProperties.SetName(ExportTranscriptBottomButton, "Export transcript");
+        AutomationProperties.SetHelpText(
+            ExportTranscriptBottomButton,
+            "Export the current transcript scope to a file.");
+        _transcriptExportCoordinator?.RefreshExportScopeStatus();
     }
 
     private async void CollaborateSendButton_Click(object sender, RoutedEventArgs e)
@@ -1854,8 +5352,18 @@ public partial class MainWindow : Window
         Collaborate.Clear();
     }
 
+    private void CollaborateStopButton_Click(object sender, RoutedEventArgs e)
+    {
+        Collaborate.Stop();
+    }
+
     private void CollaborateNewChatButton_Click(object sender, RoutedEventArgs e)
     {
+        if (Collaborate.IsRunning)
+        {
+            return;
+        }
+
         Collaborate.Clear();
         CollaboratePromptText.Focus();
     }
@@ -1871,8 +5379,33 @@ public partial class MainWindow : Window
         await Collaborate.SendAsync();
     }
 
+    private void CollaboratePlanPromptButton_Click(object sender, RoutedEventArgs e)
+    {
+        Collaborate.ApplyPromptTemplate("plan");
+    }
+
+    private void CollaborateCritiquePromptButton_Click(object sender, RoutedEventArgs e)
+    {
+        Collaborate.ApplyPromptTemplate("critique");
+    }
+
+    private void CollaborateShipPromptButton_Click(object sender, RoutedEventArgs e)
+    {
+        Collaborate.ApplyPromptTemplate("ship");
+    }
+
+    private void CollaborateExplainPromptButton_Click(object sender, RoutedEventArgs e)
+    {
+        Collaborate.ApplyPromptTemplate("explain");
+    }
+
     private void CollaborateProviderSettingsButton_Click(object sender, RoutedEventArgs e)
     {
+        if (Collaborate.IsRunning)
+        {
+            return;
+        }
+
         OpenModelProviderSettings();
     }
 
@@ -1884,6 +5417,41 @@ public partial class MainWindow : Window
     private void CollaborateRoundsPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         _collaborateCoordinator?.RefreshProviderState();
+    }
+
+    private void CollaborateRoundsPicker_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        _collaborateCoordinator?.RefreshProviderState();
+    }
+
+    private void CollaborateAddDocumentButton_Click(object sender, RoutedEventArgs e)
+    {
+        Collaborate.AddDocuments();
+    }
+
+    private void CollaborateClearDocumentsButton_Click(object sender, RoutedEventArgs e)
+    {
+        Collaborate.ClearDocuments();
+    }
+
+    private void CollaborateRunCalculatorButton_Click(object sender, RoutedEventArgs e)
+    {
+        Collaborate.RunCalculatorTool();
+    }
+
+    private void CollaborateClearCalculationsButton_Click(object sender, RoutedEventArgs e)
+    {
+        Collaborate.ClearCalculations();
+    }
+
+    private void CollaborateSaveMemoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        Collaborate.SaveMemoryNote();
+    }
+
+    private void CollaborateClearMemoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        Collaborate.ClearMemoryNotes();
     }
 
     private void ClearTranscriptFilters()
@@ -1900,7 +5468,7 @@ public partial class MainWindow : Window
         }
 
         PopulateTranscript(_lastRenderedMessages);
-        Dispatcher.BeginInvoke(() => TranscriptScrollViewer.ScrollToTop(), DispatcherPriority.Background);
+        Dispatcher.BeginInvoke(() => TranscriptItems.ScrollToTop(), DispatcherPriority.Background);
     }
 
     private void TranscriptFilter_Changed(object sender, RoutedEventArgs e)
@@ -1910,7 +5478,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        _transcriptSearchCoordinator.OnFilterChanged();
+        _transcriptSearchCoordinator.OnFilterChanged(ReferenceEquals(sender, TranscriptSearchText));
+        if (CollaboratePanel.Visibility == Visibility.Visible)
+        {
+            SetExportContext(collaborate: true);
+        }
+        else
+        {
+            TranscriptExportCoordinator.RefreshExportScopeStatus();
+        }
     }
 
     private void ClearTranscriptSearchButton_Click(object sender, RoutedEventArgs e)
@@ -1922,13 +5498,75 @@ public partial class MainWindow : Window
     {
         _userGuideWindowHost.Close();
         ProviderReachability.ClosePopup();
-        _transcriptSearchCoordinator?.ShowSearch();
+        ViewMenuPopup.IsOpen = false;
+        DebugMenuPopup.IsOpen = false;
+        _transcriptSearchCoordinator?.ToggleSearch();
     }
 
     private void TopProviderValue_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        ProviderReachability.ShowPopup();
+        ShowProviderHealthPopup(sender as UIElement);
         e.Handled = true;
+    }
+
+    private void TopProviderValue_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (!IsKeyboardActivationKey(e.Key))
+        {
+            return;
+        }
+
+        ShowProviderHealthPopup(sender as UIElement);
+        e.Handled = true;
+    }
+
+    private void ShowProviderHealthPopup(UIElement? opener = null)
+    {
+        var target = opener ?? ActiveProviderStatusButton();
+        ProviderHealthPopup.PlacementTarget = target;
+        _providerHealthFocusReturnTarget = target;
+        _transcriptSearchCoordinator?.CloseSearch();
+        ViewMenuPopup.IsOpen = false;
+        DebugMenuPopup.IsOpen = false;
+        ProviderReachability.ShowPopup();
+    }
+
+    private UIElement ActiveProviderStatusButton()
+    {
+        if (AgentTopBarMetrics.Visibility == Visibility.Visible)
+        {
+            return AgentTopProviderStatusButton;
+        }
+
+        if (CollaborateTopBarMetrics.Visibility == Visibility.Visible)
+        {
+            return CollaborateTopProviderStatusButton;
+        }
+
+        return TopProviderStatusButton;
+    }
+
+    private void ProviderHealthPopup_Opened(object? sender, EventArgs e)
+    {
+        _providerHealthFocusReturnTarget ??= Keyboard.FocusedElement ?? ActiveProviderStatusButton();
+        FocusOverlayEntry(ProviderHealthPopup, ProviderHealthCloseButton);
+    }
+
+    private void ProviderHealthPopup_Closed(object? sender, EventArgs e)
+    {
+        var returnTarget = _providerHealthFocusReturnTarget;
+        _providerHealthFocusReturnTarget = null;
+        RestoreOverlayFocus(returnTarget, ActiveProviderStatusButton(), () => !ProviderHealthPopup.IsOpen);
+    }
+
+    private void ProviderHealthPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        ClosePopupOnEscape(ProviderHealthPopup, e);
+    }
+
+    private static bool IsKeyboardActivationKey(Key key)
+    {
+        return key is Key.Enter or Key.Return or Key.Space;
     }
 
     private void ProviderHealthCloseButton_Click(object sender, RoutedEventArgs e)
@@ -1938,12 +5576,16 @@ public partial class MainWindow : Window
 
     private async void ProviderHealthTestButton_Click(object sender, RoutedEventArgs e)
     {
-        await ProviderReachability.TestProviderAsync();
+        await RunTrackedBackgroundOperationSafelyAsync(
+            "provider health test",
+            cancellationToken => ProviderReachability.TestProviderAsync(cancellationToken));
     }
 
     private async void ProviderHealthRefreshModelsButton_Click(object sender, RoutedEventArgs e)
     {
-        await ProviderReachability.RefreshModelsAsync();
+        await RunTrackedBackgroundOperationSafelyAsync(
+            "provider model refresh",
+            cancellationToken => ProviderReachability.RefreshModelsAsync(cancellationToken));
     }
 
     private void ProviderHealthSettingsButton_Click(object sender, RoutedEventArgs e)
@@ -1954,6 +5596,14 @@ public partial class MainWindow : Window
     private void TranscriptSearchText_KeyDown(object sender, KeyEventArgs e)
     {
         _transcriptSearchCoordinator?.OnSearchKeyDown(e);
+    }
+
+    private void TranscriptSearchPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            _transcriptSearchCoordinator?.OnSearchKeyDown(e);
+        }
     }
 
     private void TranscriptSearchText_PreviewMouseDown(object sender, MouseButtonEventArgs e)
@@ -1981,18 +5631,67 @@ public partial class MainWindow : Window
         _transcriptSearchCoordinator?.OnDragMouseLeftButtonUp(e);
     }
 
+    private void TranscriptSearchDragHandle_LostMouseCapture(object sender, MouseEventArgs e)
+    {
+        _transcriptSearchCoordinator?.OnDragLostMouseCapture();
+    }
+
     private void AppSettingsButton_Click(object sender, RoutedEventArgs e)
     {
+        if (AppSettingsPanel.Visibility != Visibility.Visible)
+        {
+            _settingsFocusReturnTarget = AppSettingsButton;
+        }
+
         _appSettingsCoordinator?.Toggle();
+    }
+
+    private void AppSettingsPanel_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        var visible = AppSettingsPanel.IsVisible;
+        AppSettingsScrim.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (visible)
+        {
+            EnsureSessionSettingsDirtyTracking();
+            _settingsFocusReturnTarget ??= Keyboard.FocusedElement ?? AppSettingsButton;
+            ViewMenuPopup.IsOpen = false;
+            DebugMenuPopup.IsOpen = false;
+            ProviderReachability.ClosePopup();
+            _transcriptSearchCoordinator?.CloseSearch();
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (AppSettingsPanel.Visibility == Visibility.Visible)
+                {
+                    SettingsSearchText.Focus();
+                }
+            }, DispatcherPriority.Input);
+            return;
+        }
+
+        var returnTarget = _settingsFocusReturnTarget;
+        _settingsFocusReturnTarget = null;
+        RestoreOverlayFocus(
+            returnTarget,
+            AppSettingsButton,
+            () => AppSettingsPanel.Visibility != Visibility.Visible);
+    }
+
+    private void AppSettingsScrim_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        CloseAppSettings();
+        e.Handled = true;
     }
 
     private void OpenReleasesButton_Click(object sender, RoutedEventArgs e)
     {
-        Process.Start(new ProcessStartInfo
+        if (!ShellProcessLauncher.TryStart(new ProcessStartInfo
         {
             FileName = ReleasesUrl,
             UseShellExecute = true
-        });
+        }, out var error))
+        {
+            LoadStatus.Text = $"Could not open releases: {error}";
+        }
     }
 
     private void OpenUserGuideButton_Click(object sender, RoutedEventArgs e)
@@ -2007,6 +5706,11 @@ public partial class MainWindow : Window
 
     private void OpenModelProviderSettings(string? baseUrl = null, string? model = null)
     {
+        if (!string.IsNullOrWhiteSpace(SettingsSearchText.Text))
+        {
+            SettingsSearchText.Clear();
+        }
+
         if (_appSettingsCoordinator is not null)
         {
             AppSettingsWorkflow.OpenModelProviderSettings(baseUrl, model);
@@ -2018,12 +5722,345 @@ public partial class MainWindow : Window
 
     private void CloseAppSettingsButton_Click(object sender, RoutedEventArgs e)
     {
+        CloseAppSettings();
+    }
+
+    private void CloseAppSettings()
+    {
         _appSettingsCoordinator?.SetVisible(false);
     }
 
-    private void VisualSettings_Changed(object sender, RoutedEventArgs e)
+    private void EnsureSessionSettingsDirtyTracking()
+    {
+        if (!_sessionSettingsTrackingAttached)
+        {
+            foreach (var textBox in ManualSessionSettingsTextBoxes())
+            {
+                textBox.TextChanged += SessionSettingsInput_Changed;
+            }
+
+            _sessionSettingsTrackingAttached = true;
+            _trackedSessionSettingsSessionId = _activeSession?.Id ?? "";
+            ResetSessionSettingsBaseline();
+            return;
+        }
+
+        RefreshSessionSettingsPendingState();
+    }
+
+    private TextBox[] ManualSessionSettingsTextBoxes()
+    {
+        return
+        [
+            ProviderTimeoutText,
+            ProviderTemperatureText,
+            ProviderMaxOutputText,
+            ContextTranscriptWindowText,
+            ContextPrivateWindowText,
+            ContextNotesWindowText
+        ];
+    }
+
+    private Dictionary<string, string> CaptureManualSessionSettings()
+    {
+        return new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [nameof(ProviderTimeoutText)] = ProviderTimeoutText.Text,
+            [nameof(ProviderTemperatureText)] = ProviderTemperatureText.Text,
+            [nameof(ProviderMaxOutputText)] = ProviderMaxOutputText.Text,
+            [nameof(ContextTranscriptWindowText)] = ContextTranscriptWindowText.Text,
+            [nameof(ContextPrivateWindowText)] = ContextPrivateWindowText.Text,
+            [nameof(ContextNotesWindowText)] = ContextNotesWindowText.Text
+        };
+    }
+
+    private void SessionSettingsInput_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (_isRenderingSnapshot || _restoringSessionSettingsDraft)
+        {
+            return;
+        }
+
+        PreserveCurrentSessionSettingsDraft();
+        RefreshSessionSettingsPendingState();
+    }
+
+    private void PreserveCurrentSessionSettingsDraft()
+    {
+        if (!_sessionSettingsTrackingAttached)
+        {
+            return;
+        }
+
+        var current = CaptureManualSessionSettings();
+        var delta = SessionSettingsDelta(_sessionSettingsBaseline, current);
+        if (delta.Count == 0)
+        {
+            if (!string.IsNullOrWhiteSpace(_trackedSessionSettingsSessionId))
+            {
+                _sessionSettingsDrafts.Remove(_trackedSessionSettingsSessionId);
+            }
+            else
+            {
+                _unboundSessionSettingsDraft = null;
+            }
+
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_trackedSessionSettingsSessionId))
+        {
+            _sessionSettingsDrafts[_trackedSessionSettingsSessionId] = delta;
+            _unboundSessionSettingsDraft = null;
+        }
+        else
+        {
+            _unboundSessionSettingsDraft = delta;
+        }
+    }
+
+    private void ReconcileSessionSettingsAfterSnapshot(string sessionId)
+    {
+        if (!_sessionSettingsTrackingAttached)
+        {
+            return;
+        }
+
+        _trackedSessionSettingsSessionId = sessionId;
+        ReplaceSessionSettingsBaseline(CaptureManualSessionSettings());
+        Dictionary<string, string>? draft = null;
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            if (!_sessionSettingsDrafts.TryGetValue(sessionId, out draft)
+                && _unboundSessionSettingsDraft is not null)
+            {
+                draft = _unboundSessionSettingsDraft;
+                _unboundSessionSettingsDraft = null;
+            }
+        }
+
+        if (draft is not null)
+        {
+            _restoringSessionSettingsDraft = true;
+            try
+            {
+                RestoreManualSessionSettings(draft);
+            }
+            finally
+            {
+                _restoringSessionSettingsDraft = false;
+            }
+
+            PreserveCurrentSessionSettingsDraft();
+        }
+
+        RefreshSessionSettingsPendingState();
+    }
+
+    private void RestoreManualSessionSettings(IReadOnlyDictionary<string, string> values)
+    {
+        Restore(nameof(ProviderTimeoutText), ProviderTimeoutText);
+        Restore(nameof(ProviderTemperatureText), ProviderTemperatureText);
+        Restore(nameof(ProviderMaxOutputText), ProviderMaxOutputText);
+        Restore(nameof(ContextTranscriptWindowText), ContextTranscriptWindowText);
+        Restore(nameof(ContextPrivateWindowText), ContextPrivateWindowText);
+        Restore(nameof(ContextNotesWindowText), ContextNotesWindowText);
+        return;
+
+        void Restore(string key, TextBox textBox)
+        {
+            if (values.TryGetValue(key, out var value))
+            {
+                textBox.Text = value;
+            }
+        }
+    }
+
+    private void ResetSessionSettingsBaseline()
+    {
+        ReplaceSessionSettingsBaseline(CaptureManualSessionSettings());
+        if (!string.IsNullOrWhiteSpace(_trackedSessionSettingsSessionId))
+        {
+            _sessionSettingsDrafts.Remove(_trackedSessionSettingsSessionId);
+        }
+
+        _unboundSessionSettingsDraft = null;
+
+        RefreshSessionSettingsPendingState();
+    }
+
+    private void ReplaceSessionSettingsBaseline(IReadOnlyDictionary<string, string> values)
+    {
+        _sessionSettingsBaseline.Clear();
+        foreach (var pair in values)
+        {
+            _sessionSettingsBaseline[pair.Key] = pair.Value;
+        }
+    }
+
+    private bool HasPendingSessionSettings()
+    {
+        return _sessionSettingsDrafts.Count > 0
+            || _unboundSessionSettingsDraft is not null
+            || (_sessionSettingsTrackingAttached
+                && CountChangedSessionSettings(_sessionSettingsBaseline, CaptureManualSessionSettings()) > 0);
+    }
+
+    private void RefreshSessionSettingsPendingState()
+    {
+        if (!_sessionSettingsTrackingAttached)
+        {
+            ApplySettingsButton.IsEnabled = false;
+            ApplySettingsLabel.Text = "No pending session changes";
+            SettingsPendingChangesText.Text = "No session-scoped changes pending.";
+            return;
+        }
+
+        var changed = CountChangedSessionSettings(_sessionSettingsBaseline, CaptureManualSessionSettings());
+        ApplySettingsButton.IsEnabled = changed > 0 && !_arenaBusy && _activeSession is not null;
+        ApplySettingsLabel.Text = changed == 0
+            ? "No pending session changes"
+            : $"Apply {changed} session {(changed == 1 ? "change" : "changes")}";
+        SettingsPendingChangesText.Text = changed switch
+        {
+            0 => "No session-scoped changes pending.",
+            _ when _activeSession is null => $"{changed} session-scoped {(changed == 1 ? "change" : "changes")} pending; waiting for a session to load.",
+            _ => $"{changed} session-scoped {(changed == 1 ? "change" : "changes")} pending."
+        };
+    }
+
+    internal static int CountChangedSessionSettings(
+        IReadOnlyDictionary<string, string> baseline,
+        IReadOnlyDictionary<string, string> current)
+    {
+        return SessionSettingsDelta(baseline, current).Count;
+    }
+
+    internal static Dictionary<string, string> SessionSettingsDelta(
+        IReadOnlyDictionary<string, string> baseline,
+        IReadOnlyDictionary<string, string> current)
+    {
+        return current
+            .Where(pair => !baseline.TryGetValue(pair.Key, out var value)
+                || !string.Equals(value, pair.Value, StringComparison.Ordinal))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+    }
+
+    private async void VisualSettings_Changed(object sender, RoutedEventArgs e)
     {
         _transcriptViewCoordinator?.OnVisualSettingsChanged();
+        ApplyWorldDebugVisibility(persistIfForcedOff: true);
+        ApplyAgentWorkspaceVisibility();
+        await RefreshControlPlaneHostAsync();
+    }
+
+    internal static bool IsWorldDebugEnabled(WpfSettings settings)
+    {
+        return settings.AllowDebugControls && settings.ShowWorldDebug;
+    }
+
+    private void ApplyWorldDebugVisibility(bool persistIfForcedOff)
+    {
+        var settingsChanged = false;
+        if (!_wpfSettings.AllowDebugControls && _wpfSettings.ShowWorldDebug)
+        {
+            _wpfSettings.ShowWorldDebug = false;
+            settingsChanged = true;
+        }
+
+        var enabled = IsWorldDebugEnabled(_wpfSettings);
+        if (!enabled && !_wpfSettings.LabViewMode.Equals("transcript", StringComparison.OrdinalIgnoreCase))
+        {
+            _wpfSettings.LabViewMode = "transcript";
+            settingsChanged = true;
+        }
+
+        if (settingsChanged && persistIfForcedOff)
+        {
+            _wpfSettingsStore.Save(_wpfSettings);
+        }
+
+        WorldDebugCheckBox.IsEnabled = _wpfSettings.AllowDebugControls;
+        if (WorldDebugCheckBox.IsChecked != enabled)
+        {
+            _isUpdatingWorldDebug = true;
+            try
+            {
+                WorldDebugCheckBox.IsChecked = enabled;
+            }
+            finally
+            {
+                _isUpdatingWorldDebug = false;
+            }
+        }
+
+        if (!enabled && AgentWorldPanel.Visibility == Visibility.Visible)
+        {
+            ShowTranscriptPanel(clearFilters: false);
+            return;
+        }
+
+        UpdateLabViewToggleVisibility();
+    }
+
+    private void UpdateLabViewToggleVisibility()
+    {
+        var labSurfaceVisible = CustomMatchPanel.Visibility != Visibility.Visible
+            && (TranscriptPanel.Visibility == Visibility.Visible
+                || AgentWorldPanel.Visibility == Visibility.Visible);
+        LabViewToggleGroup.Visibility = IsWorldDebugEnabled(_wpfSettings) && labSurfaceVisible
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    internal static bool IsAgentWorkspaceEnabled(WpfSettings settings)
+    {
+        return settings.ShowAgentWorkspace;
+    }
+
+    private void ApplyAgentWorkspaceVisibility()
+    {
+        var enabled = IsAgentWorkspaceEnabled(_wpfSettings);
+        AgentNavButton.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        AgentWorkspaceCheckBox.IsEnabled = true;
+        if (AgentWorkspaceCheckBox.IsChecked != enabled)
+        {
+            _isUpdatingAgentWorkspace = true;
+            try
+            {
+                AgentWorkspaceCheckBox.IsChecked = enabled;
+            }
+            finally
+            {
+                _isUpdatingAgentWorkspace = false;
+            }
+        }
+
+        if (!enabled && AgentWorkspacePanel.Visibility == Visibility.Visible)
+        {
+            ShowTranscriptPanel(clearFilters: false);
+        }
+
+        ShellNavigation.UpdateNavigationTheme();
+        ApplyControlPlaneToggleState();
+    }
+
+    private void ApplyControlPlaneToggleState()
+    {
+        ControlPlaneCheckBox.IsEnabled = true;
+        var enabled = IsControlPlaneEnabled;
+        if (ControlPlaneCheckBox.IsChecked != enabled)
+        {
+            _isUpdatingControlPlane = true;
+            try
+            {
+                ControlPlaneCheckBox.IsChecked = enabled;
+            }
+            finally
+            {
+                _isUpdatingControlPlane = false;
+            }
+        }
     }
 
     private string CurrentAvatarStyle()
@@ -2040,10 +6077,8 @@ public partial class MainWindow : Window
 
     private async void ProviderBaseUrlText_Commit(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (_providerSettingsCoordinator is not null)
-        {
-            await _providerSettingsCoordinator.ProviderBaseUrlCommittedAsync();
-        }
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.ProviderBaseUrlCommittedAsync(cancellationToken));
     }
 
     private async void ProviderBaseUrlText_KeyDown(object sender, KeyEventArgs e)
@@ -2054,26 +6089,68 @@ public partial class MainWindow : Window
         }
 
         e.Handled = true;
-        if (_providerSettingsCoordinator is not null)
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.ProviderBaseUrlCommittedAsync(cancellationToken));
+    }
+
+    private async void ProviderApiTokenBox_Commit(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.PersistModelRoutingAsync(
+                "Provider API token saved.",
+                refreshModels: true,
+                cancellationToken));
+    }
+
+    private async void ProviderApiTokenBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
         {
-            await _providerSettingsCoordinator.ProviderBaseUrlCommittedAsync();
+            return;
         }
+
+        e.Handled = true;
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.PersistModelRoutingAsync(
+                "Provider API token saved.",
+                refreshModels: true,
+                cancellationToken));
     }
 
     private async void ProviderModelText_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_providerSettingsCoordinator is not null)
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.ProviderModelSelectionChangedAsync(cancellationToken));
+    }
+
+    private async void ProviderApiModePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        await RunProviderCommitSafelyAsync(async (coordinator, cancellationToken) =>
         {
-            await _providerSettingsCoordinator.ProviderModelSelectionChangedAsync();
+            coordinator.UpdateNativeLifecycleControls();
+            await coordinator.PersistModelRoutingAsync(
+                "Provider API mode saved.",
+                refreshModels: true,
+                cancellationToken);
+        });
+    }
+
+    private async void ModelProviderSettingsExpander_Expanded(object sender, RoutedEventArgs e)
+    {
+        if (AppSettingsPanel.Visibility != Visibility.Visible)
+        {
+            return;
         }
+
+        await RunTrackedBackgroundOperationSafelyAsync(
+            "provider model refresh",
+            cancellationToken => RefreshAdvertisedModelsAsync(force: true, cancellationToken));
     }
 
     private async void ProviderModelText_Commit(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (_providerSettingsCoordinator is not null)
-        {
-            await _providerSettingsCoordinator.ProviderModelCommittedAsync();
-        }
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.ProviderModelCommittedAsync(cancellationToken));
     }
 
     private async void ProviderModelText_KeyDown(object sender, KeyEventArgs e)
@@ -2084,38 +6161,171 @@ public partial class MainWindow : Window
         }
 
         e.Handled = true;
-        if (_providerSettingsCoordinator is not null)
-        {
-            await _providerSettingsCoordinator.ProviderModelCommittedAsync();
-        }
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.ProviderModelCommittedAsync(cancellationToken));
     }
 
-    private async void ParticipantModelText_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void ProviderNativeOptions_Commit(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (_providerSettingsCoordinator is not null && sender is ComboBox comboBox)
-        {
-            await _providerSettingsCoordinator.ParticipantModelSelectionChangedAsync(comboBox);
-        }
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.ProviderNativeOptionsCommittedAsync(cancellationToken));
     }
 
-    private async void ParticipantModelText_Commit(object sender, KeyboardFocusChangedEventArgs e)
+    private async void ProviderNativeOptionsText_KeyDown(object sender, KeyEventArgs e)
     {
-        if (_providerSettingsCoordinator is not null && sender is ComboBox comboBox)
-        {
-            await _providerSettingsCoordinator.ParticipantModelCommittedAsync(comboBox);
-        }
-    }
-
-    private async void ParticipantModelText_KeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Enter || _providerSettingsCoordinator is null || sender is not ComboBox comboBox)
+        if (e.Key != Key.Enter)
         {
             return;
         }
 
         e.Handled = true;
-        await _providerSettingsCoordinator.ParticipantModelCommittedAsync(comboBox);
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.ProviderNativeOptionsCommittedAsync(cancellationToken));
     }
+
+    private async void ProviderNativeOptions_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.ProviderNativeOptionsCommittedAsync(cancellationToken));
+    }
+
+    private async void ProviderNativeOptions_CheckedChanged(object sender, RoutedEventArgs e)
+    {
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.ProviderNativeOptionsCommittedAsync(cancellationToken));
+    }
+
+    private async void ParticipantModelText_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox comboBox)
+        {
+            await RunProviderCommitSafelyAsync(
+                (coordinator, cancellationToken) => coordinator.ParticipantModelSelectionChangedAsync(comboBox, cancellationToken));
+        }
+    }
+
+    private async void ParticipantModelText_Commit(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is ComboBox comboBox)
+        {
+            await RunProviderCommitSafelyAsync(
+                (coordinator, cancellationToken) => coordinator.ParticipantModelCommittedAsync(comboBox, cancellationToken));
+        }
+    }
+
+    private async void ParticipantModelText_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || sender is not ComboBox comboBox)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await RunProviderCommitSafelyAsync(
+            (coordinator, cancellationToken) => coordinator.ParticipantModelCommittedAsync(comboBox, cancellationToken));
+    }
+
+    private Task RunProviderCommitSafelyAsync(
+        Func<ProviderSettingsCoordinator, CancellationToken, Task> commit)
+    {
+        ArgumentNullException.ThrowIfNull(commit);
+        var coordinator = _providerSettingsCoordinator;
+        var operationCoordinator = _arenaOperationCoordinator;
+        if (coordinator is null || operationCoordinator is null || _shutdownInProgress)
+        {
+            return Task.CompletedTask;
+        }
+
+        return RunUiCommitSafelyAsync(
+            () => operationCoordinator.TrackAsync(cancellationToken => commit(coordinator, cancellationToken)),
+            exception =>
+            {
+                var status = exception is OperationCanceledException
+                    ? "Provider settings save cancelled."
+                    : ArenaOperationCoordinator.OperationFailureStatus(exception);
+                SetLoadStatus(status);
+                Debug.WriteLine($"Provider settings commit failed: {exception}");
+            });
+    }
+
+    private async Task<AIArenaControlResponse> RunProviderControlOperationAsync(
+        AIArenaControlRequest request,
+        CancellationToken callerCancellationToken)
+    {
+        return await RunTrackedControlOperationAsync(
+            operationCancellationToken => _providerControlHandler.ExecuteAsync(request, operationCancellationToken),
+            callerCancellationToken);
+    }
+
+    private async Task<AIArenaControlResponse> RunTrackedControlOperationAsync(
+        Func<CancellationToken, Task<AIArenaControlResponse>> operation,
+        CancellationToken callerCancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        var operationCoordinator = _arenaOperationCoordinator;
+        if (operationCoordinator is null || _shutdownInProgress)
+        {
+            throw new OperationCanceledException("Application shutdown has already started.");
+        }
+
+        AIArenaControlResponse? response = null;
+        await operationCoordinator.TrackAsync(async shutdownCancellationToken =>
+        {
+            using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                callerCancellationToken,
+                shutdownCancellationToken);
+            response = await operation(linkedCancellation.Token);
+        });
+        return response ?? throw new InvalidOperationException("Tracked control operation completed without a response.");
+    }
+
+    private Task RunTrackedBackgroundOperationSafelyAsync(
+        string operationName,
+        Func<CancellationToken, Task> operation)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+        ArgumentNullException.ThrowIfNull(operation);
+        var operationCoordinator = _arenaOperationCoordinator;
+        if (operationCoordinator is null || _shutdownInProgress)
+        {
+            return Task.CompletedTask;
+        }
+
+        return RunUiCommitSafelyAsync(
+            () => operationCoordinator.TrackAsync(operation),
+            exception =>
+            {
+                if (exception is OperationCanceledException)
+                {
+                    return;
+                }
+
+                SetLoadStatus($"{operationName} failed: {exception.Message}");
+                Debug.WriteLine($"Tracked {operationName} failed: {exception}");
+            });
+    }
+
+    internal static async Task RunUiCommitSafelyAsync(Func<Task> commit, Action<Exception> reportFailure)
+    {
+        ArgumentNullException.ThrowIfNull(commit);
+        ArgumentNullException.ThrowIfNull(reportFailure);
+        try
+        {
+            await commit();
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                reportFailure(ex);
+            }
+            catch (Exception reportingFailure)
+            {
+                Debug.WriteLine($"UI commit failure reporting failed: {reportingFailure}");
+            }
+        }
+    }
+
     private void SetAppSettingsVisible(bool visible)
     {
         if (_appSettingsCoordinator is not null)
@@ -2156,9 +6366,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private Task RefreshAdvertisedModelsAsync(bool force = false)
+    private Task RefreshAdvertisedModelsAsync(
+        bool force = false,
+        CancellationToken cancellationToken = default)
     {
-        return _providerSettingsCoordinator?.RefreshAdvertisedModelsAsync(force) ?? Task.CompletedTask;
+        return _providerSettingsCoordinator?.RefreshAdvertisedModelsAsync(force, cancellationToken) ?? Task.CompletedTask;
     }
     private static string ShortModelName(string model)
     {
@@ -2169,27 +6381,6 @@ public partial class MainWindow : Window
 
         var trimmed = model.Trim();
         return trimmed.Length <= 28 ? trimmed : string.Concat(trimmed.AsSpan(0, 25), "...");
-    }
-
-    private static string DisplayInternetMode(string mode)
-    {
-        return string.IsNullOrWhiteSpace(mode) ? "manual" : mode.Replace('_', ' ');
-    }
-
-    private static string DisplayInternetScope(string scope)
-    {
-        return scope.Equals("open_web", StringComparison.OrdinalIgnoreCase) ? "open web" : "trusted sources";
-    }
-
-    private static string InternetModeDescription(string mode)
-    {
-        return mode.Trim().ToLowerInvariant() switch
-        {
-            "off" => "all internet fetches blocked",
-            "model_requested" => "approved model tool requests only",
-            "auto" => "manual buttons plus automatic/model-requested fetches",
-            _ => "manual user actions only"
-        };
     }
 
 }

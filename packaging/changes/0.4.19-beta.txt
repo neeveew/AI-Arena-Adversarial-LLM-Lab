@@ -1,0 +1,13 @@
+AI Arena 0.4.19-beta
+
+- Added Copy Spec for generated matches, producing a shareable JSON setup receipt with schema, tuning, seeds, scenario brief, cast preview, and current replay lock impact.
+- Expanded Recent generation summaries with cast size, cast preview, global instructions, narrator brief, and clearer Wild Seed labeling.
+- Added replay lock warnings to Recent selection status, tooltips, copied specs, and replay controls so locked fields are visible before replaying.
+- Made AI Choice seed copying safer by copying the replay id when a generated match has no deterministic seed.
+- Separated Recent copy actions from replay actions so users can copy seed, brief, or spec during auto-chat while replay/new-run waits for the arena to become idle.
+- Disabled match generation controls during busy arena work to avoid overlapping setup mutations.
+- Cleaned replay-to-new-run state by clearing stale decision cards, attachments, and research items alongside transcript and narrator status.
+- Hardened generation history rendering by skipping invalid blank-id entries and sorting displayed history newest-first.
+- Updated Recent help copy to explain Replay, New Run, Copy Seed, Copy Brief, Copy Spec, and lock warnings.
+- Packaged guide/app icons as explicit embedded resources and added a robust resource loader fallback for test hosts and installer builds.
+- Extended core and WPF tests for JSON specs, replay lock warnings, history ordering/filtering, clean replay runs, busy-state behavior, and packaged icon loading.

@@ -1,0 +1,7 @@
+AI Arena 0.4.107-beta
+
+- Adds `Get-AIArenaCollaborateReview` and `collaborate.review` for saved final answers, deterministic review verdicts, aggregate metrics, and complete latest-turn traces.
+- Moves the Collaborate control-plane command family into a dedicated auditable handler.
+- Fixes false `Needs review` verdicts caused only by healthy restored, exported, or saved-run lifecycle labels.
+- Keeps a fresh authoritative application `State` snapshot attached to every authenticated PowerShell response, including review failures.
+- Supersedes the incomplete 0.4.106-beta finalization after its dependency-index audit correctly stopped the release.

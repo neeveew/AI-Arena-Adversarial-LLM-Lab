@@ -1,0 +1,10 @@
+AI Arena 0.4.110-beta
+
+- Adds complete provider administration through PowerShell: inspect configuration, apply bounded updates, test completions, refresh advertised models, and retain the existing set-all-models shortcut.
+- Expands provider state with non-secret connection, role-routing, readiness, latency, health-check, and model-catalog details after every command.
+- Makes provider diagnostics stale-safe so a delayed test or model refresh cannot overwrite newer configuration or readiness state.
+- Accepts provider credentials as `SecureString`, clears the temporary unmanaged BSTR, and never returns plaintext credentials in state, responses, or events.
+- Preserves explicit false, zero, and empty role-inheritance values while validating provider modes and numeric bounds before mutation.
+- Adds `Save-AIArenaScreenshot`, a PowerShell trigger that captures the live AI Arena window to an atomic, non-overwriting PNG and returns its path, size, dimensions, and current app state.
+- Ships `ai-arena-control.ps1` beside the installed application so provider, screenshot, state, and arena commands work without a source checkout.
+- Retains the shipped defaults: PowerShell control and Agent are enabled independently of Debug, while the experimental AI World remains Debug-gated and off by default.

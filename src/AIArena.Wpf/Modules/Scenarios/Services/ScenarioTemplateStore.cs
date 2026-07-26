@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
+using AIArena.Core.Providers;
 using AIArena.Core.Services;
 
 namespace AIArena.Wpf.Services;
@@ -37,7 +38,9 @@ public sealed class ScenarioTemplateStore
         try
         {
             var json = File.ReadAllText(TemplatePath);
-            return JsonSerializer.Deserialize<List<ScenarioTemplate>>(json) ?? [];
+            return (JsonSerializer.Deserialize<List<ScenarioTemplate>>(json) ?? [])
+                .OfType<ScenarioTemplate>()
+                .ToList();
         }
         catch (Exception ex)
         {
@@ -99,6 +102,9 @@ public sealed class ScenarioTemplateStore
         }
         snapshot.MatchLocks["topic"] = template.TopicLocked;
         snapshot.MatchLocks["global"] = template.GlobalLocked;
+        snapshot.Engine.LastError = "";
+        snapshot.Engine.Narrator.Status = "idle";
+        snapshot.Engine.Narrator.LastError = "";
 
         var templateParticipantIds = template.Agents
             .Where(agent => AgentRosterService.IsParticipantId(agent.Id))
@@ -144,6 +150,8 @@ public sealed class ScenarioTemplateStore
             agent.PressureProfile = agentTemplate.PressureProfile ?? "";
             agent.AccentColor = AgentAccentService.NormalizeColor(agentTemplate.AccentColor);
             agent.Active = agentTemplate.Active;
+            agent.Status = agentTemplate.Active ? "waiting" : "muted";
+            agent.PrivateNotes.Clear();
             snapshot.MatchLocks[agentTemplate.Id] = agentTemplate.Locked;
         }
 
@@ -169,10 +177,15 @@ public sealed class ScenarioTemplateStore
             snapshot.Configs[key] = new ModelProviderConfig
             {
                 BaseUrl = config.BaseUrl,
+                ApiMode = ModelProviderApiModes.Normalize(config.ApiMode),
                 Model = config.Model,
                 Timeout = config.Timeout,
                 Temperature = config.Temperature,
-                MaxOutputTokens = config.MaxOutputTokens
+                MaxOutputTokens = config.MaxOutputTokens,
+                ContextLength = config.ContextLength,
+                Reasoning = config.Reasoning,
+                NativeStatefulChat = config.NativeStatefulChat,
+                NativeIdleTtlSeconds = config.NativeIdleTtlSeconds
             };
         }
     }
@@ -207,7 +220,12 @@ public sealed class ScenarioTemplateStore
                 item.Value.Model,
                 item.Value.Timeout,
                 item.Value.Temperature,
-                item.Value.MaxOutputTokens),
+                item.Value.MaxOutputTokens,
+                ModelProviderApiModes.Normalize(item.Value.ApiMode),
+                item.Value.ContextLength,
+                item.Value.Reasoning,
+                item.Value.NativeStatefulChat,
+                item.Value.NativeIdleTtlSeconds),
             StringComparer.OrdinalIgnoreCase);
 
         return new ScenarioTemplate(
@@ -234,10 +252,11 @@ public sealed class ScenarioTemplateStore
     {
         LastLoadWarning = "";
         var ordered = templates
+            .OfType<ScenarioTemplate>()
             .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        Directory.CreateDirectory(Path.GetDirectoryName(TemplatePath)!);
-        File.WriteAllText(TemplatePath, JsonSerializer.Serialize(ordered, JsonOptions));
+        var json = JsonSerializer.Serialize(ordered, JsonOptions);
+        JsonFileRecovery.WriteTextReplacing(TemplatePath, json);
     }
 }
 
@@ -275,4 +294,9 @@ public sealed record ScenarioTemplateModelConfig(
     string Model,
     int Timeout,
     double Temperature,
-    int MaxOutputTokens);
+    int MaxOutputTokens,
+    string ApiMode = ModelProviderApiModes.OpenAiCompatible,
+    int ContextLength = 0,
+    string Reasoning = "",
+    bool NativeStatefulChat = true,
+    int NativeIdleTtlSeconds = 0);

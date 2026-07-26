@@ -31,22 +31,22 @@ internal sealed class ShellCardFactory
         {
             Style = null,
             Background = background,
-            BorderBrush = resourceBrush("ControlBorderBrush"),
+            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.42),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(16),
-            Margin = new Thickness(0, 0, 0, 10)
+            CornerRadius = ArenaTokens.MediumRadius,
+            Padding = new Thickness(18),
+            Margin = new Thickness(0, 0, 0, 12)
         };
 
         var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(6) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(5) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
         var strip = new Border
         {
             Background = accent,
-            CornerRadius = new CornerRadius(8, 0, 0, 8),
-            Margin = new Thickness(-16, -16, 10, -16)
+            CornerRadius = new CornerRadius(ArenaTokens.MediumRadiusValue, 0, 0, ArenaTokens.MediumRadiusValue),
+            Margin = new Thickness(-18, -18, 11, -18)
         };
         Grid.SetColumn(strip, 0);
         grid.Children.Add(strip);
@@ -59,7 +59,8 @@ internal sealed class ShellCardFactory
             Text = body,
             Foreground = resourceBrush("TextBrush"),
             TextWrapping = TextWrapping.Wrap,
-            FontSize = 15
+            FontSize = ArenaTokens.HeadingFontSize,
+            LineHeight = 21
         });
         if (extraContent is not null)
         {
@@ -71,16 +72,27 @@ internal sealed class ShellCardFactory
         return border;
     }
 
-    public Border CreateEmptyStateCard(string title, string body, Brush accent)
+    public Border CreateEmptyStateCard(string title, string body, Brush accent, string statusLabel = "No results")
     {
-        var panel = new StackPanel();
-        panel.Children.Add(new TextBlock
+        var panel = new StackPanel
         {
-            Text = "Quiet state",
-            Foreground = resourceBrush("MutedTextBrush"),
-            FontSize = 12,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 8)
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 12, 0, 0)
+        };
+        panel.Children.Add(new Border
+        {
+            Background = blendBrush(resourceBrush("InputBrush"), accent, 0.08),
+            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.34),
+            BorderThickness = new Thickness(1),
+            CornerRadius = ArenaTokens.SmallRadius,
+            Padding = new Thickness(8, 2, 8, 3),
+            Child = new TextBlock
+            {
+                Text = statusLabel,
+                Foreground = accent,
+                FontSize = ArenaTokens.LabelFontSize,
+                FontWeight = FontWeights.SemiBold
+            }
         });
 
         return CreateCard(title, body, blendBrush(resourceBrush("CardBrush"), accent, 0.08), accent, panel);
@@ -93,27 +105,27 @@ internal sealed class ShellCardFactory
             Background = blendBrush(resourceBrush("InputBrush"), accent, 0.08),
             BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.35),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(6, 2, 6, 2),
+            CornerRadius = ArenaTokens.SmallRadius,
+            Padding = new Thickness(7, 2, 7, 3),
             Margin = new Thickness(0, 0, 6, 4),
             Child = new TextBlock
             {
                 Text = $"{label}: {value}",
                 Foreground = accent,
-                FontSize = 11,
+                FontSize = ArenaTokens.LabelFontSize,
                 FontWeight = FontWeights.SemiBold
             }
         };
     }
 
-    private static TextBlock CreateCardTitle(string title)
+    private TextBlock CreateCardTitle(string title)
     {
         return new TextBlock
         {
             Text = title,
-            Foreground = Brushes.White,
+            Foreground = resourceBrush("TextBrush"),
             FontWeight = FontWeights.SemiBold,
-            FontSize = 16,
+            FontSize = ArenaTokens.TitleFontSize,
             Margin = new Thickness(0, 0, 0, 8)
         };
     }

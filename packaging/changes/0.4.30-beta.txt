@@ -1,0 +1,16 @@
+AI Arena 0.4.30-beta
+
+- Added Copy Setup in Match Setup to copy the current setup as a readable operator brief.
+- Added Copy JSON in Match Setup to copy the current setup as a JSON setup receipt.
+- Included readiness, scenario, tuning, run shape, locks, relationship pressure, cast, narrator, and provider context in current setup receipts.
+- Added a live Relationship Matrix pressure graph preview with compact route chips.
+- Added relationship graph coverage counts so neutral/unassigned source agents are visible before saving.
+- Added incoming target hotspot detection to reveal when multiple agents pressure the same target.
+- Added mutual-pair summaries to relationship matrix status and graph insight.
+- Added invalid-rule warnings to the live pressure graph insight and status copy.
+- Expanded Scenario Preview relationship map and run constraints with pressure graph insight.
+- Added Skeptic sweep as a new relationship draft pattern.
+- Added Paired crossfire as a new relationship draft pattern.
+- Added Spotlight defense as a new relationship draft pattern.
+- Updated the seed inspector to show Wild Seed instead of the old internal YOLO label.
+- Added tests for relationship graph topology, preview lines, new matrix patterns, current setup brief/spec receipts, and new Match Setup accessibility contracts.

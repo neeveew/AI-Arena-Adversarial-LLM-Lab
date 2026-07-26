@@ -1,0 +1,14 @@
+AI Arena 0.4.46-beta
+Built: generated during release packaging
+
+- Added a session-scoped Auto Continue control to the Agent command approval rail.
+- Auto Continue enables Approve All and automatically asks for the next Agent command after command output and file-change receipts arrive.
+- Added a bounded three-step follow-up budget with visible status text so autonomous loops cannot run indefinitely.
+- Built Auto Continue prompts from the latest command output, success/failure state, and file-change receipt context.
+- Cleared the consumed command rail before each Auto Continue follow-up so the next Builder proposal stages instead of being held behind stale text.
+- Paused Auto Continue when a preview blocks, Builder returns no command, a command is cancelled, Agent is cleared, the workspace changes, or the budget is spent.
+- Preserved Approve All workspace validation under Auto Continue, including parent-path and outside-workspace blocking.
+- Made Auto Continue pause handling dispatcher-safe after asynchronous command completion.
+- Fixed Auto Continue toggling so disabling the loop does not immediately auto-run a pending preview.
+- Expanded WPF tests for Auto Continue follow-up execution, budget spending, status text, stale-command clearing, and XAML control contracts.
+- Updated README, user guide, Windows app notes, decomposition map, and research notes for bounded Agent follow-up loops.

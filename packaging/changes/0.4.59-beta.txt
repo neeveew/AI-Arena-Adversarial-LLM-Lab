@@ -1,0 +1,6 @@
+AI Arena 0.4.59-beta
+
+- Switched the Agent workspace loop to Builder-only mode while Planner and Reviewer are disabled for debugging.
+- Mark Planner and Reviewer as skipped in the progress rail so the active loop shape is visible.
+- Tightened Builder instructions for app-writing prompts so local models return a brief assumption plus one previewable command instead of long plans.
+- Increased Builder output budget to reduce truncated app-creation commands.

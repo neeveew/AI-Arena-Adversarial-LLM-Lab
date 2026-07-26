@@ -1,0 +1,3 @@
+AI Arena 0.4.72-beta
+
+- Fix AI World agents teleporting back to their spawn ring on every turn: the scene rebuild that runs each snapshot now carries each agent's live world position across the rebuild by id, so goal-directed agents stay where they walked to instead of disappearing and reappearing.

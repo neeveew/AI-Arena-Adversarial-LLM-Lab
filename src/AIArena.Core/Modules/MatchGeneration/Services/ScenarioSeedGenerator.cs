@@ -5,6 +5,11 @@ namespace AIArena.Core.Services;
 
 internal static class ScenarioSeedGenerator
 {
+    internal const string ScenarioQualityContract = ScenarioAuditPolicy.QualityContract;
+
+    private const string InternetToolGuidance =
+        "When Internet Access is enabled, use configured Internet tools only when the latest operator request asks for or would materially benefit from current or external facts, or supplies a public URL. Never send private arena context, credentials, secrets, or sensitive URL parameters to a tool. Cite retrieved sources and never imply live access without a tool result.";
+
     public static GeneratedMatch GenerateTemplateMatch(string style, string seed, string intensity, string rolePack, string absurdity, IReadOnlyList<string> agentIds)
     {
         var rng = new Random(StableSeed($"ai-arena-wpf:{style}:{intensity}:{rolePack}:{absurdity}:{seed}:{string.Join(",", agentIds)}"));
@@ -21,7 +26,8 @@ internal static class ScenarioSeedGenerator
             AbsurdityGlobalFrame(absurdity),
             IntensityGlobalFrame(intensity),
             "Surface assumptions, define terms, and keep the exchange concrete.",
-            "Do not fetch external news or live data unless the operator explicitly provides it.");
+            ScenarioQualityContract,
+            InternetToolGuidance);
         var personas = agentIds
             .Where(AgentRosterService.IsParticipantId)
             .Select(id => GeneratedPersonaFactory.For(style, seed, id, intensity, rolePack, absurdity))
@@ -53,7 +59,8 @@ internal static class ScenarioSeedGenerator
             AbsurdityGlobalFrame(absurdity),
             IntensityGlobalFrame(intensity),
             demand.GlobalDemand,
-            "Do not fetch external news or live data unless the operator explicitly provides it.");
+            ScenarioQualityContract,
+            InternetToolGuidance);
         var personas = agentIds
             .Where(AgentRosterService.IsParticipantId)
             .Select(id => GeneratedPersonaFactory.Yolo(style, seed, id, pressure.PersonaPressure, rolePack, absurdity))

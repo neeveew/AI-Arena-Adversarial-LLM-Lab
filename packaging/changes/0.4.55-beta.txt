@@ -1,0 +1,7 @@
+# AI Arena 0.4.55-beta
+
+- Hardened AI Collaborate, transcript, approval, and review copy actions against transient Windows clipboard contention.
+- Reworked transcript and AI Collaborate export writes to replace files through a temporary sibling file and recover read-only targets without leaving partial output.
+- Added safe shell-launch handling for the releases link and user-guide file opener so blocked external launches surface as app status instead of uncaught exceptions.
+- Made event-log rotation retry briefly and continue appending if rotated files are locked by another process.
+- Added focused regression coverage for locked log rotation, read-only export replacement, and safe process-launch failures.

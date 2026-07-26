@@ -1,0 +1,12 @@
+AI Arena 0.4.24-beta
+
+- Added a Battle Review panel for AI Lab transcript review inspired by arena, eval, and trace-observability tools.
+- Added a local review verdict that classifies runs as Ready to compare, Watch before deciding, or Needs intervention.
+- Added a 0-100 review score derived from discourse diagnostics, unsupported claims, evidence pressure, errors, role drift, consensus, and narrative heat.
+- Added speaker-share analysis showing leading voice, per-speaker turn counts, token share, average latency, and model summary.
+- Added run telemetry summary chips for model count, token total, latency total, watch target, and score.
+- Added risk flags for single-model comparisons, missing narrator synthesis, unsupported claims, weak evidence, role drift, consensus lock-in, narrative heat, errors, and slow turns.
+- Added Copy Packet to export a judge-style Battle Review note from AI Lab.
+- Added Copy Nudge to create a paste-ready operator intervention prompt from current review flags.
+- Added a Battle Review toggle to the View menu and wired the Review preset to enable Battle Review, Decision Card, Turn Compare, Quality Timeline, Memory Notes, Auto Moderator, and Style Fit together.
+- Updated tests, user guide, README, and research notes for the new AI Lab eval/review cockpit.

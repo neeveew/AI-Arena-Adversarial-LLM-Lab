@@ -1,0 +1,15 @@
+AI Arena 0.4.32-beta
+
+- Added a visible Match Setup preflight checklist under readiness badges.
+- Added Required checklist rows for hard setup blockers.
+- Added Advisory checklist rows for nonblocking setup warnings.
+- Added a ready-state checklist row when no blockers or warnings are present.
+- Added richer readiness badge tooltips with provider, persona, narrator, matrix, lock, and history context.
+- Added role-specific model awareness so setup can be ready when every active agent has a model even if the shared provider model is blank.
+- Updated the provider badge to show Role models when readiness is satisfied by active agent assignments.
+- Added a Locks readiness badge for topic, global, narrator, and active cast locks.
+- Reused normalized relationship matrix planning for readiness counts.
+- Blocked enabled relationship matrices with only unknown/invalid/neutral rules.
+- Counted valid relationship rules correctly when invalid matrix noise is present.
+- Added XAML accessibility coverage for the visible preflight checklist.
+- Added readiness report tests for checklist payloads, role-specific models, provider error tooltips, lock badges, and normalized matrix behavior.

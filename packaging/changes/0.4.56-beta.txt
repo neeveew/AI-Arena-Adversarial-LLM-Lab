@@ -1,0 +1,6 @@
+AI Arena 0.4.56-beta
+
+- Hardened Agent app-building output parsing for local model replies that return file snippets, POSIX heredocs, chained shell writes, and plain Go/Rust command proposals.
+- Improved generated artifact detection so static, Node, .NET, Python, Rust, and Go app suggestions survive source-only edits and point at the nearest existing project marker.
+- Added detached Node preview launchers for long-running start/dev scripts so app previews no longer time out and get killed by the bounded command runner.
+- Moved Use Artifact into the visible Agent Outputs rail and added live WPF UI smoke coverage for the Agent app preview handoff.

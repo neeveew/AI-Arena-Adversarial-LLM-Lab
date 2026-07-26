@@ -1,9 +1,14 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace AIArena.Core.Persistence;
 
 public static class NativeDataPaths
 {
     public const string AppDataFolderName = "AI Arena";
     private const string LegacyAppDataFolderName = "AI Arena Alpha";
+    private const int MaxSafeSessionIdLength = 96;
+    private const int SafeSessionHashLength = 12;
 
     public static string DefaultDataRoot()
     {
@@ -70,9 +75,14 @@ public static class NativeDataPaths
             .ToArray())
             .Trim('-', '.', ' ');
 
-        return string.IsNullOrWhiteSpace(cleaned) || cleaned.All(ch => ch == '.')
-            ? "default"
-            : cleaned;
+        if (string.IsNullOrWhiteSpace(cleaned) || cleaned.All(ch => ch == '.'))
+        {
+            return "default";
+        }
+
+        return cleaned.Length <= MaxSafeSessionIdLength
+            ? cleaned
+            : ShortenSessionId(cleaned);
     }
 
     public static void EnsureDataLayout(string dataRoot, bool migrateLegacy = true)
@@ -90,6 +100,20 @@ public static class NativeDataPaths
         {
             MigrateLegacyData(dataRoot);
         }
+    }
+
+    private static string ShortenSessionId(string cleaned)
+    {
+        var suffix = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cleaned)))
+            .ToLowerInvariant()[..SafeSessionHashLength];
+        var prefixLength = Math.Max(1, MaxSafeSessionIdLength - suffix.Length - 1);
+        var prefix = cleaned[..Math.Min(cleaned.Length, prefixLength)].Trim('-', '.', ' ');
+        if (string.IsNullOrWhiteSpace(prefix))
+        {
+            prefix = "session";
+        }
+
+        return $"{prefix}-{suffix}";
     }
 
     private static void MigrateLegacyData(string dataRoot)
@@ -111,10 +135,15 @@ public static class NativeDataPaths
             return;
         }
 
-        foreach (var sessionDir in Directory.EnumerateDirectories(legacySessionsRoot))
+        foreach (var sessionDir in SafeEnumerateDirectories(legacySessionsRoot))
         {
+            if (DirectoryIsReparsePoint(sessionDir))
+            {
+                continue;
+            }
+
             var sessionId = Path.GetFileName(sessionDir);
-            CopyDirectoryIfMissing(sessionDir, Path.Combine(SessionsRoot(dataRoot), sessionId), new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "checkpoints" });
+            CopyDirectoryIfMissing(sessionDir, Path.Combine(SessionsRoot(dataRoot), SafeSessionId(sessionId)), new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "checkpoints" });
             CopyDirectoryIfMissing(
                 Path.Combine(sessionDir, "checkpoints"),
                 CheckpointDirectory(dataRoot, sessionId));
@@ -122,7 +151,7 @@ public static class NativeDataPaths
                 Path.Combine(sessionDir, "events.jsonl"),
                 EventPath(dataRoot, sessionId));
 
-            foreach (var rotatedLog in Directory.EnumerateFiles(sessionDir, "events.*.jsonl"))
+            foreach (var rotatedLog in SafeEnumerateFiles(sessionDir, "events.*.jsonl"))
             {
                 CopyIfMissing(rotatedLog, Path.Combine(Path.GetDirectoryName(EventPath(dataRoot, sessionId))!, Path.GetFileName(rotatedLog)));
             }
@@ -136,39 +165,89 @@ public static class NativeDataPaths
             return;
         }
 
-        foreach (var directory in Directory.EnumerateDirectories(sourceRoot, "*", SearchOption.AllDirectories))
+        if (DirectoryIsReparsePoint(sourceRoot))
         {
-            var directoryName = Path.GetFileName(directory);
-            if (skipDirectoryNames?.Contains(directoryName) == true)
-            {
-                continue;
-            }
-
-            Directory.CreateDirectory(MapPath(sourceRoot, targetRoot, directory));
+            return;
         }
 
-        foreach (var file in Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories))
+        var pending = new Queue<string>();
+        pending.Enqueue(sourceRoot);
+        while (pending.TryDequeue(out var currentDirectory))
         {
-            if (IsUnderSkippedDirectory(sourceRoot, file, skipDirectoryNames))
+            var targetDirectory = PathsEqual(currentDirectory, sourceRoot)
+                ? targetRoot
+                : MapPath(sourceRoot, targetRoot, currentDirectory);
+            Directory.CreateDirectory(targetDirectory);
+
+            foreach (var file in SafeEnumerateFiles(currentDirectory))
             {
-                continue;
+                CopyIfMissing(file, MapPath(sourceRoot, targetRoot, file));
             }
 
-            CopyIfMissing(file, MapPath(sourceRoot, targetRoot, file));
+            foreach (var directory in SafeEnumerateDirectories(currentDirectory)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                if (!ShouldSkipLegacyCopyDirectory(directory, skipDirectoryNames))
+                {
+                    pending.Enqueue(directory);
+                }
+            }
         }
     }
 
-    private static bool IsUnderSkippedDirectory(string sourceRoot, string file, IReadOnlySet<string>? skipDirectoryNames)
+    private static IEnumerable<string> SafeEnumerateDirectories(string root)
     {
-        if (skipDirectoryNames is null || skipDirectoryNames.Count == 0)
+        try
         {
-            return false;
+            return Directory.EnumerateDirectories(root).ToArray();
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+        {
+            return [];
+        }
+    }
 
-        var relative = Path.GetRelativePath(sourceRoot, file);
-        return relative
-            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .Any(part => skipDirectoryNames.Contains(part));
+    private static IEnumerable<string> SafeEnumerateFiles(string root, string pattern = "*")
+    {
+        try
+        {
+            return Directory.EnumerateFiles(root, pattern).ToArray();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+        {
+            return [];
+        }
+    }
+
+    private static bool ShouldSkipLegacyCopyDirectory(string directory, IReadOnlySet<string>? skipDirectoryNames)
+    {
+        try
+        {
+            return ShouldSkipLegacyCopyDirectory(directory, skipDirectoryNames, File.GetAttributes(directory));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+        {
+            return true;
+        }
+    }
+
+    private static bool ShouldSkipLegacyCopyDirectory(string directory, IReadOnlySet<string>? skipDirectoryNames, FileAttributes attributes)
+    {
+        var directoryName = Path.GetFileName(directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        return skipDirectoryNames?.Contains(directoryName) == true
+            || (attributes & FileAttributes.ReparsePoint) == FileAttributes.ReparsePoint;
+    }
+
+    private static bool DirectoryIsReparsePoint(string directory)
+    {
+        try
+        {
+            return (File.GetAttributes(directory) & FileAttributes.ReparsePoint) == FileAttributes.ReparsePoint;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+        {
+            return true;
+        }
     }
 
     private static string MapPath(string sourceRoot, string targetRoot, string sourcePath)

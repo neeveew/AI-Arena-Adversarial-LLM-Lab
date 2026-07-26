@@ -1,0 +1,8 @@
+AI Arena 0.4.101-beta
+
+- Added PowerShell generation for Random Seed, AI Choice, Current Topics, and confirmation-gated Wild setups.
+- Added typed generation state with the active recipe and up to 20 replayable history receipts.
+- Added same-session replay that preserves transcript and clean comparison-session replay that selects the new run.
+- Return structured operation receipts and refreshed generation history after every generation or replay command.
+- Extracted headless generation automation from dialog-only UI assumptions while retaining shared busy and refresh paths.
+- Added an engine-backed regression covering deterministic generation, history, same-session replay, clean replay sessions, and bounded inputs.

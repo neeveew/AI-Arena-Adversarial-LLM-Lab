@@ -1,0 +1,13 @@
+AI Arena 0.4.36-beta
+Match Setup preset gallery release.
+
+- Added a first-class Match Setup preset catalog with category, summary, best-use, risk, and tuning metadata for every generation preset.
+- Added five new creative generation presets: Black-Box Audit, Approval Maze, Launch War Room, Template Forge, and Memory Handoff.
+- Decorated generation preset picker items at runtime with rich tooltips and accessibility help derived from the preset catalog.
+- Expanded the generation recipe tooltip with preset category, best-use guidance, risk notes, and catalog category counts.
+- Added deterministic preset receipts that summarize a preset's category, purpose, risk, role pack, style, pressure, and persona mixer.
+- Added preset catalog summary helpers so the app can report how many presets and categories are available.
+- Added exact preset-match detection for tuning recipes, including custom-recipe fallback copy.
+- Added preset match metadata to generated history briefs, JSON setup receipts, diffs, and rubrics.
+- Added preset match metadata to Copy Setup and Copy JSON for the current match setup.
+- Added deterministic tests for catalog integrity, new preset mappings, receipt copy, match detection, exported setup metadata, and XAML preset availability.

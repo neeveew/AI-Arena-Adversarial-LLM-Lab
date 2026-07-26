@@ -1,0 +1,6 @@
+AI Arena 0.4.61-beta
+
+- Fix Agent runs failing with "Model returned an empty response" when reasoning models (e.g. Qwen thinking variants) spend the whole output budget thinking before writing public content.
+- Raise Agent role output-token budgets to 4096 for Planner/Reviewer and 6144 for Builder so a full thinking pass fits before the public answer.
+- Retry Agent model steps once on the same model with reasoning disabled when a call succeeds but returns empty public content, before falling back or failing.
+- Make the AI Lab empty-content repair turn retry with reasoning disabled instead of allowing the model to exhaust the budget thinking again.

@@ -4,96 +4,190 @@
         Title="Confirm"
         Icon="/Assets/ai-arena-icon.ico"
         Width="520"
-        SizeToContent="Height"
+        Height="300"
+        MinWidth="320"
+        MinHeight="280"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
         WindowStyle="None"
         ShowInTaskbar="False"
         Background="Transparent"
-        AllowsTransparency="True">
+        AllowsTransparency="True"
+        SnapsToDevicePixels="True"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType">
+    <Window.Resources>
+        <!-- Dialog actions share the Arena button system with a taller dialog hit target. -->
+        <Style x:Key="DialogActionButtonStyle"
+               TargetType="{x:Type Button}"
+               BasedOn="{StaticResource Arena.Button.Base}">
+            <Setter Property="MinHeight" Value="44" />
+            <Setter Property="MinWidth" Value="96" />
+            <Setter Property="Padding" Value="14,4" />
+            <Setter Property="FontSize" Value="13" />
+        </Style>
+
+        <Style x:Key="DialogCloseButtonStyle"
+               TargetType="{x:Type Button}"
+               BasedOn="{StaticResource DialogActionButtonStyle}">
+            <Setter Property="Width" Value="40" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="MinWidth" Value="32" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+    </Window.Resources>
+
     <Border x:Name="DialogShell"
-            CornerRadius="8"
-            BorderThickness="2"
+            Background="{DynamicResource PanelBrush}"
+            BorderBrush="{DynamicResource PrimaryBorderBrush}"
+            BorderThickness="1"
+            CornerRadius="12"
+            SnapsToDevicePixels="True"
             PreviewMouseLeftButtonDown="DialogShell_PreviewMouseLeftButtonDown">
         <Border.Effect>
-            <DropShadowEffect Color="#000000" Opacity="0.45" BlurRadius="18" ShadowDepth="4" />
+            <DropShadowEffect BlurRadius="24"
+                              Color="#000000"
+                              Direction="270"
+                              Opacity="0.48"
+                              ShadowDepth="7" />
         </Border.Effect>
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <Border x:Name="HeaderBar"
-                    CornerRadius="6,6,0,0"
-                    Padding="18,14">
+                    Padding="14,10"
+                    Background="{DynamicResource InputBrush}"
+                    CornerRadius="11,11,0,0">
                 <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock x:Name="TitleText"
-                           FontSize="18"
-                           FontWeight="SemiBold"
-                           VerticalAlignment="Center" />
-                <Button x:Name="CloseButton"
-                        Grid.Column="1"
-                        Content="X"
-                        Click="CancelButton_Click"
-                        Width="32"
-                        Height="28"
-                        MinWidth="32"
-                        MinHeight="28"
-                        Padding="0"
-                        Margin="12,0,0,0"
-                        ToolTip="Close" />
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border x:Name="ToneBadge"
+                            Width="32"
+                            Height="32"
+                            Margin="0,0,10,0"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Center"
+                            Background="{DynamicResource InputBrush}"
+                            BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="20">
+                        <TextBlock x:Name="ToneText"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   AutomationProperties.Name="Warning"
+                                   FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                                   FontSize="16"
+                                   Text="&#xE7BA;" />
+                    </Border>
+
+                    <StackPanel Grid.Column="1"
+                                VerticalAlignment="Center">
+                        <TextBlock x:Name="ToneLabelText"
+                                   Margin="0,0,0,3"
+                                   FontFamily="Segoe UI Variable Text, Segoe UI"
+                                   FontSize="10"
+                                   FontWeight="Bold"
+                                   Text="CONFIRM ACTION" />
+                        <TextBlock x:Name="TitleText"
+                                   FontFamily="Segoe UI Variable Display, Segoe UI"
+                                   FontSize="19"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <Button x:Name="CloseButton"
+                            Grid.Column="2"
+                            Margin="10,0,0,0"
+                            Style="{StaticResource DialogCloseButtonStyle}"
+                            Click="CancelButton_Click"
+                            AutomationProperties.Name="Close confirmation"
+                            AutomationProperties.HelpText="Closes this confirmation without applying the action."
+                            ToolTip="Close confirmation" />
                 </Grid>
             </Border>
 
-            <Grid x:Name="ContentPanel"
-                  Grid.Row="1"
-                  Margin="18"
-                  MinHeight="104">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="44" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <Border x:Name="ToneBadge"
-                        Width="34"
-                        Height="34"
-                        CornerRadius="17"
-                        HorizontalAlignment="Left"
-                        VerticalAlignment="Top">
-                    <TextBlock x:Name="ToneText"
-                               Text="!"
-                               Foreground="White"
-                               FontSize="20"
-                               FontWeight="Bold"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center" />
-                </Border>
-                <TextBlock x:Name="MessageText"
-                           Grid.Column="1"
-                           FontSize="15"
-                           LineHeight="22"
-                           TextWrapping="Wrap" />
-            </Grid>
+            <Border x:Name="ContentPanel"
+                    Grid.Row="1"
+                    Margin="14,10"
+                    Padding="12,10"
+                    MinHeight="92"
+                    Background="{DynamicResource InputBrush}"
+                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="9">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <ScrollViewer MaxHeight="260"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto"
+                                  Focusable="False">
+                        <TextBlock x:Name="MessageText"
+                                   AutomationProperties.Name="Confirmation message"
+                                   FontFamily="Segoe UI Variable Text, Segoe UI"
+                                   FontSize="13"
+                                   LineHeight="19"
+                                   TextWrapping="Wrap" />
+                    </ScrollViewer>
+                    <TextBlock x:Name="ShortcutText"
+                               Grid.Row="1"
+                               Margin="0,8,0,0"
+                               FontFamily="Segoe UI Variable Text, Segoe UI"
+                               FontSize="11"
+                               Text="Esc cancels · Enter confirms"
+                               TextWrapping="Wrap" />
+                </Grid>
+            </Border>
 
-            <UniformGrid Grid.Row="2"
-                         Columns="2"
-                         HorizontalAlignment="Right"
-                         Width="280"
-                         Margin="18,0,18,18">
-                <Button x:Name="CancelButton"
-                        Content="Cancel"
-                        Click="CancelButton_Click"
-                        Margin="0,0,8,0" />
-                <Button x:Name="ConfirmButton"
-                        Content="Confirm"
-                        Click="ConfirmButton_Click"
-                        Margin="8,0,0,0" />
-            </UniformGrid>
+            <Border x:Name="FooterBar"
+                    Grid.Row="2"
+                    Padding="14,10"
+                    Background="{DynamicResource InputBrush}"
+                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                    BorderThickness="0,1,0,0"
+                    CornerRadius="0,0,11,11">
+                <Grid x:Name="ConfirmActionHost">
+                    <Grid HorizontalAlignment="Right"
+                          Width="{Binding ActualWidth, ElementName=ConfirmActionHost}"
+                          MaxWidth="340">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="CancelButton"
+                                Height="36"
+                                Style="{StaticResource DialogActionButtonStyle}"
+                                Content="Cancel"
+                                Click="CancelButton_Click"
+                                IsCancel="True"
+                                AutomationProperties.Name="Cancel confirmation"
+                                AutomationProperties.HelpText="Closes the confirmation without applying the action." />
+                        <Button x:Name="ConfirmButton"
+                                Grid.Column="2"
+                                Height="36"
+                                Style="{StaticResource DialogActionButtonStyle}"
+                                Content="Confirm"
+                                Click="ConfirmButton_Click"
+                                IsDefault="True"
+                                AutomationProperties.Name="Confirm action"
+                                AutomationProperties.HelpText="Applies the confirmed action." />
+                    </Grid>
+                </Grid>
+            </Border>
         </Grid>
     </Border>
 </Window>

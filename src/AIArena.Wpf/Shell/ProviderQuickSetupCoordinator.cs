@@ -42,7 +42,9 @@ internal sealed class ProviderQuickSetupCoordinator
             Foreground = resourceBrush("TextBrush"),
             BorderBrush = resourceBrush("ControlBorderBrush"),
             Padding = new Thickness(8),
+            MinHeight = 34,
             MinWidth = 230,
+            FontSize = 12,
             ToolTip = "OpenAI-compatible provider base URL."
         };
 
@@ -55,7 +57,9 @@ internal sealed class ProviderQuickSetupCoordinator
             Foreground = resourceBrush("TextBrush"),
             BorderBrush = resourceBrush("ControlBorderBrush"),
             Padding = new Thickness(8),
+            MinHeight = 34,
             MinWidth = 230,
+            FontSize = 12,
             ToolTip = "Pick an advertised model or type one manually."
         };
         foreach (var model in advertisedModels())
@@ -68,59 +72,91 @@ internal sealed class ProviderQuickSetupCoordinator
             Text = SessionOverviewCoordinator.ProviderSetupStatus(snapshot),
             Foreground = resourceBrush("MutedTextBrush"),
             TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 7, 0, 0)
+            FontSize = 12,
+            LineHeight = 18
         };
 
         var actions = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
-        actions.Children.Add(transcriptActions.CreateButton("Save + test", async (_, _) =>
+        actions.Children.Add(transcriptActions.CreateLabeledButton("Save + test", async (_, _) =>
         {
             await saveAndTestProviderQuickSetupAsync(baseUrlBox.Text, modelBox.Text, statusText);
-        }, true, TranscriptActionKind.Primary));
-        actions.Children.Add(transcriptActions.CreateButton("Open settings", (_, _) =>
+        }, true, TranscriptActionKind.Primary, "\uE74E"));
+        actions.Children.Add(transcriptActions.CreateLabeledButton("Open settings", (_, _) =>
         {
             openModelProviderSettings(baseUrlBox.Text, modelBox.Text);
-        }, true));
+        }, true, TranscriptActionKind.Neutral, "\uE713"));
 
-        var fields = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        var fields = new Grid { Margin = new Thickness(0, 10, 0, 0) };
         fields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         fields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
         fields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        var baseUrlStack = CreateFieldStack("Provider base URL", baseUrlBox);
+        var baseUrlStack = CreateFieldStack("Server address", baseUrlBox);
         fields.Children.Add(baseUrlStack);
 
         var modelStack = CreateFieldStack("Default model", modelBox);
         Grid.SetColumn(modelStack, 2);
         fields.Children.Add(modelStack);
 
-        var panel = new StackPanel();
-        panel.Children.Add(new TextBlock
+        var header = new Grid();
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var titleStack = new StackPanel();
+        titleStack.Children.Add(new TextBlock
         {
             Text = "Provider setup",
             Foreground = resourceBrush("TextBrush"),
             FontSize = 14,
             FontWeight = FontWeights.SemiBold
         });
-        panel.Children.Add(new TextBlock
+        titleStack.Children.Add(new TextBlock
         {
             Text = "Connect LM Studio or another OpenAI-compatible /v1 provider before running turns.",
             Foreground = resourceBrush("MutedTextBrush"),
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 3, 0, 0)
         });
+        header.Children.Add(titleStack);
+        var statusChip = CreateStatusChip(snapshot.ProviderOnline ? "Model needed" : "Provider offline", accent);
+        Grid.SetColumn(statusChip, 1);
+        header.Children.Add(statusChip);
+
+        var panel = new StackPanel();
+        panel.Children.Add(header);
         panel.Children.Add(fields);
         panel.Children.Add(actions);
-        panel.Children.Add(statusText);
+        panel.Children.Add(new Border
+        {
+            Background = blendBrush(resourceBrush("InputBrush"), accent, 0.08),
+            BorderBrush = blendBrush(resourceBrush("DisabledBorderBrush"), accent, 0.34),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(10, 8, 10, 8),
+            Margin = new Thickness(0, 2, 0, 0),
+            Child = statusText
+        });
+
+        var layout = new Grid();
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(5) });
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        layout.Children.Add(new Border
+        {
+            Background = accent,
+            CornerRadius = new CornerRadius(4),
+            Margin = new Thickness(0, 1, 10, 1)
+        });
+        Grid.SetColumn(panel, 1);
+        layout.Children.Add(panel);
 
         return new Border
         {
             Background = blendBrush(resourceBrush("InputBrush"), accent, 0.1),
-            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.5),
+            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.56),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(10),
-            Margin = new Thickness(0, 8, 0, 2),
-            Child = panel
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(12),
+            Margin = new Thickness(0, 10, 0, 2),
+            Child = layout
         };
     }
 
@@ -155,9 +191,31 @@ internal sealed class ProviderQuickSetupCoordinator
             Text = label,
             Foreground = resourceBrush("MutedTextBrush"),
             FontWeight = FontWeights.SemiBold,
+            FontSize = 11,
             Margin = new Thickness(0, 0, 0, 5)
         });
         stack.Children.Add(input);
         return stack;
+    }
+
+    private Border CreateStatusChip(string text, Brush accent)
+    {
+        return new Border
+        {
+            Background = blendBrush(resourceBrush("InputBrush"), accent, 0.16),
+            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.5),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(8, 4, 8, 4),
+            Margin = new Thickness(12, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Top,
+            Child = new TextBlock
+            {
+                Text = text,
+                Foreground = accent,
+                FontSize = 10.5,
+                FontWeight = FontWeights.SemiBold
+            }
+        };
     }
 }

@@ -1,0 +1,7 @@
+AI Arena 0.4.69-beta
+
+- Make Agent Performance cards adaptive: the speaking or most recent agent gets the full metrics card while the rest collapse to slim one-line rows; clicking any row still opens the detail popup.
+- Show only meaningful Build Evidence rows in the Agent right rail; idle "None/Not run/Pending" rows stay hidden until a task gives them state.
+- Show a live approximate token count on the running role's Progress row while Agent responses stream.
+- Merge the Speak and Stop Voice buttons in Arena Controls into one toggle that follows actual playback state.
+- Add a right-rail collapse toggle to the top toolbar; the choice persists across restarts and frees the full width for the center pane.

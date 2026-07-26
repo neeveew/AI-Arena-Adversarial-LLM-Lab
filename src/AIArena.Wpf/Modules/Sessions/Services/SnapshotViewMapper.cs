@@ -1,6 +1,8 @@
 using System.Text.Json;
 using AIArena.Core.Models;
 using AIArena.Core.Providers;
+using AgentInternetSourceItem = AIArena.Wpf.Models.AgentInternetSourceItem;
+using AgentInternetSourceSummary = AIArena.Wpf.Models.AgentInternetSourceSummary;
 using AgentState = AIArena.Wpf.Models.AgentState;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 using CoreSnapshot = AIArena.Core.Models.ArenaSnapshot;
@@ -16,7 +18,6 @@ public static class SnapshotViewMapper
     public static RenderSnapshot FromCore(CoreSessionSummary session, CoreSnapshot snapshot)
     {
         var sharedConfig = Config(snapshot, "shared");
-        var modelRss = snapshot.Engine.ModelRss;
         return new RenderSnapshot(
             session.Id,
             session.SnapshotPath,
@@ -50,9 +51,15 @@ public static class SnapshotViewMapper
             AgentAccentService.NormalizeColor(snapshot.Engine.Narrator.AccentColor),
             Locked(snapshot, "narrator"),
             string.IsNullOrWhiteSpace(sharedConfig.BaseUrl) ? ModelProviderDefaults.BaseUrl : sharedConfig.BaseUrl,
+            ModelProviderApiModes.Normalize(sharedConfig.ApiMode),
+            sharedConfig.ApiToken,
             sharedConfig.Timeout,
             sharedConfig.Temperature,
             sharedConfig.MaxOutputTokens,
+            sharedConfig.ContextLength,
+            sharedConfig.Reasoning,
+            sharedConfig.NativeStatefulChat,
+            sharedConfig.NativeIdleTtlSeconds,
             snapshot.Engine.TranscriptWindow,
             snapshot.Engine.PrivateWindow,
             snapshot.Engine.NotesWindow,
@@ -60,17 +67,37 @@ public static class SnapshotViewMapper
             snapshot.Engine.DecisionCard.Text,
             snapshot.Engine.DecisionCard.UpdatedAt,
             sharedConfig.LastError,
-            modelRss.UseInternet,
-            string.IsNullOrWhiteSpace(modelRss.Mode) ? "manual" : modelRss.Mode,
-            string.IsNullOrWhiteSpace(modelRss.SourceScope) ? "trusted" : modelRss.SourceScope,
-            modelRss.MaxResults,
-            modelRss.AllowParticipantRequests || modelRss.AllowModelRss,
-            modelRss.AllowNarratorRequests,
-            modelRss.RequireApproval,
-            string.IsNullOrWhiteSpace(snapshot.Engine.NewsAutomation.Mode) ? "manual" : snapshot.Engine.NewsAutomation.Mode,
+            snapshot.Engine.Internet.UseInternet,
             sharedConfig.LastTestOk,
             ParseMessages(snapshot.Engine.Messages, snapshot),
-            ParseAgents(snapshot.Engine.Agents, snapshot));
+            ParseAgents(snapshot.Engine.Agents, snapshot))
+        {
+            RoleOverrides = RoleOverridesFrom(snapshot, sharedConfig),
+            ProviderLastLatencyMs = sharedConfig.LastLatencyMs
+        };
+    }
+
+    private static IReadOnlyDictionary<string, Models.RoleGenerationOverride> RoleOverridesFrom(
+        CoreSnapshot snapshot,
+        ModelProviderConfig sharedConfig)
+    {
+        var overrides = new Dictionary<string, Models.RoleGenerationOverride>(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in new[] { "alpha", "beta", "gamma", "delta", "narrator" })
+        {
+            if (!snapshot.Configs.TryGetValue(key, out var config) || config is null)
+            {
+                continue;
+            }
+
+            double? temperature = Math.Abs(config.Temperature - sharedConfig.Temperature) > 0.0001 ? config.Temperature : null;
+            int? maxOutputTokens = config.MaxOutputTokens != sharedConfig.MaxOutputTokens ? config.MaxOutputTokens : null;
+            if (temperature.HasValue || maxOutputTokens.HasValue)
+            {
+                overrides[key] = new Models.RoleGenerationOverride(temperature, maxOutputTokens);
+            }
+        }
+
+        return overrides;
     }
 
     public static RenderSnapshot Empty(CoreSessionSummary session, string message)
@@ -108,9 +135,15 @@ public static class SnapshotViewMapper
             "",
             false,
             ModelProviderDefaults.BaseUrl,
+            ModelProviderApiModes.OpenAiCompatible,
+            "",
             ModelProviderDefaults.TimeoutSeconds,
             ModelProviderDefaults.Temperature,
             ModelProviderDefaults.MaxOutputTokens,
+            0,
+            "",
+            true,
+            0,
             30,
             12,
             8,
@@ -119,13 +152,6 @@ public static class SnapshotViewMapper
             0,
             "",
             false,
-            "manual",
-            "trusted",
-            1,
-            false,
-            true,
-            false,
-            "manual",
             false,
             [new TranscriptMessage(0, "Transcript", "transcript", 0, "-", 0, 0, 0, 0, "empty", "", false, "message", message, "", "", "", "", "", "", "", "", false, [])],
             []);
@@ -177,7 +203,11 @@ public static class SnapshotViewMapper
                     JsonString(result, "summary"),
                     FormatCheckedAt(JsonProperty(result, "checked_at")),
                     JsonBool(result, "cached"),
-                    ParseInternetSources(JsonProperty(result, "sources")));
+                    ParseInternetSources(JsonProperty(result, "sources")),
+                    message.Model.TokensPerSecond,
+                    message.Model.TimeToFirstTokenMs,
+                    MetadataString(message, "provider_response_id"),
+                    message.Model.ModelLoadTimeMs);
             })
             .ToArray();
     }
@@ -203,10 +233,13 @@ public static class SnapshotViewMapper
     private static IReadOnlyList<AgentState> ParseAgents(IReadOnlyList<DialogueAgent> agents, CoreSnapshot snapshot)
     {
         var sharedModel = DisplayValue(Config(snapshot, "shared").Model);
+        var latestInternetByAgent = LatestInternetSourcesByAgent(snapshot.Engine.Messages);
         return agents
             .Select(agent =>
             {
                 var id = agent.Id;
+                var agentModel = Config(snapshot, id).Model;
+                latestInternetByAgent.TryGetValue(id, out var internetSources);
                 return new AgentState(
                     id,
                     string.IsNullOrWhiteSpace(agent.Name) ? id : agent.Name,
@@ -215,17 +248,55 @@ public static class SnapshotViewMapper
                     agent.VoiceStyle,
                     agent.PressureProfile,
                     AgentAccentService.NormalizeColor(agent.AccentColor),
-                    DisplayValue(Config(snapshot, id).Model is { Length: > 0 } model ? model : sharedModel),
+                    DisplayValue(string.IsNullOrWhiteSpace(agentModel) ? sharedModel : agentModel),
                     agent.Active,
                     Locked(snapshot, id),
-                    agent.PrivateNotes.Where(note => !string.IsNullOrWhiteSpace(note)).ToArray());
+                    agent.PrivateNotes.Where(note => !string.IsNullOrWhiteSpace(note)).ToArray(),
+                    internetSources);
             })
             .ToArray();
+    }
+
+    private static IReadOnlyDictionary<string, AgentInternetSourceSummary> LatestInternetSourcesByAgent(IReadOnlyList<DialogueMessage> messages)
+    {
+        var latest = new Dictionary<string, AgentInternetSourceSummary>(StringComparer.OrdinalIgnoreCase);
+        foreach (var message in messages.OrderBy(message => message.Turn))
+        {
+            var request = MetadataObject(message, "tool_request");
+            var result = MetadataObject(message, "tool_result");
+            var sourcesElement = JsonProperty(result, "sources");
+            var sources = ParseInternetSources(sourcesElement);
+            if (sources.Count == 0)
+            {
+                continue;
+            }
+
+            var requesterId = JsonString(request, "requester_id");
+            if (string.IsNullOrWhiteSpace(requesterId))
+            {
+                requesterId = message.SpeakerId;
+            }
+
+            if (string.IsNullOrWhiteSpace(requesterId))
+            {
+                continue;
+            }
+
+            latest[requesterId.Trim()] = new AgentInternetSourceSummary(
+                JsonString(request, "query", JsonString(result, "query")),
+                FormatCheckedAt(JsonProperty(result, "checked_at")),
+                sources,
+                ParseInternetSourceItems(sourcesElement));
+        }
+
+        return latest;
     }
 
     private static IReadOnlyList<GenerationHistoryItem> ParseGenerationHistory(CoreSnapshot snapshot)
     {
         return snapshot.GenerationHistory
+            .Where(item => !string.IsNullOrWhiteSpace(item.Id))
+            .OrderByDescending(item => item.CreatedAt)
             .Select(item => new GenerationHistoryItem(
                 item.Id,
                 DisplayValue(item.Kind),
@@ -237,7 +308,18 @@ public static class SnapshotViewMapper
                 DisplayValue(item.ScenarioSeed),
                 DisplayValue(item.PersonaSeed),
                 item.CreatedAt,
-                item.Match.Topic))
+                item.Match.Topic,
+                item.Match.Global,
+                item.Match.NarratorBrief,
+                item.Match.Personas.Count(persona => !persona.AgentId.Equals("narrator", StringComparison.OrdinalIgnoreCase)),
+                string.Join(
+                    ", ",
+                    item.Match.Personas
+                        .Where(persona => !persona.AgentId.Equals("narrator", StringComparison.OrdinalIgnoreCase))
+                        .Take(4)
+                        .Select(persona => string.IsNullOrWhiteSpace(persona.Role)
+                            ? DisplayValue(persona.AgentId)
+                            : $"{DisplayValue(persona.AgentId)}: {DisplayValue(persona.Role)}"))))
             .ToArray();
     }
 
@@ -316,5 +398,39 @@ public static class SnapshotViewMapper
             })
             .Where(item => !string.IsNullOrWhiteSpace(item))
             .ToArray();
+    }
+
+    private static IReadOnlyList<AgentInternetSourceItem> ParseInternetSourceItems(JsonElement sources)
+    {
+        if (sources.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return sources.EnumerateArray()
+            .Select(source =>
+            {
+                var title = JsonString(source, "title");
+                var url = JsonString(source, "url");
+                var name = JsonString(source, "source");
+                var snippet = JsonString(source, "snippet");
+                var display = string.Join(" - ", new[] { name, title, url, snippet }.Where(item => !string.IsNullOrWhiteSpace(item)));
+                return new AgentInternetSourceItem(
+                    title,
+                    DomainLabel(url),
+                    url,
+                    snippet,
+                    FormatCheckedAt(JsonProperty(source, "published_at")),
+                    display);
+            })
+            .Where(item => !string.IsNullOrWhiteSpace(item.DisplayText))
+            .ToArray();
+    }
+
+    private static string DomainLabel(string url)
+    {
+        return Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            ? uri.Host.Replace("www.", "", StringComparison.OrdinalIgnoreCase)
+            : "";
     }
 }

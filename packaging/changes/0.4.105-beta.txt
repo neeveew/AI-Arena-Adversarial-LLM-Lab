@@ -1,0 +1,6 @@
+AI Arena 0.4.105-beta
+
+- Adds `Get-AIArenaMatchMatrix` and typed `Set-AIArenaMatchMatrix` relationship patterns, including atomic `off` behavior.
+- Persists matrix changes through a modular, cancellation-aware service with busy-state protection, event receipts, refreshed state, and named-pattern inference after restart.
+- Adds a visible Match Setup Criteria readiness badge: generated setups are Auditable, while legacy/manual setups without closure criteria show a nonblocking Basic warning.
+- Adds regression coverage for pattern normalization, persistence, restart inference, busy/invalid no-mutation guarantees, event logging, and quality-criteria readiness.

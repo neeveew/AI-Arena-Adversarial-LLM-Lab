@@ -174,6 +174,36 @@ internal static class GeneratedPersonaFactory
                 "User value witness",
                 "Adoption constraint mapper"
             ]),
+            "benchmark_duel" => RoleByParticipant(agentId, [
+                "Model A advocate",
+                "Model B advocate",
+                "Blind preference judge",
+                "Rubric auditor",
+                "Prompt fairness referee",
+                "Latency and cost analyst",
+                "User preference witness",
+                "Tie-break skeptic"
+            ]),
+            "governance_board" => RoleByParticipant(agentId, [
+                "Policy sponsor",
+                "Public-interest challenger",
+                "Enforcement critic",
+                "Exception boundary mapper",
+                "Rights impact witness",
+                "Operational owner",
+                "Appeals process designer",
+                "Accountability auditor"
+            ]),
+            "tool_ops" => RoleByParticipant(agentId, [
+                "Tool operator",
+                "Failure-mode analyst",
+                "Evidence checker",
+                "Fallback planner",
+                "Permission gatekeeper",
+                "Latency observer",
+                "Data-quality skeptic",
+                "Recovery runbook owner"
+            ]),
             _ => null
         };
     }

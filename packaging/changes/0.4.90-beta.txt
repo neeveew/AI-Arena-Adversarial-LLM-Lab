@@ -1,0 +1,11 @@
+AI Arena 0.4.90-beta
+
+- Makes the bundled SearXNG lifecycle demand-driven and race-safe across startup, stop, child exit, replacement, and shutdown.
+- Retains app-owned process handles when exit cannot be confirmed, then retries cleanup before starting a replacement backend.
+- Rejects credential-bearing, non-HTTPS remote, query-bearing, and fragment-bearing SearXNG base URLs before network access.
+- Replaces legacy RSS and curated-news behavior with Arena-tailored JSON web search and exact public-page fetching.
+- Persists the direct Internet toggle immediately and scrubs removed RSS/news extension data from legacy sessions.
+- Propagates shutdown cancellation through provider work and drains tracked Arena operations before exit.
+- Constrains the Live Agents viewport, releases empty toolbar space, preserves keyboard focus on rail collapse, and bounds the 3D material cache.
+- Restricts release packaging to win-x64 while the pinned CPython and wheel payload remains architecture-specific.
+- Prevents payload smoke builds from mutating finalized release directories and invalidating checksum manifests.

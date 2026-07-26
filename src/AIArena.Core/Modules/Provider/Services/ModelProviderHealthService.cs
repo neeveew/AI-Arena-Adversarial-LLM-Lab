@@ -31,10 +31,16 @@ public sealed class ModelProviderHealthService
         var testConfig = new ModelProviderConfig
         {
             BaseUrl = config.BaseUrl,
+            ApiMode = config.ApiMode,
+            ApiToken = config.ApiToken,
             Model = config.Model,
             Timeout = config.Timeout,
             Temperature = 0,
-            MaxOutputTokens = 16
+            MaxOutputTokens = 16,
+            ContextLength = config.ContextLength,
+            Reasoning = config.Reasoning,
+            NativeStatefulChat = config.NativeStatefulChat,
+            NativeIdleTtlSeconds = config.NativeIdleTtlSeconds
         };
         var result = await _client.CompleteChatAsync(
             testConfig,
