@@ -1450,14 +1450,22 @@
                                         AutomationProperties.HelpText="Lists required blockers and advisory warnings for the current match setup." />
                             <Grid x:Name="CurrentSetupTransferHost" HorizontalAlignment="Left" Margin="0,10,0,0">
                                 <Button x:Name="CurrentSetupTransferButton"
-                                        Content="Copy / Import  &#xE70D;"
                                         Click="CurrentSetupTransferButton_Click"
                                         Style="{StaticResource SecondaryButton}"
                                         FontSize="11"
                                         Padding="11,6"
                                         AutomationProperties.Name="Copy or import match setup"
                                         AutomationProperties.HelpText="Copy the current match setup as a brief or JSON receipt, or import a portable setup."
-                                        ToolTip="Copy or import this match setup" />
+                                        ToolTip="Copy or import this match setup">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Copy / Import" VerticalAlignment="Center" />
+                                        <TextBlock Text="&#xE70D;"
+                                                   FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                                                   FontSize="9"
+                                                   Margin="7,1,0,0"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
                                 <Popup x:Name="CurrentSetupTransferPopup"
                                        PlacementTarget="{Binding ElementName=CurrentSetupTransferButton}"
                                        Placement="Bottom"
@@ -2036,14 +2044,22 @@
                                         ToolTip="Create a clean session from the selected generated match for comparison" />
                                 <Grid x:Name="GenerationCopyHost">
                                     <Button x:Name="GenerationCopyButton"
-                                            Content="Copy  &#xE70D;"
                                             Click="GenerationCopyButton_Click"
                                             Style="{StaticResource SecondaryButton}"
                                             FontSize="11"
                                             Padding="11,6"
                                             AutomationProperties.Name="Copy from the selected generated match"
                                             AutomationProperties.HelpText="Copy the seed, brief, setup spec, diff, or evaluation rubric for the selected generated match."
-                                            ToolTip="Copy seed, brief, spec, diff, or rubric" />
+                                            ToolTip="Copy seed, brief, spec, diff, or rubric">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="Copy" VerticalAlignment="Center" />
+                                            <TextBlock Text="&#xE70D;"
+                                                       FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                                                       FontSize="9"
+                                                       Margin="7,1,0,0"
+                                                       VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
                                     <Popup x:Name="GenerationCopyPopup"
                                            PlacementTarget="{Binding ElementName=GenerationCopyButton}"
                                            Placement="Bottom"
