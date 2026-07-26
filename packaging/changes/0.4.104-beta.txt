@@ -1,0 +1,7 @@
+AI Arena 0.4.104-beta
+
+- Adds an evaluable quality contract to Random, AI Choice, Current Topics, and Wild scenario generation: good outcome, unacceptable failure, edge-case test, actionable output, and unresolved uncertainty.
+- Repairs otherwise-valid AI-generated setups deterministically when the model omits that contract.
+- Requires every agent turn to make one observable contribution and checks scenario success/failure criteria before endorsing closure.
+- Exposes the full global instruction and `qualityContractPresent` through `Get-AIArenaMatchGeneration` for PowerShell audits.
+- Documents the primary-source OpenAI and Anthropic guidance behind the change and keeps the implementation local-model friendly without another evaluator call.

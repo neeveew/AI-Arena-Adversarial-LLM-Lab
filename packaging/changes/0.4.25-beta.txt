@@ -1,0 +1,12 @@
+AI Arena 0.4.25-beta
+
+- Added Operator Quick Intervention chips to the AI Lab Operator Turn panel.
+- Added starter interventions for pre-run stakes, evidence discipline, dissent, and narrator framing.
+- Added diagnostics-driven interventions for failed turns, weak evidence, unsupported claims, consensus lock-in, role drift, narrative heat, decision framing, objections, narrator judgment, and next-step forcing.
+- Added route-aware staging so interventions can switch Operator Turn between Public, Private, and Narrator routes when appropriate.
+- Made interventions stage editable text instead of sending immediately, preserving operator control.
+- Added private role-reset intervention text that writes to agent memory notes instead of adding public transcript noise.
+- Added dynamic quick-intervention hints and tooltips that explain why each intervention is suggested.
+- Added automation-aware quick intervention buttons with stable sizing in the Operator Turn card.
+- Added regression coverage for intervention suggestion ordering, route selection, staged prompt availability, and XAML quick-chip contracts.
+- Updated README, user guide, research notes, and release metadata for the operator-steering release.

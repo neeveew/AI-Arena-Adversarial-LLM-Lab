@@ -4,6 +4,12 @@
              xmlns:local="clr-namespace:AIArena.Wpf"
              StartupUri="Shell/MainWindow.xaml">
     <Application.Resources>
-         
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="UI/Theming/DesignTokens.xaml" />
+                <ResourceDictionary Source="UI/Theming/ControlStyles.xaml" />
+                <ResourceDictionary Source="UI/Theming/SurfaceStyles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>

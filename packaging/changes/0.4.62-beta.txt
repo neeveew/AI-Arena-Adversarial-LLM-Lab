@@ -1,0 +1,4 @@
+AI Arena 0.4.62-beta
+
+- Re-enable the full Agent team loop: Planner and Reviewer now run before Builder on every Agent task instead of being skipped in Builder-only mode.
+- Add a Clear History button to the Agent Session header that clears the visible Agent thread, staged command state, command history, and the persisted Agent conversation.

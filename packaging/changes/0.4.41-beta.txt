@@ -1,0 +1,17 @@
+AI Arena 0.4.41-beta
+Agent visible work-loop polish release.
+
+- Added center action cards when Builder stages, blocks, or holds a command proposal.
+- Added center command-result cards with exit state, file-change counts, changed-path previews, and suggested next action.
+- Added a Verify prompt chip for build, run, smoke-test, or read-only inspection follow-up.
+- Added Copy Output and Copy Receipt actions to the Agent terminal output panel.
+- Added accessibility names and help text for the new Agent output copy actions.
+- Improved Agent top-mode labels with Preview ready, Needs preview, Files changed, Verify next, and Repair next states.
+- Broadened app-writing intent detection for setup, bootstrap, prototype, site, game, tool, UI, app, and application prompts.
+- Added a no-command warning when action-style prompts return prose without a runnable Builder proposal.
+- Added a no-change warning when an action-style command exits successfully but changes no tracked workspace files.
+- Changed command extraction to prefer the final labeled Command proposal block over earlier runnable examples.
+- Expanded fallback command recognition for rg, git, node, bun, Get-Content, Select-String, Test-Path, Add-Content, Out-File, Copy-Item, and Move-Item.
+- Added held-proposal cards when Builder proposes a command while the approval rail already contains one.
+- Updated README, user guide, Windows app notes, decomposition map, and research notes for the clearer Agent work loop.
+- Added deterministic tests for action cards, top-mode preview state, final proposal extraction, broader app-writing intent, inline inspection command extraction, Verify chip visibility, and copy action contracts.

@@ -89,7 +89,11 @@ internal sealed class UserGuideWindowHost
             return false;
         }
 
-        var guideText = File.ReadAllText(guidePath);
+        if (!TryReadGuideText(guidePath, out var guideText))
+        {
+            return false;
+        }
+
         var sections = BuildUserGuideSections(guideText);
         var dialog = new Window
         {
@@ -103,7 +107,7 @@ internal sealed class UserGuideWindowHost
             WindowStyle = WindowStyle.None,
             ResizeMode = ResizeMode.CanResizeWithGrip,
             ShowInTaskbar = false,
-            Background = BrushFrom("#08111F"),
+            Background = ResourceBrush(owner, "AppBackgroundBrush"),
             Foreground = ResourceBrush(owner, "TextBrush"),
             Icon = CreateAppIconImageSource()
         };
@@ -115,8 +119,8 @@ internal sealed class UserGuideWindowHost
 
         var chrome = new Border
         {
-            Background = CreateWindowBackgroundBrush(),
-            BorderBrush = BrushFrom("#243C5E"),
+            Background = CreateWindowBackgroundBrush(dialog),
+            BorderBrush = ResourceBrush(dialog, "ControlBorderBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(14, 4, 14, 14),
@@ -172,7 +176,7 @@ internal sealed class UserGuideWindowHost
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.MouseLeftButtonDown += (_, args) => DialogChrome.DragMoveIfPossible(dialog, args);
 
-        var logo = CreateGuideLogo();
+        var logo = CreateGuideLogo(dialog);
         logo.Margin = new Thickness(10, 12, 16, 8);
         Grid.SetColumn(logo, 0);
         header.Children.Add(logo);
@@ -229,15 +233,21 @@ internal sealed class UserGuideWindowHost
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var openFileButton = CreateGuideButton(dialog, "OPEN FILE", "\uE8E5");
-        openFileButton.Click += (_, _) => Process.Start(new ProcessStartInfo
+        var openFileButton = CreateGuideButton(dialog, "Open File", "\uE8E5");
+        openFileButton.Click += (_, _) =>
         {
-            FileName = guidePath,
-            UseShellExecute = true
-        });
+            if (!ShellProcessLauncher.TryStart(new ProcessStartInfo
+            {
+                FileName = guidePath,
+                UseShellExecute = true
+            }, out var error))
+            {
+                openFileButton.ToolTip = $"Could not open guide file: {error}";
+            }
+        };
         footer.Children.Add(openFileButton);
 
-        var closeButton = CreateGuideButton(dialog, "CLOSE", null);
+        var closeButton = CreateGuideButton(dialog, "Close", null);
         closeButton.Click += (_, _) => dialog.Close();
         Grid.SetColumn(closeButton, 2);
         footer.Children.Add(closeButton);
@@ -248,8 +258,8 @@ internal sealed class UserGuideWindowHost
     {
         var frame = new Border
         {
-            Background = CreatePanelBackgroundBrush(),
-            BorderBrush = BrushFrom("#22395A"),
+            Background = CreatePanelBackgroundBrush(dialog),
+            BorderBrush = ResourceBrush(dialog, "ControlBorderBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(8),
@@ -274,12 +284,13 @@ internal sealed class UserGuideWindowHost
         var contentTitle = new TextBlock
         {
             Text = DisplayTitleForSection(sections.FirstOrDefault() ?? new UserGuideSection("Guide", guideText, "\uE82D")),
-            Foreground = BrushFrom("#37D8FF"),
+            Foreground = ResourceBrush(dialog, "PrimaryBorderBrush"),
             FontSize = 24,
             FontWeight = FontWeights.SemiBold,
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center
         };
+        contentTitle.SetResourceReference(TextBlock.ForegroundProperty, "PrimaryBorderBrush");
 
         var sectionList = CreateSectionList(dialog, sections);
         var searchBox = CreateSearchBox(dialog, sectionList, sections, guideViewer, contentTitle, out var searchPlaceholder);
@@ -304,8 +315,8 @@ internal sealed class UserGuideWindowHost
             }
         };
 
-        body.Children.Add(CreateNavigationPanel(searchBox, searchPlaceholder, sectionList));
-        var contentPanel = CreateContentPanel(contentTitle, guideViewer);
+        body.Children.Add(CreateNavigationPanel(dialog, searchBox, searchPlaceholder, sectionList));
+        var contentPanel = CreateContentPanel(dialog, contentTitle, guideViewer);
         Grid.SetColumn(contentPanel, 2);
         body.Children.Add(contentPanel);
 
@@ -328,7 +339,7 @@ internal sealed class UserGuideWindowHost
 
         var arrowFactory = new FrameworkElementFactory(typeof(TextBlock));
         arrowFactory.SetValue(TextBlock.TextProperty, "\uE76C");
-        arrowFactory.SetValue(TextBlock.FontFamilyProperty, new FontFamily("Segoe MDL2 Assets"));
+        arrowFactory.SetValue(TextBlock.FontFamilyProperty, ArenaTokens.IconFontFamily);
         arrowFactory.SetValue(TextBlock.FontSizeProperty, 11.0);
         arrowFactory.SetValue(FrameworkElement.WidthProperty, 18.0);
         arrowFactory.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
@@ -339,7 +350,7 @@ internal sealed class UserGuideWindowHost
 
         var iconFactory = new FrameworkElementFactory(typeof(TextBlock));
         iconFactory.SetBinding(TextBlock.TextProperty, new Binding(nameof(UserGuideSection.IconGlyph)));
-        iconFactory.SetValue(TextBlock.FontFamilyProperty, new FontFamily("Segoe MDL2 Assets"));
+        iconFactory.SetValue(TextBlock.FontFamilyProperty, ArenaTokens.IconFontFamily);
         iconFactory.SetValue(TextBlock.FontSizeProperty, 17.0);
         iconFactory.SetValue(FrameworkElement.WidthProperty, 36.0);
         iconFactory.SetValue(FrameworkElement.MarginProperty, new Thickness(6, 0, 8, 0));
@@ -376,12 +387,12 @@ internal sealed class UserGuideWindowHost
         return sectionList;
     }
 
-    private static Border CreateNavigationPanel(TextBox searchBox, TextBlock searchPlaceholder, ListBox sectionList)
+    private static Border CreateNavigationPanel(FrameworkElement resources, TextBox searchBox, TextBlock searchPlaceholder, ListBox sectionList)
     {
         var panel = new Border
         {
-            Background = CreateNavBackgroundBrush(),
-            BorderBrush = BrushFrom("#243E61"),
+            Background = CreateNavBackgroundBrush(resources),
+            BorderBrush = ResourceBrush(resources, "DisabledBorderBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(10),
             Padding = new Thickness(14),
@@ -393,7 +404,7 @@ internal sealed class UserGuideWindowHost
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         panel.Child = grid;
 
-        grid.Children.Add(CreateSearchShell(searchBox, searchPlaceholder));
+        grid.Children.Add(CreateSearchShell(resources, searchBox, searchPlaceholder));
 
         sectionList.Margin = new Thickness(0, 12, 0, 0);
         Grid.SetRow(sectionList, 1);
@@ -413,7 +424,7 @@ internal sealed class UserGuideWindowHost
         placeholder = new TextBlock
         {
             Text = SearchPlaceholderText,
-            Foreground = BrushFrom("#7F8FA8"),
+            Foreground = ResourceBrush(dialog, "MutedTextBrush"),
             FontSize = 13,
             Margin = new Thickness(34, 0, 84, 0),
             VerticalAlignment = VerticalAlignment.Center,
@@ -426,7 +437,7 @@ internal sealed class UserGuideWindowHost
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             Foreground = ResourceBrush(dialog, "TextBrush"),
-            CaretBrush = BrushFrom("#37D8FF"),
+            CaretBrush = ResourceBrush(dialog, "PrimaryBorderBrush"),
             FontSize = 13,
             Padding = new Thickness(34, 0, 84, 0),
             VerticalContentAlignment = VerticalAlignment.Center
@@ -444,13 +455,13 @@ internal sealed class UserGuideWindowHost
         return searchBox;
     }
 
-    private static Border CreateSearchShell(TextBox searchBox, TextBlock placeholder)
+    private static Border CreateSearchShell(FrameworkElement resources, TextBox searchBox, TextBlock placeholder)
     {
         var shell = new Border
         {
             Height = 42,
-            Background = BrushFrom("#0C1A2D"),
-            BorderBrush = BrushFrom("#213A5D"),
+            Background = ResourceBrush(resources, "InputBrush"),
+            BorderBrush = ResourceBrush(resources, "ControlBorderBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(9),
             SnapsToDevicePixels = true
@@ -465,8 +476,8 @@ internal sealed class UserGuideWindowHost
         var searchIcon = new TextBlock
         {
             Text = "\uE721",
-            FontFamily = new FontFamily("Segoe MDL2 Assets"),
-            Foreground = BrushFrom("#91A4BF"),
+            FontFamily = ArenaTokens.IconFontFamily,
+            Foreground = ResourceBrush(resources, "MutedTextBrush"),
             FontSize = 16,
             Width = 34,
             HorizontalAlignment = HorizontalAlignment.Left,
@@ -478,8 +489,8 @@ internal sealed class UserGuideWindowHost
 
         var shortcut = new Border
         {
-            Background = BrushFrom("#14243A"),
-            BorderBrush = BrushFrom("#253E60"),
+            Background = ResourceBlend(resources, "InputBrush", "PrimaryBorderBrush", 0.12),
+            BorderBrush = ResourceBlend(resources, "DisabledBorderBrush", "PrimaryBorderBrush", 0.42),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(5),
             Padding = new Thickness(7, 3, 7, 3),
@@ -490,7 +501,7 @@ internal sealed class UserGuideWindowHost
             Child = new TextBlock
             {
                 Text = "Ctrl+F",
-                Foreground = BrushFrom("#8E9CB2"),
+                Foreground = ResourceBrush(resources, "MutedTextBrush"),
                 FontSize = 11
             }
         };
@@ -499,12 +510,12 @@ internal sealed class UserGuideWindowHost
         return shell;
     }
 
-    private static Border CreateContentPanel(TextBlock contentTitle, FlowDocumentScrollViewer guideViewer)
+    private static Border CreateContentPanel(FrameworkElement resources, TextBlock contentTitle, FlowDocumentScrollViewer guideViewer)
     {
         var panel = new Border
         {
-            Background = CreateArticleBackgroundBrush(),
-            BorderBrush = BrushFrom("#284360"),
+            Background = CreateArticleBackgroundBrush(resources),
+            BorderBrush = ResourceBrush(resources, "ControlBorderBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(10),
             SnapsToDevicePixels = true
@@ -518,43 +529,48 @@ internal sealed class UserGuideWindowHost
 
         var header = new Border
         {
-            Background = CreateArticleHeaderBrush(),
+            Background = CreateArticleHeaderBrush(resources),
             Padding = new Thickness(24, 18, 24, 18),
             CornerRadius = new CornerRadius(9, 9, 0, 0)
         };
-        var headerStack = new StackPanel
+        var headerGrid = new Grid
         {
-            Orientation = Orientation.Horizontal,
             VerticalAlignment = VerticalAlignment.Center
         };
-        header.Child = headerStack;
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.Child = headerGrid;
 
         var iconTile = new Border
         {
             Width = 46,
             Height = 46,
-            Background = CreateIconTileBrush(),
-            BorderBrush = BrushFrom("#2A79B9"),
+            Background = CreateIconTileBrush(resources),
+            BorderBrush = ResourceBrush(resources, "PrimaryBorderBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
             Margin = new Thickness(0, 0, 18, 0),
             Child = new TextBlock
             {
                 Text = "\uE82D",
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontFamily = ArenaTokens.IconFontFamily,
                 FontSize = 26,
-                Foreground = BrushFrom("#A8F3FF"),
+                Foreground = ResourceBrush(resources, "PrimaryBorderBrush"),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             }
         };
-        headerStack.Children.Add(iconTile);
-        headerStack.Children.Add(contentTitle);
+        Grid.SetColumn(iconTile, 0);
+        headerGrid.Children.Add(iconTile);
+        contentTitle.MinWidth = 0;
+        contentTitle.HorizontalAlignment = HorizontalAlignment.Stretch;
+        Grid.SetColumn(contentTitle, 1);
+        headerGrid.Children.Add(contentTitle);
         grid.Children.Add(header);
 
         var divider = new Border
         {
-            Background = CreateAccentDividerBrush(),
+            Background = CreateAccentDividerBrush(resources),
             Height = 2
         };
         Grid.SetRow(divider, 1);
@@ -565,6 +581,31 @@ internal sealed class UserGuideWindowHost
         grid.Children.Add(guideViewer);
 
         return panel;
+    }
+
+    internal static (Rect TitleBounds, Rect PanelBounds) DebugMeasureContentHeaderTitle(double width, string title)
+    {
+        var resources = new Border();
+        var contentTitle = new TextBlock
+        {
+            Text = title,
+            Foreground = Brushes.White,
+            FontSize = 24,
+            FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var guideViewer = new FlowDocumentScrollViewer
+        {
+            Document = new FlowDocument(new Paragraph(new Run("Guide body.")))
+        };
+        var panel = CreateContentPanel(resources, contentTitle, guideViewer);
+        panel.Measure(new Size(width, 260));
+        panel.Arrange(new Rect(0, 0, width, 260));
+        panel.UpdateLayout();
+
+        var titleBounds = contentTitle.TransformToAncestor(panel).TransformBounds(new Rect(0, 0, contentTitle.ActualWidth, contentTitle.ActualHeight));
+        return (titleBounds, new Rect(0, 0, panel.ActualWidth, panel.ActualHeight));
     }
 
     private static Button CreateGuideButton(FrameworkElement resources, string text, string? iconGlyph)
@@ -581,9 +622,9 @@ internal sealed class UserGuideWindowHost
             content.Children.Add(new TextBlock
             {
                 Text = iconGlyph,
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontFamily = ArenaTokens.IconFontFamily,
                 FontSize = 16,
-                Foreground = BrushFrom("#F0C36A"),
+                Foreground = ResourceBrush(resources, "BetaAccentBrush"),
                 Margin = new Thickness(0, 0, 12, 0),
                 VerticalAlignment = VerticalAlignment.Center
             });
@@ -601,20 +642,20 @@ internal sealed class UserGuideWindowHost
         var button = new Button
         {
             Content = content,
-            MinWidth = text.Equals("CLOSE", StringComparison.OrdinalIgnoreCase) ? 146 : 164,
+            MinWidth = text.Equals("Close", StringComparison.OrdinalIgnoreCase) ? 146 : 164,
             MinHeight = 46,
             Padding = new Thickness(18, 0, 18, 0),
             Margin = new Thickness(0),
-            Background = BrushFrom("#12223B"),
-            BorderBrush = BrushFrom("#2F80ED"),
+            Background = ResourceBrush(resources, "InputBrush"),
+            BorderBrush = ResourceBrush(resources, "PrimaryBorderBrush"),
             Foreground = ResourceBrush(resources, "TextBrush"),
             FontWeight = FontWeights.SemiBold,
             Style = CreateRoundedButtonStyle(
                 new CornerRadius(6),
-                BrushFrom("#12223B"),
-                BrushFrom("#193253"),
-                BrushFrom("#0E1C31"),
-                BrushFrom("#2F80ED"))
+                ResourceBrush(resources, "InputBrush"),
+                ResourceBlend(resources, "InputBrush", "PrimaryBorderBrush", 0.18),
+                ResourceBlend(resources, "InputBrush", "PrimaryBorderBrush", 0.08),
+                ResourceBrush(resources, "PrimaryBorderBrush"))
         };
         button.SetResourceReference(Control.ForegroundProperty, "TextBrush");
         return button;
@@ -627,7 +668,7 @@ internal sealed class UserGuideWindowHost
             Content = new TextBlock
             {
                 Text = glyph,
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontFamily = ArenaTokens.IconFontFamily,
                 FontSize = closeButton ? 12 : 11,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
@@ -638,29 +679,29 @@ internal sealed class UserGuideWindowHost
             MinHeight = 36,
             Padding = new Thickness(0),
             Margin = new Thickness(5, 0, 0, 0),
-            Background = closeButton ? BrushFrom("#18223B") : Brushes.Transparent,
-            BorderBrush = closeButton ? BrushFrom("#B04A66") : Brushes.Transparent,
+            Background = closeButton ? ResourceBlend(resources, "InputBrush", "DangerBrush", 0.35) : Brushes.Transparent,
+            BorderBrush = closeButton ? ResourceBrush(resources, "DangerBorderBrush") : Brushes.Transparent,
             Foreground = closeButton ? ResourceBrush(resources, "DangerTextBrush") : ResourceBrush(resources, "MutedTextBrush"),
             ToolTip = tooltip,
             Style = CreateRoundedButtonStyle(
                 new CornerRadius(closeButton ? 7 : 5),
-                closeButton ? BrushFrom("#18223B") : Brushes.Transparent,
-                closeButton ? BrushFrom("#2B2744") : BrushFrom("#15253B"),
-                closeButton ? BrushFrom("#3A1C34") : BrushFrom("#0D1A2C"),
-                closeButton ? BrushFrom("#B04A66") : Brushes.Transparent)
+                closeButton ? ResourceBlend(resources, "InputBrush", "DangerBrush", 0.35) : Brushes.Transparent,
+                closeButton ? ResourceBlend(resources, "InputBrush", "DangerBorderBrush", 0.28) : ResourceBlend(resources, "InputBrush", "PrimaryBorderBrush", 0.14),
+                closeButton ? ResourceBlend(resources, "InputBrush", "DangerBrush", 0.55) : ResourceBlend(resources, "InputBrush", "PrimaryBorderBrush", 0.08),
+                closeButton ? ResourceBrush(resources, "DangerBorderBrush") : Brushes.Transparent)
         };
         button.SetResourceReference(Control.ForegroundProperty, closeButton ? "DangerTextBrush" : "MutedTextBrush");
         return button;
     }
 
-    private static FrameworkElement CreateGuideLogo()
+    private static FrameworkElement CreateGuideLogo(FrameworkElement resources)
     {
         var tile = new Border
         {
             Width = 46,
             Height = 46,
-            Background = BrushFrom("#0B1528"),
-            BorderBrush = BrushFrom("#203A5F"),
+            Background = ResourceBlend(resources, "InputBrush", "PrimaryBorderBrush", 0.14),
+            BorderBrush = ResourceBlend(resources, "ControlBorderBrush", "PrimaryBorderBrush", 0.35),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(9),
             ClipToBounds = true,
@@ -712,6 +753,14 @@ internal sealed class UserGuideWindowHost
             }
         }
 
+        using var embeddedIcon = typeof(UserGuideWindowHost).Assembly.GetManifestResourceStream(resourceKey);
+        if (embeddedIcon is not null)
+        {
+            var icon = BitmapFrame.Create(embeddedIcon, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+            icon.Freeze();
+            return icon;
+        }
+
         return BitmapFrame.Create(fallbackUri);
     }
 
@@ -739,13 +788,13 @@ internal sealed class UserGuideWindowHost
         template.VisualTree = border;
 
         var hoverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-        hoverTrigger.Setters.Add(new Setter(Control.BackgroundProperty, BrushFrom("#132A45")));
-        hoverTrigger.Setters.Add(new Setter(Control.ForegroundProperty, BrushFrom("#E8F2FF")));
+        hoverTrigger.Setters.Add(new Setter(Control.BackgroundProperty, ResourceBlend(resources, "InputBrush", "PrimaryBorderBrush", 0.16)));
+        hoverTrigger.Setters.Add(new Setter(Control.ForegroundProperty, ResourceBrush(resources, "TextBrush")));
         template.Triggers.Add(hoverTrigger);
 
         var selectedTrigger = new Trigger { Property = Selector.IsSelectedProperty, Value = true };
-        selectedTrigger.Setters.Add(new Setter(Control.BackgroundProperty, CreateSelectionBrush()));
-        selectedTrigger.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
+        selectedTrigger.Setters.Add(new Setter(Control.BackgroundProperty, CreateSelectionBrush(resources)));
+        selectedTrigger.Setters.Add(new Setter(Control.ForegroundProperty, ResourceBrush(resources, "TextBrush")));
         template.Triggers.Add(selectedTrigger);
 
         style.Setters.Add(new Setter(Control.TemplateProperty, template));
@@ -830,15 +879,34 @@ internal sealed class UserGuideWindowHost
 
     private static IEnumerable<UserGuideSection> FilterSections(IReadOnlyList<UserGuideSection> sections, string query)
     {
-        if (string.IsNullOrWhiteSpace(query))
+        var tokens = SearchTokens(query);
+        if (tokens.Count == 0)
         {
             return sections;
         }
 
-        var normalized = query.Trim();
-        return sections.Where(section =>
-            section.Title.Contains(normalized, StringComparison.OrdinalIgnoreCase)
-            || section.Text.Contains(normalized, StringComparison.OrdinalIgnoreCase));
+        return sections.Where(section => SectionMatchesSearch(section, tokens));
+    }
+
+    internal static IReadOnlyList<string> DebugFilteredGuideSectionTitles(string guideText, string query)
+    {
+        return FilterSections(BuildUserGuideSections(guideText), query)
+            .Select(DisplayTitleForSection)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> SearchTokens(string query)
+    {
+        return (query ?? "")
+            .Split([' ', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static bool SectionMatchesSearch(UserGuideSection section, IReadOnlyList<string> tokens)
+    {
+        var haystack = $"{section.Title}{Environment.NewLine}{section.Text}";
+        return tokens.All(token => haystack.Contains(token, StringComparison.OrdinalIgnoreCase));
     }
 
     private static void CopyThemeResources(Window owner, FrameworkElement target)
@@ -894,7 +962,7 @@ internal sealed class UserGuideWindowHost
 
                 document.Blocks.Add(new Paragraph(new Run(heading))
                 {
-                    Foreground = BrushFrom("#37D8FF"),
+                    Foreground = ResourceBrush(resources, "PrimaryBorderBrush"),
                     FontSize = 18,
                     FontWeight = FontWeights.SemiBold,
                     Margin = new Thickness(0, 0, 0, 14)
@@ -919,7 +987,7 @@ internal sealed class UserGuideWindowHost
 
             if (!insertedLeadDivider && !isBullet)
             {
-                document.Blocks.Add(CreateGuideDivider());
+                document.Blocks.Add(CreateGuideDivider(resources));
                 insertedLeadDivider = true;
             }
         }
@@ -946,7 +1014,7 @@ internal sealed class UserGuideWindowHost
         {
             paragraph.Inlines.Add(new Run("AI Arena")
             {
-                Foreground = BrushFrom("#37D8FF"),
+                Foreground = ResourceBrush(resources, "PrimaryBorderBrush"),
                 FontWeight = FontWeights.SemiBold
             });
             paragraph.Inlines.Add(new Run(text["AI Arena".Length..]));
@@ -957,7 +1025,7 @@ internal sealed class UserGuideWindowHost
         return paragraph;
     }
 
-    private static BlockUIContainer CreateGuideDivider()
+    private static BlockUIContainer CreateGuideDivider(FrameworkElement resources)
     {
         var grid = new Grid
         {
@@ -969,13 +1037,13 @@ internal sealed class UserGuideWindowHost
         {
             Height = 1,
             VerticalAlignment = VerticalAlignment.Center,
-            Background = new LinearGradientBrush(
+                Background = new LinearGradientBrush(
                 [
-                    new GradientStop(ColorFrom("#00162A44"), 0),
-                    new GradientStop(ColorFrom("#334A78A8"), 0.26),
-                    new GradientStop(ColorFrom("#9955B6FF"), 0.5),
-                    new GradientStop(ColorFrom("#334A78A8"), 0.74),
-                    new GradientStop(ColorFrom("#00162A44"), 1)
+                    new GradientStop(WithAlpha(ResourceColor(resources, "DisabledBorderBrush", "#27342F"), 0), 0),
+                    new GradientStop(WithAlpha(ResourceColor(resources, "ControlBorderBrush", "#48645A"), 0.32), 0.26),
+                    new GradientStop(WithAlpha(ResourceColor(resources, "PrimaryBorderBrush", "#2EA889"), 0.76), 0.5),
+                    new GradientStop(WithAlpha(ResourceColor(resources, "ControlBorderBrush", "#48645A"), 0.32), 0.74),
+                    new GradientStop(WithAlpha(ResourceColor(resources, "DisabledBorderBrush", "#27342F"), 0), 1)
                 ],
                 new Point(0, 0.5),
                 new Point(1, 0.5))
@@ -988,8 +1056,8 @@ internal sealed class UserGuideWindowHost
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             Background = new LinearGradientBrush(
-                ColorFrom("#0037D8FF"),
-                ColorFrom("#FF5AA6FF"),
+                WithAlpha(ResourceColor(resources, "PrimaryBorderBrush", "#2EA889"), 0),
+                ResourceColor(resources, "AssistBorderBrush", "#E17DB6"),
                 new Point(0, 0.5),
                 new Point(1, 0.5))
         });
@@ -1156,87 +1224,116 @@ internal sealed class UserGuideWindowHost
         return null;
     }
 
-    private static Brush CreateWindowBackgroundBrush()
+    internal static bool TryReadGuideText(string guidePath, out string guideText)
+    {
+        try
+        {
+            guideText = File.ReadAllText(guidePath);
+            return !string.IsNullOrWhiteSpace(guideText);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            guideText = string.Empty;
+            return false;
+        }
+    }
+
+    private static Brush CreateWindowBackgroundBrush(FrameworkElement resources)
     {
         return new LinearGradientBrush(
-            ColorFrom("#08111F"),
-            ColorFrom("#0A172A"),
+            ResourceColor(resources, "AppBackgroundBrush", "#101916"),
+            ResourceColor(resources, "PanelBrush", "#18231F"),
             new Point(0, 0),
             new Point(1, 1));
     }
 
-    private static Brush CreatePanelBackgroundBrush()
+    private static Brush CreatePanelBackgroundBrush(FrameworkElement resources)
     {
         return new LinearGradientBrush(
-            ColorFrom("#0A1628"),
-            ColorFrom("#0C1A2D"),
+            ResourceColor(resources, "PanelBrush", "#18231F"),
+            ResourceColor(resources, "CardBrush", "#14201B"),
             new Point(0, 0),
             new Point(1, 1));
     }
 
-    private static Brush CreateNavBackgroundBrush()
+    private static Brush CreateNavBackgroundBrush(FrameworkElement resources)
     {
         return new LinearGradientBrush(
-            ColorFrom("#0B182B"),
-            ColorFrom("#0A1424"),
+            ResourceColor(resources, "CardBrush", "#14201B"),
+            ResourceColor(resources, "InputBrush", "#0D1714"),
             new Point(0, 0),
             new Point(1, 1));
     }
 
-    private static Brush CreateArticleBackgroundBrush()
+    private static Brush CreateArticleBackgroundBrush(FrameworkElement resources)
     {
         return new LinearGradientBrush(
             [
-                new GradientStop(ColorFrom("#0C1B30"), 0),
-                new GradientStop(ColorFrom("#0A1628"), 0.52),
-                new GradientStop(ColorFrom("#0B1227"), 1)
+                new GradientStop(ResourceColor(resources, "CardBrush", "#14201B"), 0),
+                new GradientStop(ResourceColor(resources, "TranscriptBodyBrush", "#14201B"), 0.56),
+                new GradientStop(ResourceColor(resources, "InputBrush", "#0D1714"), 1)
             ],
             new Point(0, 0),
             new Point(1, 1));
     }
 
-    private static Brush CreateArticleHeaderBrush()
+    private static Brush CreateArticleHeaderBrush(FrameworkElement resources)
     {
         return new LinearGradientBrush(
             [
-                new GradientStop(ColorFrom("#143A54"), 0),
-                new GradientStop(ColorFrom("#101F42"), 0.56),
-                new GradientStop(ColorFrom("#24143F"), 1)
+                new GradientStop(ShellUiHelpers.BrushColor(ResourceBlend(resources, "CardBrush", "PrimaryBorderBrush", 0.24), ResourceColor(resources, "CardBrush", "#14201B")), 0),
+                new GradientStop(ResourceColor(resources, "CardBrush", "#14201B"), 0.58),
+                new GradientStop(ShellUiHelpers.BrushColor(ResourceBlend(resources, "CardBrush", "AssistBorderBrush", 0.14), ResourceColor(resources, "CardBrush", "#14201B")), 1)
+            ],
+            new Point(0, 0.5),
+            new Point(1, 0.5));
+    }
+
+    private static Brush CreateAccentDividerBrush(FrameworkElement resources)
+    {
+        return new LinearGradientBrush(
+            [
+                new GradientStop(ResourceColor(resources, "PrimaryBorderBrush", "#2EA889"), 0),
+                new GradientStop(ResourceColor(resources, "AlphaAccentBrush", "#4DD4EF"), 0.52),
+                new GradientStop(ResourceColor(resources, "AssistBorderBrush", "#E17DB6"), 1)
             ],
             new Point(0, 0.5),
             new Point(1, 0.5));
     }
 
-    private static Brush CreateAccentDividerBrush()
+    private static Brush CreateIconTileBrush(FrameworkElement resources)
     {
         return new LinearGradientBrush(
-            [
-                new GradientStop(ColorFrom("#FF28E1FF"), 0),
-                new GradientStop(ColorFrom("#FF5C8CFF"), 0.65),
-                new GradientStop(ColorFrom("#FF7E47DE"), 1)
-            ],
-            new Point(0, 0.5),
-            new Point(1, 0.5));
-    }
-
-    private static Brush CreateIconTileBrush()
-    {
-        return new LinearGradientBrush(
-            ColorFrom("#123D69"),
-            ColorFrom("#1B346D"),
+            ShellUiHelpers.BrushColor(ResourceBlend(resources, "InputBrush", "PrimaryBorderBrush", 0.34), ResourceColor(resources, "InputBrush", "#0D1714")),
+            ShellUiHelpers.BrushColor(ResourceBlend(resources, "InputBrush", "AlphaAccentBrush", 0.18), ResourceColor(resources, "InputBrush", "#0D1714")),
             new Point(0, 0),
             new Point(1, 1));
     }
 
-    private static Brush CreateSelectionBrush()
+    private static Brush CreateSelectionBrush(FrameworkElement resources)
     {
         return new LinearGradientBrush(
             [
-                new GradientStop(ColorFrom("#FF2D83F4"), 0),
-                new GradientStop(ColorFrom("#FF6142D9"), 1)
+                new GradientStop(ShellUiHelpers.BrushColor(ResourceBlend(resources, "InputBrush", "PrimaryBorderBrush", 0.45), ResourceColor(resources, "InputBrush", "#0D1714")), 0),
+                new GradientStop(ShellUiHelpers.BrushColor(ResourceBlend(resources, "InputBrush", "AssistBorderBrush", 0.24), ResourceColor(resources, "InputBrush", "#0D1714")), 1)
             ],
             new Point(0, 0.5),
             new Point(1, 0.5));
+    }
+
+    private static Brush ResourceBlend(FrameworkElement resources, string baseKey, string accentKey, double accentAmount)
+    {
+        return ShellUiHelpers.BlendBrush(ResourceBrush(resources, baseKey), ResourceBrush(resources, accentKey), accentAmount);
+    }
+
+    private static Color ResourceColor(FrameworkElement resources, string key, string fallbackHex)
+    {
+        return ShellUiHelpers.BrushColor(ResourceBrush(resources, key), ColorFrom(fallbackHex));
+    }
+
+    private static Color WithAlpha(Color color, double alpha)
+    {
+        return Color.FromArgb((byte)Math.Round(Math.Clamp(alpha, 0, 1) * 255), color.R, color.G, color.B);
     }
 
     private static SolidColorBrush BrushFrom(string hex)

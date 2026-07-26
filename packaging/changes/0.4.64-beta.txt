@@ -1,0 +1,13 @@
+AI Arena 0.4.64-beta
+
+- Add configuration profiles to Settings: save the current provider, default model, and all role models under a name and switch loadouts with one Apply click. Profiles never store API tokens.
+- Add an "Apply to all roles" button that sets every participant and the narrator to the default model in one step.
+- Add a "Test All Roles" button that runs a tiny completion against each distinct role model and shows per-role health inline.
+- Add an Agent section to Settings: Builder-only default, Planner/Reviewer and Builder token budgets, rescue attempts, command timeout, rescue model, and a reset-to-defaults button.
+- Add a settings search box that filters and expands matching sections.
+- Add Export/Import Settings buttons; exports exclude conversations and API tokens.
+- Add a "Stream Agent responses" toggle as a safety valve for providers that misbehave with streamed output.
+- Protect provider API tokens at rest with Windows DPAPI in session snapshots and checkpoints; legacy plaintext tokens are upgraded on next save.
+- Honor the configured provider timeout up to 3600 seconds end to end instead of silently capping requests at 300 seconds.
+- Show corrected values and an explanation when out-of-range timeout, temperature, or max output values are adjusted on Apply.
+- Explain thinking-model budget behavior in the Reasoning and Max output tooltips.

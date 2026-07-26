@@ -1,0 +1,89 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+    <!--
+        AI Arena design tokens
+
+        All keys are namespaced so this dictionary can coexist with the legacy
+        window-level palette during the interface migration. Dimensions use
+        device-independent pixels and therefore continue to scale with WPF DPI.
+    -->
+
+    <!-- Type scale: compact enough for dense agent work, with a clear hierarchy. -->
+    <FontFamily x:Key="Arena.Type.FontFamily">Segoe UI Variable Text, Segoe UI</FontFamily>
+    <FontFamily x:Key="Arena.Type.DisplayFontFamily">Segoe UI Variable Display, Segoe UI</FontFamily>
+    <!-- Fluent glyphs on Windows 11 with the same code points falling back to MDL2 on Windows 10. -->
+    <FontFamily x:Key="Arena.Type.IconFontFamily">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+    <sys:Double x:Key="Arena.Type.DisplaySize">22</sys:Double>
+    <sys:Double x:Key="Arena.Type.TitleSize">17</sys:Double>
+    <sys:Double x:Key="Arena.Type.HeadingSize">14</sys:Double>
+    <sys:Double x:Key="Arena.Type.BodySize">12.5</sys:Double>
+    <sys:Double x:Key="Arena.Type.LabelSize">11.5</sys:Double>
+    <sys:Double x:Key="Arena.Type.CaptionSize">10.5</sys:Double>
+
+    <!-- A 4-DIP rhythm keeps groups easy to scan without wasting workspace. -->
+    <sys:Double x:Key="Arena.Space.1">4</sys:Double>
+    <sys:Double x:Key="Arena.Space.2">8</sys:Double>
+    <sys:Double x:Key="Arena.Space.3">10</sys:Double>
+    <sys:Double x:Key="Arena.Space.4">12</sys:Double>
+    <sys:Double x:Key="Arena.Space.5">16</sys:Double>
+    <sys:Double x:Key="Arena.Space.6">20</sys:Double>
+    <sys:Double x:Key="Arena.Space.8">24</sys:Double>
+    <Thickness x:Key="Arena.Inset.Control">8,4</Thickness>
+    <Thickness x:Key="Arena.Inset.Card">10</Thickness>
+    <Thickness x:Key="Arena.Inset.Panel">12</Thickness>
+    <Thickness x:Key="Arena.Gap.Inline">6,0,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack">0,0,0,8</Thickness>
+    <Thickness x:Key="Arena.Gap.Section">0,0,0,12</Thickness>
+
+    <!-- Target sizes include the full hit surface, not only the visible glyph. -->
+    <sys:Double x:Key="Arena.Target.Minimum">32</sys:Double>
+    <sys:Double x:Key="Arena.Target.Compact">28</sys:Double>
+    <sys:Double x:Key="Arena.Target.Icon">30</sys:Double>
+    <sys:Double x:Key="Arena.ScrollBar.Thickness">12</sys:Double>
+    <sys:Double x:Key="Arena.ScrollBar.MinimumThumbLength">32</sys:Double>
+
+    <CornerRadius x:Key="Arena.Radius.Small">6</CornerRadius>
+    <CornerRadius x:Key="Arena.Radius.Medium">8</CornerRadius>
+    <CornerRadius x:Key="Arena.Radius.Large">12</CornerRadius>
+    <CornerRadius x:Key="Arena.Radius.Pill">999</CornerRadius>
+
+    <!--
+        The design system deliberately uses static, trigger-driven state changes.
+        This zero-duration token is available to consumers that require a
+        Timeline while still respecting reduced-motion expectations.
+    -->
+    <Duration x:Key="Arena.Motion.StaticDuration">0:0:0</Duration>
+
+    <!-- Theme-independent accessibility accents. Theme surfaces remain dynamic. -->
+    <SolidColorBrush x:Key="Arena.Brush.FocusRing" Color="#9FE7FF" />
+    <SolidColorBrush x:Key="Arena.Brush.FocusRingInner" Color="#E8FAFF" />
+    <SolidColorBrush x:Key="Arena.Brush.Info" Color="#65D7F0" />
+    <SolidColorBrush x:Key="Arena.Brush.Success" Color="#83DB93" />
+    <SolidColorBrush x:Key="Arena.Brush.Warning" Color="#F2CB72" />
+    <SolidColorBrush x:Key="Arena.Brush.Critical" Color="#FF8F96" />
+    <SolidColorBrush x:Key="Arena.Brush.HoverOverlay" Color="#12FFFFFF" />
+    <SolidColorBrush x:Key="Arena.Brush.PressedOverlay" Color="#1F000000" />
+
+    <!-- Keyboard-only focus adorners keep pointer use quiet and keyboard use clear. -->
+    <Style x:Key="Arena.FocusVisual" TargetType="{x:Type Control}">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type Control}">
+                    <Grid Margin="-4"
+                          IsHitTestVisible="False"
+                          SnapsToDevicePixels="True">
+                        <Border BorderBrush="{DynamicResource Arena.Brush.FocusRingInner}"
+                                BorderThickness="4"
+                                CornerRadius="{DynamicResource Arena.Radius.Medium}"
+                                Opacity="0.22" />
+                        <Border Margin="2"
+                                BorderBrush="{DynamicResource Arena.Brush.FocusRing}"
+                                BorderThickness="2"
+                                CornerRadius="{DynamicResource Arena.Radius.Small}" />
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

@@ -1,0 +1,15 @@
+AI Arena 0.4.45-beta
+Built: generated during release packaging
+
+- Added session-scoped Approve All autonomy to the Agent command approval rail.
+- Auto-runs preview-ready Agent commands after the user opts into Approve All for the current session.
+- Kept workspace preview validation active under Approve All so blocked commands, parent-path writes, and outside-workspace paths still stop before execution.
+- Reset Approve All when Agent is cleared or the selected workspace changes.
+- Added visible autonomy status text and activity/build-evidence updates for automatic command execution.
+- Added Builder file-snippet materialization for app requests that return named code blocks instead of runnable commands.
+- Generated safe PowerShell write-files commands from extracted snippets with base64 content, relative path validation, and workspace-only writes.
+- Rejected parent-path file snippet targets before they can become commands.
+- Updated Agent command completion to refresh the global status with final exit and file-change state.
+- Hardened asynchronous command-completion UI updates through dispatcher marshaling.
+- Expanded WPF tests for Approve All auto-run behavior, file-snippet extraction, safe generated write commands, XAML command rail contracts, and status reporting.
+- Updated README, user guide, Windows app notes, decomposition map, and research notes for session autonomy and file-snippet materialization.

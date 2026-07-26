@@ -1,0 +1,365 @@
+<UserControl x:Class="AIArena.Wpf.Controls.ShellNavigationRailControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             MinWidth="184"
+             AutomationProperties.Name="AI Arena navigation rail">
+    <Border Background="{DynamicResource PanelBrush}"
+            BorderBrush="{DynamicResource ControlBorderBrush}"
+            BorderThickness="0,0,1,0">
+        <Grid Margin="10">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="16" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid AutomationProperties.Name="AI Arena">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="44" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Image Source="/Assets/ai-arena-emblem-transparent.png"
+                       Width="38"
+                       Height="38"
+                       Opacity="0.92"
+                       Stretch="Uniform"
+                       RenderOptions.BitmapScalingMode="HighQuality"
+                       VerticalAlignment="Center"
+                       IsHitTestVisible="False" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="AI Arena"
+                               Foreground="{DynamicResource TextBrush}"
+                               FontSize="17"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="Adversarial LLM Lab"
+                               Foreground="{DynamicResource MutedTextBrush}"
+                               FontSize="11" />
+                </StackPanel>
+            </Grid>
+
+            <Grid Grid.Row="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <StackPanel AutomationProperties.Name="Primary navigation">
+                    <Button x:Name="ArenaNavButtonElement"
+                            Content="AI Lab"
+                            Style="{DynamicResource NavButton}"
+                            Height="36"
+                            Padding="9,0"
+                            Margin="0,0,0,2"
+                            Click="ArenaNavButton_Click"
+                            AutomationProperties.Name="Open AI Lab" />
+                    <Button x:Name="AgentNavButtonElement"
+                            Content="Agent"
+                            Style="{DynamicResource NavButton}"
+                            Height="36"
+                            Padding="9,0"
+                            Margin="0,0,0,2"
+                            Click="AgentNavButton_Click"
+                            AutomationProperties.Name="Open Agent workspace" />
+                    <Button x:Name="CustomMatchNavButtonElement"
+                            Content="Match Setup"
+                            Style="{DynamicResource NavButton}"
+                            Height="36"
+                            Padding="9,0"
+                            Margin="0,0,0,2"
+                            Click="CustomMatchNavButton_Click"
+                            Visibility="Collapsed"
+                            AutomationProperties.Name="Open Match Setup" />
+                    <Button x:Name="CollaborateNavButtonElement"
+                            Content="AI Collaborate"
+                            Style="{DynamicResource NavButton}"
+                            Height="36"
+                            Padding="9,0"
+                            Margin="0,0,0,2"
+                            Click="CollaborateNavButton_Click"
+                            AutomationProperties.Name="Open AI Collaborate" />
+                </StackPanel>
+
+                <Border x:Name="ArenaSessionOverviewPanelElement"
+                        Grid.Row="1"
+                        Background="Transparent"
+                        BorderBrush="{DynamicResource DisabledBorderBrush}"
+                        BorderThickness="0,1,0,1"
+                        Padding="10,5"
+                        Margin="-10,4,-10,6"
+                        AutomationProperties.Name="Session overview">
+                    <Expander Header="Session details"
+                              IsExpanded="False"
+                              Foreground="{DynamicResource TextBrush}"
+                              FontSize="12"
+                              FontWeight="SemiBold"
+                              HorizontalContentAlignment="Stretch"
+                              AutomationProperties.Name="Session details"
+                              AutomationProperties.HelpText="Show or hide match, turn, agent, token, provider, and context session metrics.">
+                        <Expander.HeaderTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontSize="12"
+                                           FontWeight="SemiBold"
+                                           Margin="2,0,0,0" />
+                            </DataTemplate>
+                        </Expander.HeaderTemplate>
+                        <Grid Margin="0,7,-4,-4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1.35*" />
+                                <ColumnDefinition Width="0.65*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Border Style="{DynamicResource SessionOverviewHotspot}"
+                                    Tag="match"
+                                    AutomationProperties.Name="Open Match Setup"
+                                    Margin="0,0,4,4"
+                                    MouseLeftButtonUp="SessionOverviewMatch_MouseLeftButtonUp"
+                                    ToolTip="Open Match Setup">
+                                <StackPanel>
+                                    <TextBlock Text="Match" Style="{DynamicResource SessionMetricLabel}" />
+                                    <TextBlock x:Name="SessionOverviewMatchTextElement"
+                                               Text="-"
+                                               Style="{DynamicResource SessionMetricValue}"
+                                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="1"
+                                    Style="{DynamicResource SessionOverviewHotspot}"
+                                    Tag="turns"
+                                    AutomationProperties.Name="Open transcript"
+                                    Margin="0,0,4,4"
+                                    MouseLeftButtonUp="SessionOverviewTurns_MouseLeftButtonUp"
+                                    ToolTip="Open Transcript and clear filters">
+                                <StackPanel HorizontalAlignment="Right">
+                                    <TextBlock Text="Turns"
+                                               Style="{DynamicResource SessionMetricLabel}"
+                                               HorizontalAlignment="Right" />
+                                    <TextBlock x:Name="SessionOverviewTurnsTextElement"
+                                               Text="0"
+                                               Style="{DynamicResource SessionMetricValue}"
+                                               HorizontalAlignment="Right" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Row="1"
+                                    Style="{DynamicResource SessionOverviewHotspot}"
+                                    Tag="performance"
+                                    AutomationProperties.Name="Show Agent Performance"
+                                    Margin="0,0,4,4"
+                                    MouseLeftButtonUp="SessionOverviewPerformance_MouseLeftButtonUp"
+                                    ToolTip="Show Agent Performance">
+                                <StackPanel>
+                                    <TextBlock Text="Agents" Style="{DynamicResource SessionMetricLabel}" />
+                                    <TextBlock x:Name="SessionOverviewParticipantsTextElement"
+                                               Text="-"
+                                               Style="{DynamicResource SessionMetricValue}"
+                                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Row="1"
+                                    Grid.Column="1"
+                                    Style="{DynamicResource SessionOverviewHotspot}"
+                                    Tag="performance"
+                                    AutomationProperties.Name="Show Agent Performance"
+                                    Margin="0,0,4,4"
+                                    MouseLeftButtonUp="SessionOverviewPerformance_MouseLeftButtonUp"
+                                    ToolTip="Show Agent Performance">
+                                <StackPanel HorizontalAlignment="Right">
+                                    <TextBlock Text="Tokens"
+                                               Style="{DynamicResource SessionMetricLabel}"
+                                               HorizontalAlignment="Right" />
+                                    <TextBlock x:Name="SessionOverviewTokensTextElement"
+                                               Text="-"
+                                               Style="{DynamicResource SessionMetricValue}"
+                                               HorizontalAlignment="Right" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Row="2"
+                                    Style="{DynamicResource SessionOverviewHotspot}"
+                                    Tag="provider"
+                                    AutomationProperties.Name="Open provider settings"
+                                    Margin="0,0,4,4"
+                                    MouseLeftButtonUp="SessionOverviewProvider_MouseLeftButtonUp"
+                                    ToolTip="Open Settings / Models &amp; provider">
+                                <StackPanel>
+                                    <TextBlock Text="Provider" Style="{DynamicResource SessionMetricLabel}" />
+                                    <TextBlock x:Name="SessionOverviewProviderTextElement"
+                                               Text="-"
+                                               Style="{DynamicResource SessionMetricValue}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Row="2"
+                                    Grid.Column="1"
+                                    Style="{DynamicResource SessionOverviewHotspot}"
+                                    Tag="performance"
+                                    AutomationProperties.Name="Show Agent Performance"
+                                    Margin="0,0,4,4"
+                                    MouseLeftButtonUp="SessionOverviewPerformance_MouseLeftButtonUp"
+                                    ToolTip="Show Agent Performance">
+                                <StackPanel HorizontalAlignment="Right">
+                                    <TextBlock Text="Context"
+                                               Style="{DynamicResource SessionMetricLabel}"
+                                               HorizontalAlignment="Right" />
+                                    <TextBlock x:Name="SessionOverviewContextTextElement"
+                                               Text="-"
+                                               Style="{DynamicResource SessionMetricValue}"
+                                               HorizontalAlignment="Right" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </Expander>
+                </Border>
+
+                <Border x:Name="ArenaLiveAgentsPanelElement"
+                        Grid.Row="2"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Padding="0"
+                        Margin="-10,0,-10,8"
+                        AutomationProperties.Name="Live agents">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="Live Agents"
+                                   Style="{DynamicResource LeftRailSectionTitle}"
+                                   Margin="10,0,10,6" />
+                        <ScrollViewer x:Name="AgentItemsScrollViewerElement"
+                                      Grid.Row="1"
+                                      VerticalAlignment="Stretch"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      AutomationProperties.Name="Live agent list">
+                            <StackPanel x:Name="AgentItemsElement" />
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+
+                <Border x:Name="AgentLeftRailContextPanelElement"
+                        Grid.Row="1"
+                        Grid.RowSpan="2"
+                        Visibility="Collapsed"
+                        Background="Transparent"
+                        BorderBrush="{DynamicResource DisabledBorderBrush}"
+                        BorderThickness="0,1,0,0"
+                        Padding="10,9"
+                        Margin="-10,6,-10,8"
+                        AutomationProperties.Name="Agent workspace context">
+                    <StackPanel>
+                        <TextBlock Text="Agent"
+                                   Style="{DynamicResource LeftRailSectionTitle}"
+                                   Margin="0,0,0,7" />
+                        <TextBlock Text="Workspace"
+                                   Style="{DynamicResource LeftRailSectionTitle}"
+                                   Margin="0,1,0,6" />
+                        <Border Background="{DynamicResource InputBrush}"
+                                BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="7"
+                                Margin="0,0,0,8">
+                            <StackPanel>
+                                <TextBlock x:Name="AgentLeftWorkspacePathTextElement"
+                                           Text="-"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontSize="12"
+                                           FontWeight="SemiBold"
+                                           TextTrimming="CharacterEllipsis" />
+                                <TextBlock x:Name="AgentLeftBoundaryTextElement"
+                                           Text="No working directory."
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontSize="11"
+                                           TextWrapping="Wrap"
+                                           Margin="0,4,0,0" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Text="Team"
+                                   Style="{DynamicResource LeftRailSectionTitle}"
+                                   Margin="0,2,0,6" />
+                        <StackPanel x:Name="AgentLeftRoleItemsElement" />
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="CollaborateLeftRailContextPanelElement"
+                        Grid.Row="1"
+                        Grid.RowSpan="2"
+                        Visibility="Collapsed"
+                        Background="Transparent"
+                        BorderBrush="{DynamicResource DisabledBorderBrush}"
+                        BorderThickness="0,1,0,0"
+                        Padding="10,9"
+                        Margin="-10,6,-10,8"
+                        AutomationProperties.Name="AI Collaborate context">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,7">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="AI Collaborate"
+                                       Style="{DynamicResource LeftRailSectionTitle}"
+                                       Margin="0"
+                                       VerticalAlignment="Center" />
+                            <Button x:Name="CollaborateNewChatButtonElement"
+                                    Grid.Column="1"
+                                    Content="New"
+                                    Click="CollaborateNewChatButton_Click"
+                                    Style="{DynamicResource CompactButton}"
+                                    MinHeight="34"
+                                    MinWidth="50"
+                                    Padding="8,4"
+                                    AutomationProperties.Name="Start a new collaboration" />
+                        </Grid>
+                        <TextBlock Text="Recent Collaborations"
+                                   Style="{DynamicResource LeftRailSectionTitle}"
+                                   Margin="0,2,0,6" />
+                        <Border Background="{DynamicResource InputBrush}"
+                                BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="7"
+                                MinHeight="110">
+                            <StackPanel x:Name="CollaborateRecentItemsElement">
+                                <TextBlock Text="No recent chats yet."
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontSize="12"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Text="Team Roles"
+                                   Style="{DynamicResource LeftRailSectionTitle}"
+                                   Margin="0,12,0,6" />
+                        <StackPanel>
+                            <TextBlock Text="Alpha - Draft"
+                                       Foreground="{DynamicResource TextBrush}"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Margin="0,0,0,4" />
+                            <TextBlock Text="Beta - Critique"
+                                       Foreground="{DynamicResource TextBrush}"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Margin="0,0,0,4" />
+                            <TextBlock Text="Gamma - Evidence"
+                                       Foreground="{DynamicResource TextBrush}"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Margin="0,0,0,4" />
+                            <TextBlock Text="Narrator - Final"
+                                       Foreground="{DynamicResource TextBrush}"
+                                       FontSize="12"
+                                       FontWeight="SemiBold" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Grid>
+    </Border>
+</UserControl>

@@ -20,13 +20,15 @@ internal sealed class ArenaRunCoordinator
     private readonly Func<TimeSpan> autoChatCadence;
     private readonly Action<bool, string, bool, Button?> setArenaBusy;
     private readonly Func<string, Button?, Func<Task>, bool, Task> runArenaBusyAsync;
+    private readonly Func<string, Button?, Func<CancellationToken, Task>, bool, Task> runCancelableArenaBusyAsync;
     private readonly Func<string, Task> refreshActiveSessionAsync;
     private readonly Action<string> setLoadStatus;
     private readonly Action<string> setArenaRunStatus;
-    private readonly Func<DialogueMessage, bool, Task<bool>> handleInternetApprovalDialogAsync;
     private readonly Func<string, bool> isAgentSpeaker;
+    private readonly Action<DialogueMessage> speakNarratorMessage;
 
     private CancellationTokenSource? autoChatCancellation;
+    private TaskCompletionSource<bool>? autoChatCompletion;
 
     public ArenaRunCoordinator(
         TurnRunnerService turnRunner,
@@ -44,8 +46,9 @@ internal sealed class ArenaRunCoordinator
         Func<string, Task> refreshActiveSessionAsync,
         Action<string> setLoadStatus,
         Action<string> setArenaRunStatus,
-        Func<DialogueMessage, bool, Task<bool>> handleInternetApprovalDialogAsync,
-        Func<string, bool> isAgentSpeaker)
+        Func<string, bool> isAgentSpeaker,
+        Action<DialogueMessage>? speakNarratorMessage = null,
+        Func<string, Button?, Func<CancellationToken, Task>, bool, Task>? runCancelableArenaBusyAsync = null)
     {
         this.turnRunner = turnRunner;
         this.narratorService = narratorService;
@@ -59,11 +62,14 @@ internal sealed class ArenaRunCoordinator
         this.autoChatCadence = autoChatCadence;
         this.setArenaBusy = setArenaBusy;
         this.runArenaBusyAsync = runArenaBusyAsync;
+        this.runCancelableArenaBusyAsync = runCancelableArenaBusyAsync
+            ?? ((status, button, action, allowDuringAutoChat) =>
+                runArenaBusyAsync(status, button, () => action(CancellationToken.None), allowDuringAutoChat));
         this.refreshActiveSessionAsync = refreshActiveSessionAsync;
         this.setLoadStatus = setLoadStatus;
         this.setArenaRunStatus = setArenaRunStatus;
-        this.handleInternetApprovalDialogAsync = handleInternetApprovalDialogAsync;
         this.isAgentSpeaker = isAgentSpeaker;
+        this.speakNarratorMessage = speakNarratorMessage ?? (_ => { });
     }
 
     public bool IsAutoChatRunning => autoChatCancellation is not null;
@@ -76,6 +82,8 @@ internal sealed class ArenaRunCoordinator
         }
 
         autoChatCancellation = new CancellationTokenSource();
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        autoChatCompletion = completion;
         var token = autoChatCancellation.Token;
         var finalStatus = "Auto Chat running...";
         setArenaBusy(true, "Auto Chat running...", true, autoChatButton);
@@ -103,17 +111,6 @@ internal sealed class ArenaRunCoordinator
                     break;
                 }
 
-                if (IsPendingInternetApproval(result.Message))
-                {
-                    var resolved = await handleInternetApprovalDialogAsync(result.Message!, true);
-                    if (!resolved)
-                    {
-                        finalStatus = "Auto Chat paused for internet approval.";
-                        SetBothStatuses(finalStatus);
-                        break;
-                    }
-                }
-
                 await Task.Delay(autoChatCadence(), token);
             }
         }
@@ -122,18 +119,70 @@ internal sealed class ArenaRunCoordinator
             finalStatus = "Auto Chat stopped.";
             SetBothStatuses(finalStatus);
         }
+        catch (Exception ex)
+        {
+            finalStatus = $"Auto Chat stopped. {ArenaOperationCoordinator.OperationFailureStatus(ex)}";
+            SetBothStatuses(finalStatus);
+        }
         finally
         {
             autoChatCancellation?.Dispose();
             autoChatCancellation = null;
-            setArenaBusy(false, finalStatus, false, null);
+            try
+            {
+                setArenaBusy(false, finalStatus, false, null);
+            }
+            finally
+            {
+                // StopAutoChatAsync is a shutdown barrier. Publish completion only
+                // after the final busy-state cleanup has run, while still releasing
+                // waiters if a UI callback itself fails.
+                completion.TrySetResult(true);
+                if (ReferenceEquals(autoChatCompletion, completion))
+                {
+                    autoChatCompletion = null;
+                }
+            }
         }
     }
 
     public void StopAutoChat()
     {
-        autoChatCancellation?.Cancel();
+        var cancellation = autoChatCancellation;
+        if (cancellation is null)
+        {
+            return;
+        }
+
+        try
+        {
+            cancellation.Cancel();
+        }
+        catch (AggregateException)
+        {
+            // Cancellation is still requested even when a provider callback fails.
+            // The running loop owns final cleanup and reports its terminal status.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The loop completed between observing its cancellation source and
+            // requesting cancellation; its finally block has already cleaned up.
+            return;
+        }
+
         setArenaRunStatus("Stopping Auto Chat...");
+    }
+
+    public async Task StopAutoChatAsync()
+    {
+        var completion = autoChatCompletion?.Task;
+        if (completion is null)
+        {
+            return;
+        }
+
+        StopAutoChat();
+        await completion;
     }
 
     public async Task NarrateNowAsync()
@@ -145,11 +194,16 @@ internal sealed class ArenaRunCoordinator
             return;
         }
 
-        await runArenaBusyAsync("Narrator thinking...", narrateNowButton, async () =>
+        await runCancelableArenaBusyAsync("Narrator thinking...", narrateNowButton, async cancellationToken =>
         {
-            var result = await narratorService.NarrateNowAsync(session.Id);
+            var result = await narratorService.NarrateNowAsync(session.Id, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             var status = NarratorStatus(result);
             await refreshActiveSessionAsync(status);
+            if (result.Ok && result.Message is not null)
+            {
+                speakNarratorMessage(result.Message);
+            }
         }, true);
     }
 
@@ -162,16 +216,13 @@ internal sealed class ArenaRunCoordinator
             return;
         }
 
-        await runArenaBusyAsync("Running native 1 TURN...", oneTurnButton, async () =>
+        await runCancelableArenaBusyAsync("Running native 1 TURN...", oneTurnButton, async cancellationToken =>
         {
-            var result = await turnRunner.RunOneTurnAsync(session.Id, shouldEnforceVoiceDrift());
+            var result = await turnRunner.RunOneTurnAsync(session.Id, shouldEnforceVoiceDrift(), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             var status = OneTurnStatus(result);
             await refreshActiveSessionAsync(status);
             SetBothStatuses(status);
-            if (IsPendingInternetApproval(result.Message))
-            {
-                await handleInternetApprovalDialogAsync(result.Message!, false);
-            }
         }, false);
     }
 
@@ -184,9 +235,10 @@ internal sealed class ArenaRunCoordinator
             return;
         }
 
-        await runArenaBusyAsync($"Running {agent.Name} once...", null, async () =>
+        await runCancelableArenaBusyAsync($"Running {agent.Name} once...", null, async cancellationToken =>
         {
-            var result = await turnRunner.RunAgentTurnAsync(session.Id, agent.Id, shouldEnforceVoiceDrift());
+            var result = await turnRunner.RunAgentTurnAsync(session.Id, agent.Id, shouldEnforceVoiceDrift(), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             await refreshActiveSessionAsync(AgentTurnStatus(agent, result));
         }, false);
     }
@@ -199,9 +251,16 @@ internal sealed class ArenaRunCoordinator
             return;
         }
 
-        await runArenaBusyAsync($"Retrying turn {message.Turn} with {message.Speaker}...", null, async () =>
+        await runCancelableArenaBusyAsync($"Retrying turn {message.Turn} with {message.Speaker}...", null, async cancellationToken =>
         {
-            var result = await turnRunner.RetryTurnAsync(session.Id, message.Turn, message.SpeakerId, message.CreatedAt, shouldEnforceVoiceDrift());
+            var result = await turnRunner.RetryTurnAsync(
+                session.Id,
+                message.Turn,
+                message.SpeakerId,
+                message.CreatedAt,
+                shouldEnforceVoiceDrift(),
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             await refreshActiveSessionAsync(RetryStatus(message, result));
         }, false);
     }
@@ -239,13 +298,6 @@ internal sealed class ArenaRunCoordinator
         return result.Ok && result.Message is not null
             ? $"Retry replaced turn {originalMessage.Turn}: {result.Message.Speaker} ({result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms)"
             : $"Retry failed: {result.Error}";
-    }
-
-    internal static bool IsPendingInternetApproval(DialogueMessage? message)
-    {
-        return message is not null
-            && message.Kind.Equals("internet_approval", StringComparison.OrdinalIgnoreCase)
-            && message.Status.Equals("pending", StringComparison.OrdinalIgnoreCase);
     }
 
     private void SetBothStatuses(string status)

@@ -15,6 +15,9 @@ internal static class RolePackFrames
             "legal_policy" => new("Legal / policy", "Treat each role as a policy review function: rights, obligations, exceptions, and enforcement practicality.", "Watch whether policy language becomes operational without losing nuance."),
             "incident_response" => new("Incident response", "Treat each role as an incident room function: commander, root cause, customer impact, and prevention boundary.", "Watch whether urgency preserves evidence and produces prevention."),
             "product_risk" => new("Product risk", "Treat each role as a product risk function: user value, launch pressure, trust cost, and rollback boundary.", "Watch whether growth pressure remains reversible and honest."),
+            "benchmark_duel" => new("Benchmark duel", "Treat each role as part of a model-evaluation arena: contestant advocate, blind judge, rubric auditor, and preference-risk witness.", "Watch whether comparison stays fair, criteria remain visible, and preference claims avoid brand bias."),
+            "governance_board" => new("Governance board", "Treat each role as an oversight board function: sponsor, public-interest challenger, enforcement critic, and exception boundary.", "Watch whether governance decisions become operational without hiding accountability."),
+            "tool_ops" => new("Tool ops", "Treat each role as a tool-reliability room: operator, tool failure analyst, evidence checker, and fallback planner.", "Watch whether tool use, missing data, and fallback paths stay inspectable."),
             "absurd_lab" => new("Absurd lab", "Treat each role as an intentionally mismatched persona stress test. Preserve reasoning despite strange expertise and expression constraints.", "Watch whether absurd constraints reveal role drift, loss of signal, or surprising robustness."),
             "balanced" => new("Balanced", "Treat each role as a balanced review crew with distinct but cooperative cognitive functions.", "Watch whether the group preserves useful disagreement."),
             _ => new("Auto pack", "", "")
@@ -49,6 +52,9 @@ internal static class RolePackFrames
             "legal_policy" or "legal" or "policy" => "legal_policy",
             "incident_response" or "incident" => "incident_response",
             "product_risk" or "product" => "product_risk",
+            "benchmark_duel" or "benchmark" or "model_duel" => "benchmark_duel",
+            "governance_board" or "governance" or "board" => "governance_board",
+            "tool_ops" or "tools" or "tool_reliability" => "tool_ops",
             "absurd_lab" or "absurd" => "absurd_lab",
             _ => "auto"
         };

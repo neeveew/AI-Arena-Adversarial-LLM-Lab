@@ -1,0 +1,6 @@
+AI Arena 0.4.103-beta
+
+- Adds `Set-AIArenaMatchRoster -Count 1..8` for direct, typed PowerShell control of the active scenario cast.
+- Uses the normal bounded session-save, event-log, busy-state, and refresh path, with post-command state and `match.roster.changed` receipts.
+- Extracts Match Setup state/open/close/roster commands from MainWindow into a focused handler for easier audit and debugging.
+- Adds regression coverage proving successful persistence and no mutation while busy or when input is out of range.

@@ -6,7 +6,7 @@ using AIArena.Wpf.Services;
 
 namespace AIArena.Wpf;
 
-internal sealed class CollaborateHistoryStore
+internal class CollaborateHistoryStore
 {
     private const int MaxConversations = 24;
 
@@ -33,7 +33,7 @@ internal sealed class CollaborateHistoryStore
 
     public string LastLoadWarning { get; private set; } = "";
 
-    public IReadOnlyList<CollaborateHistoryConversation> Load()
+    public virtual IReadOnlyList<CollaborateHistoryConversation> Load()
     {
         LastLoadWarning = "";
         if (!File.Exists(HistoryPath))
@@ -47,14 +47,19 @@ internal sealed class CollaborateHistoryStore
             var file = JsonSerializer.Deserialize<CollaborateHistoryFile>(json, JsonOptions) ?? new CollaborateHistoryFile();
             return Normalize(file.Conversations);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
             LastLoadWarning = JsonFileRecovery.BackupCorruptFile(HistoryPath, "Collaborate history", ex);
             return [];
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            LastLoadWarning = $"Collaborate history could not be read and was left unchanged: {ex.Message}";
+            return [];
+        }
     }
 
-    public void Save(IReadOnlyList<CollaborateHistoryConversation> conversations)
+    public virtual void Save(IReadOnlyList<CollaborateHistoryConversation> conversations)
     {
         LastLoadWarning = "";
         Directory.CreateDirectory(Path.GetDirectoryName(HistoryPath)!);
@@ -63,14 +68,7 @@ internal sealed class CollaborateHistoryStore
             Conversations = Normalize(conversations).ToList()
         };
         var json = JsonSerializer.Serialize(file, JsonOptions);
-        var tempPath = $"{HistoryPath}.tmp";
-        File.WriteAllText(tempPath, json);
-        if (File.Exists(HistoryPath))
-        {
-            File.SetAttributes(HistoryPath, File.GetAttributes(HistoryPath) & ~FileAttributes.ReadOnly);
-        }
-
-        File.Move(tempPath, HistoryPath, overwrite: true);
+        JsonFileRecovery.WriteTextReplacing(HistoryPath, json);
     }
 
     private static IReadOnlyList<CollaborateHistoryConversation> Normalize(IReadOnlyList<CollaborateHistoryConversation>? conversations)
@@ -80,23 +78,62 @@ internal sealed class CollaborateHistoryStore
             return [];
         }
 
+        var now = DateTimeOffset.Now;
         return conversations
+            .OfType<CollaborateHistoryConversation>()
+            .Select(item => NormalizeConversation(item, now))
             .Where(item => item.Exchanges.Count > 0)
             .OrderByDescending(item => item.UpdatedAt)
             .Take(MaxConversations)
-            .Select(item =>
-            {
-                item.Id = item.Id == Guid.Empty ? Guid.NewGuid() : item.Id;
-                item.Title = string.IsNullOrWhiteSpace(item.Title) ? "Untitled chat" : item.Title.Trim();
-                item.CreatedAt = item.CreatedAt == default ? DateTimeOffset.Now : item.CreatedAt;
-                item.UpdatedAt = item.UpdatedAt == default ? item.CreatedAt : item.UpdatedAt;
-                item.Exchanges = item.Exchanges
-                    .Where(exchange => !string.IsNullOrWhiteSpace(exchange.Prompt) || !string.IsNullOrWhiteSpace(exchange.Answer))
-                    .ToList();
-                return item;
-            })
-            .Where(item => item.Exchanges.Count > 0)
             .ToList();
+    }
+
+    private static CollaborateHistoryConversation NormalizeConversation(CollaborateHistoryConversation item, DateTimeOffset now)
+    {
+        var createdAt = item.CreatedAt == default ? now : item.CreatedAt;
+        var updatedAt = item.UpdatedAt == default ? createdAt : item.UpdatedAt;
+        return new CollaborateHistoryConversation
+        {
+            Id = item.Id == Guid.Empty ? Guid.NewGuid() : item.Id,
+            Title = string.IsNullOrWhiteSpace(item.Title) ? "Untitled chat" : item.Title.Trim(),
+            CreatedAt = createdAt,
+            UpdatedAt = updatedAt,
+            Exchanges = (item.Exchanges ?? [])
+                .OfType<CollaborateHistoryExchange>()
+                .Where(exchange => !string.IsNullOrWhiteSpace(exchange.Prompt) || !string.IsNullOrWhiteSpace(exchange.Answer))
+                .Select(NormalizeExchange)
+                .ToList(),
+            MemoryNotes = CollaborateCoordinator.NormalizeMemoryNotes(item.MemoryNotes).ToList()
+        };
+    }
+
+    private static CollaborateHistoryExchange NormalizeExchange(CollaborateHistoryExchange exchange)
+    {
+        return new CollaborateHistoryExchange
+        {
+            Prompt = exchange.Prompt ?? "",
+            Answer = exchange.Answer ?? "",
+            TraceSteps = (exchange.TraceSteps ?? [])
+                .OfType<CollaborateHistoryStep>()
+                .Select(NormalizeStep)
+                .ToList()
+        };
+    }
+
+    private static CollaborateHistoryStep NormalizeStep(CollaborateHistoryStep step)
+    {
+        return new CollaborateHistoryStep
+        {
+            RoleId = step.RoleId ?? "",
+            RoleName = step.RoleName ?? "",
+            Model = step.Model ?? "",
+            Label = step.Label ?? "",
+            Text = step.Text ?? "",
+            Ok = step.Ok,
+            Error = step.Error ?? "",
+            LatencyMs = step.LatencyMs,
+            TotalTokens = step.TotalTokens
+        };
     }
 }
 
@@ -113,6 +150,7 @@ internal sealed class CollaborateHistoryConversation
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public List<CollaborateHistoryExchange> Exchanges { get; set; } = [];
+    public List<string> MemoryNotes { get; set; } = [];
 }
 
 internal sealed class CollaborateHistoryExchange

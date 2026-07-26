@@ -1,0 +1,17 @@
+AI Arena 0.4.44-beta
+Agent command cancellation release.
+
+- Added a Stop Command action to the Agent command approval rail.
+- Added danger styling and accessibility metadata for active command cancellation.
+- Wired command cancellation tokens from the WPF command rail into the command runner.
+- Added explicit cancelled command results so user cancellation is distinct from timeout and generic failure.
+- Kills the active command process tree when cancellation is requested.
+- Captures stdout, stderr, elapsed time, and file-change receipts after command cancellation.
+- Preserves partial workspace file changes made before a cancelled command is stopped.
+- Adds cancellation state to terminal output and latest-command context for follow-up prompts.
+- Updates command result cards to describe cancelled commands and suggest a safer, shorter next command.
+- Updates Build Evidence rows so cancelled commands become a retry-smaller state instead of a generic failure.
+- Keeps the Agent chat Stop path focused on chat cancellation while the right-rail Stop handles terminal cancellation.
+- Keeps Stop Command disabled until an approved command is actually running.
+- Updated README, user guide, Windows app notes, decomposition map, and research notes for command cancellation.
+- Added deterministic tests for runner cancellation, partial pre-cancel file writes, Stop button XAML contracts, and initialized disabled Stop state.

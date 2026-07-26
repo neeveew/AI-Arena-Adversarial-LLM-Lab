@@ -1,0 +1,9 @@
+AI Arena 0.4.85-beta
+- Added an optional AI Choice topic prompt in Match Setup so model-generated scenarios can be steered toward an operator-supplied subject while blank prompts keep free generation.
+- Added a local Codex OpenAI bridge script with OpenAI-compatible and LM Studio-compatible streaming endpoints for testing Codex-backed arena providers.
+- Defaulted the Codex bridge to low reasoning, disabled reasoning summaries, enabled web search for recent public knowledge, and documented setup and health checks.
+- Simplified AI Lab internet access: Internet On lets agents request local web search/fetch freely, hidden internet context feeds the same turn, and obsolete mode/source/approval controls are removed from the normal workflow.
+- Hardened Internet Access with backend query validation, repeated-failure loop protection, proactive current-topic context, and a hidden same-turn continuation path that stores internet metadata on the final agent message.
+- Kept internet metadata out of normal transcript cards by default, added a Debug > Internet details toggle for diagnostics, and repaired failed-search fragments into complete public replies.
+- Fixed generic prompts like “check for latest news online” so proactive internet access creates a concrete local web search query instead of collapsing to an invalid fragment.
+- Prevented failed internet lookups from leaking as public tool-status prose such as “dataset null”, and added a local news fallback when open web search returns no generic headline results.

@@ -1,0 +1,7 @@
+AI Arena 0.4.67-beta
+
+- Move AI World out of the left navigation rail: it is now a Transcript | World view toggle in the AI Lab top bar next to Match Setup, reflecting that it is a second rendering of the live Lab session rather than a separate workspace.
+- The left rail now lists only real workspaces: AI Lab, Agent, and AI Collaborate; the AI Lab nav entry stays highlighted while the World view is active.
+- Remember the last-used Lab view (transcript or world) and restore it when returning to the AI Lab or restarting the app.
+- Keep Match Setup available from the World view; opening it switches to the transcript with the setup flyout.
+- Update the user guide for the new AI World location.

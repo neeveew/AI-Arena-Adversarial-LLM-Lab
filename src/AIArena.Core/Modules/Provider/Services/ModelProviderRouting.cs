@@ -14,7 +14,7 @@ public static class ModelProviderRouting
         fallbackConfig = snapshot.Configs.TryGetValue(SharedConfigKey, out var shared) ? shared : null;
         if (snapshot.Configs.TryGetValue(agentId, out var specific) && !string.IsNullOrWhiteSpace(specific.Model))
         {
-            if (fallbackConfig is not null && string.Equals(specific.Model, fallbackConfig.Model, StringComparison.OrdinalIgnoreCase))
+            if (fallbackConfig is not null && string.Equals(specific.Model, fallbackConfig.Model, StringComparison.Ordinal))
             {
                 fallbackConfig = null;
             }

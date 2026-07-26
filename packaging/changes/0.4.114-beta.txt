@@ -1,0 +1,9 @@
+- Merges the window title bar into the shell top bar with themed minimize/maximize/close caption buttons, a draggable caption band, and correct maximized-edge padding.
+- Adds a Light theme that meets WCAG AA contrast, and makes the System theme follow the Windows app light/dark preference live while still honoring high contrast.
+- Switches iconography to Segoe Fluent Icons on Windows 11 (MDL2 fallback on Windows 10) through a single shared icon-font token.
+- Modernizes scrollbars: slim 4px thumbs at rest that widen on hover while keeping the full 12px hit target.
+- Unifies keyboard focus with the two-tone Arena focus ring across the main window, top bar, and dialogs, and rebases dialog action buttons on the shared Arena button system.
+- Calms accent usage: match generator and right-rail actions use one primary action with secondary siblings, status colors (paused, warning, voice drift) no longer borrow customizable agent identity colors, and cast cards keep a neutral surface with an accent edge.
+- Caps transcript body and reasoning text at a readable line length on ultrawide windows, removes card translucency for crisper text, and replaces the legacy ComboBox letter chevron with a proper glyph that flips while open.
+- Consolidates duplicated shell styles onto the Arena design tokens (shared by XAML and code-built cards) and normalizes corner radii and metadata type sizes.
+- Keeps the WPF PowerShell plane enabled by default, retains the self-screenshot command and bundled SearXNG Internet backend, and remains a self-contained Windows installation with no separate .NET Desktop Runtime requirement.

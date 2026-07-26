@@ -1,0 +1,14 @@
+# AI Arena 0.4.51-beta
+
+- Added a visible Use Artifact action in the Agent Terminal Output card.
+- Use Artifact stages the latest generated artifact suggestion command into the existing command approval rail.
+- Preserved the single approval path for artifact commands, including preview validation, risk chips, workspace-boundary blocking, and manual approval.
+- Let Use Artifact commands auto-run only through the existing Approve All session mode after preview succeeds.
+- Added artifact command provenance labels such as Static web artifact suggestion.
+- Added action and warning cards when artifact commands are staged or blocked.
+- Added stale artifact protection so missing generated files are refused before staging an artifact command.
+- Added dynamic Use Artifact tooltips that show the latest artifact summary and suggested command.
+- Changed static web artifact suggestions from a file-presence check to a default-browser preview command using Start-Process after approval.
+- Kept static web previews PowerShell-gated and risk-labeled through the normal command preview path.
+- Expanded WPF tests for Use Artifact enablement, staging behavior, provenance labels, static web preview commands, and the XAML action contract.
+- Updated README, user guide, Windows app notes, decomposition map, research notes, and release metadata for direct artifact preview staging.

@@ -1,0 +1,18 @@
+AI Arena 0.4.43-beta
+Agent Build Evidence and Rescue release.
+
+- Added a Build Evidence card to the Agent right rail.
+- Added evidence rows for workspace readiness, command need, proposal state, preview readiness, command execution, file changes, and verify/repair state.
+- Added a Rescue prompt chip for app-building runs that need one runnable command instead of more explanation.
+- Automatically stages a Rescue prompt when an app-building request completes with prose but no runnable Builder command.
+- Preserves the original operator task inside Rescue prompts.
+- Added Ctrl+Enter send support to the Agent prompt box while keeping Enter as multiline drafting.
+- Updated Builder instructions to treat previewable commands and file-changing outcomes as the app-building deliverable.
+- Strengthened Next Step prompts after successful action commands that changed no tracked files.
+- Held Builder command proposals that arrive while another command is running instead of dropping them.
+- Broadened command extraction for XML command blocks, plain labeled fences, pwsh/cmd labels, "Run this command" labels, comments before commands, npm create, and common PowerShell aliases.
+- Expanded app-work intent detection for website, page, component, verify, repair, and wire requests.
+- Blocked command previews that write or redirect to parent paths such as ..\outside.txt.
+- Blocked command previews with output options targeting parent paths above the selected workspace.
+- Updated README, user guide, Windows app notes, decomposition map, and research notes for Build Evidence, Rescue, and stricter workspace boundaries.
+- Added deterministic tests for rescue staging, Build Evidence rows, broader extraction formats, parent-path blocking, and expanded app-work intent detection.

@@ -21,7 +21,13 @@ public sealed class TranscriptService
             : active[snapshot.Engine.TurnIndex % active.Length];
     }
 
-    public DialogueMessage CreateAssistantMessage(DialogueAgent agent, string text, ModelCompletionResult result, int nextTurn)
+    public DialogueMessage CreateAssistantMessage(
+        DialogueAgent agent,
+        string text,
+        ModelCompletionResult result,
+        int nextTurn,
+        InternetToolRequest? internetRequest = null,
+        InternetToolResult? internetResult = null)
     {
         return new DialogueMessage
         {
@@ -38,9 +44,12 @@ public sealed class TranscriptService
                 LatencyMs = result.LatencyMs,
                 PromptTokens = result.PromptTokens,
                 CompletionTokens = result.CompletionTokens,
-                TotalTokens = result.TotalTokens
+                TotalTokens = result.TotalTokens,
+                TokensPerSecond = result.TokensPerSecond,
+                TimeToFirstTokenMs = result.TimeToFirstTokenMs,
+                ModelLoadTimeMs = result.ModelLoadTimeMs
             },
-            Metadata = AssistantMetadata(result.Reasoning, agent.VoiceStyle)
+            Metadata = AssistantMetadata(result, agent.VoiceStyle, internetRequest, internetResult)
         };
     }
 
@@ -103,39 +112,13 @@ public sealed class TranscriptService
         };
     }
 
-    public DialogueMessage CreateInternetApprovalMessage(InternetToolRequest request, int nextTurn)
-    {
-        var body = string.Join(
-            Environment.NewLine,
-            $"Requester: {request.RequesterId}",
-            $"Tool: {request.Tool}",
-            string.IsNullOrWhiteSpace(request.Query) ? "" : $"Query: {request.Query}",
-            string.IsNullOrWhiteSpace(request.Url) ? "" : $"URL: {request.Url}",
-            string.IsNullOrWhiteSpace(request.Reason) ? "" : $"Reason: {request.Reason}",
-            "Status: waiting for operator approval").Trim();
-
-        return new DialogueMessage
-        {
-            Turn = nextTurn,
-            Speaker = "Internet Approval",
-            SpeakerId = "internet",
-            Text = body,
-            Status = "pending",
-            Kind = "internet_approval",
-            CreatedAt = DateTimeOffset.Now.ToUnixTimeSeconds(),
-            Model = new ModelMetadata
-            {
-                Model = "internet-tool",
-                LatencyMs = 0
-            },
-            Metadata = new Dictionary<string, JsonElement>
-            {
-                ["tool_request"] = JsonSerializer.SerializeToElement(request)
-            }
-        };
-    }
-
-    public DialogueMessage CreateAssistantReplacement(DialogueMessage original, DialogueAgent agent, string text, ModelCompletionResult result)
+    public DialogueMessage CreateAssistantReplacement(
+        DialogueMessage original,
+        DialogueAgent agent,
+        string text,
+        ModelCompletionResult result,
+        InternetToolRequest? internetRequest = null,
+        InternetToolResult? internetResult = null)
     {
         return new DialogueMessage
         {
@@ -153,9 +136,12 @@ public sealed class TranscriptService
                 LatencyMs = result.LatencyMs,
                 PromptTokens = result.PromptTokens,
                 CompletionTokens = result.CompletionTokens,
-                TotalTokens = result.TotalTokens
+                TotalTokens = result.TotalTokens,
+                TokensPerSecond = result.TokensPerSecond,
+                TimeToFirstTokenMs = result.TimeToFirstTokenMs,
+                ModelLoadTimeMs = result.ModelLoadTimeMs
             },
-            Metadata = AssistantMetadata(result.Reasoning, agent.VoiceStyle),
+            Metadata = AssistantMetadata(result, agent.VoiceStyle, internetRequest, internetResult),
             Extra = original.Extra
         };
     }
@@ -240,13 +226,32 @@ public sealed class TranscriptService
             };
     }
 
-    private static Dictionary<string, JsonElement> AssistantMetadata(string reasoning, string voiceStyle)
+    private static Dictionary<string, JsonElement> AssistantMetadata(
+        ModelCompletionResult result,
+        string voiceStyle,
+        InternetToolRequest? internetRequest = null,
+        InternetToolResult? internetResult = null)
     {
-        var metadata = ReasoningMetadata(reasoning);
+        var metadata = ReasoningMetadata(result.Reasoning);
         var normalizedVoiceStyle = VoiceStyleInstructions.Normalize(voiceStyle);
         if (!normalizedVoiceStyle.Equals("default", StringComparison.OrdinalIgnoreCase))
         {
             metadata["voice_style"] = JsonSerializer.SerializeToElement(normalizedVoiceStyle);
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.ResponseId))
+        {
+            metadata["provider_response_id"] = JsonSerializer.SerializeToElement(result.ResponseId.Trim());
+        }
+
+        if (internetRequest is not null)
+        {
+            metadata["tool_request"] = JsonSerializer.SerializeToElement(internetRequest);
+        }
+
+        if (internetResult is not null)
+        {
+            metadata["tool_result"] = JsonSerializer.SerializeToElement(internetResult);
         }
 
         return metadata;

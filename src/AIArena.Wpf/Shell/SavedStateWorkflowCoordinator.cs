@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using AIArena.Core.Models;
@@ -25,6 +26,11 @@ internal sealed class SavedStateWorkflowCoordinator
     private readonly Button saveButton;
     private readonly Button loadButton;
     private readonly Button deleteButton;
+    private readonly Button forkButton;
+    private readonly FrameworkElement forkLineageReceipt;
+    private readonly TextBlock forkLineageText;
+    private readonly Button openParentButton;
+    private readonly SessionForkWorkflowService sessionForkWorkflow;
     private readonly Func<CoreSessionSummary?> activeSession;
     private readonly Func<ThemePalette> theme;
     private readonly Func<bool> isRenderingSnapshot;
@@ -41,6 +47,7 @@ internal sealed class SavedStateWorkflowCoordinator
     private IReadOnlyList<CoreSessionSummary> sessionSummaries = [];
     private IReadOnlyList<CheckpointSummary> checkpointSummaries = [];
     private IReadOnlyList<ScenarioTemplate> scenarioTemplates = [];
+    private SessionForkLineage? currentForkLineage;
     private bool isUpdating;
 
     public SavedStateWorkflowCoordinator(
@@ -59,6 +66,11 @@ internal sealed class SavedStateWorkflowCoordinator
         Button saveButton,
         Button loadButton,
         Button deleteButton,
+        Button forkButton,
+        FrameworkElement forkLineageReceipt,
+        TextBlock forkLineageText,
+        Button openParentButton,
+        SessionForkWorkflowService sessionForkWorkflow,
         Func<CoreSessionSummary?> activeSession,
         Func<ThemePalette> theme,
         Func<bool> isRenderingSnapshot,
@@ -87,6 +99,11 @@ internal sealed class SavedStateWorkflowCoordinator
         this.saveButton = saveButton;
         this.loadButton = loadButton;
         this.deleteButton = deleteButton;
+        this.forkButton = forkButton;
+        this.forkLineageReceipt = forkLineageReceipt;
+        this.forkLineageText = forkLineageText;
+        this.openParentButton = openParentButton;
+        this.sessionForkWorkflow = sessionForkWorkflow;
         this.activeSession = activeSession;
         this.theme = theme;
         this.isRenderingSnapshot = isRenderingSnapshot;
@@ -104,6 +121,53 @@ internal sealed class SavedStateWorkflowCoordinator
     public void SetSessions(IReadOnlyList<CoreSessionSummary> sessions)
     {
         sessionSummaries = sessions;
+        UpdateLineagePresentation();
+    }
+
+    public void ApplyForkLineage(SessionForkLineage? lineage)
+    {
+        currentForkLineage = lineage;
+        UpdateLineagePresentation();
+    }
+
+    public async Task ForkCurrentAsync()
+    {
+        var result = await sessionForkWorkflow.ForkCurrentAsync();
+        SetStatus(result.Message, isDanger: !result.Ok);
+        setArenaRunStatus(result.Message);
+        UpdateActionButtons();
+    }
+
+    public async Task OpenParentAsync()
+    {
+        var parentSessionId = CurrentParentSessionId();
+        if (string.IsNullOrWhiteSpace(parentSessionId))
+        {
+            SetStatus("This run has no parent lineage to open.", isDanger: true);
+            return;
+        }
+
+        if (isArenaBusy())
+        {
+            SetStatus("The arena is busy; the parent run was not opened.", isDanger: true);
+            return;
+        }
+
+        if (!ParentSessionIsAvailable(parentSessionId))
+        {
+            SetStatus($"Parent session is no longer available: {parentSessionId}.", isDanger: true);
+            UpdateActionButtons();
+            return;
+        }
+
+        await loadSessionsAsync(parentSessionId);
+        var opened = activeSession()?.Id.Equals(parentSessionId, StringComparison.OrdinalIgnoreCase) == true;
+        var message = opened
+            ? $"Opened parent session: {parentSessionId}."
+            : $"Parent session could not be opened: {parentSessionId}.";
+        SetStatus(message, isDanger: !opened);
+        setArenaRunStatus(message);
+        UpdateActionButtons();
     }
 
     public void LoadScenarioTemplates(string? preferredTemplateId = null)
@@ -196,7 +260,23 @@ internal sealed class SavedStateWorkflowCoordinator
 
     public void RefreshCheckpoints()
     {
-        _ = RefreshCheckpointsAsync();
+        _ = RefreshCheckpointsSafelyAsync(activeSession()?.Id);
+    }
+
+    private async Task RefreshCheckpointsSafelyAsync(string? capturedSessionId)
+    {
+        try
+        {
+            await RefreshCheckpointsAsync();
+        }
+        catch (Exception ex)
+        {
+            if (string.IsNullOrWhiteSpace(capturedSessionId)
+                || ShouldApplyCheckpointRefresh(capturedSessionId, activeSession()?.Id))
+            {
+                SetStatus(CheckpointRefreshFailureStatus(ex), isDanger: true);
+            }
+        }
     }
 
     public async Task RefreshCheckpointsAsync(string? selectedCheckpointId = null)
@@ -208,7 +288,14 @@ internal sealed class SavedStateWorkflowCoordinator
             return;
         }
 
-        checkpointSummaries = await sessionStore.ListCheckpointsAsync(session.Id);
+        var sessionId = session.Id;
+        var summaries = await sessionStore.ListCheckpointsAsync(sessionId);
+        if (!ShouldApplyCheckpointRefresh(sessionId, activeSession()?.Id))
+        {
+            return;
+        }
+
+        checkpointSummaries = summaries;
         if (CurrentMode().Equals("checkpoint", StringComparison.OrdinalIgnoreCase))
         {
             UpdatePicker(selectedCheckpointId);
@@ -217,6 +304,18 @@ internal sealed class SavedStateWorkflowCoordinator
                 SetStatus("No checkpoints saved for this session.");
             }
         }
+    }
+
+    internal static bool ShouldApplyCheckpointRefresh(string capturedSessionId, string? currentSessionId)
+    {
+        return !string.IsNullOrWhiteSpace(capturedSessionId)
+            && !string.IsNullOrWhiteSpace(currentSessionId)
+            && capturedSessionId.Trim().Equals(currentSessionId.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static string CheckpointRefreshFailureStatus(Exception ex)
+    {
+        return $"Checkpoint refresh failed: {ex.Message}";
     }
 
     public void ClearCheckpoints(string status)
@@ -250,8 +349,8 @@ internal sealed class SavedStateWorkflowCoordinator
                     nameLabel.Text = "New session name";
                     itemLabel.Text = "Existing session";
                     helpText.Text = "Sessions are working folders. Save copies the current setup into a fresh session, load switches sessions, and delete removes non-default sessions.";
-                    saveButton.Content = "SAVE";
-                    loadButton.Content = "LOAD";
+                    saveButton.Content = "Save";
+                    loadButton.Content = "Load";
                     nameText.ToolTip = "Enter a unique session name. Existing sessions are not overwritten.";
                     itemPicker.ToolTip = "Choose the session to load or delete.";
                     itemPicker.ItemsSource = sessionSummaries;
@@ -262,8 +361,8 @@ internal sealed class SavedStateWorkflowCoordinator
                     nameLabel.Text = "Template name";
                     itemLabel.Text = "Saved template";
                     helpText.Text = "Templates save reusable match setup: topic, global prompt, cast, locks, participants, and model assignments. Transcript is not restored.";
-                    saveButton.Content = "SAVE";
-                    loadButton.Content = "LOAD";
+                    saveButton.Content = "Save";
+                    loadButton.Content = "Load";
                     nameText.ToolTip = "Leave blank for an automatic template name. Matching names ask before overwrite.";
                     itemPicker.ToolTip = "Choose the template to load or delete.";
                     itemPicker.DisplayMemberPath = "Name";
@@ -275,8 +374,8 @@ internal sealed class SavedStateWorkflowCoordinator
                     nameLabel.Text = "Checkpoint name";
                     itemLabel.Text = "Saved checkpoint";
                     helpText.Text = "Checkpoints capture the full current session state: transcript, cast, locks, provider settings, notes, diagnostics, and turn order.";
-                    saveButton.Content = "SAVE";
-                    loadButton.Content = "LOAD";
+                    saveButton.Content = "Save";
+                    loadButton.Content = "Load";
                     nameText.ToolTip = "Leave blank for a timestamped checkpoint name.";
                     itemPicker.ToolTip = "Choose the checkpoint to load or delete.";
                     itemPicker.DisplayMemberPath = "Name";
@@ -338,19 +437,65 @@ internal sealed class SavedStateWorkflowCoordinator
 
     public void UpdateActionButtons()
     {
-        if (loadButton is null || deleteButton is null || itemPicker is null)
+        if (loadButton is null
+            || deleteButton is null
+            || forkButton is null
+            || openParentButton is null
+            || itemPicker is null)
         {
             return;
         }
 
+        var idle = !isArenaBusy();
         var hasSelection = itemPicker.SelectedItem is not null;
         var selectedDefaultSession = itemPicker.SelectedItem is CoreSessionSummary session
             && session.Id.Equals("default", StringComparison.OrdinalIgnoreCase);
-        loadButton.IsEnabled = !isArenaBusy() && hasSelection;
-        deleteButton.IsEnabled = !isArenaBusy() && hasSelection && !selectedDefaultSession;
+        var parentSessionId = CurrentParentSessionId();
+        var parentAvailable = ParentSessionIsAvailable(parentSessionId);
+        loadButton.IsEnabled = idle && hasSelection;
+        deleteButton.IsEnabled = idle && hasSelection && !selectedDefaultSession;
+        forkButton.IsEnabled = idle && activeSession() is not null;
+        openParentButton.IsEnabled = idle && parentAvailable;
         deleteButton.ToolTip = selectedDefaultSession
             ? "Default session cannot be deleted."
             : "Delete the selected saved item.";
+        var parentHelpText = parentAvailable
+            ? $"Open parent session {parentSessionId}"
+            : string.IsNullOrWhiteSpace(parentSessionId)
+                ? "This run has no parent lineage."
+                : $"Parent session {parentSessionId} is no longer available.";
+        openParentButton.ToolTip = parentHelpText;
+        AutomationProperties.SetHelpText(openParentButton, parentHelpText);
+    }
+
+    private void UpdateLineagePresentation()
+    {
+        var parentSessionId = CurrentParentSessionId();
+        if (string.IsNullOrWhiteSpace(parentSessionId) || currentForkLineage is null)
+        {
+            forkLineageReceipt.Visibility = Visibility.Collapsed;
+            forkLineageText.Text = "Fork lineage unavailable.";
+            forkLineageText.ToolTip = null;
+            UpdateActionButtons();
+            return;
+        }
+
+        var receipt = $"Forked from {parentSessionId} at turn {currentForkLineage.ParentTurnCount}";
+        forkLineageText.Text = receipt;
+        forkLineageText.ToolTip = receipt;
+        forkLineageReceipt.Visibility = Visibility.Visible;
+        UpdateActionButtons();
+    }
+
+    private string CurrentParentSessionId()
+    {
+        return currentForkLineage?.ParentSessionId?.Trim() ?? "";
+    }
+
+    private bool ParentSessionIsAvailable(string? parentSessionId)
+    {
+        return !string.IsNullOrWhiteSpace(parentSessionId)
+            && sessionSummaries.Any(session => session.Id.Equals(parentSessionId, StringComparison.OrdinalIgnoreCase));
     }
 
     public void SetStatus(string status, bool isDanger = false)

@@ -1,0 +1,5 @@
+AI Arena 0.4.65-beta
+
+- Add per-role generation overrides to Settings: each participant and the narrator can override the shared Temperature and Max output tokens, with blank fields inheriting the shared values.
+- Overrides save when a field loses focus, persist in the session per-role provider configs, and apply from the next turn through the existing role routing.
+- Show saved overrides when settings load; a role with an override but no explicit model is pinned to the current shared model so the override has a config to ride on.

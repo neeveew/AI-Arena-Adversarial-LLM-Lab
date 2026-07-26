@@ -1,0 +1,8 @@
+AI Arena 0.4.111-beta
+
+- Adds portable Match Setup v2 JSON export/import in the WPF UI and PowerShell control plane. Imports validate atomically, create a clean collision-free session, omit runtime state, and never export provider API tokens.
+- Adds canonical setup fingerprints and safe provider-token reuse only when the imported endpoint and API mode exactly match an existing trusted local configuration.
+- Unifies the five-part scenario quality contract across Core generation, Match Setup readiness, and PowerShell state; incomplete AI-generated contracts are repaired deterministically.
+- Correctly classifies Random/Wild as seed-deterministic for the same recipe and active cast, and AI Choice/Current Topics as captured-output replayable. Current Topics now labels and copies its replay id instead of presenting a synthetic seed as reproducible.
+- Makes Match Setup PowerShell navigation close Settings and transient flyouts through the same deterministic overlay path as the UI.
+- Expands the control plane to 75 commands and the typed PowerShell helper to 49 functions, with post-command state on every authenticated response.

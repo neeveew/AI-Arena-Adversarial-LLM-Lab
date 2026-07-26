@@ -1,0 +1,16 @@
+AI Arena 0.4.40-beta
+Agent app-writing action bridge release.
+
+- Fixed the standalone Agent failure mode where app-writing requests could end as prose instead of staged, approvable work.
+- Strengthened Builder prompting so write/create/scaffold/build/test requests must end with a single fenced PowerShell command proposal or a safe read-only inspection command.
+- Added a Build App prompt chip that asks the Agent to create a small runnable app through a first workspace-scoped command proposal.
+- Added a Next Step prompt chip that reviews captured terminal output and asks for one follow-up command to continue or repair the work.
+- Added command-source labels to the approval rail so users can see Builder proposals, manual edits, rejected commands, and command-result follow-up states.
+- Expanded command proposal parsing to support fenced command blocks, prompt-style `$` lines, labeled Command/Run/PowerShell lines, and runnable inline-code bullets.
+- Auto-staged Builder command proposals into the approval rail with shell selection, immediate preview, risk chips, and explicit approval still required before execution.
+- Improved occupied-rail and no-command activity messages so the Agent does not imply work was staged when it only produced text.
+- Cleared rejected command proposals from the command editor and reset the source state.
+- Added bounded file-change receipts after approved commands, showing created, modified, and deleted workspace files.
+- Fed command output plus file-change receipts into follow-up prompts so Agent can continue from actual execution results.
+- Updated README, user guide, Windows app notes, and research notes for the new Agent action loop.
+- Added deterministic tests for Builder staging, command extraction fallbacks, approval provenance, and file-change receipt summaries.

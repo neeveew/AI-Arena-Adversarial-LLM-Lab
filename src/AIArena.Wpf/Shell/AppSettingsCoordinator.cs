@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
+using AIArena.Wpf.Services;
 
 namespace AIArena.Wpf;
 
@@ -18,6 +19,7 @@ internal sealed class AppSettingsCoordinator
     private readonly ComboBox providerModelText;
     private readonly Button testProviderButton;
     private readonly RotateTransform settingsGearRotate;
+    private readonly Func<bool> animationsEnabled;
 
     public AppSettingsCoordinator(
         Dispatcher dispatcher,
@@ -29,7 +31,8 @@ internal sealed class AppSettingsCoordinator
         TextBox providerBaseUrlText,
         ComboBox providerModelText,
         Button testProviderButton,
-        RotateTransform settingsGearRotate)
+        RotateTransform settingsGearRotate,
+        Func<bool>? animationsEnabled = null)
     {
         this.dispatcher = dispatcher;
         this.shellNavigation = shellNavigation;
@@ -41,6 +44,7 @@ internal sealed class AppSettingsCoordinator
         this.providerModelText = providerModelText;
         this.testProviderButton = testProviderButton;
         this.settingsGearRotate = settingsGearRotate;
+        this.animationsEnabled = animationsEnabled ?? (() => SystemMotionPreferences.AnimationsEnabled);
     }
 
     public void Toggle()
@@ -55,7 +59,10 @@ internal sealed class AppSettingsCoordinator
         if (visible)
         {
             modelRefreshTimer.Start();
-            _ = refreshAdvertisedModelsAsync(true);
+            if (modelProviderSettingsExpander.IsExpanded)
+            {
+                _ = refreshAdvertisedModelsAsync(true);
+            }
         }
         else
         {
@@ -89,6 +96,19 @@ internal sealed class AppSettingsCoordinator
         return string.IsNullOrWhiteSpace(model);
     }
 
+    internal static bool ShouldAnimateSettingsGear(bool systemAnimationsEnabled)
+    {
+        return systemAnimationsEnabled;
+    }
+
+    internal void RefreshMotionPreference()
+    {
+        if (!ShouldAnimateSettingsGear(animationsEnabled()))
+        {
+            settingsGearRotate.BeginAnimation(RotateTransform.AngleProperty, null);
+        }
+    }
+
     private Control FocusProviderTarget(string model)
     {
         return ShouldFocusModelPicker(model) ? providerModelText : testProviderButton;
@@ -96,6 +116,12 @@ internal sealed class AppSettingsCoordinator
 
     private void AnimateSettingsGear()
     {
+        if (!ShouldAnimateSettingsGear(animationsEnabled()))
+        {
+            settingsGearRotate.BeginAnimation(RotateTransform.AngleProperty, null);
+            return;
+        }
+
         var animation = new DoubleAnimation(
             settingsGearRotate.Angle,
             settingsGearRotate.Angle + 120,

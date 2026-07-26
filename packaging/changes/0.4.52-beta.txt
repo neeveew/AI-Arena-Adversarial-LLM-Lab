@@ -1,0 +1,17 @@
+# AI Arena 0.4.52-beta
+
+- Reframed Agent Approve All as a visible workspace-session autonomy contract.
+- Added a session-autonomy center card when Approve All is toggled on or off.
+- Expanded Approve All status and help text to name preview validation, workspace boundaries, blocked previews, loop guards, cancellations, and workspace-change resets.
+- Expanded Auto Continue status and help text to describe bounded follow-up steps, duplicate-command guards, no-change loop guards, blocked previews, and workspace-change pauses.
+- Threaded the stronger autonomy contract into Planner/Reviewer/Builder prompts and copied Agent work briefs.
+- Fixed Use Artifact with Approve All so artifact provenance is attached before auto-run can start.
+- Added artifact verification result tracking for preview or verification commands staged from generated artifact suggestions.
+- Treated successful artifact preview and verification commands as no-change-expected instead of no-change repair failures.
+- Added artifact verification summaries to Build Evidence, work summaries, work briefs, command result cards, command source labels, and Auto Continue prompts.
+- Added an artifact-check top mode so successful artifact previews read as checked artifacts instead of generic verify-next work.
+- Cleared the command editor after approved commands finish so later Builder proposals do not stall behind stale command text.
+- Preserved command history, output, receipts, and work briefs as the replay/audit surfaces after the editor clears.
+- Fixed the WPF artifact-verification test wait pattern to avoid STA dispatcher deadlocks.
+- Added deterministic coverage for manual artifact checks, Approve All plus Use Artifact, autonomy cards, workspace-session copy, blocked-preview status copy, command-editor cleanup, and artifact no-change handling.
+- Updated README, user guide, Windows app notes, decomposition map, and agentic app research notes for Codex-inspired session autonomy.

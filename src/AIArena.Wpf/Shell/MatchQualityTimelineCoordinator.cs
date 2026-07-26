@@ -144,10 +144,10 @@ internal sealed class MatchQualityTimelineCoordinator
         return new Border
         {
             Background = blendBrush(resourceBrush("CardBrush"), accent, 0.08),
-            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.48),
+            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.56),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(12),
+            Padding = new Thickness(14),
             Margin = new Thickness(0, 0, 0, 12),
             Child = panel
         };
@@ -171,7 +171,7 @@ internal sealed class MatchQualityTimelineCoordinator
                 Background = blendBrush(resourceBrush("InputBrush"), accent, selected ? 0.2 : 0.08),
                 BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, selected ? 0.85 : 0.25),
                 BorderThickness = new Thickness(selected ? 2 : 1),
-                CornerRadius = new CornerRadius(3),
+                CornerRadius = new CornerRadius(4),
                 Margin = new Thickness(0, 0, 4, 4),
                 Cursor = Cursors.Hand,
                 ToolTip = $"Turn {point.Turn} {point.Speaker}{Environment.NewLine}Quality: {point.Quality} ({QualityLabel(point.Quality)}){Environment.NewLine}Tokens: {formatCompactNumber(point.Tokens)}{Environment.NewLine}{(selected ? "Click to clear this turn filter." : "Click to filter transcript to this turn.")}"
@@ -199,20 +199,51 @@ internal sealed class MatchQualityTimelineCoordinator
     {
         var button = new Button
         {
-            Content = "Clear turn",
+            Content = CreateClearButtonContent(),
             Background = resourceBrush("InputBrush"),
-            BorderBrush = resourceBrush("ControlBorderBrush"),
+            BorderBrush = resourceBrush("DisabledBorderBrush"),
             Foreground = resourceBrush("TextBrush"),
             FontSize = 11,
             FontWeight = FontWeights.SemiBold,
             MinHeight = 26,
-            Padding = new Thickness(8, 3, 8, 3),
+            MinWidth = 82,
+            Padding = new Thickness(8, 3, 9, 3),
             Margin = new Thickness(0, 6, 0, 0),
             HorizontalAlignment = HorizontalAlignment.Right,
-            ToolTip = "Return timeline and transcript to the selected turn preset"
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            Cursor = Cursors.Hand,
+            ToolTip = "Clear the selected timeline turn and return to the transcript preset."
         };
         button.Click += (_, _) => clearTimelineTurnFilter();
         return button;
+    }
+
+    private static StackPanel CreateClearButtonContent()
+    {
+        var panel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "\uE72C",
+            FontFamily = ArenaTokens.IconFontFamily,
+            FontSize = 11,
+            FontWeight = FontWeights.Normal,
+            Margin = new Thickness(0, 0, 6, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "All turns",
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        return panel;
     }
 
     private Border CreateMetric(string label, string value, Brush accent)
@@ -222,9 +253,9 @@ internal sealed class MatchQualityTimelineCoordinator
             Background = blendBrush(resourceBrush("InputBrush"), accent, 0.1),
             BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.36),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(7, 3, 7, 3),
-            Margin = new Thickness(0, 0, 6, 0),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(7, 4, 7, 4),
+            Margin = new Thickness(0, 0, 6, 6),
             Child = new TextBlock
             {
                 Text = $"{label}: {value}",

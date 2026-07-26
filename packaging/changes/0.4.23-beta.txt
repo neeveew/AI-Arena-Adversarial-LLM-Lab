@@ -1,0 +1,12 @@
+AI Arena 0.4.23-beta
+
+- Added a Run Shape card to Match Setup Scenario Preview showing the active cast handoff into the Narrator and the turn budget.
+- Added a Relationship Map card that formats active relationship pressure as source-to-target edges with stance labels.
+- Added a Lock Plan card that names locked setup fields and active locked agents.
+- Added a Setup Source card that shows scenario seed, persona seed, and recent generated setup history.
+- Expanded Scenario Preview from a simple topic/profile surface into a compact setup receipt inspired by agent workflow builders.
+- Filtered inactive, self-targeting, neutral, and invalid relationship rules out of Match Setup relationship summaries.
+- Updated Run Constraints to count only active relationship rules.
+- Updated setup readiness so an enabled relationship matrix with only invalid draft rules is called out as needing attention.
+- Added regression coverage for run shape, relationship map, lock plan, setup source, and invalid relationship filtering.
+- Updated user guide and research notes for the new Match Setup run-shape preview.

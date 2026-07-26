@@ -1,0 +1,5 @@
+AI Arena 0.4.88-beta
+
+- Internet Access now derives web_search queries from the actual operator prompt instead of collapsing topic-specific requests into generic world news.
+- Agent internet searches now use an internal five-result default and no longer expose the legacy Max results setting.
+- Internet-facing UI labels now use Internet Access terminology instead of legacy News / Internet wording.

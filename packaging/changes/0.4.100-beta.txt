@@ -1,0 +1,8 @@
+AI Arena 0.4.100-beta
+
+- Added typed PowerShell commands to inspect, open, section-switch, and close Match Setup.
+- Added typed PowerShell commands to inspect, open, live-filter, clear, and close application Settings.
+- Preserved the UI's originating-workspace return and keyboard-focus restoration paths during automation.
+- Added Match Setup and Settings overlay details to every authenticated command state receipt.
+- Excluded provider tokens and other secrets from the new Settings state contract.
+- Extracted overlay validation and receipts into a protocol-independent control service with focused regression coverage.

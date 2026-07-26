@@ -1,0 +1,14 @@
+# AI Arena 0.4.47-beta
+
+- Added a Command History card to the Agent right rail.
+- Recorded recent running, completed, and blocked Agent commands with status, shell, source, workspace, exit code, and file receipt details.
+- Added Replay Last to stage the latest command history item back through preview.
+- Added Copy History to export recent Agent command history for review or debugging.
+- Fed recent command history into Planner, Reviewer, and Builder prompts.
+- Added bounded Auto Rescue when Approve All is enabled so prose-only app-building replies automatically retry with a Rescue command prompt.
+- Kept workspace preview validation authoritative for auto-rescued, replayed, auto-approved, and auto-continued commands.
+- Expanded the Auto Continue follow-up budget from three to six steps for longer app-building loops.
+- Added an Autonomy row to Build Evidence so manual, Approve All, Auto Rescue, and Auto Continue state are visible.
+- Refreshed command history after command cleanup so replay actions enable immediately after command completion.
+- Added deterministic WPF tests for command-history copy formatting, command-history UI contracts, auto-run history, and Auto Rescue after prose-only app output.
+- Updated README, user guide, Windows app notes, decomposition map, and agentic research notes for command history, replay, and Auto Rescue.

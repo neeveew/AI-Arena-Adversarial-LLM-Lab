@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Input;
 using System.Windows.Media;
 using AIArena.Wpf.Services;
@@ -19,14 +20,36 @@ public partial class ConfirmDialog : Window
         InitializeComponent();
         DialogChrome.ImportOwnerResources(owner, this);
         DialogChrome.ApplyImplicitControlStyles(this);
-        Owner = owner;
         Title = title;
         TitleText.Text = title;
         MessageText.Text = message;
         ConfirmButton.Content = confirmText;
         CancelButton.Content = cancelText;
+        CloseButton.ToolTip = $"Close {title}";
+        ConfirmButton.ToolTip = confirmText;
+        CancelButton.ToolTip = cancelText;
+        ConfirmButton.IsDefault = tone != ConfirmDialogTone.Danger;
+        CancelButton.IsDefault = tone == ConfirmDialogTone.Danger;
+
+        AutomationProperties.SetName(TitleText, title);
+        AutomationProperties.SetName(MessageText, message);
+        AutomationProperties.SetName(ToneText, tone == ConfirmDialogTone.Danger ? "Warning" : "Confirmation");
+        AutomationProperties.SetName(ConfirmButton, confirmText);
+        AutomationProperties.SetHelpText(ConfirmButton, tone == ConfirmDialogTone.Danger
+            ? "Applies this destructive action."
+            : "Applies this action.");
+        AutomationProperties.SetItemStatus(ConfirmButton, tone == ConfirmDialogTone.Danger ? "destructive action" : "confirmation action");
+        AutomationProperties.SetName(CancelButton, cancelText);
+        AutomationProperties.SetHelpText(CancelButton, "Closes this confirmation without applying the action.");
 
         ApplyTheme(theme, tone);
+        DialogChrome.PrepareModalWindow(
+            this,
+            owner,
+            DialogShell,
+            tone == ConfirmDialogTone.Danger ? CancelButton : ConfirmButton,
+            title,
+            message);
     }
 
     public static bool Show(
@@ -56,18 +79,29 @@ public partial class ConfirmDialog : Window
         DialogShell.Background = panel;
         DialogShell.BorderBrush = primaryBorder;
         HeaderBar.Background = input;
-        ContentPanel.Background = panel;
+        ContentPanel.Background = input;
+        ContentPanel.BorderBrush = border;
         TitleText.Foreground = text;
         MessageText.Foreground = text;
-        ToneBadge.Background = badge;
-        ToneText.Text = tone == ConfirmDialogTone.Danger ? "!" : "?";
+        ToneBadge.Background = input;
+        ToneBadge.BorderBrush = primaryBorder;
+        ToneText.Foreground = badge;
+        ToneText.Text = tone == ConfirmDialogTone.Danger ? "\uE7BA" : "\uE897";
+        ToneLabelText.Foreground = badge;
+        ToneLabelText.Text = tone == ConfirmDialogTone.Danger ? "REVIEW CAREFULLY" : "CONFIRM ACTION";
+        ShortcutText.Foreground = muted;
+        ShortcutText.Text = tone == ConfirmDialogTone.Danger
+            ? $"Enter keeps this unchanged · choose {ConfirmButton.Content} to proceed"
+            : "Esc cancels · Enter confirms";
+        FooterBar.Background = input;
+        FooterBar.BorderBrush = border;
 
-        DialogChrome.ApplyButtonStyle(CloseButton, input, border, muted);
-        CloseButton.FontSize = 13;
-        CloseButton.Padding = new Thickness(0);
-        CloseButton.MinHeight = 28;
+        DialogChrome.ApplyCloseButtonStyle(CloseButton, input, border, muted);
         DialogChrome.ApplyButtonStyle(CancelButton, input, border, text);
-        DialogChrome.ApplyButtonStyle(ConfirmButton, primary, primaryBorder, Brushes.White);
+        DialogChrome.ApplyButtonStyle(ConfirmButton, primary, primaryBorder, text);
+        ApplyCloseTargetSize(CloseButton);
+        ApplyActionTargetSize(CancelButton);
+        ApplyActionTargetSize(ConfirmButton);
     }
 
     private void ConfirmButton_Click(object sender, RoutedEventArgs e)
@@ -90,6 +124,22 @@ public partial class ConfirmDialog : Window
     private static SolidColorBrush Brush(Color color)
     {
         return new SolidColorBrush(color);
+    }
+
+    private static void ApplyActionTargetSize(System.Windows.Controls.Button button)
+    {
+        button.Height = 36;
+        button.MinHeight = 36;
+        button.FontSize = 13;
+        button.Padding = new Thickness(18, 0, 18, 0);
+    }
+
+    private static void ApplyCloseTargetSize(System.Windows.Controls.Button button)
+    {
+        button.Width = 32;
+        button.Height = 32;
+        button.MinWidth = 32;
+        button.MinHeight = 32;
     }
 }
 

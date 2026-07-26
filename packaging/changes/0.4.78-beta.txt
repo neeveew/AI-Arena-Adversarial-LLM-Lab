@@ -1,0 +1,3 @@
+AI Arena 0.4.78-beta
+
+- Reorder the right-rail Arena Controls into a clearer 3-per-row layout: Auto Chat / 1 Turn / Reset on the first row, Pause / Narrate / News on the second, and Speak on the third.

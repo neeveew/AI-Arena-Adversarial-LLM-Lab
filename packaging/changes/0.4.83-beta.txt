@@ -1,0 +1,2 @@
+Agent workspace:
+- Isolated coding Agent roles from Arena participant/scenario roles by using Agent-owned planner/reviewer/builder IDs and the shared provider model for Agent calls.

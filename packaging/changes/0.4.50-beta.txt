@@ -1,0 +1,15 @@
+# AI Arena 0.4.50-beta
+
+- Allowed Agent Approve All to be armed while the Agent is already thinking, so users can opt into session autonomy after sending a task.
+- Added a final pending-preview autonomy check at the end of Agent chat turns so mid-run Approve All toggles run the next staged command automatically.
+- Allowed Auto Continue to be armed during an active Agent model turn while preserving command-running locks.
+- Clarified the Approve All on-state label as "Approve All: On" with a tooltip that explains how to turn it off.
+- Kept workspace validation authoritative under more autonomous sessions; blocked previews still stop instead of auto-running.
+- Added generated artifact suggestions after file receipts identify likely Node, .NET, Python, Rust, Go, or static web outputs.
+- Detected nested generated apps such as TinyApp/package.json, PyApp/pyproject.toml, Crate/Cargo.toml, and GoApp/go.mod.
+- Suggested scoped preview or verification commands for nested apps, including npm --prefix, python -m pytest .\App, cargo test --manifest-path, and go test ./App/....
+- Added an Artifact row to Agent Build Evidence so likely generated outputs are visible beside command and file state.
+- Threaded artifact suggestions into the compact work summary, Copy Brief handoff, and Stage Verify prompt.
+- Cleared stale artifact suggestions when the Agent workspace becomes invalid or changes.
+- Expanded Agent tests for nested artifact inference, preview-valid suggested commands, deleted-only receipts, Stage Verify artifact handoff, and mid-run Approve All arming.
+- Updated README, user guide, Windows app notes, decomposition map, research notes, and release metadata for the Agent autonomy and artifact workflow.

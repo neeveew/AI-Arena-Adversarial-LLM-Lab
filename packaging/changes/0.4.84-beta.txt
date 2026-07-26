@@ -1,0 +1,2 @@
+Agent workspace:
+- Clarified the command autonomy toggle: manual mode now reads "Approval" and armed automation reads "Full Access" instead of showing an ambiguous "Full Access: On" state.

@@ -1,0 +1,219 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Semantic surfaces provide stable information chunks without forcing layout. -->
+    <Style x:Key="Arena.Surface.Panel" TargetType="{x:Type Border}">
+        <Setter Property="Background" Value="{DynamicResource PanelBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Large}" />
+        <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Panel}" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+    </Style>
+
+    <Style x:Key="Arena.Surface.Card" TargetType="{x:Type Border}">
+        <Setter Property="Background" Value="{DynamicResource CardBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Medium}" />
+        <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Card}" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+    </Style>
+
+    <Style x:Key="Arena.Surface.Inset" TargetType="{x:Type Border}">
+        <Setter Property="Background" Value="{DynamicResource InputBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Medium}" />
+        <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Card}" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+    </Style>
+
+    <Style x:Key="Arena.Surface.Selection" TargetType="{x:Type Border}">
+        <Setter Property="Background" Value="{DynamicResource NavActiveBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
+        <Setter Property="BorderThickness" Value="2" />
+        <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Medium}" />
+        <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Card}" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+    </Style>
+
+    <Style x:Key="Arena.Text.Display" TargetType="{x:Type TextBlock}">
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.DisplayFontFamily}" />
+        <Setter Property="FontSize" Value="{DynamicResource Arena.Type.DisplaySize}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LineHeight" Value="28" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+
+    <Style x:Key="Arena.Text.Title" TargetType="{x:Type TextBlock}">
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.DisplayFontFamily}" />
+        <Setter Property="FontSize" Value="{DynamicResource Arena.Type.TitleSize}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LineHeight" Value="22" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+
+    <Style x:Key="Arena.Text.Heading" TargetType="{x:Type TextBlock}">
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
+        <Setter Property="FontSize" Value="{DynamicResource Arena.Type.HeadingSize}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LineHeight" Value="19" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <Style x:Key="Arena.Text.Body" TargetType="{x:Type TextBlock}">
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
+        <Setter Property="FontSize" Value="{DynamicResource Arena.Type.BodySize}" />
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="LineHeight" Value="18" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <Style x:Key="Arena.Text.Secondary"
+           TargetType="{x:Type TextBlock}"
+           BasedOn="{StaticResource Arena.Text.Body}">
+        <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+    </Style>
+
+    <Style x:Key="Arena.Text.Label" TargetType="{x:Type TextBlock}">
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
+        <Setter Property="FontSize" Value="{DynamicResource Arena.Type.LabelSize}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LineHeight" Value="17" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+
+    <Style x:Key="Arena.Text.Caption" TargetType="{x:Type TextBlock}">
+        <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
+        <Setter Property="FontSize" Value="{DynamicResource Arena.Type.CaptionSize}" />
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="LineHeight" Value="15.5" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <Style x:Key="Arena.Separator" TargetType="{x:Type Separator}">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Margin" Value="0,8" />
+        <Setter Property="Background" Value="{DynamicResource DisabledBorderBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type Separator}">
+                    <Border Height="1"
+                            Background="{TemplateBinding Background}"
+                            SnapsToDevicePixels="True" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A motion-free disclosure section for secondary and advanced controls. -->
+    <Style x:Key="Arena.Expander.Section" TargetType="{x:Type Expander}">
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
+        <Setter Property="FontSize" Value="{DynamicResource Arena.Type.BodySize}" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type Expander}">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{DynamicResource Arena.Radius.Medium}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <ToggleButton x:Name="HeaderToggle"
+                                          MinHeight="{DynamicResource Arena.Target.Minimum}"
+                                          Padding="10,6"
+                                          HorizontalContentAlignment="Stretch"
+                                          VerticalContentAlignment="Center"
+                                          Background="Transparent"
+                                          BorderThickness="0"
+                                          Content="{TemplateBinding Header}"
+                                          ContentStringFormat="{TemplateBinding HeaderStringFormat}"
+                                          ContentTemplate="{TemplateBinding HeaderTemplate}"
+                                          FocusVisualStyle="{StaticResource Arena.FocusVisual}"
+                                          Foreground="{TemplateBinding Foreground}"
+                                          IsChecked="{Binding IsExpanded, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="{x:Type ToggleButton}">
+                                        <Border x:Name="HeaderChrome"
+                                                Background="{TemplateBinding Background}"
+                                                CornerRadius="{DynamicResource Arena.Radius.Medium}">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="30" />
+                                                </Grid.ColumnDefinitions>
+                                                <ContentPresenter Margin="{TemplateBinding Padding}"
+                                                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                                  RecognizesAccessKey="True" />
+                                                <Path x:Name="Chevron"
+                                                      Grid.Column="1"
+                                                      Width="6"
+                                                      Height="10"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center"
+                                                      Data="M 0,0 L 5,5 L 0,10"
+                                                      Stroke="{TemplateBinding Foreground}"
+                                                      StrokeThickness="1.7"
+                                                      StrokeStartLineCap="Round"
+                                                      StrokeEndLineCap="Round" />
+                                            </Grid>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="HeaderChrome" Property="Background" Value="{DynamicResource NavHoverBrush}" />
+                                            </Trigger>
+                                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                                <Setter TargetName="HeaderChrome" Property="Background" Value="{DynamicResource NavActiveBrush}" />
+                                            </Trigger>
+                                            <Trigger Property="IsChecked" Value="True">
+                                                <Setter TargetName="HeaderChrome" Property="Background" Value="{DynamicResource NavActiveBrush}" />
+                                                <Setter TargetName="Chevron" Property="Data" Value="M 0,0 L 5,5 L 10,0" />
+                                                <Setter TargetName="Chevron" Property="Width" Value="10" />
+                                                <Setter TargetName="Chevron" Property="Height" Value="6" />
+                                            </Trigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter x:Name="ExpandedContent"
+                                              Grid.Row="1"
+                                              Margin="12,2,12,12"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              ContentSource="Content"
+                                              Visibility="Collapsed" />
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsExpanded" Value="True">
+                            <Setter TargetName="ExpandedContent" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

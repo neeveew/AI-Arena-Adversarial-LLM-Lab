@@ -1,0 +1,14 @@
+# AI Arena 0.4.49-beta
+
+- Hardened Agent command preview boundaries for scaffold and generator commands.
+- Blocked dotnet scaffold outputs above the workspace, including `--output=..\Outside` syntax.
+- Blocked npm, pnpm, yarn, npx, cargo, Angular CLI, and git clone generator targets above the workspace.
+- Expanded parent-path option blocking for out-dir, output-dir, output-path, directory, destination, target, path, working-directory, prefix, cwd, project, and git -C options.
+- Added forward-slash Windows absolute path detection for commands that reference `C:/outside/path`.
+- Preserved workspace-relative scaffold targets such as `dotnet new --output .\TinyApp` and `npm create vite@latest TinyApp`.
+- Added an Auto Continue duplicate-command brake before session auto-approval runs a repeated follow-up command.
+- Added an Auto Continue no-change loop brake after two consecutive successful no-change app-work commands.
+- Loop guards now pause Auto Continue, disable session auto-approval, leave staged duplicate commands for manual review, and surface the reason in status and Build Evidence.
+- Reset no-change loop tracking when Auto Continue is enabled, paused, cleared, cancelled, or the workspace changes.
+- Added deterministic WPF tests for scaffold escape blocking, allowed workspace-relative scaffold targets, absolute path variants, duplicate loop pauses, and repeated no-change loop pauses.
+- Updated README, user guide, Windows app notes, decomposition map, and agentic research notes for safer Agent autonomy.

@@ -1,0 +1,5 @@
+AI Arena 0.4.68-beta
+
+- Fix a settings-wipe regression introduced in 0.4.64: a settings checkbox event fired during window initialization and saved default settings over the real file on every launch, resetting debug controls, the Agent workspace path, the rescue model, the persisted Agent conversation, and other preferences.
+- Debug controls now persist across app restarts as intended.
+- Move the "Allow debug controls" toggle from Settings > Visuals to Settings > Help / About.

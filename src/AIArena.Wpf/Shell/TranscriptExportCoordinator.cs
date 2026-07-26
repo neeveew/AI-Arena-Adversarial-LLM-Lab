@@ -38,6 +38,12 @@ internal sealed class TranscriptExportCoordinator
         this.setArenaRunStatus = setArenaRunStatus;
     }
 
+    public void RefreshExportScopeStatus()
+    {
+        var state = ExportScopeState(renderedMessages(), filterMessages);
+        SetExportStatus(state.Label, state.ToolTip);
+    }
+
     public void CopyMessage(TranscriptMessage message)
     {
         if (isArenaBusy())
@@ -45,15 +51,13 @@ internal sealed class TranscriptExportCoordinator
             return;
         }
 
-        try
+        if (ShellClipboard.TrySetText(message.Text))
         {
-            Clipboard.SetText(message.Text);
             SetRunStatus($"Copied turn {message.Turn}.");
+            return;
         }
-        catch (Exception ex)
-        {
-            SetRunStatus($"Copy failed: {ex.Message}");
-        }
+
+        SetRunStatus("Copy failed: clipboard is unavailable.");
     }
 
     public void CopyInternetUrl(TranscriptMessage message)
@@ -63,15 +67,13 @@ internal sealed class TranscriptExportCoordinator
             return;
         }
 
-        try
+        if (ShellClipboard.TrySetText(message.InternetUrl))
         {
-            Clipboard.SetText(message.InternetUrl);
             SetRunStatus($"Copied URL from turn {message.Turn}.");
+            return;
         }
-        catch (Exception ex)
-        {
-            SetRunStatus($"Copy URL failed: {ex.Message}");
-        }
+
+        SetRunStatus("Copy URL failed: clipboard is unavailable.");
     }
 
     public void ExportTranscript()
@@ -111,20 +113,18 @@ internal sealed class TranscriptExportCoordinator
             return;
         }
 
-        try
+        var markdown = BuildTranscriptExport(session.Id, messages);
+        if (ShellFileExport.TryWriteAllText(dialog.FileName, markdown, out var exportError))
         {
-            var markdown = BuildTranscriptExport(session.Id, messages);
-            File.WriteAllText(dialog.FileName, markdown);
             var fileName = Path.GetFileName(dialog.FileName);
-            var scope = visibleMessages.Length > 0 ? "visible" : "all";
+            var scope = ExportScopeDescription(allMessages.Count, visibleMessages.Length);
             SetRunStatus($"Exported {messages.Length} {scope} transcript message(s) to {fileName}.");
             SetExportStatus($"Exported {messages.Length} message(s)", dialog.FileName);
+            return;
         }
-        catch (Exception ex)
-        {
-            SetRunStatus($"Export failed: {ex.Message}");
-            SetExportStatus("Export failed", $"Export failed: {ex.Message}");
-        }
+
+        SetRunStatus($"Export failed: {exportError}");
+        SetExportStatus("Export failed", $"Export failed: {exportError}");
     }
 
     private void SetRunStatus(string status)
@@ -139,7 +139,58 @@ internal sealed class TranscriptExportCoordinator
         statusText.ToolTip = tooltip;
     }
 
-    private static string BuildTranscriptExport(string sessionId, IReadOnlyList<TranscriptMessage> messages)
+    internal static ExportScopePreview ExportScopeState(
+        IReadOnlyList<TranscriptMessage> allMessages,
+        Func<IEnumerable<TranscriptMessage>, IEnumerable<TranscriptMessage>> filterMessages)
+    {
+        if (allMessages.Count == 0)
+        {
+            return new ExportScopePreview("", "No transcript messages to export yet.");
+        }
+
+        var visibleMessages = filterMessages(allMessages).ToArray();
+        if (visibleMessages.Length == 0)
+        {
+            return new ExportScopePreview(
+                $"Export: all {allMessages.Count}",
+                $"No filtered transcript messages are visible, so export will include all {allMessages.Count} transcript message(s).");
+        }
+
+        if (visibleMessages.Length == allMessages.Count)
+        {
+            return new ExportScopePreview(
+                $"Export: all {allMessages.Count}",
+                $"Export will include all {allMessages.Count} transcript message(s).");
+        }
+
+        var turns = visibleMessages
+            .Select(message => message.Turn)
+            .Where(turn => turn > 0)
+            .Distinct()
+            .OrderBy(turn => turn)
+            .ToArray();
+        var turnScope = turns.Length switch
+        {
+            0 => "filtered",
+            1 => $"turn {turns[0]}",
+            _ => $"turns {turns[0]}-{turns[^1]}"
+        };
+        return new ExportScopePreview(
+            $"Export: {visibleMessages.Length}/{allMessages.Count}",
+            $"Export will include {visibleMessages.Length} visible transcript message(s) from {turnScope}, not the full transcript.");
+    }
+
+    internal static string ExportScopeDescription(int allCount, int visibleCount)
+    {
+        if (visibleCount <= 0)
+        {
+            return "all";
+        }
+
+        return visibleCount == allCount ? "all" : "visible";
+    }
+
+    internal static string BuildTranscriptExport(string sessionId, IReadOnlyList<TranscriptMessage> messages)
     {
         var builder = new StringBuilder();
         builder.AppendLine($"# AI Arena Transcript - {sessionId}");
@@ -211,4 +262,6 @@ internal sealed class TranscriptExportCoordinator
             ? $"{value / 1000.0:0.#}k"
             : value.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
+
+    internal sealed record ExportScopePreview(string Label, string ToolTip);
 }

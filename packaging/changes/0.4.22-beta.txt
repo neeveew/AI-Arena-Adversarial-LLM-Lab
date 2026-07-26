@@ -1,0 +1,14 @@
+AI Arena 0.4.22-beta
+
+- Added Red Team mode to AI Collaborate so Alpha proposes, Beta attacks, Gamma hardens, and Narrator synthesizes.
+- Added Red Team run-plan summaries in the top metrics, context receipt, and preflight model requirements.
+- Added Run Review packets below each AI Collaborate final answer with verdict, trace health, issue count, tokens, latency, model mix, payload size, outcome, and next action.
+- Added Copy for Run Review packets.
+- Added Use for Run Review packets, staging a follow-up prompt from the review without losing the current draft.
+- Regenerated Run Review packets when reopening saved AI Collaborate chats.
+- Added Run Review text to Collaborate search indexing.
+- Added prompt-budget warnings when added context will be truncated before prompting.
+- Expanded Context Receipt with a run-review preview line.
+- Changed partial role failures to leave AI Collaborate in a review-needed status even when the Narrator returns a final answer.
+- Fixed Collaborate history normalization so empty exchanges are filtered before the 24-chat cap.
+- Added regression coverage for Red Team planning, run reviews, context truncation warnings, receipt review text, run-review search, and history-cap filtering.

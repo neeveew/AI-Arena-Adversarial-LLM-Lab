@@ -1,0 +1,13 @@
+AI Arena 0.4.38-beta
+AI Collaborate recent-run organizer release.
+
+- Added quick filter chips to the AI Collaborate Recent Collaborations rail for All, Ready, Review, No trace, Memory, and Compare-ready saved chats.
+- Added saved-run facet summaries that show ready, needs-review, no-trace, memory, and compare-ready counts above recent rows.
+- Added tokenized recent search lenses including #ready, #review, #answer, #notrace, #memory, #compare, #fast, #team, #critique, and #redteam.
+- Added search-token aliases such as #needs-review, #needs-answer, #no-trace, #red-team, #issues, and #errors.
+- Added compare-aware filtering that only shows saved chats comparable against the currently open collaboration.
+- Added inferred saved-run mode labels for Fast, Team Draft, Critique, Red Team, No trace, and Saved Run conversations.
+- Added inferred mode labels to recent row metadata so the left rail shows run type beside turn, step, token, memory, and issue counts.
+- Expanded recent-row tooltips and accessibility names with inferred mode, review state, model mix, and compare availability.
+- Expanded copied recent summaries with mode, review state, and model mix before the existing run metadata and latest review.
+- Added deterministic tests for filter parsing, saved-run facets, mode inference, tokenized search, compare filtering, visible quick chips, and copied summary metadata.

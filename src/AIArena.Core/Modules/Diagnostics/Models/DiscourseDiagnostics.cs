@@ -27,4 +27,6 @@ public sealed record FrictionDiagnostics(
     string EvidencePressureLabel,
     int NarrativeHeatScore,
     string NarrativeHeatLabel,
-    IReadOnlyDictionary<string, MetricDiagnostic> Details);
+    IReadOnlyDictionary<string, MetricDiagnostic> Details,
+    int SourceConflictCount = 0,
+    string SourceConflictLabel = "None");

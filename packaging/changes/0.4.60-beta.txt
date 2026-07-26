@@ -1,0 +1,6 @@
+AI Arena 0.4.60-beta
+
+- Allow preview validation to accept quoted absolute paths that are still inside the selected workspace, including paths with spaces.
+- Preserve PowerShell command fences that contain markdown code fences inside here-string content such as generated README files.
+- Normalize common local-model PowerShell mistakes before staging, including echo -n redirects and comma-separated Get-ChildItem -Filter listings.
+- Add regression coverage for the observed Builder-only "kindof working" app-creation failures.

@@ -1,0 +1,308 @@
+<Window x:Class="AIArena.Wpf.AiChoicePromptDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AI Choice"
+        Icon="/Assets/ai-arena-icon.ico"
+        Width="560"
+        Height="400"
+        MinWidth="320"
+        MinHeight="300"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        ShowInTaskbar="False"
+        Background="Transparent"
+        AllowsTransparency="True"
+        SnapsToDevicePixels="True"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType">
+    <Window.Resources>
+        <!-- Dialog actions share the Arena button system with a taller dialog hit target. -->
+        <Style x:Key="DialogActionButtonStyle"
+               TargetType="{x:Type Button}"
+               BasedOn="{StaticResource Arena.Button.Base}">
+            <Setter Property="MinHeight" Value="44" />
+            <Setter Property="MinWidth" Value="96" />
+            <Setter Property="Padding" Value="14,4" />
+            <Setter Property="FontSize" Value="13" />
+        </Style>
+
+        <Style x:Key="DialogCloseButtonStyle"
+               TargetType="{x:Type Button}"
+               BasedOn="{StaticResource DialogActionButtonStyle}">
+            <Setter Property="Width" Value="40" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="MinWidth" Value="32" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+
+        <Style x:Key="DialogPromptEditorStyle" TargetType="{x:Type TextBox}">
+            <Setter Property="Padding" Value="11,8" />
+            <Setter Property="Background" Value="{DynamicResource PanelBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="VerticalContentAlignment" Value="Top" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type TextBox}">
+                        <Grid SnapsToDevicePixels="True">
+                            <Border x:Name="EditorSurface"
+                                    Padding="{TemplateBinding Padding}"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="8">
+                                <Grid>
+                                    <ScrollViewer x:Name="PART_ContentHost"
+                                                  HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}"
+                                                  VerticalScrollBarVisibility="{TemplateBinding VerticalScrollBarVisibility}" />
+                                    <TextBlock x:Name="Watermark"
+                                               Margin="2,0,10,0"
+                                               HorizontalAlignment="Left"
+                                               VerticalAlignment="Top"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               IsHitTestVisible="False"
+                                               Opacity="0.72"
+                                               Text="{TemplateBinding Tag}"
+                                               TextWrapping="Wrap"
+                                               Visibility="Collapsed" />
+                                </Grid>
+                            </Border>
+                            <Border x:Name="EditorFocusRing"
+                                    BorderBrush="{DynamicResource NarratorAccentBrush}"
+                                    BorderThickness="2"
+                                    CornerRadius="9"
+                                    IsHitTestVisible="False"
+                                    Opacity="0" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Text" Value="">
+                                <Setter TargetName="Watermark" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="EditorSurface" Property="BorderBrush" Value="{DynamicResource NarratorAccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="EditorFocusRing" Property="Opacity" Value="1" />
+                            </Trigger>
+                            <Trigger Property="Validation.HasError" Value="True">
+                                <Setter TargetName="EditorFocusRing" Property="BorderBrush" Value="{DynamicResource DangerBorderBrush}" />
+                                <Setter TargetName="EditorFocusRing" Property="Opacity" Value="1" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
+                                <Setter TargetName="EditorSurface" Property="Background" Value="{DynamicResource DisabledBrush}" />
+                                <Setter TargetName="EditorSurface" Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border x:Name="DialogShell"
+            Background="{DynamicResource PanelBrush}"
+            BorderBrush="{DynamicResource NarratorAccentBrush}"
+            BorderThickness="1"
+            CornerRadius="12"
+            SnapsToDevicePixels="True"
+            PreviewMouseLeftButtonDown="DialogShell_PreviewMouseLeftButtonDown">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="24"
+                              Color="#000000"
+                              Direction="270"
+                              Opacity="0.48"
+                              ShadowDepth="7" />
+        </Border.Effect>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Border x:Name="HeaderBar"
+                    Padding="14,10"
+                    Background="{DynamicResource InputBrush}"
+                    CornerRadius="11,11,0,0">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border x:Name="ChoiceBadge"
+                            Width="32"
+                            Height="32"
+                            Margin="0,0,10,0"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Center"
+                            Background="{DynamicResource PanelBrush}"
+                            BorderBrush="{DynamicResource NarratorAccentBrush}"
+                            BorderThickness="1"
+                            CornerRadius="20">
+                        <TextBlock x:Name="ChoiceGlyph"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   AutomationProperties.Name="AI generated match"
+                                   FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                                   FontSize="16"
+                                   Text="&#xE945;" />
+                    </Border>
+
+                    <StackPanel Grid.Column="1"
+                                VerticalAlignment="Center">
+                        <TextBlock x:Name="ChoiceLabelText"
+                                   Margin="0,0,0,3"
+                                   FontFamily="Segoe UI Variable Text, Segoe UI"
+                                   FontSize="10"
+                                   FontWeight="Bold"
+                                   Text="MATCH SETUP" />
+                        <TextBlock x:Name="TitleText"
+                                   FontFamily="Segoe UI Variable Display, Segoe UI"
+                                   FontSize="19"
+                                   FontWeight="SemiBold"
+                                   Text="AI Choice"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <Button x:Name="CloseButton"
+                            Grid.Column="2"
+                            Margin="10,0,0,0"
+                            Style="{StaticResource DialogCloseButtonStyle}"
+                            Click="CancelButton_Click"
+                            AutomationProperties.Name="Close AI Choice prompt"
+                            AutomationProperties.HelpText="Closes the prompt without generating a match."
+                            ToolTip="Close AI Choice prompt" />
+                </Grid>
+            </Border>
+
+            <ScrollViewer Grid.Row="1"
+                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalContentAlignment="Stretch"
+                          VerticalContentAlignment="Top"
+                          Focusable="False">
+                <Border x:Name="ContentPanel"
+                        Margin="14,10"
+                        Padding="12,10"
+                        Background="{DynamicResource InputBrush}"
+                        BorderBrush="{DynamicResource ControlBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="10">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="PromptLabelText"
+                                       VerticalAlignment="Center"
+                                       FontFamily="Segoe UI Variable Text, Segoe UI"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       Text="Topic direction"
+                                       TextWrapping="Wrap" />
+                            <TextBlock x:Name="PromptCountText"
+                                       Grid.Column="1"
+                                       Margin="16,0,0,0"
+                                       VerticalAlignment="Center"
+                                       AutomationProperties.Name="Topic character count"
+                                       FontFamily="Segoe UI Variable Text, Segoe UI"
+                                       FontSize="11"
+                                       Text="{Binding Text.Length, ElementName=PromptText, StringFormat={}{0} / 500}" />
+                        </Grid>
+
+                        <TextBox x:Name="PromptText"
+                                 Grid.Row="1"
+                                 MinHeight="108"
+                                 MaxHeight="190"
+                                 Margin="0,7,0,0"
+                                 Style="{StaticResource DialogPromptEditorStyle}"
+                                 MaxLength="500"
+                                 AcceptsReturn="True"
+                                 HorizontalScrollBarVisibility="Disabled"
+                                 VerticalScrollBarVisibility="Auto"
+                                 TextWrapping="Wrap"
+                                 Tag="Optional — leave blank and AI Choice will pick the topic."
+                                 PreviewKeyDown="PromptText_PreviewKeyDown"
+                                 AutomationProperties.Name="AI Choice topic prompt"
+                                 AutomationProperties.HelpText="Optional topic direction for AI Choice generation. Leave blank to let the model choose. Press Control+Enter to generate."
+                                 AutomationProperties.LabeledBy="{Binding ElementName=PromptLabelText}"
+                                 ToolTip="Optional topic direction for AI Choice generation. Leave blank to let the model choose." />
+
+                        <StackPanel Grid.Row="2"
+                                    Margin="0,8,0,0">
+                            <TextBlock x:Name="PromptHintText"
+                                       FontFamily="Segoe UI Variable Text, Segoe UI"
+                                       FontSize="11"
+                                       Text="The current transcript is preserved."
+                                       TextWrapping="Wrap" />
+                            <TextBlock x:Name="PromptShortcutText"
+                                       Margin="0,4,0,0"
+                                       FontFamily="Segoe UI Variable Text, Segoe UI"
+                                       FontSize="11"
+                                       Text="Ctrl+Enter generates · Esc cancels"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+            </ScrollViewer>
+
+            <Border x:Name="FooterBar"
+                    Grid.Row="2"
+                    Padding="14,10"
+                    Background="{DynamicResource InputBrush}"
+                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                    BorderThickness="0,1,0,0"
+                    CornerRadius="0,0,11,11">
+                <Grid x:Name="ChoiceActionHost">
+                    <Grid HorizontalAlignment="Right"
+                          Width="{Binding ActualWidth, ElementName=ChoiceActionHost}"
+                          MaxWidth="340">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="CancelButton"
+                                Height="36"
+                                Style="{StaticResource DialogActionButtonStyle}"
+                                Content="Cancel"
+                                Click="CancelButton_Click"
+                                IsCancel="True"
+                                AutomationProperties.Name="Cancel AI Choice prompt"
+                                AutomationProperties.HelpText="Closes the prompt without generating a match."
+                                ToolTip="Cancel AI Choice" />
+                        <Button x:Name="GenerateButton"
+                                Grid.Column="2"
+                                Height="36"
+                                Style="{StaticResource DialogActionButtonStyle}"
+                                Content="Generate"
+                                Click="GenerateButton_Click"
+                                IsDefault="True"
+                                AutomationProperties.Name="Generate AI Choice match"
+                                AutomationProperties.HelpText="Generates a new AI Choice match from the optional topic prompt."
+                                ToolTip="Generate AI Choice match (Control+Enter)" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

@@ -1,0 +1,9 @@
+AI Arena 0.4.98-beta
+
+- Added a visible workspace-bound Agent runbook with stable plan, review, build, approval, execute, and verify step IDs.
+- Persisted run objectives, owners, dependencies, status, evidence, and bounded checkpoints across restarts.
+- Restored interrupted Running steps as Blocked with an audit checkpoint instead of silently rerunning them.
+- Connected command preview, approval/rejection, execution, file receipts, verification, cancellation, and consultation completion to the same runbook state.
+- Added `Get-AIArenaRunbook`, `Resume-AIArenaRunbook`, and `Add-AIArenaRunbookCheckpoint` PowerShell commands.
+- Included Agent runbook ID/status in every authenticated control-plane response state summary.
+- Kept resume reviewable by staging an editable prompt for the first incomplete step.

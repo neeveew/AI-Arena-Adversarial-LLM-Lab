@@ -1,0 +1,14 @@
+AI Arena 0.4.18-beta
+
+- Added Match Setup readiness feedback for topic/global/provider/agent/matrix issues.
+- Added a live generation recipe summary with clearer Random Seed, AI Choice, and Wild Seed tooltips.
+- Added six new generation presets: Model duel, Red-team gauntlet, Tool reliability trial, Governance board, Weird science panel, and Product trust room.
+- Added Benchmark duel, Governance board, and Tool ops role packs for more structured arena setups.
+- Added relationship matrix draft patterns for round-robin challenge, mutual rivals, evidence ladder, support chain, de-escalation ring, and devil's triangle.
+- Added Fact-check, Amplify, De-escalate, and Devil's advocate relationship stances and wired them into turn prompts.
+- Added Setup Profile and Run Constraints preview cards, and filtered inactive agents out of cast preview and constraint lock counts.
+- Applied generated narrator briefs to narrator personas so generation history details affect runtime behavior.
+- Fixed replay-to-new-run cleanup so all agent statuses and private notes reset even when agents are locked.
+- Hardened random style selection against a rare hash overflow edge case.
+- Expanded deterministic scenario and Wild Seed pools with blind battle, checkpoint, trace, tool, governance, and model-routing ideas.
+- Extended core and WPF smoke tests for the new presets, role packs, matrix patterns, prompt instructions, readiness copy, and preview summaries.

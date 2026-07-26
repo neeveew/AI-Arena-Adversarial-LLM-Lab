@@ -1,0 +1,13 @@
+AI Arena 0.4.20-beta
+
+- Prioritized AI World with richer 3D arena scenery: central console geometry, perimeter rails, corner beacons, extra fill/rim lighting, and denser stage detail.
+- Made non-speaking AI World agents turn toward the active speaker, making multi-agent attention and turn-taking readable in the 3D arena.
+- Strengthened active-speaker focus with an expanded floor ring and brighter speaker cue geometry.
+- Added AI World status text that names the current speaker and summarizes how many agents are watching.
+- Smoothed same-session AI World camera handoffs so live speaker changes ease instead of snapping, while first load, empty world, and session changes still reset cleanly.
+- Added AI World debug/test coverage for scenery density, listener gaze, stronger speaker focus, status text, and camera handoff behavior.
+- Added a Recent generated-match filter for All, Random, AI Choice, and Wild Seed setup history.
+- Added Copy Diff for generated matches, producing a current-vs-generated setup review with recipe, cast, lock, and change flags.
+- Added Rubric copy for generated matches, producing an eval-style scorecard adapted to role pack, style, pressure, and absurdity.
+- Expanded copied setup specs with review helpers: diff summaries and rubric checks.
+- Updated Match Setup help, user guide, and research notes for filterable Recent history, setup review packets, AI World attention guidance, and 3D arena polish.

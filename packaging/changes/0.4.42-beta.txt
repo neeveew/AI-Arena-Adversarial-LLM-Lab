@@ -1,0 +1,16 @@
+AI Arena 0.4.42-beta
+Agent phase strip and command rail action release.
+
+- Added a Work Loop card to the Agent right rail.
+- Added Planner, Reviewer, and Builder phase rows with Pending, Running, Done, and Error states.
+- Added phase summary updates for prompt start, model-role progress, staged commands, no-command warnings, completion, and cancellation.
+- Added automation metadata for Agent phase rows.
+- Added Copy action for the staged command proposal.
+- Added Clear action for the staged command proposal and preview state.
+- Added Use Held action for Builder proposals that arrive while another command occupies the approval rail.
+- Stored held Builder command proposals for later staging instead of only summarizing them.
+- Added held-proposal enablement logic so Use Held is disabled until a held command exists and while commands are running.
+- Added center action cards when held Builder proposals are staged.
+- Updated command-control enablement so Copy, Clear, and Use Held track running command state.
+- Updated README, user guide, Windows app notes, decomposition map, and research notes for the Work Loop and command rail actions.
+- Added deterministic tests for phase summary reporting, phase row host visibility, Copy/Clear/Use Held control contracts, and staged-command phase reporting.

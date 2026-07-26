@@ -1,0 +1,15 @@
+AI Arena 0.4.29-beta
+
+- Added Recent Collaboration rail summaries that report saved count, visible search results, and capped recent-list state.
+- Added compact saved-run metadata to Recent Collaboration rows, including turns, trace steps, tokens, memory notes, and issue counts.
+- Added an Open now marker so the currently loaded collaboration is visible in the saved-run rail.
+- Added a Needs review marker for saved collaborations with failed trace steps.
+- Added richer Recent Collaboration tooltips with updated time, run snippet, and right-click action guidance.
+- Added accessibility names, help text, and item-status metadata to Recent Collaboration rows.
+- Added a right-click Open action to reload saved collaborations from the action menu.
+- Added a right-click Fork action that restores saved exchanges as context while saving the next reply as a new chat.
+- Added a right-click Repeat prompt action that stages the latest prompt in a clean draft while preserving memory notes.
+- Added Copy summary for concise saved-run handoff notes.
+- Added Copy markdown for fuller saved-run review and archive handoff.
+- Kept Delete in the expanded Recent Collaboration action menu with the existing local-history removal behavior.
+- Added Recent Collaboration tests for rail summaries, metadata text, tooltips, automation text, fork behavior, repeat-prompt staging, and history-store preload paths.

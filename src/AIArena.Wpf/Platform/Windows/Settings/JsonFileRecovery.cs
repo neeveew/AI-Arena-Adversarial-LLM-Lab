@@ -4,6 +4,31 @@ namespace AIArena.Wpf.Services;
 
 internal static class JsonFileRecovery
 {
+    public static void WriteTextReplacing(string path, string contents)
+    {
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var tempPath = TemporarySiblingPath(path);
+        try
+        {
+            File.WriteAllText(tempPath, contents);
+            if (File.Exists(path))
+            {
+                File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+            }
+
+            File.Move(tempPath, path, overwrite: true);
+        }
+        finally
+        {
+            TryDeleteTempFile(tempPath);
+        }
+    }
+
     public static string BackupCorruptFile(string path, string label, Exception error)
     {
         try
@@ -34,5 +59,29 @@ internal static class JsonFileRecovery
         return File.Exists(backupPath)
             ? Path.Combine(directory, $"{fileName}.corrupt.{stamp}.{Guid.NewGuid():N}{extension}")
             : backupPath;
+    }
+
+    private static string TemporarySiblingPath(string path)
+    {
+        var directory = Path.GetDirectoryName(path) ?? "";
+        var fileName = Path.GetFileName(path);
+        return Path.Combine(directory, $".{fileName}.{Guid.NewGuid():N}.tmp");
+    }
+
+    private static void TryDeleteTempFile(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return;
+            }
+
+            File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 }

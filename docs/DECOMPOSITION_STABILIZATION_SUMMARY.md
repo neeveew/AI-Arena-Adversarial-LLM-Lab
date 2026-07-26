@@ -8,7 +8,7 @@ This summary captures the MainWindow decomposition and stabilization checkpoint 
 
 - Flattened the native WPF/shared .NET source layout into the current `src` structure.
 - Removed obsolete planning docs and refreshed repository architecture docs.
-- Moved saved-state, session template, checkpoint, provider settings, provider reachability, scenario generation, transcript search/export/mutation/view, transcript list, app settings, arena operation, news panel, custom match summary, scenario seed inspector, and session overview workflows out of `MainWindow.xaml.cs`.
+- Moved saved-state, session template, checkpoint, provider settings, provider reachability, scenario generation, transcript search/export/mutation/view, transcript list, app settings, arena operation, internet workflow, custom match summary, scenario seed inspector, and session overview workflows out of `MainWindow.xaml.cs`.
 - Consolidated common shell card and brush helpers.
 - Moved Windows DWM/native chrome interop into `WindowChromeService` under `Platform/Windows/Theming`.
 - Added `docs/MAINWINDOW_DECOMPOSITION.md` as the ownership map for the WPF shell.
@@ -38,8 +38,8 @@ The WPF smoke tests now cover coordinator helper contracts for:
 - custom match summary fallback text
 - scenario seed inspector metadata
 - provider quick setup defaults
-- news panel summary counts
-- cross-coordinator render smoke state for offline provider, blank scenario, internet/news items, and retryable transcript turns
+- internet source summary counts
+- cross-coordinator render smoke state for offline provider, blank scenario, internet items, and retryable transcript turns
 
 ## Verification Used
 

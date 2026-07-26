@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -8,9 +8,9 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>AI Arena</AssemblyName>
     <Product>AI Arena</Product>
-    <Version>0.4.01-beta-2</Version>
-    <InformationalVersion>0.4.01-beta-2</InformationalVersion>
-    <FileVersion>0.4.1.2</FileVersion>
+    <Version>0.4.114-beta</Version>
+    <InformationalVersion>0.4.114-beta</InformationalVersion>
+    <FileVersion>0.4.114.0</FileVersion>
     <ApplicationIcon>Assets\ai-arena-icon.ico</ApplicationIcon>
   </PropertyGroup>
 
@@ -28,7 +28,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Assets\ai-arena-icon.ico" LogicalName="assets/ai-arena-icon.ico" />
+    <EmbeddedResource Include="Assets\ai-arena-guide-icon.png" LogicalName="assets/ai-arena-guide-icon.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="System.Management" Version="10.0.8" />
+    <PackageReference Include="System.Speech" Version="10.0.9" />
   </ItemGroup>
 
 </Project>

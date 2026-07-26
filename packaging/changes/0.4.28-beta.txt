@@ -1,0 +1,17 @@
+AI Arena 0.4.28-beta
+
+- Added a live top-rail export scope badge for AI Lab transcripts.
+- Show full transcript export counts when no filters are active.
+- Show visible/all message counts when transcript search or timeline filters narrow export scope.
+- Added export tooltip copy that names single-turn or turn-range filtered transcript scope.
+- Added an empty-filter fallback note so export clearly falls back to the full transcript instead of a blank file.
+- Refresh export scope status after transcript refreshes and filter changes.
+- Routed the top-rail export icon to AI Collaborate chat export when the Collaborate page is visible.
+- Added contextual export button tooltip, automation name, and help text for AI Collaborate.
+- Added AI Collaborate Markdown export for the current chat.
+- Included prompts and final answers in AI Collaborate exports.
+- Included Memory Notes in AI Collaborate exports.
+- Included generated Run Review packets in AI Collaborate exports.
+- Included Team Trace steps with role labels, model names, status, compact token counts, latency, errors, and step text.
+- Added WPF regression coverage for transcript export scope previews, Collaborate chat export markdown, and the context-aware export button route.
+- Updated the user guide and research log for the new export and review-handoff workflow.

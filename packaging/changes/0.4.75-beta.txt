@@ -1,0 +1,4 @@
+AI Arena 0.4.75-beta
+
+- Virtualize the AI Lab transcript: messages now render in a recycling virtualized list instead of building one live control per message in a stacked scroll view. Only the cards currently on screen exist as controls, keeping long sessions fluid and far lighter on memory. Pixel-smooth scrolling and follow-to-newest behavior are preserved.
+- Introduce a lightweight transcript row model (adjunct panels and card descriptors) as the seam between the message list and the proven card renderer, laying clean groundwork for further view-model work without a full rewrite.

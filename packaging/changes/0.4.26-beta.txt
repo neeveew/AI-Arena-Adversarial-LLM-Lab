@@ -1,0 +1,14 @@
+AI Arena 0.4.26-beta
+
+- Added a right-rail Approval Center that appears when model-requested internet approvals are pending.
+- Added a selectable pending-approval queue with turn, requester, tool, and query/URL labels.
+- Added approval detail risk chips for direct URLs, local search, open web, approval state, max results, duplicate requests, requester type, and missing reasons.
+- Added deterministic policy verdict text so each pending request explains whether it is blocked, human-gated, trusted-scope, or auto-allowable.
+- Added an Always action that approves the selected request and turns off future internet approval prompts for the current session.
+- Added audit packet copy for pending approvals with request hash, policy verdict, requester, reason, source policy, max results, timestamp, and risk summary.
+- Preserved selected approval detail across snapshot refreshes when the same pending request remains unresolved.
+- Allowed Approval Center decisions during Auto Chat approval pauses while keeping normal busy-state protections.
+- Logged approval decision source for dialog, transcript-card, and approval-center approve/reject paths.
+- Blocked transcript retry while any internet approval is pending, matching one-turn and agent-turn behavior.
+- Bounded and wrapped Approval Center queue rows so long URLs do not push the AI Lab right rail sideways.
+- Added core and WPF tests for approval queue filtering, policy chips, audit packets, busy-state behavior, XAML contracts, and pending-approval retry blocking.

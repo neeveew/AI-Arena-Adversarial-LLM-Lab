@@ -6,8 +6,32 @@ using AIArena.Wpf.Services;
 
 namespace AIArena.Wpf;
 
+internal enum TranscriptDashboardTier
+{
+    Hidden,
+    Compact,
+    Medium,
+    Wide
+}
+
+internal readonly record struct TranscriptDashboardLayout(
+    TranscriptDashboardTier Tier,
+    bool ShowDiagnostics,
+    bool ShowTelemetry,
+    bool IsStacked,
+    int DiagnosticsColumns,
+    int TelemetryColumns,
+    double DiagnosticsMinWidth,
+    double TelemetryMinWidth)
+{
+    public bool ShowTopStrip => ShowDiagnostics || ShowTelemetry;
+}
+
 internal sealed class TranscriptViewCoordinator
 {
+    internal const double MediumDashboardMinWidth = 780;
+    internal const double WideDashboardMinWidth = 1480;
+
     private readonly WpfSettingsStore settingsStore;
     private readonly Func<WpfSettings> settings;
     private readonly Func<bool> isRenderingSnapshot;
@@ -18,12 +42,14 @@ internal sealed class TranscriptViewCoordinator
     private readonly CheckBox compactTranscriptCheckBox;
     private readonly CheckBox turnCompareCheckBox;
     private readonly CheckBox matchQualityTimelineCheckBox;
+    private readonly CheckBox battleReviewCheckBox;
     private readonly CheckBox memoryNotesCheckBox;
     private readonly CheckBox decisionCardCheckBox;
     private readonly CheckBox autoModeratorCheckBox;
     private readonly CheckBox debugControlsCheckBox;
     private readonly CheckBox styleFitCheckBox;
     private readonly CheckBox voiceDriftEnforcementCheckBox;
+    private readonly CheckBox transcriptInternetDetailsCheckBox;
     private readonly CheckBox followChatCheckBox;
     private readonly FrameworkElement debugMenuHost;
     private readonly Popup debugMenuPopup;
@@ -36,7 +62,9 @@ internal sealed class TranscriptViewCoordinator
     private readonly Button viewPresetReviewButton;
     private readonly FrameworkElement transcriptDashboardGrid;
     private readonly Border transcriptDiagnosticsHost;
+    private readonly UniformGrid transcriptDiagnosticsGrid;
     private readonly Border transcriptTelemetryHost;
+    private readonly UniformGrid transcriptTelemetryGrid;
     private readonly Border transcriptFiltersHost;
     private readonly Func<IReadOnlyList<TranscriptMessage>> renderedMessages;
     private readonly Func<ArenaViewSnapshot?> lastRenderedSnapshot;
@@ -48,7 +76,7 @@ internal sealed class TranscriptViewCoordinator
     private readonly Action<string> setLoadStatus;
     private readonly Action<string> setArenaRunStatus;
 
-    private string dashboardLayout = "";
+    private TranscriptDashboardLayout? dashboardLayout;
 
     public TranscriptViewCoordinator(
         WpfSettingsStore settingsStore,
@@ -61,12 +89,14 @@ internal sealed class TranscriptViewCoordinator
         CheckBox compactTranscriptCheckBox,
         CheckBox turnCompareCheckBox,
         CheckBox matchQualityTimelineCheckBox,
+        CheckBox battleReviewCheckBox,
         CheckBox memoryNotesCheckBox,
         CheckBox decisionCardCheckBox,
         CheckBox autoModeratorCheckBox,
         CheckBox debugControlsCheckBox,
         CheckBox styleFitCheckBox,
         CheckBox voiceDriftEnforcementCheckBox,
+        CheckBox transcriptInternetDetailsCheckBox,
         CheckBox followChatCheckBox,
         FrameworkElement debugMenuHost,
         Popup debugMenuPopup,
@@ -79,7 +109,9 @@ internal sealed class TranscriptViewCoordinator
         Button viewPresetReviewButton,
         FrameworkElement transcriptDashboardGrid,
         Border transcriptDiagnosticsHost,
+        UniformGrid transcriptDiagnosticsGrid,
         Border transcriptTelemetryHost,
+        UniformGrid transcriptTelemetryGrid,
         Border transcriptFiltersHost,
         Func<IReadOnlyList<TranscriptMessage>> renderedMessages,
         Func<ArenaViewSnapshot?> lastRenderedSnapshot,
@@ -101,12 +133,14 @@ internal sealed class TranscriptViewCoordinator
         this.compactTranscriptCheckBox = compactTranscriptCheckBox;
         this.turnCompareCheckBox = turnCompareCheckBox;
         this.matchQualityTimelineCheckBox = matchQualityTimelineCheckBox;
+        this.battleReviewCheckBox = battleReviewCheckBox;
         this.memoryNotesCheckBox = memoryNotesCheckBox;
         this.decisionCardCheckBox = decisionCardCheckBox;
         this.autoModeratorCheckBox = autoModeratorCheckBox;
         this.debugControlsCheckBox = debugControlsCheckBox;
         this.styleFitCheckBox = styleFitCheckBox;
         this.voiceDriftEnforcementCheckBox = voiceDriftEnforcementCheckBox;
+        this.transcriptInternetDetailsCheckBox = transcriptInternetDetailsCheckBox;
         this.followChatCheckBox = followChatCheckBox;
         this.debugMenuHost = debugMenuHost;
         this.debugMenuPopup = debugMenuPopup;
@@ -119,7 +153,9 @@ internal sealed class TranscriptViewCoordinator
         this.viewPresetReviewButton = viewPresetReviewButton;
         this.transcriptDashboardGrid = transcriptDashboardGrid;
         this.transcriptDiagnosticsHost = transcriptDiagnosticsHost;
+        this.transcriptDiagnosticsGrid = transcriptDiagnosticsGrid;
         this.transcriptTelemetryHost = transcriptTelemetryHost;
+        this.transcriptTelemetryGrid = transcriptTelemetryGrid;
         this.transcriptFiltersHost = transcriptFiltersHost;
         this.renderedMessages = renderedMessages;
         this.lastRenderedSnapshot = lastRenderedSnapshot;
@@ -144,12 +180,15 @@ internal sealed class TranscriptViewCoordinator
             compactTranscriptCheckBox.IsChecked = currentSettings.CompactTranscriptMode;
             turnCompareCheckBox.IsChecked = currentSettings.TurnCompareMode;
             matchQualityTimelineCheckBox.IsChecked = currentSettings.ShowMatchQualityTimeline;
+            battleReviewCheckBox.IsChecked = currentSettings.ShowBattleReview;
             memoryNotesCheckBox.IsChecked = currentSettings.ShowAgentMemoryNotes;
             decisionCardCheckBox.IsChecked = currentSettings.ShowDecisionCard;
             autoModeratorCheckBox.IsChecked = currentSettings.ShowAutoModerator;
             debugControlsCheckBox.IsChecked = currentSettings.AllowDebugControls;
             styleFitCheckBox.IsChecked = currentSettings.ShowStyleFit;
             voiceDriftEnforcementCheckBox.IsChecked = currentSettings.EnforceVoiceDrift;
+            transcriptInternetDetailsCheckBox.IsChecked = currentSettings.ShowTranscriptInternetDetails;
+            followChatCheckBox.IsChecked = currentSettings.FollowTranscript;
         }
         finally
         {
@@ -222,6 +261,14 @@ internal sealed class TranscriptViewCoordinator
             shouldPopulate: () => renderedMessages().Count > 0);
     }
 
+    public void OnBattleReviewChanged()
+    {
+        UpdateBooleanSetting(
+            battleReviewCheckBox,
+            value => settings().ShowBattleReview = value,
+            shouldPopulate: () => renderedMessages().Count > 0);
+    }
+
     public void OnMemoryNotesChanged()
     {
         UpdateBooleanSetting(
@@ -271,12 +318,40 @@ internal sealed class TranscriptViewCoordinator
         setArenaRunStatus(status);
     }
 
+    public void OnTranscriptInternetDetailsChanged()
+    {
+        if (isRenderingSnapshot())
+        {
+            return;
+        }
+
+        var currentSettings = settings();
+        currentSettings.ShowTranscriptInternetDetails = currentSettings.AllowDebugControls
+            && transcriptInternetDetailsCheckBox.IsChecked == true;
+        settingsStore.Save(currentSettings);
+        if (renderedMessages().Count > 0)
+        {
+            populateTranscript(renderedMessages());
+        }
+
+        var status = currentSettings.ShowTranscriptInternetDetails
+            ? "Debug: transcript internet details shown."
+            : "Debug: transcript internet details hidden.";
+        setLoadStatus(status);
+        setArenaRunStatus(status);
+    }
+
     public void OnFollowChatChanged()
     {
-        if (!isRenderingSnapshot())
+        if (isRenderingSnapshot())
         {
-            UpdateViewPresetState();
+            return;
         }
+
+        var currentSettings = settings();
+        currentSettings.FollowTranscript = followChatCheckBox.IsChecked == true;
+        settingsStore.Save(currentSettings);
+        UpdateViewPresetState();
     }
 
     public void ToggleDebugMenu()
@@ -296,61 +371,72 @@ internal sealed class TranscriptViewCoordinator
 
     public void ApplyFocusedPreset()
     {
-        ApplyViewPreset(false, false, false, false, "diagnostics", true);
+        ApplyViewPreset(false, false, false, false, false, showDecisionCard: false, showAutoModerator: false, showStyleFit: false, "hidden", true);
     }
 
     public void ApplyDiagnosticsPreset()
     {
-        ApplyViewPreset(false, false, true, true, "diagnostics", true);
+        ApplyViewPreset(false, false, true, false, true, showDecisionCard: false, showAutoModerator: true, showStyleFit: false, "diagnostics", true);
     }
 
     public void ApplyCompactPreset()
     {
-        ApplyViewPreset(true, false, false, false, "diagnostics", true);
+        ApplyViewPreset(true, false, false, false, false, showDecisionCard: false, showAutoModerator: false, showStyleFit: false, "hidden", true);
     }
 
     public void ApplyReviewPreset()
     {
-        ApplyViewPreset(true, true, true, true, "diagnostics", false);
+        ApplyViewPreset(true, true, true, true, true, showDecisionCard: true, showAutoModerator: true, showStyleFit: true, "diagnostics", false);
     }
 
     public void UpdateDashboardLayout(double width, bool force = false)
     {
         var mode = CurrentTopStripMode(settings());
-        var showTopStrip = !mode.Equals("hidden", StringComparison.OrdinalIgnoreCase) && width >= 1180;
-        var showDiagnostics = showTopStrip && mode.Equals("diagnostics", StringComparison.OrdinalIgnoreCase);
-        var showTelemetry = showTopStrip && mode.Equals("telemetry", StringComparison.OrdinalIgnoreCase);
-        var layout = showDiagnostics ? "diagnostics" : showTelemetry ? "telemetry" : "hidden";
-        if (!force && layout.Equals(dashboardLayout, StringComparison.OrdinalIgnoreCase))
+        var layout = ResolveDashboardLayout(width, mode);
+        if (!force && dashboardLayout == layout)
         {
             return;
         }
 
         dashboardLayout = layout;
+        var showTopStrip = layout.ShowTopStrip;
+        var stacked = showTopStrip && layout.IsStacked;
         Grid.SetRow(transcriptDiagnosticsHost, 0);
         Grid.SetColumn(transcriptDiagnosticsHost, 0);
-        Grid.SetColumnSpan(transcriptDiagnosticsHost, 1);
+        Grid.SetColumnSpan(transcriptDiagnosticsHost, stacked ? 2 : 1);
         Grid.SetRow(transcriptTelemetryHost, 0);
         Grid.SetColumn(transcriptTelemetryHost, 0);
-        Grid.SetColumnSpan(transcriptTelemetryHost, 1);
-        Grid.SetRow(transcriptFiltersHost, 0);
-        Grid.SetColumn(transcriptFiltersHost, 1);
-        Grid.SetColumnSpan(transcriptFiltersHost, 1);
+        Grid.SetColumnSpan(transcriptTelemetryHost, stacked ? 2 : 1);
+        Grid.SetRow(transcriptFiltersHost, stacked ? 1 : 0);
+        Grid.SetColumn(transcriptFiltersHost, showTopStrip && !stacked ? 1 : 0);
+        Grid.SetColumnSpan(transcriptFiltersHost, showTopStrip && !stacked ? 1 : 2);
 
-        transcriptDiagnosticsHost.Visibility = showDiagnostics ? Visibility.Visible : Visibility.Collapsed;
-        transcriptTelemetryHost.Visibility = showTelemetry ? Visibility.Visible : Visibility.Collapsed;
-        transcriptDiagnosticsHost.CornerRadius = new CornerRadius(8, 0, 0, 8);
-        transcriptTelemetryHost.CornerRadius = new CornerRadius(8, 0, 0, 8);
+        transcriptDiagnosticsHost.Visibility = layout.ShowDiagnostics ? Visibility.Visible : Visibility.Collapsed;
+        transcriptTelemetryHost.Visibility = layout.ShowTelemetry ? Visibility.Visible : Visibility.Collapsed;
+        transcriptDiagnosticsGrid.Columns = layout.DiagnosticsColumns;
+        transcriptDiagnosticsGrid.MinWidth = layout.DiagnosticsMinWidth;
+        transcriptTelemetryGrid.Columns = layout.TelemetryColumns;
+        transcriptTelemetryGrid.MinWidth = layout.TelemetryMinWidth;
+        transcriptTelemetryGrid.Margin = stacked ? new Thickness(0) : new Thickness(0, 0, 6, 0);
+        var topStripCorners = stacked
+            ? new CornerRadius(8, 8, 0, 0)
+            : new CornerRadius(8, 0, 0, 8);
+        transcriptDiagnosticsHost.CornerRadius = topStripCorners;
+        transcriptTelemetryHost.CornerRadius = topStripCorners;
         transcriptFiltersHost.HorizontalAlignment = showTopStrip
             ? HorizontalAlignment.Stretch
             : HorizontalAlignment.Right;
-        transcriptFiltersHost.CornerRadius = !showTopStrip
-            ? new CornerRadius(8)
-            : new CornerRadius(0, 8, 8, 0);
-        transcriptFiltersHost.BorderThickness = !showTopStrip
-            ? new Thickness(1)
-            : new Thickness(0, 1, 1, 1);
-        if (showDiagnostics)
+        transcriptFiltersHost.CornerRadius = stacked
+            ? new CornerRadius(0, 0, 8, 8)
+            : !showTopStrip
+                ? new CornerRadius(8)
+                : new CornerRadius(0, 8, 8, 0);
+        transcriptFiltersHost.BorderThickness = stacked
+            ? new Thickness(1, 0, 1, 1)
+            : !showTopStrip
+                ? new Thickness(1)
+                : new Thickness(0, 1, 1, 1);
+        if (layout.ShowDiagnostics)
         {
             updateDiagnostics(renderedMessages());
         }
@@ -364,14 +450,14 @@ internal sealed class TranscriptViewCoordinator
 
     public bool IsDiagnosticsDisplayed()
     {
-        return dashboardLayout.Equals("diagnostics", StringComparison.OrdinalIgnoreCase)
+        return dashboardLayout?.ShowDiagnostics == true
             && transcriptDiagnosticsHost.Visibility == Visibility.Visible
             && transcriptDiagnosticsHost.IsVisible;
     }
 
     public bool IsTelemetryDisplayed()
     {
-        return dashboardLayout.Equals("telemetry", StringComparison.OrdinalIgnoreCase)
+        return dashboardLayout?.ShowTelemetry == true
             && transcriptTelemetryHost.Visibility == Visibility.Visible
             && transcriptTelemetryHost.IsVisible;
     }
@@ -390,9 +476,15 @@ internal sealed class TranscriptViewCoordinator
     {
         var allowDebug = settings().AllowDebugControls;
         debugMenuHost.Visibility = allowDebug ? Visibility.Visible : Visibility.Collapsed;
+        transcriptInternetDetailsCheckBox.IsEnabled = allowDebug;
         if (!allowDebug)
         {
             debugMenuPopup.IsOpen = false;
+            if (transcriptInternetDetailsCheckBox.IsChecked == true)
+            {
+                settings().ShowTranscriptInternetDetails = false;
+                transcriptInternetDetailsCheckBox.IsChecked = false;
+            }
         }
     }
 
@@ -402,6 +494,7 @@ internal sealed class TranscriptViewCoordinator
             compactTranscriptCheckBox.IsChecked == true,
             turnCompareCheckBox.IsChecked == true,
             matchQualityTimelineCheckBox.IsChecked == true,
+            battleReviewCheckBox.IsChecked == true,
             memoryNotesCheckBox.IsChecked == true,
             followChatCheckBox.IsChecked == true,
             CurrentTopStripMode());
@@ -434,19 +527,77 @@ internal sealed class TranscriptViewCoordinator
         };
     }
 
-    internal static string CurrentViewPresetName(bool compact, bool compare, bool timeline, bool memory, bool autoScroll, string topStripMode)
+    internal static bool ShouldShowPerformanceMetadata(WpfSettings settings)
     {
-        if (!topStripMode.Equals("diagnostics", StringComparison.OrdinalIgnoreCase))
+        return !CurrentTopStripMode(settings).Equals("hidden", StringComparison.OrdinalIgnoreCase)
+            || settings.ShowBattleReview
+            || settings.TurnCompareMode;
+    }
+
+    internal static TranscriptDashboardLayout ResolveDashboardLayout(double width, string? mode)
+    {
+        var showDiagnostics = mode?.Equals("diagnostics", StringComparison.OrdinalIgnoreCase) == true;
+        var showTelemetry = mode?.Equals("telemetry", StringComparison.OrdinalIgnoreCase) == true;
+        if (!showDiagnostics && !showTelemetry)
         {
-            return "Custom";
+            return new TranscriptDashboardLayout(
+                TranscriptDashboardTier.Hidden,
+                ShowDiagnostics: false,
+                ShowTelemetry: false,
+                IsStacked: false,
+                DiagnosticsColumns: 6,
+                TelemetryColumns: 4,
+                DiagnosticsMinWidth: 900,
+                TelemetryMinWidth: 560);
         }
 
-        return (compact, compare, timeline, memory, autoScroll) switch
+        var availableWidth = double.IsFinite(width) ? Math.Max(0, width) : 0;
+        if (availableWidth >= WideDashboardMinWidth)
         {
-            (false, false, false, false, true) => "Focused",
-            (false, false, true, true, true) => "Diagnostics",
-            (true, false, false, false, true) => "Compact",
-            (true, true, true, true, false) => "Review",
+            return new TranscriptDashboardLayout(
+                TranscriptDashboardTier.Wide,
+                showDiagnostics,
+                showTelemetry,
+                IsStacked: false,
+                DiagnosticsColumns: 6,
+                TelemetryColumns: 4,
+                DiagnosticsMinWidth: 900,
+                TelemetryMinWidth: 560);
+        }
+
+        if (availableWidth >= MediumDashboardMinWidth)
+        {
+            return new TranscriptDashboardLayout(
+                TranscriptDashboardTier.Medium,
+                showDiagnostics,
+                showTelemetry,
+                IsStacked: true,
+                DiagnosticsColumns: 3,
+                TelemetryColumns: 4,
+                DiagnosticsMinWidth: 0,
+                TelemetryMinWidth: 0);
+        }
+
+        return new TranscriptDashboardLayout(
+            TranscriptDashboardTier.Compact,
+            showDiagnostics,
+            showTelemetry,
+            IsStacked: true,
+            DiagnosticsColumns: 2,
+            TelemetryColumns: 2,
+            DiagnosticsMinWidth: 0,
+            TelemetryMinWidth: 0);
+    }
+
+    internal static string CurrentViewPresetName(bool compact, bool compare, bool timeline, bool battleReview, bool memory, bool autoScroll, string topStripMode)
+    {
+        var normalizedTopStripMode = topStripMode.Trim().ToLowerInvariant();
+        return (compact, compare, timeline, battleReview, memory, autoScroll, normalizedTopStripMode) switch
+        {
+            (false, false, false, false, false, true, "hidden") => "Focused",
+            (false, false, true, false, true, true, "diagnostics") => "Diagnostics",
+            (true, false, false, false, false, true, "hidden") => "Compact",
+            (true, true, true, true, true, false, "diagnostics") => "Review",
             _ => "Custom"
         };
     }
@@ -455,7 +606,11 @@ internal sealed class TranscriptViewCoordinator
         bool compact,
         bool compare,
         bool timeline,
+        bool battleReview,
         bool memory,
+        bool showDecisionCard,
+        bool showAutoModerator,
+        bool showStyleFit,
         string topStripMode,
         bool autoScroll)
     {
@@ -465,7 +620,11 @@ internal sealed class TranscriptViewCoordinator
             compactTranscriptCheckBox.IsChecked = compact;
             turnCompareCheckBox.IsChecked = compare;
             matchQualityTimelineCheckBox.IsChecked = timeline;
+            battleReviewCheckBox.IsChecked = battleReview;
             memoryNotesCheckBox.IsChecked = memory;
+            decisionCardCheckBox.IsChecked = showDecisionCard;
+            autoModeratorCheckBox.IsChecked = showAutoModerator;
+            styleFitCheckBox.IsChecked = showStyleFit;
             followChatCheckBox.IsChecked = autoScroll;
             ShellUiHelpers.SelectComboTag(topStripModePicker, topStripMode);
         }
@@ -478,9 +637,14 @@ internal sealed class TranscriptViewCoordinator
         currentSettings.CompactTranscriptMode = compact;
         currentSettings.TurnCompareMode = compare;
         currentSettings.ShowMatchQualityTimeline = timeline;
+        currentSettings.ShowBattleReview = battleReview;
         currentSettings.ShowAgentMemoryNotes = memory;
+        currentSettings.ShowDecisionCard = showDecisionCard;
+        currentSettings.ShowAutoModerator = showAutoModerator;
+        currentSettings.ShowStyleFit = showStyleFit;
         currentSettings.TopStripMode = topStripMode;
         currentSettings.ShowTranscriptDiagnostics = topStripMode.Equals("diagnostics", StringComparison.OrdinalIgnoreCase);
+        currentSettings.FollowTranscript = autoScroll;
         setTurnCompareMode(compare);
         settingsStore.Save(currentSettings);
         UpdateDashboardLayout(transcriptDashboardGrid.ActualWidth, force: true);

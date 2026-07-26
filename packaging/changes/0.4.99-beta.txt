@@ -1,0 +1,7 @@
+AI Arena 0.4.99-beta
+
+- Added PowerShell inventory, creation, and selection commands for saved sessions.
+- Added PowerShell creation and confirmation-gated restore commands for full session checkpoints.
+- Return refreshed session/checkpoint receipts together with the uniform app state after every saved-state command.
+- Extracted saved-state automation into a UI-independent service shared with the app's persistence and refresh boundaries.
+- Added a persistence-backed regression test that creates, checkpoints, restores, and switches sessions.

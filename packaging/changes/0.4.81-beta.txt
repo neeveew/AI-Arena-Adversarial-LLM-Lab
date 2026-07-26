@@ -1,0 +1,3 @@
+Agent workspace:
+- Renamed the session autonomy control from Approve All to Full Access so it is distinct from explicit one-command Approval.
+- Stabilized the Agent prompt composer height so the operator input box keeps the same size across idle, approval, and Full Access states.

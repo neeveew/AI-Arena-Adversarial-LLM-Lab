@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -35,10 +36,9 @@ internal sealed class ProviderReachabilityCoordinator
     private readonly Func<ArenaViewSnapshot?> lastRenderedSnapshot;
     private readonly Func<ProviderSettingsCoordinator?> providerSettings;
     private readonly Func<string, Brush> resourceBrush;
-    private readonly Action<CoreSessionSummary, ArenaViewSnapshot> applyProviderStatusSnapshot;
-    private readonly Action<ArenaViewSnapshot> updateTopBarStatus;
+    private readonly Action<CoreSessionSummary, ArenaViewSnapshot> applyProviderStatusProjection;
     private readonly Action<string> setArenaRunStatus;
-    private readonly Func<bool, Task> refreshAdvertisedModelsAsync;
+    private readonly Func<bool, CancellationToken, Task> refreshAdvertisedModelsAsync;
     private readonly Action openModelProviderSettings;
 
     public ProviderReachabilityCoordinator(
@@ -63,10 +63,9 @@ internal sealed class ProviderReachabilityCoordinator
         Func<ArenaViewSnapshot?> lastRenderedSnapshot,
         Func<ProviderSettingsCoordinator?> providerSettings,
         Func<string, Brush> resourceBrush,
-        Action<CoreSessionSummary, ArenaViewSnapshot> applyProviderStatusSnapshot,
-        Action<ArenaViewSnapshot> updateTopBarStatus,
+        Action<CoreSessionSummary, ArenaViewSnapshot> applyProviderStatusProjection,
         Action<string> setArenaRunStatus,
-        Func<bool, Task> refreshAdvertisedModelsAsync,
+        Func<bool, CancellationToken, Task> refreshAdvertisedModelsAsync,
         Action openModelProviderSettings)
     {
         this.sessionStore = sessionStore;
@@ -90,21 +89,20 @@ internal sealed class ProviderReachabilityCoordinator
         this.lastRenderedSnapshot = lastRenderedSnapshot;
         this.providerSettings = providerSettings;
         this.resourceBrush = resourceBrush;
-        this.applyProviderStatusSnapshot = applyProviderStatusSnapshot;
-        this.updateTopBarStatus = updateTopBarStatus;
+        this.applyProviderStatusProjection = applyProviderStatusProjection;
         this.setArenaRunStatus = setArenaRunStatus;
         this.refreshAdvertisedModelsAsync = refreshAdvertisedModelsAsync;
         this.openModelProviderSettings = openModelProviderSettings;
     }
 
-    public async Task<CoreModelProviderConfig?> LoadSharedConfigAsync()
+    public async Task<CoreModelProviderConfig?> LoadSharedConfigAsync(CancellationToken cancellationToken = default)
     {
         return activeSession() is { } session
-            ? await reachabilityService.LoadSharedConfigAsync(session.Id)
+            ? await reachabilityService.LoadSharedConfigAsync(session.Id, cancellationToken)
             : null;
     }
 
-    public async Task RefreshAsync(bool force = false)
+    public async Task RefreshAsync(bool force = false, CancellationToken cancellationToken = default)
     {
         var session = activeSession();
         if (session is null || (isArenaBusy() && !force))
@@ -112,16 +110,35 @@ internal sealed class ProviderReachabilityCoordinator
             return;
         }
 
-        var result = await reachabilityService.RefreshAsync(session.Id);
-        if (result is null)
+        try
         {
-            return;
-        }
+            var result = await reachabilityService.RefreshAsync(session.Id, cancellationToken);
+            if (result is null)
+            {
+                return;
+            }
 
-        providerSettings()?.RecordProviderReachabilityCheck(result.CheckedAt, result.ModelCount);
-        providerHealthTimer.Interval = result.NextInterval;
-        await UpdateActiveProviderStatusOnlyAsync(result.Status);
-        UpdatePopup();
+            providerSettings()?.RecordProviderReachabilityCheck(result.CheckedAt, result.ModelCount);
+            providerHealthTimer.Interval = result.NextInterval;
+            if (result.SnapshotChanged)
+            {
+                await UpdateActiveProviderStatusOnlyAsync(result.Status, cancellationToken);
+            }
+            else if (!isArenaBusy())
+            {
+                setArenaRunStatus(result.Status);
+            }
+
+            UpdatePopup();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            providerHealthTimer.Interval = TimeSpan.FromSeconds(3);
+            if (!isArenaBusy())
+            {
+                setArenaRunStatus($"Provider health refresh failed: {ex.Message}");
+            }
+        }
     }
 
     public async Task PersistAsync(
@@ -130,7 +147,8 @@ internal sealed class ProviderReachabilityCoordinator
         int latencyMs,
         string status,
         ArenaSnapshot? snapshot = null,
-        string? sessionId = null)
+        string? sessionId = null,
+        CancellationToken cancellationToken = default)
     {
         var session = activeSession();
         if (session is null)
@@ -139,14 +157,29 @@ internal sealed class ProviderReachabilityCoordinator
         }
 
         sessionId ??= session.Id;
-        var result = await reachabilityService.PersistAsync(sessionId, online, error, latencyMs, status, snapshot);
+        var result = await reachabilityService.PersistAsync(
+            sessionId,
+            online,
+            error,
+            latencyMs,
+            status,
+            snapshot,
+            cancellationToken);
         if (result is null)
         {
             return;
         }
 
         providerHealthTimer.Interval = result.NextInterval;
-        await UpdateActiveProviderStatusOnlyAsync(result.Status);
+        if (result.SnapshotChanged)
+        {
+            await UpdateActiveProviderStatusOnlyAsync(result.Status, cancellationToken);
+        }
+        else if (!isArenaBusy())
+        {
+            setArenaRunStatus(result.Status);
+        }
+
         UpdatePopup();
     }
 
@@ -161,23 +194,23 @@ internal sealed class ProviderReachabilityCoordinator
         providerHealthPopup.IsOpen = false;
     }
 
-    public async Task TestProviderAsync()
+    public async Task TestProviderAsync(CancellationToken cancellationToken = default)
     {
         if (providerSettings() is not { } settings)
         {
             return;
         }
 
-        await settings.TestProviderAsync(providerHealthTestButton);
+        await settings.TestProviderAsync(providerHealthTestButton, cancellationToken);
         UpdatePopup();
     }
 
-    public async Task RefreshModelsAsync()
+    public async Task RefreshModelsAsync(CancellationToken cancellationToken = default)
     {
         await RunBusyAsync(providerHealthRefreshModelsButton, async () =>
         {
             providerHealthStatusText.Text = "Refreshing advertised models...";
-            await refreshAdvertisedModelsAsync(true);
+            await refreshAdvertisedModelsAsync(true, cancellationToken);
         });
         UpdatePopup();
     }
@@ -217,7 +250,9 @@ internal sealed class ProviderReachabilityCoordinator
         return $"Selected default model '{model}' is not in the advertised model list. Open settings to reselect or type it manually.";
     }
 
-    private async Task UpdateActiveProviderStatusOnlyAsync(string status)
+    private async Task UpdateActiveProviderStatusOnlyAsync(
+        string status,
+        CancellationToken cancellationToken)
     {
         var session = activeSession();
         if (session is null)
@@ -225,21 +260,22 @@ internal sealed class ProviderReachabilityCoordinator
             return;
         }
 
-        var latest = (await sessionStore.ListSessionsAsync()).FirstOrDefault(candidate => candidate.Id == session.Id);
+        var latest = (await sessionStore.ListSessionsAsync(cancellationToken)).FirstOrDefault(candidate => candidate.Id == session.Id);
         if (latest is null)
         {
             return;
         }
 
-        var coreSnapshot = await sessionStore.LoadSnapshotAsync(latest.Id);
+        var coreSnapshot = await sessionStore.LoadSnapshotAsync(latest.Id, cancellationToken);
         if (coreSnapshot is null)
         {
             return;
         }
 
         var snapshot = SnapshotViewMapper.FromCore(latest, coreSnapshot);
-        applyProviderStatusSnapshot(latest, snapshot);
-        updateTopBarStatus(snapshot);
+        // One UI projection prevents top bar, navigation rail, Settings, and the
+        // transcript empty state from presenting different provider generations.
+        applyProviderStatusProjection(latest, snapshot);
         if (!isArenaBusy())
         {
             setArenaRunStatus(status);
@@ -304,7 +340,7 @@ internal sealed record ProviderHealthPopupState(
             checkedAt is null
                 ? "waiting"
                 : checkedAt.Value.ToLocalTime().ToString("h:mm:ss tt", System.Globalization.CultureInfo.CurrentCulture),
-            hasError ? $"Last error: {error}" : "No provider error recorded.",
+            hasError ? $"{(online ? "Provider note" : "Last error")}: {error}" : "No provider error recorded.",
             hasError,
             missingModel,
             missingModel ? ProviderReachabilityCoordinator.ProviderModelWarning(model) : "");

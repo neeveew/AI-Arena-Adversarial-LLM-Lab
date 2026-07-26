@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "python": {
+    "name": "CPython embeddable Windows runtime",
+    "version": "3.11.9",
+    "url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip",
+    "sha256": "009D6BF7E3B2DDCA3D784FA09F90FE54336D5B60F0E0F305C37F400BF83CFD3B"
+  },
+  "searxng": {
+    "name": "SearXNG source",
+    "revision": "502c820a25bfd9e7a7175671c9d7dc96cf8afbdf",
+    "url": "https://github.com/searxng/searxng/archive/502c820a25bfd9e7a7175671c9d7dc96cf8afbdf.zip",
+    "sha256": "B2A9F9836C6A916E3B0D4235DFB8B766D96285987A87B1B90C9B2EC61D45D7E9"
+  },
+  "granian": {
+    "name": "Granian",
+    "version": "2.7.6",
+    "url": "https://pypi.org/project/granian/2.7.6/"
+  },
+  "pythonDependencies": {
+    "lockFile": "packaging/searxng-requirements-lock.txt",
+    "platform": "win_amd64",
+    "pythonAbi": "cp311",
+    "sha256": "48C71E0541A58B80A6C104D2E8DDE3BCE095C1C74E78A5C87EC2700D10D7D3BF"
+  }
+}

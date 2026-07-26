@@ -6,18 +6,18 @@ internal sealed record TemplatePools(string[] Domains, string[] Tensions, string
     {
         return style switch
         {
-            "adversarial" => new(["a fragile launch plan", "a disputed safety claim", "a controversial governance choice"], ["optimism versus evidence", "attack surface versus usability", "confidence versus uncertainty"], ["the strongest failure modes", "a risk register with mitigations", "a sharper go/no-go standard"]),
-            "technical" => new(["a production architecture decision", "a reliability incident review", "a scaling bottleneck"], ["complexity versus control", "latency versus correctness", "migration risk versus technical debt"], ["an implementation plan", "explicit invariants", "a test and rollback strategy"]),
-            "scientific" => new(["a contested experimental result", "a replication failure", "a measurement design dispute"], ["model fit versus causal explanation", "small sample signal versus noise", "hypothesis elegance versus falsifiability"], ["a falsification plan", "a stronger experimental design", "decision-grade uncertainty bounds"]),
-            "research" => new(["an unresolved empirical question", "a weakly understood user behavior", "a competing-hypothesis investigation"], ["signal versus noise", "exploration versus confirmation", "anecdote versus measurement"], ["testable hypotheses", "an evidence plan", "next research questions"]),
-            "product" => new(["a product launch tradeoff", "a retention strategy dispute", "a roadmap prioritization fight"], ["user delight versus operational load", "speed to market versus trust", "feature breadth versus product coherence"], ["a reversible launch plan", "a decision matrix", "clear success and rollback thresholds"]),
-            "safety" => new(["an AI safety boundary decision", "a misuse mitigation design", "a trust and verification policy"], ["capability versus control", "openness versus abuse resistance", "false confidence versus useful autonomy"], ["safety constraints", "abuse cases with mitigations", "a risk acceptance standard"]),
+            "adversarial" => new(["a fragile launch plan", "a disputed safety claim", "a controversial governance choice", "a blind model duel with biased judges", "a red-team gauntlet that might overfit to drama"], ["optimism versus evidence", "attack surface versus usability", "confidence versus uncertainty", "fair comparison versus tactical framing", "productive pressure versus performative hostility"], ["the strongest failure modes", "a risk register with mitigations", "a sharper go/no-go standard", "a bias-resistant verdict rubric", "a pressure plan that improves the work"]),
+            "technical" => new(["a production architecture decision", "a reliability incident review", "a scaling bottleneck", "an agent toolchain that sometimes invents tool results", "a local model routing plan under tight VRAM"], ["complexity versus control", "latency versus correctness", "migration risk versus technical debt", "tool convenience versus traceability", "context length versus response quality"], ["an implementation plan", "explicit invariants", "a test and rollback strategy", "a tool-failure playbook", "a model routing recommendation"]),
+            "scientific" => new(["a contested experimental result", "a replication failure", "a measurement design dispute", "a benchmark leaderboard with noisy human preferences", "an evaluation pack that may reward the wrong behavior"], ["model fit versus causal explanation", "small sample signal versus noise", "hypothesis elegance versus falsifiability", "crowd preference versus task-specific validity", "rubric precision versus real-world messiness"], ["a falsification plan", "a stronger experimental design", "decision-grade uncertainty bounds", "a benchmark validity memo", "a better grader specification"]),
+            "research" => new(["an unresolved empirical question", "a weakly understood user behavior", "a competing-hypothesis investigation", "a prompt-to-match wizard whose defaults may steer outcomes", "a trace analysis that reveals surprising role drift"], ["signal versus noise", "exploration versus confirmation", "anecdote versus measurement", "operator intent versus generated configuration", "trace evidence versus narrative explanation"], ["testable hypotheses", "an evidence plan", "next research questions", "a default-setting audit", "a trace-backed explanation"]),
+            "product" => new(["a product launch tradeoff", "a retention strategy dispute", "a roadmap prioritization fight", "a local AI lab onboarding flow", "a feature that turns serious evals into a game"], ["user delight versus operational load", "speed to market versus trust", "feature breadth versus product coherence", "power-user density versus first-run clarity", "fun affordances versus decision quality"], ["a reversible launch plan", "a decision matrix", "clear success and rollback thresholds", "an onboarding simplification", "a playful feature that still earns its keep"]),
+            "safety" => new(["an AI safety boundary decision", "a misuse mitigation design", "a trust and verification policy", "a human-in-the-loop checkpoint policy", "a tool approval flow with unclear escalation"], ["capability versus control", "openness versus abuse resistance", "false confidence versus useful autonomy", "speed versus reviewability", "operator freedom versus safety rails"], ["safety constraints", "abuse cases with mitigations", "a risk acceptance standard", "checkpoint rules", "an approval and audit policy"]),
             "philosophical" => new(["a question about responsibility and agency", "a value conflict in automation", "an ethical boundary case"], ["principles versus consequences", "individual agency versus system effects", "freedom versus obligation"], ["clearer concepts", "the crux of disagreement", "a principled but usable stance"]),
-            "legal" => new(["a compliance interpretation dispute", "a policy exception request", "a data governance boundary case"], ["literal rule versus operational reality", "risk avoidance versus practical enforcement", "privacy obligations versus product utility"], ["a defensible policy stance", "a review checklist", "a risk-tiered decision path"]),
-            "creative" => new(["a story-world design conflict", "a brand voice pivot", "an interactive narrative mechanic"], ["novelty versus coherence", "emotional force versus clarity", "audience surprise versus trust"], ["a sharper creative brief", "a usable constraint set", "three testable creative directions"]),
-            "red-team" => new(["an adversarial system test", "a disputed threat model", "a high-risk deployment claim"], ["attack path realism versus defensive optimism", "security theatre versus measurable control", "abuse potential versus useful access"], ["a prioritized exploit map", "hard go/no-go criteria", "a mitigation-first test plan"]),
-            "incident" => new(["a live incident review", "a failed rollback decision", "a service reliability postmortem"], ["local fix versus systemic cause", "customer harm versus internal green metrics", "speed of recovery versus evidence preservation"], ["an incident timeline", "root-cause hypotheses", "clear prevention actions"]),
-            _ => new(["a difficult product decision", "a public-interest technology tradeoff", "a team strategy reset"], ["speed versus care", "autonomy versus coordination", "short-term wins versus durable value"], ["a practical recommendation", "a map of tradeoffs", "a reversible next step"])
+            "legal" => new(["a compliance interpretation dispute", "a policy exception request", "a data governance boundary case", "an AI judge panel with unclear appeal rights", "a model-evaluation leaderboard used for procurement"], ["literal rule versus operational reality", "risk avoidance versus practical enforcement", "privacy obligations versus product utility", "automated judgment versus accountable review", "transparent criteria versus vendor pressure"], ["a defensible policy stance", "a review checklist", "a risk-tiered decision path", "an appeal and audit standard", "procurement-ready evaluation criteria"]),
+            "creative" => new(["a story-world design conflict", "a brand voice pivot", "an interactive narrative mechanic", "an absurd arena show format", "a mascot-like agent cast that must still reason well"], ["novelty versus coherence", "emotional force versus clarity", "audience surprise versus trust", "spectacle versus useful insight", "personality versus role discipline"], ["a sharper creative brief", "a usable constraint set", "three testable creative directions", "a playable arena format", "character rules that preserve signal"]),
+            "red-team" => new(["an adversarial system test", "a disputed threat model", "a high-risk deployment claim", "a tool-using agent with hidden failure paths", "a jailbreak-resistant operator workflow"], ["attack path realism versus defensive optimism", "security theatre versus measurable control", "abuse potential versus useful access", "tool autonomy versus auditability", "strong guardrails versus operator agency"], ["a prioritized exploit map", "hard go/no-go criteria", "a mitigation-first test plan", "a traceable tool-risk model", "operator-safe escalation rules"]),
+            "incident" => new(["a live incident review", "a failed rollback decision", "a service reliability postmortem", "a model host outage during an arena run", "a bad auto-config recommendation after hardware detection"], ["local fix versus systemic cause", "customer harm versus internal green metrics", "speed of recovery versus evidence preservation", "fallback speed versus trace accuracy", "automation confidence versus operator override"], ["an incident timeline", "root-cause hypotheses", "clear prevention actions", "a fallback runbook", "a safer auto-config policy"]),
+            _ => new(["a difficult product decision", "a public-interest technology tradeoff", "a team strategy reset", "a blind AI arena comparison", "a multi-agent workflow that needs human checkpoints"], ["speed versus care", "autonomy versus coordination", "short-term wins versus durable value", "preference signal versus evaluation rigor", "automation flow versus operator control"], ["a practical recommendation", "a map of tradeoffs", "a reversible next step", "a comparison rubric", "checkpoint rules"])
         };
     }
 
@@ -86,6 +86,19 @@ internal static class YoloTemplatePools
             "red-team lab",
             "adversarial red-team lab",
             "AI Arena is running a red-team style debate lab. The goal is not performance theatre; the goal is to turn friction into clearer constraints and better decisions.")
+        ,
+        new(
+            "blind battle booth",
+            "blind model battle booth",
+            "AI Arena is running a blind comparison booth. Hide brand assumptions, force criteria into the open, and judge arguments by observable quality rather than reputation."),
+        new(
+            "checkpoint maze",
+            "human-in-the-loop checkpoint maze",
+            "AI Arena is running a checkpoint-heavy agent workflow. Treat every pause, approval, and fallback as part of the experiment rather than an interruption."),
+        new(
+            "trace courtroom",
+            "agent trace courtroom",
+            "AI Arena is trying the transcript as evidence. Every claim needs a trace, every shortcut needs a defense, and every verdict must state its uncertainty.")
     ];
 
     public static readonly string[] OperationRules =
@@ -118,6 +131,17 @@ internal static class YoloTemplatePools
             "The arena is watching narrative heat, operational clarity, and whether compelling language hides weak constraints.",
             "cool dramatic framing into operational checks",
             "narrative heat, clarity, and whether strong language masks weak reasoning")
+        ,
+        new(
+            "blind preference versus brand bias",
+            "The arena is watching whether judgments depend on observable transcript quality rather than assumed model reputation.",
+            "separate preference evidence from brand or role bias",
+            "blind preference quality, judging criteria, and whether bias leaks into the verdict"),
+        new(
+            "tool confidence versus traceability",
+            "The arena is watching whether tool claims stay tied to visible evidence, approvals, fallbacks, and uncertainty.",
+            "keep tool-derived claims traceable and challenge unsupported tool confidence",
+            "tool traceability, approval quality, and whether agents overtrust missing evidence")
     ];
 
     public static readonly YoloDemand[] OutputDemands =
@@ -125,7 +149,9 @@ internal static class YoloTemplatePools
         new("a crux map with next tests", "Aim to produce a crux map, explicit assumptions, and the next test that could change the conclusion."),
         new("a constraint ledger with failure modes", "Aim to produce a constraint ledger, failure modes, and the smallest reversible next step."),
         new("a decision frame with open uncertainties", "Aim to produce a decision frame that preserves uncertainty where it matters and names what would resolve it."),
-        new("a tradeoff map with action thresholds", "Aim to produce a tradeoff map, action thresholds, and the boundary between acceptable and unacceptable risk.")
+        new("a tradeoff map with action thresholds", "Aim to produce a tradeoff map, action thresholds, and the boundary between acceptable and unacceptable risk."),
+        new("a judge rubric with bias checks", "Aim to produce a judge rubric, blind-comparison caveats, and a fair tie-break rule."),
+        new("a trace receipt with fallback rules", "Aim to produce a trace receipt, missing-evidence flags, and fallback rules for the next run.")
     ];
 
     public static PersonaPools ForPersona(string agentId, string style)

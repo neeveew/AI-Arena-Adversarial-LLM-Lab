@@ -1,0 +1,5 @@
+AI Arena 0.4.70-beta
+
+- Fix the top bar clipping session chips: the bar now grows when the chips wrap instead of cutting them off over the content below.
+- Add a "Full agent metric cards" toggle to the View menu so the previous always-full Agent Performance layout and the new adaptive layout are both available; the choice persists.
+- Reduce overlap between Live Agents and Agent Performance: in adaptive mode the metrics section shows a single hint until the first turn, and compact rows show telemetry (tokens, last latency) instead of repeating roster status pills.

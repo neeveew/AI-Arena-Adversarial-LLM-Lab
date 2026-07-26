@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Input;
 using System.Windows.Media;
 using AIArena.Wpf.Services;
@@ -12,7 +13,6 @@ public partial class TextEditDialog : Window
         InitializeComponent();
         DialogChrome.ImportOwnerResources(owner, this);
         DialogChrome.ApplyImplicitControlStyles(this);
-        Owner = owner;
         Title = title;
         TitleText.Text = title;
         if (!string.IsNullOrWhiteSpace(subtitle))
@@ -22,7 +22,20 @@ public partial class TextEditDialog : Window
 
         EditText.Text = value;
         EditText.SelectAll();
+        var editorDescription = SubtitleText.Text;
+        CloseButton.ToolTip = $"Close {title}";
+        AutomationProperties.SetName(TitleText, title);
+        AutomationProperties.SetName(SubtitleText, editorDescription);
+        AutomationProperties.SetName(EditText, $"{title} text");
+        AutomationProperties.SetHelpText(EditText, $"{editorDescription} Press Control+Enter to apply.");
         ApplyTheme(theme);
+        DialogChrome.PrepareModalWindow(
+            this,
+            owner,
+            DialogShell,
+            EditText,
+            title,
+            $"{editorDescription} Escape cancels and Control+Enter applies changes.");
     }
 
     public string TextValue { get; private set; } = "";
@@ -46,19 +59,42 @@ public partial class TextEditDialog : Window
         DialogShell.Background = panel;
         DialogShell.BorderBrush = primaryBorder;
         HeaderBar.Background = input;
+        EditorPanel.Background = input;
+        EditorPanel.BorderBrush = border;
         TitleText.Foreground = text;
         SubtitleText.Foreground = muted;
-        EditText.Background = input;
+        EditorBadge.Background = panel;
+        EditorBadge.BorderBrush = primaryBorder;
+        EditorGlyph.Foreground = primaryBorder;
+        EditText.Background = panel;
         EditText.Foreground = text;
         EditText.BorderBrush = border;
-        EditText.Padding = new Thickness(10);
+        EditText.CaretBrush = text;
+        EditText.SelectionBrush = primary;
+        EditText.FontSize = 14;
+        EditText.Padding = new Thickness(14, 12, 14, 12);
+        EditorShortcutText.Foreground = muted;
+        EditorCountText.Foreground = muted;
+        FooterBar.Background = input;
+        FooterBar.BorderBrush = border;
 
-        DialogChrome.ApplyButtonStyle(CloseButton, input, border, muted);
-        CloseButton.FontSize = 13;
-        CloseButton.Padding = new Thickness(0);
-        CloseButton.MinHeight = 28;
+        DialogChrome.ApplyCloseButtonStyle(CloseButton, input, border, muted);
         DialogChrome.ApplyButtonStyle(CancelButton, input, border, text);
-        DialogChrome.ApplyButtonStyle(ApplyButton, primary, primaryBorder, Brushes.White);
+        DialogChrome.ApplyButtonStyle(ApplyButton, primary, primaryBorder, text);
+        ApplyCloseTargetSize(CloseButton);
+        ApplyActionTargetSize(CancelButton);
+        ApplyActionTargetSize(ApplyButton);
+    }
+
+    private void EditText_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || !Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        ApplyButton_Click(ApplyButton, new RoutedEventArgs());
     }
 
     private void ApplyButton_Click(object sender, RoutedEventArgs e)
@@ -82,5 +118,21 @@ public partial class TextEditDialog : Window
     private static SolidColorBrush Brush(Color color)
     {
         return new SolidColorBrush(color);
+    }
+
+    private static void ApplyActionTargetSize(System.Windows.Controls.Button button)
+    {
+        button.Height = 36;
+        button.MinHeight = 36;
+        button.FontSize = 13;
+        button.Padding = new Thickness(18, 0, 18, 0);
+    }
+
+    private static void ApplyCloseTargetSize(System.Windows.Controls.Button button)
+    {
+        button.Width = 32;
+        button.Height = 32;
+        button.MinWidth = 32;
+        button.MinHeight = 32;
     }
 }

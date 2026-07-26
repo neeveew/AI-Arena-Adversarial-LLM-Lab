@@ -5,6 +5,9 @@ namespace AIArena.Wpf.Controls;
 
 public sealed class MetricSparklineControl : FrameworkElement
 {
+    private const double DefaultWidth = 88;
+    private const double DefaultHeight = 34;
+
     public static readonly DependencyProperty ValuesProperty = DependencyProperty.Register(
         nameof(Values),
         typeof(IReadOnlyList<double>),
@@ -55,7 +58,9 @@ public sealed class MetricSparklineControl : FrameworkElement
 
     protected override Size MeasureOverride(Size availableSize)
     {
-        return new Size(88, 34);
+        return new Size(
+            DesiredLength(Width, availableSize.Width, DefaultWidth, MinWidth, MaxWidth),
+            DesiredLength(Height, availableSize.Height, DefaultHeight, MinHeight, MaxHeight));
     }
 
     protected override void OnRender(DrawingContext drawingContext)
@@ -233,12 +238,38 @@ public sealed class MetricSparklineControl : FrameworkElement
 
     private double Normalize(double value)
     {
-        var max = Math.Max(1, MaxValue);
+        return NormalizeValue(value, MaxValue);
+    }
+
+    internal static double NormalizeValue(double value, double maxValue)
+    {
+        if (!double.IsFinite(value) || value <= 0)
+        {
+            return 0;
+        }
+
+        var max = double.IsFinite(maxValue) && maxValue > 0
+            ? maxValue
+            : 1;
         return Math.Clamp(value / max, 0, 1);
     }
 
     private static Color BrushColor(Brush brush, Color fallback)
     {
         return brush is SolidColorBrush solid ? solid.Color : fallback;
+    }
+
+    private static double DesiredLength(double explicitLength, double availableLength, double fallback, double min, double max)
+    {
+        var length = !double.IsNaN(explicitLength)
+            ? explicitLength
+            : double.IsFinite(availableLength) && availableLength > 0
+                ? availableLength
+                : fallback;
+        var lower = double.IsNaN(min) ? 0 : Math.Max(0, min);
+        var upper = double.IsNaN(max) || double.IsPositiveInfinity(max)
+            ? double.PositiveInfinity
+            : Math.Max(lower, max);
+        return Math.Clamp(length, lower, upper);
     }
 }
