@@ -1,0 +1,8 @@
+- Rebuilds Match Setup around the work surface: readiness and generation tuning collapse to one line each, so the scenario, cast, relationship, and saved-state tabs are visible without scrolling.
+- Stops repeating the same problem three times; warnings are stated once with a count and spelled out in the preflight checklist, while blockers keep their detail and open the checklist automatically.
+- Removes raw scenario and persona seed codes from the setup header, profile, and source cards; the exact values stay available through the source tooltip and Copy Seed.
+- Shows only the setup checks that need attention, with a single control to reveal the checks that already pass.
+- Folds seven copy and import buttons into two compact menus, and moves recent generation replay into the Saved State tab instead of a competing card above the tabs.
+- Gives Match Setup a footer with a clear Done action and states that edits save as they are made.
+- Reserves color for state: setup chips render their label muted with one neutral surface, preview cards no longer each pick a different accent, and readiness tones use the fixed status palette rather than customizable agent identity colors.
+- Keeps the WPF PowerShell plane enabled by default, retains the self-screenshot command and bundled SearXNG Internet backend, and remains a self-contained Windows installation with no separate .NET Desktop Runtime requirement.

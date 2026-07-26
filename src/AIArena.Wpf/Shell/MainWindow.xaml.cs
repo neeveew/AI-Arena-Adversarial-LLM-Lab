@@ -619,6 +619,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             RandomSeedIntensityPicker,
             RandomSeedAbsurdityPicker,
             SetupReadinessStatusText,
+            SetupReadinessExpander,
             SetupReadinessBadgeItems,
             SetupReadinessChecklistItems,
             CopyCurrentSetupBriefButton,
@@ -1296,7 +1297,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 "initial provider health refresh",
                 cancellationToken => ProviderReachability.RefreshAsync(force: true, cancellationToken));
         };
-        SourceInitialized += (_, _) => WindowChromeService.ApplyNativeChromeColor(this);
+        SourceInitialized += (_, _) => WindowChromeService.ApplyThemeChromeColor(this, _theme);
         StateChanged += (_, _) => ApplyMaximizedChromePadding();
         _voiceNarrationService.SpeakingChanged += () => Dispatcher.BeginInvoke(UpdateVoiceToggleButton);
         Closing += MainWindow_Closing;
@@ -3858,36 +3859,53 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void CopyGenerationSeedButton_Click(object sender, RoutedEventArgs e)
     {
+        GenerationCopyPopup.IsOpen = false;
         ScenarioWorkflow.CopyGenerationSeed();
     }
 
     private void CopyGenerationBriefButton_Click(object sender, RoutedEventArgs e)
     {
+        GenerationCopyPopup.IsOpen = false;
         ScenarioWorkflow.CopyGenerationBrief();
     }
 
     private void CopyGenerationSpecButton_Click(object sender, RoutedEventArgs e)
     {
+        GenerationCopyPopup.IsOpen = false;
         ScenarioWorkflow.CopyGenerationSpec();
     }
 
     private void CopyGenerationDiffButton_Click(object sender, RoutedEventArgs e)
     {
+        GenerationCopyPopup.IsOpen = false;
         ScenarioWorkflow.CopyGenerationDiff();
     }
 
     private void CopyGenerationRubricButton_Click(object sender, RoutedEventArgs e)
     {
+        GenerationCopyPopup.IsOpen = false;
         ScenarioWorkflow.CopyGenerationRubric();
+    }
+
+    private void CurrentSetupTransferButton_Click(object sender, RoutedEventArgs e)
+    {
+        CurrentSetupTransferPopup.IsOpen = !CurrentSetupTransferPopup.IsOpen;
+    }
+
+    private void GenerationCopyButton_Click(object sender, RoutedEventArgs e)
+    {
+        GenerationCopyPopup.IsOpen = !GenerationCopyPopup.IsOpen;
     }
 
     private void CopyCurrentSetupBriefButton_Click(object sender, RoutedEventArgs e)
     {
+        CurrentSetupTransferPopup.IsOpen = false;
         ScenarioWorkflow.CopyCurrentSetupBrief();
     }
 
     private async void CopyCurrentSetupSpecButton_Click(object sender, RoutedEventArgs e)
     {
+        CurrentSetupTransferPopup.IsOpen = false;
         try
         {
             var result = await _matchSetupPortabilityService.ExportAsync();
@@ -3914,6 +3932,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private async void ImportCurrentSetupSpecButton_Click(object sender, RoutedEventArgs e)
     {
+        CurrentSetupTransferPopup.IsOpen = false;
         if (!ShellClipboard.TryGetText(out var json))
         {
             const string status = "Clipboard does not contain readable Match Setup JSON.";
@@ -4869,6 +4888,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void RefreshGeneratedThemeSurfaces()
     {
+        WindowChromeService.ApplyThemeChromeColor(this, _theme);
         _userGuideWindowHost.RefreshTheme(this);
         _collaborateCoordinator?.RefreshTheme();
         _agentWorkspaceCoordinator?.RefreshTheme();

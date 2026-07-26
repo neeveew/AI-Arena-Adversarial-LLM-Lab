@@ -136,6 +136,19 @@ public partial class ShellTopBarControl : UserControl
 
         _captionWindow.StateChanged += (_, _) => UpdateCaptionMaximizeGlyph();
         UpdateCaptionMaximizeGlyph();
+        Services.CaptionSnapLayoutService.Attach(_captionWindow, CaptionMaximizeButton, ToggleCaptionMaximize);
+    }
+
+    private void ToggleCaptionMaximize()
+    {
+        if ((_captionWindow ?? Window.GetWindow(this)) is not { } window)
+        {
+            return;
+        }
+
+        window.WindowState = window.WindowState == WindowState.Maximized
+            ? WindowState.Normal
+            : WindowState.Maximized;
     }
 
     private void UpdateCaptionMaximizeGlyph()
@@ -155,17 +168,28 @@ public partial class ShellTopBarControl : UserControl
 
     private void CaptionMaximizeRequested(object sender, RoutedEventArgs e)
     {
-        if (Window.GetWindow(this) is { } window)
-        {
-            window.WindowState = window.WindowState == WindowState.Maximized
-                ? WindowState.Normal
-                : WindowState.Maximized;
-        }
+        ToggleCaptionMaximize();
     }
 
     private void CaptionCloseRequested(object sender, RoutedEventArgs e)
     {
         Window.GetWindow(this)?.Close();
+    }
+
+    /// <summary>
+    /// A custom caption band loses the native right-click system menu, so it is
+    /// reopened manually at the pointer.
+    /// </summary>
+    private void CaptionSystemMenuRequested(object sender, MouseButtonEventArgs e)
+    {
+        if (Window.GetWindow(this) is not { } window)
+        {
+            return;
+        }
+
+        var location = window.PointToScreen(e.GetPosition(window));
+        SystemCommands.ShowSystemMenu(window, location);
+        e.Handled = true;
     }
 
     public event ShellTopBarInteractionEventHandler InteractionRequested

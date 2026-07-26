@@ -111,7 +111,7 @@ internal sealed class UserGuideWindowHost
             Foreground = ResourceBrush(owner, "TextBrush"),
             Icon = CreateAppIconImageSource()
         };
-        dialog.SourceInitialized += (_, _) => WindowChromeService.ApplySubtleNativeChromeColor(dialog);
+        dialog.SourceInitialized += (_, _) => WindowChromeService.ApplySubtleThemeChromeColor(dialog);
         CopyThemeResources(owner, dialog);
         dialog.SetResourceReference(Window.ForegroundProperty, "TextBrush");
         _window = dialog;
@@ -153,6 +153,7 @@ internal sealed class UserGuideWindowHost
         }
 
         CopyThemeResources(owner, dialog);
+        WindowChromeService.ApplySubtleThemeChromeColor(dialog);
         if (dialog.Tag is UserGuideWindowContext context)
         {
             var section = context.SectionList.SelectedItem as UserGuideSection
@@ -812,7 +813,6 @@ internal sealed class UserGuideWindowHost
         style.Setters.Add(new Setter(Control.BackgroundProperty, normalBackground));
         style.Setters.Add(new Setter(Control.BorderBrushProperty, borderBrush));
         style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
-        style.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.White));
         style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Center));
         style.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
 

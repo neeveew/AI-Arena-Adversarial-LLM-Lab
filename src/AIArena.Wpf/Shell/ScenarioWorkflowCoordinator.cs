@@ -33,7 +33,10 @@ internal sealed class ScenarioWorkflowCoordinator
     private readonly ComboBox randomSeedIntensityPicker;
     private readonly ComboBox randomSeedAbsurdityPicker;
     private readonly TextBlock setupReadinessStatusText;
+    private readonly Expander setupReadinessExpander;
     private readonly Panel setupReadinessBadgeItems;
+    private bool readinessBadgesExpanded;
+    private IReadOnlyList<SetupReadinessBadge> lastReadinessBadges = [];
     private readonly Panel setupReadinessChecklistItems;
     private readonly Button copyCurrentSetupBriefButton;
     private readonly Button copyCurrentSetupSpecButton;
@@ -81,6 +84,7 @@ internal sealed class ScenarioWorkflowCoordinator
         ComboBox randomSeedIntensityPicker,
         ComboBox randomSeedAbsurdityPicker,
         TextBlock setupReadinessStatusText,
+        Expander setupReadinessExpander,
         Panel setupReadinessBadgeItems,
         Panel setupReadinessChecklistItems,
         Button copyCurrentSetupBriefButton,
@@ -123,6 +127,7 @@ internal sealed class ScenarioWorkflowCoordinator
         this.randomSeedIntensityPicker = randomSeedIntensityPicker;
         this.randomSeedAbsurdityPicker = randomSeedAbsurdityPicker;
         this.setupReadinessStatusText = setupReadinessStatusText;
+        this.setupReadinessExpander = setupReadinessExpander;
         this.setupReadinessBadgeItems = setupReadinessBadgeItems;
         this.setupReadinessChecklistItems = setupReadinessChecklistItems;
         this.copyCurrentSetupBriefButton = copyCurrentSetupBriefButton;
@@ -758,11 +763,19 @@ internal sealed class ScenarioWorkflowCoordinator
         AutomationProperties.SetHelpText(setupReadinessStatusText, report.Tooltip);
         PopulateReadinessBadges(report.Badges);
         PopulateReadinessChecklist(report.Checklist);
+        // A blocked setup cannot run, so its checklist is opened rather than
+        // left folded away behind the collapsed readiness header.
+        if (report.Blockers.Count > 0)
+        {
+            setupReadinessExpander.IsExpanded = true;
+        }
+
         UpdateCurrentSetupCopyActions();
     }
 
     private void PopulateReadinessBadges(IReadOnlyList<SetupReadinessBadge> badges)
     {
+        lastReadinessBadges = badges;
         setupReadinessBadgeItems.Children.Clear();
         // When every badge reads "ready" the one-line status already tells the story,
         // so the badge row collapses to give the previews more room.
@@ -773,18 +786,64 @@ internal sealed class ScenarioWorkflowCoordinator
             return;
         }
 
-        foreach (var badge in badges)
+        // Only the checks that need attention earn a badge by default. The
+        // passing ones are still one click away, but a single warning no longer
+        // puts nine badges on screen.
+        var visible = readinessBadgesExpanded
+            ? badges
+            : badges.Where(badge => badge.Kind != "ready").ToArray();
+        foreach (var badge in visible)
         {
             setupReadinessBadgeItems.Children.Add(CreateReadinessBadge(badge));
         }
+
+        var hidden = badges.Count - visible.Count;
+        if (hidden > 0 || readinessBadgesExpanded)
+        {
+            setupReadinessBadgeItems.Children.Add(CreateReadinessBadgeToggle(hidden));
+        }
+    }
+
+    private Border CreateReadinessBadgeToggle(int hiddenCount)
+    {
+        var label = readinessBadgesExpanded ? "Show less" : $"+{hiddenCount} passing";
+        var accent = resourceBrush("MutedTextBrush");
+        var chip = new Border
+        {
+            Background = resourceBrush("InputBrush"),
+            BorderBrush = resourceBrush("ControlBorderBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = ArenaTokens.SmallRadius,
+            Padding = new Thickness(7, 2, 7, 3),
+            Margin = new Thickness(0, 0, 6, 4),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Focusable = true,
+            ToolTip = readinessBadgesExpanded
+                ? "Hide the setup checks that already pass."
+                : "Show the setup checks that already pass.",
+            Child = new TextBlock
+            {
+                Text = label,
+                Foreground = accent,
+                FontSize = ArenaTokens.LabelFontSize,
+                FontWeight = FontWeights.SemiBold
+            }
+        };
+        chip.MouseLeftButtonUp += (_, args) =>
+        {
+            readinessBadgesExpanded = !readinessBadgesExpanded;
+            PopulateReadinessBadges(lastReadinessBadges);
+            args.Handled = true;
+        };
+        return chip;
     }
 
     private Border CreateReadinessBadge(SetupReadinessBadge badge)
     {
         var accent = badge.Kind switch
         {
-            "ready" => resourceBrush("GammaAccentBrush"),
-            "warning" => resourceBrush("BetaAccentBrush"),
+            "ready" => resourceBrush("Arena.Brush.Success"),
+            "warning" => resourceBrush("Arena.Brush.Warning"),
             "danger" => resourceBrush("DangerTextBrush"),
             _ => resourceBrush("MutedTextBrush")
         };
@@ -829,8 +888,8 @@ internal sealed class ScenarioWorkflowCoordinator
     {
         var accent = item.Kind switch
         {
-            "ready" => resourceBrush("GammaAccentBrush"),
-            "warning" => resourceBrush("BetaAccentBrush"),
+            "ready" => resourceBrush("Arena.Brush.Success"),
+            "warning" => resourceBrush("Arena.Brush.Warning"),
             "danger" => resourceBrush("DangerTextBrush"),
             _ => resourceBrush("MutedTextBrush")
         };
@@ -1153,10 +1212,14 @@ internal sealed class ScenarioWorkflowCoordinator
         var blockers = SetupReadinessBlockers(snapshot).ToArray();
         var warnings = SetupReadinessWarnings(snapshot).ToArray();
         var summary = SetupReadinessRunSummary(snapshot, rolePack, style, intensity, absurdity);
+        // Blockers keep their detail here because they stop the run and the
+        // readiness section is collapsed by default. Warnings are advisory and
+        // already spelled out in the checklist below, so the status line carries
+        // only their count instead of repeating each one a third time.
         var status = blockers.Length > 0
             ? $"Setup blocked: {blockers.Length} blocker(s) - {string.Join("; ", blockers.Take(2))}{(blockers.Length > 2 ? "; ..." : "")}."
             : warnings.Length > 0
-                ? $"Ready with warnings: {summary}; {warnings.Length} warning(s) - {string.Join("; ", warnings.Take(2))}{(warnings.Length > 2 ? "; ..." : "")}."
+                ? $"Ready with warnings: {summary}; {warnings.Length} warning(s) to review."
                 : $"Ready: {summary}.";
         var tooltip = SetupReadinessTooltipText(blockers, warnings, summary);
         return new SetupReadinessReport(

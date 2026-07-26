@@ -101,6 +101,12 @@
                                 <Setter TargetName="CaptionChrome" Property="Background" Value="{DynamicResource NavHoverBrush}" />
                                 <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
                             </Trigger>
+                            <!-- Snap Layouts moves the maximize button into the non-client
+                                 area, so its hover state arrives as a tag instead of IsMouseOver. -->
+                            <Trigger Property="Tag" Value="caption-hover">
+                                <Setter TargetName="CaptionChrome" Property="Background" Value="{DynamicResource NavHoverBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                            </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="CaptionChrome" Property="Background" Value="{DynamicResource NavPressedBrush}" />
                             </Trigger>
@@ -135,7 +141,8 @@
     <Border Background="{DynamicResource TopBarBrush}"
             BorderBrush="{DynamicResource ControlBorderBrush}"
             BorderThickness="0,0,0,1"
-            SnapsToDevicePixels="True">
+            SnapsToDevicePixels="True"
+            MouseRightButtonUp="CaptionSystemMenuRequested">
         <Grid x:Name="TopBarLayoutGrid" Margin="10,4">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />

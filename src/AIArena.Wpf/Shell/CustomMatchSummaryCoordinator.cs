@@ -66,13 +66,14 @@ internal sealed class CustomMatchSummaryCoordinator
 
     internal static string SetupProfileText(ArenaViewSnapshot snapshot)
     {
+        // The seed identifies the run for replay but says nothing about how the
+        // match will read, so it stays out of the at-a-glance profile.
         return string.Join(
             " / ",
             DisplayLabel(snapshot.ScenarioGeneratorRolePack, "auto pack"),
             DisplayLabel(snapshot.ScenarioGeneratorStyle, "auto style"),
             DisplayLabel(snapshot.ScenarioGeneratorIntensity, "normal pressure"),
-            DisplayLabel(snapshot.ScenarioGeneratorAbsurdity, "grounded personas"),
-            DisplayLabel(snapshot.ScenarioGeneratorSeed, "no seed"));
+            DisplayLabel(snapshot.ScenarioGeneratorAbsurdity, "grounded personas"));
     }
 
     internal static string RunShapeText(ArenaViewSnapshot snapshot)
@@ -125,8 +126,14 @@ internal sealed class CustomMatchSummaryCoordinator
 
     internal static string SetupSourceText(ArenaViewSnapshot snapshot)
     {
-        var source = DisplayLabel(snapshot.ScenarioGeneratorSeed, "manual setup");
-        var persona = DisplayLabel(snapshot.PersonaGeneratorSeed, "manual personas");
+        // Report how the setup was produced rather than echoing the raw seeds;
+        // Copy Seed and the source chip tooltip carry the exact values.
+        var source = ScenarioSeedInspectorCoordinator.ScenarioSeedSource(
+            snapshot.ScenarioGeneratorSeed,
+            snapshot.PersonaGeneratorStyle);
+        var personaSeeded = !string.IsNullOrWhiteSpace(snapshot.PersonaGeneratorSeed)
+            && snapshot.PersonaGeneratorSeed != "-";
+        var persona = personaSeeded ? "seeded personas" : "manual personas";
         var history = snapshot.GenerationHistory.Count == 0
             ? "no recent generated setups"
             : $"{snapshot.GenerationHistory.Count} recent generated setup(s)";
@@ -276,32 +283,32 @@ internal sealed class CustomMatchSummaryCoordinator
             "Setup Profile",
             SetupProfileText(snapshot),
             resourceBrush("CardBrush"),
-            resourceBrush("PrimaryBorderBrush")));
+            resourceBrush("ControlBorderBrush")));
         scenarioPreviewItems.Children.Add(shellCards.CreateCard(
             "Run Shape",
             RunShapeText(snapshot),
             resourceBrush("CardBrush"),
-            resourceBrush("GammaAccentBrush")));
+            resourceBrush("ControlBorderBrush")));
         scenarioPreviewItems.Children.Add(shellCards.CreateCard(
             "Relationship Map",
             RelationshipMapText(snapshot),
             resourceBrush("CardBrush"),
-            resourceBrush("BetaAccentBrush")));
+            resourceBrush("ControlBorderBrush")));
         scenarioPreviewItems.Children.Add(shellCards.CreateCard(
             "Lock Plan",
             LockPlanText(snapshot),
             resourceBrush("CardBrush"),
-            resourceBrush("AssistBorderBrush")));
+            resourceBrush("ControlBorderBrush")));
         scenarioPreviewItems.Children.Add(shellCards.CreateCard(
             "Setup Source",
             SetupSourceText(snapshot),
             resourceBrush("CardBrush"),
-            resourceBrush("PrimaryBorderBrush")));
+            resourceBrush("ControlBorderBrush")));
         scenarioPreviewItems.Children.Add(shellCards.CreateCard(
             "Run Constraints",
             RunConstraintText(snapshot),
             resourceBrush("CardBrush"),
-            resourceBrush("AssistBorderBrush")));
+            resourceBrush("ControlBorderBrush")));
     }
 
     private void PopulateCast(ArenaViewSnapshot snapshot)

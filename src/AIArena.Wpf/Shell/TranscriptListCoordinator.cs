@@ -286,14 +286,14 @@ internal sealed class TranscriptListCoordinator
 
         return CreateEmptyStateCard(
             presentation,
-            providerReady ? resourceBrush("BetaAccentBrush") : resourceBrush("AlphaAccentBrush"));
+            resourceBrush(providerReady ? "Arena.Brush.Success" : "Arena.Brush.Info"));
     }
 
     private Border CreateFilteredEmptyCard(int totalMessages)
     {
         return CreateEmptyStateCard(
             DescribeEmptyState(totalMessages, providerReachable: true, modelSelected: true, activeAgentCount: 0, currentAgentName: null),
-            resourceBrush("AlphaAccentBrush"));
+            resourceBrush("Arena.Brush.Info"));
     }
 
     private Border CreateEmptyStateCard(

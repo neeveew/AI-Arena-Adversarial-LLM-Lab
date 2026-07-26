@@ -156,9 +156,9 @@ internal sealed class ShellNavigationCoordinator
         SetBrush("DisabledBorderBrush", theme.DisabledBorder);
         SetBrush("DisabledTextBrush", theme.DisabledText);
         SetBrush("HoverBorderBrush", theme.HoverBorder);
-        SetBrush("NavHoverBrush", ShellUiHelpers.BlendBrush(new SolidColorBrush(theme.Input), new SolidColorBrush(theme.PrimaryBorder), 0.18));
-        SetBrush("NavActiveBrush", ShellUiHelpers.BlendBrush(new SolidColorBrush(theme.Input), new SolidColorBrush(theme.PrimaryBorder), 0.24));
-        SetBrush("NavPressedBrush", ShellUiHelpers.BlendBrush(new SolidColorBrush(theme.Input), new SolidColorBrush(theme.PrimaryBorder), 0.12));
+        SetBrush("NavHoverBrush", theme.NavHover);
+        SetBrush("NavActiveBrush", theme.NavActive);
+        SetBrush("NavPressedBrush", theme.NavPressed);
         SetBrush("PressedPrimaryBrush", theme.PressedPrimary);
         SetBrush("OverlayBrush", theme.Overlay);
         SetBrush("AlphaAccentBrush", theme.AlphaAccent);
@@ -197,7 +197,7 @@ internal sealed class ShellNavigationCoordinator
     public void ShowCustomMatchPanel()
     {
         transcriptPanel.Visibility = Visibility.Visible;
-        customMatchPanel.Visibility = Visibility.Visible;
+        ArenaMotion.RevealOverlay(customMatchPanel);
         agentWorldPanel.Visibility = Visibility.Collapsed;
         agentWorkspacePanel.Visibility = Visibility.Collapsed;
         collaboratePanel.Visibility = Visibility.Collapsed;
@@ -240,7 +240,15 @@ internal sealed class ShellNavigationCoordinator
 
     public void SetAppSettingsVisible(bool visible)
     {
-        appSettingsPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (visible)
+        {
+            ArenaMotion.RevealOverlay(appSettingsPanel);
+        }
+        else
+        {
+            ArenaMotion.HideOverlay(appSettingsPanel);
+        }
+
         ApplyAppSettingsButtonState(appSettingsButton, visible);
     }
 

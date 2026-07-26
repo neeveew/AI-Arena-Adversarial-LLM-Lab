@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 
 namespace AIArena.Wpf;
@@ -98,23 +99,33 @@ internal sealed class ShellCardFactory
         return CreateCard(title, body, blendBrush(resourceBrush("CardBrush"), accent, 0.08), accent, panel);
     }
 
-    public Border CreateSetupChip(string label, string value, Brush accent)
+    public Border CreateSetupChip(string label, string value, Brush accent, string? toolTip = null)
     {
+        // The label sits in the muted foreground and only the value takes the
+        // accent, so a row of chips reads as one field list instead of a set of
+        // competing badges.
+        var content = new TextBlock
+        {
+            FontSize = ArenaTokens.LabelFontSize,
+            FontWeight = FontWeights.SemiBold
+        };
+        content.Inlines.Add(new Run($"{label} ")
+        {
+            Foreground = resourceBrush("MutedTextBrush"),
+            FontWeight = FontWeights.Normal
+        });
+        content.Inlines.Add(new Run(value) { Foreground = accent });
+
         return new Border
         {
-            Background = blendBrush(resourceBrush("InputBrush"), accent, 0.08),
-            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.35),
+            Background = resourceBrush("InputBrush"),
+            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.25),
             BorderThickness = new Thickness(1),
             CornerRadius = ArenaTokens.SmallRadius,
             Padding = new Thickness(7, 2, 7, 3),
             Margin = new Thickness(0, 0, 6, 4),
-            Child = new TextBlock
-            {
-                Text = $"{label}: {value}",
-                Foreground = accent,
-                FontSize = ArenaTokens.LabelFontSize,
-                FontWeight = FontWeights.SemiBold
-            }
+            ToolTip = toolTip,
+            Child = content
         };
     }
 
