@@ -5,6 +5,39 @@ namespace AIArena.Wpf;
 
 internal static class ShellUiHelpers
 {
+    /// <summary>Matches the ellipsis WPF renders for CharacterEllipsis trimming.</summary>
+    public const string EllipsisSuffix = "…";
+
+    /// <summary>
+    /// Used where the reader needs to know content was cut rather than ended,
+    /// such as captured command output.
+    /// </summary>
+    public const string TruncatedNoticeSuffix = "... [truncated]";
+
+    /// <summary>
+    /// Shortens text to at most <paramref name="maxChars"/> including the
+    /// suffix.
+    ///
+    /// This replaces five separate copies that disagreed on both the suffix
+    /// ("...", "…", "... [truncated]") and on whether the limit was a hard cap:
+    /// one reserved a single character for a three-character suffix and so
+    /// overshot by two.
+    /// </summary>
+    public static string Truncate(string value, int maxChars, string suffix = EllipsisSuffix)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length <= maxChars)
+        {
+            return value;
+        }
+
+        if (maxChars <= suffix.Length)
+        {
+            return value[..Math.Max(0, maxChars)];
+        }
+
+        return value[..(maxChars - suffix.Length)] + suffix;
+    }
+
     public static string SelectedComboTag(ComboBox comboBox, string fallback)
     {
         return comboBox.SelectedItem is ComboBoxItem item && item.Tag is not null

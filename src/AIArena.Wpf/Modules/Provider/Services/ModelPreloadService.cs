@@ -276,12 +276,12 @@ public sealed class ModelPreloadService
             {
                 Content = JsonContent.Create(payload)
             };
-            ApplyAuthorization(request, apiToken);
+            ProviderHttpHelpers.ApplyAuthorization(request, apiToken);
             using var response = await httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return new ModelPreloadResult(model, "failed", FriendlyBody(body, response.ReasonPhrase), true);
+                return new ModelPreloadResult(model, "failed", ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Native model lifecycle request failed.", "message", "error", "detail"), true);
             }
 
             var loadMs = ExtractOllamaLoadMilliseconds(body);
@@ -334,12 +334,12 @@ public sealed class ModelPreloadService
             {
                 Content = JsonContent.Create(payload)
             };
-            ApplyAuthorization(request, apiToken);
+            ProviderHttpHelpers.ApplyAuthorization(request, apiToken);
             using var response = await httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return new ModelPreloadResult(selectedModel, "failed", FriendlyBody(body, response.ReasonPhrase), true);
+                return new ModelPreloadResult(selectedModel, "failed", ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Native model lifecycle request failed.", "message", "error", "detail"), true);
             }
 
             var seconds = ExtractLoadSeconds(body);
@@ -372,12 +372,12 @@ public sealed class ModelPreloadService
             {
                 Content = JsonContent.Create(new { instance_id = instanceId })
             };
-            ApplyAuthorization(request, apiToken);
+            ProviderHttpHelpers.ApplyAuthorization(request, apiToken);
             using var response = await httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return new ModelPreloadResult(selectedModel, "failed", FriendlyBody(body, response.ReasonPhrase), true);
+                return new ModelPreloadResult(selectedModel, "failed", ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Native model lifecycle request failed.", "message", "error", "detail"), true);
             }
 
             return new ModelPreloadResult(selectedModel, "unloaded", $"Unloaded instance {instanceId}.", false);
@@ -459,14 +459,6 @@ public sealed class ModelPreloadService
         return $"LM Studio reports {model.DisplayTitle} as loaded but did not provide a loaded instance id. Refresh the model catalog or reload the model in LM Studio before unloading.";
     }
 
-    private static void ApplyAuthorization(HttpRequestMessage request, string apiToken)
-    {
-        if (!string.IsNullOrWhiteSpace(apiToken))
-        {
-            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiToken.Trim()}");
-        }
-    }
-
     private static double ExtractLoadSeconds(string json)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -544,19 +536,6 @@ public sealed class ModelPreloadService
     private static string JoinDetail(params string[] parts)
     {
         return string.Join(" ", parts.Where(part => !string.IsNullOrWhiteSpace(part)));
-    }
-
-    private static string FriendlyBody(string body, string? reasonPhrase)
-    {
-        var message = LmStudioJsonMessageExtractor.ExtractMessage(body, "message", "error", "detail");
-        if (!string.IsNullOrWhiteSpace(message))
-        {
-            return message;
-        }
-
-        return !string.IsNullOrWhiteSpace(reasonPhrase)
-            ? reasonPhrase
-            : "Native model lifecycle request failed.";
     }
 
     private static string FriendlyException(Exception ex)

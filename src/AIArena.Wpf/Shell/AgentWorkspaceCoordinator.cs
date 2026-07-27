@@ -1425,7 +1425,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                     string.IsNullOrWhiteSpace(lastWorkBrief) ? "No work brief yet" : "Latest work brief",
                     string.IsNullOrWhiteSpace(lastWorkBrief)
                         ? "Run an approved command first. Agent will create a work brief from the command output, file receipt, recent history, and suggested next action."
-                        : Truncate(lastWorkBrief, 2200),
+                        : ShellUiHelpers.Truncate(lastWorkBrief, 2200, ShellUiHelpers.TruncatedNoticeSuffix),
                     "Status");
                 AddActivity("Slash /brief", string.IsNullOrWhiteSpace(lastWorkBrief) ? "No work brief available." : "Latest work brief shown.");
                 UpdateStatus(string.IsNullOrWhiteSpace(lastWorkBrief) ? "No work brief yet." : "Latest work brief shown.");
@@ -1910,7 +1910,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 Workspace: {workspacePath}
 
                 Operator request:
-                {Truncate(prompt, 1200)}
+                {ShellUiHelpers.Truncate(prompt, 1200, ShellUiHelpers.TruncatedNoticeSuffix)}
 
                 Builder notes to convert into the first runnable command:
                 {TruncateKeepingEnds(builder.Text, 2400, 800)}
@@ -2193,7 +2193,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             SetBuildEvidenceSummary("Command is running; new Builder proposal is held.");
             AddCenterMessage(
                 "Command proposal held",
-                $"{suggestionSource} produced a {suggestion.Shell} command while another command was running. Use Held will be available after the active command finishes.\n\nHeld proposal:\n{Truncate(suggestion.Command, 600)}",
+                $"{suggestionSource} produced a {suggestion.Shell} command while another command was running. Use Held will be available after the active command finishes.\n\nHeld proposal:\n{ShellUiHelpers.Truncate(suggestion.Command, 600, ShellUiHelpers.TruncatedNoticeSuffix)}",
                 "Action");
             return;
         }
@@ -2213,7 +2213,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 RefreshHeldCommandAction();
                 AddCenterMessage(
                     "Command proposal held",
-                    $"{suggestionSource} produced a {suggestion.Shell} command, but the approval rail already contains a command. Review or clear the current command first.\n\nHeld proposal:\n{Truncate(suggestion.Command, 600)}",
+                    $"{suggestionSource} produced a {suggestion.Shell} command, but the approval rail already contains a command. Review or clear the current command first.\n\nHeld proposal:\n{ShellUiHelpers.Truncate(suggestion.Command, 600, ShellUiHelpers.TruncatedNoticeSuffix)}",
                     "Action");
                 SetBuildEvidenceSummary("Builder proposal is held behind the current command.");
                 return;
@@ -2735,7 +2735,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         {
             panel.Children.Add(new TextBlock
             {
-                Text = Truncate(item.Detail.Replace("\r\n", " ", StringComparison.Ordinal).Replace('\n', ' ').Trim(), 130),
+                Text = ShellUiHelpers.Truncate(item.Detail.Replace("\r\n", " ", StringComparison.Ordinal).Replace('\n', ' ').Trim(), 130, ShellUiHelpers.TruncatedNoticeSuffix),
                 Foreground = resourceBrush("MutedTextBrush"),
                 FontSize = 10.5,
                 TextWrapping = TextWrapping.Wrap,
@@ -3130,7 +3130,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             : CommandNextAction(lastCommandResult, lastFileReceipt);
         var brief = string.IsNullOrWhiteSpace(lastWorkBrief)
             ? "No work brief has been generated yet."
-            : Truncate(lastWorkBrief, 2200);
+            : ShellUiHelpers.Truncate(lastWorkBrief, 2200, ShellUiHelpers.TruncatedNoticeSuffix);
         var artifact = latestArtifactSuggestion is null
             ? "No generated artifact suggestion detected yet."
             : $"{latestArtifactSuggestion.Summary}\nSuggested command ({latestArtifactSuggestion.Shell}):\n{latestArtifactSuggestion.Command}";
@@ -3190,7 +3190,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             : FormatLatestCommandContext();
         var brief = string.IsNullOrWhiteSpace(lastWorkBrief)
             ? "No work brief has been generated yet."
-            : Truncate(lastWorkBrief, 2200);
+            : ShellUiHelpers.Truncate(lastWorkBrief, 2200, ShellUiHelpers.TruncatedNoticeSuffix);
         var artifact = latestArtifactSuggestion is null
             ? "No generated artifact suggestion detected yet."
             : $"{latestArtifactSuggestion.Summary}\nSuggested preview command ({latestArtifactSuggestion.Shell}):\n{latestArtifactSuggestion.Command}";
@@ -4263,7 +4263,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         };
         var command = new TextBlock
         {
-            Text = Truncate(FirstCommandLine(item.Command), 120),
+            Text = ShellUiHelpers.Truncate(FirstCommandLine(item.Command), 120, ShellUiHelpers.TruncatedNoticeSuffix),
             Foreground = resourceBrush("MutedTextBrush"),
             FontSize = 11,
             TextTrimming = TextTrimming.CharacterEllipsis,
@@ -4425,9 +4425,12 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return "No command history yet.";
         }
 
-        return Truncate(string.Join(
-            Environment.NewLine,
-            commandHistory.Take(5).Select(item => $"- {item.Status} | {item.Shell} | {Truncate(FirstCommandLine(item.Command), 140)} | {item.Detail}")), 2000);
+        return ShellUiHelpers.Truncate(
+            string.Join(
+                Environment.NewLine,
+                commandHistory.Take(5).Select(item => $"- {item.Status} | {item.Shell} | {ShellUiHelpers.Truncate(FirstCommandLine(item.Command), 140, ShellUiHelpers.TruncatedNoticeSuffix)} | {item.Detail}")),
+            2000,
+            ShellUiHelpers.TruncatedNoticeSuffix);
     }
 
     private string FormatAutonomyContext()
@@ -4596,8 +4599,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private static string FormatCommandResult(AgentCommandResult result)
     {
-        var stdout = Truncate(result.StandardOutput.TrimEnd(), MaxCommandOutputChars / 2);
-        var stderr = Truncate(result.StandardError.TrimEnd(), MaxCommandOutputChars / 2);
+        var stdout = ShellUiHelpers.Truncate(result.StandardOutput.TrimEnd(), MaxCommandOutputChars / 2, ShellUiHelpers.TruncatedNoticeSuffix);
+        var stderr = ShellUiHelpers.Truncate(result.StandardError.TrimEnd(), MaxCommandOutputChars / 2, ShellUiHelpers.TruncatedNoticeSuffix);
         var error = string.IsNullOrWhiteSpace(result.Error) ? "" : $"\nError: {result.Error}";
         return $"""
             > {result.Shell} in {result.WorkingDirectory}
@@ -4618,7 +4621,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private static string FormatCommandContext(AgentCommandResult result)
     {
-        return Truncate($"""
+        return ShellUiHelpers.Truncate($"""
             Shell: {result.Shell}
             Working directory: {result.WorkingDirectory}
             Command: {result.Command}
@@ -4629,7 +4632,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             {result.StandardOutput}
             STDERR:
             {result.StandardError}
-            """, 5000);
+            """, 5000, ShellUiHelpers.TruncatedNoticeSuffix);
     }
 
     private string FormatLatestCommandContext()
@@ -4640,7 +4643,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
 
         var receipt = lastFileReceipt is null ? "" : $"{Environment.NewLine}{Environment.NewLine}{FormatFileReceipt(lastFileReceipt)}";
-        return Truncate($"{FormatCommandContext(lastCommandResult)}{receipt}", 6500);
+        return ShellUiHelpers.Truncate($"{FormatCommandContext(lastCommandResult)}{receipt}", 6500, ShellUiHelpers.TruncatedNoticeSuffix);
     }
 
     private static Task<AgentWorkspaceFileSnapshot> CaptureWorkspaceFilesAsync(string root, CancellationToken cancellationToken)
@@ -5038,16 +5041,6 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
         var name = Path.GetFileName(value.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         return string.IsNullOrWhiteSpace(name) ? value : name;
-    }
-
-    private static string Truncate(string value, int maxChars)
-    {
-        if (value.Length <= maxChars)
-        {
-            return value;
-        }
-
-        return value[..Math.Max(0, maxChars - 16)] + "... [truncated]";
     }
 
     internal static string TruncateKeepingEnds(string value, int headChars, int tailChars)

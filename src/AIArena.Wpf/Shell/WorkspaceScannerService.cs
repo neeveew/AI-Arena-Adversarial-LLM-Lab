@@ -122,7 +122,7 @@ internal static class WorkspaceScannerService
             lines[1] += $", +{(keyFiles.Count - 12).ToString(CultureInfo.InvariantCulture)} more";
         }
 
-        return Truncate(string.Join(Environment.NewLine, lines), 1600);
+        return ShellUiHelpers.Truncate(string.Join(Environment.NewLine, lines), 1600);
     }
 
     internal static IReadOnlyList<string> DiscoverWorkspaceProfileDirectories(string root)
@@ -516,13 +516,4 @@ internal static class WorkspaceScannerService
         }
     }
 
-    private static string Truncate(string value, int maxChars)
-    {
-        if (value.Length <= maxChars)
-        {
-            return value;
-        }
-
-        return value[..Math.Max(0, maxChars - 1)] + "…";
-    }
 }

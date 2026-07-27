@@ -477,7 +477,7 @@ public sealed class MatchGenerationService : IDisposable
             baseName = $"run-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}";
         }
 
-        var sessions = await _sessionStore.ListSessionsAsync(cancellationToken);
+        var sessions = await _sessionStore.ListSessionsAsync(SessionListingDetail.Identity, cancellationToken);
         var existing = sessions.Select(session => session.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (!existing.Contains(baseName))
         {

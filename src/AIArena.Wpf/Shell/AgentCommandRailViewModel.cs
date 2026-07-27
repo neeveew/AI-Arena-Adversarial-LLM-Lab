@@ -108,11 +108,11 @@ internal sealed record AgentCommandRailViewModel(
 
         var artifact = string.IsNullOrWhiteSpace(artifactSuggestionSummary)
             ? ""
-            : $" Artifact: {Truncate(artifactSuggestionSummary, 90)}.";
+            : $" Artifact: {ShellUiHelpers.Truncate(artifactSuggestionSummary, 90, ShellUiHelpers.TruncatedNoticeSuffix)}.";
         var artifactCheck = string.IsNullOrWhiteSpace(artifactVerificationSummary)
             ? ""
-            : $" Artifact check: {Truncate(artifactVerificationSummary, 90)}.";
-        return $"{state} in {FormatElapsed(result.Elapsed)} | {changed}.{artifact}{artifactCheck} {Truncate(nextAction, 120)}";
+            : $" Artifact check: {ShellUiHelpers.Truncate(artifactVerificationSummary, 90, ShellUiHelpers.TruncatedNoticeSuffix)}.";
+        return $"{state} in {FormatElapsed(result.Elapsed)} | {changed}.{artifact}{artifactCheck} {ShellUiHelpers.Truncate(nextAction, 120, ShellUiHelpers.TruncatedNoticeSuffix)}";
     }
 
     private static string CommandStatusAfterResult(
@@ -247,15 +247,6 @@ internal sealed record AgentCommandRailViewModel(
             : $"{elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture)}s";
     }
 
-    private static string Truncate(string value, int maxChars)
-    {
-        if (value.Length <= maxChars)
-        {
-            return value;
-        }
-
-        return value[..Math.Max(0, maxChars - 16)] + "... [truncated]";
-    }
 }
 
 internal sealed record AgentCommandRiskChip(string Label, string BorderResourceKey);

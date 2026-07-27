@@ -55,12 +55,12 @@ public sealed class LmStudioModelDownloadService
             {
                 Content = JsonContent.Create(payload)
             };
-            ApplyAuthorization(request, apiToken);
+            ProviderHttpHelpers.ApplyAuthorization(request, apiToken);
             using var response = await httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return LmStudioModelDownloadResult.Failed(normalizedModel, normalizedQuantization, "", FriendlyBody(body, response.ReasonPhrase));
+                return LmStudioModelDownloadResult.Failed(normalizedModel, normalizedQuantization, "", ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "LM Studio request failed.", "error", "message", "detail"));
             }
 
             return ParseStartResponse(body, normalizedModel, normalizedQuantization);
@@ -97,12 +97,12 @@ public sealed class LmStudioModelDownloadService
                 new Uri(LmStudioModelCatalogService.NormalizeLmStudioApiBase(providerBaseUrl) + "/"),
                 $"models/download/status/{Uri.EscapeDataString(normalizedJobId)}");
             using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
-            ApplyAuthorization(request, apiToken);
+            ProviderHttpHelpers.ApplyAuthorization(request, apiToken);
             using var response = await httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return LmStudioModelDownloadResult.Failed(normalizedModel, normalizedQuantization, normalizedJobId, FriendlyBody(body, response.ReasonPhrase));
+                return LmStudioModelDownloadResult.Failed(normalizedModel, normalizedQuantization, normalizedJobId, ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "LM Studio request failed.", "error", "message", "detail"));
             }
 
             return ParseStatusResponse(body, normalizedModel, normalizedQuantization, normalizedJobId);
@@ -121,9 +121,9 @@ public sealed class LmStudioModelDownloadService
     {
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
         var root = doc.RootElement;
-        var status = FirstString(root, "status", "state");
-        var jobId = FirstString(root, "job_id", "jobId", "id");
-        var responseModel = FirstString(root, "model", "model_key", "key");
+        var status = ProviderHttpHelpers.FirstString(root, "status", "state");
+        var jobId = ProviderHttpHelpers.FirstString(root, "job_id", "jobId", "id");
+        var responseModel = ProviderHttpHelpers.FirstString(root, "model", "model_key", "key");
         var error = LmStudioJsonMessageExtractor.ExtractMessage(root, "error", "message", "detail", "reason");
         var effectiveModel = string.IsNullOrWhiteSpace(responseModel) ? model : responseModel;
         var normalizedStatus = string.IsNullOrWhiteSpace(status) ? "started" : status.Trim();
@@ -146,8 +146,8 @@ public sealed class LmStudioModelDownloadService
     {
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
         var root = doc.RootElement;
-        var status = FirstString(root, "status", "state");
-        var responseModel = FirstString(root, "model", "model_key", "key");
+        var status = ProviderHttpHelpers.FirstString(root, "status", "state");
+        var responseModel = ProviderHttpHelpers.FirstString(root, "model", "model_key", "key");
         var error = LmStudioJsonMessageExtractor.ExtractMessage(root, "error", "message", "detail", "reason");
         var effectiveModel = string.IsNullOrWhiteSpace(responseModel) ? model : responseModel;
         var normalizedStatus = string.IsNullOrWhiteSpace(status) ? "unknown" : status.Trim();
@@ -240,24 +240,6 @@ public sealed class LmStudioModelDownloadService
         return trimmed.Equals("auto", StringComparison.OrdinalIgnoreCase) ? "" : trimmed;
     }
 
-    private static string FirstString(JsonElement element, params string[] names)
-    {
-        if (element.ValueKind != JsonValueKind.Object)
-        {
-            return "";
-        }
-
-        foreach (var name in names)
-        {
-            if (element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
-            {
-                return value.GetString()?.Trim() ?? "";
-            }
-        }
-
-        return "";
-    }
-
     private static double FirstDouble(JsonElement element, params string[] names)
     {
         if (element.ValueKind != JsonValueKind.Object)
@@ -298,17 +280,6 @@ public sealed class LmStudioModelDownloadService
         return 0;
     }
 
-    private static string FriendlyBody(string body, string? reason)
-    {
-        var error = LmStudioJsonMessageExtractor.ExtractMessage(body, "error", "message", "detail");
-        if (!string.IsNullOrWhiteSpace(error))
-        {
-            return error;
-        }
-
-        return string.IsNullOrWhiteSpace(reason) ? "LM Studio request failed." : reason.Trim();
-    }
-
     private static string FriendlyException(Exception ex)
     {
         return ex is TaskCanceledException
@@ -316,14 +287,6 @@ public sealed class LmStudioModelDownloadService
             : ex.Message;
     }
 
-    private static void ApplyAuthorization(HttpRequestMessage request, string apiToken)
-    {
-        var token = apiToken.Trim();
-        if (!string.IsNullOrWhiteSpace(token))
-        {
-            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}");
-        }
-    }
 }
 
 public sealed record LmStudioModelDownloadResult(

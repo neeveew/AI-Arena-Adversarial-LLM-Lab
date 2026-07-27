@@ -2809,6 +2809,68 @@ static void ProviderReachabilityProjectsOneCoherentUiGeneration()
         "the coherent provider projection should publish state before refreshing top, rail/settings, and transcript readiness in one dispatcher turn");
 }
 
+static void TruncateRespectsItsLimitAndSuffix()
+{
+    // Five separate copies of this helper disagreed on the suffix and on
+    // whether the limit was a hard cap; one reserved a single character for a
+    // three-character suffix and overshot.
+    Require(ShellUiHelpers.Truncate("short", 20) == "short", "text within the limit should be untouched");
+    Require(ShellUiHelpers.Truncate("", 5) == "", "an empty string should stay empty");
+    Require(ShellUiHelpers.Truncate("exactlyten", 10) == "exactlyten", "text exactly at the limit should not be cut");
+
+    var ellipsis = ShellUiHelpers.Truncate(new string('a', 50), 10);
+    Require(ellipsis.Length == 10, $"the limit must be a hard cap, got {ellipsis.Length}");
+    Require(ellipsis.EndsWith(ShellUiHelpers.EllipsisSuffix, StringComparison.Ordinal), "the default suffix should be the ellipsis character");
+
+    var notice = ShellUiHelpers.Truncate(new string('b', 200), 40, ShellUiHelpers.TruncatedNoticeSuffix);
+    Require(notice.Length == 40, $"the notice suffix must also respect the cap, got {notice.Length}");
+    Require(notice.EndsWith(ShellUiHelpers.TruncatedNoticeSuffix, StringComparison.Ordinal), "captured output should say it was truncated");
+
+    // A limit shorter than the suffix cannot carry one, and must still not overshoot.
+    var tiny = ShellUiHelpers.Truncate("abcdefgh", 2, ShellUiHelpers.TruncatedNoticeSuffix);
+    Require(tiny.Length <= 2, $"a limit below the suffix length must still cap, got {tiny.Length}");
+}
+
+static void SessionPickerHidesEmptySessionsWithoutLosingReach()
+{
+    static AIArena.Core.Models.SessionSummary Session(string id, int messages)
+    {
+        return new AIArena.Core.Models.SessionSummary(id, $"{id}\\snapshot.json", true, messages, 0, 0, DateTimeOffset.UnixEpoch);
+    }
+
+    // A shared data root fills with sessions that never received a turn.
+    var sessions = new[]
+    {
+        Session("default", 0),
+        Session("real-run", 12),
+        Session("replay-a", 0),
+        Session("replay-b", 0)
+    };
+
+    var visible = SavedStateWorkflowCoordinator.VisibleSessions(sessions, includeEmpty: false, selectedId: null);
+    Require(visible.Count == 2, $"empty foreign sessions should be hidden, got {visible.Count}");
+    Require(visible.Any(session => session.Id == "real-run"), "sessions with turns must stay listed");
+    Require(visible.Any(session => session.Id == "default"), "the default session must stay reachable even when empty");
+    Require(!visible.Any(session => session.Id.StartsWith("replay-", StringComparison.Ordinal)), "empty sessions should be filtered");
+
+    // The selected session must never vanish from under the operator.
+    var withSelection = SavedStateWorkflowCoordinator.VisibleSessions(sessions, includeEmpty: false, selectedId: "replay-b");
+    Require(withSelection.Any(session => session.Id == "replay-b"), "the selected session must remain visible even when empty");
+
+    var all = SavedStateWorkflowCoordinator.VisibleSessions(sessions, includeEmpty: true, selectedId: null);
+    Require(all.Count == sessions.Length, "the toggle should restore every session");
+
+    // If nothing has a transcript, showing an empty picker would be worse than showing all.
+    var allEmpty = new[] { Session("replay-a", 0), Session("replay-b", 0) };
+    Require(SavedStateWorkflowCoordinator.VisibleSessions(allEmpty, includeEmpty: false, selectedId: null).Count == 2,
+        "a store with no transcripts should fall back to listing everything rather than nothing");
+
+    var status = SavedStateWorkflowCoordinator.SessionListStatus(total: 830, visible: 2, includeEmpty: false);
+    Require(status.Contains("828 empty hidden", StringComparison.Ordinal), $"status should report how many were hidden, got '{status}'");
+    Require(!SavedStateWorkflowCoordinator.SessionListStatus(4, 4, includeEmpty: true).Contains("hidden", StringComparison.Ordinal),
+        "status should not mention hiding when nothing is hidden");
+}
+
 static void SessionTokenAccountingReportsTotalsAndPressure()
 {
     static TranscriptMessage Turn(int turn, int promptTokens, int completionTokens)
@@ -2949,8 +3011,34 @@ static void AdvertisedShortcutsAreHandled()
         ["Ctrl+Enter"] = "Key.Enter",
         ["Ctrl+E"] = "Key.E",
         ["Ctrl+,"] = "Key.OemComma",
-        ["Ctrl+Shift+R"] = "Key.R"
+        ["Ctrl+Shift+R"] = "Key.R",
+        ["Ctrl+1"] = "Key.D1",
+        ["Ctrl+2"] = "Key.D2",
+        ["Ctrl+3"] = "Key.D3",
+        ["F2"] = "Key.F2",
+        ["F5"] = "Key.F5",
+        ["F7"] = "Key.F7",
+        ["F8"] = "Key.F8",
+        ["F9"] = "Key.F9",
+        ["F10"] = "Key.F10"
     };
+
+    // WPF delivers F10 and every Alt combination as Key.System with the real
+    // key in SystemKey, because those keys traditionally open a window menu.
+    // Matching on Key alone made F10 do nothing at all.
+    Require(MainWindow.EffectiveShortcutKey(Key.System, Key.F10) == Key.F10, "F10 arrives as a system key and must resolve to F10");
+    Require(MainWindow.EffectiveShortcutKey(Key.F5, Key.None) == Key.F5, "ordinary keys must pass through unchanged");
+    Require(handlerBody.Contains("EffectiveShortcutKey", StringComparison.Ordinal), "the shell key handler must resolve system keys before matching");
+    Require(!handlerBody.Contains("switch (e.Key)", StringComparison.Ordinal), "matching on e.Key directly would lose F10 again");
+
+    // F3 means "find next" on Windows. Transcript search filters rather than
+    // stepping through matches, so binding it would fight muscle memory for no
+    // gain; this keeps it reserved until there is something to step through.
+    Require(!handlerBody.Contains("Key.F3", StringComparison.Ordinal), "F3 should stay unbound while search filters rather than stepping matches");
+
+    // Destructive actions stay pointer-only: a stray function key must not be
+    // able to wipe a run.
+    Require(!handlerBody.Contains("ResetButton_Click", StringComparison.Ordinal), "Reset must not be reachable from a shell shortcut");
 
     foreach (var pair in keyForShortcut)
     {

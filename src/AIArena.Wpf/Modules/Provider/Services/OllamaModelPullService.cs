@@ -42,12 +42,12 @@ public sealed class OllamaModelPullService
                     stream = false
                 })
             };
-            ApplyAuthorization(request, apiToken);
+            ProviderHttpHelpers.ApplyAuthorization(request, apiToken);
             using var response = await httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return OllamaModelPullResult.Failed(normalizedModel, FriendlyBody(body, response.ReasonPhrase));
+                return OllamaModelPullResult.Failed(normalizedModel, ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Ollama pull request failed.", "error", "message", "detail"));
             }
 
             return ParseResponse(body, normalizedModel);
@@ -66,9 +66,9 @@ public sealed class OllamaModelPullService
     {
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
         var root = doc.RootElement;
-        var status = FirstString(root, "status", "state");
+        var status = ProviderHttpHelpers.FirstString(root, "status", "state");
         var error = LmStudioJsonMessageExtractor.ExtractMessage(root, "error", "message", "detail", "reason");
-        var digest = FirstString(root, "digest");
+        var digest = ProviderHttpHelpers.FirstString(root, "digest");
         var completed = FirstLong(root, "completed", "completed_bytes", "downloaded", "downloaded_bytes");
         var total = FirstLong(root, "total", "total_bytes", "total_size_bytes");
         var normalizedStatus = string.IsNullOrWhiteSpace(status) ? "success" : status.Trim();
@@ -103,17 +103,6 @@ public sealed class OllamaModelPullService
         return string.Join(", ", parts);
     }
 
-    private static string FriendlyBody(string body, string? reason)
-    {
-        var error = LmStudioJsonMessageExtractor.ExtractMessage(body, "error", "message", "detail");
-        if (!string.IsNullOrWhiteSpace(error))
-        {
-            return error;
-        }
-
-        return string.IsNullOrWhiteSpace(reason) ? "Ollama pull request failed." : reason.Trim();
-    }
-
     private static string FriendlyException(Exception ex)
     {
         if (ex is TaskCanceledException)
@@ -127,33 +116,6 @@ public sealed class OllamaModelPullService
         }
 
         return ex.Message;
-    }
-
-    private static void ApplyAuthorization(HttpRequestMessage request, string apiToken)
-    {
-        var token = apiToken.Trim();
-        if (!string.IsNullOrWhiteSpace(token))
-        {
-            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}");
-        }
-    }
-
-    private static string FirstString(JsonElement element, params string[] names)
-    {
-        if (element.ValueKind != JsonValueKind.Object)
-        {
-            return "";
-        }
-
-        foreach (var name in names)
-        {
-            if (element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
-            {
-                return value.GetString()?.Trim() ?? "";
-            }
-        }
-
-        return "";
     }
 
     private static long FirstLong(JsonElement element, params string[] names)

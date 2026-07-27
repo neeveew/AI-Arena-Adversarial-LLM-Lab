@@ -343,7 +343,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             RefreshActiveSessionForCoordinatorAsync,
             ResourceBrush,
             SetArenaRunStatus,
-            SetLoadStatus);
+            SetLoadStatus,
+            SavedStateShowEmptyCheckBox);
         _crossSessionSearchService = new CrossSessionSearchService(_coreSessionStore);
         _savedStateControlService = new SavedStateControlService(
             _coreSessionStore,
@@ -2016,11 +2017,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         string? preferredSessionId = null,
         CancellationToken cancellationToken = default)
     {
-        var sessions = await _coreSessionStore.ListSessionsAsync(cancellationToken);
+        var sessions = await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Messages, cancellationToken);
         if (sessions.Count == 0)
         {
             await _coreSessionStore.EnsureDefaultSessionAsync(cancellationToken);
-            sessions = await _coreSessionStore.ListSessionsAsync(cancellationToken);
+            sessions = await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Messages, cancellationToken);
         }
 
         SavedStateCoordinator.SetSessions(sessions);
@@ -2085,7 +2086,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 return;
             }
 
-            var latestSession = (await _coreSessionStore.ListSessionsAsync())
+            var latestSession = (await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Identity))
                 .FirstOrDefault(session => session.Id == _activeSession.Id);
             if (latestSession is null)
             {
@@ -3628,6 +3629,19 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     }
 
     /// <summary>
+    /// Resolves the key a shortcut should match on.
+    ///
+    /// WPF routes F10 and every Alt combination as <see cref="Key.System"/>,
+    /// putting the real key in <see cref="KeyEventArgs.SystemKey"/>, because
+    /// those keys traditionally open a window menu. Matching on Key alone
+    /// silently loses F10.
+    /// </summary>
+    internal static Key EffectiveShortcutKey(Key key, Key systemKey)
+    {
+        return key == Key.System ? systemKey : key;
+    }
+
+    /// <summary>
     /// Window-level shortcuts. These run in the preview pass so they work from
     /// anywhere in the shell, but text-entry chords keep priority for the
     /// focused editor: composers already bind Ctrl+Enter to send.
@@ -3636,12 +3650,60 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     {
         var control = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
         var shift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
-        if (!control && e.Key != Key.F1)
+        var alt = (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt;
+        var key = EffectiveShortcutKey(e.Key, e.SystemKey);
+
+        // Function keys move between surfaces and carry no modifier. Nothing
+        // destructive is bound here: Reset stays a deliberate pointer action.
+        if (!control && !alt)
+        {
+            switch (key)
+            {
+                case Key.F2:
+                    MatchSetupButton_Click(MatchSetupButton, new RoutedEventArgs());
+                    return true;
+                case Key.F5:
+                    _ = RefreshActiveSessionAsync("Reloaded the session from disk.");
+                    return true;
+                case Key.F7:
+                    RightRailToggleButton_Click(RightRailToggleButton, new RoutedEventArgs());
+                    return true;
+                case Key.F8:
+                    ViewMenuButton_Click(ViewMenuButton, new RoutedEventArgs());
+                    return true;
+                case Key.F9:
+                    ToggleAutoChatFromShortcut();
+                    return true;
+                case Key.F10:
+                    AppSettingsButton_Click(AppSettingsButton, new RoutedEventArgs());
+                    return true;
+            }
+        }
+
+        // Ctrl+1/2/3 select a view. The navigation handlers already explain
+        // themselves when a view is gated off, so gating is not repeated here.
+        if (control && !shift && !alt)
+        {
+            switch (key)
+            {
+                case Key.D1 or Key.NumPad1:
+                    ArenaNavButton_Click(ShellNavigationRail, new RoutedEventArgs());
+                    return true;
+                case Key.D2 or Key.NumPad2:
+                    AgentNavButton_Click(ShellNavigationRail, new RoutedEventArgs());
+                    return true;
+                case Key.D3 or Key.NumPad3:
+                    CollaborateNavButton_Click(ShellNavigationRail, new RoutedEventArgs());
+                    return true;
+            }
+        }
+
+        if (!control && key != Key.F1)
         {
             return false;
         }
 
-        switch (e.Key)
+        switch (key)
         {
             case Key.F when !shift:
                 TranscriptSearchButton_Click(TranscriptSearchButton, new RoutedEventArgs());
@@ -3672,6 +3734,27 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
     }
 
+    /// <summary>
+    /// One key drives both directions of the run loop: start automatic chat, or
+    /// pause it if it is already running.
+    /// </summary>
+    private void ToggleAutoChatFromShortcut()
+    {
+        if (ArenaRun.IsAutoChatRunning)
+        {
+            StopButton_Click(StopButton, new RoutedEventArgs());
+            return;
+        }
+
+        if (!AutoChatButton.IsEnabled)
+        {
+            SetLoadStatus("Auto Chat is unavailable until the arena is ready.");
+            return;
+        }
+
+        AutoChatButton_Click(AutoChatButton, new RoutedEventArgs());
+    }
+
     private void ShowShortcutsOverlay()
     {
         var body = string.Join(
@@ -3687,8 +3770,23 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             ConfirmDialogTone.Info);
     }
 
+    /// <summary>
+    /// Function keys move between surfaces, Ctrl chords perform actions, and
+    /// Ctrl+number selects a view. F3 is intentionally absent: it means "find
+    /// next" on Windows, and transcript search filters rather than stepping
+    /// through matches, so there is nothing honest to bind it to yet.
+    /// </summary>
     internal static IReadOnlyList<(string Keys, string Action)> ShellShortcuts { get; } =
     [
+        ("Ctrl+1", "Go to AI Lab"),
+        ("Ctrl+2", "Go to Agent"),
+        ("Ctrl+3", "Go to AI Collaborate"),
+        ("F2", "Open or close Match Setup"),
+        ("F5", "Reload the session from disk"),
+        ("F7", "Show or hide the right rail"),
+        ("F8", "Open the transcript view menu"),
+        ("F9", "Start Auto Chat, or pause it"),
+        ("F10", "Open App Settings"),
         ("Ctrl+F", "Search the transcript"),
         ("Ctrl+M", "Open or close Match Setup"),
         ("Ctrl+Enter", "Run one arena turn"),
@@ -4187,6 +4285,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         _savedStateCoordinator?.OnItemSelectionChanged();
     }
 
+    private void SavedStateShowEmptyCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        _savedStateCoordinator?.SetShowEmptySessions(SavedStateShowEmptyCheckBox.IsChecked == true);
+    }
+
     private async void SavedStateSaveButton_Click(object sender, RoutedEventArgs e)
     {
         if (_savedStateCoordinator is not null)
@@ -4413,7 +4516,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
         var observedWriteTime = TryGetSessionDirectoryLastModified(_activeSession.SnapshotPath);
         var latest = observedWriteTime is null
-            ? (await _coreSessionStore.ListSessionsAsync(cancellationToken)).FirstOrDefault(session => session.Id == _activeSession.Id)
+            ? (await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Identity, cancellationToken)).FirstOrDefault(session => session.Id == _activeSession.Id)
             : _activeSession with { LastModified = observedWriteTime.Value };
         if (latest is not null)
         {
