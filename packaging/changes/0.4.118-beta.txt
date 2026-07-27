@@ -1,0 +1,4 @@
+- Speeds up the session list on large data roots: message counts are read without deserializing each snapshot, and both message and event counts are cached against each file's write time, so unchanged sessions no longer cost a full read. Measured against 830 sessions, a warm listing drops from about 1.1 seconds to roughly half a second, and a cold listing from about 9.7 seconds.
+- Makes cross-session search read each session once instead of twice; it previously listed every session and then reloaded every snapshot for the same query.
+- Precompiles the startup path with ReadyToRun and enables profile-guided tiering, taking a warm launch to a responsive shell from about 1.23 to 1.11 seconds.
+- Keeps the WPF PowerShell plane enabled by default, retains the self-screenshot command and bundled SearXNG Internet backend, and remains a self-contained Windows installation with no separate .NET Desktop Runtime requirement.
