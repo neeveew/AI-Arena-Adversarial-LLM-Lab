@@ -3688,6 +3688,39 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
     });
 }
 
+static void EmptyAndOffStatesAreNotStyledAsFailures()
+{
+    // The danger tone should mean "something went wrong", not "there is nothing
+    // here yet" or "you turned this off". Two places conflated them, and both
+    // greeted the reader with red before they had done anything wrong.
+    var shell = ReadMainWindowSource();
+
+    var noSessions = shell.IndexOf("No saved sessions yet", StringComparison.Ordinal);
+    Require(noSessions >= 0, "the first-run session status should still be reported");
+    var noSessionsLine = shell[noSessions..Math.Min(shell.Length, noSessions + 160)];
+    Require(
+        !noSessionsLine.Contains("isDanger: true", StringComparison.Ordinal),
+        "an empty data root is where every first run starts, not a failure");
+
+    var internet = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/InternetWorkflowCoordinator.cs"));
+    var offHint = internet.IndexOf("Internet is off.", StringComparison.Ordinal);
+    Require(offHint >= 0, "the internet-off hint should still be shown");
+    var offBlock = internet[offHint..Math.Min(internet.Length, offHint + 260)];
+    Require(
+        !offBlock.Contains("DangerTextBrush", StringComparison.Ordinal),
+        "internet off is a deliberate choice, and the more conservative one, so it must not read as a fault");
+    Require(
+        offBlock.Contains("MutedTextBrush", StringComparison.Ordinal),
+        "the internet-off hint should use the muted tone");
+
+    // The flag must survive for the cases it is actually for, or this guard
+    // would just be pushing every failure into the same silent grey.
+    var savedState = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/SavedStateWorkflowCoordinator.cs"));
+    Require(
+        savedState.Contains("Checkpoint load failed.\", isDanger: true", StringComparison.Ordinal),
+        "a genuine failure should still be styled as one");
+}
+
 static void CommandPaletteRanksMatchesPredictably()
 {
     // A palette that reorders itself unpredictably is worse than one that only

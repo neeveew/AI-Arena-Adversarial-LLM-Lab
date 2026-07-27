@@ -2034,8 +2034,12 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
         if (defaultSession is null)
         {
+            // A data root with no sessions is where every first run starts, not
+            // a failure. This ran during startup rather than in response to
+            // anything the reader did, so the danger tone told them something
+            // had gone wrong before they had touched the app.
             LoadStatus.Text = $"No sessions found in {Path.Combine(_coreSessionStore.DataRoot, "sessions")}";
-            SavedStateCoordinator.SetStatus("No saved sessions found.", isDanger: true);
+            SavedStateCoordinator.SetStatus("No saved sessions yet. Run a turn to create one.");
             SavedStateCoordinator.ApplyForkLineage(null);
             SavedStateCoordinator.UpdatePicker();
             PopulateFallbackState("No AI Arena sessions found.");
