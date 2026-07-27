@@ -1,0 +1,8 @@
+- Adds shell keyboard shortcuts: Ctrl+F search, Ctrl+M Match Setup, Ctrl+Enter run one turn, Ctrl+E export, Ctrl+comma settings, Ctrl+Shift+R right rail, and Ctrl+/ or F1 for the shortcut list. Ctrl+F was previously advertised in the search tooltip but did nothing.
+- Adds cross-session transcript search: find a phrase across every stored session, grouped by session with turn and speaker attribution and an excerpt around the match, and open the session a result came from.
+- Reports session token totals including prompts, and warns when the largest prompt approaches the configured provider context window.
+- Makes transcript updates incremental so a new turn no longer rebuilds every rendered card, keeping long sessions responsive.
+- Slows background polling when the window is unfocused with nothing running, restoring the responsive cadence on focus or as soon as a run starts.
+- Stops three more status colours borrowing customizable agent identity accents: provider online, the saved-snapshot receipt, and the agent performance metric row.
+- Adds guard tests so an advertised keyboard shortcut without a handler, or a status tone resolving to an agent accent, now fails the build.
+- Keeps the WPF PowerShell plane enabled by default, retains the self-screenshot command and bundled SearXNG Internet backend, and remains a self-contained Windows installation with no separate .NET Desktop Runtime requirement.
