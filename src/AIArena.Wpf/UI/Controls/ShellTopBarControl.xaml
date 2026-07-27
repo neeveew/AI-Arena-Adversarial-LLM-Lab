@@ -557,7 +557,7 @@
                         Margin="0,0,6,0"
                         AutomationProperties.Name="Open Match Setup"
                         AutomationProperties.HelpText="Open or close the Match Setup flyout."
-                        ToolTip="Open Match Setup" />
+                        ToolTip="Open Match Setup (Ctrl+M)" />
 
                 <Border Style="{StaticResource ToolbarGroup}">
                     <StackPanel Orientation="Horizontal">
@@ -669,7 +669,7 @@
                                 Style="{StaticResource TopIconButton}"
                                 AutomationProperties.Name="Export transcript"
                                 AutomationProperties.HelpText="Export the current transcript to a file."
-                                ToolTip="Export transcript">
+                                ToolTip="Export transcript (Ctrl+E)">
                             <TextBlock Text="&#xE8E5;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="13" />
                         </Button>
                         <Button x:Name="TopUserGuideButton"
@@ -835,7 +835,7 @@
                                 Margin="0"
                                 AutomationProperties.Name="Open app settings"
                                 AutomationProperties.HelpText="Open provider, internet, appearance, and app behavior settings."
-                                ToolTip="App Settings">
+                                ToolTip="App Settings (Ctrl+,)">
                             <Viewbox Width="18" Height="18">
                                 <Path x:Name="SettingsGearIcon"
                                       Fill="{DynamicResource TextBrush}"

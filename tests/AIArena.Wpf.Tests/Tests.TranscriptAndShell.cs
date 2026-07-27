@@ -9,6 +9,7 @@ using AIArena.Wpf.Services;
 using System.Collections;
 using System.Runtime.ExceptionServices;
 using System.Resources;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Threading;
 using System.Windows;
@@ -2805,6 +2806,126 @@ static void ProviderReachabilityProjectsOneCoherentUiGeneration()
     var transcriptIndex = projection.IndexOf("PopulateTranscript(snapshot.Messages)", StringComparison.Ordinal);
     Require(stateIndex >= 0 && topIndex > stateIndex && overviewIndex > topIndex && transcriptIndex > overviewIndex,
         "the coherent provider projection should publish state before refreshing top, rail/settings, and transcript readiness in one dispatcher turn");
+}
+
+static void AdvertisedShortcutsAreHandled()
+{
+    // The search tooltip promised Ctrl+F for a long time while no handler
+    // existed. Any shortcut named in the UI must be reachable from the shell
+    // key handler, and every shortcut the handler implements must be listed.
+    var handler = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var handlerStart = handler.IndexOf("private bool TryHandleShellShortcut", StringComparison.Ordinal);
+    var handlerEnd = handler.IndexOf("private void ShowShortcutsOverlay", handlerStart, StringComparison.Ordinal);
+    Require(handlerStart >= 0 && handlerEnd > handlerStart, "shell shortcut handler should remain discoverable");
+    var handlerBody = handler[handlerStart..handlerEnd];
+
+    var keyForShortcut = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["Ctrl+F"] = "Key.F",
+        ["Ctrl+M"] = "Key.M",
+        ["Ctrl+Enter"] = "Key.Enter",
+        ["Ctrl+E"] = "Key.E",
+        ["Ctrl+,"] = "Key.OemComma",
+        ["Ctrl+Shift+R"] = "Key.R"
+    };
+
+    foreach (var pair in keyForShortcut)
+    {
+        Require(
+            handlerBody.Contains(pair.Value, StringComparison.Ordinal),
+            $"{pair.Key} is advertised but the shell key handler has no {pair.Value} case");
+        Require(
+            MainWindow.ShellShortcuts.Any(shortcut => shortcut.Keys.Contains(pair.Key, StringComparison.Ordinal)),
+            $"{pair.Key} is handled but missing from the shortcut list shown to users");
+    }
+
+    // Tooltips that name a chord must match one the shell actually handles.
+    string[] markupFiles =
+    [
+        "src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml",
+        "src/AIArena.Wpf/Shell/MainWindow.xaml"
+    ];
+    foreach (var relativePath in markupFiles)
+    {
+        var markup = File.ReadAllText(FindWorkspaceFile(relativePath));
+        foreach (Match match in Regex.Matches(markup, @"\(Ctrl\+(?:Shift\+)?[A-Za-z,]+\)"))
+        {
+            var advertised = match.Value.Trim('(', ')');
+            Require(
+                MainWindow.ShellShortcuts.Any(shortcut => shortcut.Keys.Contains(advertised, StringComparison.Ordinal)),
+                $"{relativePath} advertises {advertised}, which the shell does not implement");
+        }
+    }
+}
+
+static void StatusTonesAvoidAgentIdentityAccents()
+{
+    // Agent accent brushes are user-customizable identity colors. Using one to
+    // mean "ready", "warning", or "online" makes recolouring an agent repaint
+    // unrelated status, so status tones must come from the fixed palette.
+    string[] identityBrushes =
+    [
+        "AlphaAccentBrush",
+        "BetaAccentBrush",
+        "GammaAccentBrush",
+        "DeltaAccentBrush",
+        "NarratorAccentBrush"
+    ];
+
+    string[] statusKeywords =
+    [
+        "ready",
+        "warning",
+        "danger",
+        "success",
+        "online",
+        "offline",
+        "saved",
+        "healthy"
+    ];
+
+    string[] sources =
+    [
+        "src/AIArena.Wpf/Shell/ScenarioWorkflowCoordinator.cs",
+        "src/AIArena.Wpf/Shell/TranscriptListCoordinator.cs",
+        "src/AIArena.Wpf/Shell/ProviderQuickSetupCoordinator.cs",
+        "src/AIArena.Wpf/Shell/DiagnosticsWorkflowCoordinator.cs",
+        "src/AIArena.Wpf/Shell/AgentBoardCoordinator.cs",
+        "src/AIArena.Wpf/Shell/MainWindow.xaml.cs"
+    ];
+
+    foreach (var relativePath in sources)
+    {
+        var lines = File.ReadAllLines(FindWorkspaceFile(relativePath));
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var line = lines[index];
+            if (!identityBrushes.Any(brush => line.Contains(brush, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            // A line that names an agent alongside its accent is identity, not status.
+            if (line.Contains("accentForSpeaker", StringComparison.OrdinalIgnoreCase)
+                || line.Contains("\"Alpha\"", StringComparison.Ordinal)
+                || line.Contains("\"Beta\"", StringComparison.Ordinal)
+                || line.Contains("\"Gamma\"", StringComparison.Ordinal)
+                || line.Contains("\"Delta\"", StringComparison.Ordinal)
+                || line.Contains("\"alpha\"", StringComparison.Ordinal)
+                || line.Contains("\"beta\"", StringComparison.Ordinal)
+                || line.Contains("\"gamma\"", StringComparison.Ordinal)
+                || line.Contains("\"delta\"", StringComparison.Ordinal)
+                || line.Contains("\"narrator\"", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var offending = statusKeywords.FirstOrDefault(keyword => line.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+            Require(
+                offending is null,
+                $"{relativePath}:{index + 1} uses an agent identity accent for the '{offending}' status tone; use the Arena status palette instead");
+        }
+    }
 }
 
 static void ShellNavigationCoordinatorSelectsThemes()

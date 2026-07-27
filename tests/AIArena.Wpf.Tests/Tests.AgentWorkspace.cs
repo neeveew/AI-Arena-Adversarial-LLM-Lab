@@ -1855,12 +1855,13 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
 
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-command-stage", Guid.NewGuid().ToString("N"));
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-command-stage", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox { Text = "Write a tiny app in this workspace." };
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -2020,21 +2021,22 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
 
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-rescue-command", Guid.NewGuid().ToString("N"));
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-rescue-command", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox { Text = "Write a tiny app in this workspace." };
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -2151,21 +2153,22 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
 
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-rescue-replaces-stale-command", Guid.NewGuid().ToString("N"));
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-rescue-replaces-stale-command", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox { Text = "Write an app in this workspace." };
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -2286,21 +2289,22 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
 
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-auto-rescue-command", Guid.NewGuid().ToString("N"));
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-auto-rescue-command", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox { Text = "Write a tiny app in this workspace." };
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -2471,9 +2475,9 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
@@ -2928,12 +2932,13 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
 
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-risky-auto-approve", Guid.NewGuid().ToString("N"));
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-risky-auto-approve", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox();
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -3044,21 +3049,22 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
 
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-mid-run-autonomy", Guid.NewGuid().ToString("N"));
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-mid-run-autonomy", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox { Text = "Write a tiny app in this workspace." };
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -3202,21 +3208,22 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
 
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-auto-approve", Guid.NewGuid().ToString("N"));
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-auto-approve", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox { Text = "Write a tiny app in this workspace." };
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -3382,21 +3389,22 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
 
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-node-preview", Guid.NewGuid().ToString("N"));
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-node-preview", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox { Text = "Build a tiny Node web app in this workspace." };
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -3552,21 +3560,22 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
 
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-loop-duplicate", Guid.NewGuid().ToString("N"));
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-loop-duplicate", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox { Text = "Write a tiny app in this workspace." };
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -3706,21 +3715,22 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
 
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-loop-nochange", Guid.NewGuid().ToString("N"));
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-loop-nochange", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox { Text = "Write a tiny app in this workspace." };
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -3861,9 +3871,9 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
@@ -3873,12 +3883,13 @@ static void AgentWorkspaceBlocksCommandApprovalDuringChat()
 {
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-command-chat-guard", Guid.NewGuid().ToString("N"));
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-command-chat-guard", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox { Text = "Explain this workspace before I run the staged command." };
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -4016,9 +4027,9 @@ static void AgentWorkspaceBlocksCommandApprovalDuringChat()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
@@ -4028,7 +4039,8 @@ static void AgentWorkspaceRestoresChatAfterRestart()
 {
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-chat-restore", Guid.NewGuid().ToString("N"));
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-chat-restore", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
@@ -4062,7 +4074,7 @@ static void AgentWorkspaceRestoresChatAfterRestart()
             Require(legacyRestoredMessage.Kind == "Status", "conversation store should normalize blank legacy kinds");
             Require(legacyRestoredMessage.CreatedAt == fallbackCreatedAt, "conversation store should fill missing legacy timestamps");
 
-            var settingsPath = Path.Combine(root, "configs", "settings.json");
+            var settingsPath = Path.Combine(testRoot, "configs", "settings.json");
             var settings = new WpfSettings { AgentWorkspacePath = root };
             var settingsStore = new WpfSettingsStore(settingsPath);
             var promptText = new TextBox { Text = "Explain this workspace and remember the answer." };
@@ -4245,9 +4257,9 @@ static void AgentWorkspaceRestoresChatAfterRestart()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });

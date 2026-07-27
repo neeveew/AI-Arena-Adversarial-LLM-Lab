@@ -34,7 +34,7 @@ internal sealed class ProviderQuickSetupCoordinator
 
     public Border CreateCard(ArenaViewSnapshot snapshot, AgentState? current)
     {
-        var accent = snapshot.ProviderOnline ? resourceBrush("BetaAccentBrush") : resourceBrush("DangerBorderBrush");
+        var accent = snapshot.ProviderOnline ? resourceBrush("Arena.Brush.Success") : resourceBrush("DangerBorderBrush");
         var baseUrlBox = new TextBox
         {
             Text = QuickBaseUrl(snapshot),

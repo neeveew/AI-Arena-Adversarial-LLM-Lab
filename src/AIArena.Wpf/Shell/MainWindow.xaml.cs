@@ -4118,8 +4118,86 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             return;
         }
 
+        if (TryHandleShellShortcut(e))
+        {
+            e.Handled = true;
+            return;
+        }
+
         base.OnPreviewKeyDown(e);
     }
+
+    /// <summary>
+    /// Window-level shortcuts. These run in the preview pass so they work from
+    /// anywhere in the shell, but text-entry chords keep priority for the
+    /// focused editor: composers already bind Ctrl+Enter to send.
+    /// </summary>
+    private bool TryHandleShellShortcut(KeyEventArgs e)
+    {
+        var control = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+        var shift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+        if (!control && e.Key != Key.F1)
+        {
+            return false;
+        }
+
+        switch (e.Key)
+        {
+            case Key.F when !shift:
+                TranscriptSearchButton_Click(TranscriptSearchButton, new RoutedEventArgs());
+                return true;
+            case Key.M when !shift:
+                MatchSetupButton_Click(MatchSetupButton, new RoutedEventArgs());
+                return true;
+            case Key.OemComma when !shift:
+                AppSettingsButton_Click(AppSettingsButton, new RoutedEventArgs());
+                return true;
+            case Key.E when !shift:
+                ExportTranscriptButton_Click(ExportTranscriptBottomButton, new RoutedEventArgs());
+                return true;
+            case Key.Enter when !shift && OneTurnButton.IsEnabled:
+                OneTurnButton_Click(OneTurnButton, new RoutedEventArgs());
+                return true;
+            case Key.R when shift && RightRailToggleButton.IsEnabled:
+                RightRailToggleButton_Click(RightRailToggleButton, new RoutedEventArgs());
+                return true;
+            case Key.F1:
+                ShowShortcutsOverlay();
+                return true;
+            case Key.OemQuestion when !shift:
+                ShowShortcutsOverlay();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void ShowShortcutsOverlay()
+    {
+        var body = string.Join(
+            Environment.NewLine,
+            ShellShortcuts.Select(shortcut => $"{shortcut.Keys}  -  {shortcut.Action}"));
+        ConfirmDialog.Show(
+            this,
+            _theme,
+            "Keyboard shortcuts",
+            body,
+            "Close",
+            "Close",
+            ConfirmDialogTone.Info);
+    }
+
+    internal static IReadOnlyList<(string Keys, string Action)> ShellShortcuts { get; } =
+    [
+        ("Ctrl+F", "Search the transcript"),
+        ("Ctrl+M", "Open or close Match Setup"),
+        ("Ctrl+Enter", "Run one arena turn"),
+        ("Ctrl+E", "Export the transcript"),
+        ("Ctrl+,", "Open App Settings"),
+        ("Ctrl+Shift+R", "Show or hide the right rail"),
+        ("Ctrl+/ or F1", "Show this shortcut list"),
+        ("Esc", "Close the topmost overlay")
+    ];
 
     private bool CloseTopmostShellOverlay()
     {
@@ -4627,7 +4705,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         try
         {
             await _coreSessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
-            SetSaveStatus($"Saved {DateTime.Now:h:mm tt}", ResourceBrush("AlphaAccentBrush"));
+            SetSaveStatus($"Saved {DateTime.Now:h:mm tt}", ResourceBrush("Arena.Brush.Success"));
         }
         catch (Exception ex)
         {
@@ -4703,7 +4781,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
                 if (_activeSession?.Id.Equals(sessionId, StringComparison.OrdinalIgnoreCase) == true)
                 {
-                    SetSaveStatus($"Saved {DateTime.Now:h:mm tt}", ResourceBrush("AlphaAccentBrush"));
+                    SetSaveStatus($"Saved {DateTime.Now:h:mm tt}", ResourceBrush("Arena.Brush.Success"));
                 }
             }
             finally

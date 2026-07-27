@@ -192,6 +192,8 @@ var tests = new List<(string Name, Action Test)>
     ("user guide article header trims long titles", UserGuideArticleHeaderTrimsLongTitles),
     ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState),
     ("provider reachability projects one coherent UI generation", ProviderReachabilityProjectsOneCoherentUiGeneration),
+    ("advertised shortcuts are handled", AdvertisedShortcutsAreHandled),
+    ("status tones avoid agent identity accents", StatusTonesAvoidAgentIdentityAccents),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
     ("app settings coordinator selects provider focus", AppSettingsCoordinatorSelectsProviderFocus),
     ("coordinator render contracts cover smoke states", CoordinatorRenderContractsCoverSmokeStates),

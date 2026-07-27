@@ -653,13 +653,13 @@ internal sealed class AgentPerformanceCoordinator
             Margin = new Thickness(0, 0, -7, 10)
         };
         metrics.Children.Add(CreateDetailMetric("Turns", stats.Calls.ToString(System.Globalization.CultureInfo.InvariantCulture), accent));
-        metrics.Children.Add(CreateDetailMetric("Tokens", formatCompactNumber(stats.Tokens), resourceBrush("PrimaryBorderBrush")));
-        metrics.Children.Add(CreateDetailMetric("Context", stats.Context > 0 ? formatCompactNumber(stats.Context) : "-", resourceBrush("GammaAccentBrush")));
-        metrics.Children.Add(CreateDetailMetric("Memory", notesCount.ToString(System.Globalization.CultureInfo.InvariantCulture), resourceBrush("NarratorAccentBrush")));
-        metrics.Children.Add(CreateDetailMetric("Avg", stats.AverageLatencyMs > 0 ? formatDuration(stats.AverageLatencyMs) : "-", resourceBrush("AlphaAccentBrush")));
-        metrics.Children.Add(CreateDetailMetric("Last", stats.LastLatencyMs > 0 ? formatDuration(stats.LastLatencyMs) : "-", resourceBrush("AlphaAccentBrush")));
-        metrics.Children.Add(CreateDetailMetric("Speed", FormatTokensPerSecond(stats.AverageTokensPerSecond), resourceBrush("PrimaryBorderBrush")));
-        metrics.Children.Add(CreateDetailMetric("TTFT", stats.AverageTimeToFirstTokenMs > 0 ? formatDuration(stats.AverageTimeToFirstTokenMs) : "-", resourceBrush("BetaAccentBrush")));
+        metrics.Children.Add(CreateDetailMetric("Tokens", formatCompactNumber(stats.Tokens), resourceBrush("TextBrush")));
+        metrics.Children.Add(CreateDetailMetric("Context", stats.Context > 0 ? formatCompactNumber(stats.Context) : "-", resourceBrush("TextBrush")));
+        metrics.Children.Add(CreateDetailMetric("Memory", notesCount.ToString(System.Globalization.CultureInfo.InvariantCulture), resourceBrush("TextBrush")));
+        metrics.Children.Add(CreateDetailMetric("Avg", stats.AverageLatencyMs > 0 ? formatDuration(stats.AverageLatencyMs) : "-", resourceBrush("TextBrush")));
+        metrics.Children.Add(CreateDetailMetric("Last", stats.LastLatencyMs > 0 ? formatDuration(stats.LastLatencyMs) : "-", resourceBrush("TextBrush")));
+        metrics.Children.Add(CreateDetailMetric("Speed", FormatTokensPerSecond(stats.AverageTokensPerSecond), resourceBrush("TextBrush")));
+        metrics.Children.Add(CreateDetailMetric("TTFT", stats.AverageTimeToFirstTokenMs > 0 ? formatDuration(stats.AverageTimeToFirstTokenMs) : "-", resourceBrush("TextBrush")));
         metrics.Children.Add(CreateDetailMetric("Fails", stats.Failures.ToString(System.Globalization.CultureInfo.InvariantCulture), stats.Failures > 0 ? resourceBrush("DangerTextBrush") : resourceBrush("MutedTextBrush")));
         metrics.Children.Add(CreateDetailMetric("Web", stats.InternetRequests.ToString(System.Globalization.CultureInfo.InvariantCulture), stats.InternetRequests > 0 ? resourceBrush("AssistBorderBrush") : resourceBrush("MutedTextBrush")));
         panel.Children.Add(metrics);
