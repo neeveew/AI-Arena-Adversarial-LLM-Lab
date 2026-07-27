@@ -2480,13 +2480,17 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
 
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-artifact-verification", Guid.NewGuid().ToString("N"));
+        // The settings file must live outside the scanned workspace: production
+        // keeps it under LocalAppData, and writing it inside the workspace lets
+        // conversation/runbook persistence race the command file receipt.
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-artifact-verification", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             File.WriteAllText(Path.Combine(root, "index.html"), "<main>artifact check</main>");
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox();
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -2622,22 +2626,26 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
 
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-readonly-verify", Guid.NewGuid().ToString("N"));
+        // The settings file must live outside the scanned workspace: production
+        // keeps it under LocalAppData, and writing it inside the workspace lets
+        // conversation/runbook persistence race the command file receipt.
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-readonly-verify", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             File.WriteAllText(Path.Combine(root, "index.html"), "<main>readonly verify</main>");
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox();
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -2765,22 +2773,26 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
 
     RunStaTest(() =>
     {
-        var root = Path.Combine(Path.GetTempPath(), "ai-arena-agent-artifact-auto-approve", Guid.NewGuid().ToString("N"));
+        // The settings file must live outside the scanned workspace: production
+        // keeps it under LocalAppData, and writing it inside the workspace lets
+        // conversation/runbook persistence race the command file receipt.
+        var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-artifact-auto-approve", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(testRoot, "workspace");
         Directory.CreateDirectory(root);
         try
         {
             File.WriteAllText(Path.Combine(root, "index.html"), "<main>artifact auto check</main>");
             var settings = new WpfSettings { AgentWorkspacePath = root };
-            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var settingsStore = new WpfSettingsStore(Path.Combine(testRoot, "configs", "settings.json"));
             var promptText = new TextBox();
             var statusText = new TextBlock();
             var commandText = new TextBox();
@@ -2907,9 +2919,9 @@ static void AgentWorkspaceStagesBuilderCommandProposals()
         }
         finally
         {
-            if (Directory.Exists(root))
+            if (Directory.Exists(testRoot))
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(testRoot, recursive: true);
             }
         }
     });
