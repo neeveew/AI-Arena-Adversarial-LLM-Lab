@@ -3011,8 +3011,34 @@ static void AdvertisedShortcutsAreHandled()
         ["Ctrl+Enter"] = "Key.Enter",
         ["Ctrl+E"] = "Key.E",
         ["Ctrl+,"] = "Key.OemComma",
-        ["Ctrl+Shift+R"] = "Key.R"
+        ["Ctrl+Shift+R"] = "Key.R",
+        ["Ctrl+1"] = "Key.D1",
+        ["Ctrl+2"] = "Key.D2",
+        ["Ctrl+3"] = "Key.D3",
+        ["F2"] = "Key.F2",
+        ["F5"] = "Key.F5",
+        ["F7"] = "Key.F7",
+        ["F8"] = "Key.F8",
+        ["F9"] = "Key.F9",
+        ["F10"] = "Key.F10"
     };
+
+    // WPF delivers F10 and every Alt combination as Key.System with the real
+    // key in SystemKey, because those keys traditionally open a window menu.
+    // Matching on Key alone made F10 do nothing at all.
+    Require(MainWindow.EffectiveShortcutKey(Key.System, Key.F10) == Key.F10, "F10 arrives as a system key and must resolve to F10");
+    Require(MainWindow.EffectiveShortcutKey(Key.F5, Key.None) == Key.F5, "ordinary keys must pass through unchanged");
+    Require(handlerBody.Contains("EffectiveShortcutKey", StringComparison.Ordinal), "the shell key handler must resolve system keys before matching");
+    Require(!handlerBody.Contains("switch (e.Key)", StringComparison.Ordinal), "matching on e.Key directly would lose F10 again");
+
+    // F3 means "find next" on Windows. Transcript search filters rather than
+    // stepping through matches, so binding it would fight muscle memory for no
+    // gain; this keeps it reserved until there is something to step through.
+    Require(!handlerBody.Contains("Key.F3", StringComparison.Ordinal), "F3 should stay unbound while search filters rather than stepping matches");
+
+    // Destructive actions stay pointer-only: a stray function key must not be
+    // able to wipe a run.
+    Require(!handlerBody.Contains("ResetButton_Click", StringComparison.Ordinal), "Reset must not be reachable from a shell shortcut");
 
     foreach (var pair in keyForShortcut)
     {
