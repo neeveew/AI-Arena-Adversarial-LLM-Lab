@@ -2226,6 +2226,16 @@
                                         <ComboBox x:Name="SavedStateItemPicker"
                                                   SelectionChanged="SavedStateItemPicker_SelectionChanged"
                                                   Style="{StaticResource FormComboBox}" />
+                                        <CheckBox x:Name="SavedStateShowEmptyCheckBox"
+                                                  Content="Show sessions with no turns"
+                                                  Style="{StaticResource FilterChipCheckBox}"
+                                                  Checked="SavedStateShowEmptyCheckBox_Changed"
+                                                  Unchecked="SavedStateShowEmptyCheckBox_Changed"
+                                                  Visibility="Collapsed"
+                                                  Margin="0,6,0,0"
+                                                  AutomationProperties.Name="Show sessions with no turns"
+                                                  AutomationProperties.HelpText="Include sessions that never received a turn. A data root shared with another AI Arena build can accumulate many of these."
+                                                  ToolTip="Include sessions that never received a turn" />
                                     </StackPanel>
                                 </Grid>
                                 <Grid Grid.Row="6">

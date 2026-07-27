@@ -18,6 +18,7 @@ internal sealed class SavedStateWorkflowCoordinator
     private readonly ComboBox modePicker;
     private readonly TextBox nameText;
     private readonly ComboBox itemPicker;
+    private readonly CheckBox? showEmptySessionsCheckBox;
     private readonly TextBlock nameLabel;
     private readonly TextBlock itemLabel;
     private readonly TextBlock helpText;
@@ -49,6 +50,12 @@ internal sealed class SavedStateWorkflowCoordinator
     private IReadOnlyList<ScenarioTemplate> scenarioTemplates = [];
     private SessionForkLineage? currentForkLineage;
     private bool isUpdating;
+
+    /// <summary>
+    /// When true the picker also lists sessions that never received a turn.
+    /// Off by default because a shared data root accumulates them.
+    /// </summary>
+    private bool showEmptySessions;
 
     public SavedStateWorkflowCoordinator(
         Window owner,
@@ -82,7 +89,8 @@ internal sealed class SavedStateWorkflowCoordinator
         Func<string, Task> refreshActiveSessionAsync,
         Func<string, Brush> resourceBrush,
         Action<string> setArenaRunStatus,
-        Action<string> setLoadStatus)
+        Action<string> setLoadStatus,
+        CheckBox? showEmptySessionsCheckBox = null)
     {
         this.owner = owner;
         this.sessionStore = sessionStore;
@@ -116,12 +124,52 @@ internal sealed class SavedStateWorkflowCoordinator
         this.resourceBrush = resourceBrush;
         this.setArenaRunStatus = setArenaRunStatus;
         this.setLoadStatus = setLoadStatus;
+        this.showEmptySessionsCheckBox = showEmptySessionsCheckBox;
     }
 
     public void SetSessions(IReadOnlyList<CoreSessionSummary> sessions)
     {
         sessionSummaries = sessions;
         UpdateLineagePresentation();
+    }
+
+    /// <summary>
+    /// Sessions worth offering in the picker. A data root can be shared with
+    /// other AI Arena implementations, which can leave behind large numbers of
+    /// sessions that never received a turn, so empty ones are hidden unless the
+    /// operator asks for them. The active and default sessions always stay
+    /// visible so the list can never hide what is loaded.
+    /// </summary>
+    internal static IReadOnlyList<CoreSessionSummary> VisibleSessions(
+        IReadOnlyList<CoreSessionSummary> sessions,
+        bool includeEmpty,
+        string? selectedId)
+    {
+        if (includeEmpty)
+        {
+            return sessions;
+        }
+
+        var kept = sessions
+            .Where(session => session.MessageCount > 0
+                || session.Id.Equals("default", StringComparison.OrdinalIgnoreCase)
+                || (!string.IsNullOrWhiteSpace(selectedId) && session.Id.Equals(selectedId, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+
+        // Never present an empty picker: if nothing has a transcript yet, the
+        // unfiltered list is more useful than none.
+        return kept.Length == 0 ? sessions : kept;
+    }
+
+    internal static string SessionListStatus(int total, int visible, bool includeEmpty)
+    {
+        if (includeEmpty || visible >= total)
+        {
+            return CountLabel(total, "session") + " available.";
+        }
+
+        var hidden = total - visible;
+        return $"{CountLabel(visible, "session")} available; {hidden} empty hidden.";
     }
 
     public void ApplyForkLineage(SessionForkLineage? lineage)
@@ -329,6 +377,22 @@ internal sealed class SavedStateWorkflowCoordinator
         SetStatus(status);
     }
 
+    public void SetShowEmptySessions(bool showEmpty)
+    {
+        if (showEmptySessions == showEmpty)
+        {
+            return;
+        }
+
+        showEmptySessions = showEmpty;
+        UpdatePicker(SelectedSessionId());
+    }
+
+    private string? SelectedSessionId()
+    {
+        return itemPicker?.SelectedItem is CoreSessionSummary session ? session.Id : null;
+    }
+
     public void UpdatePicker(string? selectedId = null)
     {
         if (itemPicker is null || modePicker is null)
@@ -342,6 +406,11 @@ internal sealed class SavedStateWorkflowCoordinator
             var mode = CurrentMode();
             itemPicker.ItemsSource = null;
             itemPicker.DisplayMemberPath = "";
+            if (showEmptySessionsCheckBox is not null)
+            {
+                showEmptySessionsCheckBox.Visibility = Visibility.Collapsed;
+            }
+
 
             switch (mode)
             {
@@ -353,9 +422,17 @@ internal sealed class SavedStateWorkflowCoordinator
                     loadButton.Content = "Load";
                     nameText.ToolTip = "Enter a unique session name. Existing sessions are not overwritten.";
                     itemPicker.ToolTip = "Choose the session to load or delete.";
-                    itemPicker.ItemsSource = sessionSummaries;
+                    var visibleSessions = VisibleSessions(sessionSummaries, showEmptySessions, selectedId);
+                    itemPicker.ItemsSource = visibleSessions;
                     SelectItem(selectedId, item => item is CoreSessionSummary session ? session.Id : "");
-                    SetStatus(CountLabel(sessionSummaries.Count, "session") + " available.");
+                    SetStatus(SessionListStatus(sessionSummaries.Count, visibleSessions.Count, showEmptySessions));
+                    if (showEmptySessionsCheckBox is not null)
+                    {
+                        // The toggle only makes sense for sessions; templates and
+                        // checkpoints have no equivalent empty state.
+                        showEmptySessionsCheckBox.Visibility = Visibility.Visible;
+                    }
+
                     break;
                 case "template":
                     nameLabel.Text = "Template name";

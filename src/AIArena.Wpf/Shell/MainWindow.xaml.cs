@@ -343,7 +343,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             RefreshActiveSessionForCoordinatorAsync,
             ResourceBrush,
             SetArenaRunStatus,
-            SetLoadStatus);
+            SetLoadStatus,
+            SavedStateShowEmptyCheckBox);
         _crossSessionSearchService = new CrossSessionSearchService(_coreSessionStore);
         _savedStateControlService = new SavedStateControlService(
             _coreSessionStore,
@@ -2016,11 +2017,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         string? preferredSessionId = null,
         CancellationToken cancellationToken = default)
     {
-        var sessions = await _coreSessionStore.ListSessionsAsync(cancellationToken);
+        var sessions = await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Messages, cancellationToken);
         if (sessions.Count == 0)
         {
             await _coreSessionStore.EnsureDefaultSessionAsync(cancellationToken);
-            sessions = await _coreSessionStore.ListSessionsAsync(cancellationToken);
+            sessions = await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Messages, cancellationToken);
         }
 
         SavedStateCoordinator.SetSessions(sessions);
@@ -2085,7 +2086,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 return;
             }
 
-            var latestSession = (await _coreSessionStore.ListSessionsAsync())
+            var latestSession = (await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Identity))
                 .FirstOrDefault(session => session.Id == _activeSession.Id);
             if (latestSession is null)
             {
@@ -4187,6 +4188,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         _savedStateCoordinator?.OnItemSelectionChanged();
     }
 
+    private void SavedStateShowEmptyCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        _savedStateCoordinator?.SetShowEmptySessions(SavedStateShowEmptyCheckBox.IsChecked == true);
+    }
+
     private async void SavedStateSaveButton_Click(object sender, RoutedEventArgs e)
     {
         if (_savedStateCoordinator is not null)
@@ -4413,7 +4419,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
         var observedWriteTime = TryGetSessionDirectoryLastModified(_activeSession.SnapshotPath);
         var latest = observedWriteTime is null
-            ? (await _coreSessionStore.ListSessionsAsync(cancellationToken)).FirstOrDefault(session => session.Id == _activeSession.Id)
+            ? (await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Identity, cancellationToken)).FirstOrDefault(session => session.Id == _activeSession.Id)
             : _activeSession with { LastModified = observedWriteTime.Value };
         if (latest is not null)
         {

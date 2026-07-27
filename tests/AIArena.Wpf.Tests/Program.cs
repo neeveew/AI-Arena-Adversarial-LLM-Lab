@@ -192,6 +192,7 @@ var tests = new List<(string Name, Action Test)>
     ("user guide article header trims long titles", UserGuideArticleHeaderTrimsLongTitles),
     ("provider reachability coordinator formats popup state", ProviderReachabilityCoordinatorFormatsPopupState),
     ("provider reachability projects one coherent UI generation", ProviderReachabilityProjectsOneCoherentUiGeneration),
+    ("session picker hides empty sessions without losing reach", SessionPickerHidesEmptySessionsWithoutLosingReach),
     ("session token accounting reports totals and pressure", SessionTokenAccountingReportsTotalsAndPressure),
     ("cross session search attributes and caps hits", CrossSessionSearchAttributesAndCapsHits),
     ("idle polling cadence only when nothing is running", IdlePollingCadenceOnlyWhenNothingIsRunning),

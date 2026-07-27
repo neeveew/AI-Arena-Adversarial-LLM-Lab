@@ -2809,6 +2809,46 @@ static void ProviderReachabilityProjectsOneCoherentUiGeneration()
         "the coherent provider projection should publish state before refreshing top, rail/settings, and transcript readiness in one dispatcher turn");
 }
 
+static void SessionPickerHidesEmptySessionsWithoutLosingReach()
+{
+    static AIArena.Core.Models.SessionSummary Session(string id, int messages)
+    {
+        return new AIArena.Core.Models.SessionSummary(id, $"{id}\\snapshot.json", true, messages, 0, 0, DateTimeOffset.UnixEpoch);
+    }
+
+    // A shared data root fills with sessions that never received a turn.
+    var sessions = new[]
+    {
+        Session("default", 0),
+        Session("real-run", 12),
+        Session("replay-a", 0),
+        Session("replay-b", 0)
+    };
+
+    var visible = SavedStateWorkflowCoordinator.VisibleSessions(sessions, includeEmpty: false, selectedId: null);
+    Require(visible.Count == 2, $"empty foreign sessions should be hidden, got {visible.Count}");
+    Require(visible.Any(session => session.Id == "real-run"), "sessions with turns must stay listed");
+    Require(visible.Any(session => session.Id == "default"), "the default session must stay reachable even when empty");
+    Require(!visible.Any(session => session.Id.StartsWith("replay-", StringComparison.Ordinal)), "empty sessions should be filtered");
+
+    // The selected session must never vanish from under the operator.
+    var withSelection = SavedStateWorkflowCoordinator.VisibleSessions(sessions, includeEmpty: false, selectedId: "replay-b");
+    Require(withSelection.Any(session => session.Id == "replay-b"), "the selected session must remain visible even when empty");
+
+    var all = SavedStateWorkflowCoordinator.VisibleSessions(sessions, includeEmpty: true, selectedId: null);
+    Require(all.Count == sessions.Length, "the toggle should restore every session");
+
+    // If nothing has a transcript, showing an empty picker would be worse than showing all.
+    var allEmpty = new[] { Session("replay-a", 0), Session("replay-b", 0) };
+    Require(SavedStateWorkflowCoordinator.VisibleSessions(allEmpty, includeEmpty: false, selectedId: null).Count == 2,
+        "a store with no transcripts should fall back to listing everything rather than nothing");
+
+    var status = SavedStateWorkflowCoordinator.SessionListStatus(total: 830, visible: 2, includeEmpty: false);
+    Require(status.Contains("828 empty hidden", StringComparison.Ordinal), $"status should report how many were hidden, got '{status}'");
+    Require(!SavedStateWorkflowCoordinator.SessionListStatus(4, 4, includeEmpty: true).Contains("hidden", StringComparison.Ordinal),
+        "status should not mention hiding when nothing is hidden");
+}
+
 static void SessionTokenAccountingReportsTotalsAndPressure()
 {
     static TranscriptMessage Turn(int turn, int promptTokens, int completionTokens)

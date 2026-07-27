@@ -1038,7 +1038,23 @@ public sealed class SessionStore
             || candidate.StartsWith(root + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
-    public async Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(CancellationToken cancellationToken = default)
+    {
+        return ListSessionsAsync(SessionListingDetail.Full, cancellationToken);
+    }
+
+    /// <summary>
+    /// Lists sessions at the requested level of detail.
+    ///
+    /// A data root can hold thousands of sessions, including ones written by
+    /// other AI Arena implementations that share it, so callers that only need
+    /// identities should not pay for per-session counts. Checkpoint and event
+    /// counts are the expensive part: each means enumerating a directory or
+    /// reading a log.
+    /// </summary>
+    public async Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(
+        SessionListingDetail detail,
+        CancellationToken cancellationToken = default)
     {
         var sessionsRoot = NativeDataPaths.SessionsRoot(DataRoot);
         if (!Directory.Exists(sessionsRoot))
@@ -1052,19 +1068,24 @@ public sealed class SessionStore
             cancellationToken.ThrowIfCancellationRequested();
             var id = Path.GetFileName(sessionDir);
             var snapshotPath = Path.Combine(sessionDir, "snapshot.json");
-            var messageCount = File.Exists(snapshotPath)
+            var hasSnapshot = File.Exists(snapshotPath);
+            var messageCount = detail >= SessionListingDetail.Messages && hasSnapshot
                 ? await CountSnapshotMessagesAsync(snapshotPath, cancellationToken)
                 : 0;
-            var checkpointPath = CheckpointDirectory(id);
-            var eventPath = NativeDataPaths.EventPath(DataRoot, id);
+            var checkpointCount = detail >= SessionListingDetail.Full
+                ? CountFiles(CheckpointDirectory(id), "*.json")
+                : 0;
+            var eventCount = detail >= SessionListingDetail.Full
+                ? CountLines(NativeDataPaths.EventPath(DataRoot, id))
+                : 0;
             var lastModified = DirectoryLastWriteTimeOrNow(sessionDir);
             summaries.Add(new SessionSummary(
                 id,
                 snapshotPath,
-                File.Exists(snapshotPath),
+                hasSnapshot,
                 messageCount,
-                CountFiles(checkpointPath, "*.json"),
-                CountLines(eventPath),
+                checkpointCount,
+                eventCount,
                 new DateTimeOffset(lastModified)));
         }
 

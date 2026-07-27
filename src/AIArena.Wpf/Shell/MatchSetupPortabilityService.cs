@@ -155,7 +155,7 @@ internal sealed class MatchSetupPortabilityService
             return Failure("not_available", $"Session '{source.Id}' has no snapshot to use as a provider baseline.");
         }
 
-        var sessions = await sessionStore.ListSessionsAsync(cancellationToken);
+        var sessions = await sessionStore.ListSessionsAsync(SessionListingDetail.Identity, cancellationToken);
         var targetSessionId = UniqueSessionId(requestedName, parsed.Package.Metadata.Name, sessions.Select(item => item.Id));
         var target = SessionStore.CreateDefaultSnapshot();
         target.Configs.Clear();
@@ -179,7 +179,7 @@ internal sealed class MatchSetupPortabilityService
                 break;
             }
 
-            sessions = await sessionStore.ListSessionsAsync(cancellationToken);
+            sessions = await sessionStore.ListSessionsAsync(SessionListingDetail.Identity, cancellationToken);
             targetSessionId = UniqueSessionId(requestedName, parsed.Package.Metadata.Name, sessions.Select(item => item.Id));
         }
         if (!created)

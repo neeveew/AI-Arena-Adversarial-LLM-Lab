@@ -260,7 +260,7 @@ internal sealed class ProviderReachabilityCoordinator
             return;
         }
 
-        var latest = (await sessionStore.ListSessionsAsync(cancellationToken)).FirstOrDefault(candidate => candidate.Id == session.Id);
+        var latest = (await sessionStore.ListSessionsAsync(SessionListingDetail.Identity, cancellationToken)).FirstOrDefault(candidate => candidate.Id == session.Id);
         if (latest is null)
         {
             return;
