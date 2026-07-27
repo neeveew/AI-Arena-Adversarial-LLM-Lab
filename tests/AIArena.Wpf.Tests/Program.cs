@@ -202,6 +202,7 @@ var tests = new List<(string Name, Action Test)>
     ("shell state changes reach the control plane from both routes", ShellStateChangesReachTheControlPlaneFromBothRoutes),
     ("command palette ranks matches predictably", CommandPaletteRanksMatchesPredictably),
     ("empty and off states are not styled as failures", EmptyAndOffStatesAreNotStyledAsFailures),
+    ("dependency index check ignores line endings", DependencyIndexCheckIgnoresLineEndings),
     ("status tones avoid agent identity accents", StatusTonesAvoidAgentIdentityAccents),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
     ("app settings coordinator selects provider focus", AppSettingsCoordinatorSelectsProviderFocus),
