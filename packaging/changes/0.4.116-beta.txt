@@ -4,5 +4,12 @@
 - Shows only the setup checks that need attention, with a single control to reveal the checks that already pass.
 - Folds seven copy and import buttons into two compact menus, and moves recent generation replay into the Saved State tab instead of a competing card above the tabs.
 - Gives Match Setup a footer with a clear Done action and states that edits save as they are made.
-- Reserves color for state: setup chips render their label muted with one neutral surface, preview cards no longer each pick a different accent, and readiness tones use the fixed status palette rather than customizable agent identity colors.
+- Merges the window title bar into the shell top bar with themed caption buttons, a draggable caption band, Windows 11 Snap Layouts on the maximize button, and the caption right-click system menu.
+- Adds a Light theme that meets WCAG AA contrast, makes the System theme follow the Windows app light/dark preference live while still honoring high contrast, and paints the system window frame from the active theme.
+- Switches iconography to Segoe Fluent Icons on Windows 11 with an MDL2 fallback on Windows 10, through a single shared icon-font token.
+- Modernizes scrollbars with slim thumbs that widen on hover, and unifies keyboard focus on one focus ring across the main window, top bar, and dialogs.
+- Reserves color for state throughout: setup chips, preview cards, transcript readiness, paused agents, and voice-drift indicators no longer borrow customizable agent identity accents.
+- Caps transcript body and reasoning text at a readable line length on ultrawide windows and removes card translucency for crisper text.
+- Consolidates the shell onto the Arena design system, removing roughly 380 lines of duplicated control templates, and adds a reduced-motion-aware reveal for the Match Setup and App Settings overlays.
+- Adds `scripts\capture-screenshots.ps1`, which drives the app over the control plane to regenerate the repository screenshots, and refreshes those screenshots for the current interface.
 - Keeps the WPF PowerShell plane enabled by default, retains the self-screenshot command and bundled SearXNG Internet backend, and remains a self-contained Windows installation with no separate .NET Desktop Runtime requirement.
