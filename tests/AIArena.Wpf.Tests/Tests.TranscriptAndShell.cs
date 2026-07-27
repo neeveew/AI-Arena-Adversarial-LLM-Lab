@@ -3007,6 +3007,7 @@ static void AdvertisedShortcutsAreHandled()
     var keyForShortcut = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["Ctrl+F"] = "Key.F",
+        ["Ctrl+K"] = "Key.K",
         ["Ctrl+M"] = "Key.M",
         ["Ctrl+Enter"] = "Key.Enter",
         ["Ctrl+E"] = "Key.E",
@@ -3685,6 +3686,66 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
         collaborateButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Require(openedChatId == chatId, "collaborate search row should still open the selected chat");
     });
+}
+
+static void CommandPaletteRanksMatchesPredictably()
+{
+    // A palette that reorders itself unpredictably is worse than one that only
+    // filters, so the ranking is deliberately plain and pinned here.
+    static ShellCommand Command(string title, string group = "Shell", string keys = "", string keywords = "", Func<bool>? available = null)
+    {
+        return new ShellCommand(title, title, group, keys, keywords, () => { }, available);
+    }
+
+    var commands = new List<ShellCommand>
+    {
+        Command("Go to AI Lab", "Navigate", "Ctrl+1", "arena transcript"),
+        Command("Open Match Setup", "Match", "F2", "scenario cast seed"),
+        Command("Open App Settings", "Shell", "F10", "preferences provider"),
+        Command("Search the transcript", "Transcript", "Ctrl+F", "find filter"),
+        Command("Theme: Dark Blue", "Appearance", "", "colour color dark light"),
+        Command("Go to Agent", "Navigate", "Ctrl+2", "workspace", () => false)
+    };
+
+    // An unavailable command is dropped rather than shown greyed out: offering
+    // something that cannot run wastes the reader's attention.
+    var all = ShellCommandPalette.Filter(commands, "");
+    Require(all.Count == 5, "an empty query should list every available command");
+    Require(all.All(command => command.Title != "Go to Agent"), "a gated command should not be offered");
+    Require(all[0].Title == "Go to AI Lab", "an empty query should preserve the declared order");
+
+    // Prefix beats word-prefix beats substring.
+    var open = ShellCommandPalette.Filter(commands, "open");
+    Require(open.Count == 2, "'open' should match both Open commands");
+    Require(open[0].Title == "Open Match Setup", "declared order should break ties between equal scores");
+
+    var setup = ShellCommandPalette.Filter(commands, "setup");
+    Require(setup.Count == 1 && setup[0].Title == "Open Match Setup", "a word prefix inside the title should match");
+
+    var exact = ShellCommandPalette.Filter(commands, "Go to AI Lab");
+    Require(exact[0].Title == "Go to AI Lab", "an exact title should rank first");
+
+    // Someone who remembers the key but not the wording should still land on it.
+    var byKey = ShellCommandPalette.Filter(commands, "F10");
+    Require(byKey.Count == 1 && byKey[0].Title == "Open App Settings", "a shortcut chord should find its command");
+
+    // And someone who thinks in intent rather than in the app's vocabulary.
+    var byKeyword = ShellCommandPalette.Filter(commands, "colour");
+    Require(byKeyword.Count == 1 && byKeyword[0].Title == "Theme: Dark Blue", "keywords should cover wording the title does not use");
+
+    var byGroup = ShellCommandPalette.Filter(commands, "navigate");
+    Require(byGroup.Count == 1 && byGroup[0].Title == "Go to AI Lab", "a group name should match while browsing");
+
+    Require(ShellCommandPalette.Filter(commands, "SEARCH").Count == 1, "matching must be case-insensitive");
+    Require(ShellCommandPalette.Filter(commands, "zzzz").Count == 0, "a query matching nothing should return nothing");
+
+    // Titles beat incidental substrings: "set" starts a word in "Settings" and
+    // in "Setup", but must not drag in unrelated rows.
+    var set = ShellCommandPalette.Filter(commands, "set");
+    Require(set.Count == 2, "'set' should reach Setup and Settings only");
+    Require(
+        ShellCommandPalette.Score(Command("Open Match Setup"), "Open") < ShellCommandPalette.Score(Command("Open Match Setup"), "Match"),
+        "a title prefix should outrank a later word");
 }
 
 static void ShellStateChangesReachTheControlPlaneFromBothRoutes()

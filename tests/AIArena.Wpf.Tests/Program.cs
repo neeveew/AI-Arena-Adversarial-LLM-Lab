@@ -200,6 +200,7 @@ var tests = new List<(string Name, Action Test)>
     ("transcript row sync preserves unchanged tail", TranscriptRowSyncPreservesUnchangedTail),
     ("advertised shortcuts are handled", AdvertisedShortcutsAreHandled),
     ("shell state changes reach the control plane from both routes", ShellStateChangesReachTheControlPlaneFromBothRoutes),
+    ("command palette ranks matches predictably", CommandPaletteRanksMatchesPredictably),
     ("status tones avoid agent identity accents", StatusTonesAvoidAgentIdentityAccents),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
     ("app settings coordinator selects provider focus", AppSettingsCoordinatorSelectsProviderFocus),

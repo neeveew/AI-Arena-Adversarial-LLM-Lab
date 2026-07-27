@@ -3714,6 +3714,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             case Key.F when !shift:
                 TranscriptSearchButton_Click(TranscriptSearchButton, new RoutedEventArgs());
                 return true;
+            case Key.K when !shift:
+                ShowCommandPalette();
+                return true;
             case Key.M when !shift:
                 MatchSetupButton_Click(MatchSetupButton, new RoutedEventArgs());
                 return true;
@@ -3793,6 +3796,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         ("F8", "Open the transcript view menu"),
         ("F9", "Start Auto Chat, or pause it"),
         ("F10", "Open App Settings"),
+        ("Ctrl+K", "Open the command palette"),
         ("Ctrl+F", "Search the transcript"),
         ("Ctrl+M", "Open or close Match Setup"),
         ("Ctrl+Enter", "Run one arena turn"),
