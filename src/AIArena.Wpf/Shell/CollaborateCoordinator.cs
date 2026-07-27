@@ -479,7 +479,7 @@ internal sealed class CollaborateCoordinator
             return;
         }
 
-        var note = Truncate(memoryText.Text.Trim(), MaxMemoryNoteChars);
+        var note = ShellUiHelpers.Truncate(memoryText.Text.Trim(), MaxMemoryNoteChars, ShellUiHelpers.TruncatedNoticeSuffix);
         if (string.IsNullOrWhiteSpace(note))
         {
             memoryText.Focus();
@@ -1245,7 +1245,7 @@ internal sealed class CollaborateCoordinator
             }
         }
 
-        return Truncate(builder.ToString().Trim(), MaxToolPromptChars);
+        return ShellUiHelpers.Truncate(builder.ToString().Trim(), MaxToolPromptChars, ShellUiHelpers.TruncatedNoticeSuffix);
     }
 
     private void ResetToolContext()
@@ -1679,7 +1679,7 @@ internal sealed class CollaborateCoordinator
         }
 
         var columnCount = rows.Max(row => row.Length);
-        var preview = string.Join("\n", rows.Take(6).Select(row => string.Join(" | ", row.Select(cell => Truncate(cell, 42)))));
+        var preview = string.Join("\n", rows.Take(6).Select(row => string.Join(" | ", row.Select(cell => ShellUiHelpers.Truncate(cell, 42, ShellUiHelpers.TruncatedNoticeSuffix)))));
         summary = $"Table summary: {rows.Length.ToString(CultureInfo.InvariantCulture)} rows x {columnCount.ToString(CultureInfo.InvariantCulture)} columns.\nPreview:\n{preview}";
         return true;
     }
@@ -1721,17 +1721,7 @@ internal sealed class CollaborateCoordinator
     private static string Compact(string value, int maxChars)
     {
         var compact = string.Join(" ", (value ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return Truncate(compact, maxChars);
-    }
-
-    private static string Truncate(string value, int maxChars)
-    {
-        if (value.Length <= maxChars)
-        {
-            return value;
-        }
-
-        return value[..Math.Max(0, maxChars - 16)] + "... [truncated]";
+        return ShellUiHelpers.Truncate(compact, maxChars, ShellUiHelpers.TruncatedNoticeSuffix);
     }
 
     private ProviderPlan ProviderPlanForRole(ArenaViewSnapshot current, string roleId)
@@ -3280,7 +3270,7 @@ internal sealed class CollaborateCoordinator
         var normalized = new List<string>();
         foreach (var note in notes)
         {
-            var trimmed = Truncate((note ?? "").Trim(), MaxMemoryNoteChars);
+            var trimmed = ShellUiHelpers.Truncate((note ?? "").Trim(), MaxMemoryNoteChars, ShellUiHelpers.TruncatedNoticeSuffix);
             if (string.IsNullOrWhiteSpace(trimmed)
                 || normalized.Any(existing => existing.Equals(trimmed, StringComparison.OrdinalIgnoreCase)))
             {

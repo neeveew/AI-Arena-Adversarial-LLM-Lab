@@ -53,22 +53,14 @@ public class OllamaModelCatalogService
     private async Task<(bool Ok, string Body, string Error)> GetAsync(Uri endpoint, string apiToken, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
-        ApplyAuthorization(request, apiToken);
+        ProviderHttpHelpers.ApplyAuthorization(request, apiToken);
         using var response = await httpClient.SendAsync(request, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         return response.IsSuccessStatusCode
             ? (true, body, "")
             : (false, "", ProviderConfigurationControlService.SanitizeError(
-                FriendlyBody(body, response.ReasonPhrase),
+                ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Ollama native model catalog request failed.", "message", "error", "detail"),
                 apiToken));
-    }
-
-    private static void ApplyAuthorization(HttpRequestMessage request, string apiToken)
-    {
-        if (!string.IsNullOrWhiteSpace(apiToken))
-        {
-            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiToken.Trim()}");
-        }
     }
 
     public static IReadOnlyList<OllamaModelInfo> ParseTags(string json)
@@ -82,7 +74,7 @@ public class OllamaModelCatalogService
         var entries = new List<OllamaModelInfo>();
         foreach (var item in models.EnumerateArray())
         {
-            var model = FirstString(item, "model", "name").Trim();
+            var model = ProviderHttpHelpers.FirstString(item, "model", "name").Trim();
             if (string.IsNullOrWhiteSpace(model))
             {
                 continue;
@@ -105,7 +97,7 @@ public class OllamaModelCatalogService
         var entries = new List<OllamaModelInfo>();
         foreach (var item in models.EnumerateArray())
         {
-            var model = FirstString(item, "model", "name").Trim();
+            var model = ProviderHttpHelpers.FirstString(item, "model", "name").Trim();
             if (string.IsNullOrWhiteSpace(model))
             {
                 continue;
@@ -160,8 +152,8 @@ public class OllamaModelCatalogService
         var aliases = new[]
             {
                 model,
-                FirstString(item, "name"),
-                FirstString(item, "model")
+                ProviderHttpHelpers.FirstString(item, "name"),
+                ProviderHttpHelpers.FirstString(item, "model")
             }
             .Where(alias => !string.IsNullOrWhiteSpace(alias))
             .Select(alias => alias.Trim())
@@ -169,14 +161,14 @@ public class OllamaModelCatalogService
             .ToArray();
 
         return new OllamaModelInfo(
-            Name: FirstString(item, "name"),
+            Name: ProviderHttpHelpers.FirstString(item, "name"),
             Model: model,
             SizeBytes: NullableInt64(item, "size"),
-            Digest: FirstString(item, "digest"),
-            Format: details.ValueKind == JsonValueKind.Object ? FirstString(details, "format") : "",
-            Family: details.ValueKind == JsonValueKind.Object ? FirstString(details, "family") : "",
-            ParameterSize: details.ValueKind == JsonValueKind.Object ? FirstString(details, "parameter_size") : "",
-            QuantizationLevel: details.ValueKind == JsonValueKind.Object ? FirstString(details, "quantization_level") : "",
+            Digest: ProviderHttpHelpers.FirstString(item, "digest"),
+            Format: details.ValueKind == JsonValueKind.Object ? ProviderHttpHelpers.FirstString(details, "format") : "",
+            Family: details.ValueKind == JsonValueKind.Object ? ProviderHttpHelpers.FirstString(details, "family") : "",
+            ParameterSize: details.ValueKind == JsonValueKind.Object ? ProviderHttpHelpers.FirstString(details, "parameter_size") : "",
+            QuantizationLevel: details.ValueKind == JsonValueKind.Object ? ProviderHttpHelpers.FirstString(details, "quantization_level") : "",
             ContextLength: NullableInt(item, "context_length"),
             ExpiresAt: NullableDateTimeOffset(item, "expires_at"),
             SizeVramBytes: NullableInt64(item, "size_vram"),
@@ -192,19 +184,6 @@ public class OllamaModelCatalogService
 
         array = default;
         return false;
-    }
-
-    private static string FirstString(JsonElement item, params string[] propertyNames)
-    {
-        foreach (var propertyName in propertyNames)
-        {
-            if (item.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String)
-            {
-                return value.GetString() ?? "";
-            }
-        }
-
-        return "";
     }
 
     private static int? NullableInt(JsonElement item, string propertyName)
@@ -232,19 +211,6 @@ public class OllamaModelCatalogService
             && DateTimeOffset.TryParse(value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var result)
             ? result
             : null;
-    }
-
-    private static string FriendlyBody(string body, string? reasonPhrase)
-    {
-        var message = LmStudioJsonMessageExtractor.ExtractMessage(body, "message", "error", "detail");
-        if (!string.IsNullOrWhiteSpace(message))
-        {
-            return message;
-        }
-
-        return !string.IsNullOrWhiteSpace(reasonPhrase)
-            ? reasonPhrase
-            : "Ollama native model catalog request failed.";
     }
 
     private static string FriendlyException(Exception ex)

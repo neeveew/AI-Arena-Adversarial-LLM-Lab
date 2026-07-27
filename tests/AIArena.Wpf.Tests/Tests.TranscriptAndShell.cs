@@ -2809,6 +2809,28 @@ static void ProviderReachabilityProjectsOneCoherentUiGeneration()
         "the coherent provider projection should publish state before refreshing top, rail/settings, and transcript readiness in one dispatcher turn");
 }
 
+static void TruncateRespectsItsLimitAndSuffix()
+{
+    // Five separate copies of this helper disagreed on the suffix and on
+    // whether the limit was a hard cap; one reserved a single character for a
+    // three-character suffix and overshot.
+    Require(ShellUiHelpers.Truncate("short", 20) == "short", "text within the limit should be untouched");
+    Require(ShellUiHelpers.Truncate("", 5) == "", "an empty string should stay empty");
+    Require(ShellUiHelpers.Truncate("exactlyten", 10) == "exactlyten", "text exactly at the limit should not be cut");
+
+    var ellipsis = ShellUiHelpers.Truncate(new string('a', 50), 10);
+    Require(ellipsis.Length == 10, $"the limit must be a hard cap, got {ellipsis.Length}");
+    Require(ellipsis.EndsWith(ShellUiHelpers.EllipsisSuffix, StringComparison.Ordinal), "the default suffix should be the ellipsis character");
+
+    var notice = ShellUiHelpers.Truncate(new string('b', 200), 40, ShellUiHelpers.TruncatedNoticeSuffix);
+    Require(notice.Length == 40, $"the notice suffix must also respect the cap, got {notice.Length}");
+    Require(notice.EndsWith(ShellUiHelpers.TruncatedNoticeSuffix, StringComparison.Ordinal), "captured output should say it was truncated");
+
+    // A limit shorter than the suffix cannot carry one, and must still not overshoot.
+    var tiny = ShellUiHelpers.Truncate("abcdefgh", 2, ShellUiHelpers.TruncatedNoticeSuffix);
+    Require(tiny.Length <= 2, $"a limit below the suffix length must still cap, got {tiny.Length}");
+}
+
 static void SessionPickerHidesEmptySessionsWithoutLosingReach()
 {
     static AIArena.Core.Models.SessionSummary Session(string id, int messages)

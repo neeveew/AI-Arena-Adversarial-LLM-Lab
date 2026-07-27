@@ -339,7 +339,7 @@ internal static class AgentArtifactService
             lines.Add("Recent commands:");
             foreach (var item in history.Take(5))
             {
-                lines.Add($"- {item.Status} | {item.Shell} | {Truncate(FirstCommandLine(item.Command), 140)}");
+                lines.Add($"- {item.Status} | {item.Shell} | {ShellUiHelpers.Truncate(FirstCommandLine(item.Command), 140)}");
             }
         }
 
@@ -519,7 +519,7 @@ internal static class AgentArtifactService
 
         lines.Add("");
         lines.Add(label);
-        lines.Add(Truncate(value.Trim(), 1200));
+        lines.Add(ShellUiHelpers.Truncate(value.Trim(), 1200));
     }
 
     private static void AppendReceiptGroup(List<string> lines, string label, IReadOnlyList<string> paths)
@@ -562,13 +562,4 @@ internal static class AgentArtifactService
             : $"{elapsed.TotalMilliseconds:0}ms";
     }
 
-    private static string Truncate(string value, int maxChars)
-    {
-        if (value.Length <= maxChars)
-        {
-            return value;
-        }
-
-        return value[..Math.Max(0, maxChars - 1)] + "...";
-    }
 }

@@ -34,13 +34,13 @@ public class LmStudioModelCatalogService
             var apiBase = NormalizeLmStudioApiBase(providerBaseUrl);
             var endpoint = new Uri(new Uri(apiBase + "/", UriKind.Absolute), "models");
             using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
-            ApplyAuthorization(request, apiToken);
+            ProviderHttpHelpers.ApplyAuthorization(request, apiToken);
             using var response = await httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 return LmStudioModelCatalog.Failed(ProviderConfigurationControlService.SanitizeError(
-                    FriendlyBody(body, response.ReasonPhrase),
+                    ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "LM Studio native model catalog request failed.", "message", "error", "detail"),
                     apiToken));
             }
 
@@ -58,14 +58,6 @@ public class LmStudioModelCatalogService
         }
     }
 
-    private static void ApplyAuthorization(HttpRequestMessage request, string apiToken)
-    {
-        if (!string.IsNullOrWhiteSpace(apiToken))
-        {
-            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiToken.Trim()}");
-        }
-    }
-
     public static IReadOnlyList<LmStudioModelInfo> ParseModels(string json)
     {
         using var doc = JsonDocument.Parse(json);
@@ -78,15 +70,15 @@ public class LmStudioModelCatalogService
         var entries = new List<LmStudioModelInfo>();
         foreach (var item in models.EnumerateArray())
         {
-            var key = FirstString(item, "key", "id", "selected_variant", "model").Trim();
+            var key = ProviderHttpHelpers.FirstString(item, "key", "id", "selected_variant", "model").Trim();
             if (string.IsNullOrWhiteSpace(key))
             {
                 continue;
             }
 
-            var displayName = FirstString(item, "display_name", "name").Trim();
-            var selectedVariant = FirstString(item, "selected_variant").Trim();
-            var type = FirstString(item, "type").Trim().ToLowerInvariant();
+            var displayName = ProviderHttpHelpers.FirstString(item, "display_name", "name").Trim();
+            var selectedVariant = ProviderHttpHelpers.FirstString(item, "selected_variant").Trim();
+            var type = ProviderHttpHelpers.FirstString(item, "type").Trim().ToLowerInvariant();
             if (string.IsNullOrWhiteSpace(type))
             {
                 type = InferModelType(key, displayName);
@@ -110,7 +102,7 @@ public class LmStudioModelCatalogService
             var aliases = new[]
                 {
                     key,
-                    FirstString(item, "id"),
+                    ProviderHttpHelpers.FirstString(item, "id"),
                     selectedVariant,
                     displayName
                 }
@@ -123,22 +115,22 @@ public class LmStudioModelCatalogService
                 Key: key,
                 DisplayName: displayName,
                 Type: type,
-                Publisher: FirstString(item, "publisher"),
-                Architecture: FirstString(item, "architecture"),
-                QuantizationName: quantization.ValueKind == JsonValueKind.Object ? FirstString(quantization, "name") : "",
+                Publisher: ProviderHttpHelpers.FirstString(item, "publisher"),
+                Architecture: ProviderHttpHelpers.FirstString(item, "architecture"),
+                QuantizationName: quantization.ValueKind == JsonValueKind.Object ? ProviderHttpHelpers.FirstString(quantization, "name") : "",
                 BitsPerWeight: quantization.ValueKind == JsonValueKind.Object ? NullableDouble(quantization, "bits_per_weight") : null,
                 SizeBytes: NullableInt64(item, "size_bytes"),
-                ParamsString: FirstString(item, "params_string"),
+                ParamsString: ProviderHttpHelpers.FirstString(item, "params_string"),
                 LoadedInstances: loadedInstances,
                 MaxContextLength: NullableInt(item, "max_context_length"),
-                Format: FirstString(item, "format"),
+                Format: ProviderHttpHelpers.FirstString(item, "format"),
                 Vision: capabilities.ValueKind == JsonValueKind.Object && Bool(capabilities, "vision"),
                 TrainedForToolUse: capabilities.ValueKind == JsonValueKind.Object && Bool(capabilities, "trained_for_tool_use"),
                 ReasoningOptions: reasoning.ValueKind == JsonValueKind.Object ? StringArray(reasoning, "allowed_options") : [],
-                ReasoningDefault: reasoning.ValueKind == JsonValueKind.Object ? FirstString(reasoning, "default") : "",
+                ReasoningDefault: reasoning.ValueKind == JsonValueKind.Object ? ProviderHttpHelpers.FirstString(reasoning, "default") : "",
                 SelectedVariant: selectedVariant,
                 Aliases: aliases,
-                Description: FirstString(item, "description")));
+                Description: ProviderHttpHelpers.FirstString(item, "description")));
         }
 
         return entries;
@@ -178,7 +170,7 @@ public class LmStudioModelCatalogService
                 ? configElement
                 : default;
             instances.Add(new LmStudioLoadedInstance(
-                Id: FirstString(instance, "id", "instance_id"),
+                Id: ProviderHttpHelpers.FirstString(instance, "id", "instance_id"),
                 ContextLength: config.ValueKind == JsonValueKind.Object ? NullableInt(config, "context_length") : null,
                 Parallel: config.ValueKind == JsonValueKind.Object ? NullableInt(config, "parallel") : null,
                 FlashAttention: config.ValueKind == JsonValueKind.Object ? NullableBool(config, "flash_attention") : null,
@@ -208,19 +200,6 @@ public class LmStudioModelCatalogService
 
         array = default;
         return false;
-    }
-
-    private static string FirstString(JsonElement item, params string[] propertyNames)
-    {
-        foreach (var propertyName in propertyNames)
-        {
-            if (item.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String)
-            {
-                return value.GetString() ?? "";
-            }
-        }
-
-        return "";
     }
 
     private static IReadOnlyList<string> StringArray(JsonElement item, string propertyName)
@@ -277,19 +256,6 @@ public class LmStudioModelCatalogService
             && value.TryGetDouble(out var result)
             ? result
             : null;
-    }
-
-    private static string FriendlyBody(string body, string? reasonPhrase)
-    {
-        var message = LmStudioJsonMessageExtractor.ExtractMessage(body, "message", "error", "detail");
-        if (!string.IsNullOrWhiteSpace(message))
-        {
-            return message;
-        }
-
-        return !string.IsNullOrWhiteSpace(reasonPhrase)
-            ? reasonPhrase
-            : "LM Studio native model catalog request failed.";
     }
 
     private static string FriendlyException(Exception ex)
