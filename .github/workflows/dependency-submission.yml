@@ -1,0 +1,50 @@
+name: Dependency submission
+
+# Publishes the resolved NuGet graph to GitHub's dependency graph.
+#
+# GitHub already parses the .csproj files on its own, but that only yields the
+# four direct PackageReference entries. The packages those pull in - AngleSharp,
+# the Microsoft.Extensions.* chain, RecyclableMemoryStream - stay invisible, and
+# those are just as capable of carrying an advisory. This workflow restores the
+# solution and submits the full closure instead.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.csproj'
+      - '**/*.sln'
+      - '.github/workflows/dependency-submission.yml'
+  schedule:
+    # Weekly, so a rebuild picks up graph changes even without a manifest edit.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write # Required by the dependency submission API.
+
+jobs:
+  submit:
+    name: Submit NuGet dependencies
+    # The WPF project targets net10.0-windows, which will not restore on Linux
+    # without EnableWindowsTargeting. Windows keeps the run honest to the build.
+    runs-on: windows-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore the solution
+        # This is the step that matters: restore writes project.assets.json, and
+        # that file is what lets component detection report transitive packages
+        # rather than re-reading the same direct references GitHub already has.
+        run: dotnet restore "AI Arena - WPF.sln"
+
+      - name: Detect and submit components
+        uses: advanced-security/component-detection-dependency-submission-action@31f25a8de68ae5ce2ca274bc28546a78683c15ce # v0.1.4
+        with:
+          filePath: '.'
