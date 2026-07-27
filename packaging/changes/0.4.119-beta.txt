@@ -1,0 +1,6 @@
+- Adds function-key navigation: F2 opens Match Setup, F5 reloads the session from disk, F7 shows or hides the right rail, F8 opens the transcript view menu, F9 starts or pauses Auto Chat, and F10 opens App Settings. Ctrl+1, Ctrl+2, and Ctrl+3 switch between AI Lab, Agent, and AI Collaborate. Press F1 for the full list.
+- Keeps destructive actions off the keyboard: Reset remains a deliberate pointer action, and no shortcut can discard a run.
+- Hides sessions that never received a turn from the session picker, behind a "Show sessions with no turns" toggle, so a data root shared with another AI Arena build no longer buries real sessions. The current and default sessions always stay listed.
+- Speeds up the session list further by only paying for the details each caller actually needs; listing a large data root is now roughly twice as fast again.
+- Folds duplicated provider request helpers and five separate text-truncation helpers into shared ones, which also settles truncated text ending three different ways and stops a length limit being exceeded.
+- Keeps the WPF PowerShell plane enabled by default, retains the self-screenshot command and bundled SearXNG Internet backend, and remains a self-contained Windows installation with no separate .NET Desktop Runtime requirement.
