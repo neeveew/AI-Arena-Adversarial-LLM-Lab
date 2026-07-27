@@ -1298,6 +1298,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         SystemMotionPreferences.PreferenceChanged += OnSystemMotionPreferenceChanged;
         Loaded += (_, _) =>
         {
+            ArmShellEvents();
             LoadSessions();
             _refreshTimer.Start();
             _providerHealthTimer.Start();
@@ -2733,6 +2734,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void SettingsSearchText_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
+        // Fires whether a person typed or the control plane assigned Text, which
+        // is why the query is announced here rather than from the open handler:
+        // settings.search shows the overlay first and sets the query afterwards.
+        PublishSettingsOverlayChanged("Settings search updated.");
+
         var query = SettingsSearchText.Text.Trim();
         var allExpanders = new List<Expander>();
         CollectSettingsExpanders(SettingsSectionsPanel, allExpanders);
@@ -4036,6 +4042,10 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             RightRailToggleButton,
             collapsed ? "collapsed" : "expanded");
 
+        // Resizing the window lands here too, so this only speaks when the
+        // collapsed state actually flipped.
+        PublishRailChanged();
+
         if (restoreFocusAfterCollapse)
         {
             Dispatcher.BeginInvoke(() =>
@@ -4809,6 +4819,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         ApplyShellCommandState(_activeShellSurface);
         UpdateLabViewToggleVisibility();
         UpdateLabViewToggle();
+        PublishMatchSetupOverlayChanged("Match Setup opened.");
         if (opening)
         {
             Dispatcher.BeginInvoke(() =>
@@ -4931,6 +4942,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 break;
         }
 
+        PublishMatchSetupOverlayChanged("Match Setup closed.");
         RestoreOverlayFocus(
             returnTarget,
             MatchSetupButton,
@@ -4972,6 +4984,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void ApplyShellCommandState(ShellSurface surface)
     {
+        // Every surface change runs through here, whichever route caused it, so
+        // this is where navigation is announced. Callers set _activeShellSurface
+        // before calling, which is what SelectedControlPlaneView reads.
+        PublishNavigationChanged();
+
         var state = ShellCommandState.For(surface);
         SetMatchSetupButtonState(state.ShowMatchSetup, open: false);
         SearchCommandHost.Visibility = state.ShowSearch ? Visibility.Visible : Visibility.Collapsed;

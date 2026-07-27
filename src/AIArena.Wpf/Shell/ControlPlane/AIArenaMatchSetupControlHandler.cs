@@ -129,7 +129,8 @@ internal sealed class AIArenaMatchSetupControlHandler
             return AIArenaControlResponse.Error(request, result.ErrorCode, result.Message, result.State);
         }
 
-        events.Publish("shell.overlay.changed", result.Message, result.State);
+        // No publish here: the shared show/close paths announce the change for
+        // whichever route caused it.
         return AIArenaControlResponse.Success(request, result.Message, result.State);
     }
 

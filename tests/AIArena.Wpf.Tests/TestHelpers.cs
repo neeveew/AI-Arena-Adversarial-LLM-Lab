@@ -433,10 +433,14 @@ static void WithTempSettingsStore(Action<WpfSettingsStore> action)
 /// </summary>
 static string ReadMainWindowSource()
 {
+    // MainWindow is split across partials. Every source-reading guard needs all
+    // of them, or a guard quietly stops covering whatever moved out most
+    // recently rather than failing loudly.
     return string.Join(
         Environment.NewLine,
         File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs")),
-        File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs")));
+        File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs")),
+        File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ShellEvents.cs")));
 }
 
 static string FindWorkspaceFile(string relativePath)

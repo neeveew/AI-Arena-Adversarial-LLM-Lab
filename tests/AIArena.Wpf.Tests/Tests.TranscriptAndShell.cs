@@ -3687,4 +3687,96 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
     });
 }
 
+static void ShellStateChangesReachTheControlPlaneFromBothRoutes()
+{
+    // Shell events used to be published by the control-plane command handlers
+    // themselves, so a watcher only ever saw changes an operator caused through
+    // PowerShell. Open Match Setup with F2 and the stream stayed silent, which
+    // made "live events" useless for watching a person drive the app. The
+    // publishers now live on the shared paths, and the handlers must not take
+    // them back.
+    var gate = typeof(MainWindow);
+    Require(gate is not null, "MainWindow should be visible to the test project");
+
+    // The gate keeps repeat calls quiet. This matters most for the right rail:
+    // ApplyRightRailCollapsed runs on every window resize, so an ungated
+    // publisher would flood the stream while someone drags a window corner.
+    Require(MainWindow.ShouldPublishChange(null, "expanded"), "first observation should publish");
+    Require(!MainWindow.ShouldPublishChange("expanded", "expanded"), "an unchanged rail state must stay quiet during resizes");
+    Require(MainWindow.ShouldPublishChange("expanded", "collapsed"), "a real change should publish");
+    Require(!MainWindow.ShouldPublishChange("collapsed", "  "), "a blank state is not worth announcing");
+    Require(
+        !MainWindow.ShouldPublishChange("dark-blue", "DARK-BLUE", StringComparison.OrdinalIgnoreCase),
+        "theme ids should compare case-insensitively");
+    Require(
+        MainWindow.ShouldPublishChange("dark-blue", "DARK-BLUE"),
+        "the default comparison stays ordinal so overlay keys are not accidentally merged");
+
+    var shellEvents = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ShellEvents.cs"));
+    foreach (var eventName in new[]
+    {
+        "navigation.changed",
+        "navigation.rail.changed",
+        "navigation.theme.changed",
+        "shell.overlay.changed",
+        "view.preset.changed"
+    })
+    {
+        Require(
+            shellEvents.Contains($"\"{eventName}\"", StringComparison.Ordinal),
+            $"{eventName} should be published from the shared shell path");
+    }
+
+    // If a handler publishes again, control-plane callers get the event twice
+    // while UI callers still get it once, which is worse than the original bug.
+    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    foreach (var eventName in new[]
+    {
+        "navigation.changed",
+        "navigation.rail.changed",
+        "navigation.theme.changed",
+        "view.preset.changed"
+    })
+    {
+        Require(
+            !dispatch.Contains($"Publish(\"{eventName}\"", StringComparison.Ordinal),
+            $"{eventName} must be published from the shared path, not the control-plane dispatch");
+    }
+
+    foreach (var handler in new[]
+    {
+        "src/AIArena.Wpf/Shell/ControlPlane/AIArenaSettingsControlHandler.cs",
+        "src/AIArena.Wpf/Shell/ControlPlane/AIArenaMatchSetupControlHandler.cs"
+    })
+    {
+        Require(
+            !File.ReadAllText(FindWorkspaceFile(handler)).Contains("Publish(\"shell.overlay.changed\"", StringComparison.Ordinal),
+            $"{handler} must not republish shell.overlay.changed");
+    }
+
+    // The shared paths themselves must keep calling the publishers.
+    var shell = ReadMainWindowSource();
+    Require(
+        shell.Contains("PublishNavigationChanged();", StringComparison.Ordinal),
+        "the surface-change path must announce navigation");
+    Require(
+        shell.Contains("PublishRailChanged();", StringComparison.Ordinal),
+        "the rail layout path must announce rail changes");
+    Require(
+        shell.Contains("PublishMatchSetupOverlayChanged(", StringComparison.Ordinal),
+        "the Match Setup show and close paths must announce the overlay");
+    Require(
+        shell.Contains("PublishSettingsOverlayChanged(", StringComparison.Ordinal),
+        "the settings search path must announce the query");
+
+    // settings.search shows the overlay first and sets the query afterwards, so
+    // announcing only on visibility would report a stale query.
+    var searchStart = shell.IndexOf("private void SettingsSearchText_TextChanged", StringComparison.Ordinal);
+    Require(searchStart >= 0, "the settings search handler should remain discoverable");
+    var searchBody = shell[searchStart..Math.Min(shell.Length, searchStart + 800)];
+    Require(
+        searchBody.Contains("PublishSettingsOverlayChanged", StringComparison.Ordinal),
+        "the settings query must be announced from the text-changed handler");
+}
+
 }

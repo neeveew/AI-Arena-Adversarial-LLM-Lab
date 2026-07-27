@@ -114,7 +114,9 @@ internal sealed class AIArenaSettingsControlHandler
             return AIArenaControlResponse.Error(request, result.ErrorCode, result.Message, result.State);
         }
 
-        events.Publish("shell.overlay.changed", result.Message, result.State);
+        // No publish here: AppSettingsCoordinator.SetVisible and the search box
+        // announce the change for whichever route caused it, so publishing again
+        // would double up for control-plane callers only.
         return AIArenaControlResponse.Success(request, result.Message, result.State);
     }
 }
