@@ -42,7 +42,27 @@ jobs:
         # This is the step that matters: restore writes project.assets.json, and
         # that file is what lets component detection report transitive packages
         # rather than re-reading the same direct references GitHub already has.
-        run: dotnet restore "AI Arena - WPF.sln"
+        #
+        # The runtime identifier matches what the release actually publishes
+        # (self-contained win-x64, see scripts/build-wpf-release.ps1). A plain
+        # restore resolves the same 14 packages today, but a self-contained
+        # publish is free to pull runtime-specific ones, and a graph describing
+        # a build nobody ships is not worth much.
+        run: dotnet restore "AI Arena - WPF.sln" -r win-x64
+
+      # Known shape of the submission, so the next person does not re-derive it:
+      # component detection reports every project, but the snapshot it submits
+      # carries one manifest - src/AIArena.Core/AIArena.Core.csproj - holding
+      # that project's closure. The WPF project's two direct references
+      # (System.Management, System.Speech) reach the graph through GitHub's own
+      # parsing of the .csproj instead, and neither has NuGet children. If that
+      # project ever takes on a package with a deep tree, check that its
+      # transitive packages actually appear before trusting the graph.
+      #
+      # System.CodeDom is deliberately absent. It resolves as a package only in
+      # the test project, and the System.CodeDom.dll inside the installer comes
+      # from runtimepack.Microsoft.WindowsDesktop.App.Runtime.win-x64, i.e. from
+      # .NET itself rather than from a NuGet dependency.
 
       - name: Detect and submit components
         uses: advanced-security/component-detection-dependency-submission-action@31f25a8de68ae5ce2ca274bc28546a78683c15ce # v0.1.4
