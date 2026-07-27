@@ -45,14 +45,17 @@ internal sealed class CrossSessionSearchService
         }
 
         var search = query.Trim();
-        var sessions = await sessionStore.ListSessionsAsync(cancellationToken);
-        var ordered = sessions
-            .Where(session => session.HasSnapshot)
+
+        // ListSessionsAsync inspects every session to build its summaries, and
+        // this search then loads each snapshot again - two passes over the whole
+        // data root per query. Enumerating the directories directly keeps it to
+        // one read of each snapshot that is actually searched.
+        var sessions = EnumerateSearchableSessions()
             .OrderByDescending(session => session.LastModified)
             .ToArray();
 
         var hits = new List<Hit>();
-        foreach (var session in ordered)
+        foreach (var session in sessions)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (hits.Count >= maxHits)
@@ -64,6 +67,57 @@ internal sealed class CrossSessionSearchService
         }
 
         return hits;
+    }
+
+    /// <summary>
+    /// Sessions that have a snapshot worth searching, described only by what the
+    /// file system can answer cheaply. Counts are deliberately left at zero:
+    /// nothing in the search path reads them.
+    /// </summary>
+    private IEnumerable<CoreSessionSummary> EnumerateSearchableSessions()
+    {
+        var sessionsRoot = AIArena.Core.Persistence.NativeDataPaths.SessionsRoot(sessionStore.DataRoot);
+        if (!Directory.Exists(sessionsRoot))
+        {
+            yield break;
+        }
+
+        IEnumerable<string> directories;
+        try
+        {
+            directories = Directory.EnumerateDirectories(sessionsRoot);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            yield break;
+        }
+
+        foreach (var directory in directories)
+        {
+            var snapshotPath = Path.Combine(directory, "snapshot.json");
+            FileInfo info;
+            try
+            {
+                info = new FileInfo(snapshotPath);
+                if (!info.Exists)
+                {
+                    continue;
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            yield return new CoreSessionSummary(
+                Path.GetFileName(directory),
+                snapshotPath,
+                true,
+                0,
+                0,
+                0,
+                new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero));
+        }
     }
 
     private async Task<IReadOnlyList<TranscriptMessage>> LoadMessagesAsync(
