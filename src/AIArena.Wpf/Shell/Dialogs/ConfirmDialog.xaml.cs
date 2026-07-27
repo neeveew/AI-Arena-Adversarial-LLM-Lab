@@ -88,11 +88,25 @@ public partial class ConfirmDialog : Window
         ToneText.Foreground = badge;
         ToneText.Text = tone == ConfirmDialogTone.Danger ? "\uE7BA" : "\uE897";
         ToneLabelText.Foreground = badge;
-        ToneLabelText.Text = tone == ConfirmDialogTone.Danger ? "REVIEW CAREFULLY" : "CONFIRM ACTION";
+        ToneLabelText.Text = tone switch
+        {
+            ConfirmDialogTone.Danger => "REVIEW CAREFULLY",
+            ConfirmDialogTone.Info => "REFERENCE",
+            _ => "CONFIRM ACTION"
+        };
         ShortcutText.Foreground = muted;
-        ShortcutText.Text = tone == ConfirmDialogTone.Danger
-            ? $"Enter keeps this unchanged · choose {ConfirmButton.Content} to proceed"
-            : "Esc cancels · Enter confirms";
+        ShortcutText.Text = tone switch
+        {
+            ConfirmDialogTone.Danger => $"Enter keeps this unchanged · choose {ConfirmButton.Content} to proceed",
+            ConfirmDialogTone.Info => "Esc or Enter closes",
+            _ => "Esc cancels · Enter confirms"
+        };
+
+        // Reference content has nothing to decline, so the second action is hidden.
+        if (tone == ConfirmDialogTone.Info)
+        {
+            CancelButton.Visibility = Visibility.Collapsed;
+        }
         FooterBar.Background = input;
         FooterBar.BorderBrush = border;
 
@@ -146,5 +160,8 @@ public partial class ConfirmDialog : Window
 public enum ConfirmDialogTone
 {
     Normal,
-    Danger
+    Danger,
+
+    /// <summary>Reference content with nothing to confirm, such as the shortcut list.</summary>
+    Info
 }

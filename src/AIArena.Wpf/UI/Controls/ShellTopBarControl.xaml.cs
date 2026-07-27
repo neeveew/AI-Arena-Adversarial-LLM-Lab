@@ -32,6 +32,7 @@ public enum ShellTopBarAction
     SearchTextKeyDown,
     SearchTextPointerPressed,
     SearchClearRequested,
+    SearchAllSessionsRequested,
     TranscriptExportRequested,
     UserGuideRequested,
     ViewMenuRequested,
@@ -326,6 +327,7 @@ public partial class ShellTopBarControl : UserControl
     private void SearchTextKeyDown(object sender, KeyEventArgs e) => Forward(ShellTopBarAction.SearchTextKeyDown, sender, e);
     private void SearchTextPointerPressed(object sender, MouseButtonEventArgs e) => Forward(ShellTopBarAction.SearchTextPointerPressed, sender, e);
     private void SearchClearRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.SearchClearRequested, sender, e);
+    private void SearchAllSessionsRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.SearchAllSessionsRequested, sender, e);
     private void TranscriptExportRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.TranscriptExportRequested, sender, e);
     private void UserGuideRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.UserGuideRequested, sender, e);
     private void ViewMenuRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.ViewMenuRequested, sender, e);

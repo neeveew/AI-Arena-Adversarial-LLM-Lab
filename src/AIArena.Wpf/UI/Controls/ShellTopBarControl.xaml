@@ -557,7 +557,7 @@
                         Margin="0,0,6,0"
                         AutomationProperties.Name="Open Match Setup"
                         AutomationProperties.HelpText="Open or close the Match Setup flyout."
-                        ToolTip="Open Match Setup" />
+                        ToolTip="Open Match Setup (Ctrl+M)" />
 
                 <Border Style="{StaticResource ToolbarGroup}">
                     <StackPanel Orientation="Horizontal">
@@ -652,11 +652,26 @@
                                                 <TextBlock Text="&#xE711;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="16" />
                                             </Button>
                                         </Grid>
-                                        <TextBlock x:Name="TranscriptSearchResultsHeader"
-                                                   Grid.Row="2"
-                                                   Text="Recent searches"
-                                                   Style="{StaticResource Arena.Text.Label}"
-                                                   Margin="0,18,0,10" />
+                                        <Grid Grid.Row="2" Margin="0,18,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock x:Name="TranscriptSearchResultsHeader"
+                                                       Text="Recent searches"
+                                                       Style="{StaticResource Arena.Text.Label}"
+                                                       VerticalAlignment="Center" />
+                                            <Button x:Name="SearchAllSessionsButton"
+                                                    Grid.Column="1"
+                                                    Content="Search all sessions"
+                                                    Click="SearchAllSessionsRequested"
+                                                    Style="{StaticResource Arena.Button.Secondary}"
+                                                    FontSize="11"
+                                                    Padding="9,3"
+                                                    AutomationProperties.Name="Search all sessions"
+                                                    AutomationProperties.HelpText="Find the current query across every stored session, not just this transcript."
+                                                    ToolTip="Find this query across every stored session" />
+                                        </Grid>
                                         <Border Grid.Row="3" Style="{StaticResource Arena.Surface.Inset}" Padding="8" MinHeight="220">
                                             <StackPanel x:Name="TranscriptRecentSearchItems" />
                                         </Border>
@@ -669,7 +684,7 @@
                                 Style="{StaticResource TopIconButton}"
                                 AutomationProperties.Name="Export transcript"
                                 AutomationProperties.HelpText="Export the current transcript to a file."
-                                ToolTip="Export transcript">
+                                ToolTip="Export transcript (Ctrl+E)">
                             <TextBlock Text="&#xE8E5;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="13" />
                         </Button>
                         <Button x:Name="TopUserGuideButton"
@@ -835,7 +850,7 @@
                                 Margin="0"
                                 AutomationProperties.Name="Open app settings"
                                 AutomationProperties.HelpText="Open provider, internet, appearance, and app behavior settings."
-                                ToolTip="App Settings">
+                                ToolTip="App Settings (Ctrl+,)">
                             <Viewbox Width="18" Height="18">
                                 <Path x:Name="SettingsGearIcon"
                                       Fill="{DynamicResource TextBrush}"

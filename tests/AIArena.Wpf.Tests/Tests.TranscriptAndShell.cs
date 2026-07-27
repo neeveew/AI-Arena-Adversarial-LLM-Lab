@@ -6,9 +6,11 @@ using AIArena.Wpf;
 using AIArena.Wpf.Controls;
 using AIArena.Wpf.Models;
 using AIArena.Wpf.Services;
+using System.Collections.ObjectModel;
 using System.Collections;
 using System.Runtime.ExceptionServices;
 using System.Resources;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Threading;
 using System.Windows;
@@ -2805,6 +2807,248 @@ static void ProviderReachabilityProjectsOneCoherentUiGeneration()
     var transcriptIndex = projection.IndexOf("PopulateTranscript(snapshot.Messages)", StringComparison.Ordinal);
     Require(stateIndex >= 0 && topIndex > stateIndex && overviewIndex > topIndex && transcriptIndex > overviewIndex,
         "the coherent provider projection should publish state before refreshing top, rail/settings, and transcript readiness in one dispatcher turn");
+}
+
+static void SessionTokenAccountingReportsTotalsAndPressure()
+{
+    static TranscriptMessage Turn(int turn, int promptTokens, int completionTokens)
+    {
+        return new TranscriptMessage(turn, "Alpha", "alpha", 0, "-", 0, promptTokens, completionTokens, promptTokens + completionTokens, "ok", "", false, "message", "body", "", "", "", "", "", "", "", "", false, []);
+    }
+
+    var messages = new[] { Turn(1, 1000, 200), Turn(2, 3000, 400) };
+    var snapshot = SnapshotForOverviewTest(true, "model", "", 2, messages, []) with { ProviderContextLength = 4000 };
+
+    Require(SessionOverviewCoordinator.TotalCompletionTokens(snapshot) == 600, "generated tokens should sum completion counts only");
+    Require(SessionOverviewCoordinator.TotalSessionTokens(snapshot) == 4600, "session total should include prompt and completion tokens");
+    Require(SessionOverviewCoordinator.MaxPromptContext(snapshot) == 3000, "context should track the largest prompt");
+
+    var pressure = SessionOverviewCoordinator.ContextPressure(snapshot);
+    Require(pressure is not null && Math.Abs(pressure.Value - 0.75) < 0.001, "context pressure should be the largest prompt over the window");
+    Require(SessionOverviewCoordinator.ContextPressureLabel(snapshot, value => value.ToString()).Contains("75%", StringComparison.Ordinal), "context label should surface the pressure percentage");
+
+    // An unknown window must read as unknown rather than as no pressure.
+    var unknownWindow = snapshot with { ProviderContextLength = 0 };
+    Require(SessionOverviewCoordinator.ContextPressure(unknownWindow) is null, "an unset context window should report unknown pressure");
+    Require(!SessionOverviewCoordinator.ContextPressureLabel(unknownWindow, value => value.ToString()).Contains("%", StringComparison.Ordinal), "an unknown window should not claim a percentage");
+
+    // Pressure is capped so an over-limit prompt cannot exceed 100%.
+    var overLimit = snapshot with { ProviderContextLength = 1000 };
+    Require(SessionOverviewCoordinator.ContextPressure(overLimit) == 1.0, "pressure should cap at the full window");
+    Require(SessionOverviewCoordinator.ContextPressure(overLimit) >= SessionOverviewCoordinator.ContextPressureWarningThreshold, "an over-limit prompt should cross the warning threshold");
+
+    var empty = SnapshotForOverviewTest(true, "model", "", 0, [], []);
+    Require(SessionOverviewCoordinator.TotalSessionTokens(empty) == 0, "an empty session should report no tokens");
+    Require(SessionOverviewCoordinator.ContextPressureLabel(empty, value => value.ToString()) == "-", "an empty session should show a placeholder context");
+}
+
+static void CrossSessionSearchAttributesAndCapsHits()
+{
+    static TranscriptMessage Message(int turn, string speaker, string text)
+    {
+        return new TranscriptMessage(turn, speaker, speaker.ToLowerInvariant(), 0, "-", 0, 0, 0, 0, "ok", "", false, "message", text, "", "", "", "", "", "", "", "", false, []);
+    }
+
+    var session = new AIArena.Core.Models.SessionSummary("run-7", "path", true, 3, 0, 0, DateTimeOffset.UnixEpoch.AddDays(5));
+    var messages = new[]
+    {
+        Message(1, "Alpha", "We should measure the latency threshold before shipping."),
+        Message(2, "Beta", "Unrelated turn about persona drift."),
+        Message(3, "Gamma", "The latency threshold is the wrong invariant.")
+    };
+
+    var hits = new List<CrossSessionSearchService.Hit>();
+    CrossSessionSearchService.CollectSessionHits(session, messages, "latency threshold", 100, hits);
+    Require(hits.Count == 2, $"both matching turns should be found, not {hits.Count}");
+    Require(hits.All(hit => hit.SessionId == "run-7"), "hits should carry the session they came from");
+    Require(hits[0].Turn == 1 && hits[1].Turn == 3, "hits should preserve turn attribution");
+    Require(hits[0].Speaker == "Alpha", "hits should carry the speaker");
+
+    // The cap bounds a broad query over a large history.
+    var capped = new List<CrossSessionSearchService.Hit>();
+    CrossSessionSearchService.CollectSessionHits(session, messages, "latency threshold", 1, capped);
+    Require(capped.Count == 1, "hit collection should respect the cap");
+
+    var nonMatching = new List<CrossSessionSearchService.Hit>();
+    CrossSessionSearchService.CollectSessionHits(session, messages, "no such phrase", 100, nonMatching);
+    Require(nonMatching.Count == 0, "a query with no matches should produce no hits");
+
+    // Excerpts should centre on the match rather than always showing the opening words.
+    var longText = new string('a', 200) + " latency threshold " + new string('b', 200);
+    var excerpt = CrossSessionSearchService.Excerpt(longText, "latency threshold");
+    Require(excerpt.Contains("latency threshold", StringComparison.OrdinalIgnoreCase), "excerpt should include the matched phrase");
+    Require(excerpt.StartsWith("...", StringComparison.Ordinal) && excerpt.EndsWith("...", StringComparison.Ordinal), "a mid-text match should be shown as a windowed excerpt");
+    Require(excerpt.Length < longText.Length, "excerpt should be shorter than the full turn");
+    Require(CrossSessionSearchService.Excerpt("", "x") == "", "an empty turn should produce an empty excerpt");
+}
+
+static void IdlePollingCadenceOnlyWhenNothingIsRunning()
+{
+    Require(MainWindow.ShouldUseIdlePollingCadence(windowActive: false, arenaBusy: false, autoChatRunning: false), "a backgrounded idle shell should slow its polling");
+    Require(!MainWindow.ShouldUseIdlePollingCadence(windowActive: true, arenaBusy: false, autoChatRunning: false), "a focused shell should keep the responsive cadence");
+    Require(!MainWindow.ShouldUseIdlePollingCadence(windowActive: false, arenaBusy: true, autoChatRunning: false), "a background run must not lose its refresh cadence");
+    Require(!MainWindow.ShouldUseIdlePollingCadence(windowActive: false, arenaBusy: false, autoChatRunning: true), "auto chat in the background must not lose its refresh cadence");
+}
+
+static void TranscriptRowSyncPreservesUnchangedTail()
+{
+    // Rows are newest-first, so a new turn is prepended and every later index
+    // shifts. The sync must rewrite only the head, or the virtualizing panel
+    // rebuilds every realized container on every turn.
+    // Prepending one row should touch exactly one index.
+    var collection = new ObservableCollection<object>(["adjunct-1", "turn-3", "turn-2", "turn-1"]);
+    var changes = 0;
+    collection.CollectionChanged += (_, _) => changes++;
+    TranscriptListCoordinator.SyncRowsInto(collection, ["adjunct-1", "turn-4", "turn-3", "turn-2", "turn-1"]);
+    Require(collection.SequenceEqual(["adjunct-1", "turn-4", "turn-3", "turn-2", "turn-1"]), "prepending a turn should produce the target rows");
+    Require(changes == 1, $"prepending a turn should raise one collection change, not {changes}");
+
+    // A rebuilt adjunct panel should replace only that row.
+    collection = new ObservableCollection<object>(["adjunct-a", "turn-2", "turn-1"]);
+    changes = 0;
+    collection.CollectionChanged += (_, _) => changes++;
+    TranscriptListCoordinator.SyncRowsInto(collection, ["adjunct-b", "turn-2", "turn-1"]);
+    Require(collection.SequenceEqual(["adjunct-b", "turn-2", "turn-1"]), "replacing an adjunct should produce the target rows");
+    Require(changes == 1, $"replacing an adjunct should raise one collection change, not {changes}");
+
+    // Identical input should not touch the collection at all.
+    collection = new ObservableCollection<object>(["adjunct", "turn-2", "turn-1"]);
+    changes = 0;
+    collection.CollectionChanged += (_, _) => changes++;
+    TranscriptListCoordinator.SyncRowsInto(collection, ["adjunct", "turn-2", "turn-1"]);
+    Require(changes == 0, "an unchanged transcript should not mutate the bound collection");
+
+    // Shrinking (filters applied) and growing from empty must still be exact.
+    collection = new ObservableCollection<object>(["a", "b", "c", "d"]);
+    TranscriptListCoordinator.SyncRowsInto(collection, ["z", "d"]);
+    Require(collection.SequenceEqual(["z", "d"]), "filtering down should produce the target rows");
+
+    collection = [];
+    TranscriptListCoordinator.SyncRowsInto(collection, ["a", "b", "c"]);
+    Require(collection.SequenceEqual(["a", "b", "c"]), "growing from empty should produce the target rows");
+
+    TranscriptListCoordinator.SyncRowsInto(collection, []);
+    Require(collection.Count == 0, "clearing should produce an empty collection");
+}
+
+static void AdvertisedShortcutsAreHandled()
+{
+    // The search tooltip promised Ctrl+F for a long time while no handler
+    // existed. Any shortcut named in the UI must be reachable from the shell
+    // key handler, and every shortcut the handler implements must be listed.
+    var handler = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var handlerStart = handler.IndexOf("private bool TryHandleShellShortcut", StringComparison.Ordinal);
+    var handlerEnd = handler.IndexOf("private void ShowShortcutsOverlay", handlerStart, StringComparison.Ordinal);
+    Require(handlerStart >= 0 && handlerEnd > handlerStart, "shell shortcut handler should remain discoverable");
+    var handlerBody = handler[handlerStart..handlerEnd];
+
+    var keyForShortcut = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["Ctrl+F"] = "Key.F",
+        ["Ctrl+M"] = "Key.M",
+        ["Ctrl+Enter"] = "Key.Enter",
+        ["Ctrl+E"] = "Key.E",
+        ["Ctrl+,"] = "Key.OemComma",
+        ["Ctrl+Shift+R"] = "Key.R"
+    };
+
+    foreach (var pair in keyForShortcut)
+    {
+        Require(
+            handlerBody.Contains(pair.Value, StringComparison.Ordinal),
+            $"{pair.Key} is advertised but the shell key handler has no {pair.Value} case");
+        Require(
+            MainWindow.ShellShortcuts.Any(shortcut => shortcut.Keys.Contains(pair.Key, StringComparison.Ordinal)),
+            $"{pair.Key} is handled but missing from the shortcut list shown to users");
+    }
+
+    // Tooltips that name a chord must match one the shell actually handles.
+    string[] markupFiles =
+    [
+        "src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml",
+        "src/AIArena.Wpf/Shell/MainWindow.xaml"
+    ];
+    foreach (var relativePath in markupFiles)
+    {
+        var markup = File.ReadAllText(FindWorkspaceFile(relativePath));
+        foreach (Match match in Regex.Matches(markup, @"\(Ctrl\+(?:Shift\+)?[A-Za-z,]+\)"))
+        {
+            var advertised = match.Value.Trim('(', ')');
+            Require(
+                MainWindow.ShellShortcuts.Any(shortcut => shortcut.Keys.Contains(advertised, StringComparison.Ordinal)),
+                $"{relativePath} advertises {advertised}, which the shell does not implement");
+        }
+    }
+}
+
+static void StatusTonesAvoidAgentIdentityAccents()
+{
+    // Agent accent brushes are user-customizable identity colors. Using one to
+    // mean "ready", "warning", or "online" makes recolouring an agent repaint
+    // unrelated status, so status tones must come from the fixed palette.
+    string[] identityBrushes =
+    [
+        "AlphaAccentBrush",
+        "BetaAccentBrush",
+        "GammaAccentBrush",
+        "DeltaAccentBrush",
+        "NarratorAccentBrush"
+    ];
+
+    string[] statusKeywords =
+    [
+        "ready",
+        "warning",
+        "danger",
+        "success",
+        "online",
+        "offline",
+        "saved",
+        "healthy"
+    ];
+
+    string[] sources =
+    [
+        "src/AIArena.Wpf/Shell/ScenarioWorkflowCoordinator.cs",
+        "src/AIArena.Wpf/Shell/TranscriptListCoordinator.cs",
+        "src/AIArena.Wpf/Shell/ProviderQuickSetupCoordinator.cs",
+        "src/AIArena.Wpf/Shell/DiagnosticsWorkflowCoordinator.cs",
+        "src/AIArena.Wpf/Shell/AgentBoardCoordinator.cs",
+        "src/AIArena.Wpf/Shell/MainWindow.xaml.cs"
+    ];
+
+    foreach (var relativePath in sources)
+    {
+        var lines = File.ReadAllLines(FindWorkspaceFile(relativePath));
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var line = lines[index];
+            if (!identityBrushes.Any(brush => line.Contains(brush, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            // A line that names an agent alongside its accent is identity, not status.
+            if (line.Contains("accentForSpeaker", StringComparison.OrdinalIgnoreCase)
+                || line.Contains("\"Alpha\"", StringComparison.Ordinal)
+                || line.Contains("\"Beta\"", StringComparison.Ordinal)
+                || line.Contains("\"Gamma\"", StringComparison.Ordinal)
+                || line.Contains("\"Delta\"", StringComparison.Ordinal)
+                || line.Contains("\"alpha\"", StringComparison.Ordinal)
+                || line.Contains("\"beta\"", StringComparison.Ordinal)
+                || line.Contains("\"gamma\"", StringComparison.Ordinal)
+                || line.Contains("\"delta\"", StringComparison.Ordinal)
+                || line.Contains("\"narrator\"", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var offending = statusKeywords.FirstOrDefault(keyword => line.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+            Require(
+                offending is null,
+                $"{relativePath}:{index + 1} uses an agent identity accent for the '{offending}' status tone; use the Arena status palette instead");
+        }
+    }
 }
 
 static void ShellNavigationCoordinatorSelectsThemes()

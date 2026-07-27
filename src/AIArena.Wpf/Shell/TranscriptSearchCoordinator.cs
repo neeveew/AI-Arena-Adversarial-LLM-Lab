@@ -433,7 +433,7 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
         return systemFilter.IsChecked == true;
     }
 
-    private static bool TranscriptMatchesSearch(TranscriptMessage message, string search)
+    internal static bool TranscriptMatchesSearch(TranscriptMessage message, string search)
     {
         return ContainsSearch(message.Speaker, search)
             || ContainsSearch(message.SpeakerId, search)
@@ -701,6 +701,98 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
         grid.Children.Add(meta);
 
         button.Content = grid;
+        return button;
+    }
+
+    public void ClosePopup()
+    {
+        searchPopup.IsOpen = false;
+    }
+
+    /// <summary>Replaces the result list with a single status line.</summary>
+    public void ShowCrossSessionMessage(string message)
+    {
+        if (resultListHeaderText is not null)
+        {
+            resultListHeaderText.Text = "All sessions";
+        }
+
+        recentSearchItems.Children.Clear();
+        recentSearchItems.Children.Add(CreateEmptyState("", "All sessions", message));
+    }
+
+    /// <summary>
+    /// Lists matches from other sessions, each row switching to that session.
+    /// </summary>
+    public void ShowCrossSessionResults(
+        string query,
+        IReadOnlyList<CrossSessionSearchService.Hit> hits,
+        Action<string> openSession)
+    {
+        if (resultListHeaderText is not null)
+        {
+            resultListHeaderText.Text = $"All sessions - {hits.Count} {(hits.Count == 1 ? "match" : "matches")}";
+        }
+
+        recentSearchItems.Children.Clear();
+        if (hits.Count == 0)
+        {
+            recentSearchItems.Children.Add(CreateEmptyState(
+                "",
+                "No matches in other sessions",
+                $"Nothing matched \"{TrimSearchForDisplay(query)}\" in the stored sessions."));
+            return;
+        }
+
+        foreach (var group in hits.GroupBy(hit => hit.SessionId).OrderByDescending(group => group.First().SessionLastModified))
+        {
+            recentSearchItems.Children.Add(CreateCrossSessionRow(group.Key, group.ToArray(), openSession));
+        }
+    }
+
+    private Button CreateCrossSessionRow(
+        string sessionId,
+        IReadOnlyList<CrossSessionSearchService.Hit> hits,
+        Action<string> openSession)
+    {
+        var first = hits[0];
+        var button = new Button
+        {
+            Background = resourceBrush("CardBrush"),
+            BorderBrush = resourceBrush("DisabledBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(12, 8, 12, 8),
+            Margin = new Thickness(0, 0, 0, 8),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            FontWeight = FontWeights.Normal,
+            Foreground = resourceBrush("TextBrush"),
+            ToolTip = $"Open session {sessionId}"
+        };
+        AutomationProperties.SetName(button, $"Open session {sessionId}");
+        AutomationProperties.SetHelpText(
+            button,
+            $"{hits.Count} matching turn(s) in session {sessionId}. Opens that session.");
+        button.Click += (_, _) => openSession(sessionId);
+
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock
+        {
+            Text = $"{sessionId}  -  {hits.Count} {(hits.Count == 1 ? "match" : "matches")}",
+            Foreground = resourceBrush("TextBrush"),
+            FontWeight = FontWeights.SemiBold,
+            FontSize = ArenaTokens.LabelFontSize,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = $"Turn {first.Turn} - {first.Speaker}: {first.Excerpt}",
+            Foreground = resourceBrush("MutedTextBrush"),
+            FontSize = ArenaTokens.CaptionFontSize,
+            TextWrapping = TextWrapping.Wrap,
+            MaxHeight = 46,
+            Margin = new Thickness(0, 3, 0, 0)
+        });
+        button.Content = stack;
         return button;
     }
 
