@@ -12,6 +12,8 @@
     <InformationalVersion>0.4.117-beta</InformationalVersion>
     <FileVersion>0.4.117.0</FileVersion>
     <ApplicationIcon>Assets\ai-arena-icon.ico</ApplicationIcon>
+    <!-- Profile-guided tiering costs nothing at build time and improves steady-state JIT. -->
+    <TieredPGO>true</TieredPGO>
   </PropertyGroup>
 
   <ItemGroup>

@@ -19,6 +19,18 @@ public sealed class SessionStore
     private static readonly TimeSpan SnapshotWriteLeaseTimeout = TimeSpan.FromSeconds(45);
     private static readonly KeyedAsyncLockRegistry SnapshotWriteLocks = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Snapshot path to its last observed write stamp and message count. Shared
+    /// across stores because the key is a full path, and a data root can be
+    /// shared with other AI Arena implementations.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime WriteUtc, long Length, int Count)> MessageCountCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Event log path to its last observed write stamp and line count.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime WriteUtc, long Length, int Count)> EventLineCountCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -1040,9 +1052,9 @@ public sealed class SessionStore
             cancellationToken.ThrowIfCancellationRequested();
             var id = Path.GetFileName(sessionDir);
             var snapshotPath = Path.Combine(sessionDir, "snapshot.json");
-            var snapshot = File.Exists(snapshotPath)
-                ? await TryLoadSnapshotForSummaryAsync(id, cancellationToken)
-                : null;
+            var messageCount = File.Exists(snapshotPath)
+                ? await CountSnapshotMessagesAsync(snapshotPath, cancellationToken)
+                : 0;
             var checkpointPath = CheckpointDirectory(id);
             var eventPath = NativeDataPaths.EventPath(DataRoot, id);
             var lastModified = DirectoryLastWriteTimeOrNow(sessionDir);
@@ -1050,13 +1062,72 @@ public sealed class SessionStore
                 id,
                 snapshotPath,
                 File.Exists(snapshotPath),
-                snapshot?.Engine.Messages.Count ?? 0,
+                messageCount,
                 CountFiles(checkpointPath, "*.json"),
                 CountLines(eventPath),
                 new DateTimeOffset(lastModified)));
         }
 
         return summaries;
+    }
+
+    /// <summary>
+    /// Message counts for the session list used to deserialize every snapshot,
+    /// which cost seconds once a data root held hundreds of sessions. The count
+    /// is now read by streaming past everything except engine.messages, and
+    /// cached against the file's write time so unchanged sessions are free.
+    /// </summary>
+    private async Task<int> CountSnapshotMessagesAsync(string snapshotPath, CancellationToken cancellationToken)
+    {
+        DateTime writeUtc;
+        long length;
+        try
+        {
+            var info = new FileInfo(snapshotPath);
+            writeUtc = info.LastWriteTimeUtc;
+            length = info.Length;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
+
+        if (MessageCountCache.TryGetValue(snapshotPath, out var cached)
+            && cached.WriteUtc == writeUtc
+            && cached.Length == length)
+        {
+            return cached.Count;
+        }
+
+        int count;
+        try
+        {
+            await using var stream = new FileStream(
+                snapshotPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 64 * 1024,
+                useAsync: true);
+            var document = await JsonDocument.ParseAsync(stream, default, cancellationToken);
+            using (document)
+            {
+                count = document.RootElement.TryGetProperty("engine", out var engine)
+                    && engine.ValueKind == JsonValueKind.Object
+                    && engine.TryGetProperty("messages", out var messages)
+                    && messages.ValueKind == JsonValueKind.Array
+                        ? messages.GetArrayLength()
+                        : 0;
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            // A corrupt or locked snapshot degrades to zero, as it did before.
+            return 0;
+        }
+
+        MessageCountCache[snapshotPath] = (writeUtc, length, count);
+        return count;
     }
 
     private async Task<ArenaSnapshot?> TryLoadSnapshotForSummaryAsync(string sessionId, CancellationToken cancellationToken)
@@ -1129,6 +1200,11 @@ public sealed class SessionStore
         }
     }
 
+    /// <summary>
+    /// Event logs are append-only, so a file whose write stamp and length are
+    /// unchanged still has the same number of lines. Listing a data root with
+    /// hundreds of sessions used to re-read every log in full.
+    /// </summary>
     private static int CountLines(string path)
     {
         if (!File.Exists(path))
@@ -1136,6 +1212,33 @@ public sealed class SessionStore
             return 0;
         }
 
+        DateTime writeUtc;
+        long length;
+        try
+        {
+            var info = new FileInfo(path);
+            writeUtc = info.LastWriteTimeUtc;
+            length = info.Length;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
+
+        if (EventLineCountCache.TryGetValue(path, out var cached)
+            && cached.WriteUtc == writeUtc
+            && cached.Length == length)
+        {
+            return cached.Count;
+        }
+
+        var counted = CountLinesUncached(path);
+        EventLineCountCache[path] = (writeUtc, length, counted);
+        return counted;
+    }
+
+    private static int CountLinesUncached(string path)
+    {
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
