@@ -36,23 +36,32 @@ internal sealed class ScenarioSeedInspectorCoordinator
         var personaStyle = displayStatusValue(snapshot.PersonaGeneratorStyle);
         var source = ScenarioSeedSource(snapshot.ScenarioGeneratorSeed, snapshot.PersonaGeneratorStyle);
 
-        AddChip("Source", source, "PrimaryBorderBrush");
-        AddChip("Scenario", ShortSeedValue(scenarioSeed), "TextBrush");
-        AddChip("Style", scenarioStyle, "MutedTextBrush");
+        // Seeds are reproducibility artifacts rather than setup choices, so the
+        // raw values live in the source chip's tooltip and in Copy Seed instead
+        // of occupying two chips of prime header space.
+        AddChip("Source", source, "TextBrush", SeedToolTip(scenarioSeed, personaSeed));
+        AddChip("Style", scenarioStyle, "TextBrush");
         if (scenarioIntensity != "-")
         {
-            AddChip("Pressure", scenarioIntensity, "BetaAccentBrush");
+            AddChip("Pressure", scenarioIntensity, "TextBrush");
         }
         if (ShouldShowRolePack(scenarioRolePack))
         {
-            AddChip("Pack", scenarioRolePack.Replace('_', ' '), "PrimaryBorderBrush");
+            AddChip("Pack", scenarioRolePack.Replace('_', ' '), "TextBrush");
         }
         if (ShouldShowAbsurdity(scenarioAbsurdity))
         {
-            AddChip("Absurdity", scenarioAbsurdity, "NarratorAccentBrush");
+            AddChip("Absurdity", scenarioAbsurdity, "TextBrush");
         }
-        AddChip("Personas", ShortSeedValue(personaSeed), "NarratorAccentBrush");
-        AddChip("Persona style", personaStyle, "MutedTextBrush");
+        if (personaStyle != "-" && !personaStyle.Equals(scenarioStyle, StringComparison.OrdinalIgnoreCase))
+        {
+            AddChip("Persona style", personaStyle, "TextBrush");
+        }
+    }
+
+    internal static string SeedToolTip(string scenarioSeed, string personaSeed)
+    {
+        return $"Scenario seed: {scenarioSeed}\nPersona seed: {personaSeed}\nUse Copy Seed to reproduce this setup.";
     }
 
     internal static string ScenarioSeedSource(string scenarioSeed, string personaStyle)
@@ -75,16 +84,6 @@ internal sealed class ScenarioSeedInspectorCoordinator
             : "Random";
     }
 
-    internal static string ShortSeedValue(string seed)
-    {
-        if (string.IsNullOrWhiteSpace(seed) || seed == "-")
-        {
-            return "-";
-        }
-
-        return seed.Length <= 18 ? seed : $"{seed[..15]}...";
-    }
-
     internal static bool ShouldShowRolePack(string rolePack)
     {
         return rolePack != "-" && !rolePack.Equals("auto", StringComparison.OrdinalIgnoreCase);
@@ -95,8 +94,8 @@ internal sealed class ScenarioSeedInspectorCoordinator
         return absurdity != "-" && !absurdity.Equals("grounded", StringComparison.OrdinalIgnoreCase);
     }
 
-    private void AddChip(string label, string value, string accentResourceKey)
+    private void AddChip(string label, string value, string accentResourceKey, string? toolTip = null)
     {
-        scenarioSeedInspector.Children.Add(shellCards.CreateSetupChip(label, value, resourceBrush(accentResourceKey)));
+        scenarioSeedInspector.Children.Add(shellCards.CreateSetupChip(label, value, resourceBrush(accentResourceKey), toolTip));
     }
 }

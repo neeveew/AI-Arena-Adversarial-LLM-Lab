@@ -422,10 +422,14 @@
             <Setter.Value>
                 <ControlTemplate TargetType="{x:Type ComboBox}">
                     <Grid>
+                        <!-- The selection presenter renders plain strings as inherited
+                             text, so the toggle must carry the control foreground or the
+                             closed combo box shows system-default (near black) text. -->
                         <ToggleButton x:Name="DropDownToggle"
                                       Background="{TemplateBinding Background}"
                                       BorderBrush="{TemplateBinding BorderBrush}"
                                       BorderThickness="{TemplateBinding BorderThickness}"
+                                      Foreground="{TemplateBinding Foreground}"
                                       Focusable="False"
                                       IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
                             <ToggleButton.Template>

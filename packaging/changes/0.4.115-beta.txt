@@ -1,0 +1,8 @@
+- Restores the Windows 11 Snap Layouts flyout on the custom maximize button and reopens the system menu on caption right-click, completing the merged title bar.
+- Paints the system window frame from the active theme so the border and caption match the shell in light themes instead of staying dark.
+- Completes the Arena design-system migration: the shell now adopts the shared button, text box, password box, combo box, and scrollbar chrome, removing roughly 380 lines of duplicated control templates.
+- Restructures the theme palette to named colors with derived navigation washes, so adding or editing a theme can no longer transpose two values.
+- Adds a short, uniform reveal for the Match Setup and App Settings overlays that is skipped entirely when Windows reports reduced motion.
+- Reserves status colors for status: the transcript setup and readiness cards no longer borrow customizable agent identity accents.
+- Adds `scripts\capture-screenshots.ps1`, which drives the app over the control plane to regenerate the repository screenshots, and refreshes those screenshots for the current interface.
+- Keeps the WPF PowerShell plane enabled by default, retains the self-screenshot command and bundled SearXNG Internet backend, and remains a self-contained Windows installation with no separate .NET Desktop Runtime requirement.

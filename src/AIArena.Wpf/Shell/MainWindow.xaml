@@ -55,277 +55,12 @@
         <SolidColorBrush x:Key="DeltaAccentBrush" Color="#9EA6FF" />
         <SolidColorBrush x:Key="NarratorAccentBrush" Color="#E17DB6" />
         <SolidColorBrush x:Key="OperatorAccentBrush" Color="#7FB7FF" />
-        <Style TargetType="Button">
-            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
-            <Setter Property="Background" Value="{DynamicResource InputBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Padding" Value="8,4" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="MinHeight" Value="30" />
-            <Setter Property="FocusVisualStyle" Value="{StaticResource Arena.FocusVisual}" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="ButtonBorder"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6">
-                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
-                                              Margin="{TemplateBinding Padding}"
-                                              RecognizesAccessKey="True" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource NavHoverBrush}" />
-                                <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource HoverBorderBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource Arena.Brush.FocusRing}" />
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource PressedPrimaryBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource DisabledBrush}" />
-                                <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
-                                <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsEnabled" Value="False">
-                    <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
-                    <Setter Property="Background" Value="{DynamicResource DisabledBrush}" />
-                    <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
-                    <Setter Property="Opacity" Value="0.82" />
-                    <Setter Property="Cursor" Value="Arrow" />
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-        <Style TargetType="TextBox">
-            <Setter Property="Background" Value="{DynamicResource InputBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Padding" Value="6,4" />
-            <Setter Property="MinHeight" Value="32" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="CaretBrush" Value="{DynamicResource TextBrush}" />
-            <Setter Property="SelectionBrush" Value="{DynamicResource PrimaryBorderBrush}" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="TextBox">
-                        <Border x:Name="TextBoxBorder"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6">
-                            <Grid>
-                                <ScrollViewer x:Name="PART_ContentHost"
-                                              Margin="8,3" />
-                                <TextBlock Text="{TemplateBinding Tag}"
-                                           Foreground="{DynamicResource MutedTextBrush}"
-                                           Margin="8,5,8,0"
-                                           VerticalAlignment="Top"
-                                           IsHitTestVisible="False">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Visibility" Value="Collapsed" />
-                                            <Style.Triggers>
-                                                <MultiDataTrigger>
-                                                    <MultiDataTrigger.Conditions>
-                                                        <Condition Binding="{Binding Text, RelativeSource={RelativeSource TemplatedParent}}" Value="" />
-                                                        <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource TemplatedParent}}" Value="False" />
-                                                    </MultiDataTrigger.Conditions>
-                                                    <Setter Property="Visibility" Value="Visible" />
-                                                </MultiDataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                            </Grid>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="TextBoxBorder" Property="BorderBrush" Value="{DynamicResource HoverBorderBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                                <Setter TargetName="TextBoxBorder" Property="BorderBrush" Value="{DynamicResource Arena.Brush.FocusRing}" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="TextBoxBorder" Property="Background" Value="{DynamicResource DisabledBrush}" />
-                                <Setter TargetName="TextBoxBorder" Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
-                                <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style TargetType="ComboBox">
-            <Setter Property="Background" Value="{DynamicResource InputBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Padding" Value="6,4" />
-            <Setter Property="MinHeight" Value="32" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ComboBox">
-                        <Grid>
-                            <ToggleButton x:Name="DropDownToggle"
-                                          Background="{TemplateBinding Background}"
-                                          BorderBrush="{TemplateBinding BorderBrush}"
-                                          BorderThickness="{TemplateBinding BorderThickness}"
-                                          Foreground="{TemplateBinding Foreground}"
-                                          Focusable="False"
-                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
-                                <ToggleButton.Template>
-                                    <ControlTemplate TargetType="ToggleButton">
-                                        <Border Background="{TemplateBinding Background}"
-                                                BorderBrush="{TemplateBinding BorderBrush}"
-                                                BorderThickness="{TemplateBinding BorderThickness}"
-                                                CornerRadius="6">
-                                            <ContentPresenter />
-                                        </Border>
-                                    </ControlTemplate>
-                                </ToggleButton.Template>
-                                <Grid x:Name="ComboContentGrid"
-                                      TextElement.Foreground="{DynamicResource TextBrush}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="34" />
-                                    </Grid.ColumnDefinitions>
-                                    <ContentPresenter x:Name="ContentSite"
-                                                      Content="{TemplateBinding SelectionBoxItem}"
-                                                      ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"
-                                                      ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
-                                                      HorizontalAlignment="Left"
-                                                      VerticalAlignment="Center"
-                                                      Margin="10,0,6,0"
-                                                      TextElement.Foreground="{DynamicResource TextBrush}"
-                                                      RecognizesAccessKey="True" />
-                                    <TextBox x:Name="PART_EditableTextBox"
-                                             Background="Transparent"
-                                             BorderThickness="0"
-                                             Foreground="{DynamicResource TextBrush}"
-                                             CaretBrush="{DynamicResource TextBrush}"
-                                             SelectionBrush="{DynamicResource PrimaryBorderBrush}"
-                                             HorizontalAlignment="Stretch"
-                                             VerticalAlignment="Center"
-                                             VerticalContentAlignment="Center"
-                                             MinHeight="0"
-                                             Margin="10,0,6,0"
-                                             Padding="0"
-                                             IsReadOnly="{TemplateBinding IsReadOnly}"
-                                             Visibility="Hidden" />
-                                    <Path x:Name="ChevronGlyph"
-                                          Grid.Column="1"
-                                          Width="10"
-                                          Height="6"
-                                          HorizontalAlignment="Center"
-                                          VerticalAlignment="Center"
-                                          Data="M 0,0 L 5,5 L 10,0"
-                                          Stroke="{DynamicResource TextBrush}"
-                                          StrokeThickness="1.7"
-                                          StrokeStartLineCap="Round"
-                                          StrokeEndLineCap="Round" />
-                                </Grid>
-                            </ToggleButton>
-                            <Popup x:Name="Popup"
-                                   AllowsTransparency="True"
-                                   Focusable="False"
-                                   IsOpen="{TemplateBinding IsDropDownOpen}"
-                                   Placement="Bottom"
-                                   PopupAnimation="Fade">
-                                <Border Background="{DynamicResource InputBrush}"
-                                        BorderBrush="{DynamicResource ControlBorderBrush}"
-                                        BorderThickness="1"
-                                        CornerRadius="6"
-                                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}">
-                                    <ScrollViewer MaxHeight="240"
-                                                  VerticalScrollBarVisibility="Auto"
-                                                  HorizontalScrollBarVisibility="Disabled">
-                                        <ItemsPresenter />
-                                    </ScrollViewer>
-                                </Border>
-                            </Popup>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="DropDownToggle" Property="BorderBrush" Value="{DynamicResource HoverBorderBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                                <Setter TargetName="DropDownToggle" Property="BorderBrush" Value="{DynamicResource Arena.Brush.FocusRing}" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="DropDownToggle" Property="Background" Value="{DynamicResource DisabledBrush}" />
-                                <Setter TargetName="DropDownToggle" Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
-                                <Setter TargetName="DropDownToggle" Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
-                                <Setter TargetName="ComboContentGrid" Property="TextElement.Foreground" Value="{DynamicResource DisabledTextBrush}" />
-                                <Setter TargetName="ContentSite" Property="TextElement.Foreground" Value="{DynamicResource DisabledTextBrush}" />
-                                <Setter TargetName="PART_EditableTextBox" Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
-                                <Setter TargetName="PART_EditableTextBox" Property="CaretBrush" Value="{DynamicResource DisabledTextBrush}" />
-                                <Setter TargetName="ChevronGlyph" Property="Stroke" Value="{DynamicResource DisabledTextBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsDropDownOpen" Value="True">
-                                <Setter TargetName="ChevronGlyph" Property="Data" Value="M 0,5 L 5,0 L 10,5" />
-                            </Trigger>
-                            <Trigger Property="IsEditable" Value="True">
-                                <Setter TargetName="ContentSite" Property="Visibility" Value="Hidden" />
-                                <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style TargetType="ComboBoxItem">
-            <Setter Property="Background" Value="{DynamicResource InputBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
-            <Setter Property="Padding" Value="8,6" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ComboBoxItem">
-                        <Border x:Name="ItemBorder"
-                                Background="{TemplateBinding Background}"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsHighlighted" Value="True">
-                                <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource PrimaryBrush}" />
-                                <Setter Property="Foreground" Value="White" />
-                            </Trigger>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource PrimaryBrush}" />
-                                <Setter Property="Foreground" Value="White" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsHighlighted" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource PrimaryBrush}" />
-                    <Setter Property="Foreground" Value="White" />
-                </Trigger>
-                <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource PrimaryBrush}" />
-                    <Setter Property="Foreground" Value="White" />
-                </Trigger>
-            </Style.Triggers>
-        </Style>
+        <!-- The shell adopts the Arena control system; keyed styles below layer intent on top. -->
+        <Style TargetType="Button" BasedOn="{StaticResource Arena.Button.Base}" />
+        <Style TargetType="TextBox" BasedOn="{StaticResource Arena.TextBox}" />
+        <Style TargetType="PasswordBox" BasedOn="{StaticResource Arena.PasswordBox}" />
+        <Style TargetType="ComboBox" BasedOn="{StaticResource Arena.ComboBox}" />
+        <Style TargetType="ComboBoxItem" BasedOn="{StaticResource Arena.ComboBoxItem}" />
         <Style x:Key="RoleModelComboBox" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
             <Setter Property="IsEditable" Value="True" />
             <Setter Property="IsTextSearchEnabled" Value="False" />
@@ -364,45 +99,17 @@
             <Setter Property="Padding" Value="5,2" />
             <Setter Property="MinHeight" Value="30" />
         </Style>
-        <Style x:Key="ScrollBarButton" TargetType="RepeatButton">
-            <Setter Property="Focusable" Value="False" />
-            <Setter Property="IsTabStop" Value="False" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="RepeatButton">
-                        <Border Background="Transparent" />
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        <!-- Slider thumbs only; scrollbars carry their own thumb via Arena.ScrollBar. -->
         <Style TargetType="Thumb">
             <Setter Property="Background" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Thumb">
-                        <Grid Background="Transparent">
-                            <Border x:Name="ThumbBorder"
-                                    Background="{TemplateBinding Background}"
-                                    CornerRadius="3"
-                                    Margin="1" />
-                        </Grid>
+                        <Border x:Name="ThumbBorder"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="{DynamicResource Arena.Radius.Small}"
+                                Margin="1" />
                         <ControlTemplate.Triggers>
-                            <MultiDataTrigger>
-                                <MultiDataTrigger.Conditions>
-                                    <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType={x:Type ScrollBar}}}" Value="False" />
-                                    <Condition Binding="{Binding IsDragging, RelativeSource={RelativeSource TemplatedParent}}" Value="False" />
-                                    <Condition Binding="{Binding Orientation, RelativeSource={RelativeSource AncestorType={x:Type ScrollBar}}}" Value="Vertical" />
-                                </MultiDataTrigger.Conditions>
-                                <Setter TargetName="ThumbBorder" Property="Margin" Value="4,1" />
-                            </MultiDataTrigger>
-                            <MultiDataTrigger>
-                                <MultiDataTrigger.Conditions>
-                                    <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType={x:Type ScrollBar}}}" Value="False" />
-                                    <Condition Binding="{Binding IsDragging, RelativeSource={RelativeSource TemplatedParent}}" Value="False" />
-                                    <Condition Binding="{Binding Orientation, RelativeSource={RelativeSource AncestorType={x:Type ScrollBar}}}" Value="Horizontal" />
-                                </MultiDataTrigger.Conditions>
-                                <Setter TargetName="ThumbBorder" Property="Margin" Value="1,4" />
-                            </MultiDataTrigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="ThumbBorder" Property="Background" Value="{DynamicResource HoverBorderBrush}" />
                             </Trigger>
@@ -414,53 +121,8 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <Style TargetType="ScrollBar">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="{DynamicResource ControlBorderBrush}" />
-            <Setter Property="Width" Value="12" />
-            <Setter Property="MinWidth" Value="12" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ScrollBar">
-                        <Grid x:Name="ScrollBarRoot"
-                              Background="{TemplateBinding Background}"
-                              Width="{TemplateBinding Width}">
-                            <Track x:Name="PART_Track"
-                                   IsDirectionReversed="True">
-                                <Track.DecreaseRepeatButton>
-                                    <RepeatButton Command="ScrollBar.PageUpCommand"
-                                                  Style="{StaticResource ScrollBarButton}" />
-                                </Track.DecreaseRepeatButton>
-                                <Track.Thumb>
-                                    <Thumb Background="{DynamicResource ControlBorderBrush}" />
-                                </Track.Thumb>
-                                <Track.IncreaseRepeatButton>
-                                    <RepeatButton Command="ScrollBar.PageDownCommand"
-                                                  Style="{StaticResource ScrollBarButton}" />
-                                </Track.IncreaseRepeatButton>
-                            </Track>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="Orientation" Value="Horizontal">
-                                <Setter Property="Width" Value="Auto" />
-                                <Setter Property="MinWidth" Value="0" />
-                                <Setter Property="Height" Value="12" />
-                                <Setter Property="MinHeight" Value="12" />
-                                <Setter TargetName="ScrollBarRoot" Property="Width" Value="Auto" />
-                                <Setter TargetName="ScrollBarRoot" Property="Height" Value="12" />
-                                <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False" />
-                            </Trigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Foreground" Value="{DynamicResource HoverBorderBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.3" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        <!-- Window scrollbars use the shared Arena chrome. -->
+        <Style TargetType="ScrollBar" BasedOn="{StaticResource Arena.ScrollBar}" />
         <Style x:Key="SectionTitle" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
@@ -1729,6 +1391,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <Grid Margin="0,0,0,10">
                         <Grid.ColumnDefinitions>
@@ -1754,68 +1417,97 @@
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
-                    <Border Style="{StaticResource WorkflowPanel}"
-                            Margin="0,0,0,12"
-                            Padding="14">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel>
-                                <TextBlock Text="Review scenario framing, cast personas, and lock what should survive random generation."
-                                           Style="{StaticResource PanelSubtitle}" />
-                                <WrapPanel x:Name="ScenarioSeedInspector" Margin="0,12,0,0" />
+                    <!-- Readiness leads with a one-line verdict; the chips, preflight
+                         checklist, and transfer actions stay one click away. -->
+                    <Expander x:Name="SetupReadinessExpander"
+                              IsExpanded="False"
+                              Style="{StaticResource AgentControlsExpander}"
+                              Margin="0,0,0,12">
+                        <Expander.Header>
+                            <StackPanel Margin="2,0,0,0">
+                                <TextBlock Text="Setup readiness"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontWeight="SemiBold" />
                                 <TextBlock x:Name="SetupReadinessStatusText"
                                            Text="Setup readiness will appear after a session loads."
                                            Style="{StaticResource HintText}"
                                            AutomationProperties.Name="Match setup readiness"
                                            AutomationProperties.HelpText="Summarizes whether the current match setup is ready to run."
-                                           Margin="0,10,0,0"
+                                           Margin="0,3,0,0"
                                            TextTrimming="CharacterEllipsis"
                                            ToolTip="Setup readiness will appear after a session loads." />
-                                <WrapPanel x:Name="SetupReadinessBadgeItems"
-                                           Margin="0,8,0,-4"
-                                           AutomationProperties.Name="Match setup readiness badges"
-                                           AutomationProperties.HelpText="Shows setup state, agent, provider, persona, narrator, relationship matrix, and history badges." />
-                                <StackPanel x:Name="SetupReadinessChecklistItems"
-                                            Margin="0,8,0,0"
-                                            AutomationProperties.Name="Match setup preflight checklist"
-                                            AutomationProperties.HelpText="Lists required blockers and advisory warnings for the current match setup." />
-                                <WrapPanel Margin="0,10,0,0">
-                                    <Button x:Name="CopyCurrentSetupBriefButton"
-                                            Content="Copy Setup"
-                                            Click="CopyCurrentSetupBriefButton_Click"
-                                            Style="{StaticResource SecondaryButton}"
-                                            AutomationProperties.Name="Copy current setup brief"
-                                            AutomationProperties.HelpText="Copy the current match setup as a readable brief."
-                                            FontSize="11"
-                                            Padding="11,6"
-                                            Margin="0,0,6,0"
-                                            ToolTip="Copy the current match setup as a readable brief" />
-                                    <Button x:Name="CopyCurrentSetupSpecButton"
-                                            Content="Copy JSON"
-                                            Click="CopyCurrentSetupSpecButton_Click"
-                                            Style="{StaticResource SecondaryButton}"
-                                            AutomationProperties.Name="Copy current setup JSON"
-                                            AutomationProperties.HelpText="Copy the current match setup as a JSON setup receipt."
-                                            FontSize="11"
-                                            Padding="11,6"
-                                            Margin="0,0,6,0"
-                                            ToolTip="Copy the current match setup as a JSON setup receipt" />
-                                    <Button x:Name="ImportCurrentSetupSpecButton"
-                                            Content="Import JSON"
-                                            Click="ImportCurrentSetupSpecButton_Click"
-                                            Style="{StaticResource SecondaryButton}"
-                                            AutomationProperties.Name="Import portable match setup JSON"
-                                            AutomationProperties.HelpText="Validate Match Setup JSON from the clipboard and create a clean imported session without overwriting the current run."
-                                            FontSize="11"
-                                            Padding="11,6"
-                                            ToolTip="Import portable Match Setup JSON from the clipboard into a clean session" />
-                                </WrapPanel>
                             </StackPanel>
-                        </Grid>
-                    </Border>
+                        </Expander.Header>
+                        <StackPanel Margin="0,4,0,0">
+                            <WrapPanel x:Name="ScenarioSeedInspector" />
+                            <WrapPanel x:Name="SetupReadinessBadgeItems"
+                                       Margin="0,8,0,-4"
+                                       AutomationProperties.Name="Match setup readiness badges"
+                                       AutomationProperties.HelpText="Shows the setup checks that need attention, and can reveal the checks that already pass." />
+                            <StackPanel x:Name="SetupReadinessChecklistItems"
+                                        Margin="0,8,0,0"
+                                        AutomationProperties.Name="Match setup preflight checklist"
+                                        AutomationProperties.HelpText="Lists required blockers and advisory warnings for the current match setup." />
+                            <Grid x:Name="CurrentSetupTransferHost" HorizontalAlignment="Left" Margin="0,10,0,0">
+                                <Button x:Name="CurrentSetupTransferButton"
+                                        Click="CurrentSetupTransferButton_Click"
+                                        Style="{StaticResource SecondaryButton}"
+                                        FontSize="11"
+                                        Padding="11,6"
+                                        AutomationProperties.Name="Copy or import match setup"
+                                        AutomationProperties.HelpText="Copy the current match setup as a brief or JSON receipt, or import a portable setup."
+                                        ToolTip="Copy or import this match setup">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Copy / Import" VerticalAlignment="Center" />
+                                        <TextBlock Text="&#xE70D;"
+                                                   FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                                                   FontSize="9"
+                                                   Margin="7,1,0,0"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                                <Popup x:Name="CurrentSetupTransferPopup"
+                                       PlacementTarget="{Binding ElementName=CurrentSetupTransferButton}"
+                                       Placement="Bottom"
+                                       VerticalOffset="6"
+                                       StaysOpen="False"
+                                       AllowsTransparency="True"
+                                       PopupAnimation="Fade">
+                                    <Border Style="{StaticResource FlyoutCard}"
+                                            MinWidth="210"
+                                            AutomationProperties.Name="Match setup transfer actions">
+                                        <StackPanel>
+                                            <Button x:Name="CopyCurrentSetupBriefButton"
+                                                    Content="Copy setup brief"
+                                                    Click="CopyCurrentSetupBriefButton_Click"
+                                                    Style="{StaticResource Arena.Button.Quiet}"
+                                                    HorizontalContentAlignment="Left"
+                                                    AutomationProperties.Name="Copy current setup brief"
+                                                    AutomationProperties.HelpText="Copy the current match setup as a readable brief."
+                                                    ToolTip="Copy the current match setup as a readable brief" />
+                                            <Button x:Name="CopyCurrentSetupSpecButton"
+                                                    Content="Copy setup JSON"
+                                                    Click="CopyCurrentSetupSpecButton_Click"
+                                                    Style="{StaticResource Arena.Button.Quiet}"
+                                                    HorizontalContentAlignment="Left"
+                                                    AutomationProperties.Name="Copy current setup JSON"
+                                                    AutomationProperties.HelpText="Copy the current match setup as a JSON setup receipt."
+                                                    ToolTip="Copy the current match setup as a JSON setup receipt" />
+                                            <Separator Style="{StaticResource Arena.Separator}" />
+                                            <Button x:Name="ImportCurrentSetupSpecButton"
+                                                    Content="Import setup JSON"
+                                                    Click="ImportCurrentSetupSpecButton_Click"
+                                                    Style="{StaticResource Arena.Button.Quiet}"
+                                                    HorizontalContentAlignment="Left"
+                                                    AutomationProperties.Name="Import portable match setup JSON"
+                                                    AutomationProperties.HelpText="Validate Match Setup JSON from the clipboard and create a clean imported session without overwriting the current run."
+                                                    ToolTip="Import portable Match Setup JSON from the clipboard into a clean session" />
+                                        </StackPanel>
+                                    </Border>
+                                </Popup>
+                            </Grid>
+                        </StackPanel>
+                    </Expander>
                     <Expander x:Name="GenerationTuningExpander"
                               IsExpanded="False"
                               Style="{StaticResource AgentControlsExpander}"
@@ -2097,131 +1789,6 @@
                         </Border>
                     </WrapPanel>
                     </Expander>
-                        <Border Style="{StaticResource ConfigToolbarCard}"
-                                Margin="0,0,0,12"
-                                HorizontalAlignment="Left">
-                            <StackPanel>
-                                <Grid Margin="0,0,0,6">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Text="Recent"
-                                               Style="{StaticResource FieldLabel}"
-                                               VerticalAlignment="Center" />
-                                    <Button Grid.Column="1"
-                                            Content="?"
-                                            Tag="recent"
-                                            Click="GenerationHelpButton_Click"
-                                            Style="{StaticResource HelpIconButton}"
-                                            AutomationProperties.Name="Generation history help"
-                                            AutomationProperties.HelpText="Explain replay, new run, and seed copy actions."
-                                            Margin="8,0,0,0"
-                                            ToolTip="Explain generation history" />
-                                </Grid>
-                                <WrapPanel>
-                                <ComboBox x:Name="GenerationHistoryFilterPicker"
-                                          Width="116"
-                                          Style="{StaticResource CompactComboBox}"
-                                          Margin="0,0,6,0"
-                                          AutomationProperties.Name="Recent generated match filter"
-                                          AutomationProperties.HelpText="Filter recent generated matches by generation type."
-                                          ToolTip="Filter recent generated matches"
-                                          SelectionChanged="GenerationHistoryFilterPicker_SelectionChanged">
-                                    <ComboBoxItem Content="All" Tag="all" IsSelected="True" />
-                                    <ComboBoxItem Content="Random" Tag="random" />
-                                    <ComboBoxItem Content="AI Choice" Tag="ai_choice" />
-                                    <ComboBoxItem Content="Current Topics" Tag="current_topics" />
-                                    <ComboBoxItem Content="Wild Seed" Tag="yolo" />
-                                </ComboBox>
-                                <ComboBox x:Name="GenerationHistoryPicker"
-                                           Width="260"
-                                          Style="{StaticResource CompactComboBox}"
-                                          Margin="0,0,6,0"
-                                          AutomationProperties.Name="Recent generated matches"
-                                          AutomationProperties.HelpText="Choose a previously generated match to replay, copy, or open in a new run."
-                                          ToolTip="Recent generated matches"
-                                          SelectionChanged="GenerationHistoryPicker_SelectionChanged" />
-                                <Button x:Name="ReplayGenerationButton"
-                                        Content="Replay"
-                                        Click="ReplayGenerationButton_Click"
-                                        Style="{StaticResource SecondaryButton}"
-                                        AutomationProperties.Name="Replay generated match"
-                                        AutomationProperties.HelpText="Replay the selected generated match without calling a model."
-                                        FontSize="11"
-                                        Padding="11,6"
-                                        Margin="0,0,6,0"
-                                        ToolTip="Replay the selected generated match without calling a model" />
-                                <Button x:Name="ReplayNewRunButton"
-                                        Content="New Run"
-                                        Click="ReplayNewRunButton_Click"
-                                        Style="{StaticResource SecondaryButton}"
-                                        AutomationProperties.Name="Create replay run"
-                                        AutomationProperties.HelpText="Create a clean session from the selected generated match."
-                                        FontSize="11"
-                                        Padding="11,6"
-                                        Margin="0,0,6,0"
-                                        ToolTip="Create a clean session from the selected generated match for comparison" />
-                                <Button x:Name="CopyGenerationSeedButton"
-                                        Content="Copy Seed"
-                                        Click="CopyGenerationSeedButton_Click"
-                                        Style="{StaticResource SecondaryButton}"
-                                        AutomationProperties.Name="Copy generation seed"
-                                        AutomationProperties.HelpText="Copy the selected generation seed."
-                                        FontSize="11"
-                                        Padding="11,6"
-                                        Margin="0,0,6,0"
-                                        ToolTip="Copy the selected generation seed" />
-                                <Button x:Name="CopyGenerationBriefButton"
-                                        Content="Copy Brief"
-                                        Click="CopyGenerationBriefButton_Click"
-                                        Style="{StaticResource SecondaryButton}"
-                                        AutomationProperties.Name="Copy generation brief"
-                                        AutomationProperties.HelpText="Copy the selected generated match summary, seeds, and tuning details."
-                                        FontSize="11"
-                                        Padding="11,6"
-                                        Margin="0,0,6,0"
-                                        ToolTip="Copy the selected generated match brief" />
-                                <Button x:Name="CopyGenerationSpecButton"
-                                        Content="Copy Spec"
-                                        Click="CopyGenerationSpecButton_Click"
-                                        Style="{StaticResource SecondaryButton}"
-                                        AutomationProperties.Name="Copy generation setup spec"
-                                        AutomationProperties.HelpText="Copy the selected generated match as a compact JSON setup receipt."
-                                        FontSize="11"
-                                        Padding="11,6"
-                                        Margin="0,0,6,0"
-                                        ToolTip="Copy the selected generated match as a compact JSON setup receipt" />
-                                <Button x:Name="CopyGenerationDiffButton"
-                                        Content="Copy Diff"
-                                        Click="CopyGenerationDiffButton_Click"
-                                        Style="{StaticResource SecondaryButton}"
-                                        AutomationProperties.Name="Copy generation setup diff"
-                                        AutomationProperties.HelpText="Copy a review diff between the selected generated match and the current setup."
-                                        FontSize="11"
-                                        Padding="11,6"
-                                        Margin="0,0,6,0"
-                                        ToolTip="Copy a review diff between the selected generated match and the current setup" />
-                                <Button x:Name="CopyGenerationRubricButton"
-                                        Content="Rubric"
-                                        Click="CopyGenerationRubricButton_Click"
-                                        Style="{StaticResource SecondaryButton}"
-                                        AutomationProperties.Name="Copy generation evaluation rubric"
-                                        AutomationProperties.HelpText="Copy an evaluation rubric for judging this generated match."
-                                        FontSize="11"
-                                        Padding="11,6"
-                                        ToolTip="Copy an evaluation rubric for judging this generated match" />
-                                </WrapPanel>
-                                <TextBlock x:Name="GenerationHistoryStatusText"
-                                           Text="Recent generated matches appear here."
-                                           Style="{StaticResource HintText}"
-                                           AutomationProperties.Name="Recent generated match status"
-                                           AutomationProperties.HelpText="Summarizes the selected generated match or the recent generation history count."
-                                           Margin="0,7,0,0"
-                                           TextTrimming="CharacterEllipsis"
-                                           ToolTip="Recent generated matches appear here." />
-                            </StackPanel>
-                        </Border>
                     <Popup x:Name="GenerationHelpPopup"
                            Placement="Bottom"
                            StaysOpen="False"
@@ -2408,6 +1975,157 @@
                         </Border>
                         </StackPanel>
                         <StackPanel x:Name="MatchSetupSavedSection" Visibility="Collapsed">
+                        <!-- Replay history lives with the other saved-state tools instead of
+                             competing with the setup tabs above. -->
+                        <Border Style="{StaticResource ConfigToolbarCard}"
+                                Margin="0,0,0,12"
+                                HorizontalAlignment="Left">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Recent"
+                                               Style="{StaticResource FieldLabel}"
+                                               VerticalAlignment="Center" />
+                                    <Button Grid.Column="1"
+                                            Content="?"
+                                            Tag="recent"
+                                            Click="GenerationHelpButton_Click"
+                                            Style="{StaticResource HelpIconButton}"
+                                            AutomationProperties.Name="Generation history help"
+                                            AutomationProperties.HelpText="Explain replay, new run, and seed copy actions."
+                                            Margin="8,0,0,0"
+                                            ToolTip="Explain generation history" />
+                                </Grid>
+                                <WrapPanel>
+                                <ComboBox x:Name="GenerationHistoryFilterPicker"
+                                          Width="116"
+                                          Style="{StaticResource CompactComboBox}"
+                                          Margin="0,0,6,0"
+                                          AutomationProperties.Name="Recent generated match filter"
+                                          AutomationProperties.HelpText="Filter recent generated matches by generation type."
+                                          ToolTip="Filter recent generated matches"
+                                          SelectionChanged="GenerationHistoryFilterPicker_SelectionChanged">
+                                    <ComboBoxItem Content="All" Tag="all" IsSelected="True" />
+                                    <ComboBoxItem Content="Random" Tag="random" />
+                                    <ComboBoxItem Content="AI Choice" Tag="ai_choice" />
+                                    <ComboBoxItem Content="Current Topics" Tag="current_topics" />
+                                    <ComboBoxItem Content="Wild Seed" Tag="yolo" />
+                                </ComboBox>
+                                <ComboBox x:Name="GenerationHistoryPicker"
+                                           Width="260"
+                                          Style="{StaticResource CompactComboBox}"
+                                          Margin="0,0,6,0"
+                                          AutomationProperties.Name="Recent generated matches"
+                                          AutomationProperties.HelpText="Choose a previously generated match to replay, copy, or open in a new run."
+                                          ToolTip="Recent generated matches"
+                                          SelectionChanged="GenerationHistoryPicker_SelectionChanged" />
+                                <Button x:Name="ReplayGenerationButton"
+                                        Content="Replay"
+                                        Click="ReplayGenerationButton_Click"
+                                        Style="{StaticResource SecondaryButton}"
+                                        AutomationProperties.Name="Replay generated match"
+                                        AutomationProperties.HelpText="Replay the selected generated match without calling a model."
+                                        FontSize="11"
+                                        Padding="11,6"
+                                        Margin="0,0,6,0"
+                                        ToolTip="Replay the selected generated match without calling a model" />
+                                <Button x:Name="ReplayNewRunButton"
+                                        Content="New Run"
+                                        Click="ReplayNewRunButton_Click"
+                                        Style="{StaticResource SecondaryButton}"
+                                        AutomationProperties.Name="Create replay run"
+                                        AutomationProperties.HelpText="Create a clean session from the selected generated match."
+                                        FontSize="11"
+                                        Padding="11,6"
+                                        Margin="0,0,6,0"
+                                        ToolTip="Create a clean session from the selected generated match for comparison" />
+                                <Grid x:Name="GenerationCopyHost">
+                                    <Button x:Name="GenerationCopyButton"
+                                            Click="GenerationCopyButton_Click"
+                                            Style="{StaticResource SecondaryButton}"
+                                            FontSize="11"
+                                            Padding="11,6"
+                                            AutomationProperties.Name="Copy from the selected generated match"
+                                            AutomationProperties.HelpText="Copy the seed, brief, setup spec, diff, or evaluation rubric for the selected generated match."
+                                            ToolTip="Copy seed, brief, spec, diff, or rubric">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="Copy" VerticalAlignment="Center" />
+                                            <TextBlock Text="&#xE70D;"
+                                                       FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                                                       FontSize="9"
+                                                       Margin="7,1,0,0"
+                                                       VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Popup x:Name="GenerationCopyPopup"
+                                           PlacementTarget="{Binding ElementName=GenerationCopyButton}"
+                                           Placement="Bottom"
+                                           VerticalOffset="6"
+                                           StaysOpen="False"
+                                           AllowsTransparency="True"
+                                           PopupAnimation="Fade">
+                                        <Border Style="{StaticResource FlyoutCard}"
+                                                MinWidth="230"
+                                                AutomationProperties.Name="Generated match copy actions">
+                                            <StackPanel>
+                                                <Button x:Name="CopyGenerationSeedButton"
+                                                        Content="Seed"
+                                                        Click="CopyGenerationSeedButton_Click"
+                                                        Style="{StaticResource Arena.Button.Quiet}"
+                                                        HorizontalContentAlignment="Left"
+                                                        AutomationProperties.Name="Copy generation seed"
+                                                        AutomationProperties.HelpText="Copy the selected generation seed."
+                                                        ToolTip="Copy the selected generation seed" />
+                                                <Button x:Name="CopyGenerationBriefButton"
+                                                        Content="Brief"
+                                                        Click="CopyGenerationBriefButton_Click"
+                                                        Style="{StaticResource Arena.Button.Quiet}"
+                                                        HorizontalContentAlignment="Left"
+                                                        AutomationProperties.Name="Copy generation brief"
+                                                        AutomationProperties.HelpText="Copy the selected generated match summary, seeds, and tuning details."
+                                                        ToolTip="Copy the selected generated match brief" />
+                                                <Button x:Name="CopyGenerationSpecButton"
+                                                        Content="Setup JSON"
+                                                        Click="CopyGenerationSpecButton_Click"
+                                                        Style="{StaticResource Arena.Button.Quiet}"
+                                                        HorizontalContentAlignment="Left"
+                                                        AutomationProperties.Name="Copy generation setup spec"
+                                                        AutomationProperties.HelpText="Copy the selected generated match as a compact JSON setup receipt."
+                                                        ToolTip="Copy the selected generated match as a compact JSON setup receipt" />
+                                                <Button x:Name="CopyGenerationDiffButton"
+                                                        Content="Diff against current"
+                                                        Click="CopyGenerationDiffButton_Click"
+                                                        Style="{StaticResource Arena.Button.Quiet}"
+                                                        HorizontalContentAlignment="Left"
+                                                        AutomationProperties.Name="Copy generation setup diff"
+                                                        AutomationProperties.HelpText="Copy a review diff between the selected generated match and the current setup."
+                                                        ToolTip="Copy a review diff between the selected generated match and the current setup" />
+                                                <Button x:Name="CopyGenerationRubricButton"
+                                                        Content="Evaluation rubric"
+                                                        Click="CopyGenerationRubricButton_Click"
+                                                        Style="{StaticResource Arena.Button.Quiet}"
+                                                        HorizontalContentAlignment="Left"
+                                                        AutomationProperties.Name="Copy generation evaluation rubric"
+                                                        AutomationProperties.HelpText="Copy an evaluation rubric for judging this generated match."
+                                                        ToolTip="Copy an evaluation rubric for judging this generated match" />
+                                            </StackPanel>
+                                        </Border>
+                                    </Popup>
+                                </Grid>
+                                </WrapPanel>
+                                <TextBlock x:Name="GenerationHistoryStatusText"
+                                           Text="Recent generated matches appear here."
+                                           Style="{StaticResource HintText}"
+                                           AutomationProperties.Name="Recent generated match status"
+                                           AutomationProperties.HelpText="Summarizes the selected generated match or the recent generation history count."
+                                           Margin="0,7,0,0"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="Recent generated matches appear here." />
+                            </StackPanel>
+                        </Border>
                         <Border Style="{StaticResource WorkflowPanel}">
                             <Grid>
                                 <Grid.RowDefinitions>
@@ -2561,6 +2279,36 @@
                         </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
+                    <!-- Match Setup writes every edit straight to the session, so the
+                         footer confirms completion rather than applying a staged draft. -->
+                    <Border Grid.Row="2"
+                            Background="{DynamicResource PanelBrush}"
+                            BorderBrush="{DynamicResource DisabledBorderBrush}"
+                            BorderThickness="0,1,0,0"
+                            Padding="0,12,0,0"
+                            Margin="0,10,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="MatchSetupFooterHintText"
+                                       Text="Changes are saved as you make them."
+                                       Style="{StaticResource HintText}"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" />
+                            <Button x:Name="MatchSetupDoneButton"
+                                    Grid.Column="1"
+                                    Content="Done"
+                                    Click="CloseMatchSetupButton_Click"
+                                    Style="{StaticResource PrimaryButton}"
+                                    MinWidth="120"
+                                    MinHeight="34"
+                                    AutomationProperties.Name="Close Match Setup"
+                                    AutomationProperties.HelpText="Close Match Setup and return to the previous view. Setup changes are already saved."
+                                    ToolTip="Close Match Setup" />
+                        </Grid>
+                    </Border>
             </Grid>
             </Border>
 

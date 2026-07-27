@@ -383,7 +383,7 @@ static void CustomMatchSummaryCoordinatorNormalizesCardText()
         RivalryMatrix = [new RivalryMatrixItem("alpha", "beta", "fact_check")]
     };
     Require(CustomMatchSummaryCoordinator.SetupProfileText(snapshot).Contains("benchmark duel", StringComparison.OrdinalIgnoreCase), "setup profile should summarize role pack");
-    Require(CustomMatchSummaryCoordinator.SetupProfileText(snapshot).Contains("seed 123", StringComparison.OrdinalIgnoreCase), "setup profile should summarize seed");
+    Require(!CustomMatchSummaryCoordinator.SetupProfileText(snapshot).Contains("seed 123", StringComparison.OrdinalIgnoreCase), "setup profile should describe the run shape, not echo the raw seed");
     Require(CustomMatchSummaryCoordinator.RunShapeText(snapshot).Contains("2 active: Alpha -> Beta -> Narrator", StringComparison.Ordinal), "run shape should show active cast order and narrator handoff");
     Require(CustomMatchSummaryCoordinator.RunShapeText(snapshot).Contains("turn budget", StringComparison.OrdinalIgnoreCase), "run shape should include turn budget context");
     Require(CustomMatchSummaryCoordinator.RelationshipMapText(snapshot).Contains("alpha -> beta", StringComparison.OrdinalIgnoreCase), "relationship map should show active relationship links");
@@ -392,7 +392,9 @@ static void CustomMatchSummaryCoordinatorNormalizesCardText()
     Require(CustomMatchSummaryCoordinator.LockPlanText(snapshot).Contains("topic", StringComparison.OrdinalIgnoreCase), "lock plan should include topic locks");
     Require(CustomMatchSummaryCoordinator.LockPlanText(snapshot).Contains("Alpha", StringComparison.Ordinal), "lock plan should include active locked agent names");
     Require(!CustomMatchSummaryCoordinator.LockPlanText(snapshot).Contains("Gamma", StringComparison.Ordinal), "lock plan should ignore inactive locked agents");
-    Require(CustomMatchSummaryCoordinator.SetupSourceText(snapshot).Contains("seed 123", StringComparison.OrdinalIgnoreCase), "setup source should show scenario seed source");
+    var setupSource = CustomMatchSummaryCoordinator.SetupSourceText(snapshot);
+    Require(setupSource.Contains("Random", StringComparison.OrdinalIgnoreCase), "setup source should classify how the setup was produced");
+    Require(!setupSource.Contains("seed 123", StringComparison.OrdinalIgnoreCase), "setup source should not echo the raw seed");
     var constraints = CustomMatchSummaryCoordinator.RunConstraintText(snapshot);
     Require(constraints.Contains("2 active agent", StringComparison.OrdinalIgnoreCase), "run constraints should count only active agents");
     Require(constraints.Contains("2 lock", StringComparison.OrdinalIgnoreCase), "run constraints should include topic and active-agent locks but ignore inactive lock noise");
@@ -429,9 +431,9 @@ static void ScenarioSeedInspectorCoordinatorFormatsMetadata()
     Require(ScenarioSeedInspectorCoordinator.ScenarioSeedSource("ai-choice", "") == "AI Choice", "AI choice seed should be detected");
     Require(ScenarioSeedInspectorCoordinator.ScenarioSeedSource("YOLO-123", "") == "Wild Seed", "Wild Seed source should be detected");
     Require(ScenarioSeedInspectorCoordinator.ScenarioSeedSource("manual", "yolo") == "Wild Seed", "Wild Seed persona style should win");
-    Require(ScenarioSeedInspectorCoordinator.ShortSeedValue("") == "-", "blank seed should become placeholder");
-    Require(ScenarioSeedInspectorCoordinator.ShortSeedValue("123456789012345678") == "123456789012345678", "18 character seed should not be shortened");
-    Require(ScenarioSeedInspectorCoordinator.ShortSeedValue("1234567890123456789") == "123456789012345...", "long seed should be shortened");
+    var seedTip = ScenarioSeedInspectorCoordinator.SeedToolTip("scenario-abc", "persona-xyz");
+    Require(seedTip.Contains("scenario-abc", StringComparison.Ordinal), "seed tooltip should carry the full scenario seed");
+    Require(seedTip.Contains("persona-xyz", StringComparison.Ordinal), "seed tooltip should carry the full persona seed");
     Require(!ScenarioSeedInspectorCoordinator.ShouldShowRolePack("auto"), "auto role pack should be hidden");
     Require(!ScenarioSeedInspectorCoordinator.ShouldShowRolePack("AUTO"), "auto role pack should hide case-insensitively");
     Require(!ScenarioSeedInspectorCoordinator.ShouldShowRolePack("-"), "placeholder role pack should be hidden");
@@ -461,12 +463,20 @@ static void ProviderQuickSetupCoordinatorFormatsDefaults()
 
 static void MainWindowComboBoxTemplateUsesThemeResources()
 {
+    // The shell adopts the Arena control system, so the combo box template lives in
+    // the shared dictionary while the window keeps only intent-level styles.
     var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
-    Require(!xaml.Contains("SystemColors.WindowBrushKey", StringComparison.Ordinal), "combo box template should not pin popup window color to one theme");
-    Require(!xaml.Contains("SystemColors.ControlBrushKey", StringComparison.Ordinal), "combo box template should not pin control color to one theme");
-    Require(!xaml.Contains("SystemColors.HighlightBrushKey", StringComparison.Ordinal), "combo box template should not pin selection highlight to one theme");
-    Require(xaml.Contains("PART_EditableTextBox", StringComparison.Ordinal), "combo box template should keep editable model picker support");
-    Require(xaml.Contains("DisabledTextBrush", StringComparison.Ordinal), "combo box template should dim disabled editable controls");
+    var controlStyles = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Theming/ControlStyles.xaml"));
+    foreach (var markup in new[] { xaml, controlStyles })
+    {
+        Require(!markup.Contains("SystemColors.WindowBrushKey", StringComparison.Ordinal), "combo box template should not pin popup window color to one theme");
+        Require(!markup.Contains("SystemColors.ControlBrushKey", StringComparison.Ordinal), "combo box template should not pin control color to one theme");
+        Require(!markup.Contains("SystemColors.HighlightBrushKey", StringComparison.Ordinal), "combo box template should not pin selection highlight to one theme");
+    }
+
+    Require(controlStyles.Contains("PART_EditableTextBox", StringComparison.Ordinal), "combo box template should keep editable model picker support");
+    Require(controlStyles.Contains("DisabledTextBrush", StringComparison.Ordinal), "combo box template should dim disabled editable controls");
+    Require(xaml.Contains("TargetType=\"ComboBox\" BasedOn=\"{StaticResource Arena.ComboBox}\"", StringComparison.Ordinal), "the shell combo box should adopt the Arena control system");
 }
 
 static void MainWindowCollaboratePromptUsesMultilineAlignment()

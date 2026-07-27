@@ -1,27 +1,51 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 
 namespace AIArena.Wpf.Services;
 
 internal static class WindowChromeService
 {
-    public static void ApplyNativeChromeColor(Window window)
+    /// <summary>
+    /// Paints the DWM frame from the active palette so the system border and
+    /// caption match the shell in every theme, light ones included.
+    /// </summary>
+    public static void ApplyThemeChromeColor(Window window, ThemePalette theme)
     {
         ApplyNativeChromeColor(
             window,
-            ColorRef(0x58, 0x58, 0x58),
-            ColorRef(0x20, 0x20, 0x20),
-            ColorRef(0xFF, 0xFF, 0xFF));
+            ColorRef(theme.Border),
+            ColorRef(theme.TopBar),
+            ColorRef(theme.Text));
     }
 
-    public static void ApplySubtleNativeChromeColor(Window window)
+    /// <summary>Frame colors for secondary windows, which sit on the panel surface.</summary>
+    public static void ApplySubtleThemeChromeColor(Window window, ThemePalette theme)
     {
         ApplyNativeChromeColor(
             window,
-            ColorRef(0x12, 0x1B, 0x26),
-            ColorRef(0x0B, 0x12, 0x1B),
-            ColorRef(0xFF, 0xFF, 0xFF));
+            ColorRef(theme.PrimaryBorder),
+            ColorRef(theme.Panel),
+            ColorRef(theme.Text));
+    }
+
+    /// <summary>
+    /// Subtle frame colors for windows that carry their own copy of the theme
+    /// resources rather than a palette reference.
+    /// </summary>
+    public static void ApplySubtleThemeChromeColor(Window window)
+    {
+        ApplyNativeChromeColor(
+            window,
+            ColorRef(ResourceColor(window, "PrimaryBorderBrush", Color.FromRgb(0x12, 0x1B, 0x26))),
+            ColorRef(ResourceColor(window, "PanelBrush", Color.FromRgb(0x0B, 0x12, 0x1B))),
+            ColorRef(ResourceColor(window, "TextBrush", Colors.White)));
+    }
+
+    private static Color ResourceColor(Window window, string key, Color fallback)
+    {
+        return window.TryFindResource(key) is SolidColorBrush brush ? brush.Color : fallback;
     }
 
     private static void ApplyNativeChromeColor(Window window, int borderColor, int captionColor, int textColor)
@@ -45,6 +69,11 @@ internal static class WindowChromeService
     internal static int ColorRef(byte red, byte green, byte blue)
     {
         return red | (green << 8) | (blue << 16);
+    }
+
+    internal static int ColorRef(Color color)
+    {
+        return ColorRef(color.R, color.G, color.B);
     }
 
     [DllImport("dwmapi.dll", PreserveSig = true)]
