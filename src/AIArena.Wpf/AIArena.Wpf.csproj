@@ -8,9 +8,9 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>AI Arena</AssemblyName>
     <Product>AI Arena</Product>
-    <Version>0.4.120-beta</Version>
-    <InformationalVersion>0.4.120-beta</InformationalVersion>
-    <FileVersion>0.4.120.0</FileVersion>
+    <Version>0.4.121-beta</Version>
+    <InformationalVersion>0.4.121-beta</InformationalVersion>
+    <FileVersion>0.4.121.0</FileVersion>
     <ApplicationIcon>Assets\ai-arena-icon.ico</ApplicationIcon>
     <!-- Profile-guided tiering costs nothing at build time and improves steady-state JIT. -->
     <TieredPGO>true</TieredPGO>

@@ -130,7 +130,7 @@ public partial class MainWindow
                         return AIArenaControlResponse.Error(request, "invalid_argument", $"Unknown navigation view '{view}'.");
                     }
 
-                    _controlPlaneEvents.Publish("navigation.changed", "AI Arena view changed.", new { view = SelectedControlPlaneView() });
+                    // ApplyShellCommandState announces this for both routes.
                     return AIArenaControlResponse.Success(request, "AI Arena view changed.", BuildControlPlaneSnapshot());
                 }
             case AIArenaControlCommands.NavigationThemeSet:
@@ -147,8 +147,8 @@ public partial class MainWindow
                     }
 
                     var themeId = ThemePalette.NormalizeId(theme);
+                    // ApplyTheme announces this for both routes.
                     ShellNavigation.ApplyTheme(themeId, persist: true, rerender: true);
-                    _controlPlaneEvents.Publish("navigation.theme.changed", "AI Arena theme changed.", new { theme = themeId });
                     return AIArenaControlResponse.Success(request, "AI Arena theme changed.", BuildControlPlaneSnapshot());
                 }
             case AIArenaControlCommands.NavigationProviderFocus:
@@ -165,7 +165,7 @@ public partial class MainWindow
                         return AIArenaControlResponse.Error(request, "invalid_argument", "navigation.rail.set requires args.state: show, hide, or toggle.");
                     }
 
-                    _controlPlaneEvents.Publish("navigation.rail.changed", "Right rail visibility changed.", BuildRightRailControlState());
+                    // ApplyRightRailCollapsed announces this for both routes.
                     return AIArenaControlResponse.Success(request, "Right rail visibility changed.", BuildRightRailControlState());
                 }
             case AIArenaControlCommands.ViewPresetSet:
@@ -189,7 +189,7 @@ public partial class MainWindow
                             return AIArenaControlResponse.Error(request, "invalid_argument", "view.preset.set requires args.preset: focused, diagnostics, compact, or review.");
                     }
 
-                    _controlPlaneEvents.Publish("view.preset.changed", "Transcript view preset changed.", new { preset });
+                    // The preset methods announce this for both routes.
                     return AIArenaControlResponse.Success(request, "Transcript view preset changed.", new { preset });
                 }
             case AIArenaControlCommands.MatchGenerationState:

@@ -158,8 +158,11 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
     {
         if (useInternetCheckBox.IsChecked != true)
         {
+            // Internet off is a deliberate choice, and the more conservative one:
+            // nothing leaves the machine. The danger tone read as a fault report
+            // for a setting the reader had just chosen on purpose.
             internetHintText.Text = "Internet is off. Agents and narrator cannot search the web or fetch pages.";
-            internetHintText.Foreground = resourceBrush("DangerTextBrush");
+            internetHintText.Foreground = resourceBrush("MutedTextBrush");
             return;
         }
 

@@ -41,6 +41,11 @@ internal sealed class ShellNavigationCoordinator
 
     private bool isSelectingTheme;
 
+    /// <summary>
+    /// Raised with the theme id after a theme is applied, whichever route asked.
+    /// </summary>
+    public Action<string>? ThemeChanged { get; set; }
+
     public ShellNavigationCoordinator(
         Window owner,
         WpfSettingsStore settingsStore,
@@ -181,6 +186,8 @@ internal sealed class ShellNavigationCoordinator
         {
             refreshActiveSession($"Theme applied: {theme.Name}");
         }
+
+        ThemeChanged?.Invoke(theme.Id);
     }
 
     public void ShowTranscriptPanel()

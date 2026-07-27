@@ -3007,6 +3007,7 @@ static void AdvertisedShortcutsAreHandled()
     var keyForShortcut = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["Ctrl+F"] = "Key.F",
+        ["Ctrl+K"] = "Key.K",
         ["Ctrl+M"] = "Key.M",
         ["Ctrl+Enter"] = "Key.Enter",
         ["Ctrl+E"] = "Key.E",
@@ -3685,6 +3686,191 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
         collaborateButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Require(openedChatId == chatId, "collaborate search row should still open the selected chat");
     });
+}
+
+static void EmptyAndOffStatesAreNotStyledAsFailures()
+{
+    // The danger tone should mean "something went wrong", not "there is nothing
+    // here yet" or "you turned this off". Two places conflated them, and both
+    // greeted the reader with red before they had done anything wrong.
+    var shell = ReadMainWindowSource();
+
+    var noSessions = shell.IndexOf("No saved sessions yet", StringComparison.Ordinal);
+    Require(noSessions >= 0, "the first-run session status should still be reported");
+    var noSessionsLine = shell[noSessions..Math.Min(shell.Length, noSessions + 160)];
+    Require(
+        !noSessionsLine.Contains("isDanger: true", StringComparison.Ordinal),
+        "an empty data root is where every first run starts, not a failure");
+
+    var internet = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/InternetWorkflowCoordinator.cs"));
+    var offHint = internet.IndexOf("Internet is off.", StringComparison.Ordinal);
+    Require(offHint >= 0, "the internet-off hint should still be shown");
+    var offBlock = internet[offHint..Math.Min(internet.Length, offHint + 260)];
+    Require(
+        !offBlock.Contains("DangerTextBrush", StringComparison.Ordinal),
+        "internet off is a deliberate choice, and the more conservative one, so it must not read as a fault");
+    Require(
+        offBlock.Contains("MutedTextBrush", StringComparison.Ordinal),
+        "the internet-off hint should use the muted tone");
+
+    // The flag must survive for the cases it is actually for, or this guard
+    // would just be pushing every failure into the same silent grey.
+    var savedState = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/SavedStateWorkflowCoordinator.cs"));
+    Require(
+        savedState.Contains("Checkpoint load failed.\", isDanger: true", StringComparison.Ordinal),
+        "a genuine failure should still be styled as one");
+}
+
+static void CommandPaletteRanksMatchesPredictably()
+{
+    // A palette that reorders itself unpredictably is worse than one that only
+    // filters, so the ranking is deliberately plain and pinned here.
+    static ShellCommand Command(string title, string group = "Shell", string keys = "", string keywords = "", Func<bool>? available = null)
+    {
+        return new ShellCommand(title, title, group, keys, keywords, () => { }, available);
+    }
+
+    var commands = new List<ShellCommand>
+    {
+        Command("Go to AI Lab", "Navigate", "Ctrl+1", "arena transcript"),
+        Command("Open Match Setup", "Match", "F2", "scenario cast seed"),
+        Command("Open App Settings", "Shell", "F10", "preferences provider"),
+        Command("Search the transcript", "Transcript", "Ctrl+F", "find filter"),
+        Command("Theme: Dark Blue", "Appearance", "", "colour color dark light"),
+        Command("Go to Agent", "Navigate", "Ctrl+2", "workspace", () => false)
+    };
+
+    // An unavailable command is dropped rather than shown greyed out: offering
+    // something that cannot run wastes the reader's attention.
+    var all = ShellCommandPalette.Filter(commands, "");
+    Require(all.Count == 5, "an empty query should list every available command");
+    Require(all.All(command => command.Title != "Go to Agent"), "a gated command should not be offered");
+    Require(all[0].Title == "Go to AI Lab", "an empty query should preserve the declared order");
+
+    // Prefix beats word-prefix beats substring.
+    var open = ShellCommandPalette.Filter(commands, "open");
+    Require(open.Count == 2, "'open' should match both Open commands");
+    Require(open[0].Title == "Open Match Setup", "declared order should break ties between equal scores");
+
+    var setup = ShellCommandPalette.Filter(commands, "setup");
+    Require(setup.Count == 1 && setup[0].Title == "Open Match Setup", "a word prefix inside the title should match");
+
+    var exact = ShellCommandPalette.Filter(commands, "Go to AI Lab");
+    Require(exact[0].Title == "Go to AI Lab", "an exact title should rank first");
+
+    // Someone who remembers the key but not the wording should still land on it.
+    var byKey = ShellCommandPalette.Filter(commands, "F10");
+    Require(byKey.Count == 1 && byKey[0].Title == "Open App Settings", "a shortcut chord should find its command");
+
+    // And someone who thinks in intent rather than in the app's vocabulary.
+    var byKeyword = ShellCommandPalette.Filter(commands, "colour");
+    Require(byKeyword.Count == 1 && byKeyword[0].Title == "Theme: Dark Blue", "keywords should cover wording the title does not use");
+
+    var byGroup = ShellCommandPalette.Filter(commands, "navigate");
+    Require(byGroup.Count == 1 && byGroup[0].Title == "Go to AI Lab", "a group name should match while browsing");
+
+    Require(ShellCommandPalette.Filter(commands, "SEARCH").Count == 1, "matching must be case-insensitive");
+    Require(ShellCommandPalette.Filter(commands, "zzzz").Count == 0, "a query matching nothing should return nothing");
+
+    // Titles beat incidental substrings: "set" starts a word in "Settings" and
+    // in "Setup", but must not drag in unrelated rows.
+    var set = ShellCommandPalette.Filter(commands, "set");
+    Require(set.Count == 2, "'set' should reach Setup and Settings only");
+    Require(
+        ShellCommandPalette.Score(Command("Open Match Setup"), "Open") < ShellCommandPalette.Score(Command("Open Match Setup"), "Match"),
+        "a title prefix should outrank a later word");
+}
+
+static void ShellStateChangesReachTheControlPlaneFromBothRoutes()
+{
+    // Shell events used to be published by the control-plane command handlers
+    // themselves, so a watcher only ever saw changes an operator caused through
+    // PowerShell. Open Match Setup with F2 and the stream stayed silent, which
+    // made "live events" useless for watching a person drive the app. The
+    // publishers now live on the shared paths, and the handlers must not take
+    // them back.
+    var gate = typeof(MainWindow);
+    Require(gate is not null, "MainWindow should be visible to the test project");
+
+    // The gate keeps repeat calls quiet. This matters most for the right rail:
+    // ApplyRightRailCollapsed runs on every window resize, so an ungated
+    // publisher would flood the stream while someone drags a window corner.
+    Require(MainWindow.ShouldPublishChange(null, "expanded"), "first observation should publish");
+    Require(!MainWindow.ShouldPublishChange("expanded", "expanded"), "an unchanged rail state must stay quiet during resizes");
+    Require(MainWindow.ShouldPublishChange("expanded", "collapsed"), "a real change should publish");
+    Require(!MainWindow.ShouldPublishChange("collapsed", "  "), "a blank state is not worth announcing");
+    Require(
+        !MainWindow.ShouldPublishChange("dark-blue", "DARK-BLUE", StringComparison.OrdinalIgnoreCase),
+        "theme ids should compare case-insensitively");
+    Require(
+        MainWindow.ShouldPublishChange("dark-blue", "DARK-BLUE"),
+        "the default comparison stays ordinal so overlay keys are not accidentally merged");
+
+    var shellEvents = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ShellEvents.cs"));
+    foreach (var eventName in new[]
+    {
+        "navigation.changed",
+        "navigation.rail.changed",
+        "navigation.theme.changed",
+        "shell.overlay.changed",
+        "view.preset.changed"
+    })
+    {
+        Require(
+            shellEvents.Contains($"\"{eventName}\"", StringComparison.Ordinal),
+            $"{eventName} should be published from the shared shell path");
+    }
+
+    // If a handler publishes again, control-plane callers get the event twice
+    // while UI callers still get it once, which is worse than the original bug.
+    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    foreach (var eventName in new[]
+    {
+        "navigation.changed",
+        "navigation.rail.changed",
+        "navigation.theme.changed",
+        "view.preset.changed"
+    })
+    {
+        Require(
+            !dispatch.Contains($"Publish(\"{eventName}\"", StringComparison.Ordinal),
+            $"{eventName} must be published from the shared path, not the control-plane dispatch");
+    }
+
+    foreach (var handler in new[]
+    {
+        "src/AIArena.Wpf/Shell/ControlPlane/AIArenaSettingsControlHandler.cs",
+        "src/AIArena.Wpf/Shell/ControlPlane/AIArenaMatchSetupControlHandler.cs"
+    })
+    {
+        Require(
+            !File.ReadAllText(FindWorkspaceFile(handler)).Contains("Publish(\"shell.overlay.changed\"", StringComparison.Ordinal),
+            $"{handler} must not republish shell.overlay.changed");
+    }
+
+    // The shared paths themselves must keep calling the publishers.
+    var shell = ReadMainWindowSource();
+    Require(
+        shell.Contains("PublishNavigationChanged();", StringComparison.Ordinal),
+        "the surface-change path must announce navigation");
+    Require(
+        shell.Contains("PublishRailChanged();", StringComparison.Ordinal),
+        "the rail layout path must announce rail changes");
+    Require(
+        shell.Contains("PublishMatchSetupOverlayChanged(", StringComparison.Ordinal),
+        "the Match Setup show and close paths must announce the overlay");
+    Require(
+        shell.Contains("PublishSettingsOverlayChanged(", StringComparison.Ordinal),
+        "the settings search path must announce the query");
+
+    // settings.search shows the overlay first and sets the query afterwards, so
+    // announcing only on visibility would report a stale query.
+    var searchStart = shell.IndexOf("private void SettingsSearchText_TextChanged", StringComparison.Ordinal);
+    Require(searchStart >= 0, "the settings search handler should remain discoverable");
+    var searchBody = shell[searchStart..Math.Min(shell.Length, searchStart + 800)];
+    Require(
+        searchBody.Contains("PublishSettingsOverlayChanged", StringComparison.Ordinal),
+        "the settings query must be announced from the text-changed handler");
 }
 
 }

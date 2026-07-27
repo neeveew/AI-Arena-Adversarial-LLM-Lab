@@ -1298,6 +1298,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         SystemMotionPreferences.PreferenceChanged += OnSystemMotionPreferenceChanged;
         Loaded += (_, _) =>
         {
+            ArmShellEvents();
             LoadSessions();
             _refreshTimer.Start();
             _providerHealthTimer.Start();
@@ -2033,8 +2034,12 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
         if (defaultSession is null)
         {
+            // A data root with no sessions is where every first run starts, not
+            // a failure. This ran during startup rather than in response to
+            // anything the reader did, so the danger tone told them something
+            // had gone wrong before they had touched the app.
             LoadStatus.Text = $"No sessions found in {Path.Combine(_coreSessionStore.DataRoot, "sessions")}";
-            SavedStateCoordinator.SetStatus("No saved sessions found.", isDanger: true);
+            SavedStateCoordinator.SetStatus("No saved sessions yet. Run a turn to create one.");
             SavedStateCoordinator.ApplyForkLineage(null);
             SavedStateCoordinator.UpdatePicker();
             PopulateFallbackState("No AI Arena sessions found.");
@@ -2733,6 +2738,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void SettingsSearchText_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
+        // Fires whether a person typed or the control plane assigned Text, which
+        // is why the query is announced here rather than from the open handler:
+        // settings.search shows the overlay first and sets the query afterwards.
+        PublishSettingsOverlayChanged("Settings search updated.");
+
         var query = SettingsSearchText.Text.Trim();
         var allExpanders = new List<Expander>();
         CollectSettingsExpanders(SettingsSectionsPanel, allExpanders);
@@ -3708,6 +3718,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             case Key.F when !shift:
                 TranscriptSearchButton_Click(TranscriptSearchButton, new RoutedEventArgs());
                 return true;
+            case Key.K when !shift:
+                ShowCommandPalette();
+                return true;
             case Key.M when !shift:
                 MatchSetupButton_Click(MatchSetupButton, new RoutedEventArgs());
                 return true;
@@ -3787,6 +3800,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         ("F8", "Open the transcript view menu"),
         ("F9", "Start Auto Chat, or pause it"),
         ("F10", "Open App Settings"),
+        ("Ctrl+K", "Open the command palette"),
         ("Ctrl+F", "Search the transcript"),
         ("Ctrl+M", "Open or close Match Setup"),
         ("Ctrl+Enter", "Run one arena turn"),
@@ -4035,6 +4049,10 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         AutomationProperties.SetItemStatus(
             RightRailToggleButton,
             collapsed ? "collapsed" : "expanded");
+
+        // Resizing the window lands here too, so this only speaks when the
+        // collapsed state actually flipped.
+        PublishRailChanged();
 
         if (restoreFocusAfterCollapse)
         {
@@ -4809,6 +4827,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         ApplyShellCommandState(_activeShellSurface);
         UpdateLabViewToggleVisibility();
         UpdateLabViewToggle();
+        PublishMatchSetupOverlayChanged("Match Setup opened.");
         if (opening)
         {
             Dispatcher.BeginInvoke(() =>
@@ -4931,6 +4950,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 break;
         }
 
+        PublishMatchSetupOverlayChanged("Match Setup closed.");
         RestoreOverlayFocus(
             returnTarget,
             MatchSetupButton,
@@ -4972,6 +4992,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void ApplyShellCommandState(ShellSurface surface)
     {
+        // Every surface change runs through here, whichever route caused it, so
+        // this is where navigation is announced. Callers set _activeShellSurface
+        // before calling, which is what SelectedControlPlaneView reads.
+        PublishNavigationChanged();
+
         var state = ShellCommandState.For(surface);
         SetMatchSetupButtonState(state.ShowMatchSetup, open: false);
         SearchCommandHost.Visibility = state.ShowSearch ? Visibility.Visible : Visibility.Collapsed;

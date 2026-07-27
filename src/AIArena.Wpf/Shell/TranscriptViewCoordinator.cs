@@ -369,24 +369,35 @@ internal sealed class TranscriptViewCoordinator
         viewMenuPopup.IsOpen = !viewMenuPopup.IsOpen;
     }
 
+    /// <summary>
+    /// Raised with the preset name after one is applied, whichever route asked.
+    /// The name lives here rather than in ApplyViewPreset because that method
+    /// only ever sees the expanded flags, not which preset produced them.
+    /// </summary>
+    public Action<string>? PresetChanged { get; set; }
+
     public void ApplyFocusedPreset()
     {
         ApplyViewPreset(false, false, false, false, false, showDecisionCard: false, showAutoModerator: false, showStyleFit: false, "hidden", true);
+        PresetChanged?.Invoke("focused");
     }
 
     public void ApplyDiagnosticsPreset()
     {
         ApplyViewPreset(false, false, true, false, true, showDecisionCard: false, showAutoModerator: true, showStyleFit: false, "diagnostics", true);
+        PresetChanged?.Invoke("diagnostics");
     }
 
     public void ApplyCompactPreset()
     {
         ApplyViewPreset(true, false, false, false, false, showDecisionCard: false, showAutoModerator: false, showStyleFit: false, "hidden", true);
+        PresetChanged?.Invoke("compact");
     }
 
     public void ApplyReviewPreset()
     {
         ApplyViewPreset(true, true, true, true, true, showDecisionCard: true, showAutoModerator: true, showStyleFit: true, "diagnostics", false);
+        PresetChanged?.Invoke("review");
     }
 
     public void UpdateDashboardLayout(double width, bool force = false)

@@ -53,6 +53,13 @@ internal sealed class AppSettingsCoordinator
         SetVisible(!isVisible());
     }
 
+    /// <summary>
+    /// Raised after the overlay's visibility has been applied, whichever route
+    /// asked for it. The host uses this to announce the change once, rather than
+    /// each caller remembering to.
+    /// </summary>
+    public Action<bool>? VisibilityChanged { get; set; }
+
     public void SetVisible(bool visible)
     {
         shellNavigation.SetAppSettingsVisible(visible);
@@ -68,6 +75,8 @@ internal sealed class AppSettingsCoordinator
         {
             modelRefreshTimer.Stop();
         }
+
+        VisibilityChanged?.Invoke(visible);
     }
 
     public void OpenModelProviderSettings(string? baseUrl = null, string? model = null)
