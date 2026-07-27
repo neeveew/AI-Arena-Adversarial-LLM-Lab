@@ -652,11 +652,26 @@
                                                 <TextBlock Text="&#xE711;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="16" />
                                             </Button>
                                         </Grid>
-                                        <TextBlock x:Name="TranscriptSearchResultsHeader"
-                                                   Grid.Row="2"
-                                                   Text="Recent searches"
-                                                   Style="{StaticResource Arena.Text.Label}"
-                                                   Margin="0,18,0,10" />
+                                        <Grid Grid.Row="2" Margin="0,18,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock x:Name="TranscriptSearchResultsHeader"
+                                                       Text="Recent searches"
+                                                       Style="{StaticResource Arena.Text.Label}"
+                                                       VerticalAlignment="Center" />
+                                            <Button x:Name="SearchAllSessionsButton"
+                                                    Grid.Column="1"
+                                                    Content="Search all sessions"
+                                                    Click="SearchAllSessionsRequested"
+                                                    Style="{StaticResource Arena.Button.Secondary}"
+                                                    FontSize="11"
+                                                    Padding="9,3"
+                                                    AutomationProperties.Name="Search all sessions"
+                                                    AutomationProperties.HelpText="Find the current query across every stored session, not just this transcript."
+                                                    ToolTip="Find this query across every stored session" />
+                                        </Grid>
                                         <Border Grid.Row="3" Style="{StaticResource Arena.Surface.Inset}" Padding="8" MinHeight="220">
                                             <StackPanel x:Name="TranscriptRecentSearchItems" />
                                         </Border>

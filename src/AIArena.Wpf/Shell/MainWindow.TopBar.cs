@@ -162,6 +162,9 @@ public partial class MainWindow
             case ShellTopBarAction.SearchClearRequested:
                 ClearTranscriptSearchButton_Click(e.SourceElement, Args<RoutedEventArgs>(e));
                 break;
+            case ShellTopBarAction.SearchAllSessionsRequested:
+                SearchAllSessionsButton_Click(e.SourceElement, Args<RoutedEventArgs>(e));
+                break;
             case ShellTopBarAction.TranscriptExportRequested:
                 ExportTranscriptButton_Click(e.SourceElement, Args<RoutedEventArgs>(e));
                 break;

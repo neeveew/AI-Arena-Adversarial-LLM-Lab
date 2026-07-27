@@ -268,7 +268,7 @@ internal static partial class Program
 
     static void ControlPlaneMainWindowAwaitsLifecycleTransitions()
     {
-        var mainWindow = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+        var mainWindow = ReadMainWindowSource();
         Require(mainWindow.Contains("private async Task RefreshControlPlaneHostAsync()", StringComparison.Ordinal), "MainWindow should use an asynchronous control-plane transition path");
         Require(mainWindow.Contains("await host.StartIfEnabledAsync();", StringComparison.Ordinal), "control-plane enable should await a pending stop without blocking the dispatcher");
         Require(mainWindow.Contains("await host.StopAsync();", StringComparison.Ordinal), "control-plane disable should asynchronously drain active clients");
@@ -828,7 +828,7 @@ internal static partial class Program
         Require(good.Ok && resizeCalls == 1 && activeAgents == 6, "handler should delegate one valid roster resize and return refreshed state");
         Require(published?.Type == "match.roster.changed", "successful roster sizing should publish an auditable event");
 
-        var mainWindow = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+        var mainWindow = ReadMainWindowSource();
         Require(mainWindow.Contains("_matchSetupControlHandler.CanHandle", StringComparison.Ordinal), "MainWindow should route the Match Setup family through its focused handler");
         Require(!mainWindow.Contains("case AIArenaControlCommands.MatchSetupState", StringComparison.Ordinal), "MainWindow should not retain duplicated Match Setup overlay cases");
         }
@@ -1217,7 +1217,7 @@ internal static partial class Program
                     var invalidResponse = PumpDispatcherTask(handler.ExecuteAsync(invalidRequest));
                     Require(!invalidResponse.Ok && invalidResponse.ErrorCode == "invalid_argument" && published.Count == 1, "app screenshot handler should reject a non-string path without capturing or publishing");
 
-                    var mainWindow = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+                    var mainWindow = ReadMainWindowSource();
                     Require(mainWindow.Contains("_appControlHandler.CanHandle(request.Command)", StringComparison.Ordinal)
                         && mainWindow.Contains("operationCancellationToken => _appControlHandler.ExecuteAsync(request, operationCancellationToken)", StringComparison.Ordinal), "MainWindow should delegate app screenshots through the tracked control-operation boundary");
                     Require(!mainWindow.Contains("case AIArenaControlCommands.AppScreenshot", StringComparison.Ordinal), "MainWindow should not duplicate app screenshot routing in its command switch");
@@ -1601,7 +1601,7 @@ internal static partial class Program
 
     static void ControlPlaneMainWindowDelegatesProviderCommands()
     {
-        var mainWindow = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+        var mainWindow = ReadMainWindowSource();
         Require(mainWindow.Contains("_providerControlHandler.CanHandle(request.Command)", StringComparison.Ordinal), "MainWindow should delegate the provider command family before its legacy command switch");
         Require(mainWindow.Contains("RunProviderControlOperationAsync(request, cancellationToken)", StringComparison.Ordinal), "MainWindow should track provider commands through the operation coordinator");
         Require(mainWindow.Contains("operationCancellationToken => _providerControlHandler.ExecuteAsync(request, operationCancellationToken)", StringComparison.Ordinal), "MainWindow should pass the tracked linked cancellation token into the focused provider handler");
@@ -1621,7 +1621,7 @@ internal static partial class Program
 
     static void ControlPlanePublishesRequiredEventVocabulary()
     {
-        var mainWindow = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+        var mainWindow = ReadMainWindowSource();
         var matchSetupHandler = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaMatchSetupControlHandler.cs"));
         var settingsHandler = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaSettingsControlHandler.cs"));
         var agentWorkspace = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/AgentWorkspaceCoordinator.cs"));
@@ -1649,7 +1649,7 @@ internal static partial class Program
 
     static void ControlPlaneNavigationClosesSettingsForMainViews()
     {
-        var mainWindow = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+        var mainWindow = ReadMainWindowSource();
         var selectStart = mainWindow.IndexOf("private bool SelectControlPlaneView", StringComparison.Ordinal);
         var selectedStart = mainWindow.IndexOf("private string SelectedControlPlaneView", StringComparison.Ordinal);
         Require(selectStart >= 0, "MainWindow should define control-plane view selection");
@@ -1667,7 +1667,7 @@ internal static partial class Program
 
     static void ControlPlaneMatchSetupOpenOwnsVisibleOverlay()
     {
-        var mainWindow = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+        var mainWindow = ReadMainWindowSource();
         Require(
             mainWindow.Contains(
                 "BuildMatchSetupControlState,\r\n            OpenMatchSetupFromControlPlane,",

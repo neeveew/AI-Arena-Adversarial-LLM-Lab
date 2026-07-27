@@ -81,10 +81,18 @@ internal sealed class SessionOverviewCoordinator
         sessionOverviewTurnsText.Text = snapshot.TurnCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
         sessionOverviewParticipantsText.Text = ParticipantSummary(snapshot);
         sessionOverviewTokensText.Text = formatCompactNumber(TotalCompletionTokens(snapshot));
+        sessionOverviewTokensText.ToolTip =
+            $"{formatCompactNumber(TotalCompletionTokens(snapshot))} generated · {formatCompactNumber(TotalSessionTokens(snapshot))} total including prompts";
         sessionOverviewProviderText.Text = ProviderLabel(snapshot.ProviderOnline);
         sessionOverviewProviderText.Foreground = ProviderAccent(snapshot.ProviderOnline);
-        var context = MaxPromptContext(snapshot);
-        sessionOverviewContextText.Text = context > 0 ? formatCompactNumber(context) : "-";
+        sessionOverviewContextText.Text = ContextPressureLabel(snapshot, formatCompactNumber);
+        var pressure = ContextPressure(snapshot);
+        sessionOverviewContextText.Foreground = pressure >= ContextPressureWarningThreshold
+            ? resourceBrush("Arena.Brush.Warning")
+            : resourceBrush("TextBrush");
+        sessionOverviewContextText.ToolTip = pressure is null
+            ? "Largest prompt so far. Set a provider context length to see how close it is to the limit."
+            : $"Largest prompt is {pressure.Value * 100:0}% of the {formatCompactNumber(snapshot.ProviderContextLength)} token context window.";
         populateAgentPerformance(snapshot);
     }
 
@@ -192,6 +200,51 @@ internal sealed class SessionOverviewCoordinator
     {
         return snapshot.Messages.Select(message => Math.Max(message.PromptTokens, 0)).DefaultIfEmpty(0).Max();
     }
+
+    /// <summary>
+    /// Every token the session has spent, prompt and completion together. The
+    /// per-turn counts are visible but never added up, so a long run gives no
+    /// sense of its own cost.
+    /// </summary>
+    internal static int TotalSessionTokens(ArenaViewSnapshot snapshot)
+    {
+        return snapshot.Messages.Sum(message => Math.Max(message.PromptTokens, 0) + Math.Max(message.CompletionTokens, 0));
+    }
+
+    /// <summary>
+    /// How close the largest prompt has come to the configured context window,
+    /// as a fraction. Returns null when the window is unknown, so callers can
+    /// tell "no pressure" apart from "cannot say".
+    /// </summary>
+    internal static double? ContextPressure(ArenaViewSnapshot snapshot)
+    {
+        var limit = snapshot.ProviderContextLength;
+        if (limit <= 0)
+        {
+            return null;
+        }
+
+        var used = MaxPromptContext(snapshot);
+        return used <= 0 ? 0 : Math.Min(1.0, (double)used / limit);
+    }
+
+    /// <summary>Short label for the context cell, including pressure when known.</summary>
+    internal static string ContextPressureLabel(ArenaViewSnapshot snapshot, Func<int, string> formatCompactNumber)
+    {
+        var context = MaxPromptContext(snapshot);
+        if (context <= 0)
+        {
+            return "-";
+        }
+
+        var pressure = ContextPressure(snapshot);
+        return pressure is null
+            ? formatCompactNumber(context)
+            : $"{formatCompactNumber(context)} ({pressure.Value * 100:0}%)";
+    }
+
+    /// <summary>Pressure at or above this fraction is worth flagging.</summary>
+    internal const double ContextPressureWarningThreshold = 0.85;
 
     private Brush ProviderAccent(bool providerOnline)
     {

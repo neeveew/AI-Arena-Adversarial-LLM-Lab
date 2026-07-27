@@ -426,6 +426,19 @@ static void WithTempSettingsStore(Action<WpfSettingsStore> action)
     }
 }
 
+/// <summary>
+/// MainWindow is split across partial files, so structural assertions read the
+/// whole class rather than one file. Control-plane code is appended last and is
+/// contiguous, which keeps ordering assertions inside it meaningful.
+/// </summary>
+static string ReadMainWindowSource()
+{
+    return string.Join(
+        Environment.NewLine,
+        File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs")),
+        File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs")));
+}
+
 static string FindWorkspaceFile(string relativePath)
 {
     var directory = new DirectoryInfo(AppContext.BaseDirectory);

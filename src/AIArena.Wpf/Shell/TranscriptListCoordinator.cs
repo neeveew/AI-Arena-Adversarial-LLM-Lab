@@ -30,6 +30,8 @@ internal sealed class TranscriptListCoordinator
 
     // Row data for the virtualized transcript list. Adjunct rows wrap a pre-built panel;
     // card rows are lightweight descriptors whose card is built on demand when realized.
+    private readonly System.Collections.ObjectModel.ObservableCollection<object> rowItems = [];
+
     private sealed record AdjunctRow(UIElement Element);
 
     private sealed record CardRow(TranscriptMessage Message, bool Retryable, bool SearchMatch, bool IsLatest);
@@ -194,10 +196,61 @@ internal sealed class TranscriptListCoordinator
 
     private void SetRows(List<object> rows, bool follow)
     {
-        transcriptItems.ItemsSource = rows;
+        if (!ReferenceEquals(transcriptItems.ItemsSource, rowItems))
+        {
+            transcriptItems.ItemsSource = rowItems;
+        }
+
+        SyncRows(rows);
         if (follow)
         {
             dispatcher.BeginInvoke(() => transcriptItems.ScrollToTop(), DispatcherPriority.Background);
+        }
+    }
+
+    /// <summary>
+    /// Updates the bound collection in place instead of replacing ItemsSource,
+    /// so the virtualizing panel keeps the containers it already realized.
+    ///
+    /// The transcript is newest-first, so a new turn is prepended and every
+    /// later index shifts. Diffing from the end finds the unchanged tail -
+    /// CardRow is a record, so equal turns compare equal - and only the short
+    /// head of adjunct panels plus the new card is rewritten.
+    /// </summary>
+    private void SyncRows(List<object> rows)
+    {
+        SyncRowsInto(rowItems, rows);
+    }
+
+    internal static void SyncRowsInto(IList<object> target, IReadOnlyList<object> rows)
+    {
+        var sharedSuffix = 0;
+        while (sharedSuffix < target.Count
+            && sharedSuffix < rows.Count
+            && Equals(target[target.Count - 1 - sharedSuffix], rows[rows.Count - 1 - sharedSuffix]))
+        {
+            sharedSuffix++;
+        }
+
+        var currentHead = target.Count - sharedSuffix;
+        var targetHead = rows.Count - sharedSuffix;
+
+        for (var index = 0; index < Math.Min(currentHead, targetHead); index++)
+        {
+            if (!Equals(target[index], rows[index]))
+            {
+                target[index] = rows[index];
+            }
+        }
+
+        while (currentHead > targetHead)
+        {
+            target.RemoveAt(--currentHead);
+        }
+
+        for (var index = currentHead; index < targetHead; index++)
+        {
+            target.Insert(index, rows[index]);
         }
     }
 
