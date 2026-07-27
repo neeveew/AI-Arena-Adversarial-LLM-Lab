@@ -3,12 +3,12 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.4.119-beta</Version>
-    <InformationalVersion>0.4.119-beta</InformationalVersion>
-    <FileVersion>0.4.119.0</FileVersion>
+    <Version>0.4.120-beta</Version>
+    <InformationalVersion>0.4.120-beta</InformationalVersion>
+    <FileVersion>0.4.120.0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="PuppeteerSharp" Version="25.1.1" />
-    <PackageReference Include="SmartReader" Version="0.11.0" />
+    <PackageReference Include="SmartReader" Version="0.11.1" />
   </ItemGroup>
 </Project>
