@@ -206,6 +206,7 @@ var tests = new List<(string Name, Action Test)>
     ("every human drivable event has a shared publisher", EveryHumanDrivableEventHasASharedPublisher),
     ("control plane key parsing accepts what people write", ControlPlaneKeyParsingAcceptsWhatPeopleWrite),
     ("screenshots and modals do not misreport the app", ScreenshotsAndModalsDoNotMisreportTheApp),
+    ("empty arguments are not mistaken for missing ones", EmptyArgumentsAreNotMistakenForMissingOnes),
     ("status tones avoid agent identity accents", StatusTonesAvoidAgentIdentityAccents),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
     ("app settings coordinator selects provider focus", AppSettingsCoordinatorSelectsProviderFocus),

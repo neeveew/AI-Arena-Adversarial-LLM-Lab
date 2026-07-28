@@ -1619,6 +1619,44 @@ internal static partial class Program
         }
     }
 
+    static void EmptyArgumentsAreNotMistakenForMissingOnes()
+    {
+        static AIArenaControlRequest Parse(string json)
+        {
+            Require(AIArenaControlPlaneProtocol.TryParseRequest(json, out var request, out var error), $"request should parse: {error}");
+            return request;
+        }
+
+        // Typing an empty string clears a field, so "" and "not supplied" are
+        // different instructions. OptionalString collapses both to null, which
+        // let shell.input.type accept a request carrying no text at all and
+        // silently wipe the target field - the failure mode of a mistyped
+        // argument name was destructive rather than an error.
+        var supplied = Parse("""{"id":"1","command":"shell.input.type","args":{"text":""}}""");
+        Require(AIArenaControlArguments.TryGetString(supplied, "text", out var empty), "an empty string is still an argument");
+        Require(empty.Length == 0, "an empty argument should read back empty");
+        Require(
+            AIArenaControlArguments.OptionalString(supplied, "text") is null,
+            "OptionalString still collapses empty to null, which is exactly why the presence-aware read exists");
+
+        var omitted = Parse("""{"id":"2","command":"shell.input.type","args":{}}""");
+        Require(!AIArenaControlArguments.TryGetString(omitted, "text", out _), "an omitted argument should report absent");
+
+        var nulled = Parse("""{"id":"3","command":"shell.input.type","args":{"text":null}}""");
+        Require(!AIArenaControlArguments.TryGetString(nulled, "text", out _), "an explicit null should count as absent");
+
+        var valued = Parse("""{"id":"4","command":"shell.input.type","args":{"text":"internet"}}""");
+        Require(
+            AIArenaControlArguments.TryGetString(valued, "text", out var text) && text == "internet",
+            "a real value should read back unchanged");
+
+        // And the dispatch must actually use it, or the distinction is academic.
+        var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+        Require(
+            dispatch.Contains("TryGetString(request, \"text\"", StringComparison.Ordinal),
+            "shell.input.type should read text with the presence-aware accessor");
+    }
+
     static void ControlPlanePublishesRequiredEventVocabulary()
     {
         var mainWindow = ReadMainWindowSource();

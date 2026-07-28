@@ -218,7 +218,16 @@ public partial class MainWindow
                 }
             case AIArenaControlCommands.ShellInputType:
                 {
-                    var typed = ControlTypeText(OptionalStringArg(request, "target"), RequiredStringArg(request, "text"));
+                    // Absent and empty have to be told apart here. Empty is a
+                    // legitimate value - it clears the field - so defaulting a
+                    // missing argument to empty silently wiped the target for
+                    // any caller who mistyped the argument name.
+                    if (!AIArenaControlArguments.TryGetString(request, "text", out var textArg))
+                    {
+                        return AIArenaControlResponse.Error(request, "missing_argument", "shell.input.type requires args.text.");
+                    }
+
+                    var typed = ControlTypeText(OptionalStringArg(request, "target"), textArg);
                     return typed.Ok
                         ? AIArenaControlResponse.Success(request, typed.Message, typed.State)
                         : AIArenaControlResponse.Error(request, typed.ErrorCode, typed.Message, typed.State);

@@ -304,13 +304,18 @@ internal sealed class AIArenaScreenshotControlService
                 dialogBitmap.Render(dialog);
                 dialogBitmap.Freeze();
 
-                // Placed where it actually sits relative to the owner, so the
-                // image matches what someone looking at the screen would see.
+                // Offset via screen coordinates rather than Left and Top. A
+                // maximized window reports its restore bounds in Left and Top,
+                // not where it actually sits, so subtracting them placed the
+                // dialog wrongly - and only ever while maximized, which is the
+                // state least likely to be checked.
+                var ownerOrigin = window.PointToScreen(new Point(0, 0));
+                var dialogOrigin = dialog.PointToScreen(new Point(0, 0));
                 drawing.DrawImage(
                     dialogBitmap,
                     new Rect(
-                        dialog.Left - window.Left,
-                        dialog.Top - window.Top,
+                        (dialogOrigin.X - ownerOrigin.X) / dpi.DpiScaleX,
+                        (dialogOrigin.Y - ownerOrigin.Y) / dpi.DpiScaleY,
                         dialog.ActualWidth,
                         dialog.ActualHeight));
             }
