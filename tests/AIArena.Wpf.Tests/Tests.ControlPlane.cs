@@ -465,7 +465,7 @@ internal static partial class Program
         Require(AIArenaControlCommands.IsKnown("export.session"), "control-plane registry should include session export");
         Require(AIArenaControlCommands.IsKnown("export.receipts"), "control-plane registry should include receipts export");
         Require(!AIArenaControlCommands.IsKnown("not.real"), "control-plane registry should reject unknown commands");
-        Require(AIArenaControlCapabilityCatalog.All.Count == 76, "capability catalog should expose the complete 76-command surface");
+        Require(AIArenaControlCapabilityCatalog.All.Count == 80, "capability catalog should expose the complete 80-command surface");
         Require(AIArenaControlCapabilityCatalog.All.Select(item => item.Command).Distinct(StringComparer.OrdinalIgnoreCase).Count() == AIArenaControlCapabilityCatalog.All.Count, "capability catalog commands should be unique");
         var reset = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == "arena.reset");
         Require(reset.Destructive && reset.RequiredArguments.Contains("confirm", StringComparer.OrdinalIgnoreCase), "capability catalog should mark arena reset as destructive and confirmation-gated");
@@ -506,7 +506,7 @@ internal static partial class Program
         var functionCount = script
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Count(line => line.TrimStart().StartsWith("function ", StringComparison.OrdinalIgnoreCase));
-        Require(functionCount == 50, "PowerShell client should expose the complete 50-function surface");
+        Require(functionCount == 54, "PowerShell client should expose the complete 54-function surface");
         Require(script.Contains("[string]$Token", StringComparison.Ordinal), "PowerShell client should expose -Token for authenticated control-plane calls");
         Require(script.Contains("AI_ARENA_CONTROL_TOKEN", StringComparison.Ordinal), "PowerShell client should support token injection through AI_ARENA_CONTROL_TOKEN");
         Require(script.Contains("Get-AIArenaControlToken", StringComparison.Ordinal), "PowerShell client should load the app-written token for debug calls");

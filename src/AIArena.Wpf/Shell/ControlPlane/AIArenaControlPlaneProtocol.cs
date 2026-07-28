@@ -98,6 +98,10 @@ internal static class AIArenaControlCommands
     public const string NavigationProviderFocus = "navigation.provider.focus";
     public const string NavigationRailSet = "navigation.rail.set";
     public const string ViewPresetSet = "view.preset.set";
+    public const string ShellPaletteList = "shell.palette.list";
+    public const string ShellPaletteRun = "shell.palette.run";
+    public const string ShellInputKey = "shell.input.key";
+    public const string ShellInputType = "shell.input.type";
     public const string MatchSetupState = "match.setup.state";
     public const string MatchSetupOpen = "match.setup.open";
     public const string MatchSetupClose = "match.setup.close";

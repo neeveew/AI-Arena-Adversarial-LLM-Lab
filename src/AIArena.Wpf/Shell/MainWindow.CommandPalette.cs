@@ -38,6 +38,53 @@ public partial class MainWindow
         chosen.Invoke();
     }
 
+    /// <summary>
+    /// The palette's contents, for the control plane. Everything else in the
+    /// shell can be driven without focus; the palette could only be reached by
+    /// simulating Ctrl+K, and simulated keystrokes follow whatever window the
+    /// operating system considers foreground rather than the one you meant.
+    /// </summary>
+    internal object ControlListPaletteCommands()
+    {
+        var available = ShellCommandPalette.Filter(BuildShellCommands(), "", _recentCommandIds);
+        return new
+        {
+            surface = SelectedControlPlaneView(),
+            count = available.Count,
+            commands = available
+                .Select(command => new { command.Id, command.Title, command.Group, command.Keys })
+                .ToList()
+        };
+    }
+
+    internal (bool Ok, string Message) ControlRunPaletteCommand(string id)
+    {
+        var match = BuildShellCommands().FirstOrDefault(
+            command => command.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+        {
+            return (false, $"No palette command with id '{id}'.");
+        }
+
+        // Gated commands are refused rather than forced: the gate is the same one
+        // that hides them in the palette, and running Stop on a surface that has
+        // nothing running is not a thing the reader could have asked for.
+        if (!match.Available)
+        {
+            return (false, $"Palette command '{id}' is not available on the current surface.");
+        }
+
+        _recentCommandIds.Remove(match.Id);
+        _recentCommandIds.Insert(0, match.Id);
+        if (_recentCommandIds.Count > RecentCommandLimit)
+        {
+            _recentCommandIds.RemoveRange(RecentCommandLimit, _recentCommandIds.Count - RecentCommandLimit);
+        }
+
+        match.Invoke();
+        return (true, $"Palette command '{match.Title}' ran.");
+    }
+
     private IReadOnlyList<ShellCommand> BuildShellCommands()
     {
         var commands = new List<ShellCommand>

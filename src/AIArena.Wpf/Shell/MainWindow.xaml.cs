@@ -3658,10 +3658,21 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     /// </summary>
     private bool TryHandleShellShortcut(KeyEventArgs e)
     {
-        var control = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
-        var shift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
-        var alt = (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt;
-        var key = EffectiveShortcutKey(e.Key, e.SystemKey);
+        return TryHandleShellShortcut(
+            EffectiveShortcutKey(e.Key, e.SystemKey),
+            (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control,
+            (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift,
+            (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt);
+    }
+
+    /// <summary>
+    /// The chord is passed explicitly rather than read from the live keyboard so
+    /// the control plane can drive the same shortcut layer a person uses.
+    /// Synthesising real key events would not work: operating-system input goes
+    /// to whichever window is foreground, not to the one that was asked for.
+    /// </summary>
+    internal bool TryHandleShellShortcut(Key key, bool control, bool shift, bool alt)
+    {
 
         // Function keys move between surfaces and carry no modifier. Nothing
         // destructive is bound here: Reset stays a deliberate pointer action.

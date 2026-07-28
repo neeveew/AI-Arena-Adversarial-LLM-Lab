@@ -3688,6 +3688,34 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
     });
 }
 
+static void ControlPlaneKeyParsingAcceptsWhatPeopleWrite()
+{
+    // The control plane sends chords through the shell shortcut layer rather
+    // than simulating operating-system input, because simulated input goes to
+    // whichever window is foreground - which for a background caller is somebody
+    // else's application.
+    Require(MainWindow.TryParseShortcutKey("F2", out var f2) && f2 == Key.F2, "function keys should parse");
+    Require(MainWindow.TryParseShortcutKey("k", out var k) && k == Key.K, "letters should parse case-insensitively");
+    Require(MainWindow.TryParseShortcutKey(" Escape ", out var esc) && esc == Key.Escape, "surrounding space should not matter");
+
+    // A bare digit is what someone would write for Ctrl+1, and D1 is not a name
+    // anyone would guess.
+    Require(MainWindow.TryParseShortcutKey("1", out var one) && one == Key.D1, "a bare digit should map onto the D keys");
+
+    Require(!MainWindow.TryParseShortcutKey("", out _), "an empty key should be rejected");
+    Require(!MainWindow.TryParseShortcutKey("nonsense", out _), "an unknown key should be rejected rather than silently ignored");
+
+    var ctrlShift = MainWindow.ParseModifiers("ctrl+shift");
+    Require(ctrlShift.Control && ctrlShift.Shift && !ctrlShift.Alt, "ctrl+shift should parse");
+    var spaced = MainWindow.ParseModifiers("Control Alt");
+    Require(spaced.Control && spaced.Alt && !spaced.Shift, "spaces and the long name should work too");
+    var none = MainWindow.ParseModifiers(null);
+    Require(!none.Control && !none.Shift && !none.Alt, "no modifiers should mean no modifiers");
+
+    Require(MainWindow.DescribeChord(Key.K, true, false, false) == "Ctrl+K", "the chord should read back the way it was asked for");
+    Require(MainWindow.DescribeChord(Key.F2, false, false, false) == "F2", "an unmodified key needs no prefix");
+}
+
 static void EveryHumanDrivableEventHasASharedPublisher()
 {
     // Events published only from the control-plane dispatch describe what an

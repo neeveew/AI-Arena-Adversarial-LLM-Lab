@@ -204,6 +204,7 @@ var tests = new List<(string Name, Action Test)>
     ("empty and off states are not styled as failures", EmptyAndOffStatesAreNotStyledAsFailures),
     ("dependency index check ignores line endings", DependencyIndexCheckIgnoresLineEndings),
     ("every human drivable event has a shared publisher", EveryHumanDrivableEventHasASharedPublisher),
+    ("control plane key parsing accepts what people write", ControlPlaneKeyParsingAcceptsWhatPeopleWrite),
     ("status tones avoid agent identity accents", StatusTonesAvoidAgentIdentityAccents),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
     ("app settings coordinator selects provider focus", AppSettingsCoordinatorSelectsProviderFocus),

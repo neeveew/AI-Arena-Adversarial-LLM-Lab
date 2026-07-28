@@ -102,6 +102,10 @@ Set-AIArenaProviderConfig -ClearApiToken
 | `navigation.provider.focus` | `Invoke-AIArena navigation.provider.focus` | Optional `baseUrl`, `model` |
 | `navigation.rail.set` | `Set-AIArenaRightRail show` | `state`: `show`, `hide`, `toggle` |
 | `view.preset.set` | `Set-AIArenaViewPreset diagnostics` | `preset`: `focused`, `diagnostics`, `compact`, `review` |
+| `shell.palette.list` | `Get-AIArenaPalette` | none; lists the palette entries available on the current surface |
+| `shell.palette.run` | `Invoke-AIArenaPaletteCommand view.lab` | `id`: a palette entry id from `shell.palette.list` |
+| `shell.input.key` | `Send-AIArenaKey K -Modifiers ctrl` | `key`: `F2`, `k`, `1`, `Escape`; optional `modifiers`: `ctrl`, `shift`, `alt`, combined with `+` |
+| `shell.input.type` | `Set-AIArenaText 'internet' SettingsSearchText` | `text`; optional `target`: a named text field, defaulting to the focused one |
 
 ## Match Setup and settings
 
@@ -229,6 +233,25 @@ The other commands return the refreshed session/checkpoint inventory in `data`; 
 | `export.transcript` | `Export-AIArena transcript` | Returns transcript Markdown in the response payload. |
 | `export.session` | `Export-AIArena session` | Returns a structured session snapshot. |
 | `export.receipts` | `Export-AIArena receipts` | Returns Agent evidence, outputs, Collaborate status, and provider readiness. |
+
+## Keyboard and text input
+
+`shell.input.key` and `shell.input.type` do not simulate operating-system input.
+A chord is passed to the same shell shortcut layer a keypress reaches, and text
+is written into the named field, both on the UI thread.
+
+This matters for background automation. Simulated keystrokes go to whichever
+window the operating system currently considers foreground, which for a
+background caller is frequently somebody else's application; a script that meant
+to press `Ctrl+K` in AI Arena can type into a browser instead. Routing through
+the app's own handlers removes the question: the window can be minimised, or
+behind another, and the command still lands where it was aimed.
+
+`shell.input.key` reports `handled`, so asking whether a chord is bound is a
+legitimate question rather than an error. `shell.palette.list` and
+`shell.palette.run` cover the command palette, which otherwise had no route but
+`Ctrl+K`; a palette entry runs the same handler its button runs, so it emits the
+same events.
 
 ## Events
 

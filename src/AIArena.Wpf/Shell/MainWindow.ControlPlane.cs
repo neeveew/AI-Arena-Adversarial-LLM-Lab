@@ -192,6 +192,37 @@ public partial class MainWindow
                     // The preset methods announce this for both routes.
                     return AIArenaControlResponse.Success(request, "Transcript view preset changed.", new { preset });
                 }
+            case AIArenaControlCommands.ShellPaletteList:
+                return AIArenaControlResponse.Success(request, "Command palette captured.", ControlListPaletteCommands());
+            case AIArenaControlCommands.ShellPaletteRun:
+                {
+                    var id = RequiredStringArg(request, "id");
+                    if (string.IsNullOrWhiteSpace(id))
+                    {
+                        return AIArenaControlResponse.Error(request, "missing_argument", "shell.palette.run requires args.id.");
+                    }
+
+                    // No publish here either: a palette entry runs the same
+                    // handler a button runs, and those announce themselves.
+                    var run = ControlRunPaletteCommand(id);
+                    return run.Ok
+                        ? AIArenaControlResponse.Success(request, run.Message, ControlListPaletteCommands())
+                        : AIArenaControlResponse.Error(request, "not_available", run.Message, ControlListPaletteCommands());
+                }
+            case AIArenaControlCommands.ShellInputKey:
+                {
+                    var sent = ControlSendKey(RequiredStringArg(request, "key"), OptionalStringArg(request, "modifiers"));
+                    return sent.Ok
+                        ? AIArenaControlResponse.Success(request, sent.Message, sent.State)
+                        : AIArenaControlResponse.Error(request, sent.ErrorCode, sent.Message, sent.State);
+                }
+            case AIArenaControlCommands.ShellInputType:
+                {
+                    var typed = ControlTypeText(OptionalStringArg(request, "target"), RequiredStringArg(request, "text"));
+                    return typed.Ok
+                        ? AIArenaControlResponse.Success(request, typed.Message, typed.State)
+                        : AIArenaControlResponse.Error(request, typed.ErrorCode, typed.Message, typed.State);
+                }
             case AIArenaControlCommands.MatchGenerationState:
                 return AIArenaControlResponse.Success(
                     request,
