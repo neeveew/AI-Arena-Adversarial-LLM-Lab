@@ -59,12 +59,21 @@ internal static class ShellUiHelpers
         comboBox.SelectedIndex = comboBox.Items.Count > 0 ? 0 : -1;
     }
 
+    /// <summary>
+    /// Flattens text to a single line and shortens it to <paramref name="maxLength"/>.
+    ///
+    /// This was missed when the five truncation copies were consolidated: it cut
+    /// at maxLength and then appended three more characters, so it returned
+    /// maxLength + 3 and quietly broke the "limit is a hard cap" rule the shared
+    /// helper documents, while also ending in "..." where everything else had
+    /// settled on a single ellipsis.
+    /// </summary>
     public static string CompactPreview(string? text, int maxLength, string fallback)
     {
         var cleaned = string.IsNullOrWhiteSpace(text)
             ? fallback
             : string.Join(" ", text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-        return cleaned.Length <= maxLength ? cleaned : $"{cleaned[..maxLength]}...";
+        return Truncate(cleaned, maxLength);
     }
 
     public static Brush BlendBrush(Brush baseBrush, Brush accentBrush, double accentAmount)

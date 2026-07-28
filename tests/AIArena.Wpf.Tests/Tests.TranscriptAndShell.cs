@@ -2829,6 +2829,26 @@ static void TruncateRespectsItsLimitAndSuffix()
     // A limit shorter than the suffix cannot carry one, and must still not overshoot.
     var tiny = ShellUiHelpers.Truncate("abcdefgh", 2, ShellUiHelpers.TruncatedNoticeSuffix);
     Require(tiny.Length <= 2, $"a limit below the suffix length must still cap, got {tiny.Length}");
+
+    // CompactPreview was missed by that consolidation. It cut at the limit and
+    // then appended three more characters, so it returned maxLength + 3 and
+    // ended in "..." while everything else had settled on one ellipsis.
+    var preview = ShellUiHelpers.CompactPreview(new string('c', 400), 155, "(empty)");
+    Require(preview.Length == 155, $"CompactPreview must respect the same hard cap, got {preview.Length}");
+    Require(
+        preview.EndsWith(ShellUiHelpers.EllipsisSuffix, StringComparison.Ordinal),
+        "CompactPreview should end the way every other shortened string does");
+
+    // Its own behaviour still has to hold: newlines flattened, blank replaced.
+    Require(
+        ShellUiHelpers.CompactPreview("first\r\nsecond", 100, "(empty)") == "first second",
+        "CompactPreview should flatten line breaks into single spaces");
+    Require(
+        ShellUiHelpers.CompactPreview("   ", 100, "(empty)") == "(empty)",
+        "blank text should fall back");
+    Require(
+        ShellUiHelpers.CompactPreview("short", 100, "(empty)") == "short",
+        "text within the limit should be untouched");
 }
 
 static void SessionPickerHidesEmptySessionsWithoutLosingReach()
