@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Threading;
 using AIArena.Wpf.Services;
 
 namespace AIArena.Wpf;
@@ -18,7 +19,21 @@ public partial class MainWindow
 
     private const int RecentCommandLimit = 8;
 
+    /// <summary>
+    /// The dialog is opened on the next dispatcher pass rather than inline.
+    /// ShowDialog runs a nested message loop and does not return until the
+    /// palette closes, so opening it inline meant a control-plane caller sending
+    /// Ctrl+K waited for a human to dismiss a dialog and timed out instead. For
+    /// someone actually pressing the key the extra pass is imperceptible.
+    ///
+    /// Any future shortcut that opens a modal needs the same treatment.
+    /// </summary>
     private void ShowCommandPalette()
+    {
+        Dispatcher.BeginInvoke(new Action(OpenCommandPalette), DispatcherPriority.Background);
+    }
+
+    private void OpenCommandPalette()
     {
         var chosen = CommandPaletteDialog.Show(this, _theme, BuildShellCommands(), _recentCommandIds);
         if (chosen is null)

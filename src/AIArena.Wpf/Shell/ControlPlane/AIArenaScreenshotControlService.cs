@@ -255,6 +255,101 @@ internal sealed class AIArenaScreenshotControlService
         }
     }
 
+    /// <summary>
+    /// Renders the window, then any dialog open over it.
+    ///
+    /// RenderTargetBitmap walks one visual tree, and a dialog is a separate
+    /// window with its own. Capturing the main window alone therefore produced
+    /// an image showing no dialog at all while one was plainly on screen, which
+    /// is worse than an obviously failed capture: it quietly reports a state the
+    /// app is not in, and anyone verifying against it draws the wrong conclusion.
+    /// </summary>
+    private RenderTargetBitmap RenderWithOpenDialogs(int pixelWidth, int pixelHeight, DpiScale dpi)
+    {
+        var main = new RenderTargetBitmap(
+            pixelWidth,
+            pixelHeight,
+            dpi.PixelsPerInchX,
+            dpi.PixelsPerInchY,
+            PixelFormats.Pbgra32);
+        main.Render(window);
+
+        var dialogs = OpenDialogs();
+        if (dialogs.Count == 0)
+        {
+            main.Freeze();
+            return main;
+        }
+
+        main.Freeze();
+        var composite = new DrawingVisual();
+        using (var drawing = composite.RenderOpen())
+        {
+            drawing.DrawImage(main, new Rect(0, 0, window.ActualWidth, window.ActualHeight));
+            foreach (var dialog in dialogs)
+            {
+                var dialogWidth = (int)Math.Ceiling(dialog.ActualWidth * dpi.DpiScaleX);
+                var dialogHeight = (int)Math.Ceiling(dialog.ActualHeight * dpi.DpiScaleY);
+                if (dialogWidth <= 0 || dialogHeight <= 0)
+                {
+                    continue;
+                }
+
+                var dialogBitmap = new RenderTargetBitmap(
+                    dialogWidth,
+                    dialogHeight,
+                    dpi.PixelsPerInchX,
+                    dpi.PixelsPerInchY,
+                    PixelFormats.Pbgra32);
+                dialogBitmap.Render(dialog);
+                dialogBitmap.Freeze();
+
+                // Placed where it actually sits relative to the owner, so the
+                // image matches what someone looking at the screen would see.
+                drawing.DrawImage(
+                    dialogBitmap,
+                    new Rect(
+                        dialog.Left - window.Left,
+                        dialog.Top - window.Top,
+                        dialog.ActualWidth,
+                        dialog.ActualHeight));
+            }
+        }
+
+        var composed = new RenderTargetBitmap(
+            pixelWidth,
+            pixelHeight,
+            dpi.PixelsPerInchX,
+            dpi.PixelsPerInchY,
+            PixelFormats.Pbgra32);
+        composed.Render(composite);
+        composed.Freeze();
+        return composed;
+    }
+
+    private List<Window> OpenDialogs()
+    {
+        var dialogs = new List<Window>();
+        if (Application.Current is null)
+        {
+            return dialogs;
+        }
+
+        foreach (var candidate in Application.Current.Windows.OfType<Window>())
+        {
+            if (!ReferenceEquals(candidate, window)
+                && candidate.IsVisible
+                && ReferenceEquals(candidate.Owner, window)
+                && candidate.ActualWidth > 0
+                && candidate.ActualHeight > 0)
+            {
+                dialogs.Add(candidate);
+            }
+        }
+
+        return dialogs;
+    }
+
     private AIArenaScreenshotControlResult CaptureCore(string targetPath, CancellationToken cancellationToken)
     {
         string? tempPath = null;
@@ -280,14 +375,7 @@ internal sealed class AIArenaScreenshotControlService
                     targetPath);
             }
 
-            var bitmap = new RenderTargetBitmap(
-                pixelWidth,
-                pixelHeight,
-                dpi.PixelsPerInchX,
-                dpi.PixelsPerInchY,
-                PixelFormats.Pbgra32);
-            bitmap.Render(window);
-            bitmap.Freeze();
+            var bitmap = RenderWithOpenDialogs(pixelWidth, pixelHeight, dpi);
 
             var directory = System.IO.Path.GetDirectoryName(targetPath);
             if (string.IsNullOrWhiteSpace(directory))

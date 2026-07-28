@@ -3688,6 +3688,43 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
     });
 }
 
+static void ScreenshotsAndModalsDoNotMisreportTheApp()
+{
+    // Two failures that both produced a confident wrong answer rather than an
+    // obvious error, which is the worst shape a verification tool can have.
+    //
+    // RenderTargetBitmap walks one visual tree, so capturing the window alone
+    // returned an image with no dialog in it while a dialog was plainly on
+    // screen. Anyone checking a dialog against that image concluded it had
+    // never opened.
+    var screenshot = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaScreenshotControlService.cs"));
+    Require(
+        screenshot.Contains("RenderWithOpenDialogs", StringComparison.Ordinal),
+        "the screenshot should composite dialogs over the window");
+    Require(
+        screenshot.Contains("candidate.Owner, window", StringComparison.Ordinal),
+        "only dialogs owned by the shell window should be composited in");
+
+    // ShowDialog runs a nested message loop and does not return until the
+    // palette closes, so opening it inline made a control-plane Ctrl+K wait for
+    // a human and time out.
+    var palette = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.CommandPalette.cs"));
+    var showStart = palette.IndexOf("private void ShowCommandPalette", StringComparison.Ordinal);
+    Require(showStart >= 0, "the palette entry point should remain discoverable");
+
+    // Bounded by the next member, or the slice runs into OpenCommandPalette,
+    // which is supposed to contain the call being ruled out here.
+    var showEnd = palette.IndexOf("private void OpenCommandPalette", showStart, StringComparison.Ordinal);
+    Require(showEnd > showStart, "the deferred opener should remain discoverable");
+    var showBody = palette[showStart..showEnd];
+    Require(
+        showBody.Contains("BeginInvoke", StringComparison.Ordinal),
+        "the palette must open on a later dispatcher pass so a control-plane chord can return");
+    Require(
+        !showBody.Contains("CommandPaletteDialog.Show", StringComparison.Ordinal),
+        "ShowCommandPalette must not open the dialog inline again");
+}
+
 static void ControlPlaneKeyParsingAcceptsWhatPeopleWrite()
 {
     // The control plane sends chords through the shell shortcut layer rather
