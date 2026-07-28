@@ -14,6 +14,9 @@ public partial class App : Application
     private SearxngSupervisorService? searxngSupervisor;
     private readonly CancellationTokenSource shutdownCancellation = new();
 
+    /// <summary>0 until a crash has been shown to the reader; see InstallCrashHandlers.</summary>
+    private int crashReported;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         try
@@ -100,8 +103,18 @@ public partial class App : Application
         {
             var path = CrashReporter.Write("Dispatcher", args.Exception);
             args.Handled = true;
-            ReportToUser(args.Exception, path);
-            Shutdown(1);
+
+            // Only the first failure gets a dialog and a shutdown. The message
+            // box is modal and pumps messages, and Shutdown runs OnExit on this
+            // same dispatcher, so anything failing during either would re-enter
+            // here: a second box stacked on the first, another shutdown asked
+            // for, and a reader holding down Enter on error dialogs while the
+            // app dies. Later failures still leave a report.
+            if (Interlocked.Exchange(ref crashReported, 1) == 0)
+            {
+                ReportToUser(args.Exception, path);
+                Shutdown(1);
+            }
         };
 
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>

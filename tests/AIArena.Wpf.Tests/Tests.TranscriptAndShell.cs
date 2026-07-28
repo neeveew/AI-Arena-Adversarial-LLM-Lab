@@ -3918,8 +3918,50 @@ static void CrashesLeaveSomethingBehind()
         }
     }
 
+    // A failing app rarely fails once, and the stamp is only accurate to the
+    // millisecond, so a cascade inside one millisecond used to write every
+    // report to the same name and leave only the last. The first is usually the
+    // interesting one.
+    var reportDir = Path.Combine(Path.GetTempPath(), $"ai-arena-crash-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(reportDir);
+    try
+    {
+        var stamp = new DateTime(2026, 7, 28, 12, 0, 0, 500);
+        var paths = new List<string>();
+        for (var i = 0; i < 4; i++)
+        {
+            var path = CrashReporter.UniquePath(reportDir, stamp);
+            File.WriteAllText(path, "report");
+            paths.Add(path);
+        }
+
+        Require(
+            paths.Distinct(StringComparer.OrdinalIgnoreCase).Count() == paths.Count,
+            "reports written in the same millisecond must not overwrite one another");
+        Require(
+            Directory.GetFiles(reportDir, "crash-*.log").Length == 4,
+            "every report in a cascade should survive");
+    }
+    finally
+    {
+        try
+        {
+            Directory.Delete(reportDir, recursive: true);
+        }
+        catch
+        {
+        }
+    }
+
     // And the handlers have to actually be installed, or none of the above runs.
     var app = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/App.xaml.cs"));
+
+    // The message box is modal and pumps messages, and Shutdown runs OnExit on
+    // the same dispatcher, so a failure during either would re-enter the handler
+    // and stack a second dialog on the first.
+    Require(
+        app.Contains("Interlocked.Exchange(ref crashReported", StringComparison.Ordinal),
+        "only the first crash should raise a dialog and ask for shutdown");
     foreach (var hook in new[] { "DispatcherUnhandledException", "AppDomain.CurrentDomain.UnhandledException", "TaskScheduler.UnobservedTaskException" })
     {
         Require(app.Contains(hook, StringComparison.Ordinal), $"{hook} should be handled");

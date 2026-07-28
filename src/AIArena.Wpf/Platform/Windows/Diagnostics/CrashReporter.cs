@@ -27,9 +27,7 @@ internal static class CrashReporter
         {
             var directory = ReportDirectory();
             Directory.CreateDirectory(directory);
-            var path = Path.Combine(
-                directory,
-                $"crash-{DateTime.Now:yyyyMMdd-HHmmss-fff}.log");
+            var path = UniquePath(directory, DateTime.Now);
 
             var report = new StringBuilder()
                 .AppendLine($"AI Arena {Version()}")
@@ -51,6 +49,32 @@ internal static class CrashReporter
             // would be worse, and would hide the original failure entirely.
             return null;
         }
+    }
+
+    /// <summary>
+    /// The stamp is only accurate to the millisecond, and a failing app rarely
+    /// fails once: a cascade inside the same millisecond would have written
+    /// every report to the same name, leaving only the last. The first report is
+    /// usually the interesting one, so losing it is the wrong way round.
+    /// </summary>
+    internal static string UniquePath(string directory, DateTime stamp)
+    {
+        var basePath = Path.Combine(directory, $"crash-{stamp:yyyyMMdd-HHmmss-fff}");
+        if (!File.Exists(basePath + ".log"))
+        {
+            return basePath + ".log";
+        }
+
+        for (var attempt = 2; attempt <= 9; attempt++)
+        {
+            var candidate = $"{basePath}-{attempt}.log";
+            if (!File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return $"{basePath}-{Guid.NewGuid():N}.log";
     }
 
     internal static string ReportDirectory()
