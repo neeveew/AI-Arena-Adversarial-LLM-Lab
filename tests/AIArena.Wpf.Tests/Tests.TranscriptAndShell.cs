@@ -3723,6 +3723,24 @@ static void ScreenshotsAndModalsDoNotMisreportTheApp()
     Require(
         !showBody.Contains("CommandPaletteDialog.Show", StringComparison.Ordinal),
         "ShowCommandPalette must not open the dialog inline again");
+
+    // Deferring the open made duplicates possible. Three quick Ctrl+K presses
+    // queued three opens before the first had run and stacked three modals, and
+    // the control plane could not dismiss them: a chord sent over the pipe
+    // reaches the shell handler, not the focused dialog.
+    Require(
+        showBody.Contains("_paletteOpen", StringComparison.Ordinal),
+        "ShowCommandPalette should toggle a palette that is already open");
+    Require(
+        showBody.Contains("open.Close()", StringComparison.Ordinal),
+        "a second Ctrl+K should close the palette rather than stack another");
+
+    var openStart = palette.IndexOf("private void OpenCommandPalette", StringComparison.Ordinal);
+    var openEnd = palette.IndexOf("private void OpenCommandPaletteCore", openStart, StringComparison.Ordinal);
+    Require(openEnd > openStart, "the guarded opener should remain discoverable");
+    Require(
+        palette[openStart..openEnd].Contains("if (_paletteOpen)", StringComparison.Ordinal),
+        "the opener needs its own guard, because queued opens are dispatched before any of them has opened anything");
 }
 
 static void ControlPlaneKeyParsingAcceptsWhatPeopleWrite()

@@ -28,12 +28,50 @@ public partial class MainWindow
     ///
     /// Any future shortcut that opens a modal needs the same treatment.
     /// </summary>
+    private bool _paletteOpen;
+
     private void ShowCommandPalette()
     {
+        // Toggling closed matches F2 on Match Setup, and it gives the control
+        // plane a way to dismiss a palette it opened: a chord sent over the pipe
+        // reaches the shell handler, not the focused dialog, so Escape alone
+        // could not close one.
+        if (_paletteOpen)
+        {
+            foreach (var open in Application.Current.Windows.OfType<CommandPaletteDialog>().ToList())
+            {
+                open.Close();
+            }
+
+            return;
+        }
+
         Dispatcher.BeginInvoke(new Action(OpenCommandPalette), DispatcherPriority.Background);
     }
 
     private void OpenCommandPalette()
+    {
+        // Deferring the open made duplicates possible: three quick Ctrl+K
+        // presses queued three opens before the first had run, and stacked three
+        // modals. The flag is checked here rather than only in ShowCommandPalette
+        // because at queue time none of them has opened anything yet.
+        if (_paletteOpen)
+        {
+            return;
+        }
+
+        _paletteOpen = true;
+        try
+        {
+            OpenCommandPaletteCore();
+        }
+        finally
+        {
+            _paletteOpen = false;
+        }
+    }
+
+    private void OpenCommandPaletteCore()
     {
         var chosen = CommandPaletteDialog.Show(this, _theme, BuildShellCommands(), _recentCommandIds);
         if (chosen is null)
