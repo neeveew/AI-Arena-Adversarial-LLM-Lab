@@ -146,6 +146,19 @@ public partial class MainWindow
                         return AIArenaControlResponse.Error(request, "missing_argument", "navigation.theme.set requires args.theme or args.themeId.");
                     }
 
+                    // Validated before normalizing. NormalizeId substitutes a
+                    // default for anything it does not recognise, so a typo used
+                    // to report success while switching the reader to a theme
+                    // nobody asked for - light became dark-blue and the response
+                    // said "AI Arena theme changed."
+                    if (!ThemePalette.IsKnownId(theme))
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "invalid_argument",
+                            $"navigation.theme.set requires a known theme: {string.Join(", ", ThemePalette.KnownIds)}.");
+                    }
+
                     var themeId = ThemePalette.NormalizeId(theme);
                     // ApplyTheme announces this for both routes.
                     ShellNavigation.ApplyTheme(themeId, persist: true, rerender: true);

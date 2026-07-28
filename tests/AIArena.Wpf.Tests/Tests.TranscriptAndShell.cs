@@ -3688,6 +3688,53 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
     });
 }
 
+static void AnUnknownThemeIsRefusedRatherThanSubstituted()
+{
+    // navigation.theme.set normalized before validating, and NormalizeId is
+    // deliberately total: it substitutes a default for anything it does not
+    // recognise so an old settings file still opens. Used on a caller's input
+    // that turned a typo into a silent theme change - asking for a misspelled
+    // name moved the reader from light to dark-blue and answered "AI Arena
+    // theme changed."
+    Require(ThemePalette.IsKnownId("dark-blue"), "a real id should be accepted");
+    Require(ThemePalette.IsKnownId("  Light  "), "ids should survive trimming and case");
+    Require(ThemePalette.IsKnownId("system"), "system is a legitimate choice, not a built-in palette");
+    Require(!ThemePalette.IsKnownId("totally-not-a-theme"), "an unknown id should be refused");
+    Require(!ThemePalette.IsKnownId(""), "an empty id should be refused");
+    Require(!ThemePalette.IsKnownId(null), "a missing id should be refused");
+
+    // NormalizeId keeps substituting, which is right for reading persisted state.
+    Require(
+        ThemePalette.NormalizeId("totally-not-a-theme") != "totally-not-a-theme",
+        "NormalizeId should still fall back, since a settings file may name a theme this build dropped");
+
+    Require(ThemePalette.KnownIds.Count > 0, "there should be ids to offer");
+    Require(
+        ThemePalette.KnownIds.Distinct(StringComparer.OrdinalIgnoreCase).Count() == ThemePalette.KnownIds.Count,
+        "the offered list is shown to the reader, so it must not repeat itself");
+    Require(
+        ThemePalette.KnownIds.All(ThemePalette.IsKnownId),
+        "every offered id must actually be accepted");
+
+    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    // Bounded by the next case rather than a character count, so adding a
+    // comment to this branch cannot push the code being checked out of view.
+    var themeCase = dispatch.IndexOf("case AIArenaControlCommands.NavigationThemeSet", StringComparison.Ordinal);
+    Require(themeCase >= 0, "the theme command should remain discoverable");
+    var nextCase = dispatch.IndexOf("case AIArenaControlCommands.", themeCase + 10, StringComparison.Ordinal);
+    var body = dispatch[themeCase..(nextCase > themeCase ? nextCase : dispatch.Length)];
+    // Matched on the call syntax, not the bare names: the comment explaining
+    // this fix mentions NormalizeId before the check runs, and prose should not
+    // decide whether a guard passes.
+    var validate = body.IndexOf("ThemePalette.IsKnownId(", StringComparison.Ordinal);
+    var normalize = body.IndexOf("ThemePalette.NormalizeId(", StringComparison.Ordinal);
+    Require(validate >= 0, "the theme id should be validated");
+    Require(normalize >= 0, "the theme id should still be normalized once accepted");
+    Require(
+        validate < normalize,
+        "the id has to be validated before it is normalized, or the substitution has already happened");
+}
+
 static void CrashesLeaveSomethingBehind()
 {
     // The only diagnostics were Debug.WriteLine calls, which the compiler strips
