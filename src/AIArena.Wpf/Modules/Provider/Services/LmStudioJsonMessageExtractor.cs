@@ -4,6 +4,14 @@ namespace AIArena.Wpf.Services;
 
 internal static class LmStudioJsonMessageExtractor
 {
+    /// <summary>
+    /// Enough to carry a real provider error, short of pasting a web page into
+    /// a status line.
+    /// </summary>
+    internal const int MaxMessageLength = 400;
+
+    internal const string TruncationNotice = "... [truncated]";
+
     public static string ExtractMessage(string body, params string[] propertyNames)
     {
         if (string.IsNullOrWhiteSpace(body))
@@ -14,12 +22,24 @@ internal static class LmStudioJsonMessageExtractor
         try
         {
             using var doc = JsonDocument.Parse(body);
-            return ExtractMessage(doc.RootElement, propertyNames);
+            return Cap(ExtractMessage(doc.RootElement, propertyNames));
         }
         catch (JsonException)
         {
-            return body.Trim();
+            // A body that is not JSON is usually an HTML error page from a proxy
+            // or from a base URL pointing at something that is not a provider,
+            // and the whole of it used to become the operator-facing message.
+            // These strings are shown in status lines and failure dialogs, so an
+            // unbounded one is a page of markup where a sentence belongs.
+            return Cap(body.Trim());
         }
+    }
+
+    private static string Cap(string message)
+    {
+        return message.Length <= MaxMessageLength
+            ? message
+            : message[..(MaxMessageLength - TruncationNotice.Length)] + TruncationNotice;
     }
 
     public static string ExtractMessage(JsonElement element, params string[] propertyNames)

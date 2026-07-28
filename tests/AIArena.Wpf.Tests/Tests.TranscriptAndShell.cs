@@ -3708,6 +3708,47 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
     });
 }
 
+static void ProviderErrorTextCannotBeAWholeWebPage()
+{
+    // These strings land in status lines and failure dialogs. A body that is not
+    // JSON - an HTML error page from a proxy, or from a base URL pointing at
+    // something that is not a provider - was returned whole, so a 502 page
+    // arrived in the UI intact. The app lets you type any base URL, so this is
+    // an ordinary misconfiguration rather than a contrived one.
+    var page = "<html><body>" + new string('x', 5000) + "</body></html>";
+    var capped = LmStudioJsonMessageExtractor.ExtractMessage(page, "error");
+    Require(
+        capped.Length <= LmStudioJsonMessageExtractor.MaxMessageLength,
+        $"a non-JSON body must be capped, got {capped.Length}");
+    Require(
+        capped.EndsWith(LmStudioJsonMessageExtractor.TruncationNotice, StringComparison.Ordinal),
+        "a shortened provider error should say it was cut rather than just stopping");
+
+    // A provider that returns a huge message inside valid JSON gets the same cap.
+    var longJson = JsonSerializer.Serialize(new { error = new string('y', 5000) });
+    var cappedJson = LmStudioJsonMessageExtractor.ExtractMessage(longJson, "error");
+    Require(
+        cappedJson.Length <= LmStudioJsonMessageExtractor.MaxMessageLength,
+        $"a long JSON message must be capped too, got {cappedJson.Length}");
+
+    // Ordinary errors must survive untouched, or the cap has made things worse.
+    var normal = JsonSerializer.Serialize(new { error = "Model not found." });
+    Require(
+        LmStudioJsonMessageExtractor.ExtractMessage(normal, "error") == "Model not found.",
+        "a real error message should pass through unchanged");
+    Require(
+        LmStudioJsonMessageExtractor.ExtractMessage("", "error") == "",
+        "an empty body should stay empty");
+
+    // Deep nesting is handled by the parser's own depth limit rather than by
+    // recursing until the stack gives out: it throws, and the fallback catches.
+    var deep = string.Concat(Enumerable.Repeat("{\"a\":", 200)) + "1" + string.Concat(Enumerable.Repeat("}", 200));
+    var deepResult = LmStudioJsonMessageExtractor.ExtractMessage(deep, "error");
+    Require(
+        deepResult.Length <= LmStudioJsonMessageExtractor.MaxMessageLength,
+        "a document too deep to parse should still produce a bounded message");
+}
+
 static void GenerationRefusesUnknownOptionsInsteadOfSubstituting()
 {
     // Generation validated length and nothing else, so an unrecognised style
