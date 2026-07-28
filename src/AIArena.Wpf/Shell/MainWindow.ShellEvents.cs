@@ -39,6 +39,19 @@ public partial class MainWindow
         {
             appSettings.VisibilityChanged = visible =>
                 PublishSettingsOverlayChanged(visible ? "Settings opened." : "Settings closed.");
+
+            // Match Setup already hides settings when it opens. Without the
+            // mirror image, settings opened over Match Setup and covered its
+            // close button, so the only way out was to close settings first.
+            appSettings.Opening = () =>
+            {
+                // Qualified: MainWindow inherits a Visibility property, which
+                // shadows the enum type name here.
+                if (CustomMatchPanel.Visibility == System.Windows.Visibility.Visible)
+                {
+                    CloseMatchSetupFlyout();
+                }
+            };
         }
 
         if (_shellNavigationCoordinator is { } navigation)

@@ -3688,6 +3688,33 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
     });
 }
 
+static void SettingsAndMatchSetupDoNotShareTheWindow()
+{
+    // Opening Match Setup has always hidden settings. The mirror image was
+    // never implemented, so opening settings over Match Setup left both up:
+    // the settings panel covered Match Setup's close button and footer, and the
+    // only way out was to close settings first. The asymmetry was the tell -
+    // one direction had a deliberate hide, the other had nothing.
+    var settings = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/AppSettingsCoordinator.cs"));
+    Require(
+        settings.Contains("Opening?.Invoke()", StringComparison.Ordinal),
+        "the settings overlay should announce that it is about to open");
+
+    var setVisible = settings.IndexOf("public void SetVisible", StringComparison.Ordinal);
+    Require(setVisible >= 0, "SetVisible should remain the single visibility path");
+    var body = settings[setVisible..Math.Min(settings.Length, setVisible + 400)];
+    Require(
+        body.IndexOf("Opening?.Invoke()", StringComparison.Ordinal)
+            < body.IndexOf("SetAppSettingsVisible", StringComparison.Ordinal),
+        "the host needs to dismiss the other overlay before this one is shown, not after");
+
+    var shell = ReadMainWindowSource();
+    Require(
+        shell.Contains("appSettings.Opening", StringComparison.Ordinal)
+            && shell.Contains("CloseMatchSetupFlyout()", StringComparison.Ordinal),
+        "opening settings should close Match Setup, mirroring what Match Setup already does");
+}
+
 static void ScreenshotsAndModalsDoNotMisreportTheApp()
 {
     // Two failures that both produced a confident wrong answer rather than an
