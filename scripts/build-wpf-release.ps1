@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.4.123-beta",
+    [string]$Version = "0.4.124-beta",
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = "Release",
     [ValidateSet('win-x64')]
