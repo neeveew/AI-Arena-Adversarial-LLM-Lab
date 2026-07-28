@@ -271,6 +271,32 @@ public sealed record ThemePalette
             ?? BuiltIn.First(item => item.Id == "dark-arena");
     }
 
+    /// <summary>
+    /// Every id a caller may legitimately ask for. "system" is added only when
+    /// the built-in list does not already carry it, since it does today and
+    /// listing it twice makes the error message look broken.
+    /// </summary>
+    public static IReadOnlyList<string> KnownIds { get; } =
+        BuiltIn.Select(theme => theme.Id)
+            .Concat(["system"])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    /// <summary>
+    /// True when the id names a real theme.
+    ///
+    /// NormalizeId cannot answer this. It is deliberately total - it has to
+    /// return something usable when reading a settings file written by an older
+    /// build - so it silently substitutes a default for anything it does not
+    /// recognise, which makes a typo indistinguishable from a choice.
+    /// </summary>
+    public static bool IsKnownId(string? id)
+    {
+        var cleaned = (id ?? "").Trim();
+        return cleaned.Length > 0
+            && KnownIds.Any(known => string.Equals(known, cleaned, StringComparison.OrdinalIgnoreCase));
+    }
+
     public static string NormalizeId(string? id)
     {
         if (string.IsNullOrWhiteSpace(id))

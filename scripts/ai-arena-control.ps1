@@ -1036,6 +1036,103 @@ function Set-AIArenaViewPreset {
     Invoke-AIArena -Command 'view.preset.set' -Preset $Preset -TimeoutMs $TimeoutMs -Token $Token
 }
 
+function Send-AIArenaKey {
+    <#
+        .SYNOPSIS
+        Sends a chord through the shell shortcut layer.
+
+        .DESCRIPTION
+        Routed through the app's own handlers rather than simulated at the
+        operating-system level, so it does not need window focus and cannot leak
+        into another application. Reports whether the chord was bound.
+
+        .EXAMPLE
+        Send-AIArenaKey F2
+        Send-AIArenaKey K -Modifiers ctrl
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [string]$Key,
+
+        [Parameter(Position = 1)]
+        [string]$Modifiers,
+
+        [Parameter()]
+        [int]$TimeoutMs = 5000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    $payload = @{ key = $Key }
+    if ($PSBoundParameters.ContainsKey('Modifiers')) { $payload['modifiers'] = $Modifiers }
+    Invoke-AIArena -Command 'shell.input.key' -Args $payload -TimeoutMs $TimeoutMs -Token $Token
+}
+
+function Set-AIArenaText {
+    <#
+        .SYNOPSIS
+        Types text into a named field, or the focused one when no target is given.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [AllowEmptyString()]
+        [string]$Text,
+
+        [Parameter(Position = 1)]
+        [string]$Target,
+
+        [Parameter()]
+        [int]$TimeoutMs = 5000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    $payload = @{ text = $Text }
+    if ($PSBoundParameters.ContainsKey('Target')) { $payload['target'] = $Target }
+    Invoke-AIArena -Command 'shell.input.type' -Args $payload -TimeoutMs $TimeoutMs -Token $Token
+}
+
+function Get-AIArenaPalette {
+    <#
+        .SYNOPSIS
+        Lists the command palette entries available on the current surface.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [int]$TimeoutMs = 5000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    Invoke-AIArena -Command 'shell.palette.list' -TimeoutMs $TimeoutMs -Token $Token
+}
+
+function Invoke-AIArenaPaletteCommand {
+    <#
+        .SYNOPSIS
+        Runs a command palette entry by id.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [string]$Id,
+
+        [Parameter()]
+        [int]$TimeoutMs = 5000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    Invoke-AIArena -Command 'shell.palette.run' -Id $Id -TimeoutMs $TimeoutMs -Token $Token
+}
+
 function Get-AIArenaInternet {
     [CmdletBinding()]
     param(

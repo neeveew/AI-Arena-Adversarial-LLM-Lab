@@ -465,7 +465,7 @@ internal static partial class Program
         Require(AIArenaControlCommands.IsKnown("export.session"), "control-plane registry should include session export");
         Require(AIArenaControlCommands.IsKnown("export.receipts"), "control-plane registry should include receipts export");
         Require(!AIArenaControlCommands.IsKnown("not.real"), "control-plane registry should reject unknown commands");
-        Require(AIArenaControlCapabilityCatalog.All.Count == 76, "capability catalog should expose the complete 76-command surface");
+        Require(AIArenaControlCapabilityCatalog.All.Count == 80, "capability catalog should expose the complete 80-command surface");
         Require(AIArenaControlCapabilityCatalog.All.Select(item => item.Command).Distinct(StringComparer.OrdinalIgnoreCase).Count() == AIArenaControlCapabilityCatalog.All.Count, "capability catalog commands should be unique");
         var reset = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == "arena.reset");
         Require(reset.Destructive && reset.RequiredArguments.Contains("confirm", StringComparer.OrdinalIgnoreCase), "capability catalog should mark arena reset as destructive and confirmation-gated");
@@ -506,7 +506,7 @@ internal static partial class Program
         var functionCount = script
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Count(line => line.TrimStart().StartsWith("function ", StringComparison.OrdinalIgnoreCase));
-        Require(functionCount == 50, "PowerShell client should expose the complete 50-function surface");
+        Require(functionCount == 54, "PowerShell client should expose the complete 54-function surface");
         Require(script.Contains("[string]$Token", StringComparison.Ordinal), "PowerShell client should expose -Token for authenticated control-plane calls");
         Require(script.Contains("AI_ARENA_CONTROL_TOKEN", StringComparison.Ordinal), "PowerShell client should support token injection through AI_ARENA_CONTROL_TOKEN");
         Require(script.Contains("Get-AIArenaControlToken", StringComparison.Ordinal), "PowerShell client should load the app-written token for debug calls");
@@ -1617,6 +1617,44 @@ internal static partial class Program
         {
             Require(!mainWindow.Contains($"case AIArenaControlCommands.{command}", StringComparison.Ordinal), $"MainWindow should not retain a duplicated {command} switch case");
         }
+    }
+
+    static void EmptyArgumentsAreNotMistakenForMissingOnes()
+    {
+        static AIArenaControlRequest Parse(string json)
+        {
+            Require(AIArenaControlPlaneProtocol.TryParseRequest(json, out var request, out var error), $"request should parse: {error}");
+            return request;
+        }
+
+        // Typing an empty string clears a field, so "" and "not supplied" are
+        // different instructions. OptionalString collapses both to null, which
+        // let shell.input.type accept a request carrying no text at all and
+        // silently wipe the target field - the failure mode of a mistyped
+        // argument name was destructive rather than an error.
+        var supplied = Parse("""{"id":"1","command":"shell.input.type","args":{"text":""}}""");
+        Require(AIArenaControlArguments.TryGetString(supplied, "text", out var empty), "an empty string is still an argument");
+        Require(empty.Length == 0, "an empty argument should read back empty");
+        Require(
+            AIArenaControlArguments.OptionalString(supplied, "text") is null,
+            "OptionalString still collapses empty to null, which is exactly why the presence-aware read exists");
+
+        var omitted = Parse("""{"id":"2","command":"shell.input.type","args":{}}""");
+        Require(!AIArenaControlArguments.TryGetString(omitted, "text", out _), "an omitted argument should report absent");
+
+        var nulled = Parse("""{"id":"3","command":"shell.input.type","args":{"text":null}}""");
+        Require(!AIArenaControlArguments.TryGetString(nulled, "text", out _), "an explicit null should count as absent");
+
+        var valued = Parse("""{"id":"4","command":"shell.input.type","args":{"text":"internet"}}""");
+        Require(
+            AIArenaControlArguments.TryGetString(valued, "text", out var text) && text == "internet",
+            "a real value should read back unchanged");
+
+        // And the dispatch must actually use it, or the distinction is academic.
+        var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+        Require(
+            dispatch.Contains("TryGetString(request, \"text\"", StringComparison.Ordinal),
+            "shell.input.type should read text with the presence-aware accessor");
     }
 
     static void ControlPlanePublishesRequiredEventVocabulary()

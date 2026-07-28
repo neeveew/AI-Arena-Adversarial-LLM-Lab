@@ -102,6 +102,10 @@ Set-AIArenaProviderConfig -ClearApiToken
 | `navigation.provider.focus` | `Invoke-AIArena navigation.provider.focus` | Optional `baseUrl`, `model` |
 | `navigation.rail.set` | `Set-AIArenaRightRail show` | `state`: `show`, `hide`, `toggle` |
 | `view.preset.set` | `Set-AIArenaViewPreset diagnostics` | `preset`: `focused`, `diagnostics`, `compact`, `review` |
+| `shell.palette.list` | `Get-AIArenaPalette` | none; lists the palette entries available on the current surface |
+| `shell.palette.run` | `Invoke-AIArenaPaletteCommand view.lab` | `id`: a palette entry id from `shell.palette.list` |
+| `shell.input.key` | `Send-AIArenaKey K -Modifiers ctrl` | `key`: `F2`, `k`, `1`, `Escape`; optional `modifiers`: `ctrl`, `shift`, `alt`, combined with `+` |
+| `shell.input.type` | `Set-AIArenaText 'internet' SettingsSearchText` | `text`; optional `target`: a named text field, defaulting to the focused one |
 
 ## Match Setup and settings
 
@@ -230,9 +234,52 @@ The other commands return the refreshed session/checkpoint inventory in `data`; 
 | `export.session` | `Export-AIArena session` | Returns a structured session snapshot. |
 | `export.receipts` | `Export-AIArena receipts` | Returns Agent evidence, outputs, Collaborate status, and provider readiness. |
 
+## Keyboard and text input
+
+`shell.input.key` and `shell.input.type` do not simulate operating-system input.
+A chord is passed to the same shell shortcut layer a keypress reaches, and text
+is written into the named field, both on the UI thread.
+
+This matters for background automation. Simulated keystrokes go to whichever
+window the operating system currently considers foreground, which for a
+background caller is frequently somebody else's application; a script that meant
+to press `Ctrl+K` in AI Arena can type into a browser instead. Routing through
+the app's own handlers removes the question: the window can be minimised, or
+behind another, and the command still lands where it was aimed.
+
+`shell.input.key` reports `handled`, so asking whether a chord is bound is a
+legitimate question rather than an error. `shell.palette.list` and
+`shell.palette.run` cover the command palette, which otherwise had no route but
+`Ctrl+K`; a palette entry runs the same handler its button runs, so it emits the
+same events.
+
 ## Events
 
-The event stream emits line-delimited JSON. Current event types:
+The event stream emits line-delimited JSON.
+
+Most shell events are reported whichever way the change happened. Opening Match
+Setup with `F2` or the top bar emits the same `shell.overlay.changed` as the
+`match.setup.open` command, and the same holds for navigation, the right rail,
+the theme, the transcript view preset, the Internet setting and diagnostic, and
+the arena run loop. Watching the stream therefore shows a person using the app,
+not only an operator driving it from a script. Earlier versions published these
+from the command handlers alone, so anything done by hand was invisible.
+
+Each change is still reported once, not once per route, and the publishers are
+gated on the state actually changing - resizing the window does not emit a run
+of `navigation.rail.changed`.
+
+Some events remain command-only because they describe a request that arrives
+with the command rather than shell state: `agent.command.staged`,
+`agent.command.approved`, `agent.command.rejected`, `agent.prompt.sent`,
+`agent.prompt.staged`, `agent.stop.requested`, `agent.runbook.resumed`,
+`agent.runbook.checkpointed`, `agent.workspace.changed`, `arena.operator.sent`,
+`arena.reset.completed`, `match.generation.changed`,
+`session.saved-state.changed`, and `navigation.provider.focused`. The equivalent
+UI gestures report themselves through the transcript and the Agent workspace
+instead.
+
+Current event types:
 
 - `events.connected`
 - `status.changed`

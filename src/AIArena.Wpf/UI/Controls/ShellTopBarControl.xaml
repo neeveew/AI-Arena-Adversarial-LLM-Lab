@@ -687,6 +687,18 @@
                                 ToolTip="Export transcript (Ctrl+E)">
                             <TextBlock Text="&#xE8E5;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="13" />
                         </Button>
+                        <!-- The palette was reachable only by Ctrl+K, which meant
+                             the feature built to make everything findable could
+                             not itself be found. -->
+                        <Button x:Name="TopCommandPaletteButton"
+                                Click="CommandPaletteRequested"
+                                Style="{StaticResource TopIconButton}"
+                                Margin="0"
+                                AutomationProperties.Name="Open the command palette"
+                                AutomationProperties.HelpText="Search everything the shell can do. Keyboard shortcut Control+K."
+                                ToolTip="Commands (Ctrl+K)">
+                            <TextBlock Text="&#xE71D;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="14" />
+                        </Button>
                         <Button x:Name="TopUserGuideButton"
                                 Click="UserGuideRequested"
                                 Style="{StaticResource TopIconButton}"

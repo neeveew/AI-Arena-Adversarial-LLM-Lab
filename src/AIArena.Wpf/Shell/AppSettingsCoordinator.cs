@@ -60,8 +60,23 @@ internal sealed class AppSettingsCoordinator
     /// </summary>
     public Action<bool>? VisibilityChanged { get; set; }
 
+    /// <summary>
+    /// Raised just before the overlay becomes visible, so the host can dismiss
+    /// anything it should not share the window with.
+    ///
+    /// Opening Match Setup already hides these settings; the reverse was never
+    /// implemented, so settings opened on top of Match Setup and clipped it,
+    /// leaving its close button and footer behind the panel and unreachable.
+    /// </summary>
+    public Action? Opening { get; set; }
+
     public void SetVisible(bool visible)
     {
+        if (visible)
+        {
+            Opening?.Invoke();
+        }
+
         shellNavigation.SetAppSettingsVisible(visible);
         if (visible)
         {

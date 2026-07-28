@@ -51,6 +51,11 @@ if (-not (Test-Path $exe)) {
 $shots = @(
     @{ Name = 'screenshot-transcript.png';   Theme = 'dark-blue'; Setup = { Select-AIArenaView 'arena' | Out-Null } }
     @{ Name = 'screenshot-custom-match.png'; Theme = 'dark-blue'; Setup = { Open-AIArenaMatchSetup | Out-Null } }
+    # The palette is a dialog. It reaches the capture because the screenshot
+    # composites open dialogs over the window, and it opens without focus
+    # because the chord is routed through the shell handlers rather than
+    # simulated at the operating-system level.
+    @{ Name = 'screenshot-command-palette.png'; Theme = 'dark-blue'; Setup = { Select-AIArenaView 'arena' | Out-Null; Send-AIArenaKey K -Modifiers ctrl | Out-Null } }
     @{ Name = 'screenshot-light.png';        Theme = 'light';     Setup = { Select-AIArenaView 'arena' | Out-Null } }
 )
 

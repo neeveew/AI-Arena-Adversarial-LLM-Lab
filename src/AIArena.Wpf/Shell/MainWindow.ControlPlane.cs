@@ -146,6 +146,19 @@ public partial class MainWindow
                         return AIArenaControlResponse.Error(request, "missing_argument", "navigation.theme.set requires args.theme or args.themeId.");
                     }
 
+                    // Validated before normalizing. NormalizeId substitutes a
+                    // default for anything it does not recognise, so a typo used
+                    // to report success while switching the reader to a theme
+                    // nobody asked for - light became dark-blue and the response
+                    // said "AI Arena theme changed."
+                    if (!ThemePalette.IsKnownId(theme))
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "invalid_argument",
+                            $"navigation.theme.set requires a known theme: {string.Join(", ", ThemePalette.KnownIds)}.");
+                    }
+
                     var themeId = ThemePalette.NormalizeId(theme);
                     // ApplyTheme announces this for both routes.
                     ShellNavigation.ApplyTheme(themeId, persist: true, rerender: true);
@@ -191,6 +204,46 @@ public partial class MainWindow
 
                     // The preset methods announce this for both routes.
                     return AIArenaControlResponse.Success(request, "Transcript view preset changed.", new { preset });
+                }
+            case AIArenaControlCommands.ShellPaletteList:
+                return AIArenaControlResponse.Success(request, "Command palette captured.", ControlListPaletteCommands());
+            case AIArenaControlCommands.ShellPaletteRun:
+                {
+                    var id = RequiredStringArg(request, "id");
+                    if (string.IsNullOrWhiteSpace(id))
+                    {
+                        return AIArenaControlResponse.Error(request, "missing_argument", "shell.palette.run requires args.id.");
+                    }
+
+                    // No publish here either: a palette entry runs the same
+                    // handler a button runs, and those announce themselves.
+                    var run = ControlRunPaletteCommand(id);
+                    return run.Ok
+                        ? AIArenaControlResponse.Success(request, run.Message, ControlListPaletteCommands())
+                        : AIArenaControlResponse.Error(request, "not_available", run.Message, ControlListPaletteCommands());
+                }
+            case AIArenaControlCommands.ShellInputKey:
+                {
+                    var sent = ControlSendKey(RequiredStringArg(request, "key"), OptionalStringArg(request, "modifiers"));
+                    return sent.Ok
+                        ? AIArenaControlResponse.Success(request, sent.Message, sent.State)
+                        : AIArenaControlResponse.Error(request, sent.ErrorCode, sent.Message, sent.State);
+                }
+            case AIArenaControlCommands.ShellInputType:
+                {
+                    // Absent and empty have to be told apart here. Empty is a
+                    // legitimate value - it clears the field - so defaulting a
+                    // missing argument to empty silently wiped the target for
+                    // any caller who mistyped the argument name.
+                    if (!AIArenaControlArguments.TryGetString(request, "text", out var textArg))
+                    {
+                        return AIArenaControlResponse.Error(request, "missing_argument", "shell.input.type requires args.text.");
+                    }
+
+                    var typed = ControlTypeText(OptionalStringArg(request, "target"), textArg);
+                    return typed.Ok
+                        ? AIArenaControlResponse.Success(request, typed.Message, typed.State)
+                        : AIArenaControlResponse.Error(request, typed.ErrorCode, typed.Message, typed.State);
                 }
             case AIArenaControlCommands.MatchGenerationState:
                 return AIArenaControlResponse.Success(
@@ -321,7 +374,25 @@ public partial class MainWindow
                     }
 
                     AgentWorkspace.ControlSetWorkspace(path);
-                    _controlPlaneEvents.Publish("agent.workspace.changed", "Agent workspace changed.", new { path = AgentWorkspace.DebugWorkspacePath });
+
+                    // The workspace itself already refuses anything that is not
+                    // an existing directory, and clears rather than keeping a
+                    // bad value. What it could not do was say so: the command
+                    // answered "Agent workspace updated." either way, so a
+                    // caller that pointed at a typo, a file, or a folder that
+                    // had been moved was told it had succeeded while the
+                    // workspace was quietly emptied.
+                    var applied = AgentWorkspace.DebugWorkspacePath;
+                    if (!string.Equals(applied.Trim(), path.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "invalid_argument",
+                            $"agent.workspace.set requires an existing directory: '{path}'.",
+                            AgentWorkspace.ControlState);
+                    }
+
+                    _controlPlaneEvents.Publish("agent.workspace.changed", "Agent workspace changed.", new { path = applied });
                     return AIArenaControlResponse.Success(request, "Agent workspace updated.", AgentWorkspace.ControlState);
                 }
             case AIArenaControlCommands.AgentSend:
@@ -374,19 +445,15 @@ public partial class MainWindow
                 }
             case AIArenaControlCommands.ArenaStart:
                 _ = ArenaRun.StartAutoChatAsync();
-                _controlPlaneEvents.Publish("arena.run.started", "Arena auto-chat start requested.");
                 return AIArenaControlResponse.Success(request, "Arena auto-chat start requested.", BuildControlPlaneSnapshot());
             case AIArenaControlCommands.ArenaStop:
                 ArenaRun.StopAutoChat();
-                _controlPlaneEvents.Publish("arena.run.stopped", "Arena auto-chat stop requested.");
                 return AIArenaControlResponse.Success(request, "Arena auto-chat stop requested.", BuildControlPlaneSnapshot());
             case AIArenaControlCommands.ArenaTurn:
                 await ArenaRun.RunOneTurnAsync();
-                _controlPlaneEvents.Publish("arena.turn.completed", "Arena one-turn request completed.");
                 return AIArenaControlResponse.Success(request, "Arena one-turn request completed.", BuildControlPlaneSnapshot());
             case AIArenaControlCommands.ArenaNarrate:
                 await ArenaRun.NarrateNowAsync();
-                _controlPlaneEvents.Publish("arena.narration.completed", "Arena narration request completed.");
                 return AIArenaControlResponse.Success(request, "Arena narration request completed.", BuildControlPlaneSnapshot());
             case AIArenaControlCommands.ArenaReset:
                 if (!OptionalBoolArg(request, "confirm"))
@@ -429,12 +496,10 @@ public partial class MainWindow
                     }
 
                     await InternetWorkflow.ControlSetEnabledAsync(enabled);
-                    _controlPlaneEvents.Publish("internet.changed", "Internet setting changed.", InternetWorkflow.ControlState);
                     return AIArenaControlResponse.Success(request, "Internet setting changed.", InternetWorkflow.ControlState);
                 }
             case AIArenaControlCommands.InternetTest:
                 await InternetWorkflow.TestInternetAsync();
-                _controlPlaneEvents.Publish("internet.test.completed", "Internet diagnostic completed.", InternetWorkflow.ControlState);
                 return AIArenaControlResponse.Success(request, "Internet diagnostic completed.", InternetWorkflow.ControlState);
             case AIArenaControlCommands.ExportTranscript:
                 return AIArenaControlResponse.Success(request, "Transcript export captured.", BuildTranscriptControlExport());

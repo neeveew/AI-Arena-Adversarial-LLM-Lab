@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Threading;
 using AIArena.Wpf.Services;
 
 namespace AIArena.Wpf;
@@ -11,13 +12,130 @@ public partial class MainWindow
     // handler the button or shortcut calls, so there is one behaviour per
     // action and the palette cannot drift away from the UI.
 
+    // Most-recently-used ids, newest first. Kept for the session rather than
+    // persisted: the point is that the handful of things you are doing right now
+    // stay at the top, and that intent rarely survives a restart.
+    private readonly List<string> _recentCommandIds = [];
+
+    private const int RecentCommandLimit = 8;
+
+    /// <summary>
+    /// The dialog is opened on the next dispatcher pass rather than inline.
+    /// ShowDialog runs a nested message loop and does not return until the
+    /// palette closes, so opening it inline meant a control-plane caller sending
+    /// Ctrl+K waited for a human to dismiss a dialog and timed out instead. For
+    /// someone actually pressing the key the extra pass is imperceptible.
+    ///
+    /// Any future shortcut that opens a modal needs the same treatment.
+    /// </summary>
+    private bool _paletteOpen;
+
     private void ShowCommandPalette()
     {
-        var chosen = CommandPaletteDialog.Show(this, _theme, BuildShellCommands());
+        // Toggling closed matches F2 on Match Setup, and it gives the control
+        // plane a way to dismiss a palette it opened: a chord sent over the pipe
+        // reaches the shell handler, not the focused dialog, so Escape alone
+        // could not close one.
+        if (_paletteOpen)
+        {
+            foreach (var open in Application.Current.Windows.OfType<CommandPaletteDialog>().ToList())
+            {
+                open.Close();
+            }
+
+            return;
+        }
+
+        Dispatcher.BeginInvoke(new Action(OpenCommandPalette), DispatcherPriority.Background);
+    }
+
+    private void OpenCommandPalette()
+    {
+        // Deferring the open made duplicates possible: three quick Ctrl+K
+        // presses queued three opens before the first had run, and stacked three
+        // modals. The flag is checked here rather than only in ShowCommandPalette
+        // because at queue time none of them has opened anything yet.
+        if (_paletteOpen)
+        {
+            return;
+        }
+
+        _paletteOpen = true;
+        try
+        {
+            OpenCommandPaletteCore();
+        }
+        finally
+        {
+            _paletteOpen = false;
+        }
+    }
+
+    private void OpenCommandPaletteCore()
+    {
+        var chosen = CommandPaletteDialog.Show(this, _theme, BuildShellCommands(), _recentCommandIds);
+        if (chosen is null)
+        {
+            return;
+        }
+
+        _recentCommandIds.Remove(chosen.Id);
+        _recentCommandIds.Insert(0, chosen.Id);
+        if (_recentCommandIds.Count > RecentCommandLimit)
+        {
+            _recentCommandIds.RemoveRange(RecentCommandLimit, _recentCommandIds.Count - RecentCommandLimit);
+        }
 
         // Invoked after the dialog closes so an action is free to open another
         // window without fighting a modal that is still up.
-        chosen?.Invoke();
+        chosen.Invoke();
+    }
+
+    /// <summary>
+    /// The palette's contents, for the control plane. Everything else in the
+    /// shell can be driven without focus; the palette could only be reached by
+    /// simulating Ctrl+K, and simulated keystrokes follow whatever window the
+    /// operating system considers foreground rather than the one you meant.
+    /// </summary>
+    internal object ControlListPaletteCommands()
+    {
+        var available = ShellCommandPalette.Filter(BuildShellCommands(), "", _recentCommandIds);
+        return new
+        {
+            surface = SelectedControlPlaneView(),
+            count = available.Count,
+            commands = available
+                .Select(command => new { command.Id, command.Title, command.Group, command.Keys })
+                .ToList()
+        };
+    }
+
+    internal (bool Ok, string Message) ControlRunPaletteCommand(string id)
+    {
+        var match = BuildShellCommands().FirstOrDefault(
+            command => command.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+        {
+            return (false, $"No palette command with id '{id}'.");
+        }
+
+        // Gated commands are refused rather than forced: the gate is the same one
+        // that hides them in the palette, and running Stop on a surface that has
+        // nothing running is not a thing the reader could have asked for.
+        if (!match.Available)
+        {
+            return (false, $"Palette command '{id}' is not available on the current surface.");
+        }
+
+        _recentCommandIds.Remove(match.Id);
+        _recentCommandIds.Insert(0, match.Id);
+        if (_recentCommandIds.Count > RecentCommandLimit)
+        {
+            _recentCommandIds.RemoveRange(RecentCommandLimit, _recentCommandIds.Count - RecentCommandLimit);
+        }
+
+        match.Invoke();
+        return (true, $"Palette command '{match.Title}' ran.");
     }
 
     private IReadOnlyList<ShellCommand> BuildShellCommands()
@@ -122,9 +240,67 @@ public partial class MainWindow
                 ShowShortcutsOverlay)
         };
 
+        AddSurfaceCommands(commands);
         AddViewPresetCommands(commands);
         AddThemeCommands(commands);
         return commands;
+    }
+
+    /// <summary>
+    /// Actions that only mean something on one surface. They are gated rather
+    /// than always listed, so the palette does not offer to stop a Collaborate
+    /// run while you are looking at the transcript.
+    ///
+    /// Reset is deliberately absent. It stays a pointer action for the same
+    /// reason it has no keyboard shortcut: nothing that discards a run should be
+    /// two keystrokes away from a search box.
+    /// </summary>
+    private void AddSurfaceCommands(List<ShellCommand> commands)
+    {
+        commands.Add(new ShellCommand(
+            "arena.narrate",
+            "Narrate the match now",
+            "Match",
+            "",
+            "narrator commentary observe",
+            () => _ = ArenaRun.NarrateNowAsync(),
+            () => _activeShellSurface == ShellSurface.Lab && NarrateNowButton.IsEnabled));
+
+        commands.Add(new ShellCommand(
+            "arena.speak",
+            "Speak the latest narrator message",
+            "Match",
+            "",
+            "voice tts read aloud",
+            () => SpeakLatestNarratorButton_Click(SpeakLatestNarratorButton, new RoutedEventArgs()),
+            () => _activeShellSurface == ShellSurface.Lab && SpeakLatestNarratorButton.IsEnabled));
+
+        commands.Add(new ShellCommand(
+            "collaborate.new",
+            "Start a new Collaborate chat",
+            "Collaborate",
+            "",
+            "fresh clear conversation",
+            () => CollaborateNewChatButton_Click(CollaborateNewChatButton, new RoutedEventArgs()),
+            () => _activeShellSurface == ShellSurface.Collaborate));
+
+        commands.Add(new ShellCommand(
+            "collaborate.stop",
+            "Stop the Collaborate run",
+            "Collaborate",
+            "",
+            "cancel halt",
+            () => CollaborateStopButton_Click(CollaborateStopButton, new RoutedEventArgs()),
+            () => _activeShellSurface == ShellSurface.Collaborate && CollaborateStopButton.IsEnabled));
+
+        commands.Add(new ShellCommand(
+            "agent.clear-history",
+            "Clear the Agent command history",
+            "Agent",
+            "",
+            "commands log wipe",
+            () => AgentClearHistoryButton_Click(AgentClearHistoryButton, new RoutedEventArgs()),
+            () => _activeShellSurface == ShellSurface.Agent && IsAgentWorkspaceEnabled(_wpfSettings)));
     }
 
     private void AddViewPresetCommands(List<ShellCommand> commands)

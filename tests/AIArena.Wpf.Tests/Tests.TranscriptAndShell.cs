@@ -2829,6 +2829,26 @@ static void TruncateRespectsItsLimitAndSuffix()
     // A limit shorter than the suffix cannot carry one, and must still not overshoot.
     var tiny = ShellUiHelpers.Truncate("abcdefgh", 2, ShellUiHelpers.TruncatedNoticeSuffix);
     Require(tiny.Length <= 2, $"a limit below the suffix length must still cap, got {tiny.Length}");
+
+    // CompactPreview was missed by that consolidation. It cut at the limit and
+    // then appended three more characters, so it returned maxLength + 3 and
+    // ended in "..." while everything else had settled on one ellipsis.
+    var preview = ShellUiHelpers.CompactPreview(new string('c', 400), 155, "(empty)");
+    Require(preview.Length == 155, $"CompactPreview must respect the same hard cap, got {preview.Length}");
+    Require(
+        preview.EndsWith(ShellUiHelpers.EllipsisSuffix, StringComparison.Ordinal),
+        "CompactPreview should end the way every other shortened string does");
+
+    // Its own behaviour still has to hold: newlines flattened, blank replaced.
+    Require(
+        ShellUiHelpers.CompactPreview("first\r\nsecond", 100, "(empty)") == "first second",
+        "CompactPreview should flatten line breaks into single spaces");
+    Require(
+        ShellUiHelpers.CompactPreview("   ", 100, "(empty)") == "(empty)",
+        "blank text should fall back");
+    Require(
+        ShellUiHelpers.CompactPreview("short", 100, "(empty)") == "short",
+        "text within the limit should be untouched");
 }
 
 static void SessionPickerHidesEmptySessionsWithoutLosingReach()
@@ -3688,6 +3708,504 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
     });
 }
 
+static void RejectedWorkspacePathsAreReportedAsFailures()
+{
+    // The workspace already refused anything that was not an existing
+    // directory, and cleared rather than keeping a bad value. What it could not
+    // do was say so: the command answered "Agent workspace updated." either
+    // way, so pointing at a typo, a file, or a folder that had since moved
+    // reported success while the workspace was quietly emptied.
+    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    var start = dispatch.IndexOf("case AIArenaControlCommands.AgentWorkspaceSet", StringComparison.Ordinal);
+    Require(start >= 0, "the workspace command should remain discoverable");
+    var next = dispatch.IndexOf("case AIArenaControlCommands.", start + 10, StringComparison.Ordinal);
+    var body = dispatch[start..(next > start ? next : dispatch.Length)];
+
+    Require(
+        body.Contains("DebugWorkspacePath", StringComparison.Ordinal),
+        "the command should read back what the workspace actually accepted");
+    Require(
+        body.Contains("invalid_argument", StringComparison.Ordinal),
+        "a path the workspace refused should be reported as a failure");
+
+    // The success path must still publish, and only on success, or a refused
+    // path would announce a change that never happened.
+    var publish = body.IndexOf("agent.workspace.changed", StringComparison.Ordinal);
+    var reject = body.IndexOf("invalid_argument", StringComparison.Ordinal);
+    Require(publish > reject, "the change should be announced only after the path is known to have applied");
+}
+
+static void ProviderErrorTextCannotBeAWholeWebPage()
+{
+    // These strings land in status lines and failure dialogs. A body that is not
+    // JSON - an HTML error page from a proxy, or from a base URL pointing at
+    // something that is not a provider - was returned whole, so a 502 page
+    // arrived in the UI intact. The app lets you type any base URL, so this is
+    // an ordinary misconfiguration rather than a contrived one.
+    var page = "<html><body>" + new string('x', 5000) + "</body></html>";
+    var capped = LmStudioJsonMessageExtractor.ExtractMessage(page, "error");
+    Require(
+        capped.Length <= LmStudioJsonMessageExtractor.MaxMessageLength,
+        $"a non-JSON body must be capped, got {capped.Length}");
+    Require(
+        capped.EndsWith(LmStudioJsonMessageExtractor.TruncationNotice, StringComparison.Ordinal),
+        "a shortened provider error should say it was cut rather than just stopping");
+
+    // A provider that returns a huge message inside valid JSON gets the same cap.
+    var longJson = JsonSerializer.Serialize(new { error = new string('y', 5000) });
+    var cappedJson = LmStudioJsonMessageExtractor.ExtractMessage(longJson, "error");
+    Require(
+        cappedJson.Length <= LmStudioJsonMessageExtractor.MaxMessageLength,
+        $"a long JSON message must be capped too, got {cappedJson.Length}");
+
+    // Ordinary errors must survive untouched, or the cap has made things worse.
+    var normal = JsonSerializer.Serialize(new { error = "Model not found." });
+    Require(
+        LmStudioJsonMessageExtractor.ExtractMessage(normal, "error") == "Model not found.",
+        "a real error message should pass through unchanged");
+    Require(
+        LmStudioJsonMessageExtractor.ExtractMessage("", "error") == "",
+        "an empty body should stay empty");
+
+    // Deep nesting is handled by the parser's own depth limit rather than by
+    // recursing until the stack gives out: it throws, and the fallback catches.
+    var deep = string.Concat(Enumerable.Repeat("{\"a\":", 200)) + "1" + string.Concat(Enumerable.Repeat("}", 200));
+    var deepResult = LmStudioJsonMessageExtractor.ExtractMessage(deep, "error");
+    Require(
+        deepResult.Length <= LmStudioJsonMessageExtractor.MaxMessageLength,
+        "a document too deep to parse should still produce a bounded message");
+}
+
+static void GenerationRefusesUnknownOptionsInsteadOfSubstituting()
+{
+    // Generation validated length and nothing else, so an unrecognised style
+    // reached the generator and was quietly replaced by its default: asking for
+    // a misspelled style produced a balanced match, replaced the scenario and
+    // cast, and answered "Random Seed generated". Generation is destructive, so
+    // a typo has to be refused rather than reinterpreted.
+    Require(!MatchGenerationService.TryNormalizeStyle("totally-not-a-style", out _), "an unknown style should be refused");
+    Require(!MatchGenerationService.TryNormalizeIntensity("nope", out _), "an unknown intensity should be refused");
+    Require(!MatchGenerationService.TryNormalizeRolePack("nope", out _), "an unknown role pack should be refused");
+    Require(!MatchGenerationService.TryNormalizeAbsurdity("nope", out _), "an unknown absurdity should be refused");
+
+    // Blank means "unspecified" and has to keep working, or every caller that
+    // omits an option starts failing.
+    foreach (var blank in new[] { "", "   ", (string?)null })
+    {
+        Require(MatchGenerationService.TryNormalizeStyle(blank, out _), "a blank style means unspecified");
+        Require(MatchGenerationService.TryNormalizeIntensity(blank, out _), "a blank intensity means unspecified");
+        Require(MatchGenerationService.TryNormalizeRolePack(blank, out _), "a blank role pack means unspecified");
+        Require(MatchGenerationService.TryNormalizeAbsurdity(blank, out _), "a blank absurdity means unspecified");
+    }
+
+    // The aliases are the reason validation shares the generator's mapping
+    // rather than keeping its own list: a second list would drift and start
+    // rejecting input that has always worked.
+    Require(
+        MatchGenerationService.TryNormalizeRolePack("legal", out var legal) && legal == "legal_policy",
+        "'legal' is a real alias for the legal_policy pack");
+    Require(
+        MatchGenerationService.TryNormalizeRolePack("redteam", out var red) && red == "red_team",
+        "'redteam' is a real alias for the red_team pack");
+    Require(
+        MatchGenerationService.TryNormalizeAbsurdity("max", out var max) && max == "maximum",
+        "'max' is a real alias for maximum absurdity");
+    Require(
+        MatchGenerationService.TryNormalizeStyle("auto", out _),
+        "'auto' is a legitimate style request, not a typo");
+    Require(
+        MatchGenerationService.TryNormalizeIntensity("SHARP", out var sharp) && sharp == "sharp",
+        "case should not decide whether an option is real");
+
+    var service = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ScenarioGenerationControlService.cs"));
+    foreach (var option in new[] { "TryNormalizeStyle", "TryNormalizeIntensity", "TryNormalizeRolePack", "TryNormalizeAbsurdity" })
+    {
+        Require(
+            service.Contains(option, StringComparison.Ordinal),
+            $"generation should validate with {option} before running");
+    }
+}
+
+static void AnUnknownThemeIsRefusedRatherThanSubstituted()
+{
+    // navigation.theme.set normalized before validating, and NormalizeId is
+    // deliberately total: it substitutes a default for anything it does not
+    // recognise so an old settings file still opens. Used on a caller's input
+    // that turned a typo into a silent theme change - asking for a misspelled
+    // name moved the reader from light to dark-blue and answered "AI Arena
+    // theme changed."
+    Require(ThemePalette.IsKnownId("dark-blue"), "a real id should be accepted");
+    Require(ThemePalette.IsKnownId("  Light  "), "ids should survive trimming and case");
+    Require(ThemePalette.IsKnownId("system"), "system is a legitimate choice, not a built-in palette");
+    Require(!ThemePalette.IsKnownId("totally-not-a-theme"), "an unknown id should be refused");
+    Require(!ThemePalette.IsKnownId(""), "an empty id should be refused");
+    Require(!ThemePalette.IsKnownId(null), "a missing id should be refused");
+
+    // NormalizeId keeps substituting, which is right for reading persisted state.
+    Require(
+        ThemePalette.NormalizeId("totally-not-a-theme") != "totally-not-a-theme",
+        "NormalizeId should still fall back, since a settings file may name a theme this build dropped");
+
+    Require(ThemePalette.KnownIds.Count > 0, "there should be ids to offer");
+    Require(
+        ThemePalette.KnownIds.Distinct(StringComparer.OrdinalIgnoreCase).Count() == ThemePalette.KnownIds.Count,
+        "the offered list is shown to the reader, so it must not repeat itself");
+    Require(
+        ThemePalette.KnownIds.All(ThemePalette.IsKnownId),
+        "every offered id must actually be accepted");
+
+    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    // Bounded by the next case rather than a character count, so adding a
+    // comment to this branch cannot push the code being checked out of view.
+    var themeCase = dispatch.IndexOf("case AIArenaControlCommands.NavigationThemeSet", StringComparison.Ordinal);
+    Require(themeCase >= 0, "the theme command should remain discoverable");
+    var nextCase = dispatch.IndexOf("case AIArenaControlCommands.", themeCase + 10, StringComparison.Ordinal);
+    var body = dispatch[themeCase..(nextCase > themeCase ? nextCase : dispatch.Length)];
+    // Matched on the call syntax, not the bare names: the comment explaining
+    // this fix mentions NormalizeId before the check runs, and prose should not
+    // decide whether a guard passes.
+    var validate = body.IndexOf("ThemePalette.IsKnownId(", StringComparison.Ordinal);
+    var normalize = body.IndexOf("ThemePalette.NormalizeId(", StringComparison.Ordinal);
+    Require(validate >= 0, "the theme id should be validated");
+    Require(normalize >= 0, "the theme id should still be normalized once accepted");
+    Require(
+        validate < normalize,
+        "the id has to be validated before it is normalized, or the substitution has already happened");
+}
+
+static void CrashesLeaveSomethingBehind()
+{
+    // The only diagnostics were Debug.WriteLine calls, which the compiler strips
+    // from the release build people actually run. An unhandled exception closed
+    // the window and left no dialog, no log and nothing to report - and the data
+    // root had a logs directory nothing had written to in months.
+    string? written = null;
+    try
+    {
+        Exception captured;
+        try
+        {
+            throw new InvalidOperationException("crash reporter self test");
+        }
+        catch (InvalidOperationException ex)
+        {
+            captured = ex;
+        }
+
+        written = CrashReporter.Write("SelfTest", captured);
+        Require(written is not null, "a crash report should be written");
+        Require(File.Exists(written!), "the reported path should exist");
+
+        var report = File.ReadAllText(written!);
+        Require(report.Contains("crash reporter self test", StringComparison.Ordinal), "the report should carry the exception message");
+        Require(report.Contains("SelfTest", StringComparison.Ordinal), "the report should say where the failure came from");
+        Require(report.Contains("InvalidOperationException", StringComparison.Ordinal), "the report should carry the exception type");
+        Require(report.Contains("AI Arena", StringComparison.Ordinal), "the report should identify the build");
+
+        // A handler that throws turns a diagnosable failure into a mystery, so
+        // a null exception has to be survivable too.
+        var nullCase = CrashReporter.Write("SelfTest", null);
+        if (nullCase is not null && File.Exists(nullCase))
+        {
+            File.Delete(nullCase);
+        }
+    }
+    finally
+    {
+        if (written is not null && File.Exists(written))
+        {
+            File.Delete(written);
+        }
+    }
+
+    // A failing app rarely fails once, and the stamp is only accurate to the
+    // millisecond, so a cascade inside one millisecond used to write every
+    // report to the same name and leave only the last. The first is usually the
+    // interesting one.
+    var reportDir = Path.Combine(Path.GetTempPath(), $"ai-arena-crash-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(reportDir);
+    try
+    {
+        var stamp = new DateTime(2026, 7, 28, 12, 0, 0, 500);
+        var paths = new List<string>();
+        for (var i = 0; i < 4; i++)
+        {
+            var path = CrashReporter.UniquePath(reportDir, stamp);
+            File.WriteAllText(path, "report");
+            paths.Add(path);
+        }
+
+        Require(
+            paths.Distinct(StringComparer.OrdinalIgnoreCase).Count() == paths.Count,
+            "reports written in the same millisecond must not overwrite one another");
+        Require(
+            Directory.GetFiles(reportDir, "crash-*.log").Length == 4,
+            "every report in a cascade should survive");
+    }
+    finally
+    {
+        try
+        {
+            Directory.Delete(reportDir, recursive: true);
+        }
+        catch
+        {
+        }
+    }
+
+    // And the handlers have to actually be installed, or none of the above runs.
+    var app = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/App.xaml.cs"));
+
+    // The message box is modal and pumps messages, and Shutdown runs OnExit on
+    // the same dispatcher, so a failure during either would re-enter the handler
+    // and stack a second dialog on the first.
+    Require(
+        app.Contains("Interlocked.Exchange(ref crashReported", StringComparison.Ordinal),
+        "only the first crash should raise a dialog and ask for shutdown");
+    foreach (var hook in new[] { "DispatcherUnhandledException", "AppDomain.CurrentDomain.UnhandledException", "TaskScheduler.UnobservedTaskException" })
+    {
+        Require(app.Contains(hook, StringComparison.Ordinal), $"{hook} should be handled");
+    }
+
+    Require(
+        app.IndexOf("InstallCrashHandlers()", StringComparison.Ordinal)
+            < app.IndexOf("SessionStore.ProtectSecret", StringComparison.Ordinal),
+        "the handlers should be installed before the rest of startup can fail");
+}
+
+static void NarrowingTheWindowDoesNotHideTheRailForGood()
+{
+    // Once the window is wide again the effective state is decided by the latch
+    // alone, and the resize handler only ever set it. Narrowing the window once
+    // therefore hid the right rail for good: the preference said expanded, the
+    // latch said collapsed, nothing announced the change, and only a toggle
+    // could break the tie.
+    Require(
+        !MainWindow.IsRightRailEffectivelyCollapsed(false, false, false, false),
+        "wide window, expanded preference, no latch: the rail belongs on screen");
+    Require(
+        MainWindow.IsRightRailEffectivelyCollapsed(false, true, false),
+        "a narrow window collapses the rail even while the preference says expanded");
+    Require(
+        !MainWindow.IsRightRailEffectivelyCollapsed(false, true, true),
+        "asking for it by hand while narrow should reveal it");
+    Require(
+        MainWindow.IsRightRailEffectivelyCollapsed(true, false, false),
+        "an explicit preference to collapse still wins at any width");
+
+    // This is the state the bug left behind, and it is still reachable if the
+    // latch is ever left set while wide - which is what the guard below prevents.
+    Require(
+        MainWindow.IsRightRailEffectivelyCollapsed(false, false, false, widthCollapseLatched: true),
+        "a latch left set while wide hides the rail, which is why it must be cleared");
+
+    var shell = ReadMainWindowSource();
+    var sizeChanged = shell.IndexOf("private void MainWindow_SizeChanged", StringComparison.Ordinal);
+    Require(sizeChanged >= 0, "the resize handler should remain discoverable");
+    var body = shell[sizeChanged..Math.Min(shell.Length, sizeChanged + 1400)];
+    Require(
+        body.Contains("_rightRailWidthCollapseLatched = autoCollapse", StringComparison.Ordinal),
+        "the latch has to track the narrow range in both directions, not just on the way in");
+}
+
+static void SettingsAndMatchSetupDoNotShareTheWindow()
+{
+    // Opening Match Setup has always hidden settings. The mirror image was
+    // never implemented, so opening settings over Match Setup left both up:
+    // the settings panel covered Match Setup's close button and footer, and the
+    // only way out was to close settings first. The asymmetry was the tell -
+    // one direction had a deliberate hide, the other had nothing.
+    var settings = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/AppSettingsCoordinator.cs"));
+    Require(
+        settings.Contains("Opening?.Invoke()", StringComparison.Ordinal),
+        "the settings overlay should announce that it is about to open");
+
+    var setVisible = settings.IndexOf("public void SetVisible", StringComparison.Ordinal);
+    Require(setVisible >= 0, "SetVisible should remain the single visibility path");
+    var body = settings[setVisible..Math.Min(settings.Length, setVisible + 400)];
+    Require(
+        body.IndexOf("Opening?.Invoke()", StringComparison.Ordinal)
+            < body.IndexOf("SetAppSettingsVisible", StringComparison.Ordinal),
+        "the host needs to dismiss the other overlay before this one is shown, not after");
+
+    var shell = ReadMainWindowSource();
+    Require(
+        shell.Contains("appSettings.Opening", StringComparison.Ordinal)
+            && shell.Contains("CloseMatchSetupFlyout()", StringComparison.Ordinal),
+        "opening settings should close Match Setup, mirroring what Match Setup already does");
+}
+
+static void ScreenshotsAndModalsDoNotMisreportTheApp()
+{
+    // Two failures that both produced a confident wrong answer rather than an
+    // obvious error, which is the worst shape a verification tool can have.
+    //
+    // RenderTargetBitmap walks one visual tree, so capturing the window alone
+    // returned an image with no dialog in it while a dialog was plainly on
+    // screen. Anyone checking a dialog against that image concluded it had
+    // never opened.
+    var screenshot = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaScreenshotControlService.cs"));
+    Require(
+        screenshot.Contains("RenderWithOpenDialogs", StringComparison.Ordinal),
+        "the screenshot should composite dialogs over the window");
+    Require(
+        screenshot.Contains("candidate.Owner, window", StringComparison.Ordinal),
+        "only dialogs owned by the shell window should be composited in");
+
+    // ShowDialog runs a nested message loop and does not return until the
+    // palette closes, so opening it inline made a control-plane Ctrl+K wait for
+    // a human and time out.
+    var palette = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.CommandPalette.cs"));
+    var showStart = palette.IndexOf("private void ShowCommandPalette", StringComparison.Ordinal);
+    Require(showStart >= 0, "the palette entry point should remain discoverable");
+
+    // Bounded by the next member, or the slice runs into OpenCommandPalette,
+    // which is supposed to contain the call being ruled out here.
+    var showEnd = palette.IndexOf("private void OpenCommandPalette", showStart, StringComparison.Ordinal);
+    Require(showEnd > showStart, "the deferred opener should remain discoverable");
+    var showBody = palette[showStart..showEnd];
+    Require(
+        showBody.Contains("BeginInvoke", StringComparison.Ordinal),
+        "the palette must open on a later dispatcher pass so a control-plane chord can return");
+    Require(
+        !showBody.Contains("CommandPaletteDialog.Show", StringComparison.Ordinal),
+        "ShowCommandPalette must not open the dialog inline again");
+
+    // Deferring the open made duplicates possible. Three quick Ctrl+K presses
+    // queued three opens before the first had run and stacked three modals, and
+    // the control plane could not dismiss them: a chord sent over the pipe
+    // reaches the shell handler, not the focused dialog.
+    Require(
+        showBody.Contains("_paletteOpen", StringComparison.Ordinal),
+        "ShowCommandPalette should toggle a palette that is already open");
+    Require(
+        showBody.Contains("open.Close()", StringComparison.Ordinal),
+        "a second Ctrl+K should close the palette rather than stack another");
+
+    var openStart = palette.IndexOf("private void OpenCommandPalette", StringComparison.Ordinal);
+    var openEnd = palette.IndexOf("private void OpenCommandPaletteCore", openStart, StringComparison.Ordinal);
+    Require(openEnd > openStart, "the guarded opener should remain discoverable");
+    Require(
+        palette[openStart..openEnd].Contains("if (_paletteOpen)", StringComparison.Ordinal),
+        "the opener needs its own guard, because queued opens are dispatched before any of them has opened anything");
+
+    // Every shortcut that opens a modal needs this, not just the palette. F1 was
+    // missed the first time round: it opened a ConfirmDialog inline, so a
+    // control-plane F1 waited for a human and timed out, and repeats stacked
+    // dialogs nothing could close. This checks the whole set rather than one.
+    var shellSource = ReadMainWindowSource();
+    foreach (var opener in new[] { "ShowShortcutsOverlay", "ShowCommandPalette" })
+    {
+        var start = shellSource.IndexOf($"private void {opener}()", StringComparison.Ordinal);
+        Require(start >= 0, $"{opener} should remain discoverable");
+        var next = shellSource.IndexOf("private ", start + 20, StringComparison.Ordinal);
+        var openerBody = shellSource[start..(next > start ? next : shellSource.Length)];
+        Require(
+            openerBody.Contains("BeginInvoke", StringComparison.Ordinal),
+            $"{opener} must defer, or a control-plane chord that triggers it never returns");
+        Require(
+            openerBody.Contains(".Close()", StringComparison.Ordinal),
+            $"{opener} must be closable by repeating the chord, since the control plane cannot reach a focused dialog");
+    }
+}
+
+static void ControlPlaneKeyParsingAcceptsWhatPeopleWrite()
+{
+    // The control plane sends chords through the shell shortcut layer rather
+    // than simulating operating-system input, because simulated input goes to
+    // whichever window is foreground - which for a background caller is somebody
+    // else's application.
+    Require(MainWindow.TryParseShortcutKey("F2", out var f2) && f2 == Key.F2, "function keys should parse");
+    Require(MainWindow.TryParseShortcutKey("k", out var k) && k == Key.K, "letters should parse case-insensitively");
+    Require(MainWindow.TryParseShortcutKey(" Escape ", out var esc) && esc == Key.Escape, "surrounding space should not matter");
+
+    // A bare digit is what someone would write for Ctrl+1, and D1 is not a name
+    // anyone would guess.
+    Require(MainWindow.TryParseShortcutKey("1", out var one) && one == Key.D1, "a bare digit should map onto the D keys");
+
+    Require(!MainWindow.TryParseShortcutKey("", out _), "an empty key should be rejected");
+    Require(!MainWindow.TryParseShortcutKey("nonsense", out _), "an unknown key should be rejected rather than silently ignored");
+
+    var ctrlShift = MainWindow.ParseModifiers("ctrl+shift");
+    Require(ctrlShift.Control && ctrlShift.Shift && !ctrlShift.Alt, "ctrl+shift should parse");
+    var spaced = MainWindow.ParseModifiers("Control Alt");
+    Require(spaced.Control && spaced.Alt && !spaced.Shift, "spaces and the long name should work too");
+    var none = MainWindow.ParseModifiers(null);
+    Require(!none.Control && !none.Shift && !none.Alt, "no modifiers should mean no modifiers");
+
+    Require(MainWindow.DescribeChord(Key.K, true, false, false) == "Ctrl+K", "the chord should read back the way it was asked for");
+    Require(MainWindow.DescribeChord(Key.F2, false, false, false) == "F2", "an unmodified key needs no prefix");
+}
+
+static void EveryHumanDrivableEventHasASharedPublisher()
+{
+    // Events published only from the control-plane dispatch describe what an
+    // operator did through PowerShell and nothing else, so a watcher sees
+    // silence while a person uses the app. Anything a person can also trigger
+    // has to publish from the path both routes share.
+    //
+    // The list below is the deliberate exception: these are control-plane
+    // concepts, not shell state. Adding a new event to the dispatch fails this
+    // test until someone either gives it a shared publisher or writes down here
+    // why it cannot have one.
+    var controlPlaneOnly = new HashSet<string>(StringComparer.Ordinal)
+    {
+        // Staging, approving and rejecting a command, and sending an Agent or
+        // operator prompt, are all requests that arrive with the command. The
+        // equivalent UI gestures report themselves through the Agent workspace
+        // and transcript rather than through these.
+        "agent.command.staged",
+        "agent.command.approved",
+        "agent.command.rejected",
+        "agent.prompt.sent",
+        "agent.prompt.staged",
+        "agent.stop.requested",
+        "agent.runbook.resumed",
+        "agent.runbook.checkpointed",
+        "agent.workspace.changed",
+        "arena.operator.sent",
+        "arena.reset.completed",
+        "match.generation.changed",
+        "session.saved-state.changed",
+        "navigation.provider.focused"
+    };
+
+    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    var published = new HashSet<string>(StringComparer.Ordinal);
+    foreach (System.Text.RegularExpressions.Match match in
+             System.Text.RegularExpressions.Regex.Matches(dispatch, @"Publish\(""([^""]+)"""))
+    {
+        published.Add(match.Groups[1].Value);
+    }
+
+    Require(published.Count > 0, "the control-plane dispatch should still publish something");
+
+    var unexplained = published.Where(name => !controlPlaneOnly.Contains(name)).OrderBy(name => name).ToList();
+    Require(
+        unexplained.Count == 0,
+        $"these events publish only from the control-plane dispatch and need a shared publisher: {string.Join(", ", unexplained)}");
+
+    // The other half: the shell publishers must still be doing their job.
+    var shellEvents = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ShellEvents.cs"));
+    foreach (var name in new[]
+    {
+        "arena.run.started",
+        "arena.run.stopped",
+        "arena.turn.completed",
+        "arena.narration.completed",
+        "internet.changed",
+        "internet.test.completed"
+    })
+    {
+        Require(
+            shellEvents.Contains($"\"{name}\"", StringComparison.Ordinal),
+            $"{name} should publish from the shared path");
+        Require(
+            !published.Contains(name),
+            $"{name} must not also publish from the dispatch, or control-plane callers get it twice");
+    }
+}
+
 static void DependencyIndexCheckIgnoresLineEndings()
 {
     // The release gate compared the checked-in index against a freshly generated
@@ -3796,6 +4314,23 @@ static void CommandPaletteRanksMatchesPredictably()
 
     Require(ShellCommandPalette.Filter(commands, "SEARCH").Count == 1, "matching must be case-insensitive");
     Require(ShellCommandPalette.Filter(commands, "zzzz").Count == 0, "a query matching nothing should return nothing");
+
+    // Recency reorders the browse list, so the handful of things you are doing
+    // right now sit at the top when the palette opens.
+    var recent = new[] { "Open App Settings", "Theme: Dark Blue" };
+    var browsed = ShellCommandPalette.Filter(commands, "", recent);
+    Require(browsed[0].Title == "Open App Settings", "the most recent command should lead an empty query");
+    Require(browsed[1].Title == "Theme: Dark Blue", "recency order should be preserved");
+    Require(browsed.Count == 5, "recency must not drop or duplicate anything");
+    Require(browsed[2].Title == "Go to AI Lab", "everything else should keep its declared order");
+
+    // But it only ever breaks ties. Typing a command's exact name and watching
+    // something else sit above it is precisely the unpredictability this
+    // ranking exists to avoid.
+    var exactWithRecency = ShellCommandPalette.Filter(commands, "Go to AI Lab", recent);
+    Require(
+        exactWithRecency[0].Title == "Go to AI Lab",
+        "an exact match must outrank a more recently used command");
 
     // Titles beat incidental substrings: "set" starts a word in "Settings" and
     // in "Setup", but must not drag in unrelated rows.

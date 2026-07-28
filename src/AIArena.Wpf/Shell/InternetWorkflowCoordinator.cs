@@ -88,6 +88,15 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
 
     public bool IsEnabled => useInternetCheckBox.IsChecked == true;
 
+    /// <summary>
+    /// Raised after the Internet setting changes, whichever route changed it.
+    /// The control-plane path sets the checkbox, so both arrive here.
+    /// </summary>
+    public Action? EnabledChanged { get; set; }
+
+    /// <summary>Raised when a diagnostic run finishes, successfully or not.</summary>
+    public Action? DiagnosticCompleted { get; set; }
+
     public async Task ControlSetEnabledAsync(bool enabled)
     {
         if (useInternetCheckBox.IsChecked != enabled)
@@ -260,6 +269,10 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
                 }
 
                 testInternetButton.Content = "Test Internet";
+
+                // Only the latest run reports: a superseded diagnostic finishing
+                // late should not announce a result the reader already replaced.
+                DiagnosticCompleted?.Invoke();
             }
         }
     }
@@ -347,6 +360,7 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
         }
 
         UpdateSettingsHint();
+        EnabledChanged?.Invoke();
         if (!applyingSnapshot)
         {
             var sessionId = appliedSessionId;

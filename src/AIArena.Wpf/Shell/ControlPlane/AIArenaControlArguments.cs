@@ -31,6 +31,32 @@ internal static class AIArenaControlArguments
         return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
+    /// <summary>
+    /// Presence-aware string read: true when the caller supplied the argument at
+    /// all, even as an empty string.
+    ///
+    /// OptionalString collapses empty to null, which is right where blank means
+    /// "not given" and wrong wherever blank is a legitimate value. Typing an
+    /// empty string clears a field, so an omitted argument and a deliberately
+    /// empty one have to be told apart or a mistyped argument name silently
+    /// wipes the target.
+    /// </summary>
+    public static bool TryGetString(AIArenaControlRequest request, string name, out string value)
+    {
+        value = "";
+        if (request.Args is null
+            || !request.Args.TryGetValue(name, out var element)
+            || element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return false;
+        }
+
+        value = element.ValueKind == JsonValueKind.String
+            ? element.GetString() ?? ""
+            : element.ToString();
+        return true;
+    }
+
     public static bool TryOptionalBool(AIArenaControlRequest request, string name, out bool? result)
     {
         result = null;

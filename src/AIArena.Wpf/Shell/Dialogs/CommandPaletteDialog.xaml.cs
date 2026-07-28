@@ -10,13 +10,19 @@ namespace AIArena.Wpf;
 public partial class CommandPaletteDialog : Window
 {
     private readonly IReadOnlyList<ShellCommand> commands;
+    private readonly IReadOnlyList<string> recentIds;
 
-    private CommandPaletteDialog(Window owner, ThemePalette theme, IReadOnlyList<ShellCommand> commands)
+    private CommandPaletteDialog(
+        Window owner,
+        ThemePalette theme,
+        IReadOnlyList<ShellCommand> commands,
+        IReadOnlyList<string> recentIds)
     {
         InitializeComponent();
         DialogChrome.ImportOwnerResources(owner, this);
         DialogChrome.ApplyImplicitControlStyles(this);
         this.commands = commands;
+        this.recentIds = recentIds;
         ApplyTheme(theme);
         ApplyQuery("");
         DialogChrome.PrepareModalWindow(
@@ -37,15 +43,19 @@ public partial class CommandPaletteDialog : Window
     /// </summary>
     // Internal rather than public: the class itself has to be public for the
     // generated XAML partial, but ShellCommand is an internal shell concept.
-    internal static ShellCommand? Show(Window owner, ThemePalette theme, IReadOnlyList<ShellCommand> commands)
+    internal static ShellCommand? Show(
+        Window owner,
+        ThemePalette theme,
+        IReadOnlyList<ShellCommand> commands,
+        IReadOnlyList<string> recentIds)
     {
-        var dialog = new CommandPaletteDialog(owner, theme, commands);
+        var dialog = new CommandPaletteDialog(owner, theme, commands, recentIds);
         return dialog.ShowDialog() == true ? dialog.Chosen : null;
     }
 
     private void ApplyQuery(string query)
     {
-        var matches = ShellCommandPalette.Filter(commands, query);
+        var matches = ShellCommandPalette.Filter(commands, query, recentIds);
         ResultsList.ItemsSource = matches;
         if (matches.Count > 0)
         {
@@ -107,9 +117,42 @@ public partial class CommandPaletteDialog : Window
         ResultsList.ScrollIntoView(ResultsList.Items[next]);
     }
 
+    /// <summary>
+    /// A single click runs the command under the pointer.
+    ///
+    /// Only double-click was wired, so clicking a row selected it and otherwise
+    /// did nothing - the palette looked broken to anyone who reached for the
+    /// mouse, which is not how any palette behaves. SelectionChanged is not used
+    /// for this because arrowing through the list would then run commands.
+    /// </summary>
+    private void ResultsList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source)
+        {
+            return;
+        }
+
+        // Resolved through the container so a click on the scrollbar or on the
+        // empty space below the rows does not run whatever happens to be selected.
+        if (ItemsControl.ContainerFromElement(ResultsList, source) is not ListBoxItem clicked)
+        {
+            return;
+        }
+
+        ResultsList.SelectedItem = clicked.DataContext;
+        e.Handled = true;
+        Accept();
+    }
+
     private void ResultsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         Accept();
+    }
+
+    private void CancelButton_Click(object sender, RoutedEventArgs e)
+    {
+        DialogResult = false;
+        Close();
     }
 
     private void Accept()
@@ -147,6 +190,7 @@ public partial class CommandPaletteDialog : Window
         FooterBar.Background = input;
         FooterBar.BorderBrush = border;
         FooterText.Foreground = muted;
+        DialogChrome.ApplyCloseButtonStyle(CloseButton, input, border, muted);
     }
 
     private void DialogShell_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)

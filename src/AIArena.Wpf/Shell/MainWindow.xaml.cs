@@ -3658,10 +3658,21 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     /// </summary>
     private bool TryHandleShellShortcut(KeyEventArgs e)
     {
-        var control = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
-        var shift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
-        var alt = (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt;
-        var key = EffectiveShortcutKey(e.Key, e.SystemKey);
+        return TryHandleShellShortcut(
+            EffectiveShortcutKey(e.Key, e.SystemKey),
+            (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control,
+            (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift,
+            (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt);
+    }
+
+    /// <summary>
+    /// The chord is passed explicitly rather than read from the live keyboard so
+    /// the control plane can drive the same shortcut layer a person uses.
+    /// Synthesising real key events would not work: operating-system input goes
+    /// to whichever window is foreground, not to the one that was asked for.
+    /// </summary>
+    internal bool TryHandleShellShortcut(Key key, bool control, bool shift, bool alt)
+    {
 
         // Function keys move between surfaces and carry no modifier. Nothing
         // destructive is bound here: Reset stays a deliberate pointer action.
@@ -3768,19 +3779,58 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         AutoChatButton_Click(AutoChatButton, new RoutedEventArgs());
     }
 
+    private bool _shortcutsOverlayOpen;
+
+    /// <summary>
+    /// Deferred and guarded for the same reasons the command palette is.
+    /// ConfirmDialog.Show runs a nested message loop and does not return until
+    /// the reader dismisses it, so opening it inline meant a control-plane F1
+    /// waited for a human and timed out, and repeated presses stacked dialogs
+    /// that the plane had no way to close.
+    /// </summary>
     private void ShowShortcutsOverlay()
     {
-        var body = string.Join(
-            Environment.NewLine,
-            ShellShortcuts.Select(shortcut => $"{shortcut.Keys}  -  {shortcut.Action}"));
-        ConfirmDialog.Show(
-            this,
-            _theme,
-            "Keyboard shortcuts",
-            body,
-            "Close",
-            "Close",
-            ConfirmDialogTone.Info);
+        if (_shortcutsOverlayOpen)
+        {
+            foreach (var open in Application.Current.Windows.OfType<ConfirmDialog>().ToList())
+            {
+                open.Close();
+            }
+
+            return;
+        }
+
+        Dispatcher.BeginInvoke(new Action(OpenShortcutsOverlay), DispatcherPriority.Background);
+    }
+
+    private void OpenShortcutsOverlay()
+    {
+        // Checked here as well: queued opens are dispatched before any of them
+        // has opened anything, so the flag above cannot catch a burst.
+        if (_shortcutsOverlayOpen)
+        {
+            return;
+        }
+
+        _shortcutsOverlayOpen = true;
+        try
+        {
+            var body = string.Join(
+                Environment.NewLine,
+                ShellShortcuts.Select(shortcut => $"{shortcut.Keys}  -  {shortcut.Action}"));
+            ConfirmDialog.Show(
+                this,
+                _theme,
+                "Keyboard shortcuts",
+                body,
+                "Close",
+                "Close",
+                ConfirmDialogTone.Info);
+        }
+        finally
+        {
+            _shortcutsOverlayOpen = false;
+        }
     }
 
     /// <summary>
@@ -3944,11 +3994,13 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         var autoCollapse = ShouldAutoCollapseRightRail(e.NewSize.Width);
         if (autoCollapse != _rightRailAutoCollapseActive)
         {
-            if (autoCollapse)
-            {
-                _rightRailWidthCollapseLatched = true;
-            }
-
+            // The latch lets a narrow window override an expanded preference,
+            // and IsRightRailEffectivelyCollapsed consults it alone once the
+            // window is wide again. It was only ever set, never cleared here, so
+            // narrowing the window once hid the rail for good: widening brought
+            // it back to a state where the preference said expanded, the latch
+            // still said collapsed, and only a toggle could break the tie.
+            _rightRailWidthCollapseLatched = autoCollapse;
             _rightRailAutoCollapseActive = autoCollapse;
             _rightRailNarrowRevealRequested = false;
         }
