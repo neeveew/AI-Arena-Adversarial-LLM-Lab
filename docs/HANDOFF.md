@@ -30,6 +30,10 @@ Installer distributions are always self-contained and include the required .NET 
 
 Test-only changes and behavior-identical internal refactors do not need an installer.
 
+Publishing is part of the release, not a follow-up. A version bump reaches main with the README download link already pointing at `v<version>`, so the tag and GitHub release have to exist or the repository front page links to nothing. `wpf-release-sanity.ps1` now checks that the README advertises the version being built, and that the payload's recorded source commit still matches the checkout - an installer built before a later `src/` commit is refused rather than shipped under a tag whose tree it was never built from. The build stamps `Source commit:` and `Source tree (src):` into `release-manifest.txt` for that check. If app source lands after the build, bump the version and rebuild; the build scripts deliberately refuse to overwrite an existing versioned distribution.
+
+A scheduled `Build and test` workflow job fails when main declares a version that has no published release.
+
 ## Verification
 
 Before shipping a production change:
@@ -61,4 +65,8 @@ Use `dotnet build-server shutdown` or force a rebuild if incremental builds appe
 
 ## Refactor Direction
 
-Large structural refactors such as full MVVM, DI migration, xUnit migration, or finishing `AgentWorkspaceCoordinator` decomposition should be planned as multi-increment efforts. The next reasonable decomposition step is a workspace scanning service extracted from Agent workspace logic.
+Large structural refactors such as full MVVM, DI migration, xUnit migration, or finishing `AgentWorkspaceCoordinator` decomposition should be planned as multi-increment efforts.
+
+The workspace scanning service this section used to nominate is done: `WorkspaceScannerService` has existed since 0.4.114-beta.
+
+The open structural imbalance is that `AIArena.Core` carries roughly 13k lines against 70k in `AIArena.Wpf`, so most domain logic is only reachable through STA WPF tests. Lifting provider and arena logic out of the shell into Core is the next reasonable increment.

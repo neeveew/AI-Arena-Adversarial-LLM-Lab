@@ -216,6 +216,27 @@ New-AIArenaSha256Manifest `
     -OutputPath $releaseChecksumsPath `
     -ExcludeRelativePath @('release-manifest.txt')
 
+# Record which source produced this payload. Without it a release cannot be told
+# apart from one built before a later source commit, which is how an installer
+# ends up shipping under a tag whose tree it was never built from.
+$sourceState = [ordered]@{ Commit = 'unavailable'; SrcTree = 'unavailable' }
+try {
+    $head = (& git -C $repoRoot rev-parse HEAD 2>$null)
+    $srcTree = (& git -C $repoRoot rev-parse 'HEAD:src' 2>$null)
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($head) -and -not [string]::IsNullOrWhiteSpace($srcTree)) {
+        $sourceState.Commit = $head.Trim()
+        $sourceState.SrcTree = $srcTree.Trim()
+        # A dirty src/ means the payload does not correspond to any commit at all.
+        # Recorded rather than thrown so the gate, not the build, decides.
+        $dirty = @(& git -C $repoRoot status --porcelain -- src 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($dirty.Count -gt 0) {
+            $sourceState.SrcTree = "$($sourceState.SrcTree) +dirty"
+        }
+    }
+} catch {
+    Write-Warning "Source commit could not be recorded: $($_.Exception.Message)"
+}
+
 $manifestLines = @(
     "AI Arena Release Manifest",
     "Version: $Version",
@@ -225,6 +246,8 @@ $manifestLines = @(
     "Self-contained: $($SelfContained.IsPresent)",
     "Signing policy: $SigningPolicy",
     "Signing enabled: $($signing.Enabled)",
+    "Source commit: $($sourceState.Commit)",
+    "Source tree (src): $($sourceState.SrcTree)",
     "",
     "SHA256:"
 )
