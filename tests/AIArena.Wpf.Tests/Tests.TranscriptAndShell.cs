@@ -3978,6 +3978,25 @@ static void ScreenshotsAndModalsDoNotMisreportTheApp()
     Require(
         palette[openStart..openEnd].Contains("if (_paletteOpen)", StringComparison.Ordinal),
         "the opener needs its own guard, because queued opens are dispatched before any of them has opened anything");
+
+    // Every shortcut that opens a modal needs this, not just the palette. F1 was
+    // missed the first time round: it opened a ConfirmDialog inline, so a
+    // control-plane F1 waited for a human and timed out, and repeats stacked
+    // dialogs nothing could close. This checks the whole set rather than one.
+    var shellSource = ReadMainWindowSource();
+    foreach (var opener in new[] { "ShowShortcutsOverlay", "ShowCommandPalette" })
+    {
+        var start = shellSource.IndexOf($"private void {opener}()", StringComparison.Ordinal);
+        Require(start >= 0, $"{opener} should remain discoverable");
+        var next = shellSource.IndexOf("private ", start + 20, StringComparison.Ordinal);
+        var openerBody = shellSource[start..(next > start ? next : shellSource.Length)];
+        Require(
+            openerBody.Contains("BeginInvoke", StringComparison.Ordinal),
+            $"{opener} must defer, or a control-plane chord that triggers it never returns");
+        Require(
+            openerBody.Contains(".Close()", StringComparison.Ordinal),
+            $"{opener} must be closable by repeating the chord, since the control plane cannot reach a focused dialog");
+    }
 }
 
 static void ControlPlaneKeyParsingAcceptsWhatPeopleWrite()

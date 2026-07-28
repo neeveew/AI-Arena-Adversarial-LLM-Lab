@@ -3779,19 +3779,58 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         AutoChatButton_Click(AutoChatButton, new RoutedEventArgs());
     }
 
+    private bool _shortcutsOverlayOpen;
+
+    /// <summary>
+    /// Deferred and guarded for the same reasons the command palette is.
+    /// ConfirmDialog.Show runs a nested message loop and does not return until
+    /// the reader dismisses it, so opening it inline meant a control-plane F1
+    /// waited for a human and timed out, and repeated presses stacked dialogs
+    /// that the plane had no way to close.
+    /// </summary>
     private void ShowShortcutsOverlay()
     {
-        var body = string.Join(
-            Environment.NewLine,
-            ShellShortcuts.Select(shortcut => $"{shortcut.Keys}  -  {shortcut.Action}"));
-        ConfirmDialog.Show(
-            this,
-            _theme,
-            "Keyboard shortcuts",
-            body,
-            "Close",
-            "Close",
-            ConfirmDialogTone.Info);
+        if (_shortcutsOverlayOpen)
+        {
+            foreach (var open in Application.Current.Windows.OfType<ConfirmDialog>().ToList())
+            {
+                open.Close();
+            }
+
+            return;
+        }
+
+        Dispatcher.BeginInvoke(new Action(OpenShortcutsOverlay), DispatcherPriority.Background);
+    }
+
+    private void OpenShortcutsOverlay()
+    {
+        // Checked here as well: queued opens are dispatched before any of them
+        // has opened anything, so the flag above cannot catch a burst.
+        if (_shortcutsOverlayOpen)
+        {
+            return;
+        }
+
+        _shortcutsOverlayOpen = true;
+        try
+        {
+            var body = string.Join(
+                Environment.NewLine,
+                ShellShortcuts.Select(shortcut => $"{shortcut.Keys}  -  {shortcut.Action}"));
+            ConfirmDialog.Show(
+                this,
+                _theme,
+                "Keyboard shortcuts",
+                body,
+                "Close",
+                "Close",
+                ConfirmDialogTone.Info);
+        }
+        finally
+        {
+            _shortcutsOverlayOpen = false;
+        }
     }
 
     /// <summary>

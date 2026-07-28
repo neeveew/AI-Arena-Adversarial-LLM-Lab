@@ -433,14 +433,18 @@ static void WithTempSettingsStore(Action<WpfSettingsStore> action)
 /// </summary>
 static string ReadMainWindowSource()
 {
-    // MainWindow is split across partials. Every source-reading guard needs all
-    // of them, or a guard quietly stops covering whatever moved out most
-    // recently rather than failing loudly.
-    return string.Join(
-        Environment.NewLine,
-        File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs")),
-        File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs")),
-        File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ShellEvents.cs")));
+    // MainWindow is split across partials, and listing them by hand went stale
+    // twice: a guard silently stopped covering whatever had moved into a new
+    // partial instead of failing loudly. Enumerating them means adding a partial
+    // cannot quietly narrow what the guards see.
+    var shell = Path.GetDirectoryName(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"))!;
+    var partials = Directory.GetFiles(shell, "MainWindow*.cs")
+        .Where(path => !path.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase))
+        .OrderBy(path => path, StringComparer.Ordinal)
+        .ToList();
+
+    Require(partials.Count >= 3, $"MainWindow should still be split across partials, found {partials.Count}");
+    return string.Join(Environment.NewLine, partials.Select(File.ReadAllText));
 }
 
 static string FindWorkspaceFile(string relativePath)
