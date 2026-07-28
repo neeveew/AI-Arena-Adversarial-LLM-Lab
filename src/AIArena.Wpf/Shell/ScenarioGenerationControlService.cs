@@ -360,6 +360,32 @@ internal sealed class ScenarioGenerationControlService
             }
         }
 
+        // Length was all this checked, so an unrecognised style or intensity got
+        // through and the generator quietly substituted its default: asking for
+        // a misspelled style produced a balanced match, regenerated the session,
+        // and answered "Random Seed generated". Generation is destructive - it
+        // replaces the scenario and cast - so a typo has to be refused, not
+        // reinterpreted.
+        if (!MatchGenerationService.TryNormalizeStyle(options.Style, out _))
+        {
+            return $"args.style is not a known style: '{options.Style}'.";
+        }
+
+        if (!MatchGenerationService.TryNormalizeIntensity(options.Intensity, out _))
+        {
+            return $"args.intensity is not a known intensity: '{options.Intensity}'.";
+        }
+
+        if (!MatchGenerationService.TryNormalizeRolePack(options.RolePack, out _))
+        {
+            return $"args.rolePack is not a known role pack: '{options.RolePack}'.";
+        }
+
+        if (!MatchGenerationService.TryNormalizeAbsurdity(options.Absurdity, out _))
+        {
+            return $"args.absurdity is not a known absurdity level: '{options.Absurdity}'.";
+        }
+
         return null;
     }
 

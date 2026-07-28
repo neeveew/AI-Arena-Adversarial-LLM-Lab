@@ -745,11 +745,68 @@ public sealed class MatchGenerationService : IDisposable
         return Intensities.Contains(cleaned) ? cleaned : "normal";
     }
 
-    private static string NormalizeRolePack(string value)
+    // The Try* pair below exists because the Normalize* methods are deliberately
+    // total: reading a snapshot written by another build must not fail, so an
+    // unrecognised value becomes the default. That is wrong for a caller's
+    // argument, where a typo and a choice have to be told apart - asking to
+    // generate a "legall" match silently produced an "auto" one and reported
+    // success. Validation shares the mapping below so the two cannot disagree
+    // about which aliases are real.
+
+    /// <summary>
+    /// True when the value names a real style, or is blank, which means
+    /// "unspecified" and lets the caller's configured default apply.
+    /// </summary>
+    public static bool TryNormalizeStyle(string? value, out string normalized)
     {
-        var cleaned = string.IsNullOrWhiteSpace(value)
+        normalized = NormalizeStyle(value ?? "");
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return true;
+        }
+
+        var cleaned = value.Trim().ToLowerInvariant();
+        return cleaned == "auto" || Styles.Contains(cleaned);
+    }
+
+    /// <summary>True when the value names a real intensity, or is blank.</summary>
+    public static bool TryNormalizeIntensity(string? value, out string normalized)
+    {
+        normalized = NormalizeIntensity(value ?? "");
+        return string.IsNullOrWhiteSpace(value)
+            || Intensities.Contains(value.Trim().ToLowerInvariant());
+    }
+
+    /// <summary>True when the value names a real role pack or alias, or is blank.</summary>
+    public static bool TryNormalizeRolePack(string? value, out string normalized)
+    {
+        normalized = NormalizeRolePack(value ?? "");
+        return string.IsNullOrWhiteSpace(value) || MapRolePack(CleanRolePack(value)) is not null;
+    }
+
+    /// <summary>True when the value names a real absurdity level or alias, or is blank.</summary>
+    public static bool TryNormalizeAbsurdity(string? value, out string normalized)
+    {
+        normalized = NormalizeAbsurdity(value ?? "");
+        return string.IsNullOrWhiteSpace(value)
+            || MapAbsurdity(value.Trim().ToLowerInvariant()) is not null;
+    }
+
+    private static string CleanRolePack(string value)
+    {
+        return string.IsNullOrWhiteSpace(value)
             ? "auto"
             : value.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_').Replace("/", "_");
+    }
+
+    private static string NormalizeRolePack(string value)
+    {
+        return MapRolePack(CleanRolePack(value)) ?? "auto";
+    }
+
+    /// <summary>Returns null for anything unrecognised, so callers can tell.</summary>
+    private static string? MapRolePack(string cleaned)
+    {
         return cleaned switch
         {
             "auto" => "auto",
@@ -765,20 +822,26 @@ public sealed class MatchGenerationService : IDisposable
             "governance_board" or "governance" or "board" => "governance_board",
             "tool_ops" or "tools" or "tool_reliability" => "tool_ops",
             "absurd_lab" or "absurd" => "absurd_lab",
-            _ => "auto"
+            _ => null
         };
     }
 
     private static string NormalizeAbsurdity(string value)
     {
         var cleaned = string.IsNullOrWhiteSpace(value) ? "grounded" : value.Trim().ToLowerInvariant();
+        return MapAbsurdity(cleaned) ?? "grounded";
+    }
+
+    /// <summary>Returns null for anything unrecognised, so callers can tell.</summary>
+    private static string? MapAbsurdity(string cleaned)
+    {
         return cleaned switch
         {
             "grounded" or "none" or "off" => "grounded",
             "odd" or "weird" => "odd",
             "absurd" => "absurd",
             "maximum" or "max" => "maximum",
-            _ => "grounded"
+            _ => null
         };
     }
 

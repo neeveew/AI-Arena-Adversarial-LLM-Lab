@@ -3688,6 +3688,56 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
     });
 }
 
+static void GenerationRefusesUnknownOptionsInsteadOfSubstituting()
+{
+    // Generation validated length and nothing else, so an unrecognised style
+    // reached the generator and was quietly replaced by its default: asking for
+    // a misspelled style produced a balanced match, replaced the scenario and
+    // cast, and answered "Random Seed generated". Generation is destructive, so
+    // a typo has to be refused rather than reinterpreted.
+    Require(!MatchGenerationService.TryNormalizeStyle("totally-not-a-style", out _), "an unknown style should be refused");
+    Require(!MatchGenerationService.TryNormalizeIntensity("nope", out _), "an unknown intensity should be refused");
+    Require(!MatchGenerationService.TryNormalizeRolePack("nope", out _), "an unknown role pack should be refused");
+    Require(!MatchGenerationService.TryNormalizeAbsurdity("nope", out _), "an unknown absurdity should be refused");
+
+    // Blank means "unspecified" and has to keep working, or every caller that
+    // omits an option starts failing.
+    foreach (var blank in new[] { "", "   ", (string?)null })
+    {
+        Require(MatchGenerationService.TryNormalizeStyle(blank, out _), "a blank style means unspecified");
+        Require(MatchGenerationService.TryNormalizeIntensity(blank, out _), "a blank intensity means unspecified");
+        Require(MatchGenerationService.TryNormalizeRolePack(blank, out _), "a blank role pack means unspecified");
+        Require(MatchGenerationService.TryNormalizeAbsurdity(blank, out _), "a blank absurdity means unspecified");
+    }
+
+    // The aliases are the reason validation shares the generator's mapping
+    // rather than keeping its own list: a second list would drift and start
+    // rejecting input that has always worked.
+    Require(
+        MatchGenerationService.TryNormalizeRolePack("legal", out var legal) && legal == "legal_policy",
+        "'legal' is a real alias for the legal_policy pack");
+    Require(
+        MatchGenerationService.TryNormalizeRolePack("redteam", out var red) && red == "red_team",
+        "'redteam' is a real alias for the red_team pack");
+    Require(
+        MatchGenerationService.TryNormalizeAbsurdity("max", out var max) && max == "maximum",
+        "'max' is a real alias for maximum absurdity");
+    Require(
+        MatchGenerationService.TryNormalizeStyle("auto", out _),
+        "'auto' is a legitimate style request, not a typo");
+    Require(
+        MatchGenerationService.TryNormalizeIntensity("SHARP", out var sharp) && sharp == "sharp",
+        "case should not decide whether an option is real");
+
+    var service = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ScenarioGenerationControlService.cs"));
+    foreach (var option in new[] { "TryNormalizeStyle", "TryNormalizeIntensity", "TryNormalizeRolePack", "TryNormalizeAbsurdity" })
+    {
+        Require(
+            service.Contains(option, StringComparison.Ordinal),
+            $"generation should validate with {option} before running");
+    }
+}
+
 static void AnUnknownThemeIsRefusedRatherThanSubstituted()
 {
     // navigation.theme.set normalized before validating, and NormalizeId is
