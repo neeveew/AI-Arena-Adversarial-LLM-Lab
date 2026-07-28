@@ -53,6 +53,20 @@ public partial class MainWindow
             return (false, "not_available", reason, BuildInputState(false));
         }
 
+        // A field the reader could not type into should not accept typing from a
+        // script either. Setting Text works regardless of either flag, so
+        // without this a caller could fill a box that is disabled because an
+        // operation is running, and be told it succeeded.
+        if (!box.IsEnabled)
+        {
+            return (false, "not_available", $"{box.Name} is disabled.", BuildInputState(false));
+        }
+
+        if (box.IsReadOnly)
+        {
+            return (false, "not_available", $"{box.Name} is read-only.", BuildInputState(false));
+        }
+
         // Setting Text raises TextChanged, which is what the app's own handlers
         // listen to, so this behaves like typing rather than poking at state.
         box.Text = value;
