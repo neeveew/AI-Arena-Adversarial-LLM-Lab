@@ -3688,6 +3688,41 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
     });
 }
 
+static void NarrowingTheWindowDoesNotHideTheRailForGood()
+{
+    // Once the window is wide again the effective state is decided by the latch
+    // alone, and the resize handler only ever set it. Narrowing the window once
+    // therefore hid the right rail for good: the preference said expanded, the
+    // latch said collapsed, nothing announced the change, and only a toggle
+    // could break the tie.
+    Require(
+        !MainWindow.IsRightRailEffectivelyCollapsed(false, false, false, false),
+        "wide window, expanded preference, no latch: the rail belongs on screen");
+    Require(
+        MainWindow.IsRightRailEffectivelyCollapsed(false, true, false),
+        "a narrow window collapses the rail even while the preference says expanded");
+    Require(
+        !MainWindow.IsRightRailEffectivelyCollapsed(false, true, true),
+        "asking for it by hand while narrow should reveal it");
+    Require(
+        MainWindow.IsRightRailEffectivelyCollapsed(true, false, false),
+        "an explicit preference to collapse still wins at any width");
+
+    // This is the state the bug left behind, and it is still reachable if the
+    // latch is ever left set while wide - which is what the guard below prevents.
+    Require(
+        MainWindow.IsRightRailEffectivelyCollapsed(false, false, false, widthCollapseLatched: true),
+        "a latch left set while wide hides the rail, which is why it must be cleared");
+
+    var shell = ReadMainWindowSource();
+    var sizeChanged = shell.IndexOf("private void MainWindow_SizeChanged", StringComparison.Ordinal);
+    Require(sizeChanged >= 0, "the resize handler should remain discoverable");
+    var body = shell[sizeChanged..Math.Min(shell.Length, sizeChanged + 1400)];
+    Require(
+        body.Contains("_rightRailWidthCollapseLatched = autoCollapse", StringComparison.Ordinal),
+        "the latch has to track the narrow range in both directions, not just on the way in");
+}
+
 static void SettingsAndMatchSetupDoNotShareTheWindow()
 {
     // Opening Match Setup has always hidden settings. The mirror image was

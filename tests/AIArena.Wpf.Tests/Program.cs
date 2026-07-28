@@ -207,6 +207,7 @@ var tests = new List<(string Name, Action Test)>
     ("control plane key parsing accepts what people write", ControlPlaneKeyParsingAcceptsWhatPeopleWrite),
     ("screenshots and modals do not misreport the app", ScreenshotsAndModalsDoNotMisreportTheApp),
     ("settings and match setup do not share the window", SettingsAndMatchSetupDoNotShareTheWindow),
+    ("narrowing the window does not hide the rail for good", NarrowingTheWindowDoesNotHideTheRailForGood),
     ("empty arguments are not mistaken for missing ones", EmptyArgumentsAreNotMistakenForMissingOnes),
     ("status tones avoid agent identity accents", StatusTonesAvoidAgentIdentityAccents),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),

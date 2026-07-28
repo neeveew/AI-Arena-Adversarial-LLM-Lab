@@ -3955,11 +3955,13 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         var autoCollapse = ShouldAutoCollapseRightRail(e.NewSize.Width);
         if (autoCollapse != _rightRailAutoCollapseActive)
         {
-            if (autoCollapse)
-            {
-                _rightRailWidthCollapseLatched = true;
-            }
-
+            // The latch lets a narrow window override an expanded preference,
+            // and IsRightRailEffectivelyCollapsed consults it alone once the
+            // window is wide again. It was only ever set, never cleared here, so
+            // narrowing the window once hid the rail for good: widening brought
+            // it back to a state where the preference said expanded, the latch
+            // still said collapsed, and only a toggle could break the tie.
+            _rightRailWidthCollapseLatched = autoCollapse;
             _rightRailAutoCollapseActive = autoCollapse;
             _rightRailNarrowRevealRequested = false;
         }
