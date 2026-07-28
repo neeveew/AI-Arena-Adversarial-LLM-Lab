@@ -1,0 +1,89 @@
+name: Build and test
+
+# The repository carries ~490 console-runner tests that only ever ran on a
+# developer machine. Both runners already exit non-zero on failure, so nothing
+# was needed to make them gate a change except somewhere to run them.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Daily, for the release-published check below. A version bump reaches main
+    # before the release is published, so that check must not run on push.
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    if: github.event_name != 'schedule'
+    # net10.0-windows will not restore on Linux without EnableWindowsTargeting,
+    # and the WPF suite needs STA, so the runner has to match the real build.
+    runs-on: windows-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore the solution
+        run: dotnet restore "AI Arena - WPF.sln"
+
+      - name: Build the solution
+        run: dotnet build "AI Arena - WPF.sln" --no-restore --configuration Debug
+
+      - name: Run the core test suite
+        run: dotnet run --project tests/AIArena.Tests/AIArena.Tests.csproj --no-build
+
+      - name: Run the WPF test suite
+        run: dotnet run --project tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj --no-build
+
+      - name: Check the dependency index is current
+        shell: pwsh
+        run: ./scripts/dependency-index.ps1 -Check
+
+  release-published:
+    name: Declared version is published
+    # Schedule and manual only. Catches a version that main advertises but that
+    # was never tagged and released - the README download link then 404s for
+    # everyone reading the repository front page.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compare the declared version against published releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' \
+            src/AIArena.Wpf/AIArena.Wpf.csproj | head -1)"
+          if [ -z "$version" ]; then
+            echo "Could not read <Version> from the WPF project." >&2
+            exit 1
+          fi
+          echo "main declares $version"
+
+          readme="$(sed -n 's:.*\[Download \([^]]*\)\].*:\1:p' README.md | head -1)"
+          if [ "$readme" != "$version" ]; then
+            echo "README advertises '$readme' but the project declares '$version'." >&2
+            exit 1
+          fi
+
+          if ! gh release view "v$version" --json tagName >/dev/null 2>&1; then
+            echo "No published release for v$version." >&2
+            echo "The README download link points at a tag that does not exist." >&2
+            exit 1
+          fi
+          echo "v$version is published."

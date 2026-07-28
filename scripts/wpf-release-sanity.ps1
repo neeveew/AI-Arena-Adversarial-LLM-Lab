@@ -56,6 +56,7 @@ $coreTests = Join-Path $Root "tests/AIArena.Tests/AIArena.Tests.csproj"
 $wpfTests = Join-Path $Root "tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj"
 $licenseFile = Join-Path $Root "LICENSE"
 $noticeFile = Join-Path $Root "NOTICE.md"
+$readmeFile = Join-Path $Root "README.md"
 $userGuideFile = Join-Path $Root "docs/USER_GUIDE.md"
 $shortcutIconFile = Join-Path $Root "src/AIArena.Wpf/Assets/ai-arena-icon.ico"
 $wpfProject = Join-Path $Root "src/AIArena.Wpf/AIArena.Wpf.csproj"
@@ -106,6 +107,7 @@ Assert-PathExists $coreTests "core console test harness"
 Assert-PathExists $wpfTests "WPF console test harness"
 Assert-PathExists $licenseFile "licence file"
 Assert-PathExists $noticeFile "notice file"
+Assert-PathExists $readmeFile "readme"
 Assert-PathExists $userGuideFile "user guide"
 Assert-PathExists $shortcutIconFile "shortcut icon"
 Assert-PathExists $wpfProject "WPF project"
@@ -281,6 +283,23 @@ foreach ($requiredGuideSection in @(
     }
 }
 
+# The README download link is the front door. It is edited by hand during the
+# version bump, so it can name a version the release never produced, and readers
+# land on a tag that does not exist.
+$readmeText = Get-Content -LiteralPath $readmeFile -Raw
+$readmeDownload = [regex]::Match($readmeText, '\[Download\s+(?<label>[^\]]+)\]\(\s*(?<url>[^)\s]+)\s*\)')
+if (-not $readmeDownload.Success) {
+    throw "README no longer advertises a download link; the release version cannot be checked."
+}
+$readmeLabel = $readmeDownload.Groups['label'].Value.Trim()
+if ($readmeLabel -ne $Version) {
+    throw "README advertises download '$readmeLabel' but this release is $Version."
+}
+$expectedReleaseUrl = "https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v$Version"
+if ($readmeDownload.Groups['url'].Value.Trim() -ne $expectedReleaseUrl) {
+    throw "README download link does not point at $expectedReleaseUrl."
+}
+
 $manifestText = Get-Content -LiteralPath $releaseManifest -Raw
 $installerManifestText = Get-Content -LiteralPath $installerManifest -Raw
 $releaseChangelogText = Get-Content -LiteralPath $releaseChangelog -Raw
@@ -296,6 +315,37 @@ if ($manifestText -notmatch ('Version: ' + [regex]::Escape($Version))) {
 }
 if ($manifestText -notmatch '(?m)^Self-contained: True\r?$') {
     throw "Installer releases must be self-contained."
+}
+
+# A payload built before a later source commit ships under a tag whose tree it
+# was never built from, and the checksums all still agree because they only ever
+# described the payload. Compare the recorded source against the checkout.
+$recordedCommit = [regex]::Match($manifestText, '(?m)^Source commit:\s*(?<value>\S+)\s*$')
+$recordedSrcTree = [regex]::Match($manifestText, '(?m)^Source tree \(src\):\s*(?<value>.+?)\s*$')
+if (-not $recordedCommit.Success -or -not $recordedSrcTree.Success) {
+    throw "Release manifest does not record the source commit it was built from. Rebuild $Version with the current release scripts."
+}
+$builtCommit = $recordedCommit.Groups['value'].Value
+$builtSrcTree = $recordedSrcTree.Groups['value'].Value
+if ($builtCommit -eq 'unavailable' -or $builtSrcTree -eq 'unavailable') {
+    throw "Release $Version was built outside a git checkout, so its source cannot be verified."
+}
+if ($builtSrcTree -like '*+dirty*') {
+    throw "Release $Version was built from a modified src/ tree, so it matches no commit. Commit the changes and rebuild."
+}
+$currentSrcTree = (& git -C $Root rev-parse 'HEAD:src' 2>$null)
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($currentSrcTree)) {
+    throw "Current src/ tree could not be read from git; release source cannot be verified."
+}
+$currentSrcTree = $currentSrcTree.Trim()
+if ($currentSrcTree -ne $builtSrcTree) {
+    throw ("Release $Version was built from src/ tree $builtSrcTree (commit $builtCommit), " +
+        "but the checkout is now at $currentSrcTree. App source changed after the installer was built; " +
+        "bump the version and rebuild so the release matches its tag.")
+}
+$dirtySrc = @(& git -C $Root status --porcelain -- src 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+if ($dirtySrc.Count -gt 0) {
+    throw "src/ has uncommitted changes, so release $Version no longer matches the checkout."
 }
 
 $runtimeConfig = Get-Content -LiteralPath $releaseRuntimeConfig -Raw | ConvertFrom-Json
