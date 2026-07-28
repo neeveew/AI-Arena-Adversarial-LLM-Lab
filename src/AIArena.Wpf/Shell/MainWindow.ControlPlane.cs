@@ -374,7 +374,25 @@ public partial class MainWindow
                     }
 
                     AgentWorkspace.ControlSetWorkspace(path);
-                    _controlPlaneEvents.Publish("agent.workspace.changed", "Agent workspace changed.", new { path = AgentWorkspace.DebugWorkspacePath });
+
+                    // The workspace itself already refuses anything that is not
+                    // an existing directory, and clears rather than keeping a
+                    // bad value. What it could not do was say so: the command
+                    // answered "Agent workspace updated." either way, so a
+                    // caller that pointed at a typo, a file, or a folder that
+                    // had been moved was told it had succeeded while the
+                    // workspace was quietly emptied.
+                    var applied = AgentWorkspace.DebugWorkspacePath;
+                    if (!string.Equals(applied.Trim(), path.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "invalid_argument",
+                            $"agent.workspace.set requires an existing directory: '{path}'.",
+                            AgentWorkspace.ControlState);
+                    }
+
+                    _controlPlaneEvents.Publish("agent.workspace.changed", "Agent workspace changed.", new { path = applied });
                     return AIArenaControlResponse.Success(request, "Agent workspace updated.", AgentWorkspace.ControlState);
                 }
             case AIArenaControlCommands.AgentSend:

@@ -92,6 +92,7 @@
                              HorizontalContentAlignment="Stretch"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             PreviewMouseLeftButtonUp="ResultsList_PreviewMouseLeftButtonUp"
                              MouseDoubleClick="ResultsList_MouseDoubleClick"
                              AutomationProperties.Name="Matching commands">
                         <ListBox.ItemTemplate>

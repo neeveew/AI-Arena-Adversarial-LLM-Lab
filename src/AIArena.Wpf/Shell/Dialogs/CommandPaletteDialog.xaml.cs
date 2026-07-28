@@ -117,6 +117,33 @@ public partial class CommandPaletteDialog : Window
         ResultsList.ScrollIntoView(ResultsList.Items[next]);
     }
 
+    /// <summary>
+    /// A single click runs the command under the pointer.
+    ///
+    /// Only double-click was wired, so clicking a row selected it and otherwise
+    /// did nothing - the palette looked broken to anyone who reached for the
+    /// mouse, which is not how any palette behaves. SelectionChanged is not used
+    /// for this because arrowing through the list would then run commands.
+    /// </summary>
+    private void ResultsList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source)
+        {
+            return;
+        }
+
+        // Resolved through the container so a click on the scrollbar or on the
+        // empty space below the rows does not run whatever happens to be selected.
+        if (ItemsControl.ContainerFromElement(ResultsList, source) is not ListBoxItem clicked)
+        {
+            return;
+        }
+
+        ResultsList.SelectedItem = clicked.DataContext;
+        e.Handled = true;
+        Accept();
+    }
+
     private void ResultsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         Accept();

@@ -212,6 +212,7 @@ var tests = new List<(string Name, Action Test)>
     ("an unknown theme is refused rather than substituted", AnUnknownThemeIsRefusedRatherThanSubstituted),
     ("generation refuses unknown options instead of substituting", GenerationRefusesUnknownOptionsInsteadOfSubstituting),
     ("provider error text cannot be a whole web page", ProviderErrorTextCannotBeAWholeWebPage),
+    ("rejected workspace paths are reported as failures", RejectedWorkspacePathsAreReportedAsFailures),
     ("empty arguments are not mistaken for missing ones", EmptyArgumentsAreNotMistakenForMissingOnes),
     ("status tones avoid agent identity accents", StatusTonesAvoidAgentIdentityAccents),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),

@@ -3708,6 +3708,33 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
     });
 }
 
+static void RejectedWorkspacePathsAreReportedAsFailures()
+{
+    // The workspace already refused anything that was not an existing
+    // directory, and cleared rather than keeping a bad value. What it could not
+    // do was say so: the command answered "Agent workspace updated." either
+    // way, so pointing at a typo, a file, or a folder that had since moved
+    // reported success while the workspace was quietly emptied.
+    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    var start = dispatch.IndexOf("case AIArenaControlCommands.AgentWorkspaceSet", StringComparison.Ordinal);
+    Require(start >= 0, "the workspace command should remain discoverable");
+    var next = dispatch.IndexOf("case AIArenaControlCommands.", start + 10, StringComparison.Ordinal);
+    var body = dispatch[start..(next > start ? next : dispatch.Length)];
+
+    Require(
+        body.Contains("DebugWorkspacePath", StringComparison.Ordinal),
+        "the command should read back what the workspace actually accepted");
+    Require(
+        body.Contains("invalid_argument", StringComparison.Ordinal),
+        "a path the workspace refused should be reported as a failure");
+
+    // The success path must still publish, and only on success, or a refused
+    // path would announce a change that never happened.
+    var publish = body.IndexOf("agent.workspace.changed", StringComparison.Ordinal);
+    var reject = body.IndexOf("invalid_argument", StringComparison.Ordinal);
+    Require(publish > reject, "the change should be announced only after the path is known to have applied");
+}
+
 static void ProviderErrorTextCannotBeAWholeWebPage()
 {
     // These strings land in status lines and failure dialogs. A body that is not
