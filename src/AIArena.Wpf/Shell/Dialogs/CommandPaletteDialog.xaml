@@ -46,6 +46,7 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
                     <TextBlock x:Name="SearchGlyph"
@@ -79,6 +80,24 @@
                                    Opacity="0.66"
                                    Text="Search commands..." />
                     </Grid>
+
+                    <!-- The window has no system chrome, so without this a
+                         mouse-only reader had no way at all to dismiss the
+                         palette: the footer offers Escape and nothing else. -->
+                    <Button x:Name="CloseButton"
+                            Grid.Column="2"
+                            Width="32"
+                            Height="32"
+                            Margin="10,0,0,0"
+                            VerticalAlignment="Center"
+                            Click="CancelButton_Click"
+                            AutomationProperties.Name="Close the command palette"
+                            AutomationProperties.HelpText="Closes the palette without running a command."
+                            ToolTip="Close (Esc)">
+                        <TextBlock FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                                   FontSize="12"
+                                   Text="&#xE711;" />
+                    </Button>
                 </Grid>
             </Border>
 

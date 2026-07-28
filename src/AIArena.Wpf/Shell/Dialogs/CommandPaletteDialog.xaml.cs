@@ -149,6 +149,12 @@ public partial class CommandPaletteDialog : Window
         Accept();
     }
 
+    private void CancelButton_Click(object sender, RoutedEventArgs e)
+    {
+        DialogResult = false;
+        Close();
+    }
+
     private void Accept()
     {
         if (ResultsList.SelectedItem is not ShellCommand command)
@@ -184,6 +190,7 @@ public partial class CommandPaletteDialog : Window
         FooterBar.Background = input;
         FooterBar.BorderBrush = border;
         FooterText.Foreground = muted;
+        DialogChrome.ApplyCloseButtonStyle(CloseButton, input, border, muted);
     }
 
     private void DialogShell_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
