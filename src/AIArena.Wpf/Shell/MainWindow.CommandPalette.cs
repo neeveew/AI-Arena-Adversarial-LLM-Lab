@@ -140,9 +140,67 @@ public partial class MainWindow
                 ShowShortcutsOverlay)
         };
 
+        AddSurfaceCommands(commands);
         AddViewPresetCommands(commands);
         AddThemeCommands(commands);
         return commands;
+    }
+
+    /// <summary>
+    /// Actions that only mean something on one surface. They are gated rather
+    /// than always listed, so the palette does not offer to stop a Collaborate
+    /// run while you are looking at the transcript.
+    ///
+    /// Reset is deliberately absent. It stays a pointer action for the same
+    /// reason it has no keyboard shortcut: nothing that discards a run should be
+    /// two keystrokes away from a search box.
+    /// </summary>
+    private void AddSurfaceCommands(List<ShellCommand> commands)
+    {
+        commands.Add(new ShellCommand(
+            "arena.narrate",
+            "Narrate the match now",
+            "Match",
+            "",
+            "narrator commentary observe",
+            () => _ = ArenaRun.NarrateNowAsync(),
+            () => _activeShellSurface == ShellSurface.Lab && NarrateNowButton.IsEnabled));
+
+        commands.Add(new ShellCommand(
+            "arena.speak",
+            "Speak the latest narrator message",
+            "Match",
+            "",
+            "voice tts read aloud",
+            () => SpeakLatestNarratorButton_Click(SpeakLatestNarratorButton, new RoutedEventArgs()),
+            () => _activeShellSurface == ShellSurface.Lab && SpeakLatestNarratorButton.IsEnabled));
+
+        commands.Add(new ShellCommand(
+            "collaborate.new",
+            "Start a new Collaborate chat",
+            "Collaborate",
+            "",
+            "fresh clear conversation",
+            () => CollaborateNewChatButton_Click(CollaborateNewChatButton, new RoutedEventArgs()),
+            () => _activeShellSurface == ShellSurface.Collaborate));
+
+        commands.Add(new ShellCommand(
+            "collaborate.stop",
+            "Stop the Collaborate run",
+            "Collaborate",
+            "",
+            "cancel halt",
+            () => CollaborateStopButton_Click(CollaborateStopButton, new RoutedEventArgs()),
+            () => _activeShellSurface == ShellSurface.Collaborate && CollaborateStopButton.IsEnabled));
+
+        commands.Add(new ShellCommand(
+            "agent.clear-history",
+            "Clear the Agent command history",
+            "Agent",
+            "",
+            "commands log wipe",
+            () => AgentClearHistoryButton_Click(AgentClearHistoryButton, new RoutedEventArgs()),
+            () => _activeShellSurface == ShellSurface.Agent && IsAgentWorkspaceEnabled(_wpfSettings)));
     }
 
     private void AddViewPresetCommands(List<ShellCommand> commands)

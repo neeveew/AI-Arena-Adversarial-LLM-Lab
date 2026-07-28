@@ -34,6 +34,7 @@ public enum ShellTopBarAction
     SearchClearRequested,
     SearchAllSessionsRequested,
     TranscriptExportRequested,
+    CommandPaletteRequested,
     UserGuideRequested,
     ViewMenuRequested,
     ViewMenuOpened,
@@ -329,6 +330,8 @@ public partial class ShellTopBarControl : UserControl
     private void SearchClearRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.SearchClearRequested, sender, e);
     private void SearchAllSessionsRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.SearchAllSessionsRequested, sender, e);
     private void TranscriptExportRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.TranscriptExportRequested, sender, e);
+    private void CommandPaletteRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.CommandPaletteRequested, sender, e);
+
     private void UserGuideRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.UserGuideRequested, sender, e);
     private void ViewMenuRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.ViewMenuRequested, sender, e);
     private void ViewMenuOpened(object? sender, EventArgs e) => Forward(ShellTopBarAction.ViewMenuOpened, sender ?? this, e);

@@ -168,6 +168,9 @@ public partial class MainWindow
             case ShellTopBarAction.TranscriptExportRequested:
                 ExportTranscriptButton_Click(e.SourceElement, Args<RoutedEventArgs>(e));
                 break;
+            case ShellTopBarAction.CommandPaletteRequested:
+                ShowCommandPalette();
+                break;
             case ShellTopBarAction.UserGuideRequested:
                 OpenUserGuideButton_Click(e.SourceElement, Args<RoutedEventArgs>(e));
                 break;
