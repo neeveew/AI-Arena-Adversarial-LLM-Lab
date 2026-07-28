@@ -3688,6 +3688,75 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
     });
 }
 
+static void EveryHumanDrivableEventHasASharedPublisher()
+{
+    // Events published only from the control-plane dispatch describe what an
+    // operator did through PowerShell and nothing else, so a watcher sees
+    // silence while a person uses the app. Anything a person can also trigger
+    // has to publish from the path both routes share.
+    //
+    // The list below is the deliberate exception: these are control-plane
+    // concepts, not shell state. Adding a new event to the dispatch fails this
+    // test until someone either gives it a shared publisher or writes down here
+    // why it cannot have one.
+    var controlPlaneOnly = new HashSet<string>(StringComparer.Ordinal)
+    {
+        // Staging, approving and rejecting a command, and sending an Agent or
+        // operator prompt, are all requests that arrive with the command. The
+        // equivalent UI gestures report themselves through the Agent workspace
+        // and transcript rather than through these.
+        "agent.command.staged",
+        "agent.command.approved",
+        "agent.command.rejected",
+        "agent.prompt.sent",
+        "agent.prompt.staged",
+        "agent.stop.requested",
+        "agent.runbook.resumed",
+        "agent.runbook.checkpointed",
+        "agent.workspace.changed",
+        "arena.operator.sent",
+        "arena.reset.completed",
+        "match.generation.changed",
+        "session.saved-state.changed",
+        "navigation.provider.focused"
+    };
+
+    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    var published = new HashSet<string>(StringComparer.Ordinal);
+    foreach (System.Text.RegularExpressions.Match match in
+             System.Text.RegularExpressions.Regex.Matches(dispatch, @"Publish\(""([^""]+)"""))
+    {
+        published.Add(match.Groups[1].Value);
+    }
+
+    Require(published.Count > 0, "the control-plane dispatch should still publish something");
+
+    var unexplained = published.Where(name => !controlPlaneOnly.Contains(name)).OrderBy(name => name).ToList();
+    Require(
+        unexplained.Count == 0,
+        $"these events publish only from the control-plane dispatch and need a shared publisher: {string.Join(", ", unexplained)}");
+
+    // The other half: the shell publishers must still be doing their job.
+    var shellEvents = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ShellEvents.cs"));
+    foreach (var name in new[]
+    {
+        "arena.run.started",
+        "arena.run.stopped",
+        "arena.turn.completed",
+        "arena.narration.completed",
+        "internet.changed",
+        "internet.test.completed"
+    })
+    {
+        Require(
+            shellEvents.Contains($"\"{name}\"", StringComparison.Ordinal),
+            $"{name} should publish from the shared path");
+        Require(
+            !published.Contains(name),
+            $"{name} must not also publish from the dispatch, or control-plane callers get it twice");
+    }
+}
+
 static void DependencyIndexCheckIgnoresLineEndings()
 {
     // The release gate compared the checked-in index against a freshly generated
@@ -3796,6 +3865,23 @@ static void CommandPaletteRanksMatchesPredictably()
 
     Require(ShellCommandPalette.Filter(commands, "SEARCH").Count == 1, "matching must be case-insensitive");
     Require(ShellCommandPalette.Filter(commands, "zzzz").Count == 0, "a query matching nothing should return nothing");
+
+    // Recency reorders the browse list, so the handful of things you are doing
+    // right now sit at the top when the palette opens.
+    var recent = new[] { "Open App Settings", "Theme: Dark Blue" };
+    var browsed = ShellCommandPalette.Filter(commands, "", recent);
+    Require(browsed[0].Title == "Open App Settings", "the most recent command should lead an empty query");
+    Require(browsed[1].Title == "Theme: Dark Blue", "recency order should be preserved");
+    Require(browsed.Count == 5, "recency must not drop or duplicate anything");
+    Require(browsed[2].Title == "Go to AI Lab", "everything else should keep its declared order");
+
+    // But it only ever breaks ties. Typing a command's exact name and watching
+    // something else sit above it is precisely the unpredictability this
+    // ranking exists to avoid.
+    var exactWithRecency = ShellCommandPalette.Filter(commands, "Go to AI Lab", recent);
+    Require(
+        exactWithRecency[0].Title == "Go to AI Lab",
+        "an exact match must outrank a more recently used command");
 
     // Titles beat incidental substrings: "set" starts a word in "Settings" and
     // in "Setup", but must not drag in unrelated rows.

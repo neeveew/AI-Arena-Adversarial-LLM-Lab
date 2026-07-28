@@ -74,6 +74,14 @@ internal sealed class ArenaRunCoordinator
 
     public bool IsAutoChatRunning => autoChatCancellation is not null;
 
+    /// <summary>
+    /// Raised with a run-loop transition - "started", "stopped", "turn" or
+    /// "narration" - after it actually happens, whichever route asked. The host
+    /// turns these into control-plane events so clicking Auto Chat announces the
+    /// same thing as the arena.start command.
+    /// </summary>
+    public Action<string>? RunLifecycle { get; set; }
+
     public async Task StartAutoChatAsync()
     {
         if (activeSession() is null || autoChatCancellation is not null)
@@ -87,6 +95,7 @@ internal sealed class ArenaRunCoordinator
         var token = autoChatCancellation.Token;
         var finalStatus = "Auto Chat running...";
         setArenaBusy(true, "Auto Chat running...", true, autoChatButton);
+        RunLifecycle?.Invoke("started");
 
         try
         {
@@ -154,6 +163,10 @@ internal sealed class ArenaRunCoordinator
             return;
         }
 
+        // Past the guard the loop is definitely being stopped, so this reports
+        // the transition rather than every press of a button that was a no-op.
+        RunLifecycle?.Invoke("stopped");
+
         try
         {
             cancellation.Cancel();
@@ -205,6 +218,8 @@ internal sealed class ArenaRunCoordinator
                 speakNarratorMessage(result.Message);
             }
         }, true);
+
+        RunLifecycle?.Invoke("narration");
     }
 
     public async Task RunOneTurnAsync()
@@ -224,6 +239,8 @@ internal sealed class ArenaRunCoordinator
             await refreshActiveSessionAsync(status);
             SetBothStatuses(status);
         }, false);
+
+        RunLifecycle?.Invoke("turn");
     }
 
     public async Task RunAgentTurnAsync(AgentState agent)

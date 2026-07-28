@@ -34,19 +34,38 @@ internal static class ShellCommandPalette
     /// is a search surface, and offering something that cannot run wastes the
     /// reader's attention.
     /// </summary>
-    public static IReadOnlyList<ShellCommand> Filter(IReadOnlyList<ShellCommand> commands, string? query)
+    public static IReadOnlyList<ShellCommand> Filter(
+        IReadOnlyList<ShellCommand> commands,
+        string? query,
+        IReadOnlyList<string>? recentIds = null)
     {
         var available = commands.Where(command => command.Available).ToList();
         var trimmed = (query ?? "").Trim();
+
+        // Recency only ever breaks ties. Letting it outrank relevance would mean
+        // typing the exact name of a command and watching something else sit
+        // above it, which is the unpredictability this ranking exists to avoid.
+        int Recency(ShellCommand command)
+        {
+            var rank = recentIds is null ? -1 : recentIds.ToList().IndexOf(command.Id);
+            return rank < 0 ? int.MaxValue : rank;
+        }
+
         if (trimmed.Length == 0)
         {
-            return available;
+            return available
+                .Select((command, index) => (command, index))
+                .OrderBy(entry => Recency(entry.command))
+                .ThenBy(entry => entry.index)
+                .Select(entry => entry.command)
+                .ToList();
         }
 
         return available
             .Select((command, index) => (command, index, score: Score(command, trimmed)))
             .Where(match => match.score < int.MaxValue)
             .OrderBy(match => match.score)
+            .ThenBy(match => Recency(match.command))
             .ThenBy(match => match.index)
             .Select(match => match.command)
             .ToList();

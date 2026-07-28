@@ -10,13 +10,19 @@ namespace AIArena.Wpf;
 public partial class CommandPaletteDialog : Window
 {
     private readonly IReadOnlyList<ShellCommand> commands;
+    private readonly IReadOnlyList<string> recentIds;
 
-    private CommandPaletteDialog(Window owner, ThemePalette theme, IReadOnlyList<ShellCommand> commands)
+    private CommandPaletteDialog(
+        Window owner,
+        ThemePalette theme,
+        IReadOnlyList<ShellCommand> commands,
+        IReadOnlyList<string> recentIds)
     {
         InitializeComponent();
         DialogChrome.ImportOwnerResources(owner, this);
         DialogChrome.ApplyImplicitControlStyles(this);
         this.commands = commands;
+        this.recentIds = recentIds;
         ApplyTheme(theme);
         ApplyQuery("");
         DialogChrome.PrepareModalWindow(
@@ -37,15 +43,19 @@ public partial class CommandPaletteDialog : Window
     /// </summary>
     // Internal rather than public: the class itself has to be public for the
     // generated XAML partial, but ShellCommand is an internal shell concept.
-    internal static ShellCommand? Show(Window owner, ThemePalette theme, IReadOnlyList<ShellCommand> commands)
+    internal static ShellCommand? Show(
+        Window owner,
+        ThemePalette theme,
+        IReadOnlyList<ShellCommand> commands,
+        IReadOnlyList<string> recentIds)
     {
-        var dialog = new CommandPaletteDialog(owner, theme, commands);
+        var dialog = new CommandPaletteDialog(owner, theme, commands, recentIds);
         return dialog.ShowDialog() == true ? dialog.Chosen : null;
     }
 
     private void ApplyQuery(string query)
     {
-        var matches = ShellCommandPalette.Filter(commands, query);
+        var matches = ShellCommandPalette.Filter(commands, query, recentIds);
         ResultsList.ItemsSource = matches;
         if (matches.Count > 0)
         {

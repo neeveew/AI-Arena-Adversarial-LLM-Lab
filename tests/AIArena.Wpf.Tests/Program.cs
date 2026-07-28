@@ -203,6 +203,7 @@ var tests = new List<(string Name, Action Test)>
     ("command palette ranks matches predictably", CommandPaletteRanksMatchesPredictably),
     ("empty and off states are not styled as failures", EmptyAndOffStatesAreNotStyledAsFailures),
     ("dependency index check ignores line endings", DependencyIndexCheckIgnoresLineEndings),
+    ("every human drivable event has a shared publisher", EveryHumanDrivableEventHasASharedPublisher),
     ("status tones avoid agent identity accents", StatusTonesAvoidAgentIdentityAccents),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
     ("app settings coordinator selects provider focus", AppSettingsCoordinatorSelectsProviderFocus),

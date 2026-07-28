@@ -374,19 +374,15 @@ public partial class MainWindow
                 }
             case AIArenaControlCommands.ArenaStart:
                 _ = ArenaRun.StartAutoChatAsync();
-                _controlPlaneEvents.Publish("arena.run.started", "Arena auto-chat start requested.");
                 return AIArenaControlResponse.Success(request, "Arena auto-chat start requested.", BuildControlPlaneSnapshot());
             case AIArenaControlCommands.ArenaStop:
                 ArenaRun.StopAutoChat();
-                _controlPlaneEvents.Publish("arena.run.stopped", "Arena auto-chat stop requested.");
                 return AIArenaControlResponse.Success(request, "Arena auto-chat stop requested.", BuildControlPlaneSnapshot());
             case AIArenaControlCommands.ArenaTurn:
                 await ArenaRun.RunOneTurnAsync();
-                _controlPlaneEvents.Publish("arena.turn.completed", "Arena one-turn request completed.");
                 return AIArenaControlResponse.Success(request, "Arena one-turn request completed.", BuildControlPlaneSnapshot());
             case AIArenaControlCommands.ArenaNarrate:
                 await ArenaRun.NarrateNowAsync();
-                _controlPlaneEvents.Publish("arena.narration.completed", "Arena narration request completed.");
                 return AIArenaControlResponse.Success(request, "Arena narration request completed.", BuildControlPlaneSnapshot());
             case AIArenaControlCommands.ArenaReset:
                 if (!OptionalBoolArg(request, "confirm"))
@@ -429,12 +425,10 @@ public partial class MainWindow
                     }
 
                     await InternetWorkflow.ControlSetEnabledAsync(enabled);
-                    _controlPlaneEvents.Publish("internet.changed", "Internet setting changed.", InternetWorkflow.ControlState);
                     return AIArenaControlResponse.Success(request, "Internet setting changed.", InternetWorkflow.ControlState);
                 }
             case AIArenaControlCommands.InternetTest:
                 await InternetWorkflow.TestInternetAsync();
-                _controlPlaneEvents.Publish("internet.test.completed", "Internet diagnostic completed.", InternetWorkflow.ControlState);
                 return AIArenaControlResponse.Success(request, "Internet diagnostic completed.", InternetWorkflow.ControlState);
             case AIArenaControlCommands.ExportTranscript:
                 return AIArenaControlResponse.Success(request, "Transcript export captured.", BuildTranscriptControlExport());

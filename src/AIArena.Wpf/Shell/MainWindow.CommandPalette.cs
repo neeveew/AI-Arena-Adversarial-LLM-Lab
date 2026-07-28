@@ -11,13 +11,31 @@ public partial class MainWindow
     // handler the button or shortcut calls, so there is one behaviour per
     // action and the palette cannot drift away from the UI.
 
+    // Most-recently-used ids, newest first. Kept for the session rather than
+    // persisted: the point is that the handful of things you are doing right now
+    // stay at the top, and that intent rarely survives a restart.
+    private readonly List<string> _recentCommandIds = [];
+
+    private const int RecentCommandLimit = 8;
+
     private void ShowCommandPalette()
     {
-        var chosen = CommandPaletteDialog.Show(this, _theme, BuildShellCommands());
+        var chosen = CommandPaletteDialog.Show(this, _theme, BuildShellCommands(), _recentCommandIds);
+        if (chosen is null)
+        {
+            return;
+        }
+
+        _recentCommandIds.Remove(chosen.Id);
+        _recentCommandIds.Insert(0, chosen.Id);
+        if (_recentCommandIds.Count > RecentCommandLimit)
+        {
+            _recentCommandIds.RemoveRange(RecentCommandLimit, _recentCommandIds.Count - RecentCommandLimit);
+        }
 
         // Invoked after the dialog closes so an action is free to open another
         // window without fighting a modal that is still up.
-        chosen?.Invoke();
+        chosen.Invoke();
     }
 
     private IReadOnlyList<ShellCommand> BuildShellCommands()

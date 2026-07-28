@@ -232,7 +232,31 @@ The other commands return the refreshed session/checkpoint inventory in `data`; 
 
 ## Events
 
-The event stream emits line-delimited JSON. Current event types:
+The event stream emits line-delimited JSON.
+
+Most shell events are reported whichever way the change happened. Opening Match
+Setup with `F2` or the top bar emits the same `shell.overlay.changed` as the
+`match.setup.open` command, and the same holds for navigation, the right rail,
+the theme, the transcript view preset, the Internet setting and diagnostic, and
+the arena run loop. Watching the stream therefore shows a person using the app,
+not only an operator driving it from a script. Earlier versions published these
+from the command handlers alone, so anything done by hand was invisible.
+
+Each change is still reported once, not once per route, and the publishers are
+gated on the state actually changing - resizing the window does not emit a run
+of `navigation.rail.changed`.
+
+Some events remain command-only because they describe a request that arrives
+with the command rather than shell state: `agent.command.staged`,
+`agent.command.approved`, `agent.command.rejected`, `agent.prompt.sent`,
+`agent.prompt.staged`, `agent.stop.requested`, `agent.runbook.resumed`,
+`agent.runbook.checkpointed`, `agent.workspace.changed`, `arena.operator.sent`,
+`arena.reset.completed`, `match.generation.changed`,
+`session.saved-state.changed`, and `navigation.provider.focused`. The equivalent
+UI gestures report themselves through the transcript and the Agent workspace
+instead.
+
+Current event types:
 
 - `events.connected`
 - `status.changed`

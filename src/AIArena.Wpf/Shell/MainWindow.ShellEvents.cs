@@ -51,7 +51,42 @@ public partial class MainWindow
             transcriptView.PresetChanged = PublishViewPresetChanged;
         }
 
+        ArenaRun.RunLifecycle = PublishArenaLifecycle;
+        InternetWorkflow.EnabledChanged = () =>
+            _controlPlaneEvents.Publish("internet.changed", "Internet setting changed.", InternetWorkflow.ControlState);
+        InternetWorkflow.DiagnosticCompleted = () =>
+            _controlPlaneEvents.Publish("internet.test.completed", "Internet diagnostic completed.", InternetWorkflow.ControlState);
+
         _shellEventsArmed = true;
+    }
+
+    /// <summary>
+    /// Run-loop transitions are discrete events rather than state, so unlike the
+    /// shell publishers these are not change-gated: running two turns should be
+    /// reported twice.
+    /// </summary>
+    private void PublishArenaLifecycle(string transition)
+    {
+        if (!_shellEventsArmed)
+        {
+            return;
+        }
+
+        switch (transition)
+        {
+            case "started":
+                _controlPlaneEvents.Publish("arena.run.started", "Arena auto-chat start requested.");
+                break;
+            case "stopped":
+                _controlPlaneEvents.Publish("arena.run.stopped", "Arena auto-chat stop requested.");
+                break;
+            case "turn":
+                _controlPlaneEvents.Publish("arena.turn.completed", "Arena one-turn request completed.");
+                break;
+            case "narration":
+                _controlPlaneEvents.Publish("arena.narration.completed", "Arena narration request completed.");
+                break;
+        }
     }
 
     private void PublishNavigationChanged()
