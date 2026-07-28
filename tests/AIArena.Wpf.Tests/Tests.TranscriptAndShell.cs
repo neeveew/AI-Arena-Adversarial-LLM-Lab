@@ -3688,6 +3688,64 @@ static void TranscriptSearchCoordinatorExposesRowAutomation()
     });
 }
 
+static void CrashesLeaveSomethingBehind()
+{
+    // The only diagnostics were Debug.WriteLine calls, which the compiler strips
+    // from the release build people actually run. An unhandled exception closed
+    // the window and left no dialog, no log and nothing to report - and the data
+    // root had a logs directory nothing had written to in months.
+    string? written = null;
+    try
+    {
+        Exception captured;
+        try
+        {
+            throw new InvalidOperationException("crash reporter self test");
+        }
+        catch (InvalidOperationException ex)
+        {
+            captured = ex;
+        }
+
+        written = CrashReporter.Write("SelfTest", captured);
+        Require(written is not null, "a crash report should be written");
+        Require(File.Exists(written!), "the reported path should exist");
+
+        var report = File.ReadAllText(written!);
+        Require(report.Contains("crash reporter self test", StringComparison.Ordinal), "the report should carry the exception message");
+        Require(report.Contains("SelfTest", StringComparison.Ordinal), "the report should say where the failure came from");
+        Require(report.Contains("InvalidOperationException", StringComparison.Ordinal), "the report should carry the exception type");
+        Require(report.Contains("AI Arena", StringComparison.Ordinal), "the report should identify the build");
+
+        // A handler that throws turns a diagnosable failure into a mystery, so
+        // a null exception has to be survivable too.
+        var nullCase = CrashReporter.Write("SelfTest", null);
+        if (nullCase is not null && File.Exists(nullCase))
+        {
+            File.Delete(nullCase);
+        }
+    }
+    finally
+    {
+        if (written is not null && File.Exists(written))
+        {
+            File.Delete(written);
+        }
+    }
+
+    // And the handlers have to actually be installed, or none of the above runs.
+    var app = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/App.xaml.cs"));
+    foreach (var hook in new[] { "DispatcherUnhandledException", "AppDomain.CurrentDomain.UnhandledException", "TaskScheduler.UnobservedTaskException" })
+    {
+        Require(app.Contains(hook, StringComparison.Ordinal), $"{hook} should be handled");
+    }
+
+    Require(
+        app.IndexOf("InstallCrashHandlers()", StringComparison.Ordinal)
+            < app.IndexOf("SessionStore.ProtectSecret", StringComparison.Ordinal),
+        "the handlers should be installed before the rest of startup can fail");
+}
+
 static void NarrowingTheWindowDoesNotHideTheRailForGood()
 {
     // Once the window is wide again the effective state is decided by the latch

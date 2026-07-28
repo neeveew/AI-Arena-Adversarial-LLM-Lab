@@ -208,6 +208,7 @@ var tests = new List<(string Name, Action Test)>
     ("screenshots and modals do not misreport the app", ScreenshotsAndModalsDoNotMisreportTheApp),
     ("settings and match setup do not share the window", SettingsAndMatchSetupDoNotShareTheWindow),
     ("narrowing the window does not hide the rail for good", NarrowingTheWindowDoesNotHideTheRailForGood),
+    ("crashes leave something behind", CrashesLeaveSomethingBehind),
     ("empty arguments are not mistaken for missing ones", EmptyArgumentsAreNotMistakenForMissingOnes),
     ("status tones avoid agent identity accents", StatusTonesAvoidAgentIdentityAccents),
     ("shell navigation coordinator selects themes", ShellNavigationCoordinatorSelectsThemes),
