@@ -2,7 +2,7 @@
 
 A native Windows lab for running adversarial multi-agent conversations and collaborative AI team chats between local or OpenAI-compatible LLMs.
 
-[Download 0.4.121-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.121-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
+[Download 0.4.122-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.122-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
 
 AI Arena is not a chatbot and not just a model comparison board. It is a local multi-agent LLM lab where agents can debate, collaborate, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
 
