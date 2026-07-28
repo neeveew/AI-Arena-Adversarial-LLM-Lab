@@ -211,6 +211,7 @@ var tests = new List<(string Name, Action Test)>
     ("crashes leave something behind", CrashesLeaveSomethingBehind),
     ("an unknown theme is refused rather than substituted", AnUnknownThemeIsRefusedRatherThanSubstituted),
     ("generation refuses unknown options instead of substituting", GenerationRefusesUnknownOptionsInsteadOfSubstituting),
+    ("a blocked arena operation is not reported as completed", ABlockedArenaOperationIsNotReportedAsCompleted),
     ("provider error text cannot be a whole web page", ProviderErrorTextCannotBeAWholeWebPage),
     ("rejected workspace paths are reported as failures", RejectedWorkspacePathsAreReportedAsFailures),
     ("empty arguments are not mistaken for missing ones", EmptyArgumentsAreNotMistakenForMissingOnes),

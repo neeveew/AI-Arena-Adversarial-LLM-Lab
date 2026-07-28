@@ -4425,12 +4425,12 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         SaveStatusText.ToolTip = text;
     }
 
-    private Task RunArenaBusyForCoordinatorAsync(string status, Func<Task> action)
+    private Task<bool> RunArenaBusyForCoordinatorAsync(string status, Func<Task> action)
     {
         return RunArenaBusyAsync(status, action);
     }
 
-    private Task RunArenaBusyForCoordinatorAsync(string status, Button? operationButton, Func<Task> action, bool allowDuringAutoChat)
+    private Task<bool> RunArenaBusyForCoordinatorAsync(string status, Button? operationButton, Func<Task> action, bool allowDuringAutoChat)
     {
         return RunArenaBusyAsync(status, operationButton, action, allowDuringAutoChat);
     }
@@ -4499,7 +4499,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         });
     }
 
-    private Task RunArenaBusyForCoordinatorAsync(
+    private Task<bool> RunArenaBusyForCoordinatorAsync(
         string status,
         Button? operationButton,
         Func<CancellationToken, Task> action,
@@ -4543,14 +4543,15 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         _controlPlaneEvents.Publish("status.changed", status, new { surface = "arena" });
     }
 
-    private async Task RunArenaBusyAsync(string status, Func<Task> action)
+    /// <summary>False when the arena was busy and the work was skipped.</summary>
+    private async Task<bool> RunArenaBusyAsync(string status, Func<Task> action)
     {
-        await RunArenaBusyAsync(status, null, action);
+        return await RunArenaBusyAsync(status, null, action);
     }
 
-    private async Task RunArenaBusyAsync(string status, Button? operationButton, Func<Task> action, bool allowDuringAutoChat = false)
+    private async Task<bool> RunArenaBusyAsync(string status, Button? operationButton, Func<Task> action, bool allowDuringAutoChat = false)
     {
-        await ArenaOperations.RunAsync(status, operationButton, action, allowDuringAutoChat);
+        return await ArenaOperations.RunAsync(status, operationButton, action, allowDuringAutoChat);
     }
 
     private void SetArenaBusy(bool busy, string status, bool stopEnabled)

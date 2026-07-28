@@ -110,19 +110,27 @@ internal sealed class ArenaOperationCoordinator
         UpdateReadiness(new ArenaActionReadiness(false, readinessMessage));
     }
 
-    public Task RunAsync(string status, Func<Task> action)
+    public Task<bool> RunAsync(string status, Func<Task> action)
     {
         ArgumentNullException.ThrowIfNull(action);
         return RunAsync(status, null, _ => action());
     }
 
-    public Task RunAsync(string status, Button? operationButton, Func<Task> action, bool allowDuringAutoChat = false)
+    public Task<bool> RunAsync(string status, Button? operationButton, Func<Task> action, bool allowDuringAutoChat = false)
     {
         ArgumentNullException.ThrowIfNull(action);
         return RunAsync(status, operationButton, _ => action(), allowDuringAutoChat);
     }
 
-    public async Task RunAsync(
+    /// <summary>
+    /// False when the operation never ran because the arena was already busy.
+    ///
+    /// This used to return void, so a blocked operation was indistinguishable
+    /// from a completed one. A button is disabled while the arena is busy, so a
+    /// person could not reach this - but the control plane could, and reported
+    /// "Arena one-turn request completed" for a turn that never happened.
+    /// </summary>
+    public async Task<bool> RunAsync(
         string status,
         Button? operationButton,
         Func<CancellationToken, Task> action,
@@ -132,7 +140,7 @@ internal sealed class ArenaOperationCoordinator
         var mode = OperationMode(isBusy(), allowDuringAutoChat, isAutoChatRunning());
         if (mode == ArenaOperationMode.Blocked || !TryBeginOperation(out var cancellationToken))
         {
-            return;
+            return false;
         }
 
         var operationLockTaken = false;
@@ -203,6 +211,10 @@ internal sealed class ArenaOperationCoordinator
                 EndOperation();
             }
         }
+
+        // The action was reached. Whether it threw is reported through the
+        // status text above, as it always has been.
+        return true;
     }
 
     public async Task TrackAsync(Func<CancellationToken, Task> action)

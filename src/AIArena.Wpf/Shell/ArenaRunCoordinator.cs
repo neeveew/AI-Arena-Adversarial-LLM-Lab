@@ -19,8 +19,8 @@ internal sealed class ArenaRunCoordinator
     private readonly Func<bool> shouldEnforceVoiceDrift;
     private readonly Func<TimeSpan> autoChatCadence;
     private readonly Action<bool, string, bool, Button?> setArenaBusy;
-    private readonly Func<string, Button?, Func<Task>, bool, Task> runArenaBusyAsync;
-    private readonly Func<string, Button?, Func<CancellationToken, Task>, bool, Task> runCancelableArenaBusyAsync;
+    private readonly Func<string, Button?, Func<Task>, bool, Task<bool>> runArenaBusyAsync;
+    private readonly Func<string, Button?, Func<CancellationToken, Task>, bool, Task<bool>> runCancelableArenaBusyAsync;
     private readonly Func<string, Task> refreshActiveSessionAsync;
     private readonly Action<string> setLoadStatus;
     private readonly Action<string> setArenaRunStatus;
@@ -42,13 +42,13 @@ internal sealed class ArenaRunCoordinator
         Func<bool> shouldEnforceVoiceDrift,
         Func<TimeSpan> autoChatCadence,
         Action<bool, string, bool, Button?> setArenaBusy,
-        Func<string, Button?, Func<Task>, bool, Task> runArenaBusyAsync,
+        Func<string, Button?, Func<Task>, bool, Task<bool>> runArenaBusyAsync,
         Func<string, Task> refreshActiveSessionAsync,
         Action<string> setLoadStatus,
         Action<string> setArenaRunStatus,
         Func<string, bool> isAgentSpeaker,
         Action<DialogueMessage>? speakNarratorMessage = null,
-        Func<string, Button?, Func<CancellationToken, Task>, bool, Task>? runCancelableArenaBusyAsync = null)
+        Func<string, Button?, Func<CancellationToken, Task>, bool, Task<bool>>? runCancelableArenaBusyAsync = null)
     {
         this.turnRunner = turnRunner;
         this.narratorService = narratorService;
@@ -198,16 +198,17 @@ internal sealed class ArenaRunCoordinator
         await completion;
     }
 
-    public async Task NarrateNowAsync()
+    /// <summary>False when there was no session, or the arena was already busy.</summary>
+    public async Task<bool> NarrateNowAsync()
     {
         var session = activeSession();
         if (session is null)
         {
             setLoadStatus("No active session.");
-            return;
+            return false;
         }
 
-        await runCancelableArenaBusyAsync("Narrator thinking...", narrateNowButton, async cancellationToken =>
+        var ran = await runCancelableArenaBusyAsync("Narrator thinking...", narrateNowButton, async cancellationToken =>
         {
             var result = await narratorService.NarrateNowAsync(session.Id, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
@@ -219,19 +220,28 @@ internal sealed class ArenaRunCoordinator
             }
         }, true);
 
-        RunLifecycle?.Invoke("narration");
+        // Only announce a narration that actually happened. The runner returns
+        // false when the arena was busy and the work was skipped, and reporting
+        // that as completed is how a blocked request came to look like a done one.
+        if (ran)
+        {
+            RunLifecycle?.Invoke("narration");
+        }
+
+        return ran;
     }
 
-    public async Task RunOneTurnAsync()
+    /// <summary>False when there was no session, or the arena was already busy.</summary>
+    public async Task<bool> RunOneTurnAsync()
     {
         var session = activeSession();
         if (session is null)
         {
             setLoadStatus("No active session.");
-            return;
+            return false;
         }
 
-        await runCancelableArenaBusyAsync("Running native 1 TURN...", oneTurnButton, async cancellationToken =>
+        var ran = await runCancelableArenaBusyAsync("Running native 1 TURN...", oneTurnButton, async cancellationToken =>
         {
             var result = await turnRunner.RunOneTurnAsync(session.Id, shouldEnforceVoiceDrift(), cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
@@ -240,7 +250,12 @@ internal sealed class ArenaRunCoordinator
             SetBothStatuses(status);
         }, false);
 
-        RunLifecycle?.Invoke("turn");
+        if (ran)
+        {
+            RunLifecycle?.Invoke("turn");
+        }
+
+        return ran;
     }
 
     public async Task RunAgentTurnAsync(AgentState agent)

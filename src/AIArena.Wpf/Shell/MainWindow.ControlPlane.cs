@@ -450,11 +450,24 @@ public partial class MainWindow
                 ArenaRun.StopAutoChat();
                 return AIArenaControlResponse.Success(request, "Arena auto-chat stop requested.", BuildControlPlaneSnapshot());
             case AIArenaControlCommands.ArenaTurn:
-                await ArenaRun.RunOneTurnAsync();
-                return AIArenaControlResponse.Success(request, "Arena one-turn request completed.", BuildControlPlaneSnapshot());
+                // A turn is skipped when the arena is already busy. Reporting
+                // that as completed made five concurrent requests look like five
+                // turns when only three ran, and a caller had no way to tell.
+                return await ArenaRun.RunOneTurnAsync()
+                    ? AIArenaControlResponse.Success(request, "Arena one-turn request completed.", BuildControlPlaneSnapshot())
+                    : AIArenaControlResponse.Error(
+                        request,
+                        "not_available",
+                        "The arena is busy or has no active session; the turn was not run.",
+                        BuildControlPlaneSnapshot());
             case AIArenaControlCommands.ArenaNarrate:
-                await ArenaRun.NarrateNowAsync();
-                return AIArenaControlResponse.Success(request, "Arena narration request completed.", BuildControlPlaneSnapshot());
+                return await ArenaRun.NarrateNowAsync()
+                    ? AIArenaControlResponse.Success(request, "Arena narration request completed.", BuildControlPlaneSnapshot())
+                    : AIArenaControlResponse.Error(
+                        request,
+                        "not_available",
+                        "The arena is busy or has no active session; narration was not run.",
+                        BuildControlPlaneSnapshot());
             case AIArenaControlCommands.ArenaReset:
                 if (!OptionalBoolArg(request, "confirm"))
                 {

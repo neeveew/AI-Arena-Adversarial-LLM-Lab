@@ -692,7 +692,7 @@ static void ArenaRunCoordinatorDrainsAutoChatOnStopCore()
 
                 busy = value;
             },
-            async (_, _, action, _) => await action(),
+            async (_, _, action, _) => { await action(); return true; },
             _ => Task.CompletedTask,
             _ => { },
             _ => { },
@@ -822,7 +822,7 @@ static ArenaRunCoordinator CreateArenaRunCoordinatorForFailureTest(
             busy = value;
             captureStatus(status);
         },
-        async (_, _, action, _) => await action(),
+        async (_, _, action, _) => { await action(); return true; },
         _ => Task.CompletedTask,
         captureStatus,
         captureStatus,
@@ -3774,6 +3774,54 @@ static void ProviderErrorTextCannotBeAWholeWebPage()
     Require(
         deepResult.Length <= LmStudioJsonMessageExtractor.MaxMessageLength,
         "a document too deep to parse should still produce a bounded message");
+}
+
+static void ABlockedArenaOperationIsNotReportedAsCompleted()
+{
+    // The operation runner returned void, so an operation skipped because the
+    // arena was already busy was indistinguishable from one that ran. A button
+    // is disabled while busy so a person could not reach it, but the control
+    // plane could: five concurrent arena.turn calls reported five successes
+    // when three turns actually happened, and the run-loop event fired for the
+    // two that never ran.
+    var runner = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ArenaOperationCoordinator.cs"));
+    Require(
+        runner.Contains("public async Task<bool> RunAsync(", StringComparison.Ordinal),
+        "the operation runner has to report whether it ran");
+
+    var blocked = runner.IndexOf("mode == ArenaOperationMode.Blocked", StringComparison.Ordinal);
+    Require(blocked >= 0, "the blocked path should remain discoverable");
+    Require(
+        runner[blocked..Math.Min(runner.Length, blocked + 220)].Contains("return false", StringComparison.Ordinal),
+        "a blocked operation must report that it did not run");
+
+    // The event must not fire for work that was skipped, or the stream says a
+    // turn completed when none did.
+    var arena = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ArenaRunCoordinator.cs"));
+    foreach (var method in new[] { "RunOneTurnAsync", "NarrateNowAsync" })
+    {
+        Require(
+            arena.Contains($"public async Task<bool> {method}(", StringComparison.Ordinal),
+            $"{method} should report whether it ran");
+    }
+
+    Require(
+        arena.Contains("if (ran)", StringComparison.Ordinal),
+        "the run-loop event should be gated on the work actually happening");
+    Require(
+        !arena.Contains("}, false);\r\n\r\n        RunLifecycle?.Invoke(\"turn\");", StringComparison.Ordinal)
+            && !arena.Contains("}, false);\n\n        RunLifecycle?.Invoke(\"turn\");", StringComparison.Ordinal),
+        "the turn event must not fire unconditionally again");
+
+    // And the command has to pass the answer on rather than always succeeding.
+    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    var turnCase = dispatch.IndexOf("case AIArenaControlCommands.ArenaTurn", StringComparison.Ordinal);
+    Require(turnCase >= 0, "the arena.turn command should remain discoverable");
+    var body = dispatch[turnCase..Math.Min(dispatch.Length, turnCase + 900)];
+    Require(
+        body.Contains("await ArenaRun.RunOneTurnAsync()", StringComparison.Ordinal)
+            && body.Contains("not_available", StringComparison.Ordinal),
+        "a skipped turn should be reported as unavailable rather than completed");
 }
 
 static void GenerationRefusesUnknownOptionsInsteadOfSubstituting()
