@@ -816,6 +816,24 @@ static void MainWindowContextualCommandHostsAndProviderMetricsStayWired()
     var viewHost = Named("ViewMenuHost");
     Require(viewHost.Name.LocalName == "Grid", "View should have a dedicated visibility host");
     Require(viewHost.Descendants().Contains(Named("ViewMenuButton")), "ViewMenuHost should own the transcript View command");
+    var viewAndDebugGroup = Named("ViewAndDebugToolbarGroup");
+    Require(viewAndDebugGroup.Descendants().Contains(viewHost) && viewAndDebugGroup.Descendants().Contains(Named("DebugMenuHost")), "the View and Debug hosts should share a visibility-aware toolbar group");
+    Require(!viewAndDebugGroup.Descendants().Contains(searchHost), "the visibility-aware View and Debug group should not hide the always-available Agent help commands");
+    var collapsedVisibilityConditions = viewAndDebugGroup
+        .Descendants()
+        .Where(element => element.Name.LocalName == "Condition"
+            && string.Equals((string?)element.Attribute("Value"), "Collapsed", StringComparison.Ordinal))
+        .Select(element => (string?)element.Attribute("Binding"))
+        .ToArray();
+    Require(
+        collapsedVisibilityConditions.Any(binding => binding?.Contains("ElementName=ViewMenuHost", StringComparison.Ordinal) == true)
+        && collapsedVisibilityConditions.Any(binding => binding?.Contains("ElementName=DebugMenuHost", StringComparison.Ordinal) == true),
+        "the shared View and Debug toolbar chrome should collapse when both contextual hosts are collapsed");
+    Require(
+        viewAndDebugGroup.Descendants().Any(element => element.Name.LocalName == "Setter"
+            && string.Equals((string?)element.Attribute("Property"), "Visibility", StringComparison.Ordinal)
+            && string.Equals((string?)element.Attribute("Value"), "Collapsed", StringComparison.Ordinal)),
+        "the empty View and Debug toolbar group should not leave phantom chrome in Agent mode");
 
     var themePicker = Named("ThemePicker");
     var visualsSection = themePicker.Ancestors().SingleOrDefault(element =>
@@ -1507,7 +1525,10 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
     var topBarXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"));
     var windowTag = xaml[..(xaml.IndexOf('>') + 1)];
     var topBarLayout = XamlStartTag(topBarXaml, "TopBarLayoutGrid", "Grid");
+    var topBarStatus = XamlStartTag(topBarXaml, "TopBarStatus", "Grid");
+    var topBarSecondaryStatus = XamlStartTag(topBarXaml, "TopBarSecondaryStatus", "DockPanel");
     var topBarCommands = XamlStartTag(topBarXaml, "TopBarCommandPanel", "WrapPanel");
+    var transcriptSearchPopup = XamlStartTag(topBarXaml, "TranscriptSearchPopup", "Popup");
     var viewMenuButton = XamlStartTag(topBarXaml, "ViewMenuButton", "Button");
     var diagnosticsGrid = XamlStartTag(xaml, "TranscriptDiagnosticsGrid", "UniformGrid");
     var telemetryGrid = XamlStartTag(xaml, "TranscriptTelemetryGrid", "UniformGrid");
@@ -1517,8 +1538,23 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
     Require(windowTag.Contains("UseLayoutRounding=\"True\"", StringComparison.Ordinal), "the shell should round layout at the root for crisp fractional-DPI borders");
     Require(windowTag.Contains("SnapsToDevicePixels=\"True\"", StringComparison.Ordinal), "the shell should snap its root visual to device pixels");
     Require(topBarLayout.Contains("x:Name=\"TopBarLayoutGrid\"", StringComparison.Ordinal), "the top bar should expose an adaptive grid host");
-    Require(topBarCommands.Contains("Grid.Row=\"1\"", StringComparison.Ordinal) && topBarCommands.Contains("Grid.ColumnSpan=\"2\"", StringComparison.Ordinal), "the top bar should fail safe to the narrow stacked arrangement before its first size pass");
+    var topBarDocument = XDocument.Load(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"));
+    XNamespace xamlNamespace = "http://schemas.microsoft.com/winfx/2006/xaml";
+    var topBarLayoutElement = topBarDocument.Descendants().Single(element =>
+        string.Equals((string?)element.Attribute(xamlNamespace + "Name"), "TopBarLayoutGrid", StringComparison.Ordinal));
+    var primaryTopBarRow = topBarLayoutElement
+        .Elements()
+        .Single(element => element.Name.LocalName == "Grid.RowDefinitions")
+        .Elements()
+        .First();
+    Require(string.Equals((string?)primaryTopBarRow.Attribute("MinHeight"), "38", StringComparison.Ordinal), "the shared top-bar primary row should reserve the 38-DIP command-group height");
+    Require(topBarStatus.Contains("Grid.Row=\"0\"", StringComparison.Ordinal) && topBarStatus.Contains("VerticalAlignment=\"Center\"", StringComparison.Ordinal), "the top-bar metrics should occupy the shared centered primary row");
+    Require(topBarSecondaryStatus.Contains("Grid.Row=\"1\"", StringComparison.Ordinal) && topBarSecondaryStatus.Contains("Grid.ColumnSpan=\"2\"", StringComparison.Ordinal), "the optional status line should occupy its own full-width row instead of changing the primary-row alignment");
+    Require(topBarCommands.Contains("Grid.Row=\"2\"", StringComparison.Ordinal) && topBarCommands.Contains("Grid.ColumnSpan=\"2\"", StringComparison.Ordinal), "the top bar should fail safe to the narrow stacked arrangement before its first size pass");
     Require(topBarCommands.Contains("HorizontalAlignment=\"Right\"", StringComparison.Ordinal), "stacked top-bar commands should remain visually anchored to the right");
+    Require(topBarCommands.Contains("VerticalAlignment=\"Center\"", StringComparison.Ordinal), "inline top-bar commands should share the primary-row centerline with the metrics");
+    Require(File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs")).Contains("Grid.SetRow(TopBarCommandPanel, stacked ? 2 : 0);", StringComparison.Ordinal), "the adaptive shell should move commands into the shared primary row only for inline layouts");
+    Require(transcriptSearchPopup.Contains("PlacementTarget=\"{Binding ElementName=TopBarLayoutGrid}\"", StringComparison.Ordinal), "the transcript search popup should open below the complete multi-row top bar");
     Require(viewMenuButton.Contains("Content=\"{Binding ViewButtonLabel}\"", StringComparison.Ordinal), "the closed View control should keep the active preset visible");
     Require(topBarXaml.Contains("Visibility=\"{Binding ShowStatusLine, Converter={StaticResource BooleanToVisibilityConverter}}\"", StringComparison.Ordinal), "routine status should not reserve a permanent second top-bar row");
     var topBarPresentation = new AIArena.Wpf.ViewModels.ShellTopBarPresentationViewModel();

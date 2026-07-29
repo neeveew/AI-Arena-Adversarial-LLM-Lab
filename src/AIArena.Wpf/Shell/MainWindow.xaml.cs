@@ -4019,7 +4019,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         Grid.SetRow(TopBarStatus, 0);
         Grid.SetColumn(TopBarStatus, 0);
         Grid.SetColumnSpan(TopBarStatus, stacked ? 2 : 1);
-        Grid.SetRow(TopBarCommandPanel, stacked ? 1 : 0);
+        Grid.SetRow(TopBarCommandPanel, stacked ? 2 : 0);
         Grid.SetColumn(TopBarCommandPanel, stacked ? 0 : 1);
         Grid.SetColumnSpan(TopBarCommandPanel, stacked ? 2 : 1);
         TopBarCommandPanel.Margin = stacked

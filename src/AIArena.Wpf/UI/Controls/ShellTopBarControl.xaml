@@ -143,8 +143,11 @@
             BorderThickness="0,0,0,1"
             SnapsToDevicePixels="True"
             MouseRightButtonUp="CaptionSystemMenuRequested">
-        <Grid x:Name="TopBarLayoutGrid" Margin="10,4">
+        <Grid x:Name="TopBarLayoutGrid" Margin="10,3">
             <Grid.RowDefinitions>
+                <!-- The primary rail row is shared by metrics and commands so
+                     their centers stay aligned when the status row is visible. -->
+                <RowDefinition Height="Auto" MinHeight="38" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
@@ -157,7 +160,7 @@
 
             <StackPanel x:Name="CaptionButtonsPanel"
                         Grid.Row="0"
-                        Grid.RowSpan="2"
+                        Grid.RowSpan="3"
                         Grid.Column="2"
                         Orientation="Horizontal"
                         VerticalAlignment="Top"
@@ -192,11 +195,6 @@
                   VerticalAlignment="Center"
                   WindowChrome.IsHitTestVisibleInChrome="True"
                   ToolTipService.ShowDuration="60000">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-
                 <Grid x:Name="ArenaTopBarMetrics" VerticalAlignment="Center">
                     <WrapPanel VerticalAlignment="Center">
                         <Border Style="{StaticResource TopMetricPill}" MinWidth="116">
@@ -362,32 +360,6 @@
                     </WrapPanel>
                 </Grid>
 
-                <DockPanel Grid.Row="1"
-                           Margin="2,4,2,0"
-                           LastChildFill="True"
-                           Visibility="{Binding ShowStatusLine, Converter={StaticResource BooleanToVisibilityConverter}}">
-                    <TextBlock x:Name="SaveStatusText"
-                               DockPanel.Dock="Right"
-                               Text="Saved"
-                               Style="{StaticResource Arena.Text.Caption}"
-                               AutomationProperties.LiveSetting="Polite"
-                               Visibility="Collapsed"
-                               Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}" />
-                    <Ellipse Width="6"
-                             Height="6"
-                             Margin="{DynamicResource Arena.Gap.Inline.After.Default}"
-                             Fill="{DynamicResource Arena.Brush.Info}"
-                             VerticalAlignment="Center"
-                             IsHitTestVisible="False" />
-                    <TextBlock x:Name="ArenaRunStatus"
-                               Text="{Binding ArenaStatus}"
-                               Style="{StaticResource Arena.Text.Caption}"
-                               AutomationProperties.Name="Arena status"
-                               AutomationProperties.LiveSetting="Polite"
-                               TextTrimming="CharacterEllipsis"
-                               ToolTip="{Binding ArenaStatus}" />
-                </DockPanel>
-
                 <Popup x:Name="ProviderHealthPopup"
                        PlacementTarget="{Binding ElementName=TopProviderStatusButton}"
                        Placement="Bottom"
@@ -497,8 +469,37 @@
                 </Popup>
             </Grid>
 
-            <WrapPanel x:Name="TopBarCommandPanel"
+            <DockPanel x:Name="TopBarSecondaryStatus"
                        Grid.Row="1"
+                       Grid.Column="0"
+                       Grid.ColumnSpan="2"
+                       Margin="2,0,2,0"
+                       LastChildFill="True"
+                       Visibility="{Binding ShowStatusLine, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <TextBlock x:Name="SaveStatusText"
+                           DockPanel.Dock="Right"
+                           Text="Saved"
+                           Style="{StaticResource Arena.Text.Caption}"
+                           AutomationProperties.LiveSetting="Polite"
+                           Visibility="Collapsed"
+                           Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}" />
+                <Ellipse Width="6"
+                         Height="6"
+                         Margin="{DynamicResource Arena.Gap.Inline.After.Default}"
+                         Fill="{DynamicResource Arena.Brush.Info}"
+                         VerticalAlignment="Center"
+                         IsHitTestVisible="False" />
+                <TextBlock x:Name="ArenaRunStatus"
+                           Text="{Binding ArenaStatus}"
+                           Style="{StaticResource Arena.Text.Caption}"
+                           AutomationProperties.Name="Arena status"
+                           AutomationProperties.LiveSetting="Polite"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding ArenaStatus}" />
+            </DockPanel>
+
+            <WrapPanel x:Name="TopBarCommandPanel"
+                       Grid.Row="2"
                        Grid.Column="0"
                        Grid.ColumnSpan="2"
                        Orientation="Horizontal"
@@ -571,7 +572,7 @@
                                 <TextBlock Text="&#xE721;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="14" />
                             </Button>
                             <Popup x:Name="TranscriptSearchPopup"
-                                   PlacementTarget="{Binding ElementName=TopBarStatus}"
+                                   PlacementTarget="{Binding ElementName=TopBarLayoutGrid}"
                                    Placement="Bottom"
                                    HorizontalOffset="36"
                                    VerticalOffset="18"
@@ -711,7 +712,20 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource ToolbarGroup}">
+                <Border x:Name="ViewAndDebugToolbarGroup">
+                    <Border.Style>
+                        <Style TargetType="Border" BasedOn="{StaticResource ToolbarGroup}">
+                            <Style.Triggers>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding Visibility, ElementName=ViewMenuHost}" Value="Collapsed" />
+                                        <Condition Binding="{Binding Visibility, ElementName=DebugMenuHost}" Value="Collapsed" />
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </MultiDataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
                     <StackPanel Orientation="Horizontal">
                         <Grid x:Name="ViewMenuHost" VerticalAlignment="Center">
                             <Button x:Name="ViewMenuButton"
