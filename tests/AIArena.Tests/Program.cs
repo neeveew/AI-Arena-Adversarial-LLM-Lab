@@ -22,6 +22,11 @@ if (args.Length > 0 && args[0].Equals("--event-log-writer", StringComparison.Ord
 
 var tests = new List<(string Name, Action Test)>
 {
+    ("solution doctor discovers projects and project-correct commands", DotNetSolutionDoctorTests.DiscoversSolutionsProjectsAndProjectCorrectCommands),
+    ("solution doctor parses compiler MSBuild and harness evidence", DotNetSolutionDoctorTests.ParsesCompilerMsBuildAndExecutableHarnessEvidence),
+    ("solution doctor plans focused conventional test retries", DotNetSolutionDoctorTests.PlansFocusedConventionalTestRetry),
+    ("solution doctor reports partial projects and honors cancellation", DotNetSolutionDoctorTests.ReportsPartialProjectsAndHonorsCancellation),
+    ("solution doctor validates the real AI Arena product solutions", DotNetSolutionDoctorTests.ValidatesAiArenaProductSolutions),
     ("loads legacy snapshot shape", LoadLegacySnapshotShape),
     ("session store scrubs removed rss and news extension data", SessionStoreScrubsRemovedInternetExtensions),
     ("normalizes provider base urls", NormalizeProviderBaseUrls),

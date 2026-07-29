@@ -11,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using AIArena.Core.Models;
 using AIArena.Core.Providers;
+using AIArena.Core.Services;
 using AIArena.Wpf.Models;
 using AIArena.Wpf.Services;
 using Microsoft.Win32;
@@ -130,6 +131,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private readonly Action<string> setShellStatus;
     private readonly Action<string, string, object?> publishControlEvent;
     private readonly Func<string, CancellationToken, Task<string>> buildWorkspaceProfileAsync;
+    private readonly Func<string, CancellationToken, Task<DotNetWorkspaceSnapshot>> discoverDotNetWorkspaceAsync;
     private readonly object workspaceProfileSync = new();
     private readonly List<AgentWorkspaceMessage> messages = [];
     private readonly List<AgentStep> latestSteps = [];
@@ -141,8 +143,12 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private CancellationTokenSource? workspaceProfileCancellation;
     private Task workspaceProfileRefreshTask = Task.CompletedTask;
     private long workspaceProfileRefreshVersion;
+    private long workspaceGeneration;
     private AgentCommandPreview? pendingPreview;
     private AgentCommandResult? lastCommandResult;
+    private AIArena.Core.Models.DotNetCommandResult? lastDotNetCommandResult;
+    private DotNetWorkspaceSnapshot? lastDotNetCommandSnapshot;
+    private DotNetWorkspaceSnapshot? dotNetWorkspaceSnapshot;
     private AgentWorkspaceFileReceipt? lastFileReceipt;
     private AgentArtifactSuggestion? latestArtifactSuggestion;
     private AgentArtifactSuggestion? stagedArtifactSuggestion;
@@ -173,6 +179,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private bool disposed;
 
     internal string DebugWorkspacePath => workspacePath;
+
+    internal long DebugWorkspaceGeneration => Volatile.Read(ref workspaceGeneration);
 
     internal string DebugCommandText => commandText.Text;
 
@@ -214,6 +222,10 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     internal Task DebugWorkspaceProfileRefreshTask => Volatile.Read(ref workspaceProfileRefreshTask);
 
+    internal string DebugDotNetWorkspaceState => AgentDotNetSolutionDoctorService.WorkspaceEvidenceState(dotNetWorkspaceSnapshot);
+
+    internal string DebugDotNetResultPacket => AgentDotNetSolutionDoctorService.FormatResultPacket(lastDotNetCommandSnapshot, lastDotNetCommandResult);
+
     internal string DebugArtifactSuggestion => latestArtifactSuggestion?.Summary ?? "";
 
     internal string DebugArtifactVerification => latestArtifactVerification?.Summary ?? "";
@@ -253,6 +265,10 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     internal string DebugBuildEvidenceSummary => buildEvidenceSummaryText.Text;
 
     internal int DebugBuildEvidenceCount => buildEvidenceItems.Children.Count;
+
+    internal string DebugBuildEvidenceStates => string.Join(
+        Environment.NewLine,
+        CurrentBuildEvidence().Select(item => $"{item.Label}: {item.State}"));
 
     internal string DebugOutputSummary => outputSummaryText.Text;
 
@@ -431,6 +447,26 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         return RunApprovedCommandAsync();
     }
 
+    internal bool DebugApplyCompletedCommandForTest(
+        AgentCommandResult result,
+        AgentWorkspaceFileReceipt receipt,
+        long? commandWorkspaceGeneration = null)
+    {
+        var preview = AgentWorkspaceCommand.BuildPreview(result.WorkingDirectory, result.Shell, result.Command);
+        if (!preview.Ok)
+        {
+            return false;
+        }
+
+        return ApplyCompletedCommand(
+            preview,
+            commandWorkspaceGeneration ?? Volatile.Read(ref workspaceGeneration),
+            dotNetWorkspaceSnapshot,
+            result,
+            receipt,
+            runningArtifactSuggestion: null);
+    }
+
     internal void DebugPreviewCommand()
     {
         PreviewCommand();
@@ -551,7 +587,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         StackPanel? outputItems = null,
         Action<string, string, object?>? publishControlEvent = null,
         Func<string, CancellationToken, Task<string>>? buildWorkspaceProfileAsync = null,
-        TextBlock? runbookMetaText = null)
+        TextBlock? runbookMetaText = null,
+        Func<string, CancellationToken, Task<DotNetWorkspaceSnapshot>>? discoverDotNetWorkspaceAsync = null)
     {
         this.owner = owner;
         this.dispatcher = dispatcher;
@@ -627,6 +664,10 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         this.setShellStatus = setShellStatus;
         this.publishControlEvent = publishControlEvent ?? ((_, _, _) => { });
         this.buildWorkspaceProfileAsync = buildWorkspaceProfileAsync ?? WorkspaceScannerService.BuildWorkspaceProfileAsync;
+        this.discoverDotNetWorkspaceAsync = discoverDotNetWorkspaceAsync
+            ?? ((root, cancellationToken) => Task.Run(
+                () => new DotNetWorkspaceIntelligenceService().DiscoverAsync(root, cancellationToken: cancellationToken),
+                cancellationToken));
 
         this.workspaceBrowseButton.Click += (_, _) => BrowseWorkspace();
         this.workspaceApplyButton.Click += (_, _) => ApplyWorkspaceFromText(persist: true);
@@ -859,6 +900,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         activeCommandHistoryId = null;
         nextCommandHistoryId = 1;
         lastCommandResult = null;
+        lastDotNetCommandResult = null;
+        lastDotNetCommandSnapshot = null;
         lastFileReceipt = null;
         latestArtifactSuggestion = null;
         stagedArtifactSuggestion = null;
@@ -937,11 +980,23 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         var normalized = AgentWorkspaceCommand.NormalizeWorkspacePath(workspacePathText.Text, out var error);
         if (!string.IsNullOrWhiteSpace(error))
         {
+            if (!string.IsNullOrWhiteSpace(workspacePath))
+            {
+                Interlocked.Increment(ref workspaceGeneration);
+            }
+
             workspacePath = "";
             runbook.Reset("");
             runbookVerificationPending = false;
             PersistRunbook();
             CancelWorkspaceProfileRefresh("No workspace profile yet.");
+            lastCommandResult = null;
+            lastDotNetCommandResult = null;
+            lastDotNetCommandSnapshot = null;
+            lastFileReceipt = null;
+            lastWorkBrief = "";
+            commandHistory.Clear();
+            activeCommandHistoryId = null;
             latestArtifactSuggestion = null;
             stagedArtifactSuggestion = null;
             latestArtifactVerification = null;
@@ -955,12 +1010,20 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             PauseAutoContinue("Workspace missing; Auto Continue was reset.");
             RefreshAutoApproveAction();
             SetBuildEvidenceSummary("Workspace missing; command proposals are disabled.");
+            RefreshCommandHistory();
+            RefreshWorkSummary();
             RefreshProviderState();
             return;
         }
 
+        var workspaceChanged = !workspacePath.Equals(normalized, StringComparison.OrdinalIgnoreCase);
         var changedWorkspace = !string.IsNullOrWhiteSpace(workspacePath)
-            && !workspacePath.Equals(normalized, StringComparison.OrdinalIgnoreCase);
+            && workspaceChanged;
+        if (workspaceChanged)
+        {
+            Interlocked.Increment(ref workspaceGeneration);
+        }
+
         workspacePath = normalized;
         RefreshWorkspaceProfile();
         workspacePathText.Text = normalized;
@@ -978,10 +1041,19 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             runbookVerificationPending = false;
             PersistRunbook();
             ResetPhases("Workspace changed. Ready for a new software task.");
+            lastCommandResult = null;
+            lastDotNetCommandResult = null;
+            lastDotNetCommandSnapshot = null;
+            lastFileReceipt = null;
+            lastWorkBrief = "";
+            commandHistory.Clear();
+            activeCommandHistoryId = null;
             latestArtifactSuggestion = null;
             stagedArtifactSuggestion = null;
             latestArtifactVerification = null;
             lastCommandWasArtifactVerification = false;
+            RefreshCommandHistory();
+            RefreshWorkSummary();
             RefreshOutputs();
         }
 
@@ -1030,6 +1102,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             cancellation = new CancellationTokenSource();
             workspaceProfileCancellation = cancellation;
             Volatile.Write(ref workspaceProfile, "Workspace profile is loading.");
+            dotNetWorkspaceSnapshot = null;
         }
 
         TryCancel(previousCancellation);
@@ -1046,6 +1119,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             cancellation = workspaceProfileCancellation;
             workspaceProfileCancellation = null;
             Volatile.Write(ref workspaceProfile, replacementProfile);
+            dotNetWorkspaceSnapshot = null;
         }
 
         TryCancel(cancellation);
@@ -1058,13 +1132,41 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     {
         try
         {
-            var profile = await buildWorkspaceProfileAsync(profilePath, cancellation.Token).ConfigureAwait(false);
+            string profile;
+            try
+            {
+                profile = await buildWorkspaceProfileAsync(profilePath, cancellation.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                profile = "Filesystem workspace profile unavailable; .NET discovery continued independently.";
+            }
+
+            DotNetWorkspaceSnapshot dotNetSnapshot;
+            try
+            {
+                dotNetSnapshot = await discoverDotNetWorkspaceAsync(profilePath, cancellation.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                dotNetSnapshot = AgentDotNetSolutionDoctorService.CreateUnavailableSnapshot(profilePath, exception);
+            }
+
             cancellation.Token.ThrowIfCancellationRequested();
             ApplyWorkspaceProfileResult(
                 profilePath,
                 version,
                 cancellation,
-                string.IsNullOrWhiteSpace(profile) ? "Workspace profile unavailable." : profile);
+                string.IsNullOrWhiteSpace(profile) ? "Workspace profile unavailable." : profile,
+                dotNetSnapshot);
         }
         catch (OperationCanceledException)
         {
@@ -1075,7 +1177,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 profilePath,
                 version,
                 cancellation,
-                "Workspace profile unavailable; ask Builder for a read-only inspection first.");
+                "Workspace profile unavailable; ask Builder for a read-only inspection first.",
+                AgentDotNetSolutionDoctorService.CreateUnavailableSnapshot(profilePath, new IOException("Workspace profile unavailable.")));
         }
         finally
         {
@@ -1095,7 +1198,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         string profilePath,
         long version,
         CancellationTokenSource cancellation,
-        string profile)
+        string profile,
+        DotNetWorkspaceSnapshot dotNetSnapshot)
     {
         lock (workspaceProfileSync)
         {
@@ -1107,7 +1211,28 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 return;
             }
 
-            Volatile.Write(ref workspaceProfile, profile);
+            dotNetWorkspaceSnapshot = dotNetSnapshot;
+            Volatile.Write(ref workspaceProfile, AgentDotNetSolutionDoctorService.FormatWorkspaceProfile(profile, dotNetSnapshot));
+        }
+
+        if (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        if (dispatcher.CheckAccess())
+        {
+            RefreshBuildEvidence();
+        }
+        else
+        {
+            try
+            {
+                dispatcher.BeginInvoke(RefreshBuildEvidence, DispatcherPriority.Background);
+            }
+            catch (InvalidOperationException) when (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+            {
+            }
         }
     }
 
@@ -1677,6 +1802,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
 
         var preview = pendingPreview;
+        var commandWorkspaceGeneration = Volatile.Read(ref workspaceGeneration);
+        var commandDotNetSnapshot = dotNetWorkspaceSnapshot;
         var runningArtifactSuggestion = ArtifactSuggestionForPreview(preview);
         isRunningCommand = true;
         commandCancellation?.Dispose();
@@ -1700,6 +1827,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
         AgentCommandResult? completedResult = null;
         AgentWorkspaceFileReceipt? completedReceipt = null;
+        var resultApplied = false;
         var beforeFiles = new AgentWorkspaceFileSnapshot(
             new Dictionary<string, AgentWorkspaceFileStamp>(StringComparer.OrdinalIgnoreCase),
             ScannedLimit: true);
@@ -1719,9 +1847,18 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             beforeFiles = ExcludeInternalStateFiles(preview.WorkspacePath, beforeFiles);
             afterFiles = ExcludeInternalStateFiles(preview.WorkspacePath, afterFiles);
             var receipt = BuildFileReceipt(beforeFiles, afterFiles);
-            completedResult = result;
-            completedReceipt = receipt;
-            ApplyCompletedCommand(preview, result, receipt, runningArtifactSuggestion);
+            resultApplied = ApplyCompletedCommand(
+                preview,
+                commandWorkspaceGeneration,
+                commandDotNetSnapshot,
+                result,
+                receipt,
+                runningArtifactSuggestion);
+            if (resultApplied)
+            {
+                completedResult = result;
+                completedReceipt = receipt;
+            }
         }
         catch (OperationCanceledException) when (commandToken.IsCancellationRequested)
         {
@@ -1748,9 +1885,18 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 false,
                 true,
                 "Command cancelled.");
-            completedResult = result;
-            completedReceipt = receipt;
-            ApplyCompletedCommand(preview, result, receipt, runningArtifactSuggestion);
+            resultApplied = ApplyCompletedCommand(
+                preview,
+                commandWorkspaceGeneration,
+                commandDotNetSnapshot,
+                result,
+                receipt,
+                runningArtifactSuggestion);
+            if (resultApplied)
+            {
+                completedResult = result;
+                completedReceipt = receipt;
+            }
         }
         finally
         {
@@ -1779,20 +1925,43 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
     }
 
-    private void ApplyCompletedCommand(
+    private bool ApplyCompletedCommand(
         AgentCommandPreview preview,
+        long commandWorkspaceGeneration,
+        DotNetWorkspaceSnapshot? commandDotNetSnapshot,
         AgentCommandResult result,
         AgentWorkspaceFileReceipt receipt,
         AgentArtifactSuggestion? runningArtifactSuggestion)
     {
+        var structuredResult = AgentDotNetSolutionDoctorService.TryParseCommandResult(
+            commandDotNetSnapshot,
+            preview.WorkspacePath,
+            result);
         var inferredArtifactSuggestion = InferArtifactSuggestion(preview.WorkspacePath, receipt);
         var artifactVerification = runningArtifactSuggestion is null
             ? null
             : AgentArtifactVerification.From(runningArtifactSuggestion, result);
+        var dotNetStructureChanged = ReceiptTouchesDotNetWorkspaceStructure(receipt);
+        var dotNetRefreshRequired = dotNetStructureChanged
+            || structuredResult?.Command.Kind == DotNetCommandKind.Restore;
+        var applied = false;
         RunOnUiThread(() =>
         {
+            if (commandWorkspaceGeneration != Volatile.Read(ref workspaceGeneration)
+                || !workspacePath.Equals(preview.WorkspacePath, StringComparison.OrdinalIgnoreCase))
+            {
+                publishControlEvent(
+                    "command.result.discarded",
+                    "A completed command result was discarded after the Agent workspace changed.",
+                    new { preview.Shell, preview.Command });
+                return;
+            }
+
+            applied = true;
             lastFileReceipt = receipt;
             lastCommandResult = result;
+            lastDotNetCommandResult = dotNetStructureChanged ? null : structuredResult;
+            lastDotNetCommandSnapshot = lastDotNetCommandResult is null ? null : commandDotNetSnapshot;
             latestArtifactSuggestion = inferredArtifactSuggestion ?? runningArtifactSuggestion;
             latestArtifactVerification = artifactVerification;
             lastCommandWasArtifactVerification = runningArtifactSuggestion is not null;
@@ -1808,7 +1977,9 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             if (runbook.HasActiveRun)
             {
                 runbook.MarkExecutionFinished(result.Ok, result.Canceled, lastFileReceipt.Summary, DateTimeOffset.Now);
-                if (result.Ok && (runbookVerificationPending || runningArtifactSuggestion is not null))
+                if (result.Ok
+                    && structuredResult?.Command.Kind != DotNetCommandKind.Restore
+                    && (runbookVerificationPending || runningArtifactSuggestion is not null))
                 {
                     runbook.MarkCompleted(lastFileReceipt.Summary, DateTimeOffset.Now);
                     runbookVerificationPending = false;
@@ -1849,6 +2020,13 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             AddCommandResultMessage(result, lastFileReceipt);
             ScrollToEnd();
         });
+
+        if (applied && dotNetRefreshRequired)
+        {
+            RefreshWorkspaceProfile();
+        }
+
+        return applied;
     }
 
     private AgentArtifactSuggestion? ArtifactSuggestionForPreview(AgentCommandPreview preview)
@@ -2277,6 +2455,31 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private string CommandNextAction(AgentCommandResult result, AgentWorkspaceFileReceipt receipt)
     {
+        if (CurrentStructuredDotNetResult(result) is { } dotNetResult)
+        {
+            if (dotNetResult.WasCancelled)
+            {
+                return "Use Stage Retry to choose a safer, shorter project-correct .NET action. Do not restore packages automatically.";
+            }
+
+            var retry = AgentDotNetSolutionDoctorService.CreateNarrowedRetry(lastDotNetCommandSnapshot, dotNetResult);
+            if (!dotNetResult.Succeeded)
+            {
+                return retry is null
+                    ? "Use Stage Repair with the structured C# or test failure evidence; do not restore packages unless a separate approved restore is actually required."
+                    : $"Use Stage Repair with this project-correct narrowed action: {AgentDotNetSolutionDoctorService.FormatPowerShellInvocation(retry.Command)}. Do not restore packages automatically.";
+            }
+
+            if (dotNetResult.Command.Kind == DotNetCommandKind.Restore)
+            {
+                return "Restore completed under separate approval. Solution Doctor is refreshing local assets state; use Stage Verify for the project-correct build and test gates.";
+            }
+
+            return dotNetResult.TestTotals is not null
+                ? "The structured .NET test evidence passed. Use Stage Verify for the next project-correct gate or Stage Next to continue."
+                : "The structured .NET build evidence passed. Use Stage Verify for the project-correct test harnesses or Stage Next to continue.";
+        }
+
         return AgentCommandResultService.CommandNextAction(
             result,
             receipt,
@@ -2287,27 +2490,81 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private AgentResultFollowUpDescriptor ResultFollowUpDescriptor(AgentCommandResult result, AgentWorkspaceFileReceipt? receipt)
     {
-        return AgentCommandResultService.ResultFollowUpDescriptor(
+        var descriptor = AgentCommandResultService.ResultFollowUpDescriptor(
             result,
             receipt,
             currentPromptRequiresCommand,
             IsLatestArtifactVerificationResult(result),
             latestArtifactVerification?.ActionTitle ?? "Artifact check");
+        if (CurrentStructuredDotNetResult(result) is { Succeeded: false } dotNetResult && !result.Canceled)
+        {
+            var retry = AgentDotNetSolutionDoctorService.CreateNarrowedRetry(lastDotNetCommandSnapshot, dotNetResult);
+            var target = retry is null
+                ? "the first structured .NET failure"
+                : AgentDotNetSolutionDoctorService.FormatPowerShellInvocation(retry.Command);
+            return descriptor with
+            {
+                ButtonLabel = "Stage Repair",
+                ToolTip = $"Stage a project-correct repair prompt focused on {target}.",
+                ActivityDetail = "Project-correct repair prompt staged from structured .NET evidence.",
+                CardBody = $"The last .NET action failed. The repair prompt is narrowed to {target}.",
+                BuildEvidence = "Structured .NET repair prompt staged.",
+                Status = "Structured .NET repair prompt staged."
+            };
+        }
+
+        if (CurrentStructuredDotNetResult(result) is
+            {
+                Succeeded: true,
+                Command.Kind: DotNetCommandKind.Restore
+            })
+        {
+            return descriptor with
+            {
+                ButtonLabel = "Stage Next",
+                ToolTip = "Stage a project-correct verification prompt after the separately approved restore.",
+                ActivityDetail = "Post-restore verification prompt staged from refreshed .NET workspace evidence.",
+                CardBody = "Restore completed and no tracked source changes were expected. Verify with the refreshed project-correct build and test actions.",
+                BuildEvidence = "Post-restore verification prompt staged.",
+                Status = "Post-restore verification prompt staged."
+            };
+        }
+
+        return descriptor;
     }
 
     private string CommandStatusSummary(AgentCommandResult result, AgentWorkspaceFileReceipt receipt)
     {
-        return CommandRailViewModel(result, receipt).CommandStatus;
+        var status = CommandRailViewModel(result, receipt).CommandStatus;
+        return CurrentStructuredDotNetResult(result) is { } dotNetResult
+            ? $"{status} .NET: {AgentDotNetSolutionDoctorService.ResultEvidenceState(dotNetResult)}."
+            : status;
     }
 
     private string CommandSourceAfterResult(AgentCommandResult result, AgentWorkspaceFileReceipt receipt)
     {
+        if (CurrentStructuredDotNetResult(result) is { } dotNetResult)
+        {
+            return dotNetResult.WasCancelled
+                ? "Structured .NET action was cancelled. Use Stage Retry for a safer bounded action."
+                : dotNetResult.Succeeded
+                ? "Structured .NET evidence passed. Use Stage Verify for the next typed gate."
+                : "Structured .NET failure captured. Use Stage Repair for a narrowed retry.";
+        }
+
         return CommandRailViewModel(result, receipt).CommandSource;
     }
 
     private string BuildCommandResultEvidenceSummary(AgentCommandResult result, AgentWorkspaceFileReceipt receipt)
     {
-        return CommandRailViewModel(result, receipt).BuildEvidenceSummary;
+        return CurrentStructuredDotNetResult(result) is { } dotNetResult
+            ? $".NET {dotNetResult.Command.Kind}: {AgentDotNetSolutionDoctorService.ResultEvidenceState(dotNetResult)}."
+            : CommandRailViewModel(result, receipt).BuildEvidenceSummary;
+    }
+
+    private AIArena.Core.Models.DotNetCommandResult? CurrentStructuredDotNetResult(AgentCommandResult result)
+    {
+        return ReferenceEquals(lastCommandResult, result) ? lastDotNetCommandResult : null;
     }
 
     private AgentCommandRailViewModel CommandRailViewModel(AgentCommandResult result, AgentWorkspaceFileReceipt receipt)
@@ -2315,23 +2572,29 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         return AgentCommandResultService.CommandRailViewModel(
             result,
             receipt,
-            currentPromptRequiresCommand,
+            currentPromptRequiresCommand && !SuccessfulNoChangeIsExpected(result),
             IsLatestArtifactVerificationResult(result),
             latestArtifactVerification?.ActionTitle ?? "Artifact check");
     }
 
     private bool SuccessfulNoChangeRequiresRepair(AgentCommandResult result, AgentWorkspaceFileReceipt receipt)
     {
-        return AgentCommandResultService.SuccessfulNoChangeRequiresRepair(
-            result,
-            receipt,
-            currentPromptRequiresCommand,
-            IsLatestArtifactVerificationResult(result));
+        return !SuccessfulNoChangeIsExpected(result)
+            && AgentCommandResultService.SuccessfulNoChangeRequiresRepair(
+                result,
+                receipt,
+                currentPromptRequiresCommand,
+                IsLatestArtifactVerificationResult(result));
     }
 
     private bool SuccessfulNoChangeIsExpected(AgentCommandResult result)
     {
-        return AgentCommandResultService.SuccessfulNoChangeIsExpected(result, IsLatestArtifactVerificationResult(result));
+        return CurrentStructuredDotNetResult(result) is
+            {
+                Succeeded: true,
+                Command.Kind: DotNetCommandKind.Restore
+            }
+            || AgentCommandResultService.SuccessfulNoChangeIsExpected(result, IsLatestArtifactVerificationResult(result));
     }
 
     private bool IsLatestArtifactVerificationResult(AgentCommandResult result)
@@ -2828,6 +3091,14 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             {
                 new("Workspace", workspaceReady ? ShortWorkspaceName(workspacePath) : "Missing", workspaceReady ? "AssistBorderBrush" : "DangerBorderBrush")
             };
+            if (HasDotNetWorkspaceEvidence(dotNetWorkspaceSnapshot))
+            {
+                idleRows.Add(new AgentEvidenceItem(
+                    ".NET",
+                    AgentDotNetSolutionDoctorService.WorkspaceEvidenceState(dotNetWorkspaceSnapshot),
+                    dotNetWorkspaceSnapshot!.IsPartial ? "PrimaryBorderBrush" : "AssistBorderBrush"));
+            }
+
             if (autoContinueForSession || autoApproveCommandsForSession)
             {
                 idleRows.Add(new AgentEvidenceItem("Autonomy", autonomyState, "PrimaryBorderBrush"));
@@ -2836,7 +3107,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return idleRows;
         }
 
-        return
+        List<AgentEvidenceItem> rows =
         [
             new("Workspace", workspaceReady ? ShortWorkspaceName(workspacePath) : "Missing", workspaceReady ? "AssistBorderBrush" : "DangerBorderBrush"),
             new("Autonomy", autonomyState, autoContinueForSession || autoApproveCommandsForSession ? "PrimaryBorderBrush" : "DisabledBorderBrush"),
@@ -2848,6 +3119,46 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             new("Artifact", artifactState, artifactBrush),
             new("Verify", verifyState, verifyBrush)
         ];
+        if (HasDotNetWorkspaceEvidence(dotNetWorkspaceSnapshot))
+        {
+            rows.Insert(1, new AgentEvidenceItem(
+                ".NET",
+                AgentDotNetSolutionDoctorService.WorkspaceEvidenceState(dotNetWorkspaceSnapshot),
+                dotNetWorkspaceSnapshot!.IsPartial ? "PrimaryBorderBrush" : "AssistBorderBrush"));
+        }
+
+        if (lastDotNetCommandResult is not null)
+        {
+            rows.Add(new AgentEvidenceItem(
+                "C# Diagnostics",
+                AgentDotNetSolutionDoctorService.ResultEvidenceState(lastDotNetCommandResult),
+                lastDotNetCommandResult.Succeeded
+                    ? "AssistBorderBrush"
+                    : lastDotNetCommandResult.WasCancelled ? "PrimaryBorderBrush" : "DangerBorderBrush"));
+            if (lastDotNetCommandResult.TestTotals is not null || lastDotNetCommandResult.FailingTests.Count > 0)
+            {
+                rows.Add(new AgentEvidenceItem(
+                    ".NET Tests",
+                    AgentDotNetSolutionDoctorService.TestEvidenceState(lastDotNetCommandResult),
+                    lastDotNetCommandResult.Succeeded ? "AssistBorderBrush" : "DangerBorderBrush"));
+            }
+
+            if (!lastDotNetCommandResult.Succeeded && !lastDotNetCommandResult.WasCancelled)
+            {
+                rows.Add(new AgentEvidenceItem(
+                    "First Failure",
+                    AgentDotNetSolutionDoctorService.PrimaryFailureState(lastDotNetCommandResult),
+                    "DangerBorderBrush"));
+            }
+        }
+
+        return rows;
+    }
+
+    private static bool HasDotNetWorkspaceEvidence(DotNetWorkspaceSnapshot? snapshot)
+    {
+        return snapshot is not null
+            && (snapshot.Projects.Count > 0 || snapshot.Solutions.Count > 0 || snapshot.Diagnostics.Count > 0);
     }
 
     private Border CreateEvidenceRow(AgentEvidenceItem item)
@@ -3188,6 +3499,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         var context = lastCommandResult is null
             ? "No command has run yet. Prefer one read-only inspection command if the verification target is unclear."
             : FormatLatestCommandContext();
+        var dotNetVerification = FormatDotNetVerificationActions();
         var brief = string.IsNullOrWhiteSpace(lastWorkBrief)
             ? "No work brief has been generated yet."
             : ShellUiHelpers.Truncate(lastWorkBrief, 2200, ShellUiHelpers.TruncatedNoticeSuffix);
@@ -3200,6 +3512,9 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
             Current evidence:
             {context}
+
+            Project-correct .NET actions:
+            {dotNetVerification}
 
             Latest work brief:
             {brief}
@@ -4642,8 +4957,25 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return "No command output captured yet.";
         }
 
+        var structured = AgentDotNetSolutionDoctorService.FormatResultPacket(lastDotNetCommandSnapshot, lastDotNetCommandResult);
         var receipt = lastFileReceipt is null ? "" : $"{Environment.NewLine}{Environment.NewLine}{FormatFileReceipt(lastFileReceipt)}";
-        return ShellUiHelpers.Truncate($"{FormatCommandContext(lastCommandResult)}{receipt}", 6500, ShellUiHelpers.TruncatedNoticeSuffix);
+        return ShellUiHelpers.Truncate(
+            $"{structured}{Environment.NewLine}{Environment.NewLine}Raw command evidence:{Environment.NewLine}{FormatCommandContext(lastCommandResult)}{receipt}",
+            8000,
+            ShellUiHelpers.TruncatedNoticeSuffix);
+    }
+
+    private string FormatDotNetVerificationActions()
+    {
+        var plans = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(dotNetWorkspaceSnapshot);
+        return plans.Count == 0
+            ? "No typed .NET verification action is available; use a read-only inspection and do not invent project targets."
+            : ShellUiHelpers.Truncate(
+                string.Join(
+                    Environment.NewLine,
+                    plans.Select(plan => $"- {AgentDotNetSolutionDoctorService.FormatPowerShellInvocation(plan)}")),
+                1_800,
+                ShellUiHelpers.TruncatedNoticeSuffix);
     }
 
     private static Task<AgentWorkspaceFileSnapshot> CaptureWorkspaceFilesAsync(string root, CancellationToken cancellationToken)
@@ -4756,6 +5088,20 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private static bool ReceiptHasKnownNoChanges(AgentWorkspaceFileReceipt receipt)
     {
         return WorkspaceScannerService.ReceiptHasKnownNoChanges(receipt);
+    }
+
+    private static bool ReceiptTouchesDotNetWorkspaceStructure(AgentWorkspaceFileReceipt receipt)
+    {
+        return receipt.Created
+            .Concat(receipt.Modified)
+            .Concat(receipt.Deleted)
+            .Any(path =>
+                path.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".props", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".targets", StringComparison.OrdinalIgnoreCase)
+                || Path.GetFileName(path).Equals("global.json", StringComparison.OrdinalIgnoreCase));
     }
 
     internal static bool ReceiptScanIsLimitedWithoutTrackedChanges(AgentWorkspaceFileReceipt receipt)

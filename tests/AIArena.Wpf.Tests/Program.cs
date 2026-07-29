@@ -101,6 +101,7 @@ var tests = new List<(string Name, Action Test)>
     ("agent workspace profile skips oversized package json", AgentWorkspaceProfileSkipsOversizedPackageJson),
     ("agent workspace generated commands reject shell metacharacters", AgentWorkspaceGeneratedCommandsRejectShellMetacharacters),
     ("agent workspace bounded readers and candidates stop at limits", AgentWorkspaceBoundedReadersAndCandidatesStopAtLimits),
+    ("agent solution doctor presents typed workspace actions", AgentSolutionDoctorPresentsTypedWorkspaceActions),
     ("agent workspace stages builder command proposals", AgentWorkspaceStagesBuilderCommandProposals),
     ("agent workspace blocks command approval during chat", AgentWorkspaceBlocksCommandApprovalDuringChat),
     ("agent workspace restores chat after restart", AgentWorkspaceRestoresChatAfterRestart),
@@ -327,7 +328,11 @@ var tests = new List<(string Name, Action Test)>
     ("control plane publishes required event vocabulary", ControlPlanePublishesRequiredEventVocabulary),
     ("control plane navigation closes settings for main views", ControlPlaneNavigationClosesSettingsForMainViews),
     ("control plane Match Setup open owns the visible overlay", ControlPlaneMatchSetupOpenOwnsVisibleOverlay),
+    ("agent solution doctor drives structured repair evidence", AgentSolutionDoctorDrivesStructuredRepairEvidence),
     ("agent workspace profile refresh ignores stale results", AgentWorkspaceProfileRefreshIgnoresStaleResults),
+    ("agent solution doctor refresh ignores stale typed results", AgentSolutionDoctorRefreshIgnoresStaleTypedResults),
+    ("agent solution doctor survives legacy profile failure", AgentSolutionDoctorSurvivesLegacyProfileFailure),
+    ("agent solution doctor refreshes assets after restore", AgentSolutionDoctorRefreshesAfterRestore),
     ("agent workspace profile refresh disposes safely", AgentWorkspaceProfileRefreshDisposesSafely)
 };
 

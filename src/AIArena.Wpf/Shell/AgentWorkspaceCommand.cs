@@ -746,7 +746,7 @@ internal static partial class AgentWorkspaceCommand
     [GeneratedRegex(@"(?i)\b(rm\s+-rf|remove-item\b[^\r\n;|&]*-recurse\b|del\b.*(/s|/q)|rmdir\b|rd\s+|git\s+clean\b|git\s+reset\s+--hard|format\b|diskpart\b|reg\s+delete)\b")]
     private static partial Regex DestructiveCommandRegex();
 
-    [GeneratedRegex(@"(?i)\b(curl|wget|invoke-webrequest|iwr|invoke-restmethod|irm|npm\s+install|pnpm\s+install|yarn\s+install|pip\s+install|dotnet\s+add\s+package|winget|choco)\b")]
+    [GeneratedRegex(@"(?i)\b(curl|wget|invoke-webrequest|iwr|invoke-restmethod|irm|npm\s+install|pnpm\s+install|yarn\s+install|pip\s+install|dotnet(?:\.exe)?\s+(restore|add\s+package)|winget|choco)\b")]
     private static partial Regex NetworkOrInstallCommandRegex();
 
     [GeneratedRegex(@"(?i)\b(npm\s+(--prefix\s+(""[^""]+""|'[^']+'|\S+)\s+)?(run\s+)?(dev|start|serve|preview)|pnpm\s+(run\s+)?(dev|start|serve|preview)|yarn\s+(run\s+)?(dev|start|serve|preview)|bun\s+(run\s+)?(dev|start)|npx\s+vite|vite(\.cmd)?|dotnet\s+(watch|run)|python\s+(-m\s+)?http\.server|py\s+(-m\s+)?http\.server|watch\s+|start-process)\b")]

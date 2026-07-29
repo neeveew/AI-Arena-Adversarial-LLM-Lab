@@ -35,6 +35,7 @@ internal static class WorkspaceScannerService
     private static readonly string[] WorkspaceProfileExtensionFileNames =
     [
         ".sln",
+        ".slnx",
         ".csproj",
         ".html"
     ];
@@ -62,11 +63,10 @@ internal static class WorkspaceScannerService
         var signals = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         var verifyCommands = new List<string>();
         if (keyFiles.Any(path => path.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase)
             || path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)))
         {
             signals.Add(".NET");
-            verifyCommands.Add("dotnet build");
-            verifyCommands.Add("dotnet test");
         }
 
         var packagePath = keyFiles.FirstOrDefault(path => RelativeFileNameEquals(path, "package.json"));

@@ -435,6 +435,13 @@ static void AgentWorkspaceCommandPreviewGatesExecution()
         Require(dotnetRun.Ok, $"dotnet run should remain previewable for manual approval: {dotnetRun.Error}");
         Require(dotnetRun.Risks.Contains("Long-running"), "dotnet run should be flagged as a long-running app preview");
 
+        var dotnetRestore = AgentWorkspaceCommand.BuildPreview(root, "Terminal", "dotnet restore .\\TinyApp.sln");
+        Require(dotnetRestore.Ok, $"dotnet restore should remain previewable for explicit approval: {dotnetRestore.Error}");
+        Require(dotnetRestore.Risks.Contains("Network/install"), "dotnet restore should be visibly flagged as a network/install action");
+        Require(!AgentWorkspaceCommand.CanRunAutomatically(dotnetRestore, out _), "dotnet restore must not run automatically under Full Access");
+        var dotnetExeRestore = AgentWorkspaceCommand.BuildPreview(root, "Terminal", "dotnet.exe restore .\\TinyApp.sln");
+        Require(dotnetExeRestore.Risks.Contains("Network/install"), "dotnet.exe restore should retain the same explicit network/install boundary");
+
         var staticServer = AgentWorkspaceCommand.BuildPreview(root, "Terminal", "python -m http.server 5173");
         Require(staticServer.Ok, $"python static server should remain previewable for manual approval: {staticServer.Error}");
         Require(staticServer.Risks.Contains("Long-running"), "python static servers should be flagged as long-running previews");
@@ -4392,7 +4399,8 @@ static void AgentWorkspaceProfileRefreshDisposesSafely()
 private static AgentWorkspaceCoordinator CreateWorkspaceProfileTestCoordinator(
     WpfSettings settings,
     WpfSettingsStore settingsStore,
-    Func<string, CancellationToken, Task<string>> buildWorkspaceProfileAsync)
+    Func<string, CancellationToken, Task<string>> buildWorkspaceProfileAsync,
+    Func<string, CancellationToken, Task<DotNetWorkspaceSnapshot>>? discoverDotNetWorkspaceAsync = null)
 {
     var shellPicker = new ComboBox();
     shellPicker.Items.Add(new ComboBoxItem { Content = "PowerShell", Tag = "PowerShell" });
@@ -4465,7 +4473,8 @@ private static AgentWorkspaceCoordinator CreateWorkspaceProfileTestCoordinator(
         () => null,
         AccentResourceBrush,
         _ => { },
-        buildWorkspaceProfileAsync: buildWorkspaceProfileAsync);
+        buildWorkspaceProfileAsync: buildWorkspaceProfileAsync,
+        discoverDotNetWorkspaceAsync: discoverDotNetWorkspaceAsync);
 }
 
 }
