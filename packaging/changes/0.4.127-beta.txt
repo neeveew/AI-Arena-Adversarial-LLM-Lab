@@ -1,0 +1,5 @@
+- Adds Agent's native .NET Solution Doctor with bounded solution/project discovery, typed restore and build diagnostics, project-correct Build/Test/Run plans, safe command previews, and structured repair evidence.
+- Hardens Solution Doctor across project-only, partial, empty, equivalent, duplicate-path, and hostile-path workspaces while keeping restores separately approved and refusing ambiguous repair guesses.
+- Keeps the AI Lab top rail aligned and stable, preserves Match Setup as a same-position toggle, and moves actionable or transient helper status into a compact bottom-left dock that cannot change top-rail height.
+- Redesigns transcript cards with compact model statistics and detailed hover/focus telemetry, full-width collapsible reasoning, and permanently visible quiet 30-DIP Copy, Speak, Pin, Retry, Delete, and Compare controls.
+- Preserves responsive, keyboard, automation, reduced-motion, Dark Blue, Light, and High Contrast behavior with expanded regression coverage for shell layout, transcript cards, and Solution Doctor workflows.

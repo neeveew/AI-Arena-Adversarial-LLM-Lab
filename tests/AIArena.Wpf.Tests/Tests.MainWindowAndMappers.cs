@@ -1603,7 +1603,7 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
     Require(matchSetupButton.Contains("Style=\"{StaticResource Arena.Button.Primary}\"", StringComparison.Ordinal), "Match Setup should retain primary emphasis in the top rail");
     Require(matchSetupButton.Contains("Height=\"38\"", StringComparison.Ordinal) && matchSetupButton.Contains("VerticalAlignment=\"Center\"", StringComparison.Ordinal), "Match Setup should match the 38-DIP top-rail command-group height");
     Require(matchSetupButton.Contains("Width=\"104\"", StringComparison.Ordinal), "Match Setup and Close Setup should share a fixed width so toggling does not shift neighboring commands");
-    Require(matchSetupButton.Contains("Padding=\"10,0\"", StringComparison.Ordinal), "Match Setup should use compact horizontal-only toolbar padding");
+    Require(matchSetupButton.Contains("Padding=\"{DynamicResource Arena.Inset.ToolbarAction}\"", StringComparison.Ordinal), "Match Setup should use the compact horizontal-only toolbar padding token");
     Require(viewMenuButton.Contains("Content=\"{Binding ViewButtonLabel}\"", StringComparison.Ordinal), "the closed View control should keep the active preset visible");
     Require(statusDock.Contains("Grid.Row=\"3\"", StringComparison.Ordinal), "the visible status dock should occupy the navigation rail's previously unused bottom row");
     Require(statusDock.Contains("Visibility=\"{Binding ShowStatusDock", StringComparison.Ordinal), "routine status should release the bottom-rail space");

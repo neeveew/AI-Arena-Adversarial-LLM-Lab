@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.4.126-beta",
+    [string]$Version = "0.4.127-beta",
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = "Release",
     [ValidateSet('win-x64')]
@@ -205,6 +205,7 @@ $githubNotesLines = @(
     "- changelog.md",
     "- changes.txt",
     "- github-release-notes.md",
+    "- installer-signing.json",
     "- release-checksums.sha256",
     "- release-manifest.txt",
     "- release-signing.json"

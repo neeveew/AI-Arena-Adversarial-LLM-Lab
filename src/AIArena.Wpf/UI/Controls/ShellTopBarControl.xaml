@@ -142,7 +142,7 @@
             BorderThickness="0,0,0,1"
             SnapsToDevicePixels="True"
             MouseRightButtonUp="CaptionSystemMenuRequested">
-        <Grid x:Name="TopBarLayoutGrid" Margin="10,3">
+        <Grid x:Name="TopBarLayoutGrid" Margin="{DynamicResource Arena.Layout.TopBarMargin}">
             <Grid.RowDefinitions>
                 <!-- Metrics and commands share the primary row when space permits.
                      The command rail falls back to row 1 without a status row
@@ -533,7 +533,7 @@
                         Style="{StaticResource Arena.Button.Primary}"
                         Height="38"
                         Width="104"
-                        Padding="10,0"
+                        Padding="{DynamicResource Arena.Inset.ToolbarAction}"
                         VerticalAlignment="Center"
                         Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                         AutomationProperties.Name="Open Match Setup"

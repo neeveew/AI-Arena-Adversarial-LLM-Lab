@@ -369,8 +369,8 @@
                     Background="{DynamicResource InputBrush}"
                     BorderBrush="{DynamicResource DisabledBorderBrush}"
                     BorderThickness="0,1,0,0"
-                    Padding="10,8"
-                    Margin="-10,8,-10,-10"
+                    Padding="{DynamicResource Arena.Inset.StatusDock}"
+                    Margin="{DynamicResource Arena.Layout.StatusDockBleed}"
                     ToolTip="{Binding DisplayStatusToolTip}"
                     Visibility="{Binding ShowStatusDock, Converter={StaticResource BooleanToVisibilityConverter}}"
                     AutomationProperties.Name="Application status"
@@ -383,7 +383,7 @@
                     </Grid.ColumnDefinitions>
                     <Ellipse Width="6"
                              Height="6"
-                             Margin="0,0,8,0"
+                             Margin="{DynamicResource Arena.Gap.Inline.After.Default}"
                              Fill="{DynamicResource Arena.Brush.Info}"
                              VerticalAlignment="Center"
                              IsHitTestVisible="False" />

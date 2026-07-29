@@ -3,9 +3,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.4.126-beta</Version>
-    <InformationalVersion>0.4.126-beta</InformationalVersion>
-    <FileVersion>0.4.126.0</FileVersion>
+    <Version>0.4.127-beta</Version>
+    <InformationalVersion>0.4.127-beta</InformationalVersion>
+    <FileVersion>0.4.127.0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="PuppeteerSharp" Version="25.1.1" />

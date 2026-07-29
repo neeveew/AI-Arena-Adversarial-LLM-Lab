@@ -36,11 +36,16 @@
     <Thickness x:Key="Arena.Inset.Control">8,4</Thickness>
     <Thickness x:Key="Arena.Inset.Card">10</Thickness>
     <Thickness x:Key="Arena.Inset.Panel">12</Thickness>
+    <Thickness x:Key="Arena.Inset.None">0</Thickness>
 
     <!-- Component insets measured from the established compact interface. -->
     <Thickness x:Key="Arena.Inset.RailAction">7,4</Thickness>
     <Thickness x:Key="Arena.Inset.QuickAction">10,4</Thickness>
     <Thickness x:Key="Arena.Inset.MatchSetupAction">11,6</Thickness>
+    <Thickness x:Key="Arena.Inset.ToolbarAction">10,0</Thickness>
+    <Thickness x:Key="Arena.Inset.StatusDock">10,8</Thickness>
+    <Thickness x:Key="Arena.Layout.TopBarMargin">10,3</Thickness>
+    <Thickness x:Key="Arena.Layout.StatusDockBleed">-10,8,-10,-10</Thickness>
 
     <!--
         Directional layout tokens preserve the current geometry exactly. Before
