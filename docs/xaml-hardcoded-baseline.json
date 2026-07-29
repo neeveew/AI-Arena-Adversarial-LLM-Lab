@@ -2,10 +2,10 @@
     "note":  "Ratchet baseline for hard-coded XAML layout and type values. Regenerate with scripts/xaml-hardcoded-values.ps1 after reducing a count.",
     "generatedBy":  "scripts/xaml-hardcoded-values.ps1",
     "properties":  {
-                       "Margin":  470,
-                       "Padding":  199,
-                       "CornerRadius":  63,
-                       "FontSize":  148
+                       "Margin":  410,
+                       "Padding":  187,
+                       "CornerRadius":  51,
+                       "FontSize":  122
                    },
-    "total":  880
+    "total":  770
 }

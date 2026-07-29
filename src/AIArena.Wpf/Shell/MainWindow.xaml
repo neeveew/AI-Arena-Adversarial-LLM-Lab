@@ -97,11 +97,11 @@
         <Style x:Key="SectionTitle" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.HeadingSize}" />
         </Style>
         <Style x:Key="PanelTitle" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
-            <Setter Property="FontSize" Value="22" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.DisplaySize}" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
         </Style>
@@ -119,14 +119,14 @@
             <Setter Property="Background" Value="{DynamicResource InputBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Medium}" />
             <Setter Property="Padding" Value="0" />
         </Style>
         <Style x:Key="AgentWorkspaceStrip" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource CardBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Medium}" />
             <Setter Property="Padding" Value="12,10" />
             <Setter Property="Margin" Value="0,0,0,10" />
         </Style>
@@ -142,8 +142,8 @@
             <Setter Property="Background" Value="{DynamicResource CardBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="12" />
-            <Setter Property="Padding" Value="10" />
+            <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Large}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Card}" />
             <Setter Property="Margin" Value="0" />
             <Setter Property="MaxWidth" Value="900" />
             <Setter Property="HorizontalAlignment" Value="Center" />
@@ -185,7 +185,7 @@
         <Style x:Key="CollaborateToolExpander" TargetType="Expander" BasedOn="{StaticResource AgentControlsExpander}">
             <Setter Property="Padding" Value="8,5" />
             <Setter Property="Margin" Value="0,0,0,6" />
-            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.LabelSize}" />
         </Style>
         <Style x:Key="SessionOverviewHotspot" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource InputBrush}" />
@@ -213,11 +213,11 @@
             <Setter Property="FontSize" Value="12" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-            <Setter Property="Margin" Value="0,0,0,8" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack}" />
         </Style>
         <Style x:Key="SessionMetricLabel" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
-            <Setter Property="FontSize" Value="10.5" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.CaptionSize}" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
         </Style>
@@ -241,7 +241,7 @@
                                 BorderBrush="{DynamicResource ControlBorderBrush}"
                                 BorderThickness="1"
                                 CornerRadius="5"
-                                Padding="8,4">
+                                Padding="{DynamicResource Arena.Inset.Control}">
                             <StackPanel Orientation="Horizontal">
                                 <Border x:Name="ChipMark"
                                         Width="10"
@@ -301,7 +301,7 @@
                                         HorizontalAlignment="Left"
                                         Margin="3,0,0,0"
                                         Background="{DynamicResource MutedTextBrush}"
-                                        CornerRadius="8" />
+                                        CornerRadius="{DynamicResource Arena.Radius.Medium}" />
                             </Border>
                         </Grid>
                         <ControlTemplate.Triggers>
@@ -444,47 +444,47 @@
         </Style>
         <Style x:Key="RightRailCard" TargetType="Border" BasedOn="{StaticResource Card}">
             <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
-            <Setter Property="Padding" Value="10" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Card}" />
         </Style>
         <Style x:Key="AgentRailCard" TargetType="Border" BasedOn="{StaticResource RightRailCard}">
             <Setter Property="Background" Value="{DynamicResource CardBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
-            <Setter Property="Padding" Value="10" />
-            <Setter Property="Margin" Value="0,0,0,8" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Card}" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack}" />
         </Style>
         <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="{DynamicResource PrimaryBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
-            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Control}" />
             <Setter Property="MinHeight" Value="34" />
         </Style>
         <Style x:Key="SecondaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="{DynamicResource InputBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
-            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Control}" />
             <Setter Property="MinHeight" Value="32" />
         </Style>
         <Style x:Key="AssistButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="{DynamicResource AssistBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource AssistBorderBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
-            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Control}" />
             <Setter Property="MinHeight" Value="32" />
         </Style>
         <Style x:Key="WarningButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="{DynamicResource InputBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource BetaAccentBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource BetaAccentBrush}" />
-            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Control}" />
             <Setter Property="MinHeight" Value="32" />
         </Style>
         <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="{DynamicResource DangerBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource DangerBorderBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
-            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Control}" />
             <Setter Property="MinHeight" Value="32" />
         </Style>
         <Style x:Key="CompactButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
@@ -512,7 +512,7 @@
             <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
         </Style>
         <Style x:Key="RightRailActionButton" TargetType="Button" BasedOn="{StaticResource Arena.Button.Secondary}">
-            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.LabelSize}" />
             <Setter Property="Padding" Value="7,4" />
             <Setter Property="Margin" Value="0,0,5,5" />
             <Setter Property="MinWidth" Value="0" />
@@ -544,7 +544,7 @@
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
         <Style x:Key="RightRailActionLabel" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.LabelSize}" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
@@ -560,7 +560,7 @@
             <Setter Property="Background" Value="{DynamicResource InputBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
-            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.LabelSize}" />
             <Setter Property="MinHeight" Value="32" />
             <Setter Property="Padding" Value="6,3" />
             <Setter Property="MinWidth" Value="0" />
@@ -590,7 +590,7 @@
             <Setter Property="Background" Value="{DynamicResource InputBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Small}" />
             <Setter Property="Padding" Value="9,4" />
             <Setter Property="Margin" Value="0,0,8,0" />
         </Style>
@@ -603,7 +603,7 @@
         </Style>
         <Style x:Key="DashboardMetricLabel" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
-            <Setter Property="FontSize" Value="10.5" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.CaptionSize}" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
         </Style>
@@ -632,7 +632,7 @@
             <Setter Property="Background" Value="{DynamicResource CardBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Small}" />
             <Setter Property="Padding" Value="9,6" />
             <Setter Property="Margin" Value="0,0,10,0" />
             <Setter Property="MinHeight" Value="34" />
@@ -641,7 +641,7 @@
             <Setter Property="Background" Value="{DynamicResource CardBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Medium}" />
             <Setter Property="Padding" Value="14" />
             <Setter Property="Margin" Value="0,0,0,18" />
         </Style>
@@ -656,7 +656,7 @@
         <Style x:Key="FlyoutCard" TargetType="Border" BasedOn="{StaticResource Arena.Surface.Panel}">
             <Setter Property="Background" Value="{DynamicResource TopBarBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
-            <Setter Property="Padding" Value="12" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Panel}" />
             <Setter Property="Effect">
                 <Setter.Value>
                     <DropShadowEffect Color="#000000"
@@ -675,7 +675,7 @@
             <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="7" />
-            <Setter Property="Padding" Value="10" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Card}" />
             <Setter Property="Margin" Value="0,0,10,10" />
         </Style>
         <Style x:Key="SettingsStatusCard" TargetType="Border">
@@ -726,7 +726,7 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="8">
+                                CornerRadius="{DynamicResource Arena.Radius.Medium}">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -762,7 +762,7 @@
                                                             Background="{DynamicResource InputBrush}"
                                                             BorderBrush="{DynamicResource DisabledBorderBrush}"
                                                             BorderThickness="1"
-                                                            CornerRadius="6"
+                                                            CornerRadius="{DynamicResource Arena.Radius.Small}"
                                                             Margin="0,0,10,0"
                                                             VerticalAlignment="Center">
                                                         <TextBlock x:Name="SectionIcon"
@@ -779,14 +779,14 @@
                                                                Text="{TemplateBinding Content}"
                                                                Foreground="{DynamicResource TextBrush}"
                                                                FontWeight="{TemplateBinding FontWeight}"
-                                                               FontSize="12.5"
+                                                               FontSize="{DynamicResource Arena.Type.BodySize}"
                                                                TextTrimming="CharacterEllipsis"
                                                                VerticalAlignment="Center" />
                                                     <TextBlock x:Name="Chevron"
                                                                Grid.Column="2"
                                                                Text="&#xE70D;"
                                                                FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
-                                                               FontSize="10.5"
+                                                               FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                                                Foreground="{TemplateBinding Foreground}"
                                                                FontWeight="SemiBold"
                                                                Margin="12,0,0,0"
@@ -881,7 +881,7 @@
                                         <ControlTemplate TargetType="ToggleButton">
                                             <Border x:Name="HeaderChrome"
                                                     Background="Transparent"
-                                                    CornerRadius="6"
+                                                    CornerRadius="{DynamicResource Arena.Radius.Small}"
                                                     MinHeight="34"
                                                     Padding="9,6">
                                                 <Grid>
@@ -898,7 +898,7 @@
                                                                Grid.Column="1"
                                                                Text="&#xE70D;"
                                                                FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
-                                                               FontSize="10.5"
+                                                               FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                                                Foreground="{DynamicResource MutedTextBrush}"
                                                                Margin="12,0,2,0"
                                                                VerticalAlignment="Center" />
@@ -924,7 +924,7 @@
                                         Grid.Row="1"
                                         BorderBrush="{DynamicResource DisabledBorderBrush}"
                                         BorderThickness="0,1,0,0"
-                                        Padding="10"
+                                        Padding="{DynamicResource Arena.Inset.Card}"
                                         Visibility="Collapsed">
                                     <ContentPresenter ContentSource="Content" />
                                 </Border>
@@ -1162,7 +1162,7 @@
                                             VerticalAlignment="Center">
                                     <TextBlock Text="&#xE9D9;"
                                                FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
-                                               FontSize="14"
+                                               FontSize="{DynamicResource Arena.Type.HeadingSize}"
                                                Foreground="{DynamicResource MutedTextBrush}"
                                                Margin="0,0,10,0" />
                                     <TextBlock Text="Metrics appear after the first agent turn"
@@ -1189,7 +1189,7 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="*" />
                                 </Grid.RowDefinitions>
-                                <Grid Margin="0,0,0,8">
+                                <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="34" />
@@ -1204,7 +1204,7 @@
                                         <TextBlock x:Name="DiagnosticDetailSubtitleText"
                                                    Text=""
                                                    Foreground="{DynamicResource MutedTextBrush}"
-                                                   FontSize="10.5"
+                                                   FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                                    TextTrimming="CharacterEllipsis"
                                                    Margin="0,2,0,0" />
                                     </StackPanel>
@@ -1356,7 +1356,7 @@
                     Background="{DynamicResource PanelBrush}"
                     BorderBrush="{DynamicResource ControlBorderBrush}"
                     BorderThickness="1"
-                    CornerRadius="8"
+                    CornerRadius="{DynamicResource Arena.Radius.Medium}"
                     Padding="18">
                 <Grid>
                     <Grid.RowDefinitions>
@@ -1393,7 +1393,7 @@
                     <Expander x:Name="SetupReadinessExpander"
                               IsExpanded="False"
                               Style="{StaticResource AgentControlsExpander}"
-                              Margin="0,0,0,12">
+                              Margin="{DynamicResource Arena.Gap.Section}">
                         <Expander.Header>
                             <StackPanel Margin="2,0,0,0">
                                 <TextBlock Text="Setup readiness"
@@ -1482,7 +1482,7 @@
                     <Expander x:Name="GenerationTuningExpander"
                               IsExpanded="False"
                               Style="{StaticResource AgentControlsExpander}"
-                              Margin="0,0,0,12">
+                              Margin="{DynamicResource Arena.Gap.Section}">
                         <Expander.Header>
                             <StackPanel Margin="2,0,0,0">
                                 <TextBlock Text="Generation &amp; Tuning"
@@ -1782,7 +1782,7 @@
                             </StackPanel>
                         </Border>
                     </Popup>
-                        <WrapPanel Margin="0,0,0,12">
+                        <WrapPanel Margin="{DynamicResource Arena.Gap.Section}">
                             <Button x:Name="MatchSetupScenarioTabButton"
                                     Content="Scenario"
                                     Tag="scenario"
@@ -1949,7 +1949,7 @@
                         <!-- Replay history lives with the other saved-state tools instead of
                              competing with the setup tabs above. -->
                         <Border Style="{StaticResource ConfigToolbarCard}"
-                                Margin="0,0,0,12"
+                                Margin="{DynamicResource Arena.Gap.Section}"
                                 HorizontalAlignment="Left">
                             <StackPanel>
                                 <Grid Margin="0,0,0,6">
@@ -2388,7 +2388,7 @@
                                    AutomationProperties.LiveSetting="Polite"
                                    Text="No workspace selected."
                                    Foreground="{DynamicResource TextBrush}"
-                                   FontSize="11.5"
+                                   FontSize="{DynamicResource Arena.Type.LabelSize}"
                                    FontWeight="SemiBold"
                                    TextTrimming="CharacterEllipsis"
                                    Margin="0,7,0,0" />
@@ -2652,7 +2652,7 @@
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <Grid Margin="0,0,0,12">
+                <Grid Margin="{DynamicResource Arena.Gap.Section}">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -2675,12 +2675,12 @@
                 </Grid>
                 <Border Grid.Row="1"
                         Style="{StaticResource ContentFrame}"
-                        Margin="0,0,0,12">
+                        Margin="{DynamicResource Arena.Gap.Section}">
                     <ScrollViewer x:Name="CollaborateChatScrollViewer"
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled">
                         <StackPanel x:Name="CollaborateMessageItems"
-                                    Margin="12" />
+                                    Margin="{DynamicResource Arena.Inset.Panel}" />
                     </ScrollViewer>
                 </Border>
                 <Border Grid.Row="2"
@@ -2800,7 +2800,7 @@
                                     Style="{StaticResource CompactButton}"
                                     MinHeight="24"
                                     Padding="8,2"
-                                    FontSize="10.5"
+                                    FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                     ToolTip="Preview the run plan and context that AI Collaborate will send." />
                         </StackPanel>
                     </Grid>
@@ -2938,7 +2938,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
-                            <Grid Margin="0,0,0,8">
+                            <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="34" />
@@ -2946,7 +2946,7 @@
                                 <TextBlock Text="Agent Detail"
                                            Foreground="{DynamicResource TextBrush}"
                                            FontWeight="SemiBold"
-                                           FontSize="14"
+                                           FontSize="{DynamicResource Arena.Type.HeadingSize}"
                                            VerticalAlignment="Center" />
                                 <Button x:Name="AgentPerformanceDetailCloseButton"
                                         Grid.Column="1"
@@ -2982,7 +2982,7 @@
                                        FontSize="11"
                                        VerticalAlignment="Center" />
                         </Grid>
-                        <UniformGrid Columns="3" Margin="0,0,0,8">
+                        <UniformGrid Columns="3" Margin="{DynamicResource Arena.Gap.Stack}">
                             <Button x:Name="OperatorPublicRouteButton"
                                     Content="Public"
                                     Click="OperatorPublicRouteButton_Click"
@@ -3008,7 +3008,7 @@
                                    AutomationProperties.Name="Operator route visibility"
                                    AutomationProperties.HelpText="Explains who can see the staged operator turn."
                                    Margin="0,0,0,10" />
-                        <Grid x:Name="OperatorPrivateTargetRow" Visibility="Collapsed" Margin="0,0,0,8">
+                        <Grid x:Name="OperatorPrivateTargetRow" Visibility="Collapsed" Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
@@ -3032,7 +3032,7 @@
                                        Grid.Row="1"
                                        Grid.Column="1"
                                        Foreground="{DynamicResource MutedTextBrush}"
-                                       FontSize="10.5"
+                                       FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                        TextWrapping="Wrap"
                                        Margin="0,4,0,0"
                                        Text="Writes private memory notes; no public transcript turn." />
@@ -3040,7 +3040,7 @@
                         <Expander Header="Steering aids"
                                   Style="{StaticResource Arena.Expander.Section}"
                                   IsExpanded="False"
-                                  Margin="0,0,0,8"
+                                  Margin="{DynamicResource Arena.Gap.Stack}"
                                   AutomationProperties.Name="Operator steering aids"
                                   AutomationProperties.HelpText="Expand to show quick interventions and reusable operator templates.">
                             <StackPanel>
@@ -3096,7 +3096,7 @@
                                     MinWidth="30"
                                     MinHeight="30"
                                     Padding="0"
-                                    Margin="6,0,0,0"
+                                    Margin="{DynamicResource Arena.Gap.Inline}"
                                     AutomationProperties.Name="Use selected operator template"
                                     ToolTip="Use selected template">
                                 <TextBlock Text="&#x21AA;"
@@ -3113,7 +3113,7 @@
                                     MinWidth="30"
                                     MinHeight="30"
                                     Padding="0"
-                                    Margin="6,0,0,0"
+                                    Margin="{DynamicResource Arena.Gap.Inline}"
                                     AutomationProperties.Name="Save operator template"
                                     ToolTip="Save current operator text as a template">
                                 <TextBlock Text="&#xE74E;"
@@ -3130,7 +3130,7 @@
                                     MinWidth="30"
                                     MinHeight="30"
                                     Padding="0"
-                                    Margin="6,0,0,0"
+                                    Margin="{DynamicResource Arena.Gap.Inline}"
                                     AutomationProperties.Name="Delete selected operator template"
                                     ToolTip="Delete selected template">
                                 <TextBlock Text="&#xE74D;"
@@ -3180,9 +3180,9 @@
                             <TextBlock x:Name="AgentRunbookMetaText"
                                        Text="No active runbook. A task creates one automatically."
                                        Style="{StaticResource HintText}"
-                                       FontSize="10.5"
+                                       FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                        TextWrapping="Wrap"
-                                       Margin="0,0,0,8"
+                                       Margin="{DynamicResource Arena.Gap.Stack}"
                                        AutomationProperties.Name="Agent runbook identity and checkpoint status" />
                             <StackPanel x:Name="AgentPhaseItems" />
                         </StackPanel>
@@ -3194,7 +3194,7 @@
                                        Text="No app-building task yet."
                                        Style="{StaticResource HintText}"
                                        TextWrapping="Wrap"
-                                       Margin="0,0,0,8" />
+                                       Margin="{DynamicResource Arena.Gap.Stack}" />
                             <StackPanel x:Name="AgentBuildEvidenceItems" />
                         </StackPanel>
                     </Border>
@@ -3205,7 +3205,7 @@
                                        Text="No artifacts yet."
                                        Style="{StaticResource HintText}"
                                        TextWrapping="Wrap"
-                                       Margin="0,0,0,8" />
+                                       Margin="{DynamicResource Arena.Gap.Stack}" />
                             <StackPanel x:Name="AgentOutputItems" />
                             <Button x:Name="AgentCommandStageArtifactButton"
                                     Content="Use Artifact"
@@ -3318,18 +3318,18 @@
                                         ToolTip="Stage held Builder proposal" />
                             </UniformGrid>
                             <WrapPanel x:Name="AgentCommandRiskItems"
-                                       Margin="0,0,0,8" />
+                                       Margin="{DynamicResource Arena.Gap.Stack}" />
                             <Border Background="{DynamicResource InputBrush}"
                                     BorderBrush="{DynamicResource DisabledBorderBrush}"
                                     BorderThickness="1"
-                                    CornerRadius="6"
+                                    CornerRadius="{DynamicResource Arena.Radius.Small}"
                                     Padding="8"
                                     MinHeight="78"
-                                    Margin="0,0,0,8">
+                                    Margin="{DynamicResource Arena.Gap.Stack}">
                                 <TextBlock x:Name="AgentCommandApprovalText"
                                            Text="Preview required before any command can run."
                                            Foreground="{DynamicResource TextBrush}"
-                                           FontSize="11.5"
+                                           FontSize="{DynamicResource Arena.Type.LabelSize}"
                                            TextWrapping="Wrap" />
                             </Border>
                             <TextBlock x:Name="AgentCommandStatusText"
@@ -3351,7 +3351,7 @@
                                      VerticalScrollBarVisibility="Auto"
                                      HorizontalScrollBarVisibility="Auto"
                                      FontFamily="Consolas"
-                                     FontSize="11.5"
+                                     FontSize="{DynamicResource Arena.Type.LabelSize}"
                                      Text="No command output." />
                             <UniformGrid Columns="2"
                                          Margin="0,8,-6,0">
@@ -3423,7 +3423,7 @@
                                        Text="No commands recorded yet."
                                        Style="{StaticResource HintText}"
                                        TextWrapping="Wrap"
-                                       Margin="0,0,0,8" />
+                                       Margin="{DynamicResource Arena.Gap.Stack}" />
                             <StackPanel x:Name="AgentCommandHistoryItems" />
                             <UniformGrid Columns="2"
                                          Margin="0,8,-6,0">
@@ -3468,7 +3468,7 @@
                             <ComboBox x:Name="CollaborateModePicker"
                                       SelectionChanged="CollaborateModePicker_SelectionChanged"
                                       Style="{StaticResource FormComboBox}"
-                                      Margin="0,0,0,12">
+                                      Margin="{DynamicResource Arena.Gap.Section}">
                                 <ComboBoxItem Content="Fast" Tag="fast" />
                                 <ComboBoxItem Content="Team Draft" Tag="team" IsSelected="True" />
                                 <ComboBoxItem Content="Critique" Tag="critique" />
@@ -3481,7 +3481,7 @@
                                       IsEditable="True"
                                       IsTextSearchEnabled="False"
                                       Style="{StaticResource FormComboBox}"
-                                      Margin="0,0,0,12"
+                                      Margin="{DynamicResource Arena.Gap.Section}"
                                       ToolTip="Visible collaboration passes before final synthesis. Type a custom value from 1 to 12.">
                                 <ComboBoxItem Content="1" Tag="1" IsSelected="True" />
                                 <ComboBoxItem Content="2" Tag="2" />
@@ -3523,7 +3523,7 @@
                                         Content="Add Doc"
                                         Click="CollaborateAddDocumentButton_Click"
                                         Style="{StaticResource CompactButton}"
-                                        FontSize="10.5"
+                                        FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                         MinHeight="30"
                                         Padding="7,4" />
                                 <Button x:Name="CollaborateClearDocumentsButton"
@@ -3531,7 +3531,7 @@
                                         Content="Clear"
                                         Click="CollaborateClearDocumentsButton_Click"
                                         Style="{StaticResource CompactButton}"
-                                        FontSize="10.5"
+                                        FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                         MinHeight="30"
                                         Padding="7,4" />
                             </Grid>
@@ -3563,7 +3563,7 @@
                                         Content="Run"
                                         Click="CollaborateRunCalculatorButton_Click"
                                         Style="{StaticResource CompactButton}"
-                                        FontSize="10.5"
+                                        FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                         MinHeight="30"
                                         Padding="7,4" />
                                 <Button x:Name="CollaborateClearCalculationsButton"
@@ -3571,7 +3571,7 @@
                                         Content="Clear"
                                         Click="CollaborateClearCalculationsButton_Click"
                                         Style="{StaticResource CompactButton}"
-                                        FontSize="10.5"
+                                        FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                         MinHeight="30"
                                         Padding="7,4" />
                             </Grid>
@@ -3603,7 +3603,7 @@
                                         Content="Save"
                                         Click="CollaborateSaveMemoryButton_Click"
                                         Style="{StaticResource CompactButton}"
-                                        FontSize="10.5"
+                                        FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                         MinHeight="30"
                                         Padding="7,4" />
                                 <Button x:Name="CollaborateClearMemoryButton"
@@ -3611,7 +3611,7 @@
                                         Content="Clear"
                                         Click="CollaborateClearMemoryButton_Click"
                                         Style="{StaticResource CompactButton}"
-                                        FontSize="10.5"
+                                        FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                         MinHeight="30"
                                         Padding="7,4" />
                             </Grid>
@@ -3672,7 +3672,7 @@
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <Grid Margin="0,0,0,12">
+                <Grid Margin="{DynamicResource Arena.Gap.Section}">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -3747,7 +3747,7 @@
                                    Margin="0,0,0,10"
                                    TextWrapping="Wrap" />
                         <TextBlock Text="Provider" Style="{StaticResource FieldLabel}" />
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="8" />
@@ -3776,7 +3776,7 @@
                         <TextBlock x:Name="ProviderPresetStatusText"
                                    Style="{StaticResource HintText}"
                                    AutomationProperties.LiveSetting="Polite"
-                                   Margin="0,0,0,8"
+                                   Margin="{DynamicResource Arena.Gap.Stack}"
                                    Text="A preset fills the server address and connection type. Your model choice stays unchanged." />
                         <Expander x:Name="ProviderCustomConnectionExpander"
                                   Header="Custom connection"
@@ -3787,7 +3787,7 @@
                         <ComboBox x:Name="ProviderApiModePicker"
                                   SelectionChanged="ProviderApiModePicker_SelectionChanged"
                                   Style="{StaticResource FormComboBox}"
-                                  Margin="0,0,0,8"
+                                  Margin="{DynamicResource Arena.Gap.Stack}"
                                   ToolTip="OpenAI-compatible works with most local providers. LM Studio native enables /api/v1 features; Ollama native enables /api/chat, /api/tags, thinking output, and keep-alive lifecycle requests.">
                             <ComboBoxItem Content="OpenAI-compatible /v1" Tag="openai_compatible" IsSelected="True" />
                             <ComboBoxItem Content="LM Studio native /api/v1" Tag="lmstudio_native" />
@@ -3796,20 +3796,20 @@
                         <TextBlock Text="Server address" Style="{StaticResource FieldLabel}" />
                         <TextBox x:Name="ProviderBaseUrlText"
                                   Style="{StaticResource FormTextBox}"
-                                  Margin="0,0,0,8"
+                                  Margin="{DynamicResource Arena.Gap.Stack}"
                                   LostKeyboardFocus="ProviderBaseUrlText_Commit"
                                   KeyDown="ProviderBaseUrlText_KeyDown" />
                         <TextBlock Text="Access token (optional)" Style="{StaticResource FieldLabel}" />
                         <PasswordBox x:Name="ProviderApiTokenBox"
                                      Style="{StaticResource FormPasswordBox}"
-                                     Margin="0,0,0,8"
+                                     Margin="{DynamicResource Arena.Gap.Stack}"
                                      LostKeyboardFocus="ProviderApiTokenBox_Commit"
                                      KeyDown="ProviderApiTokenBox_KeyDown"
                                      ToolTip="Optional bearer token for local providers, Ollama Cloud, proxies, or OpenAI-compatible endpoints that require Authorization." />
                             </StackPanel>
                         </Expander>
                         <TextBlock Text="Default model" Style="{StaticResource FieldLabel}" />
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="8" />
@@ -3860,7 +3860,7 @@
                                           IsEditable="True"
                                           IsTextSearchEnabled="False"
                                           Style="{StaticResource FormComboBox}"
-                                          Margin="0,0,0,8"
+                                          Margin="{DynamicResource Arena.Gap.Stack}"
                                           ToolTip="Pick a saved provider + model routing setup, or type a new name and press Save." />
                                 <Grid Margin="0,0,0,6">
                                     <Grid.ColumnDefinitions>
@@ -3907,7 +3907,7 @@
                                 Click="UseDefaultModelForAllRolesButton_Click"
                                 Style="{StaticResource SecondaryButton}"
                                 Padding="8,6"
-                                Margin="0,0,0,8"
+                                Margin="{DynamicResource Arena.Gap.Stack}"
                                 HorizontalAlignment="Left"
                                 ToolTip="Clear role-specific model choices so every participant and the narrator keep following the default model.">
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
@@ -3917,7 +3917,7 @@
                         </Button>
 
                         <TextBlock Text="Role-specific models" Style="{StaticResource FieldLabel}" Margin="0,2,0,6" />
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="96" />
                                 <ColumnDefinition Width="8" />
@@ -4014,13 +4014,13 @@
                             <TextBox x:Name="NarratorMaxOverrideText" Grid.Row="10" Grid.Column="4" Style="{StaticResource FormTextBox}" LostFocus="RoleOverrideText_Commit" />
                         </Grid>
                         <TextBlock Style="{StaticResource HintText}"
-                                   Margin="0,0,0,8"
+                                   Margin="{DynamicResource Arena.Gap.Stack}"
                                    Text="Blank fields use the values under Advanced model calls. Overrides save when a field loses focus and apply from the next turn. Temperature 0-2; response limit 1-32768 tokens." />
 
                         <TextBlock Text="Routing summary" Style="{StaticResource FieldLabel}" />
                         <TextBlock x:Name="RoleModelSummaryText"
                                    Style="{StaticResource CollapsibleHintText}"
-                                   Margin="0,0,0,8" />
+                                   Margin="{DynamicResource Arena.Gap.Stack}" />
                         <Button x:Name="TestAllRolesButton"
                                 Click="TestAllRolesButton_Click"
                                 Style="{StaticResource SecondaryButton}"
@@ -4042,9 +4042,9 @@
                             <StackPanel>
                                 <TextBlock Text="Scan this PC and the connected provider, then recommend a model spread for the arena roles."
                                            Style="{StaticResource HintText}"
-                                           Margin="0,0,0,8"
+                                           Margin="{DynamicResource Arena.Gap.Stack}"
                                            TextWrapping="Wrap" />
-                                <Grid Margin="0,0,0,8">
+                                <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="10" />
@@ -4074,7 +4074,7 @@
                                         </StackPanel>
                                     </Button>
                                 </Grid>
-                                <Grid Margin="0,0,0,8">
+                                <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="8" />
@@ -4117,7 +4117,7 @@
                                   IsExpanded="False"
                                   ToolTip="Preload, unload, or download models when using an LM Studio or Ollama native connection.">
                             <StackPanel>
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="8" />
@@ -4145,16 +4145,16 @@
                         </Grid>
                         <TextBlock x:Name="LoadPlanPreviewText"
                                    Style="{StaticResource HintText}"
-                                   Margin="0,0,0,8"
+                                   Margin="{DynamicResource Arena.Gap.Stack}"
                                    Text="Load plan preview appears after selecting models." />
                         <TextBlock x:Name="PreloadModelsStatusText"
                                    Style="{StaticResource HintText}"
                                    AutomationProperties.LiveSetting="Polite"
-                                   Margin="0,0,0,8"
+                                   Margin="{DynamicResource Arena.Gap.Stack}"
                                    Text="Preload telemetry appears here." />
                         <WrapPanel x:Name="PreloadModelsItems"
-                                   Margin="0,0,0,8" />
-                        <Grid Margin="0,0,0,8">
+                                   Margin="{DynamicResource Arena.Gap.Stack}" />
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="10" />
@@ -4178,7 +4178,7 @@
                                 </ComboBox>
                             </StackPanel>
                         </Grid>
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="10" />
@@ -4208,7 +4208,7 @@
                         <TextBlock x:Name="DownloadModelStatusText"
                                    Style="{StaticResource HintText}"
                                    AutomationProperties.LiveSetting="Polite"
-                                   Margin="0,0,0,8"
+                                   Margin="{DynamicResource Arena.Gap.Stack}"
                                    Text="Downloads use LM Studio native jobs or Ollama native /api/pull." />
                             </StackPanel>
                         </Expander>
@@ -4220,9 +4220,9 @@
                             <StackPanel>
                         <TextBlock Text="Shared request defaults for this session. Use Apply at the bottom after editing timeout, temperature, or response limit."
                                    Style="{StaticResource HintText}"
-                                   Margin="0,0,0,8"
+                                   Margin="{DynamicResource Arena.Gap.Stack}"
                                    TextWrapping="Wrap" />
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="10" />
@@ -4241,7 +4241,7 @@
                                          ToolTip="0-2. Lower is more deterministic; higher is more varied. Out-of-range values are corrected on Apply." />
                             </StackPanel>
                         </Grid>
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="10" />
@@ -4262,7 +4262,7 @@
                                          ToolTip="0 uses the provider default. LM Studio native sends context_length; Ollama native sends options.num_ctx." />
                             </StackPanel>
                         </Grid>
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="10" />
@@ -4338,7 +4338,7 @@
                                   Checked="StreamModelResponsesCheckBox_CheckedChanged"
                                   Unchecked="StreamModelResponsesCheckBox_CheckedChanged"
                                   ToolTip="Show Agent workspace output while it is generated. Turn this off if a provider misbehaves with streamed responses." />
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="8" />
@@ -4359,7 +4359,7 @@
                                          ToolTip="Output token budget for Builder steps, 256-32768. Builder writes full file contents, so keep this the largest." />
                             </StackPanel>
                         </Grid>
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="8" />
@@ -4386,7 +4386,7 @@
                                  HorizontalContentAlignment="Left"
                                  LostFocus="AgentRescueModelText_LostFocus"
                                  Tag="Optional fallback model..."
-                                 Margin="0,0,0,8"
+                                 Margin="{DynamicResource Arena.Gap.Stack}"
                                  ToolTip="Optional model id used as a fallback when an Agent role step fails or returns no usable text and no other fallback applies." />
                         <Button x:Name="ResetAgentSettingsButton"
                                 Click="ResetAgentSettingsButton_Click"
@@ -4452,7 +4452,7 @@
                                   AutomationProperties.HelpText="Choose an installed Windows voice for AI Arena text to speech."
                                   Margin="0,0,0,10"
                                   ToolTip="Choose an installed Windows voice" />
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="72" />
                                 <ColumnDefinition Width="*" />
@@ -4500,7 +4500,7 @@
                                        TextAlignment="Right"
                                        VerticalAlignment="Center" />
                         </Grid>
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="8" />
@@ -4555,7 +4555,7 @@
                         <ComboBox x:Name="AvatarStylePicker"
                                   SelectionChanged="VisualSettings_Changed"
                                   Style="{StaticResource FormComboBox}"
-                                  Margin="0,0,0,8"
+                                  Margin="{DynamicResource Arena.Gap.Stack}"
                                   ToolTip="Select one deterministic avatar style for transcript speakers.">
                             <ComboBoxItem Content="Champion portrait pack" Tag="pack" />
                             <ComboBoxItem Content="Procedural robot portraits" Tag="procedural" />
@@ -4569,7 +4569,7 @@
                         <ComboBox x:Name="SystemGlyphStylePicker"
                                   SelectionChanged="VisualSettings_Changed"
                                   Style="{StaticResource FormComboBox}"
-                                  Margin="0,0,0,8"
+                                  Margin="{DynamicResource Arena.Gap.Stack}"
                                   ToolTip="Select one rendering style for system, internet, and error events.">
                             <ComboBoxItem Content="Warning / server glyph" Tag="glyph" />
                             <ComboBoxItem Content="Fallback initial" Tag="fallback" />
@@ -4609,7 +4609,7 @@
                                   FontWeight="SemiBold"
                                   Checked="ControlPlaneCheckBox_Changed"
                                   Unchecked="ControlPlaneCheckBox_Changed"
-                                  Margin="0,0,0,8"
+                                  Margin="{DynamicResource Arena.Gap.Stack}"
                                   AutomationProperties.Name="Toggle AI Arena control plane"
                                   AutomationProperties.HelpText="Enable or disable authenticated local PowerShell automation. Enabled by default."
                                   ToolTip="Enable authenticated local PowerShell control, state inspection, and event streaming" />
@@ -4784,7 +4784,7 @@
                                    Text="No session-scoped changes pending."
                                    Style="{StaticResource CollapsibleHintText}"
                                    AutomationProperties.LiveSetting="Polite"
-                                   Margin="0,0,0,8"
+                                   Margin="{DynamicResource Arena.Gap.Stack}"
                                    TextWrapping="Wrap" />
                         <Button x:Name="ApplySettingsButton"
                                 Click="ApplySettingsButton_Click"

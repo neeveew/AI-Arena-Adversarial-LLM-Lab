@@ -953,7 +953,8 @@ static void MainWindowAgentCommandRailExposesApprovalContract()
     Require(autoContinue.Contains("AutomationProperties.HelpText=\"", StringComparison.Ordinal), "Auto Continue should explain its follow-up command behavior");
     Require(autoContinue.Contains("loop guards", StringComparison.Ordinal), "Auto Continue help text should mention loop guards");
     Require(autoContinueStatus.Contains("Auto Continue is off", StringComparison.Ordinal), "Auto Continue status should start in manual next-step mode");
-    Require(risks.Contains("Margin=\"0,0,0,8\"", StringComparison.Ordinal), "Agent risk chips should have a stable host");
+    // Arena.Gap.Stack is 0,0,0,8; the host spacing is unchanged, only its spelling.
+    Require(risks.Contains("Margin=\"{DynamicResource Arena.Gap.Stack}\"", StringComparison.Ordinal), "Agent risk chips should have a stable host");
     Require(approval.Contains("TextWrapping=\"Wrap\"", StringComparison.Ordinal), "Agent approval preview should wrap long invocations");
     Require(output.Contains("IsReadOnly=\"True\"", StringComparison.Ordinal), "Agent terminal output should not be editable");
     Require(output.Contains("HorizontalScrollBarVisibility=\"Auto\"", StringComparison.Ordinal), "Agent terminal output should preserve wide command lines");
