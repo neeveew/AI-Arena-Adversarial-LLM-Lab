@@ -29,7 +29,7 @@ The app is designed for local experimentation with model behavior. You can creat
 
 ## App Layout
 
-The left rail contains the app identity, navigation, and contextual status. AI Lab, Agent, and AI Collaborate are first-class navigation surfaces. Agent is visible by default and can be shown or hidden independently under **Settings -> Agent workspace**; this does not require Debug controls. In AI Lab the rail shows session overview and live agent status. In Agent it shows the active working directory and software team roles. In AI Collaborate it shows recent collaboration chats and team roles.
+The left rail contains the app identity, navigation, contextual status, and a compact bottom status dock. The dock appears for actionable arena guidance or short-lived receipts, uses at most two lines, and keeps the top rail at a stable height. AI Lab, Agent, and AI Collaborate are first-class navigation surfaces. Agent is visible by default and can be shown or hidden independently under **Settings -> Agent workspace**; this does not require Debug controls. In AI Lab the rail shows session overview and live agent status. In Agent it shows the active working directory and software team roles. In AI Collaborate it shows recent collaboration chats and team roles.
 
 The center area contains the active page:
 
@@ -58,7 +58,7 @@ At narrower window sizes, opening the right rail reveals it as a drawer over the
 - Provider: online/offline provider state.
 - Current turn: next scheduled participant.
 - Turns: transcript turn count.
-- The second status line shows the current idle/run state. When idle, it names the next participant, selected model, and provider state.
+- Actionable idle/run guidance appears in the bottom-left status dock rather than adding a second top-rail row. Routine Ready and Provider online messages stay hidden.
 - Match Setup: opens the wide AI Lab setup flyout for scenario, cast, lock, generation, and saved-state controls.
 - Search icon: opens a draggable search popup. In AI Lab it searches transcript text, speakers, models, and sources. In AI Collaborate it uses collaboration-oriented placeholder text and recent searches.
 - Export icon: in AI Lab, exports the current transcript scope to Markdown; in AI Collaborate, exports the current chat with run reviews and team trace details.
@@ -83,7 +83,7 @@ The transcript renders newest-first. Each message card shows:
 
 Hover over the compact model summary, or move keyboard focus to it, to reveal the full delivery details. Available details include voice, latency, time to first token, model load time, throughput, prompt/completion/total tokens, style-fit result, status, and provider response ID. Missing measurements are omitted rather than shown as zero or unknown.
 
-Model reasoning remains collapsible on the left of the card footer. Message actions stay on the right so they are available without opening a separate details drawer. On narrow cards, the model summary moves onto a second header line and the actions wrap beneath reasoning. Internet metadata keeps its own disclosure.
+Model reasoning remains collapsible and its expanded body uses the full inner width of the card. Quiet 30-DIP message actions stay visible at the right of the reasoning header without reserving a column beside the expanded text. On narrow cards, the model summary moves onto a second header line and the actions wrap beneath reasoning. Internet metadata keeps its own disclosure.
 
 Focused, Compact, Diagnostics, and Review presets use this same card information hierarchy; changing preset does not hide card-level delivery statistics or actions.
 

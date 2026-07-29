@@ -133,18 +133,37 @@ internal sealed class TranscriptCardRenderer
         var canMutate = message.Turn > 0;
         actions.Children.Add(CreateActionButton("Copy", (_, _) => copyTranscriptMessage(message), canMutate, iconGlyph: "\uE8C8"));
         actions.Children.Add(CreateActionButton("Speak", (_, _) => speakTranscriptMessage(message), canMutate && canSpeakTranscriptMessage(message), iconGlyph: "\uE189"));
-        actions.Children.Add(CreateActionButton(message.Pinned ? "Unpin" : "Pin", async (_, _) => await togglePinTranscriptMessageAsync(message), canMutate, TranscriptActionKind.Primary, "\uE718"));
+        var pinButton = CreateActionButton(
+            message.Pinned ? "Unpin" : "Pin",
+            async (_, _) => await togglePinTranscriptMessageAsync(message),
+            canMutate,
+            message.Pinned ? TranscriptActionKind.Primary : TranscriptActionKind.Neutral,
+            "\uE718");
+        SetToggleActionState(
+            pinButton,
+            message.Pinned,
+            message.Pinned
+                ? "This message is pinned. Activate to unpin it."
+                : "This message is not pinned. Activate to pin it.");
+        actions.Children.Add(pinButton);
         actions.Children.Add(CreateActionButton("Retry", async (_, _) => await retryTranscriptMessageAsync(message), canMutate && retryable && isAgentSpeaker(message.SpeakerId) && !isInternet, iconGlyph: "\uE72C"));
         actions.Children.Add(CreateActionButton("Delete", async (_, _) => await deleteTranscriptMessageAsync(message), canMutate, TranscriptActionKind.Danger, "\uE74D"));
         if (turnCompareMode())
         {
             var selectedForCompare = isSelectedForCompare(message);
-            actions.Children.Add(CreateActionButton(
+            var compareButton = CreateActionButton(
                 selectedForCompare ? "Drop compare" : "Compare",
                 (_, _) => toggleTurnCompareMessage(message),
                 canMutate && canCompareMessage(message),
                 selectedForCompare ? TranscriptActionKind.Primary : TranscriptActionKind.Neutral,
-                selectedForCompare ? "\uE711" : null));
+                "\uE8AB");
+            SetToggleActionState(
+                compareButton,
+                selectedForCompare,
+                selectedForCompare
+                    ? "This message is selected for comparison. Activate to remove it."
+                    : "This message is not selected for comparison. Activate to add it.");
+            actions.Children.Add(compareButton);
         }
         AutomationProperties.SetName(actions, $"Message actions for turn {message.Turn}");
         AutomationProperties.SetHelpText(
@@ -171,8 +190,7 @@ internal sealed class TranscriptCardRenderer
                     Text = message.Reasoning,
                     Foreground = resourceBrush("TextBrush"),
                     TextWrapping = TextWrapping.Wrap,
-                    MaxWidth = 940,
-                    HorizontalAlignment = HorizontalAlignment.Left,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
                     Margin = new Thickness(0, 8, 0, 0)
                 });
         }
@@ -182,7 +200,13 @@ internal sealed class TranscriptCardRenderer
 
     public Button CreateActionButton(string text, RoutedEventHandler? handler, bool enabled, TranscriptActionKind kind = TranscriptActionKind.Neutral, string? iconGlyph = null)
     {
-        return transcriptActions.CreateButton(text, handler, enabled, kind, iconGlyph);
+        return transcriptActions.CreateCardButton(text, handler, enabled, kind, iconGlyph);
+    }
+
+    private static void SetToggleActionState(Button button, bool active, string helpText)
+    {
+        AutomationProperties.SetItemStatus(button, active ? "active" : "inactive");
+        AutomationProperties.SetHelpText(button, helpText);
     }
 
     internal static bool CanSpeakMessage(TranscriptMessage message)
@@ -222,12 +246,19 @@ internal sealed class TranscriptCardRenderer
 
     public Expander CreateExpander(string header, Brush accent, UIElement content)
     {
+        if (content is FrameworkElement contentElement)
+        {
+            contentElement.HorizontalAlignment = HorizontalAlignment.Stretch;
+        }
+
         return new Expander
         {
             Header = header,
             Foreground = accent,
             FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 12, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
             ToolTip = $"Show {header.ToLowerInvariant()}",
             Content = new Border
             {
@@ -237,6 +268,7 @@ internal sealed class TranscriptCardRenderer
                 CornerRadius = ArenaTokens.MediumRadius,
                 Padding = new Thickness(10),
                 Margin = new Thickness(0, 8, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
                 Child = content
             }
         };
@@ -260,11 +292,14 @@ internal sealed class TranscriptCardRenderer
         {
             Grid.SetRow(reasoning, 0);
             Grid.SetColumn(reasoning, 0);
+            Grid.SetColumnSpan(reasoning, 2);
+            Panel.SetZIndex(reasoning, 0);
             footer.Children.Add(reasoning);
         }
 
         actions.HorizontalAlignment = HorizontalAlignment.Right;
         actions.VerticalAlignment = VerticalAlignment.Top;
+        Panel.SetZIndex(actions, 1);
         footer.Children.Add(actions);
 
         void ApplyLayout(double width)
@@ -282,7 +317,7 @@ internal sealed class TranscriptCardRenderer
             var sideBySide = layout == TranscriptCardFooterLayout.SideBySide;
             Grid.SetRow(reasoning, 0);
             Grid.SetColumn(reasoning, 0);
-            Grid.SetColumnSpan(reasoning, sideBySide ? 1 : 2);
+            Grid.SetColumnSpan(reasoning, 2);
             Grid.SetRow(actions, sideBySide ? 0 : 1);
             Grid.SetColumn(actions, sideBySide ? 1 : 0);
             Grid.SetColumnSpan(actions, sideBySide ? 1 : 2);

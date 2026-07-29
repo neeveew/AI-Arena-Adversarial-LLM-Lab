@@ -15,9 +15,16 @@ public sealed class ShellTopBarPresentationViewModel : INotifyPropertyChanged
     private string currentTurnValue = "-";
     private string turnCountValue = "0";
     private string arenaStatus = "Ready.";
+    private string displayStatus = "Ready.";
+    private string displayStatusToolTip = "Ready.";
+    private string displayStatusHelpText = "Current arena status: Ready.";
+    private bool showStatusDock;
     private string viewButtonLabel = "View: Custom";
-    private bool showStatusLine;
-    private bool forceStatusLine;
+    private string transientStatus = "";
+    private string transientStatusToolTip = "";
+    private string transientStatusHelpText = "";
+    private long nextTransientStatusGeneration;
+    private long activeTransientStatusGeneration;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -48,17 +55,31 @@ public sealed class ShellTopBarPresentationViewModel : INotifyPropertyChanged
     public string ArenaStatus
     {
         get => arenaStatus;
-        set
-        {
-            SetField(ref arenaStatus, value);
-            UpdateStatusLineVisibility();
-        }
+        set => SetPersistentStatus(value);
     }
 
-    public bool ShowStatusLine
+    public string DisplayStatus
     {
-        get => showStatusLine;
-        private set => SetField(ref showStatusLine, value);
+        get => displayStatus;
+        private set => SetField(ref displayStatus, value);
+    }
+
+    public string DisplayStatusToolTip
+    {
+        get => displayStatusToolTip;
+        private set => SetField(ref displayStatusToolTip, value);
+    }
+
+    public string DisplayStatusHelpText
+    {
+        get => displayStatusHelpText;
+        private set => SetField(ref displayStatusHelpText, value);
+    }
+
+    public bool ShowStatusDock
+    {
+        get => showStatusDock;
+        private set => SetField(ref showStatusDock, value);
     }
 
     public string ViewButtonLabel
@@ -67,10 +88,76 @@ public sealed class ShellTopBarPresentationViewModel : INotifyPropertyChanged
         set => SetField(ref viewButtonLabel, value);
     }
 
-    public void SetTransientStatusVisible(bool visible)
+    internal long ShowTransientStatus(string status, string? toolTip = null, string? helpText = null)
     {
-        forceStatusLine = visible;
-        UpdateStatusLineVisibility();
+        var normalized = NormalizeStatus(status);
+        var generation = ++nextTransientStatusGeneration;
+        activeTransientStatusGeneration = generation;
+        transientStatus = normalized;
+        transientStatusToolTip = NormalizeDetail(toolTip, normalized);
+        transientStatusHelpText = NormalizeDetail(helpText, transientStatusToolTip);
+        UpdateDisplayStatus();
+        return generation;
+    }
+
+    internal bool ClearTransientStatus(long generation)
+    {
+        if (generation <= 0 || generation != activeTransientStatusGeneration)
+        {
+            return false;
+        }
+
+        activeTransientStatusGeneration = 0;
+        transientStatus = "";
+        transientStatusToolTip = "";
+        transientStatusHelpText = "";
+        UpdateDisplayStatus();
+        return true;
+    }
+
+    private void SetPersistentStatus(string? status)
+    {
+        var normalized = NormalizeStatus(status);
+        SetField(ref arenaStatus, normalized, nameof(ArenaStatus));
+        if (activeTransientStatusGeneration == 0)
+        {
+            UpdateDisplayStatus();
+        }
+    }
+
+    private void UpdateDisplayStatus()
+    {
+        var transientActive = activeTransientStatusGeneration != 0;
+        var status = transientActive ? transientStatus : arenaStatus;
+        var toolTip = transientActive ? transientStatusToolTip : status;
+        var helpText = transientActive
+            ? transientStatusHelpText
+            : $"Current arena status: {status}";
+        var shouldShowStatusDock = transientActive || !IsRoutineStatus(status);
+        if (shouldShowStatusDock && !ShowStatusDock)
+        {
+            // Reveal first so a Polite live region is present when its text changes.
+            ShowStatusDock = true;
+        }
+
+        DisplayStatus = status;
+        DisplayStatusToolTip = toolTip;
+        DisplayStatusHelpText = helpText;
+        if (!shouldShowStatusDock && ShowStatusDock)
+        {
+            // Project the routine state before releasing the bottom-rail space.
+            ShowStatusDock = false;
+        }
+    }
+
+    private static string NormalizeStatus(string? status)
+    {
+        return string.IsNullOrWhiteSpace(status) ? "Ready." : status.Trim();
+    }
+
+    private static string NormalizeDetail(string? detail, string fallback)
+    {
+        return string.IsNullOrWhiteSpace(detail) ? fallback : detail.Trim();
     }
 
     internal static bool IsRoutineStatus(string? status)
@@ -80,11 +167,6 @@ public sealed class ShellTopBarPresentationViewModel : INotifyPropertyChanged
             || normalized.Equals("Ready.", StringComparison.OrdinalIgnoreCase)
             || normalized.Equals("Provider online.", StringComparison.OrdinalIgnoreCase)
             || normalized.Equals("Provider online", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private void UpdateStatusLineVisibility()
-    {
-        ShowStatusLine = forceStatusLine || !IsRoutineStatus(arenaStatus);
     }
 
     private void SetField(ref string field, string? value, [CallerMemberName] string? propertyName = null)

@@ -7,6 +7,10 @@ namespace AIArena.Wpf;
 
 internal sealed class TranscriptActionCoordinator
 {
+    internal const string CardActionStyleKey = "Arena.Button.TranscriptAction";
+    internal const string ActiveCardActionStyleKey = "Arena.Button.TranscriptAction.Active";
+    internal const string DangerCardActionStyleKey = "Arena.Button.TranscriptAction.Danger";
+
     private readonly Func<bool> compactTranscriptMode;
     private readonly Func<bool> isArenaBusy;
     private readonly Func<string, Brush> resourceBrush;
@@ -20,6 +24,59 @@ internal sealed class TranscriptActionCoordinator
         this.compactTranscriptMode = compactTranscriptMode;
         this.isArenaBusy = isArenaBusy;
         this.resourceBrush = resourceBrush;
+    }
+
+    internal static string ResolveCardActionStyleKey(TranscriptActionKind kind)
+    {
+        return kind switch
+        {
+            TranscriptActionKind.Primary => ActiveCardActionStyleKey,
+            TranscriptActionKind.Danger => DangerCardActionStyleKey,
+            _ => CardActionStyleKey
+        };
+    }
+
+    public Button CreateCardButton(
+        string text,
+        RoutedEventHandler? handler,
+        bool enabled,
+        TranscriptActionKind kind = TranscriptActionKind.Neutral,
+        string? iconGlyph = null)
+    {
+        var button = new Button
+        {
+            Content = string.IsNullOrWhiteSpace(iconGlyph)
+                ? text
+                : new TextBlock
+                {
+                    Text = iconGlyph,
+                    FontFamily = ArenaTokens.IconFontFamily,
+                    FontSize = 13,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                },
+            IsEnabled = enabled && !isArenaBusy(),
+            Tag = enabled,
+            Width = 30,
+            Height = 30,
+            MinWidth = 30,
+            MinHeight = 30,
+            Padding = new Thickness(0),
+            Margin = new Thickness(3, 0, 0, 0),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            ToolTip = text
+        };
+        button.SetResourceReference(FrameworkElement.StyleProperty, ResolveCardActionStyleKey(kind));
+        AutomationProperties.SetName(button, text);
+        AutomationProperties.SetHelpText(button, text);
+        if (handler is not null)
+        {
+            button.Click += handler;
+        }
+
+        TrackButton(button);
+        return button;
     }
 
     public Button CreateButton(string text, RoutedEventHandler? handler, bool enabled, TranscriptActionKind kind = TranscriptActionKind.Neutral, string? iconGlyph = null)

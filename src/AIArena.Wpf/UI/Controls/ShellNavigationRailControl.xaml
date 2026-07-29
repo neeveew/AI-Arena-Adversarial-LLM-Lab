@@ -3,6 +3,9 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              MinWidth="184"
              AutomationProperties.Name="AI Arena navigation rail">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+    </UserControl.Resources>
     <Border Background="{DynamicResource PanelBrush}"
             BorderBrush="{DynamicResource ControlBorderBrush}"
             BorderThickness="0,0,1,0">
@@ -360,6 +363,44 @@
                     </StackPanel>
                 </Border>
             </Grid>
+
+            <Border x:Name="ShellStatusDockElement"
+                    Grid.Row="3"
+                    Background="{DynamicResource InputBrush}"
+                    BorderBrush="{DynamicResource DisabledBorderBrush}"
+                    BorderThickness="0,1,0,0"
+                    Padding="10,8"
+                    Margin="-10,8,-10,-10"
+                    ToolTip="{Binding DisplayStatusToolTip}"
+                    Visibility="{Binding ShowStatusDock, Converter={StaticResource BooleanToVisibilityConverter}}"
+                    AutomationProperties.Name="Application status"
+                    AutomationProperties.HelpText="{Binding DisplayStatusHelpText}"
+                    ToolTipService.ShowDuration="60000">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Ellipse Width="6"
+                             Height="6"
+                             Margin="0,0,8,0"
+                             Fill="{DynamicResource Arena.Brush.Info}"
+                             VerticalAlignment="Center"
+                             IsHitTestVisible="False" />
+                    <TextBlock x:Name="ShellStatusTextElement"
+                               Grid.Column="1"
+                               Text="{Binding DisplayStatus}"
+                               Style="{DynamicResource Arena.Text.Caption}"
+                               AutomationProperties.Name="Arena status"
+                               AutomationProperties.HelpText="{Binding DisplayStatusHelpText}"
+                               AutomationProperties.LiveSetting="Polite"
+                               TextWrapping="Wrap"
+                               TextTrimming="CharacterEllipsis"
+                               LineHeight="16"
+                               LineStackingStrategy="BlockLineHeight"
+                               MaxHeight="32" />
+                </Grid>
+            </Border>
         </Grid>
     </Border>
 </UserControl>

@@ -7,7 +7,6 @@
              KeyboardNavigation.TabNavigation="Continue"
              AutomationProperties.Name="Application status and commands">
     <UserControl.Resources>
-        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
         <Style x:Key="TopMetricPill" TargetType="Border" BasedOn="{StaticResource Arena.Surface.Inset}">
             <Setter Property="MinHeight" Value="32" />
             <Setter Property="Padding" Value="8,4" />
@@ -145,10 +144,10 @@
             MouseRightButtonUp="CaptionSystemMenuRequested">
         <Grid x:Name="TopBarLayoutGrid" Margin="10,3">
             <Grid.RowDefinitions>
-                <!-- The primary rail row is shared by metrics and commands so
-                     their centers stay aligned when the status row is visible. -->
+                <!-- Metrics and commands share the primary row when space permits.
+                     The command rail falls back to row 1 without a status row
+                     changing either row's centerline. -->
                 <RowDefinition Height="Auto" MinHeight="38" />
-                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
@@ -160,7 +159,7 @@
 
             <StackPanel x:Name="CaptionButtonsPanel"
                         Grid.Row="0"
-                        Grid.RowSpan="3"
+                        Grid.RowSpan="2"
                         Grid.Column="2"
                         Orientation="Horizontal"
                         VerticalAlignment="Top"
@@ -469,37 +468,15 @@
                 </Popup>
             </Grid>
 
-            <DockPanel x:Name="TopBarSecondaryStatus"
-                       Grid.Row="1"
-                       Grid.Column="0"
-                       Grid.ColumnSpan="2"
-                       Margin="2,0,2,0"
-                       LastChildFill="True"
-                       Visibility="{Binding ShowStatusLine, Converter={StaticResource BooleanToVisibilityConverter}}">
-                <TextBlock x:Name="SaveStatusText"
-                           DockPanel.Dock="Right"
-                           Text="Saved"
-                           Style="{StaticResource Arena.Text.Caption}"
-                           AutomationProperties.LiveSetting="Polite"
-                           Visibility="Collapsed"
-                           Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}" />
-                <Ellipse Width="6"
-                         Height="6"
-                         Margin="{DynamicResource Arena.Gap.Inline.After.Default}"
-                         Fill="{DynamicResource Arena.Brush.Info}"
-                         VerticalAlignment="Center"
-                         IsHitTestVisible="False" />
-                <TextBlock x:Name="ArenaRunStatus"
-                           Text="{Binding ArenaStatus}"
-                           Style="{StaticResource Arena.Text.Caption}"
-                           AutomationProperties.Name="Arena status"
-                           AutomationProperties.LiveSetting="Polite"
-                           TextTrimming="CharacterEllipsis"
-                           ToolTip="{Binding ArenaStatus}" />
-            </DockPanel>
+            <!-- Compatibility target for existing persistence coordinators. Visible
+                 shell status is presented by the navigation-rail status dock. -->
+            <TextBlock x:Name="SaveStatusText"
+                       Text="Saved"
+                       Visibility="Collapsed"
+                       IsHitTestVisible="False" />
 
             <WrapPanel x:Name="TopBarCommandPanel"
-                       Grid.Row="2"
+                       Grid.Row="1"
                        Grid.Column="0"
                        Grid.ColumnSpan="2"
                        Orientation="Horizontal"

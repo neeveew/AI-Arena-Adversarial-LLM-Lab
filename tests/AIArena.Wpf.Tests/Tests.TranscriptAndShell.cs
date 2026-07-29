@@ -613,17 +613,40 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
             .SingleOrDefault(panel => AutomationProperties.GetName(panel) == "Message actions for turn 12");
         Require(actionPanel is not null, "message actions should have a stable automation-labelled footer");
         Require(actionPanel!.HorizontalAlignment == HorizontalAlignment.Right, "the action footer should align to the right of model reasoning");
-        var actions = actionPanel.Children.OfType<Button>().Select(AutomationProperties.GetName).ToArray();
+        var actionButtons = actionPanel.Children.OfType<Button>().ToArray();
+        var actions = actionButtons.Select(AutomationProperties.GetName).ToArray();
         Require(
             actions.SequenceEqual(["Copy", "Speak", "Pin", "Retry", "Delete", "Compare"], StringComparer.Ordinal),
             "the visible action footer should preserve copy, speak, pin, retry, delete, and optional compare order");
         Require(
-            actionPanel.Children.OfType<Button>().All(button => button.MinHeight >= 36),
-            "all persistent transcript actions should retain safe vertical pointer targets");
-        Require(
-            actionPanel.Children.OfType<Button>().Take(5).All(button => button.MinWidth >= 36),
-            "icon actions should retain safe horizontal pointer targets");
+            actionButtons.All(button =>
+                button.Width == 30
+                && button.Height == 30
+                && button.MinWidth == 30
+                && button.MinHeight == 30
+                && button.Margin == new Thickness(3, 0, 0, 0)),
+            "card-only transcript actions should use the approved quiet 30-DIP square rail");
         Require(actionPanel is RightAlignedWrapPanel, "persistent actions should use a wrap panel that right-aligns every constrained row");
+        Require(
+            TranscriptActionCoordinator.ResolveCardActionStyleKey(TranscriptActionKind.Neutral) == TranscriptActionCoordinator.CardActionStyleKey
+            && TranscriptActionCoordinator.ResolveCardActionStyleKey(TranscriptActionKind.Primary) == TranscriptActionCoordinator.ActiveCardActionStyleKey
+            && TranscriptActionCoordinator.ResolveCardActionStyleKey(TranscriptActionKind.Danger) == TranscriptActionCoordinator.DangerCardActionStyleKey,
+            "card action tones should resolve to quiet, active, and interaction-only danger styles");
+
+        var pinButton = actionButtons.Single(button => AutomationProperties.GetName(button) == "Pin");
+        var compareButton = actionButtons.Single(button => AutomationProperties.GetName(button) == "Compare");
+        var deleteButton = actionButtons.Single(button => AutomationProperties.GetName(button) == "Delete");
+        Require(AutomationProperties.GetItemStatus(pinButton) == "inactive", "an unpinned message should expose an inactive Pin action");
+        Require(AutomationProperties.GetItemStatus(compareButton) == "inactive", "an unselected message should expose an inactive Compare action");
+        Require(
+            compareButton.Content is TextBlock { Text: "\uE8AB" } compareGlyph
+            && compareGlyph.FontFamily.Source.Contains("Segoe", StringComparison.OrdinalIgnoreCase),
+            "Compare should remain icon-only and use the Segoe Fluent Switch glyph");
+        Require(
+            deleteButton.ReadLocalValue(Control.BackgroundProperty) == DependencyProperty.UnsetValue
+            && deleteButton.ReadLocalValue(Control.BorderBrushProperty) == DependencyProperty.UnsetValue
+            && deleteButton.ReadLocalValue(Control.ForegroundProperty) == DependencyProperty.UnsetValue,
+            "Delete should not carry local danger colours that override interaction-state style triggers");
 
         var wrapProbe = new RightAlignedWrapPanel();
         for (var index = 0; index < 3; index++)
@@ -642,9 +665,56 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
         Require(
             expanders.Any(expander => expander.Header?.ToString() == "Model reasoning"),
             "model reasoning should remain a separate collapsible footer section");
+        var reasoning = expanders.Single(expander => expander.Header?.ToString() == "Model reasoning");
+        var footer = LogicalDescendants<Grid>(card)
+            .Single(element => AutomationProperties.GetName(element) == "Transcript message footer for turn 12");
+        Require(Grid.GetColumn(reasoning) == 0 && Grid.GetColumnSpan(reasoning) == 2, "reasoning should span the complete footer width in every responsive tier");
+        Require(
+            reasoning.HorizontalAlignment == HorizontalAlignment.Stretch
+            && reasoning.HorizontalContentAlignment == HorizontalAlignment.Stretch
+            && reasoning.Content is Border
+            {
+                HorizontalAlignment: HorizontalAlignment.Stretch,
+                Child: TextBlock
+                {
+                    HorizontalAlignment: HorizontalAlignment.Stretch,
+                    MaxWidth: double.PositiveInfinity
+                }
+            },
+            "reasoning disclosure, content chrome, and text should all stretch across the card");
+        Require(
+            Panel.GetZIndex(actionPanel) > Panel.GetZIndex(reasoning),
+            "the wide action rail should overlay the reasoning header without constraining expanded reasoning content");
+        Require(
+            !LogicalDescendants<Button>(reasoning).Any(button =>
+                actions.Contains(AutomationProperties.GetName(button), StringComparer.Ordinal)),
+            "action buttons must be siblings of the reasoning disclosure rather than children of its toggle header");
+        Require(!reasoning.IsExpanded, "reasoning should start collapsed");
+        actionButtons.Single(button => AutomationProperties.GetName(button) == "Copy")
+            .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Require(!reasoning.IsExpanded, "activating a sibling action should not expand reasoning");
+        reasoning.IsExpanded = true;
+        actionButtons.Single(button => AutomationProperties.GetName(button) == "Copy")
+            .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Require(reasoning.IsExpanded, "activating a sibling action should not collapse reasoning");
         Require(
             !expanders.Any(expander => AutomationProperties.GetName(expander) == "Message actions"),
             "actions should no longer be hidden behind a message-actions disclosure");
+
+        var activeRenderer = CreateTranscriptCardRendererForTest(turnCompare: true, selectedForCompare: true);
+        var activeCard = activeRenderer.CreateCard(
+            message with { Turn = 16, Pinned = true },
+            retryable: true,
+            searchMatch: false,
+            isLatest: false);
+        var activeButtons = LogicalDescendants<Button>(activeCard).ToArray();
+        var unpinButton = activeButtons.Single(button => AutomationProperties.GetName(button) == "Unpin");
+        var dropCompareButton = activeButtons.Single(button => AutomationProperties.GetName(button) == "Drop compare");
+        Require(AutomationProperties.GetItemStatus(unpinButton) == "active", "a pinned message should expose an active Unpin action");
+        Require(AutomationProperties.GetItemStatus(dropCompareButton) == "active", "a selected message should expose an active Drop compare action");
+        Require(
+            dropCompareButton.Content is TextBlock { Text: "\uE8AB" },
+            "selected and unselected comparison states should retain the same Switch glyph");
 
         var noReasoningCard = renderer.CreateCard(
             message with { Turn = 14, Reasoning = "" },
@@ -675,8 +745,52 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
         var compactActions = LogicalDescendants<WrapPanel>(compactCard)
             .Single(panel => AutomationProperties.GetName(panel) == "Message actions for turn 15");
         Require(
-            compactActions.Children.OfType<Button>().All(button => button.MinHeight == 36),
-            "compact cards should preserve the established 36-DIP action targets");
+            compactActions.Children.OfType<Button>().All(button =>
+                button.Width == 30
+                && button.Height == 30
+                && button.MinWidth == 30
+                && button.MinHeight == 30),
+            "compact and regular cards should share the same quiet 30-DIP action rail");
+
+        var sharedActionCoordinator = new TranscriptActionCoordinator(() => false, () => false, AccentResourceBrush);
+        var sharedIconButton = sharedActionCoordinator.CreateButton("Shared", null, true, iconGlyph: "\uE8C8");
+        var sharedLabeledButton = sharedActionCoordinator.CreateLabeledButton("Shared label", null, true, TranscriptActionKind.Primary, "\uE8C8");
+        Require(
+            sharedIconButton.Width == 40 && sharedIconButton.Height == 40,
+            "the transcript-card action style must not shrink shared transcript/adjunct icon buttons");
+        Require(
+            double.IsNaN(sharedLabeledButton.Width) && sharedLabeledButton.MinHeight == 40,
+            "the transcript-card action style must not shrink labeled quick-setup buttons");
+
+        var controlStyles = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Theming/ControlStyles.xaml"));
+        foreach (var styleKey in new[]
+        {
+            TranscriptActionCoordinator.CardActionStyleKey,
+            TranscriptActionCoordinator.ActiveCardActionStyleKey,
+            TranscriptActionCoordinator.DangerCardActionStyleKey
+        })
+        {
+            Require(controlStyles.Contains($"x:Key=\"{styleKey}\"", StringComparison.Ordinal), $"control styles should define {styleKey}");
+        }
+        var dangerStyleStart = controlStyles.IndexOf($"x:Key=\"{TranscriptActionCoordinator.DangerCardActionStyleKey}\"", StringComparison.Ordinal);
+        var nextStyleStart = controlStyles.IndexOf("\n    <Style x:Key=", dangerStyleStart + 1, StringComparison.Ordinal);
+        var dangerStyle = controlStyles[dangerStyleStart..nextStyleStart];
+        Require(
+            dangerStyle.Contains("IsMouseOver", StringComparison.Ordinal)
+            && dangerStyle.Contains("IsKeyboardFocusWithin", StringComparison.Ordinal)
+            && dangerStyle.Contains("IsPressed", StringComparison.Ordinal)
+            && dangerStyle.Contains("DangerTextBrush", StringComparison.Ordinal),
+            "the Delete style should reveal danger tone only for pointer, keyboard-focus, and pressed interaction states");
+        var quietStyleStart = controlStyles.IndexOf($"x:Key=\"{TranscriptActionCoordinator.CardActionStyleKey}\"", StringComparison.Ordinal);
+        var activeStyleStart = controlStyles.IndexOf($"x:Key=\"{TranscriptActionCoordinator.ActiveCardActionStyleKey}\"", StringComparison.Ordinal);
+        var quietStyle = controlStyles[quietStyleStart..activeStyleStart];
+        Require(
+            quietStyle.Contains("<ControlTemplate TargetType=\"{x:Type Button}\">", StringComparison.Ordinal)
+            && quietStyle.Contains("<Setter Property=\"Background\" Value=\"Transparent\"", StringComparison.Ordinal)
+            && quietStyle.Contains("<Setter Property=\"BorderBrush\" Value=\"Transparent\"", StringComparison.Ordinal)
+            && quietStyle.Contains("Arena.Brush.FocusRing", StringComparison.Ordinal)
+            && !quietStyle.Contains("DisabledBrush", StringComparison.Ordinal),
+            "transcript actions should own transparent disabled chrome and a palette-aware keyboard focus treatment");
     });
 
     static IEnumerable<T> LogicalDescendants<T>(DependencyObject root) where T : DependencyObject
@@ -748,7 +862,10 @@ static string FormatTranscriptNumberForTest(int value)
     return value.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
 }
 
-static TranscriptCardRenderer CreateTranscriptCardRendererForTest(bool turnCompare = false, bool compact = false)
+static TranscriptCardRenderer CreateTranscriptCardRendererForTest(
+    bool turnCompare = false,
+    bool compact = false,
+    bool selectedForCompare = false)
 {
     var actionCoordinator = new TranscriptActionCoordinator(() => compact, () => false, AccentResourceBrush);
     return new TranscriptCardRenderer(
@@ -772,7 +889,7 @@ static TranscriptCardRenderer CreateTranscriptCardRendererForTest(bool turnCompa
         _ => { },
         speakerId => !string.IsNullOrWhiteSpace(speakerId) && !speakerId.Equals("operator", StringComparison.OrdinalIgnoreCase),
         () => turnCompare,
-        _ => false,
+        _ => selectedForCompare,
         _ => true,
         _ => { },
         _ => false,

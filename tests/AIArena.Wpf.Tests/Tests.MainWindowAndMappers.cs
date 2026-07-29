@@ -1460,7 +1460,9 @@ static void MainWindowOverlaysPreserveKeyboardAndAccessibilityContracts()
 {
     var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"))
         + Environment.NewLine
-        + File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"));
+        + File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"))
+        + Environment.NewLine
+        + File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellNavigationRailControl.xaml"));
     var source = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
 
     var settingsScrim = XamlStartTag(xaml, "AppSettingsScrim", "Border");
@@ -1519,7 +1521,7 @@ static void MainWindowOverlaysPreserveKeyboardAndAccessibilityContracts()
 
     foreach (var name in new[]
     {
-        "ArenaRunStatus",
+        "ShellStatusTextElement",
         "AgentStatusText",
         "CollaborateStatusText",
         "ProviderTestStatus",
@@ -1545,11 +1547,14 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
 {
     var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
     var topBarXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"));
+    var railXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellNavigationRailControl.xaml"));
     var windowTag = xaml[..(xaml.IndexOf('>') + 1)];
     var topBarLayout = XamlStartTag(topBarXaml, "TopBarLayoutGrid", "Grid");
     var topBarStatus = XamlStartTag(topBarXaml, "TopBarStatus", "Grid");
-    var topBarSecondaryStatus = XamlStartTag(topBarXaml, "TopBarSecondaryStatus", "DockPanel");
     var topBarCommands = XamlStartTag(topBarXaml, "TopBarCommandPanel", "WrapPanel");
+    var saveStatusProxy = XamlStartTag(topBarXaml, "SaveStatusText", "TextBlock");
+    var statusDock = XamlStartTag(railXaml, "ShellStatusDockElement", "Border");
+    var statusText = XamlStartTag(railXaml, "ShellStatusTextElement", "TextBlock");
     var transcriptSearchPopup = XamlStartTag(topBarXaml, "TranscriptSearchPopup", "Popup");
     var matchSetupButton = XamlStartTag(topBarXaml, "MatchSetupButton", "Button");
     var viewMenuButton = XamlStartTag(topBarXaml, "ViewMenuButton", "Button");
@@ -1570,7 +1575,13 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
         .Single(element => element.Name.LocalName == "Grid.RowDefinitions")
         .Elements()
         .First();
+    var topBarRows = topBarLayoutElement
+        .Elements()
+        .Single(element => element.Name.LocalName == "Grid.RowDefinitions")
+        .Elements()
+        .ToArray();
     Require(string.Equals((string?)primaryTopBarRow.Attribute("MinHeight"), "38", StringComparison.Ordinal), "the shared top-bar primary row should reserve the 38-DIP command-group height");
+    Require(topBarRows.Length == 2, "the top bar should contain only its primary row and narrow command row");
     var toolbarGroupStyle = topBarDocument.Descendants().Single(element =>
         element.Name.LocalName == "Style"
         && string.Equals((string?)element.Attribute(xamlNamespace + "Key"), "ToolbarGroup", StringComparison.Ordinal));
@@ -1581,28 +1592,93 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
             && string.Equals((string?)element.Attribute("Value"), "38", StringComparison.Ordinal)),
         "top-rail toolbar groups should share the Match Setup button's explicit 38-DIP height");
     Require(topBarStatus.Contains("Grid.Row=\"0\"", StringComparison.Ordinal) && topBarStatus.Contains("VerticalAlignment=\"Center\"", StringComparison.Ordinal), "the top-bar metrics should occupy the shared centered primary row");
-    Require(topBarSecondaryStatus.Contains("Grid.Row=\"1\"", StringComparison.Ordinal) && topBarSecondaryStatus.Contains("Grid.ColumnSpan=\"2\"", StringComparison.Ordinal), "the optional status line should occupy its own full-width row instead of changing the primary-row alignment");
-    Require(topBarCommands.Contains("Grid.Row=\"2\"", StringComparison.Ordinal) && topBarCommands.Contains("Grid.ColumnSpan=\"2\"", StringComparison.Ordinal), "the top bar should fail safe to the narrow stacked arrangement before its first size pass");
+    Require(!topBarXaml.Contains("TopBarSecondaryStatus", StringComparison.Ordinal), "status should no longer add a visual secondary row beneath the top-bar metrics");
+    Require(topBarCommands.Contains("Grid.Row=\"1\"", StringComparison.Ordinal) && topBarCommands.Contains("Grid.ColumnSpan=\"2\"", StringComparison.Ordinal), "the top bar should fail safe to the narrow two-row arrangement before its first size pass");
     Require(topBarCommands.Contains("HorizontalAlignment=\"Right\"", StringComparison.Ordinal), "stacked top-bar commands should remain visually anchored to the right");
     Require(topBarCommands.Contains("VerticalAlignment=\"Center\"", StringComparison.Ordinal), "inline top-bar commands should share the primary-row centerline with the metrics");
-    Require(File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs")).Contains("Grid.SetRow(TopBarCommandPanel, stacked ? 2 : 0);", StringComparison.Ordinal), "the adaptive shell should move commands into the shared primary row only for inline layouts");
+    var mainWindowSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    Require(mainWindowSource.Contains("Grid.SetRow(TopBarCommandPanel, stacked ? 1 : 0);", StringComparison.Ordinal), "the adaptive shell should move commands between the narrow command row and shared primary row");
+    Require(mainWindowSource.Contains("ShellNavigationRail.Presentation = ShellTopBar.Presentation;", StringComparison.Ordinal), "the top bar and navigation status dock should share the exact presentation model instance");
     Require(transcriptSearchPopup.Contains("PlacementTarget=\"{Binding ElementName=TopBarLayoutGrid}\"", StringComparison.Ordinal), "the transcript search popup should open below the complete multi-row top bar");
     Require(matchSetupButton.Contains("Style=\"{StaticResource Arena.Button.Primary}\"", StringComparison.Ordinal), "Match Setup should retain primary emphasis in the top rail");
     Require(matchSetupButton.Contains("Height=\"38\"", StringComparison.Ordinal) && matchSetupButton.Contains("VerticalAlignment=\"Center\"", StringComparison.Ordinal), "Match Setup should match the 38-DIP top-rail command-group height");
     Require(matchSetupButton.Contains("Width=\"104\"", StringComparison.Ordinal), "Match Setup and Close Setup should share a fixed width so toggling does not shift neighboring commands");
     Require(matchSetupButton.Contains("Padding=\"10,0\"", StringComparison.Ordinal), "Match Setup should use compact horizontal-only toolbar padding");
     Require(viewMenuButton.Contains("Content=\"{Binding ViewButtonLabel}\"", StringComparison.Ordinal), "the closed View control should keep the active preset visible");
-    Require(topBarXaml.Contains("Visibility=\"{Binding ShowStatusLine, Converter={StaticResource BooleanToVisibilityConverter}}\"", StringComparison.Ordinal), "routine status should not reserve a permanent second top-bar row");
+    Require(statusDock.Contains("Grid.Row=\"3\"", StringComparison.Ordinal), "the visible status dock should occupy the navigation rail's previously unused bottom row");
+    Require(statusDock.Contains("Visibility=\"{Binding ShowStatusDock", StringComparison.Ordinal), "routine status should release the bottom-rail space");
+    Require(statusDock.Contains("ToolTip=\"{Binding DisplayStatusToolTip}\"", StringComparison.Ordinal), "the bottom status dock should expose deterministic pointer detail");
+    Require(statusDock.Contains("AutomationProperties.HelpText=\"{Binding DisplayStatusHelpText}\"", StringComparison.Ordinal), "the bottom status dock should expose deterministic automation help");
+    Require(statusText.Contains("Text=\"{Binding DisplayStatus}\"", StringComparison.Ordinal), "the bottom status text should bind to the shared display projection");
+    Require(statusText.Contains("AutomationProperties.LiveSetting=\"Polite\"", StringComparison.Ordinal), "the bottom status dock should be the polite live announcement surface");
+    Require(statusText.Contains("LineHeight=\"16\"", StringComparison.Ordinal)
+        && statusText.Contains("LineStackingStrategy=\"BlockLineHeight\"", StringComparison.Ordinal)
+        && statusText.Contains("MaxHeight=\"32\"", StringComparison.Ordinal),
+        "the bottom status dock should reserve exactly two deterministic text lines");
+    Require(saveStatusProxy.Contains("Visibility=\"Collapsed\"", StringComparison.Ordinal), "the legacy save-status target should stay permanently nonvisual");
+    Require(!saveStatusProxy.Contains("AutomationProperties.LiveSetting", StringComparison.Ordinal), "the compatibility save target should not duplicate live announcements");
+
     var topBarPresentation = new AIArena.Wpf.ViewModels.ShellTopBarPresentationViewModel();
+    var changedProperties = new HashSet<string>(StringComparer.Ordinal);
+    var changedPropertyOrder = new List<string>();
+    topBarPresentation.PropertyChanged += (_, args) =>
+    {
+        if (!string.IsNullOrWhiteSpace(args.PropertyName))
+        {
+            changedProperties.Add(args.PropertyName);
+            changedPropertyOrder.Add(args.PropertyName);
+        }
+    };
     topBarPresentation.ArenaStatus = "Provider online.";
-    Require(!topBarPresentation.ShowStatusLine, "routine provider health should stay inside the provider metric instead of repeating below it");
+    Require(!topBarPresentation.ShowStatusDock, "routine provider health should stay inside the provider metric instead of repeating in the bottom dock");
+    changedPropertyOrder.Clear();
     topBarPresentation.ArenaStatus = "Select a model before running the arena.";
-    Require(topBarPresentation.ShowStatusLine, "actionable arena status should reveal the compact secondary row");
+    Require(topBarPresentation.ShowStatusDock, "actionable arena status should reveal the bottom status dock");
+    Require(topBarPresentation.DisplayStatus == "Select a model before running the arena.", "persistent actionable status should be the visible projection");
+    Require(topBarPresentation.DisplayStatusToolTip == topBarPresentation.DisplayStatus, "persistent status should use its exact text as the tooltip");
+    Require(topBarPresentation.DisplayStatusHelpText.Contains(topBarPresentation.DisplayStatus, StringComparison.Ordinal), "persistent status help should include the exact actionable state");
+    Require(
+        changedPropertyOrder.IndexOf("ShowStatusDock") < changedPropertyOrder.IndexOf("DisplayStatus"),
+        "the live status dock should become visible before actionable text is projected");
+
+    var firstGeneration = topBarPresentation.ShowTransientStatus(
+        "Screenshot saved: first.png",
+        @"C:\captures\first.png",
+        "AI Arena saved the first screenshot.");
+    Require(topBarPresentation.ShowStatusDock, "a transient receipt should reveal the bottom status dock");
+    Require(topBarPresentation.DisplayStatus == "Screenshot saved: first.png", "transient status should temporarily override the persistent status");
+    Require(topBarPresentation.DisplayStatusToolTip == @"C:\captures\first.png", "transient status should preserve its detailed path tooltip");
+    Require(topBarPresentation.DisplayStatusHelpText == "AI Arena saved the first screenshot.", "transient status should preserve its automation help");
+
+    topBarPresentation.ArenaStatus = "Select a provider model.";
+    Require(topBarPresentation.DisplayStatus == "Screenshot saved: first.png", "persistent changes should not interrupt an active transient receipt");
+    var secondGeneration = topBarPresentation.ShowTransientStatus(
+        "Screenshot saved: second.png",
+        @"C:\captures\second.png",
+        "AI Arena saved the second screenshot.");
+    Require(!topBarPresentation.ClearTransientStatus(firstGeneration), "a stale receipt timer must not clear a newer transient status");
+    Require(topBarPresentation.DisplayStatus == "Screenshot saved: second.png", "rejecting a stale clear should retain the newest receipt");
+    Require(topBarPresentation.ClearTransientStatus(secondGeneration), "the current transient generation should clear successfully");
+    Require(topBarPresentation.DisplayStatus == "Select a provider model.", "clearing the current receipt should restore the latest persistent status");
+    Require(topBarPresentation.ShowStatusDock, "restored actionable status should keep the bottom dock visible");
+    changedPropertyOrder.Clear();
     topBarPresentation.ArenaStatus = "Ready.";
-    topBarPresentation.SetTransientStatusVisible(true);
-    Require(topBarPresentation.ShowStatusLine, "transient save and screenshot receipts should be able to reveal the status row");
-    topBarPresentation.SetTransientStatusVisible(false);
-    Require(!topBarPresentation.ShowStatusLine, "routine status should collapse again after a transient receipt expires");
+    Require(!topBarPresentation.ShowStatusDock, "routine status should collapse the bottom dock after a transient receipt expires");
+    Require(
+        changedPropertyOrder.IndexOf("DisplayStatus") < changedPropertyOrder.IndexOf("ShowStatusDock"),
+        "the visible live region should project routine status before the dock collapses");
+    foreach (var propertyName in new[] { "DisplayStatus", "DisplayStatusToolTip", "DisplayStatusHelpText", "ShowStatusDock" })
+    {
+        Require(changedProperties.Contains(propertyName), $"{propertyName} should notify the shared status binding when its projection changes");
+    }
+
+    var screenshotSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    Require(screenshotSource.Contains("ShowTransientStatus(receiptText, result.Path, helpText)", StringComparison.Ordinal), "screenshot receipts should move through the shared status presentation");
+    Require(screenshotSource.Contains("ClearTransientStatus(generation)", StringComparison.Ordinal), "screenshot receipt expiry should clear only its own generation");
+    Require(!screenshotSource.Contains("SetTransientStatusVisible", StringComparison.Ordinal), "screenshot receipts should not use the retired visibility-only status API");
+    Require(!screenshotSource.Contains("SaveStatusText.Visibility", StringComparison.Ordinal), "the compatibility save target should never become visual");
+    Require(!screenshotSource.Contains("SaveStatusText.Text.Equals", StringComparison.Ordinal), "screenshot receipt expiry should not rely on text equality for stale-clear protection");
+    Require(screenshotSource.Contains("ArenaRunStatus.Text", StringComparison.Ordinal), "the control-plane snapshot should retain the persistent arena-status compatibility target");
     foreach (var presetButtonName in new[] { "ViewPresetFocusedButton", "ViewPresetDiagnosticsButton", "ViewPresetCompactButton", "ViewPresetReviewButton" })
     {
         var presetButton = XamlStartTag(topBarXaml, presetButtonName, "Button");

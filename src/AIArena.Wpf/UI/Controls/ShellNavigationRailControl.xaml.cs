@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using AIArena.Wpf.ViewModels;
 
 namespace AIArena.Wpf.Controls;
 
@@ -10,9 +11,26 @@ namespace AIArena.Wpf.Controls;
 /// </summary>
 public partial class ShellNavigationRailControl : UserControl
 {
+    private ShellTopBarPresentationViewModel? presentation;
+
     public ShellNavigationRailControl()
     {
         InitializeComponent();
+    }
+
+    internal ShellTopBarPresentationViewModel? Presentation
+    {
+        get => presentation;
+        set
+        {
+            if (ReferenceEquals(presentation, value))
+            {
+                return;
+            }
+
+            presentation = value;
+            DataContext = value;
+        }
     }
 
     public event RoutedEventHandler? ArenaNavigationRequested;

@@ -531,30 +531,25 @@ public partial class MainWindow
     private void ShowScreenshotReceipt(AIArenaScreenshotControlResult result)
     {
         var fileName = Path.GetFileName(result.Path);
-        SaveStatusText.Text = $"Screenshot saved: {fileName}";
-        SaveStatusText.Visibility = Visibility.Visible;
+        var receiptText = $"Screenshot saved: {fileName}";
+        var helpText = $"AI Arena saved a screenshot to {result.Path} at {result.CapturedAt:HH:mm:ss}.";
+        SaveStatusText.Text = receiptText;
         SaveStatusText.ToolTip = result.Path;
         AutomationProperties.SetName(SaveStatusText, "Screenshot capture receipt");
-        AutomationProperties.SetHelpText(
-            SaveStatusText,
-            $"AI Arena saved a screenshot to {result.Path} at {result.CapturedAt:HH:mm:ss}.");
-        AutomationProperties.SetLiveSetting(SaveStatusText, AutomationLiveSetting.Polite);
-        ShellTopBar.Presentation.SetTransientStatusVisible(true);
-        _ = HideScreenshotReceiptAsync(SaveStatusText.Text);
+        AutomationProperties.SetHelpText(SaveStatusText, helpText);
+        var generation = ShellTopBar.Presentation.ShowTransientStatus(receiptText, result.Path, helpText);
+        _ = HideScreenshotReceiptAsync(generation);
     }
 
-    private async Task HideScreenshotReceiptAsync(string receiptText)
+    private async Task HideScreenshotReceiptAsync(long generation)
     {
         await Task.Delay(TimeSpan.FromSeconds(4));
         await Dispatcher.InvokeAsync(() =>
         {
-            if (!SaveStatusText.Text.Equals(receiptText, StringComparison.Ordinal))
+            if (!ShellTopBar.Presentation.ClearTransientStatus(generation))
             {
                 return;
             }
-
-            SaveStatusText.Visibility = Visibility.Collapsed;
-            ShellTopBar.Presentation.SetTransientStatusVisible(false);
         });
     }
 
