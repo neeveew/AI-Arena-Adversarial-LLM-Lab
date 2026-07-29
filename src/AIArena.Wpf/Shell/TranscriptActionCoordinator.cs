@@ -10,7 +10,7 @@ internal sealed class TranscriptActionCoordinator
     private readonly Func<bool> compactTranscriptMode;
     private readonly Func<bool> isArenaBusy;
     private readonly Func<string, Brush> resourceBrush;
-    private readonly List<Button> actionButtons = [];
+    private readonly List<WeakReference<Button>> actionButtons = [];
 
     public TranscriptActionCoordinator(
         Func<bool> compactTranscriptMode,
@@ -74,7 +74,7 @@ internal sealed class TranscriptActionCoordinator
         {
             button.Click += handler;
         }
-        actionButtons.Add(button);
+        TrackButton(button);
         return button;
     }
 
@@ -118,7 +118,7 @@ internal sealed class TranscriptActionCoordinator
         {
             button.Click += handler;
         }
-        actionButtons.Add(button);
+        TrackButton(button);
         return button;
     }
 
@@ -150,16 +150,82 @@ internal sealed class TranscriptActionCoordinator
         return panel;
     }
 
-    public void Clear()
+    internal int TrackedButtonCount
     {
-        actionButtons.Clear();
+        get
+        {
+            Prune();
+            return actionButtons.Count;
+        }
+    }
+
+    public void Prune()
+    {
+        for (var index = actionButtons.Count - 1; index >= 0; index--)
+        {
+            if (!actionButtons[index].TryGetTarget(out _))
+            {
+                actionButtons.RemoveAt(index);
+            }
+        }
     }
 
     public void UpdateBusyState(bool busy)
     {
-        foreach (var button in actionButtons)
+        for (var index = actionButtons.Count - 1; index >= 0; index--)
         {
+            if (!actionButtons[index].TryGetTarget(out var button))
+            {
+                actionButtons.RemoveAt(index);
+                continue;
+            }
+
             button.IsEnabled = !busy && button.Tag is true;
+        }
+    }
+
+    private void TrackButton(Button button)
+    {
+        Prune();
+        button.IsEnabled = !isArenaBusy() && button.Tag is true;
+        if (!actionButtons.Any(reference =>
+                reference.TryGetTarget(out var existing)
+                && ReferenceEquals(existing, button)))
+        {
+            actionButtons.Add(new WeakReference<Button>(button));
+        }
+
+        button.Loaded -= ActionButton_Loaded;
+        button.Unloaded -= ActionButton_Unloaded;
+        button.Loaded += ActionButton_Loaded;
+        button.Unloaded += ActionButton_Unloaded;
+    }
+
+    private void UntrackButton(Button button)
+    {
+        for (var index = actionButtons.Count - 1; index >= 0; index--)
+        {
+            if (!actionButtons[index].TryGetTarget(out var existing)
+                || ReferenceEquals(existing, button))
+            {
+                actionButtons.RemoveAt(index);
+            }
+        }
+    }
+
+    private void ActionButton_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            TrackButton(button);
+        }
+    }
+
+    private void ActionButton_Unloaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            UntrackButton(button);
         }
     }
 }

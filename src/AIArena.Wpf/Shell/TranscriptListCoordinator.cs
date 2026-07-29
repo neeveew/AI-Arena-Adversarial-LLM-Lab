@@ -123,7 +123,7 @@ internal sealed class TranscriptListCoordinator
     public void Populate(IReadOnlyList<TranscriptMessage> messages)
     {
         setLastRenderedMessages(messages);
-        transcriptActions.Clear();
+        transcriptActions.Prune();
         transcriptInsight.ClearTimelineFilterIfMissing(messages);
 
         var visibleMessages = transcriptSearch.FilterMessages(messages).ToArray();

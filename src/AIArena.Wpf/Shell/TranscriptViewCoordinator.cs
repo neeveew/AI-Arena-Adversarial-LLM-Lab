@@ -538,13 +538,6 @@ internal sealed class TranscriptViewCoordinator
         };
     }
 
-    internal static bool ShouldShowPerformanceMetadata(WpfSettings settings)
-    {
-        return !CurrentTopStripMode(settings).Equals("hidden", StringComparison.OrdinalIgnoreCase)
-            || settings.ShowBattleReview
-            || settings.TurnCompareMode;
-    }
-
     internal static TranscriptDashboardLayout ResolveDashboardLayout(double width, string? mode)
     {
         var showDiagnostics = mode?.Equals("diagnostics", StringComparison.OrdinalIgnoreCase) == true;

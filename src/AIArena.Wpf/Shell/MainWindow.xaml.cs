@@ -714,7 +714,6 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             () => _wpfSettings.SystemEventGlyphs,
             ShouldShowStyleFit,
             (style, text) => _voiceStyleAdherenceService.Analyze(style, text),
-            diagnostic => VoiceAdherenceAccent(diagnostic),
             FormatDuration,
             FormatCompactNumber,
             TranscriptExportCoordinator.CopyMessage,
@@ -729,8 +728,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             message => TranscriptInsight.ToggleTurnCompareMessage(message),
             CanSpeakTranscriptMessage,
             SpeakTranscriptMessage,
-            () => _wpfSettings.AllowDebugControls && _wpfSettings.ShowTranscriptInternetDetails,
-            () => TranscriptViewCoordinator.ShouldShowPerformanceMetadata(_wpfSettings));
+            () => _wpfSettings.AllowDebugControls && _wpfSettings.ShowTranscriptInternetDetails);
         _transcriptAdjunctCoordinator = new TranscriptAdjunctCoordinator(
             _discourseDiagnostics,
             _voiceStyleAdherenceService,

@@ -541,27 +541,142 @@ static void TranscriptCardRendererShowsSourceGlobeOnSourcedTurns()
     });
 }
 
-static void TranscriptCardRendererProgressivelyDisclosesMessageActions()
+static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
 {
     RunStaTest(() =>
     {
-        var renderer = CreateTranscriptCardRendererForTest();
+        var renderer = CreateTranscriptCardRendererForTest(turnCompare: true);
+        var message = TranscriptForTest(12, "Alpha", "alpha", "message", "ok") with
+        {
+            Model = "qwen/qwen3-4b",
+            VoiceStyle = "bark-only",
+            LatencyMs = 10_000,
+            TimeToFirstTokenMs = 211,
+            ModelLoadTimeMs = 3_600,
+            PromptTokens = 858,
+            CompletionTokens = 536,
+            TotalTokens = 1_394,
+            TokensPerSecond = 89,
+            ProviderResponseId = "response-42",
+            Reasoning = "Check the claim against the policy."
+        };
+        const string expectedSummary = "qwen/qwen3-4b  \u00B7  10.0s  \u00B7  536 Tok  \u00B7  89 tok/s";
+
+        Require(
+            TranscriptCardRenderer.BuildModelStatsSummary(message, FormatTranscriptDurationForTest, FormatTranscriptNumberForTest) == expectedSummary,
+            "the header summary should keep model, response time, generated tokens, and throughput in the approved order");
+
+        var helpText = renderer.BuildModelStatsHelpText(message);
+        foreach (var expected in new[]
+        {
+            "qwen/qwen3-4b",
+            "Bark-only",
+            "10.0s",
+            "Time to first token",
+            "211 ms",
+            "load",
+            "3.6s",
+            "89 tok/s",
+            "858",
+            "536",
+            "1,394",
+            "Cues: strong 88",
+            "ok",
+            "response-42"
+        })
+        {
+            Require(helpText.Contains(expected, StringComparison.OrdinalIgnoreCase), $"model-stat help should include '{expected}'");
+        }
+
         var card = renderer.CreateCard(
-            TranscriptForTest(12, "Alpha", "alpha", "message", "ok"),
+            message,
             retryable: true,
             searchMatch: false,
             isLatest: false);
-        var disclosures = LogicalDescendants<Expander>(card)
-            .Where(expander => AutomationProperties.GetName(expander) == "Message actions")
-            .ToArray();
 
-        Require(disclosures.Length == 1, "each transcript card should expose one stable message-actions disclosure");
-        Require(!disclosures[0].IsExpanded, "message actions should start collapsed to keep the reading path quiet");
-        Require(disclosures[0].Header is Border { MinHeight: >= 32 }, "the action disclosure header should retain a compact desktop pointer target");
-        Require(disclosures[0].Content is Border { Child: WrapPanel actions } && actions.Children.Count >= 5,
-            "expanding message actions should retain copy, speech, pin, retry, and delete controls");
-        Require(AutomationProperties.GetHelpText(disclosures[0]).Contains("reveal", StringComparison.OrdinalIgnoreCase),
-            "assistive technology should explain what the message-actions disclosure reveals");
+        var statsHost = LogicalDescendants<FrameworkElement>(card)
+            .SingleOrDefault(element => AutomationProperties.GetName(element).StartsWith("Model statistics for turn 12:", StringComparison.Ordinal));
+        Require(statsHost is not null, "meaningful model telemetry should create one focusable header summary");
+        Require(statsHost!.Focusable, "keyboard users should be able to focus the model-stat summary");
+        Require(
+            AutomationProperties.GetName(statsHost).Contains(expectedSummary, StringComparison.Ordinal),
+            "the model-stat automation name should include the same brief summary that sighted users see");
+        Require(
+            statsHost.ToolTip is ToolTip { Content: TextBlock tooltipText } && tooltipText.Text == helpText,
+            "pointer hover should reveal the same detailed model-stat text in a theme-aware tooltip");
+        Require(AutomationProperties.GetHelpText(statsHost) == helpText, "automation help should expose the detailed model-stat text");
+        Require(
+            statsHost is ContentControl { Content: Border { Child: TextBlock summaryText } } && summaryText.Text == expectedSummary,
+            "the accessible stats host should render the deterministic brief summary");
+
+        var actionPanel = LogicalDescendants<WrapPanel>(card)
+            .SingleOrDefault(panel => AutomationProperties.GetName(panel) == "Message actions for turn 12");
+        Require(actionPanel is not null, "message actions should have a stable automation-labelled footer");
+        Require(actionPanel!.HorizontalAlignment == HorizontalAlignment.Right, "the action footer should align to the right of model reasoning");
+        var actions = actionPanel.Children.OfType<Button>().Select(AutomationProperties.GetName).ToArray();
+        Require(
+            actions.SequenceEqual(["Copy", "Speak", "Pin", "Retry", "Delete", "Compare"], StringComparer.Ordinal),
+            "the visible action footer should preserve copy, speak, pin, retry, delete, and optional compare order");
+        Require(
+            actionPanel.Children.OfType<Button>().All(button => button.MinHeight >= 36),
+            "all persistent transcript actions should retain safe vertical pointer targets");
+        Require(
+            actionPanel.Children.OfType<Button>().Take(5).All(button => button.MinWidth >= 36),
+            "icon actions should retain safe horizontal pointer targets");
+        Require(actionPanel is RightAlignedWrapPanel, "persistent actions should use a wrap panel that right-aligns every constrained row");
+
+        var wrapProbe = new RightAlignedWrapPanel();
+        for (var index = 0; index < 3; index++)
+        {
+            wrapProbe.Children.Add(new Border { Width = 40, Height = 20 });
+        }
+        wrapProbe.Measure(new Size(90, double.PositiveInfinity));
+        wrapProbe.Arrange(new Rect(0, 0, 90, wrapProbe.DesiredSize.Height));
+        var firstSlot = LayoutInformation.GetLayoutSlot((FrameworkElement)wrapProbe.Children[0]);
+        var finalSlot = LayoutInformation.GetLayoutSlot((FrameworkElement)wrapProbe.Children[2]);
+        Require(
+            firstSlot.X >= 9 && finalSlot.X >= 49,
+            "each wrapped action line, including a partial final line, should arrange from the right edge");
+
+        var expanders = LogicalDescendants<Expander>(card).ToArray();
+        Require(
+            expanders.Any(expander => expander.Header?.ToString() == "Model reasoning"),
+            "model reasoning should remain a separate collapsible footer section");
+        Require(
+            !expanders.Any(expander => AutomationProperties.GetName(expander) == "Message actions"),
+            "actions should no longer be hidden behind a message-actions disclosure");
+
+        var noReasoningCard = renderer.CreateCard(
+            message with { Turn = 14, Reasoning = "" },
+            retryable: true,
+            searchMatch: false,
+            isLatest: false);
+        var noReasoningFooter = LogicalDescendants<Grid>(noReasoningCard)
+            .Single(element => AutomationProperties.GetName(element) == "Transcript message footer for turn 14");
+        var noReasoningActions = LogicalDescendants<WrapPanel>(noReasoningCard)
+            .Single(panel => AutomationProperties.GetName(panel) == "Message actions for turn 14");
+        Require(
+            Grid.GetColumn(noReasoningActions) == 0 && Grid.GetColumnSpan(noReasoningActions) == 2,
+            "when reasoning is absent, right-aligned actions should occupy the full footer width");
+        Require(
+            !LogicalDescendants<Expander>(noReasoningFooter).Any(expander => expander.Header?.ToString() == "Model reasoning"),
+            "cards without reasoning should not reserve an empty reasoning disclosure");
+
+        var compactRenderer = CreateTranscriptCardRendererForTest(turnCompare: true, compact: true);
+        var compactCard = compactRenderer.CreateCard(
+            message with { Turn = 15 },
+            retryable: true,
+            searchMatch: false,
+            isLatest: true);
+        Require(
+            LogicalDescendants<FrameworkElement>(compactCard)
+                .Any(element => AutomationProperties.GetName(element).StartsWith("Model statistics for turn 15:", StringComparison.Ordinal)),
+            "compact cards should keep the same model-stat summary");
+        var compactActions = LogicalDescendants<WrapPanel>(compactCard)
+            .Single(panel => AutomationProperties.GetName(panel) == "Message actions for turn 15");
+        Require(
+            compactActions.Children.OfType<Button>().All(button => button.MinHeight == 36),
+            "compact cards should preserve the established 36-DIP action targets");
     });
 
     static IEnumerable<T> LogicalDescendants<T>(DependencyObject root) where T : DependencyObject
@@ -581,11 +696,63 @@ static void TranscriptCardRendererProgressivelyDisclosesMessageActions()
     }
 }
 
-static TranscriptCardRenderer CreateTranscriptCardRendererForTest()
+static void TranscriptCardRendererOmitsUnavailableStatsAndResolvesResponsiveTiers()
 {
-    var actionCoordinator = new TranscriptActionCoordinator(() => false, () => false, AccentResourceBrush);
+    var noTelemetry = TranscriptForTest(13, "Alpha", "alpha", "message", "ok") with { Model = "" };
+    Require(
+        string.IsNullOrEmpty(TranscriptCardRenderer.BuildModelStatsSummary(noTelemetry, FormatTranscriptDurationForTest, FormatTranscriptNumberForTest)),
+        "cards with no meaningful model or delivery telemetry should omit the header summary");
+    Require(
+        string.IsNullOrEmpty(TranscriptCardRenderer.BuildModelStatsSummary(
+            noTelemetry with { Speaker = "Operator", SpeakerId = "operator", Model = "operator-model", LatencyMs = 20 },
+            FormatTranscriptDurationForTest,
+            FormatTranscriptNumberForTest)),
+        "operator cards should omit model statistics even if incidental values are present");
+    Require(
+        string.IsNullOrEmpty(TranscriptCardRenderer.BuildModelStatsSummary(
+            noTelemetry with { Speaker = "System", SpeakerId = "system", Model = "system-model", LatencyMs = 20 },
+            FormatTranscriptDurationForTest,
+            FormatTranscriptNumberForTest)),
+        "system cards should omit model statistics");
+    Require(
+        string.IsNullOrEmpty(TranscriptCardRenderer.BuildModelStatsSummary(
+            noTelemetry with { Speaker = "Internet", SpeakerId = "internet", Kind = "internet", Model = "tool-model", LatencyMs = 20 },
+            FormatTranscriptDurationForTest,
+            FormatTranscriptNumberForTest)),
+        "internet cards should omit model statistics");
+    Require(
+        string.IsNullOrEmpty(TranscriptCardRenderer.BuildModelStatsSummary(
+            noTelemetry with { Turn = 0, Model = "model", LatencyMs = 20 },
+            FormatTranscriptDurationForTest,
+            FormatTranscriptNumberForTest)),
+        "empty and non-turn cards should omit model statistics");
+
+    Require(TranscriptCardRenderer.ResolveCardHeaderLayout(719) == TranscriptCardHeaderLayout.Stacked, "headers below 720 DIP should stack model statistics");
+    Require(TranscriptCardRenderer.ResolveCardHeaderLayout(720) == TranscriptCardHeaderLayout.Inline, "headers at 720 DIP should keep model statistics inline");
+    Require(TranscriptCardRenderer.ResolveCardFooterLayout(619) == TranscriptCardFooterLayout.Stacked, "footers below 620 DIP should place actions beneath reasoning");
+    Require(TranscriptCardRenderer.ResolveCardFooterLayout(620) == TranscriptCardFooterLayout.SideBySide, "footers at 620 DIP should keep reasoning and actions side by side");
+}
+
+static string FormatTranscriptDurationForTest(int value)
+{
+    return value switch
+    {
+        10_000 => "10.0s",
+        3_600 => "3.6s",
+        _ => $"{value.ToString(System.Globalization.CultureInfo.InvariantCulture)} ms"
+    };
+}
+
+static string FormatTranscriptNumberForTest(int value)
+{
+    return value.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
+}
+
+static TranscriptCardRenderer CreateTranscriptCardRendererForTest(bool turnCompare = false, bool compact = false)
+{
+    var actionCoordinator = new TranscriptActionCoordinator(() => compact, () => false, AccentResourceBrush);
     return new TranscriptCardRenderer(
-        () => false,
+        () => compact,
         actionCoordinator,
         AccentResourceBrush,
         ShellUiHelpers.BlendBrush,
@@ -594,20 +761,19 @@ static TranscriptCardRenderer CreateTranscriptCardRendererForTest()
         () => "default",
         () => false,
         () => true,
-        () => false,
-        (_, _) => new VoiceAdherenceDiagnostic("", "", "none", 0, "", [], []),
-        _ => AccentResourceBrush("MutedTextBrush"),
-        _ => "0 ms",
-        value => value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        () => true,
+        (_, _) => new VoiceAdherenceDiagnostic("bark-only", "Bark-only", "strong", 88, "Voice cues are strong.", ["compact clauses"], []),
+        FormatTranscriptDurationForTest,
+        FormatTranscriptNumberForTest,
         _ => { },
         _ => Task.CompletedTask,
         _ => Task.CompletedTask,
         _ => Task.CompletedTask,
         _ => { },
         speakerId => !string.IsNullOrWhiteSpace(speakerId) && !speakerId.Equals("operator", StringComparison.OrdinalIgnoreCase),
-        () => false,
+        () => turnCompare,
         _ => false,
-        _ => false,
+        _ => true,
         _ => { },
         _ => false,
         _ => { },
@@ -3359,10 +3525,10 @@ static void TranscriptViewCoordinatorNormalizesViewState()
     Require(TranscriptViewCoordinator.CurrentTopStripMode(new WpfSettings { TopStripMode = "telemetry" }) == "telemetry", "known top strip mode should be preserved");
     Require(TranscriptViewCoordinator.CurrentTopStripMode(new WpfSettings { TopStripMode = "hidden", ShowTranscriptDiagnostics = true }) == "hidden", "known hidden top strip mode should override legacy diagnostics flag");
     Require(TranscriptViewCoordinator.CurrentTopStripMode(new WpfSettings { TopStripMode = "weird", ShowTranscriptDiagnostics = true }) == "diagnostics", "unknown top strip mode should fall back from diagnostics flag");
-    Require(!TranscriptViewCoordinator.ShouldShowPerformanceMetadata(new WpfSettings { TopStripMode = "hidden" }), "focused reading should progressively disclose model delivery metadata");
-    Require(!TranscriptViewCoordinator.ShouldShowPerformanceMetadata(new WpfSettings { TopStripMode = "hidden", CompactTranscriptMode = true }), "compact reading should progressively disclose model delivery metadata");
-    Require(TranscriptViewCoordinator.ShouldShowPerformanceMetadata(new WpfSettings { TopStripMode = "diagnostics" }), "diagnostics mode should reveal model delivery metadata");
-    Require(TranscriptViewCoordinator.ShouldShowPerformanceMetadata(new WpfSettings { TopStripMode = "hidden", ShowBattleReview = true }), "review adjuncts should reveal model delivery metadata");
+    var coordinatorSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptViewCoordinator.cs"));
+    Require(
+        !coordinatorSource.Contains("ShouldShowPerformanceMetadata", StringComparison.Ordinal),
+        "view presets should no longer decide whether transcript cards expose delivery statistics");
     Require(TranscriptViewCoordinator.CurrentViewPresetName(false, false, false, false, false, true, "hidden") == "Focused", "focused preset should be detected only when the diagnostic strip is disclosed");
     Require(TranscriptViewCoordinator.CurrentViewPresetName(false, false, true, false, true, true, "diagnostics") == "Diagnostics", "diagnostics preset should be detected");
     Require(TranscriptViewCoordinator.CurrentViewPresetName(true, false, false, false, false, true, "hidden") == "Compact", "compact preset should be detected with a focus-first top strip");

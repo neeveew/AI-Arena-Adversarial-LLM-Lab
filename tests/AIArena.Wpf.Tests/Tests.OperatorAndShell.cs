@@ -262,9 +262,10 @@ static void TranscriptActionCoordinatorExposesAutomationNames()
 {
     RunStaTest(() =>
     {
+        var busy = false;
         var coordinator = new TranscriptActionCoordinator(
             () => false,
-            () => false,
+            () => busy,
             AccentResourceBrush);
 
         var iconButton = coordinator.CreateButton("Copy", null, enabled: true, iconGlyph: "\uE8C8");
@@ -276,6 +277,28 @@ static void TranscriptActionCoordinatorExposesAutomationNames()
         Require(AutomationProperties.GetHelpText(labeledButton) == "Pin", "labeled transcript action should expose command help text");
         Require(iconButton.MinWidth >= 40 && iconButton.MinHeight >= 40, "standard icon actions should use a forgiving pointer target");
         Require(labeledButton.MinHeight >= 40, "standard labeled actions should use a forgiving pointer target");
+        Require(coordinator.TrackedButtonCount == 2, "new transcript actions should be tracked for busy-state updates");
+
+        iconButton.RaiseEvent(new RoutedEventArgs(FrameworkElement.UnloadedEvent));
+        Require(coordinator.TrackedButtonCount == 1, "an unrealized transcript card should release its action-button registration");
+        busy = true;
+        coordinator.UpdateBusyState(busy: true);
+        iconButton.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+        Require(coordinator.TrackedButtonCount == 2, "a recycled transcript card should restore its action-button registration when realized");
+        Require(!iconButton.IsEnabled, "a reloaded transcript action should immediately adopt a busy state that changed while it was unrealized");
+
+        iconButton.RaiseEvent(new RoutedEventArgs(FrameworkElement.UnloadedEvent));
+        busy = false;
+        coordinator.UpdateBusyState(busy: false);
+        Require(labeledButton.IsEnabled, "released busy state should restore enabled realized actions");
+        iconButton.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+        Require(iconButton.IsEnabled, "a reloaded transcript action should immediately adopt an idle state that changed while it was unrealized");
+
+        var listSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptListCoordinator.cs"));
+        Require(
+            listSource.Contains("transcriptActions.Prune()", StringComparison.Ordinal)
+            && !listSource.Contains("transcriptActions.Clear()", StringComparison.Ordinal),
+            "incremental transcript refresh should prune dead action registrations without dropping live recycled cards");
     });
 }
 

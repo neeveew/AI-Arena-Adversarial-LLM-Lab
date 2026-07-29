@@ -76,12 +76,16 @@ The transcript renders newest-first. Each message card shows:
 
 - Turn number.
 - Speaker and role.
-- Model name.
-- Latency and generated token count.
-- Context size.
+- A compact header summary of the model, response time, generated token count, and throughput when those values are available.
 - Public message text.
 - Optional model reasoning.
-- Actions such as copy, retry, compare, pin, and delete.
+- Permanently visible actions for copy, speech, pin, retry, delete, and optional turn comparison.
+
+Hover over the compact model summary, or move keyboard focus to it, to reveal the full delivery details. Available details include voice, latency, time to first token, model load time, throughput, prompt/completion/total tokens, style-fit result, status, and provider response ID. Missing measurements are omitted rather than shown as zero or unknown.
+
+Model reasoning remains collapsible on the left of the card footer. Message actions stay on the right so they are available without opening a separate details drawer. On narrow cards, the model summary moves onto a second header line and the actions wrap beneath reasoning. Internet metadata keeps its own disclosure.
+
+Focused, Compact, Diagnostics, and Review presets use this same card information hierarchy; changing preset does not hide card-level delivery statistics or actions.
 
 The transcript filter row can show or hide System, Agents, Narrator, and Operator messages. The turn dropdown filters by all turns or specific turn ranges.
 

@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using AIArena.Core.Models;
@@ -8,6 +9,18 @@ using AIArena.Wpf.Controls;
 using AIArena.Wpf.Models;
 
 namespace AIArena.Wpf;
+
+internal enum TranscriptCardHeaderLayout
+{
+    Stacked,
+    Inline
+}
+
+internal enum TranscriptCardFooterLayout
+{
+    Stacked,
+    SideBySide
+}
 
 internal enum TranscriptActionKind
 {
@@ -29,7 +42,6 @@ internal sealed class TranscriptCardRenderer
     private readonly Func<bool> useSystemGlyph;
     private readonly Func<bool> shouldShowStyleFit;
     private readonly Func<string, string, VoiceAdherenceDiagnostic> analyzeVoiceAdherence;
-    private readonly Func<VoiceAdherenceDiagnostic, Brush> voiceAdherenceAccent;
     private readonly Func<int, string> formatDuration;
     private readonly Func<int, string> formatCompactNumber;
     private readonly Action<TranscriptMessage> copyTranscriptMessage;
@@ -45,7 +57,6 @@ internal sealed class TranscriptCardRenderer
     private readonly Func<TranscriptMessage, bool> canSpeakTranscriptMessage;
     private readonly Action<TranscriptMessage> speakTranscriptMessage;
     private readonly Func<bool> showInternetDetails;
-    private readonly Func<bool> showPerformanceMetadata;
 
     public TranscriptCardRenderer(
         Func<bool> compactTranscriptMode,
@@ -59,7 +70,6 @@ internal sealed class TranscriptCardRenderer
         Func<bool> useSystemGlyph,
         Func<bool> shouldShowStyleFit,
         Func<string, string, VoiceAdherenceDiagnostic> analyzeVoiceAdherence,
-        Func<VoiceAdherenceDiagnostic, Brush> voiceAdherenceAccent,
         Func<int, string> formatDuration,
         Func<int, string> formatCompactNumber,
         Action<TranscriptMessage> copyTranscriptMessage,
@@ -74,8 +84,7 @@ internal sealed class TranscriptCardRenderer
         Action<TranscriptMessage> toggleTurnCompareMessage,
         Func<TranscriptMessage, bool>? canSpeakTranscriptMessage = null,
         Action<TranscriptMessage>? speakTranscriptMessage = null,
-        Func<bool>? showInternetDetails = null,
-        Func<bool>? showPerformanceMetadata = null)
+        Func<bool>? showInternetDetails = null)
     {
         this.compactTranscriptMode = compactTranscriptMode;
         this.transcriptActions = transcriptActions;
@@ -88,7 +97,6 @@ internal sealed class TranscriptCardRenderer
         this.useSystemGlyph = useSystemGlyph;
         this.shouldShowStyleFit = shouldShowStyleFit;
         this.analyzeVoiceAdherence = analyzeVoiceAdherence;
-        this.voiceAdherenceAccent = voiceAdherenceAccent;
         this.formatDuration = formatDuration;
         this.formatCompactNumber = formatCompactNumber;
         this.copyTranscriptMessage = copyTranscriptMessage;
@@ -104,7 +112,6 @@ internal sealed class TranscriptCardRenderer
         this.canSpeakTranscriptMessage = canSpeakTranscriptMessage ?? (_ => false);
         this.speakTranscriptMessage = speakTranscriptMessage ?? (_ => { });
         this.showInternetDetails = showInternetDetails ?? (() => true);
-        this.showPerformanceMetadata = showPerformanceMetadata ?? (() => true);
     }
 
     public Border CreateCard(TranscriptMessage message, bool retryable, bool searchMatch, bool isLatest)
@@ -118,7 +125,7 @@ internal sealed class TranscriptCardRenderer
             ? resourceBrush(message.Status.Equals("error", StringComparison.OrdinalIgnoreCase) ? "DangerBorderBrush" : "AssistBorderBrush")
             : (isInternet || visibleInternetDetails) ? resourceBrush("AssistBorderBrush") : accentForSpeaker(message.SpeakerId);
 
-        var actions = new WrapPanel
+        var actions = new RightAlignedWrapPanel
         {
             Orientation = Orientation.Horizontal,
             Margin = new Thickness(0)
@@ -139,6 +146,11 @@ internal sealed class TranscriptCardRenderer
                 selectedForCompare ? TranscriptActionKind.Primary : TranscriptActionKind.Neutral,
                 selectedForCompare ? "\uE711" : null));
         }
+        AutomationProperties.SetName(actions, $"Message actions for turn {message.Turn}");
+        AutomationProperties.SetHelpText(
+            actions,
+            "Copy, speak, pin, retry, delete, or compare this transcript message when each action is enabled.");
+
         var extras = new StackPanel();
         if (visibleInternetDetails)
         {
@@ -147,9 +159,11 @@ internal sealed class TranscriptCardRenderer
                 accent: resourceBrush("AssistBorderBrush"),
                 content: CreateInternetDetails(message)));
         }
+
+        Expander? reasoning = null;
         if (!string.IsNullOrWhiteSpace(message.Reasoning))
         {
-            extras.Children.Add(CreateExpander(
+            reasoning = CreateExpander(
                 "Model reasoning",
                 accentForSpeaker(message.SpeakerId),
                 new TextBlock
@@ -160,12 +174,9 @@ internal sealed class TranscriptCardRenderer
                     MaxWidth = 940,
                     HorizontalAlignment = HorizontalAlignment.Left,
                     Margin = new Thickness(0, 8, 0, 0)
-                }));
+                });
         }
-        var collapsedPerformance = showPerformanceMetadata()
-            ? null
-            : CreatePerformanceMetadata(message, isInternet, isSystemEvent);
-        extras.Children.Add(CreateActionTray(actions, accent, collapsedPerformance));
+        extras.Children.Add(CreateMessageFooter(message, actions, reasoning));
         return CreateCardLayout(message, body, accent, isInternet, searchMatch, isLatest, isSystemEvent, extras);
     }
 
@@ -231,92 +242,59 @@ internal sealed class TranscriptCardRenderer
         };
     }
 
-    private Expander CreateActionTray(WrapPanel actions, Brush accent, WrapPanel? collapsedPerformance)
+    private Grid CreateMessageFooter(TranscriptMessage message, WrapPanel actions, Expander? reasoning)
     {
         var compact = compactTranscriptMode();
-        var header = new Border
+        var footer = new Grid
         {
-            MinHeight = compact ? 28 : 32,
-            Padding = new Thickness(2, 0, 6, 0),
-            Background = Brushes.Transparent,
-            Child = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                VerticalAlignment = VerticalAlignment.Center,
-                Children =
-                {
-                    new TextBlock
-                    {
-                        Text = "\uE712",
-                        FontFamily = ArenaTokens.IconFontFamily,
-                        FontSize = compact ? ArenaTokens.CaptionFontSize : ArenaTokens.LabelFontSize,
-                        Foreground = accent,
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(0, 0, 5, 0)
-                    },
-                    new TextBlock
-                    {
-                        Text = collapsedPerformance is null ? "Message actions" : "Message details & actions",
-                        FontSize = compact ? ArenaTokens.CaptionFontSize : ArenaTokens.LabelFontSize,
-                        FontWeight = FontWeights.SemiBold,
-                        Foreground = resourceBrush("MutedTextBrush"),
-                        VerticalAlignment = VerticalAlignment.Center
-                    }
-                }
-            }
+            Margin = new Thickness(0, compact ? 3 : 5, 0, 0)
         };
-        var content = new Border
-        {
-            Background = blendBrush(resourceBrush("TranscriptBodyBrush"), accent, 0.09),
-            BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.28),
-            BorderThickness = new Thickness(1),
-            CornerRadius = ArenaTokens.MediumRadius,
-            Padding = compact ? new Thickness(5, 4, 2, 2) : new Thickness(6, 5, 2, 2),
-            Margin = new Thickness(0, 2, 0, 0),
-            Child = CreateActionTrayContent(actions, collapsedPerformance)
-        };
-        var expander = new Expander
-        {
-            Header = header,
-            Content = content,
-            IsExpanded = false,
-            Foreground = resourceBrush("MutedTextBrush"),
-            HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            Margin = new Thickness(0, compact ? 3 : 5, 0, 0),
-            ToolTip = collapsedPerformance is null
-                ? "Show copy, speech, pin, retry, compare, and delete actions"
-                : "Show model delivery details and message actions"
-        };
-        AutomationProperties.SetName(expander, "Message actions");
-        AutomationProperties.SetHelpText(
-            expander,
-            collapsedPerformance is null
-                ? "Expand to reveal the actions available for this transcript message."
-                : "Expand to reveal model delivery details and the actions available for this transcript message.");
-        expander.SetResourceReference(FrameworkElement.StyleProperty, "Arena.Expander.Section");
-        return expander;
-    }
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        footer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-    private UIElement CreateActionTrayContent(WrapPanel actions, WrapPanel? collapsedPerformance)
-    {
-        if (collapsedPerformance is null)
+        AutomationProperties.SetName(footer, $"Transcript message footer for turn {message.Turn}");
+
+        if (reasoning is not null)
         {
-            return actions;
+            Grid.SetRow(reasoning, 0);
+            Grid.SetColumn(reasoning, 0);
+            footer.Children.Add(reasoning);
         }
 
-        var panel = new StackPanel();
-        panel.Children.Add(new TextBlock
+        actions.HorizontalAlignment = HorizontalAlignment.Right;
+        actions.VerticalAlignment = VerticalAlignment.Top;
+        footer.Children.Add(actions);
+
+        void ApplyLayout(double width)
         {
-            Text = "Model & delivery",
-            Foreground = resourceBrush("MutedTextBrush"),
-            FontSize = compactTranscriptMode() ? ArenaTokens.CaptionFontSize : ArenaTokens.LabelFontSize,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(2, 0, 0, 5)
-        });
-        panel.Children.Add(collapsedPerformance);
-        actions.Margin = new Thickness(0, compactTranscriptMode() ? 5 : 7, 0, 0);
-        panel.Children.Add(actions);
-        return panel;
+            if (reasoning is null)
+            {
+                Grid.SetRow(actions, 0);
+                Grid.SetColumn(actions, 0);
+                Grid.SetColumnSpan(actions, 2);
+                actions.Margin = new Thickness(0, compact ? 3 : 5, 0, 0);
+                return;
+            }
+
+            var layout = ResolveCardFooterLayout(width);
+            var sideBySide = layout == TranscriptCardFooterLayout.SideBySide;
+            Grid.SetRow(reasoning, 0);
+            Grid.SetColumn(reasoning, 0);
+            Grid.SetColumnSpan(reasoning, sideBySide ? 1 : 2);
+            Grid.SetRow(actions, sideBySide ? 0 : 1);
+            Grid.SetColumn(actions, sideBySide ? 1 : 0);
+            Grid.SetColumnSpan(actions, sideBySide ? 1 : 2);
+            actions.Margin = sideBySide
+                ? new Thickness(compact ? 8 : 12, 12, 0, 0)
+                : new Thickness(0, compact ? 5 : 7, 0, 0);
+        }
+
+        ApplyLayout(0);
+        footer.Loaded += (_, _) => ApplyLayout(footer.ActualWidth);
+        footer.SizeChanged += (_, args) => ApplyLayout(args.NewSize.Width);
+        return footer;
     }
 
     public UIElement CreateInternetDetails(TranscriptMessage message)
@@ -445,60 +423,186 @@ internal sealed class TranscriptCardRenderer
         }
     }
 
-    private IReadOnlyList<Border> CreateStatPills(
-        TranscriptMessage message,
-        bool isInternet,
-        bool includePerformance = true,
-        bool includeState = true)
+    internal static TranscriptCardHeaderLayout ResolveCardHeaderLayout(double width)
     {
-        var pills = new List<Border>();
-        if (includePerformance)
+        return double.IsFinite(width) && width >= 720
+            ? TranscriptCardHeaderLayout.Inline
+            : TranscriptCardHeaderLayout.Stacked;
+    }
+
+    internal static TranscriptCardFooterLayout ResolveCardFooterLayout(double width)
+    {
+        return double.IsFinite(width) && width >= 620
+            ? TranscriptCardFooterLayout.SideBySide
+            : TranscriptCardFooterLayout.Stacked;
+    }
+
+    internal static string BuildModelStatsSummary(
+        TranscriptMessage message,
+        Func<int, string> formatDuration,
+        Func<int, string> formatCompactNumber)
+    {
+        if (!ShouldRenderModelStats(message))
         {
-            var performance = new List<string>
-            {
-                formatDuration(message.LatencyMs),
-                FormatGeneratedTokens(message)
-            };
-            if (message.TokensPerSecond > 0)
-            {
-                performance.Add($"{message.TokensPerSecond.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)} tok/s");
-            }
-
-            pills.Add(CreateStatPill(string.Join("  \u00B7  ", performance), isInternet));
-
-            var delivery = new List<string>();
-
-            if (message.TimeToFirstTokenMs > 0)
-            {
-                delivery.Add($"TTFT {formatDuration(message.TimeToFirstTokenMs)}");
-            }
-
-            if (message.ModelLoadTimeMs > 0)
-            {
-                delivery.Add($"load {formatDuration(message.ModelLoadTimeMs)}");
-            }
-
-            if (message.PromptTokens > 0)
-            {
-                delivery.Add($"ctx {formatCompactNumber(message.PromptTokens)}");
-            }
-            else if (message.TotalTokens > 0 && message.CompletionTokens <= 0)
-            {
-                delivery.Add($"total {formatCompactNumber(message.TotalTokens)}");
-            }
-
-            if (delivery.Count > 0)
-            {
-                pills.Add(CreateStatPill(string.Join("  \u00B7  ", delivery), isInternet));
-            }
+            return "";
         }
 
-        if (includeState && !message.Status.Equals("ok", StringComparison.OrdinalIgnoreCase))
+        var summary = new List<string> { message.Model.Trim() };
+        if (message.LatencyMs > 0)
+        {
+            summary.Add(formatDuration(message.LatencyMs));
+        }
+
+        if (message.CompletionTokens > 0)
+        {
+            summary.Add($"{formatCompactNumber(message.CompletionTokens)} Tok");
+        }
+
+        if (message.TokensPerSecond > 0)
+        {
+            summary.Add($"{message.TokensPerSecond.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)} tok/s");
+        }
+
+        return string.Join("  \u00B7  ", summary);
+    }
+
+    internal string BuildModelStatsHelpText(TranscriptMessage message)
+    {
+        if (!ShouldRenderModelStats(message))
+        {
+            return "";
+        }
+
+        var details = new List<string>
+        {
+            $"Model: {message.Model.Trim()}"
+        };
+        if (!string.IsNullOrWhiteSpace(message.VoiceStyle))
+        {
+            details.Add($"Voice: {RoleStyleCatalog.VoiceStyleLabel(message.VoiceStyle)}");
+        }
+
+        if (message.LatencyMs > 0)
+        {
+            details.Add($"Response time: {formatDuration(message.LatencyMs)}");
+        }
+
+        if (message.TimeToFirstTokenMs > 0)
+        {
+            details.Add($"Time to first token: {formatDuration(message.TimeToFirstTokenMs)}");
+        }
+
+        if (message.ModelLoadTimeMs > 0)
+        {
+            details.Add($"Model load: {formatDuration(message.ModelLoadTimeMs)}");
+        }
+
+        if (message.TokensPerSecond > 0)
+        {
+            details.Add($"Throughput: {message.TokensPerSecond.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)} tok/s");
+        }
+
+        if (message.PromptTokens > 0)
+        {
+            details.Add($"Prompt/context tokens: {formatCompactNumber(message.PromptTokens)}");
+        }
+
+        if (message.CompletionTokens > 0)
+        {
+            details.Add($"Generated tokens: {formatCompactNumber(message.CompletionTokens)}");
+        }
+
+        if (message.TotalTokens > 0)
+        {
+            details.Add($"Total tokens: {formatCompactNumber(message.TotalTokens)}");
+        }
+
+        if (shouldShowStyleFit() && !string.IsNullOrWhiteSpace(message.VoiceStyle))
+        {
+            var diagnostic = analyzeVoiceAdherence(message.VoiceStyle, message.Text);
+            var summary = string.IsNullOrWhiteSpace(diagnostic.Summary)
+                ? RoleStyleCatalog.VoiceAdherenceChipText(diagnostic)
+                : $"{RoleStyleCatalog.VoiceAdherenceChipText(diagnostic)} - {diagnostic.Summary}";
+            details.Add($"Style fit: {summary}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(message.Status))
+        {
+            details.Add($"Status: {message.Status.Trim()}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(message.ProviderResponseId))
+        {
+            details.Add($"Provider response ID: {message.ProviderResponseId.Trim()}");
+        }
+
+        return string.Join(Environment.NewLine, details);
+    }
+
+    private ContentControl? CreateModelStatsHost(TranscriptMessage message)
+    {
+        var summary = BuildModelStatsSummary(message, formatDuration, formatCompactNumber);
+        if (string.IsNullOrWhiteSpace(summary))
+        {
+            return null;
+        }
+
+        var detail = BuildModelStatsHelpText(message);
+        var capsule = CreateStatPill(summary, isInternet: false);
+        capsule.Margin = new Thickness(0);
+        if (capsule.Child is TextBlock summaryText)
+        {
+            summaryText.MaxWidth = compactTranscriptMode() ? 280 : 360;
+        }
+
+        var host = new ModelStatsContentControl
+        {
+            Content = capsule,
+            Focusable = true,
+            Cursor = Cursors.Help,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        KeyboardNavigation.SetIsTabStop(host, true);
+        host.SetResourceReference(FrameworkElement.FocusVisualStyleProperty, "Arena.FocusVisual");
+        AutomationProperties.SetName(host, $"Model statistics for turn {message.Turn}: {summary}");
+        AutomationProperties.SetHelpText(host, detail);
+
+        var toolTip = new ToolTip
+        {
+            Background = resourceBrush("TranscriptBodyBrush"),
+            BorderBrush = resourceBrush("ControlBorderBrush"),
+            Foreground = resourceBrush("TextBrush"),
+            Padding = new Thickness(10, 8, 10, 8),
+            Placement = PlacementMode.Bottom,
+            PlacementTarget = host,
+            MaxWidth = 440,
+            Content = new TextBlock
+            {
+                Text = detail,
+                Foreground = resourceBrush("TextBrush"),
+                TextWrapping = TextWrapping.Wrap,
+                MaxWidth = 410
+            }
+        };
+        host.ToolTip = toolTip;
+        ToolTipService.SetInitialShowDelay(host, 300);
+        ToolTipService.SetShowDuration(host, 60000);
+        host.GotKeyboardFocus += (_, _) => toolTip.IsOpen = true;
+        host.LostKeyboardFocus += (_, _) => toolTip.IsOpen = false;
+        host.Unloaded += (_, _) => toolTip.IsOpen = false;
+        return host;
+    }
+
+    private IReadOnlyList<Border> CreateStatePills(TranscriptMessage message, bool isInternet)
+    {
+        var pills = new List<Border>();
+        if (!message.Status.Equals("ok", StringComparison.OrdinalIgnoreCase))
         {
             pills.Add(CreateStatPill(message.Status, isInternet, isDanger: message.Status.Equals("error", StringComparison.OrdinalIgnoreCase)));
         }
 
-        if (includeState && message.Pinned)
+        if (message.Pinned)
         {
             pills.Add(CreateStatPill("pinned", isInternet));
         }
@@ -506,35 +610,20 @@ internal sealed class TranscriptCardRenderer
         return pills;
     }
 
-    private WrapPanel CreatePerformanceMetadata(TranscriptMessage message, bool isInternet, bool isSystemEvent)
+    private static bool ShouldRenderModelStats(TranscriptMessage message)
     {
-        var metadata = new WrapPanel();
-        if (!isInternet && !string.IsNullOrWhiteSpace(message.Model))
-        {
-            metadata.Children.Add(CreateStatPill(message.Model, isInternet));
-        }
-
-        var voiceChip = RoleStyleCatalog.VoiceStyleChipText(message.VoiceStyle);
-        if (!isInternet && !isSystemEvent && !string.IsNullOrWhiteSpace(voiceChip))
-        {
-            metadata.Children.Add(CreateStatPill(voiceChip, isInternet));
-            if (shouldShowStyleFit())
-            {
-                var voiceAdherence = analyzeVoiceAdherence(message.VoiceStyle, message.Text);
-                metadata.Children.Add(CreateStatPill(
-                    RoleStyleCatalog.VoiceAdherenceChipText(voiceAdherence),
-                    isInternet,
-                    accentOverride: voiceAdherenceAccent(voiceAdherence),
-                    toolTip: RoleStyleCatalog.VoiceAdherenceTooltip(voiceAdherence)));
-            }
-        }
-
-        foreach (var pill in CreateStatPills(message, isInternet, includePerformance: true, includeState: false))
-        {
-            metadata.Children.Add(pill);
-        }
-
-        return metadata;
+        var isInternet = IsInternetMessage(message);
+        var isSystem = IsSystemEvent(message, isInternet)
+            || message.Kind.Equals("system", StringComparison.OrdinalIgnoreCase)
+            || message.SpeakerId.Equals("system", StringComparison.OrdinalIgnoreCase);
+        var isOperator = message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase);
+        var model = message.Model?.Trim();
+        return message.Turn > 0
+            && !isInternet
+            && !isSystem
+            && !isOperator
+            && !string.IsNullOrWhiteSpace(model)
+            && !model.Equals("-", StringComparison.Ordinal);
     }
 
     private Border CreateCardLayout(TranscriptMessage message, string body, Brush accent, bool isInternet, bool searchMatch, bool isLatest, bool isSystemEvent, UIElement? extraContent)
@@ -726,7 +815,9 @@ internal sealed class TranscriptCardRenderer
         var header = new Grid();
         header.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         header.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        header.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var titleRow = new StackPanel
@@ -769,30 +860,25 @@ internal sealed class TranscriptCardRenderer
         Grid.SetColumn(titleRow, 0);
         header.Children.Add(titleRow);
 
-        var metadata = new WrapPanel
+        var modelStats = CreateModelStatsHost(message);
+        if (modelStats is not null)
+        {
+            header.Children.Add(modelStats);
+        }
+
+        var state = new WrapPanel
         {
             Margin = compact ? new Thickness(0, 4, 0, 0) : new Thickness(0, 6, 0, 0)
         };
-        if (showPerformanceMetadata())
+        foreach (var pill in CreateStatePills(message, isInternet))
         {
-            var performanceMetadata = CreatePerformanceMetadata(message, isInternet, isSystemEvent);
-            while (performanceMetadata.Children.Count > 0)
-            {
-                var item = performanceMetadata.Children[0];
-                performanceMetadata.Children.RemoveAt(0);
-                metadata.Children.Add(item);
-            }
+            state.Children.Add(pill);
         }
-        foreach (var pill in CreateStatPills(message, isInternet, includePerformance: false, includeState: true))
+        Grid.SetColumn(state, 0);
+        Grid.SetColumnSpan(state, 3);
+        if (state.Children.Count > 0)
         {
-            metadata.Children.Add(pill);
-        }
-        Grid.SetRow(metadata, 1);
-        Grid.SetColumn(metadata, 0);
-        Grid.SetColumnSpan(metadata, 2);
-        if (metadata.Children.Count > 0)
-        {
-            header.Children.Add(metadata);
+            header.Children.Add(state);
         }
 
         var time = new TextBlock
@@ -804,9 +890,30 @@ internal sealed class TranscriptCardRenderer
             Margin = new Thickness(12, 0, 0, 0)
         };
         Grid.SetRow(time, 0);
-        Grid.SetColumn(time, 1);
+        Grid.SetColumn(time, 2);
         header.Children.Add(time);
 
+        void ApplyLayout(double width)
+        {
+            if (modelStats is null)
+            {
+                Grid.SetRow(state, 1);
+                return;
+            }
+
+            var inline = ResolveCardHeaderLayout(width) == TranscriptCardHeaderLayout.Inline;
+            Grid.SetRow(modelStats, inline ? 0 : 1);
+            Grid.SetColumn(modelStats, inline ? 1 : 0);
+            Grid.SetColumnSpan(modelStats, inline ? 1 : 3);
+            modelStats.Margin = inline
+                ? new Thickness(compact ? 6 : 10, 0, 0, 0)
+                : new Thickness(0, compact ? 4 : 6, 0, 0);
+            Grid.SetRow(state, inline ? 1 : 2);
+        }
+
+        ApplyLayout(0);
+        header.Loaded += (_, _) => ApplyLayout(header.ActualWidth);
+        header.SizeChanged += (_, args) => ApplyLayout(args.NewSize.Width);
         return header;
     }
 
@@ -896,10 +1003,4 @@ internal sealed class TranscriptCardRenderer
         return $"{speaker}{Environment.NewLine}Model: {model}{Environment.NewLine}{kind}";
     }
 
-    private string FormatGeneratedTokens(TranscriptMessage message)
-    {
-        return message.CompletionTokens > 0
-            ? $"{formatCompactNumber(message.CompletionTokens)} Tok"
-            : "Tok unknown";
-    }
 }
