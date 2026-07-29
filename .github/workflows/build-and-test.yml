@@ -50,6 +50,10 @@ jobs:
         shell: pwsh
         run: ./scripts/dependency-index.ps1 -Check
 
+      - name: Check XAML gained no hard-coded values
+        shell: pwsh
+        run: ./scripts/xaml-hardcoded-values.ps1 -Check
+
   release-published:
     name: Declared version is published
     # Schedule and manual only. Catches a version that main advertises but that

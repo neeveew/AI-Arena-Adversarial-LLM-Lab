@@ -56,6 +56,7 @@ Use `dotnet build-server shutdown` or force a rebuild if incremental builds appe
 - Top-level-statement `Program.cs` files cannot be split across files until converted to an explicit partial `Program` with `Main`.
 - `using static` is useful for extracting static helpers with minimal call-site churn.
 - Avoid flaky STA render tests that depend on virtualized WPF containers being realized in headless `Measure/Arrange`.
+- Do not run the payload's bundled `searxng/python/python.exe` against a built release in `dist`. Importing any module writes `__pycache__` into the payload, which then fails the release checksum manifest with a file-count mismatch. The build strips those directories, so removing them restores the payload. The same applies to launching the app from a `dist` payload directory rather than an installed copy.
 
 ## Current Guardrails
 
