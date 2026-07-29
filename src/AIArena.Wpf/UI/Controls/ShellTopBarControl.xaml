@@ -43,7 +43,7 @@
             <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Medium}" />
             <Setter Property="Padding" Value="3" />
             <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Inline.After.Compact}" />
-            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Height" Value="38" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
         <Style x:Key="TopCompactButton" TargetType="Button" BasedOn="{StaticResource Arena.Button.Secondary}">
@@ -554,7 +554,10 @@
                         Content="Match setup"
                         Click="MatchSetupRequested"
                         Style="{StaticResource Arena.Button.Primary}"
-                        MinHeight="34"
+                        Height="38"
+                        Width="104"
+                        Padding="10,0"
+                        VerticalAlignment="Center"
                         Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                         AutomationProperties.Name="Open Match Setup"
                         AutomationProperties.HelpText="Open or close the Match Setup flyout."

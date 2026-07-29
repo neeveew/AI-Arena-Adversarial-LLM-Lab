@@ -23,17 +23,9 @@ internal sealed record ShellCommandState(
     {
         return surface switch
         {
-            ShellSurface.Lab => new(
-                ShowMatchSetup: true,
-                ShowSearch: true,
-                ShowExport: true,
-                ShowView: true,
-                SearchAutomationName: "Search transcripts",
-                SearchHelpText: "Search transcript text, speakers, models, and sources.",
-                ExportAutomationName: "Export transcript",
-                ExportHelpText: "Export the current transcript scope to a file."),
+            ShellSurface.Lab => Lab,
             ShellSurface.World => MatchSetupOnly,
-            ShellSurface.MatchSetup => Hidden,
+            ShellSurface.MatchSetup => Lab,
             ShellSurface.Agent => Hidden,
             ShellSurface.Collaborate => new(
                 ShowMatchSetup: false,
@@ -47,6 +39,16 @@ internal sealed record ShellCommandState(
             _ => throw new ArgumentOutOfRangeException(nameof(surface), surface, "Unknown shell surface.")
         };
     }
+
+    private static ShellCommandState Lab { get; } = new(
+        ShowMatchSetup: true,
+        ShowSearch: true,
+        ShowExport: true,
+        ShowView: true,
+        SearchAutomationName: "Search transcripts",
+        SearchHelpText: "Search transcript text, speakers, models, and sources.",
+        ExportAutomationName: "Export transcript",
+        ExportHelpText: "Export the current transcript scope to a file.");
 
     private static ShellCommandState MatchSetupOnly { get; } = new(
         ShowMatchSetup: true,

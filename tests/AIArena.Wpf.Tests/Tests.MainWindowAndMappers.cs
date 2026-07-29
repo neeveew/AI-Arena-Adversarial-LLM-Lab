@@ -765,7 +765,7 @@ static void ShellCommandStateMapsContextualWorkspaceCommands()
     {
         [ShellSurface.Lab] = (true, true, true, true),
         [ShellSurface.World] = (true, false, false, false),
-        [ShellSurface.MatchSetup] = (false, false, false, false),
+        [ShellSurface.MatchSetup] = (true, true, true, true),
         [ShellSurface.Agent] = (false, false, false, false),
         [ShellSurface.Collaborate] = (false, true, true, false)
     };
@@ -794,6 +794,7 @@ static void ShellCommandStateMapsContextualWorkspaceCommands()
     Require(lab.ExportAutomationName.Contains("transcript", StringComparison.OrdinalIgnoreCase), "Lab export should announce transcript scope");
     Require(collaborate.SearchAutomationName.Contains("Collaborate", StringComparison.OrdinalIgnoreCase), "Collaborate search should announce its active workspace");
     Require(collaborate.ExportAutomationName.Contains("Collaborate", StringComparison.OrdinalIgnoreCase), "Collaborate export should announce its active workspace");
+    Require(ShellCommandState.For(ShellSurface.MatchSetup) == lab, "Match Setup should preserve the complete Lab command layout while replacing the transcript canvas");
 }
 
 static void MainWindowContextualCommandHostsAndProviderMetricsStayWired()
@@ -890,6 +891,27 @@ static void MainWindowNavigationTransitionsPreserveContext()
     Require(showMatchSetup.Contains("_matchSetupReturnSurface = _activeShellSurface", StringComparison.Ordinal), "opening Match Setup should capture the current shell surface");
     Require(showMatchSetup.Contains("_matchSetupFocusReturnTarget = Keyboard.FocusedElement ?? MatchSetupButton", StringComparison.Ordinal), "opening Match Setup should capture its focus return target");
     Require(showMatchSetup.Contains("CloseMatchSetupButton.Focus()", StringComparison.Ordinal), "opening Match Setup should move focus into the flyout");
+
+    var toggleMatchSetup = CSharpMethodBlock(source, "private void MatchSetupButton_Click(object sender, RoutedEventArgs e)");
+    var visibleSetup = toggleMatchSetup.IndexOf("CustomMatchPanel.Visibility == Visibility.Visible", StringComparison.Ordinal);
+    var closeVisibleSetup = toggleMatchSetup.IndexOf("CloseMatchSetupFlyout()", StringComparison.Ordinal);
+    var showClosedSetup = toggleMatchSetup.IndexOf("ShowCustomMatchPanel()", StringComparison.Ordinal);
+    Require(visibleSetup >= 0 && closeVisibleSetup > visibleSetup && showClosedSetup > closeVisibleSetup, "the persistent Match Setup command should close an open setup before opening a closed one");
+
+    var applyShellCommands = CSharpMethodBlock(source, "private void ApplyShellCommandState(ShellSurface surface)");
+    Require(applyShellCommands.Contains("ShellCommandState.For(surface)", StringComparison.Ordinal), "Match Setup should preserve the Lab command layout through its surface command state");
+    Require(applyShellCommands.Contains("surface == ShellSurface.MatchSetup && state.ShowMatchSetup", StringComparison.Ordinal), "the preserved Match Setup command should expose its open state");
+    Require(!applyShellCommands.Contains("_matchSetupReturnSurface", StringComparison.Ordinal), "Match Setup commands should stay in Lab context instead of inheriting an unrelated return workspace");
+
+    var labViewToggle = CSharpMethodBlock(source, "private void LabViewToggle_Click(object sender, RoutedEventArgs e)");
+    var openMatchSetupCheck = labViewToggle.IndexOf("CustomMatchPanel.Visibility == Visibility.Visible", StringComparison.Ordinal);
+    var closeBeforeSwitch = labViewToggle.IndexOf("CloseMatchSetupFlyout()", StringComparison.Ordinal);
+    var applySelectedView = labViewToggle.IndexOf("ApplyLabViewMode(tag, persist: true)", StringComparison.Ordinal);
+    Require(openMatchSetupCheck >= 0 && closeBeforeSwitch > openMatchSetupCheck && applySelectedView > closeBeforeSwitch, "the Transcript/World selector should publish a normal Match Setup close before switching Lab views");
+
+    var labViewToggleVisibility = CSharpMethodBlock(source, "private void UpdateLabViewToggleVisibility()");
+    Require(!labViewToggleVisibility.Contains("CustomMatchPanel.Visibility", StringComparison.Ordinal), "opening Match Setup should not remove an enabled Transcript/World top-rail group");
+    Require(labViewToggleVisibility.Contains("TranscriptPanel.Visibility == Visibility.Visible", StringComparison.Ordinal), "the Lab view toggle should remain tied to the underlying transcript surface");
 
     var closeMatchSetupMethod = CSharpMethodBlock(source, "private void CloseMatchSetupFlyout()");
     foreach (var surface in new[] { ShellSurface.World, ShellSurface.Agent, ShellSurface.Collaborate })
@@ -1529,6 +1551,7 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
     var topBarSecondaryStatus = XamlStartTag(topBarXaml, "TopBarSecondaryStatus", "DockPanel");
     var topBarCommands = XamlStartTag(topBarXaml, "TopBarCommandPanel", "WrapPanel");
     var transcriptSearchPopup = XamlStartTag(topBarXaml, "TranscriptSearchPopup", "Popup");
+    var matchSetupButton = XamlStartTag(topBarXaml, "MatchSetupButton", "Button");
     var viewMenuButton = XamlStartTag(topBarXaml, "ViewMenuButton", "Button");
     var diagnosticsGrid = XamlStartTag(xaml, "TranscriptDiagnosticsGrid", "UniformGrid");
     var telemetryGrid = XamlStartTag(xaml, "TranscriptTelemetryGrid", "UniformGrid");
@@ -1548,6 +1571,15 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
         .Elements()
         .First();
     Require(string.Equals((string?)primaryTopBarRow.Attribute("MinHeight"), "38", StringComparison.Ordinal), "the shared top-bar primary row should reserve the 38-DIP command-group height");
+    var toolbarGroupStyle = topBarDocument.Descendants().Single(element =>
+        element.Name.LocalName == "Style"
+        && string.Equals((string?)element.Attribute(xamlNamespace + "Key"), "ToolbarGroup", StringComparison.Ordinal));
+    Require(
+        toolbarGroupStyle.Elements().Any(element =>
+            element.Name.LocalName == "Setter"
+            && string.Equals((string?)element.Attribute("Property"), "Height", StringComparison.Ordinal)
+            && string.Equals((string?)element.Attribute("Value"), "38", StringComparison.Ordinal)),
+        "top-rail toolbar groups should share the Match Setup button's explicit 38-DIP height");
     Require(topBarStatus.Contains("Grid.Row=\"0\"", StringComparison.Ordinal) && topBarStatus.Contains("VerticalAlignment=\"Center\"", StringComparison.Ordinal), "the top-bar metrics should occupy the shared centered primary row");
     Require(topBarSecondaryStatus.Contains("Grid.Row=\"1\"", StringComparison.Ordinal) && topBarSecondaryStatus.Contains("Grid.ColumnSpan=\"2\"", StringComparison.Ordinal), "the optional status line should occupy its own full-width row instead of changing the primary-row alignment");
     Require(topBarCommands.Contains("Grid.Row=\"2\"", StringComparison.Ordinal) && topBarCommands.Contains("Grid.ColumnSpan=\"2\"", StringComparison.Ordinal), "the top bar should fail safe to the narrow stacked arrangement before its first size pass");
@@ -1555,6 +1587,10 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
     Require(topBarCommands.Contains("VerticalAlignment=\"Center\"", StringComparison.Ordinal), "inline top-bar commands should share the primary-row centerline with the metrics");
     Require(File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs")).Contains("Grid.SetRow(TopBarCommandPanel, stacked ? 2 : 0);", StringComparison.Ordinal), "the adaptive shell should move commands into the shared primary row only for inline layouts");
     Require(transcriptSearchPopup.Contains("PlacementTarget=\"{Binding ElementName=TopBarLayoutGrid}\"", StringComparison.Ordinal), "the transcript search popup should open below the complete multi-row top bar");
+    Require(matchSetupButton.Contains("Style=\"{StaticResource Arena.Button.Primary}\"", StringComparison.Ordinal), "Match Setup should retain primary emphasis in the top rail");
+    Require(matchSetupButton.Contains("Height=\"38\"", StringComparison.Ordinal) && matchSetupButton.Contains("VerticalAlignment=\"Center\"", StringComparison.Ordinal), "Match Setup should match the 38-DIP top-rail command-group height");
+    Require(matchSetupButton.Contains("Width=\"104\"", StringComparison.Ordinal), "Match Setup and Close Setup should share a fixed width so toggling does not shift neighboring commands");
+    Require(matchSetupButton.Contains("Padding=\"10,0\"", StringComparison.Ordinal), "Match Setup should use compact horizontal-only toolbar padding");
     Require(viewMenuButton.Contains("Content=\"{Binding ViewButtonLabel}\"", StringComparison.Ordinal), "the closed View control should keep the active preset visible");
     Require(topBarXaml.Contains("Visibility=\"{Binding ShowStatusLine, Converter={StaticResource BooleanToVisibilityConverter}}\"", StringComparison.Ordinal), "routine status should not reserve a permanent second top-bar row");
     var topBarPresentation = new AIArena.Wpf.ViewModels.ShellTopBarPresentationViewModel();

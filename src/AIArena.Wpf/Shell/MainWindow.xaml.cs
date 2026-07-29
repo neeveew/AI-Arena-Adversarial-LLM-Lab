@@ -4730,6 +4730,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     {
         if (sender is Button button && button.Tag is string tag)
         {
+            if (CustomMatchPanel.Visibility == Visibility.Visible)
+            {
+                CloseMatchSetupFlyout();
+            }
+
             ApplyLabViewMode(tag, persist: true);
         }
     }
@@ -5050,8 +5055,13 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         // before calling, which is what SelectedControlPlaneView reads.
         PublishNavigationChanged();
 
+        // Match Setup replaces the center canvas, but remains part of the Lab
+        // workspace. Its command state deliberately mirrors Lab so opening setup
+        // does not make the toggle and transcript tools jump.
         var state = ShellCommandState.For(surface);
-        SetMatchSetupButtonState(state.ShowMatchSetup, open: false);
+        SetMatchSetupButtonState(
+            state.ShowMatchSetup,
+            open: surface == ShellSurface.MatchSetup && state.ShowMatchSetup);
         SearchCommandHost.Visibility = state.ShowSearch ? Visibility.Visible : Visibility.Collapsed;
         ExportTranscriptBottomButton.Visibility = state.ShowExport ? Visibility.Visible : Visibility.Collapsed;
         ViewMenuHost.Visibility = state.ShowView ? Visibility.Visible : Visibility.Collapsed;
@@ -5842,9 +5852,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void UpdateLabViewToggleVisibility()
     {
-        var labSurfaceVisible = CustomMatchPanel.Visibility != Visibility.Visible
-            && (TranscriptPanel.Visibility == Visibility.Visible
-                || AgentWorldPanel.Visibility == Visibility.Visible);
+        var labSurfaceVisible = TranscriptPanel.Visibility == Visibility.Visible
+            || AgentWorldPanel.Visibility == Visibility.Visible;
         LabViewToggleGroup.Visibility = IsWorldDebugEnabled(_wpfSettings) && labSurfaceVisible
             ? Visibility.Visible
             : Visibility.Collapsed;
