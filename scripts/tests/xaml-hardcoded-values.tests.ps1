@@ -14,6 +14,7 @@ $excludedRoot = Join-Path $sourceRoot "bin"
 $excludedPath = Join-Path $excludedRoot "Ignored.xaml"
 $baselinePath = Join-Path $docsRoot "xaml-hardcoded-baseline.json"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+$utf8Bom = New-Object System.Text.UTF8Encoding($true)
 
 function Require {
     param([bool]$Condition, [string]$Message)
@@ -205,6 +206,21 @@ try {
     [void](Invoke-FixtureGit @('init', '--quiet'))
     [void](Invoke-FixtureGit @('config', 'user.name', 'AI Arena Ratchet Test'))
     [void](Invoke-FixtureGit @('config', 'user.email', 'ratchet@example.invalid'))
+
+    # Preserve a regression fixture for the exact boundary that broke in CI:
+    # main's historical baseline carried a UTF-8 BOM, while a default Windows
+    # console decoded `git show` using OEM code page 850. The old reader saw
+    # mojibake instead of U+FEFF and failed before it could compare inventories.
+    $baselineWithBomText = [System.IO.File]::ReadAllText($baselinePath)
+    [System.IO.File]::WriteAllText($baselinePath, $baselineWithBomText, $utf8Bom)
+    $baselineWithBomBytes = [System.IO.File]::ReadAllBytes($baselinePath)
+    Require (
+        $baselineWithBomBytes.Length -ge 3 -and
+        $baselineWithBomBytes[0] -eq 0xEF -and
+        $baselineWithBomBytes[1] -eq 0xBB -and
+        $baselineWithBomBytes[2] -eq 0xBF
+    ) "Git-ref fixture baseline should carry a UTF-8 BOM."
+
     [void](Invoke-FixtureGit @('add', 'docs/xaml-hardcoded-baseline.json', 'src/Fixture.xaml'))
     [void](Invoke-FixtureGit @('commit', '--quiet', '-m', 'baseline'))
     $baseSha = (@(Invoke-FixtureGit @('rev-parse', 'HEAD')) -join '').Trim()
@@ -214,7 +230,13 @@ try {
     Remove-Item -LiteralPath $baselinePath -Force
     $inflatedBaseline = Invoke-Gate @('-Update')
     Require ($inflatedBaseline.ExitCode -eq 0) "Fixture should be able to simulate a manually inflated replacement baseline."
-    $baseComparison = Invoke-Gate @('-Check', '-BaselineRef', $baseSha)
+    $previousConsoleOutputEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(850)
+        $baseComparison = Invoke-Gate @('-Check', '-BaselineRef', $baseSha)
+    } finally {
+        [Console]::OutputEncoding = $previousConsoleOutputEncoding
+    }
     Require ($baseComparison.ExitCode -ne 0) "BaselineRef comparison should reject inventory inflation relative to the base commit."
     Require ($baseComparison.Output -match 'grew relative') "BaselineRef inflation failure should identify the base comparison."
 
