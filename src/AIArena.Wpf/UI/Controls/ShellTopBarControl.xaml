@@ -11,7 +11,7 @@
         <Style x:Key="TopMetricPill" TargetType="Border" BasedOn="{StaticResource Arena.Surface.Inset}">
             <Setter Property="MinHeight" Value="32" />
             <Setter Property="Padding" Value="8,4" />
-            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Inline.After.Compact}" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
         <Style x:Key="InteractiveTopMetricPill" TargetType="Border" BasedOn="{StaticResource TopMetricPill}">
@@ -29,7 +29,7 @@
             </Style.Triggers>
         </Style>
         <Style x:Key="TopMetricLabel" TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Caption}">
-            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Inline.After.Default}" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
         <Style x:Key="TopMetricValue" TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Label}">
@@ -42,7 +42,7 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Medium}" />
             <Setter Property="Padding" Value="3" />
-            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Inline.After.Compact}" />
             <Setter Property="MinHeight" Value="32" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
@@ -71,14 +71,14 @@
             </Setter>
         </Style>
         <Style x:Key="FlyoutSectionLabel" TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Label}">
-            <Setter Property="Margin" Value="0,0,0,10" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
         </Style>
         <Style x:Key="MiniMetricCard" TargetType="Border" BasedOn="{StaticResource Arena.Surface.Inset}">
             <Setter Property="Padding" Value="8,6" />
         </Style>
         <Style x:Key="MiniMetricLabel" TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Caption}" />
         <Style x:Key="MiniMetricValue" TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Label}">
-            <Setter Property="Margin" Value="0,3,0,0" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.Before.Micro}" />
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
         </Style>
         <Style x:Key="CaptionButton" TargetType="Button">
@@ -372,10 +372,10 @@
                                Style="{StaticResource Arena.Text.Caption}"
                                AutomationProperties.LiveSetting="Polite"
                                Visibility="Collapsed"
-                               Margin="12,0,0,0" />
+                               Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}" />
                     <Ellipse Width="6"
                              Height="6"
-                             Margin="0,0,8,0"
+                             Margin="{DynamicResource Arena.Gap.Inline.After.Default}"
                              Fill="{DynamicResource Arena.Brush.Info}"
                              VerticalAlignment="Center"
                              IsHitTestVisible="False" />
@@ -419,32 +419,32 @@
                                                Text="Status unavailable"
                                                Style="{StaticResource Arena.Text.Caption}"
                                                AutomationProperties.LiveSetting="Polite"
-                                               Margin="0,3,0,0" />
+                                               Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}" />
                                 </StackPanel>
                                 <Button x:Name="ProviderHealthCloseButton"
                                         Grid.Column="1"
                                         Click="ProviderPopupCloseRequested"
                                         Style="{StaticResource TopIconButton}"
-                                        Margin="8,0,0,0"
+                                        Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
                                         AutomationProperties.Name="Close provider health"
                                         ToolTip="Close provider health">
                                     <TextBlock Text="&#xE8BB;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="11" />
                                 </Button>
                             </Grid>
-                            <UniformGrid Columns="2" Margin="0,0,0,10">
+                            <UniformGrid Columns="2" Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
                                 <Border Style="{StaticResource MiniMetricCard}" Margin="0,0,6,6">
                                     <StackPanel>
                                         <TextBlock Text="Base URL" Style="{StaticResource MiniMetricLabel}" />
                                         <TextBlock x:Name="ProviderHealthBaseUrlText" Text="-" Style="{StaticResource MiniMetricValue}" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
                                     </StackPanel>
                                 </Border>
-                                <Border Style="{StaticResource MiniMetricCard}" Margin="0,0,0,6">
+                                <Border Style="{StaticResource MiniMetricCard}" Margin="{DynamicResource Arena.Gap.Stack.After.Compact}">
                                     <StackPanel>
                                         <TextBlock Text="Models" Style="{StaticResource MiniMetricLabel}" />
                                         <TextBlock x:Name="ProviderHealthModelCountText" Text="-" Style="{StaticResource MiniMetricValue}" />
                                     </StackPanel>
                                 </Border>
-                                <Border Style="{StaticResource MiniMetricCard}" Margin="0,0,6,0">
+                                <Border Style="{StaticResource MiniMetricCard}" Margin="{DynamicResource Arena.Gap.Inline.After.Compact}">
                                     <StackPanel>
                                         <TextBlock Text="Default model" Style="{StaticResource MiniMetricLabel}" />
                                         <TextBlock x:Name="ProviderHealthDefaultModelText" Text="-" Style="{StaticResource MiniMetricValue}" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
@@ -463,7 +463,7 @@
                                     BorderThickness="1"
                                     CornerRadius="{DynamicResource Arena.Radius.Small}"
                                     Padding="10,8"
-                                    Margin="0,0,0,10"
+                                    Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                     Visibility="Collapsed">
                                 <TextBlock x:Name="ProviderHealthModelWarningText"
                                            Text="Selected model is not in the advertised model list."
@@ -479,13 +479,13 @@
                                         Content="Test"
                                         Click="ProviderTestRequested"
                                         Style="{StaticResource Arena.Button.Primary}"
-                                        Margin="0,0,6,0"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         AutomationProperties.Name="Test provider connection" />
                                 <Button x:Name="ProviderHealthRefreshModelsButton"
                                         Content="Models"
                                         Click="ProviderModelsRefreshRequested"
                                         Style="{StaticResource Arena.Button.Secondary}"
-                                        Margin="0,0,6,0"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         AutomationProperties.Name="Refresh provider models" />
                                 <Button Content="Settings"
                                         Click="ProviderSettingsRequested"
@@ -505,7 +505,7 @@
                        HorizontalAlignment="Right"
                        VerticalAlignment="Center"
                        WindowChrome.IsHitTestVisibleInChrome="True"
-                       Margin="0,8,0,0">
+                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                 <TextBlock x:Name="ExportStatusText"
                            Text=""
                            AutomationProperties.LiveSetting="Polite"
@@ -554,7 +554,7 @@
                         Click="MatchSetupRequested"
                         Style="{StaticResource Arena.Button.Primary}"
                         MinHeight="34"
-                        Margin="0,0,6,0"
+                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                         AutomationProperties.Name="Open Match Setup"
                         AutomationProperties.HelpText="Open or close the Match Setup flyout."
                         ToolTip="Open Match Setup (Ctrl+M)" />
@@ -744,7 +744,7 @@
                                     <StackPanel>
                                         <TextBlock Text="View" Style="{StaticResource Arena.Text.Heading}" Margin="0,0,0,12" />
                                         <TextBlock Text="Presets" Style="{StaticResource FlyoutSectionLabel}" />
-                                        <UniformGrid Columns="2" Margin="0,0,0,10">
+                                        <UniformGrid Columns="2" Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
                                             <Button x:Name="ViewPresetFocusedButton"
                                                     Content="Focused"
                                                     Click="ViewPresetFocusedRequested"
@@ -756,14 +756,14 @@
                                                     Content="Diagnostics"
                                                     Click="ViewPresetDiagnosticsRequested"
                                                     Style="{StaticResource Arena.Button.Secondary}"
-                                                    Margin="0,0,0,6"
+                                                    Margin="{DynamicResource Arena.Gap.Stack.After.Compact}"
                                                     AutomationProperties.HelpText="Show timeline, memory, diagnostics, and follow-latest behavior."
                                                     ToolTip="Timeline, memory, and diagnostics" />
                                             <Button x:Name="ViewPresetCompactButton"
                                                     Content="Compact"
                                                     Click="ViewPresetCompactRequested"
                                                     Style="{StaticResource Arena.Button.Secondary}"
-                                                    Margin="0,0,6,0"
+                                                    Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                                     AutomationProperties.HelpText="Use a denser transcript layout for smaller windows."
                                                     ToolTip="Dense layout for smaller windows" />
                                             <Button x:Name="ViewPresetReviewButton"
@@ -776,12 +776,12 @@
                                         <TextBlock x:Name="ViewActivePresetText" Text="Active: Custom" Style="{StaticResource Arena.Text.Caption}" Margin="0,0,0,12" />
                                         <Separator Style="{StaticResource Arena.Separator}" Margin="0,0,0,12" />
                                         <TextBlock Text="Optional details" Style="{StaticResource FlyoutSectionLabel}" />
-                                        <CheckBox x:Name="AgentPerformanceFullCardsCheckBox" Content="Full agent metric cards" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="FullAgentCardsChanged" Unchecked="FullAgentCardsChanged" Margin="0,0,0,6" />
-                                        <CheckBox x:Name="CompactTranscriptCheckBox" Content="Compact transcript" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="CompactTranscriptChanged" Unchecked="CompactTranscriptChanged" Margin="0,0,0,6" />
-                                        <CheckBox x:Name="TurnCompareCheckBox" Content="Turn compare" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="TurnCompareChanged" Unchecked="TurnCompareChanged" Margin="0,0,0,6" />
-                                        <CheckBox x:Name="MatchQualityTimelineCheckBox" Content="Quality timeline" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="QualityTimelineChanged" Unchecked="QualityTimelineChanged" Margin="0,0,0,6" />
-                                        <CheckBox x:Name="BattleReviewCheckBox" Content="Battle review" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="BattleReviewChanged" Unchecked="BattleReviewChanged" Margin="0,0,0,6" />
-                                        <CheckBox x:Name="MemoryNotesCheckBox" Content="Memory notes" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="MemoryNotesChanged" Unchecked="MemoryNotesChanged" Margin="0,0,0,6" />
+                                        <CheckBox x:Name="AgentPerformanceFullCardsCheckBox" Content="Full agent metric cards" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="FullAgentCardsChanged" Unchecked="FullAgentCardsChanged" Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
+                                        <CheckBox x:Name="CompactTranscriptCheckBox" Content="Compact transcript" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="CompactTranscriptChanged" Unchecked="CompactTranscriptChanged" Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
+                                        <CheckBox x:Name="TurnCompareCheckBox" Content="Turn compare" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="TurnCompareChanged" Unchecked="TurnCompareChanged" Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
+                                        <CheckBox x:Name="MatchQualityTimelineCheckBox" Content="Quality timeline" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="QualityTimelineChanged" Unchecked="QualityTimelineChanged" Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
+                                        <CheckBox x:Name="BattleReviewCheckBox" Content="Battle review" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="BattleReviewChanged" Unchecked="BattleReviewChanged" Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
+                                        <CheckBox x:Name="MemoryNotesCheckBox" Content="Memory notes" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="MemoryNotesChanged" Unchecked="MemoryNotesChanged" Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
                                         <CheckBox x:Name="FollowChatCheckBox"
                                                   Content="Follow latest"
                                                   Style="{StaticResource Arena.CheckBox.Toggle}"
@@ -824,11 +824,11 @@
                                         AutomationProperties.Name="Debug menu">
                                     <StackPanel>
                                         <TextBlock Text="Experimental" Style="{StaticResource Arena.Text.Heading}" Margin="0,0,0,12" />
-                                        <CheckBox x:Name="DecisionCardCheckBox" Content="Decision card" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="DecisionCardChanged" Unchecked="DecisionCardChanged" Margin="0,0,0,6" />
-                                        <CheckBox x:Name="AutoModeratorCheckBox" Content="Auto moderator" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="AutoModeratorChanged" Unchecked="AutoModeratorChanged" Margin="0,0,0,6" />
-                                        <CheckBox x:Name="StyleFitCheckBox" Content="Style fit" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="StyleFitChanged" Unchecked="StyleFitChanged" Margin="0,0,0,6" />
-                                        <CheckBox x:Name="VoiceDriftEnforcementCheckBox" Content="Voice drift enforcement" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="VoiceDriftChanged" Unchecked="VoiceDriftChanged" Margin="0,0,0,6" />
-                                        <CheckBox x:Name="TranscriptInternetDetailsCheckBox" Content="Internet details" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="InternetDetailsChanged" Unchecked="InternetDetailsChanged" Margin="0,0,0,6" />
+                                        <CheckBox x:Name="DecisionCardCheckBox" Content="Decision card" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="DecisionCardChanged" Unchecked="DecisionCardChanged" Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
+                                        <CheckBox x:Name="AutoModeratorCheckBox" Content="Auto moderator" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="AutoModeratorChanged" Unchecked="AutoModeratorChanged" Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
+                                        <CheckBox x:Name="StyleFitCheckBox" Content="Style fit" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="StyleFitChanged" Unchecked="StyleFitChanged" Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
+                                        <CheckBox x:Name="VoiceDriftEnforcementCheckBox" Content="Voice drift enforcement" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="VoiceDriftChanged" Unchecked="VoiceDriftChanged" Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
+                                        <CheckBox x:Name="TranscriptInternetDetailsCheckBox" Content="Internet details" Style="{StaticResource Arena.CheckBox.Toggle}" Checked="InternetDetailsChanged" Unchecked="InternetDetailsChanged" Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
                                         <CheckBox x:Name="WorldDebugCheckBox"
                                                   Content="AI World (3D)"
                                                   Style="{StaticResource Arena.CheckBox.Toggle}"
@@ -836,7 +836,7 @@
                                                   Unchecked="WorldDebugChanged"
                                                   AutomationProperties.Name="Toggle experimental AI World 3D view"
                                                   AutomationProperties.HelpText="Show or hide the Transcript and World view selector. AI World is off by default."
-                                                  Margin="0,0,0,10" />
+                                                  Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
                                         <TextBlock Text="Advanced diagnostics are hidden unless debug controls are enabled."
                                                    Style="{StaticResource Arena.Text.Caption}" />
                                     </StackPanel>

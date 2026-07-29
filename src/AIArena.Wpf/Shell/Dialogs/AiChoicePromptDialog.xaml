@@ -248,14 +248,14 @@
                                  ToolTip="Optional topic direction for AI Choice generation. Leave blank to let the model choose." />
 
                         <StackPanel Grid.Row="2"
-                                    Margin="0,8,0,0">
+                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                             <TextBlock x:Name="PromptHintText"
                                        FontFamily="Segoe UI Variable Text, Segoe UI"
                                        FontSize="11"
                                        Text="The current transcript is preserved."
                                        TextWrapping="Wrap" />
                             <TextBlock x:Name="PromptShortcutText"
-                                       Margin="0,4,0,0"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}"
                                        FontFamily="Segoe UI Variable Text, Segoe UI"
                                        FontSize="11"
                                        Text="Ctrl+Enter generates · Esc cancels"

@@ -277,7 +277,7 @@
                                            Foreground="{DynamicResource MutedTextBrush}"
                                            FontSize="11"
                                            TextWrapping="Wrap"
-                                           Margin="0,4,0,0" />
+                                           Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}" />
                             </StackPanel>
                         </Border>
                         <TextBlock Text="Team"
@@ -341,17 +341,17 @@
                                        Foreground="{DynamicResource TextBrush}"
                                        FontSize="12"
                                        FontWeight="SemiBold"
-                                       Margin="0,0,0,4" />
+                                       Margin="{DynamicResource Arena.Gap.Stack.After.Tight}" />
                             <TextBlock Text="Beta - Critique"
                                        Foreground="{DynamicResource TextBrush}"
                                        FontSize="12"
                                        FontWeight="SemiBold"
-                                       Margin="0,0,0,4" />
+                                       Margin="{DynamicResource Arena.Gap.Stack.After.Tight}" />
                             <TextBlock Text="Gamma - Evidence"
                                        Foreground="{DynamicResource TextBrush}"
                                        FontSize="12"
                                        FontWeight="SemiBold"
-                                       Margin="0,0,0,4" />
+                                       Margin="{DynamicResource Arena.Gap.Stack.After.Tight}" />
                             <TextBlock Text="Narrator - Final"
                                        Foreground="{DynamicResource TextBrush}"
                                        FontSize="12"

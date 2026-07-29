@@ -28,6 +28,8 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
@@ -50,9 +52,24 @@ jobs:
         shell: pwsh
         run: ./scripts/dependency-index.ps1 -Check
 
+      - name: Test the XAML hard-coded-value ratchet
+        shell: pwsh
+        run: ./scripts/tests/xaml-hardcoded-values.tests.ps1
+
       - name: Check XAML gained no hard-coded values
         shell: pwsh
-        run: ./scripts/xaml-hardcoded-values.ps1 -Check
+        env:
+          XAML_BASELINE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # Hashtable splatting, not array. Splatting an array passes its
+          # elements positionally, so '-BaselineRef' and the SHA arrived as bare
+          # arguments and the gate rejected the SHA as an unexpected positional.
+          $gateArguments = @{ Check = $true }
+          if ($env:XAML_BASELINE_REF -match '^[0-9a-fA-F]{40}$' -and
+              $env:XAML_BASELINE_REF -notmatch '^0{40}$') {
+            $gateArguments.BaselineRef = $env:XAML_BASELINE_REF
+          }
+          & ./scripts/xaml-hardcoded-values.ps1 @gateArguments
 
   release-published:
     name: Declared version is published

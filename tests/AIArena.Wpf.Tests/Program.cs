@@ -266,6 +266,7 @@ var tests = new List<(string Name, Action Test)>
     ("provider quick setup coordinator formats defaults", ProviderQuickSetupCoordinatorFormatsDefaults),
     ("main window combobox template uses theme resources", MainWindowComboBoxTemplateUsesThemeResources),
     ("theme brush defaults mirror the default palette", ThemeBrushDefaultsMirrorTheDefaultPalette),
+    ("design token resources match their WPF contract", DesignTokenResourcesMatchTheirWpfContract),
     ("main window collaborate prompt uses multiline alignment", MainWindowCollaboratePromptUsesMultilineAlignment),
     ("main window collaborate prompt assist buttons stay compact", MainWindowCollaboratePromptAssistButtonsStayCompact),
     ("main window agent section is top level", MainWindowAgentSectionIsTopLevel),

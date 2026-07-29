@@ -52,6 +52,7 @@ $installerReleaseSigningReport = Join-Path $installerDir "release-signing.json"
 $installerSigningReport = Join-Path $installerDir "installer-signing.json"
 $dependencyIndexScript = Join-Path $Root "scripts/dependency-index.ps1"
 $xamlBaselineScript = Join-Path $Root "scripts/xaml-hardcoded-values.ps1"
+$xamlBaselineTests = Join-Path $Root "scripts/tests/xaml-hardcoded-values.tests.ps1"
 $solutionFile = Join-Path $Root "AI Arena - WPF.sln"
 $coreTests = Join-Path $Root "tests/AIArena.Tests/AIArena.Tests.csproj"
 $wpfTests = Join-Path $Root "tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj"
@@ -104,6 +105,7 @@ Assert-PathExists $releaseChangelog "release changelog"
 Assert-PathExists $releaseGithubReleaseNotes "release GitHub release notes"
 Assert-PathExists $dependencyIndexScript "dependency index script"
 Assert-PathExists $xamlBaselineScript "XAML hard-coded baseline script"
+Assert-PathExists $xamlBaselineTests "XAML hard-coded baseline fixture tests"
 Assert-PathExists $solutionFile "WPF solution"
 Assert-PathExists $coreTests "core console test harness"
 Assert-PathExists $wpfTests "WPF console test harness"
@@ -117,6 +119,11 @@ Assert-PathExists $coreProject "core project"
 
 & $dependencyIndexScript -Check
 & $xamlBaselineScript -Check
+& $xamlBaselineTests
+$xamlBaselineTestExitCode = $LASTEXITCODE
+if ($xamlBaselineTestExitCode -ne 0) {
+    throw "XAML hard-coded baseline fixture tests failed with exit code $xamlBaselineTestExitCode."
+}
 
 $solutionText = Get-Content -LiteralPath $solutionFile -Raw
 if ($solutionText -notmatch [regex]::Escape("tests\AIArena.Tests\AIArena.Tests.csproj")) {
@@ -127,7 +134,16 @@ if ($solutionText -notmatch [regex]::Escape("tests\AIArena.Wpf.Tests\AIArena.Wpf
 }
 
 dotnet run --project $coreTests --no-restore
+$coreTestExitCode = $LASTEXITCODE
+if ($coreTestExitCode -ne 0) {
+    throw "Core console test harness failed with exit code $coreTestExitCode."
+}
+
 dotnet run --project $wpfTests --no-restore
+$wpfTestExitCode = $LASTEXITCODE
+if ($wpfTestExitCode -ne 0) {
+    throw "WPF console test harness failed with exit code $wpfTestExitCode."
+}
 
 $scriptText = Get-Content -LiteralPath $innoScript -Raw
 if ($scriptText -notmatch '#define MyAppName "AI Arena"') {
@@ -347,6 +363,10 @@ if ($currentSrcTree -ne $builtSrcTree) {
         "bump the version and rebuild so the release matches its tag.")
 }
 $dirtySrc = @(& git -C $Root status --porcelain -- src 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$gitStatusExitCode = $LASTEXITCODE
+if ($gitStatusExitCode -ne 0) {
+    throw "Current src/ working-tree status could not be read from git; release source cannot be verified (exit code $gitStatusExitCode)."
+}
 if ($dirtySrc.Count -gt 0) {
     throw "src/ has uncommitted changes, so release $Version no longer matches the checkout."
 }

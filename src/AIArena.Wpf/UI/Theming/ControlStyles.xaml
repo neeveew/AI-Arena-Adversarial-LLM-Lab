@@ -261,7 +261,7 @@
                                   Visibility="Collapsed" />
                         </Border>
                         <ContentPresenter Grid.Column="1"
-                                          Margin="8,0,0,0"
+                                          Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
                                           HorizontalAlignment="Left"
                                           VerticalAlignment="Center"
                                           RecognizesAccessKey="True" />
@@ -328,7 +328,7 @@
                                     CornerRadius="9" />
                         </Border>
                         <ContentPresenter Grid.Column="1"
-                                          Margin="8,0,0,0"
+                                          Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
                                           HorizontalAlignment="Left"
                                           VerticalAlignment="Center"
                                           RecognizesAccessKey="True" />

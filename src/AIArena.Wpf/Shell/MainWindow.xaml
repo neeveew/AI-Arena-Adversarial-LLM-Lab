@@ -113,7 +113,7 @@
         </Style>
         <Style x:Key="Card" TargetType="Border" BasedOn="{StaticResource Arena.Surface.Card}">
             <Setter Property="Padding" Value="14" />
-            <Setter Property="Margin" Value="0,0,0,10" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
         </Style>
         <Style x:Key="ContentFrame" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource InputBrush}" />
@@ -128,7 +128,7 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Medium}" />
             <Setter Property="Padding" Value="12,10" />
-            <Setter Property="Margin" Value="0,0,0,10" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
         </Style>
         <Style x:Key="AgentConversationFrame" TargetType="Border">
             <Setter Property="Background" Value="Transparent" />
@@ -136,7 +136,7 @@
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="CornerRadius" Value="0" />
             <Setter Property="Padding" Value="0" />
-            <Setter Property="Margin" Value="0,0,0,10" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
         </Style>
         <Style x:Key="AgentComposerPanel" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource CardBrush}" />
@@ -160,8 +160,8 @@
             <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
             <Setter Property="FontSize" Value="11" />
-            <Setter Property="MinHeight" Value="32" />
-            <Setter Property="Padding" Value="8,3" />
+            <Setter Property="MinHeight" Value="{DynamicResource Arena.Target.Compact}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.QuickAction}" />
             <Setter Property="Margin" Value="0,0,5,5" />
         </Style>
         <Style x:Key="AgentAutonomyButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
@@ -169,8 +169,8 @@
             <Setter Property="BorderBrush" Value="{DynamicResource BetaAccentBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource BetaAccentBrush}" />
             <Setter Property="FontSize" Value="11" />
-            <Setter Property="MinHeight" Value="32" />
-            <Setter Property="Padding" Value="8,3" />
+            <Setter Property="MinHeight" Value="{DynamicResource Arena.Target.Compact}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.QuickAction}" />
             <Setter Property="Margin" Value="0,0,5,5" />
         </Style>
         <Style x:Key="AgentControlsExpander" TargetType="Expander">
@@ -179,12 +179,12 @@
             <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="10,7" />
-            <Setter Property="Margin" Value="0,0,0,10" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
             <Setter Property="FontSize" Value="12" />
         </Style>
         <Style x:Key="CollaborateToolExpander" TargetType="Expander" BasedOn="{StaticResource AgentControlsExpander}">
             <Setter Property="Padding" Value="8,5" />
-            <Setter Property="Margin" Value="0,0,0,6" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Compact}" />
             <Setter Property="FontSize" Value="{DynamicResource Arena.Type.LabelSize}" />
         </Style>
         <Style x:Key="SessionOverviewHotspot" TargetType="Border">
@@ -390,7 +390,7 @@
         <Style x:Key="NavButton" TargetType="Button">
             <Setter Property="Height" Value="34" />
             <Setter Property="Padding" Value="10,0" />
-            <Setter Property="Margin" Value="0,0,0,4" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Tight}" />
             <Setter Property="FocusVisualStyle" Value="{StaticResource Arena.FocusVisual}" />
             <Setter Property="HorizontalContentAlignment" Value="Left" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
@@ -492,6 +492,30 @@
             <Setter Property="MinHeight" Value="28" />
             <Setter Property="FontSize" Value="11" />
         </Style>
+        <Style x:Key="CollaborateQuickActionButton"
+               TargetType="Button"
+               BasedOn="{StaticResource CompactButton}">
+            <Setter Property="MinHeight" Value="{DynamicResource Arena.Target.Compact}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.QuickAction}" />
+        </Style>
+        <Style x:Key="CompactRailActionButton"
+               TargetType="Button"
+               BasedOn="{StaticResource CompactButton}">
+            <Setter Property="MinHeight" Value="{DynamicResource Arena.Target.Icon}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.RailAction}" />
+        </Style>
+        <Style x:Key="MatchSetupPrimaryActionButton"
+               TargetType="Button"
+               BasedOn="{StaticResource PrimaryButton}">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.MatchSetupAction}" />
+        </Style>
+        <Style x:Key="MatchSetupSecondaryActionButton"
+               TargetType="Button"
+               BasedOn="{StaticResource SecondaryButton}">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.MatchSetupAction}" />
+        </Style>
         <Style x:Key="ToolbarButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
             <Setter Property="Height" Value="30" />
             <Setter Property="MinHeight" Value="30" />
@@ -513,7 +537,7 @@
         </Style>
         <Style x:Key="RightRailActionButton" TargetType="Button" BasedOn="{StaticResource Arena.Button.Secondary}">
             <Setter Property="FontSize" Value="{DynamicResource Arena.Type.LabelSize}" />
-            <Setter Property="Padding" Value="7,4" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.RailAction}" />
             <Setter Property="Margin" Value="0,0,5,5" />
             <Setter Property="MinWidth" Value="0" />
         </Style>
@@ -540,7 +564,7 @@
             <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.IconFontFamily}" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="FontWeight" Value="Normal" />
-            <Setter Property="Margin" Value="0,0,5,0" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Inline.After.Tight}" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
         <Style x:Key="RightRailActionLabel" TargetType="TextBlock">
@@ -553,7 +577,7 @@
         <Style x:Key="CommandButtonLabel" TargetType="TextBlock" BasedOn="{StaticResource RightRailActionLabel}" />
         <Style x:Key="RightRailSectionTitle" TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Heading}">
             <Setter Property="FontSize" Value="13" />
-            <Setter Property="Margin" Value="0,0,0,10" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
         </Style>
         <Style x:Key="OperatorRouteButton" TargetType="Button" BasedOn="{StaticResource CompactButton}">
@@ -571,7 +595,7 @@
             <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="FontSize" Value="11" />
-            <Setter Property="Margin" Value="0,0,0,6" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Compact}" />
         </Style>
         <Style x:Key="HintText" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
@@ -592,7 +616,7 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Small}" />
             <Setter Property="Padding" Value="9,4" />
-            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Inline.After.Default}" />
         </Style>
         <Style x:Key="DashboardMetricChip" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource CardBrush}" />
@@ -626,7 +650,7 @@
             <Setter Property="CornerRadius" Value="7" />
             <Setter Property="Padding" Value="8,6" />
             <Setter Property="MinHeight" Value="48" />
-            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Inline.After.Compact}" />
         </Style>
         <Style x:Key="TranscriptFilterSummaryPill" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource CardBrush}" />
@@ -668,7 +692,7 @@
         </Style>
         <Style x:Key="FlyoutSectionLabel" TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Label}">
             <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
-            <Setter Property="Margin" Value="0,0,0,10" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
         </Style>
         <Style x:Key="ConfigToolbarCard" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource CardBrush}" />
@@ -715,7 +739,7 @@
             <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="0" />
-            <Setter Property="Margin" Value="0,0,0,10" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Tag" Value="&#xE713;" />
             <Setter Property="SnapsToDevicePixels" Value="True" />
@@ -789,7 +813,7 @@
                                                                FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                                                Foreground="{TemplateBinding Foreground}"
                                                                FontWeight="SemiBold"
-                                                               Margin="12,0,0,0"
+                                                               Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}"
                                                                VerticalAlignment="Center" />
                                                 </Grid>
                                             </Border>
@@ -1013,7 +1037,7 @@
                 </controls:TranscriptListBox>
                 <Grid x:Name="TranscriptDashboardGrid"
                       Grid.Row="0"
-                      Margin="0,0,0,10"
+                      Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                       SizeChanged="TranscriptDashboardGrid_SizeChanged">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -1056,13 +1080,13 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <TextBlock Text="Consensus" Style="{StaticResource DashboardMetricLabel}" />
-                                <Grid Grid.Row="1" Margin="0,3,0,0">
+                                <Grid Grid.Row="1" Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" MinWidth="58" />
                                         <ColumnDefinition Width="82" />
                                     </Grid.ColumnDefinitions>
                                     <WrapPanel VerticalAlignment="Center">
-                                        <TextBlock x:Name="ConsensusValueText" Text="-" Style="{StaticResource DashboardMetricValue}" Margin="0,0,5,0" />
+                                        <TextBlock x:Name="ConsensusValueText" Text="-" Style="{StaticResource DashboardMetricValue}" Margin="{DynamicResource Arena.Gap.Inline.After.Tight}" />
                                         <TextBlock x:Name="ConsensusTrendText" Text="-" Style="{StaticResource DashboardMetricTrend}" />
                                     </WrapPanel>
                                     <controls:MetricSparklineControl x:Name="ConsensusSparkline" Grid.Column="1" Width="78" Height="22" HorizontalAlignment="Right" />
@@ -1076,13 +1100,13 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <TextBlock Text="Role Drift" Style="{StaticResource DashboardMetricLabel}" />
-                                <Grid Grid.Row="1" Margin="0,3,0,0">
+                                <Grid Grid.Row="1" Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" MinWidth="58" />
                                         <ColumnDefinition Width="82" />
                                     </Grid.ColumnDefinitions>
                                     <WrapPanel VerticalAlignment="Center">
-                                        <TextBlock x:Name="RoleDriftValueText" Text="-" Style="{StaticResource DashboardMetricValue}" Margin="0,0,5,0" />
+                                        <TextBlock x:Name="RoleDriftValueText" Text="-" Style="{StaticResource DashboardMetricValue}" Margin="{DynamicResource Arena.Gap.Inline.After.Tight}" />
                                         <TextBlock x:Name="RoleDriftTrendText" Text="-" Style="{StaticResource DashboardMetricTrend}" />
                                     </WrapPanel>
                                     <controls:MetricSparklineControl x:Name="RoleDriftSparkline" Grid.Column="1" Width="78" Height="22" HorizontalAlignment="Right" />
@@ -1096,13 +1120,13 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <TextBlock Text="Unsupported Claims" Style="{StaticResource DashboardMetricLabel}" />
-                                <Grid Grid.Row="1" Margin="0,3,0,0">
+                                <Grid Grid.Row="1" Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" MinWidth="58" />
                                         <ColumnDefinition Width="82" />
                                     </Grid.ColumnDefinitions>
                                     <WrapPanel VerticalAlignment="Center">
-                                        <TextBlock x:Name="UnsupportedClaimsValueText" Text="-" Style="{StaticResource DashboardMetricValue}" Margin="0,0,5,0" />
+                                        <TextBlock x:Name="UnsupportedClaimsValueText" Text="-" Style="{StaticResource DashboardMetricValue}" Margin="{DynamicResource Arena.Gap.Inline.After.Tight}" />
                                         <TextBlock x:Name="UnsupportedClaimsTrendText" Text="-" Style="{StaticResource DashboardMetricTrend}" />
                                     </WrapPanel>
                                     <controls:MetricSparklineControl x:Name="UnsupportedClaimsSparkline" Grid.Column="1" Width="78" Height="22" HorizontalAlignment="Right" Mode="bars" MaxValue="8" />
@@ -1116,13 +1140,13 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <TextBlock Text="Evidence Pressure" Style="{StaticResource DashboardMetricLabel}" />
-                                <Grid Grid.Row="1" Margin="0,3,0,0">
+                                <Grid Grid.Row="1" Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" MinWidth="76" />
                                         <ColumnDefinition Width="82" />
                                     </Grid.ColumnDefinitions>
                                     <WrapPanel VerticalAlignment="Center">
-                                        <TextBlock x:Name="EvidencePressureValueText" Text="-" Style="{StaticResource DashboardMetricValue}" Margin="0,0,5,0" MaxWidth="62" />
+                                        <TextBlock x:Name="EvidencePressureValueText" Text="-" Style="{StaticResource DashboardMetricValue}" Margin="{DynamicResource Arena.Gap.Inline.After.Tight}" MaxWidth="62" />
                                         <TextBlock x:Name="EvidencePressureTrendText" Text="-" Style="{StaticResource DashboardMetricTrend}" />
                                     </WrapPanel>
                                     <controls:MetricSparklineControl x:Name="EvidencePressureSparkline" Grid.Column="1" Width="78" Height="22" HorizontalAlignment="Right" />
@@ -1136,13 +1160,13 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <TextBlock Text="Narrative Heat" Style="{StaticResource DashboardMetricLabel}" />
-                                <Grid Grid.Row="1" Margin="0,3,0,0">
+                                <Grid Grid.Row="1" Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" MinWidth="70" />
                                         <ColumnDefinition Width="82" />
                                     </Grid.ColumnDefinitions>
                                     <WrapPanel VerticalAlignment="Center">
-                                        <TextBlock x:Name="NarrativeHeatValueText" Text="-" Style="{StaticResource DashboardMetricValue}" Margin="0,0,5,0" MaxWidth="58" />
+                                        <TextBlock x:Name="NarrativeHeatValueText" Text="-" Style="{StaticResource DashboardMetricValue}" Margin="{DynamicResource Arena.Gap.Inline.After.Tight}" MaxWidth="58" />
                                         <TextBlock x:Name="NarrativeHeatTrendText" Text="-" Style="{StaticResource DashboardMetricTrend}" />
                                     </WrapPanel>
                                     <controls:MetricSparklineControl x:Name="NarrativeHeatSparkline" Grid.Column="1" Width="78" Height="22" HorizontalAlignment="Right" />
@@ -1239,7 +1263,7 @@
                         <UniformGrid x:Name="TranscriptTelemetryGrid"
                                      Columns="4"
                                      MinWidth="560"
-                                     Margin="0,0,6,0">
+                                     Margin="{DynamicResource Arena.Gap.Inline.After.Compact}">
                             <Border Style="{StaticResource TelemetryMetricCard}">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
@@ -1285,7 +1309,7 @@
                                         <TextBlock x:Name="TelemetryVramValueText" Text="-" Style="{StaticResource DashboardMetricValue}" Foreground="{DynamicResource DeltaAccentBrush}" />
                                         <TextBlock x:Name="TelemetryVramDetailText" Text=" Unavailable" Style="{StaticResource DashboardMetricTrend}" Margin="4,2,0,0" />
                                     </StackPanel>
-                                    <Grid Grid.Row="2" Height="4" VerticalAlignment="Bottom" Margin="0,3,0,0">
+                                    <Grid Grid.Row="2" Height="4" VerticalAlignment="Bottom" Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}">
                                         <Border Background="{DynamicResource InputBrush}" CornerRadius="2" />
                                         <Border x:Name="TelemetryVramUsageBar" Background="{DynamicResource DeltaAccentBrush}" CornerRadius="2" Width="0" HorizontalAlignment="Left" />
                                     </Grid>
@@ -1303,7 +1327,7 @@
                                         <TextBlock x:Name="TelemetryRamValueText" Text="-" Style="{StaticResource DashboardMetricValue}" Foreground="{DynamicResource GammaAccentBrush}" />
                                         <TextBlock x:Name="TelemetryRamDetailText" Text="" Style="{StaticResource DashboardMetricTrend}" Margin="4,2,0,0" />
                                     </StackPanel>
-                                    <Grid Grid.Row="2" Height="4" VerticalAlignment="Bottom" Margin="0,3,0,0">
+                                    <Grid Grid.Row="2" Height="4" VerticalAlignment="Bottom" Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}">
                                         <Border Background="{DynamicResource InputBrush}" CornerRadius="2" />
                                         <Border x:Name="TelemetryRamUsageBar" Background="{DynamicResource GammaAccentBrush}" CornerRadius="2" Width="0" HorizontalAlignment="Left" />
                                     </Grid>
@@ -1332,16 +1356,16 @@
                                           Width="116"
                                           Style="{StaticResource CompactComboBox}"
                                           SelectionChanged="TranscriptFilter_Changed"
-                                          Margin="0,0,6,0">
+                                          Margin="{DynamicResource Arena.Gap.Inline.After.Compact}">
                                     <ComboBoxItem Content="All Turns" Tag="all" IsSelected="True" />
                                     <ComboBoxItem Content="Latest 10" Tag="latest10" />
                                     <ComboBoxItem Content="Latest 25" Tag="latest25" />
                                     <ComboBoxItem Content="Errors Only" Tag="errors" />
                                     <ComboBoxItem Content="Pinned Only" Tag="pinned" />
                                 </ComboBox>
-                                <CheckBox x:Name="TranscriptFilterSystemCheckBox" Content="System" Style="{StaticResource FilterChipCheckBox}" IsChecked="True" Checked="TranscriptFilter_Changed" Unchecked="TranscriptFilter_Changed" Margin="0,0,6,0" />
-                                <CheckBox x:Name="TranscriptFilterAgentsCheckBox" Content="Agents" Style="{StaticResource FilterChipCheckBox}" IsChecked="True" Checked="TranscriptFilter_Changed" Unchecked="TranscriptFilter_Changed" Margin="0,0,6,0" />
-                                <CheckBox x:Name="TranscriptFilterNarratorCheckBox" Content="Narrator" Style="{StaticResource FilterChipCheckBox}" IsChecked="True" Checked="TranscriptFilter_Changed" Unchecked="TranscriptFilter_Changed" Margin="0,0,6,0" />
+                                <CheckBox x:Name="TranscriptFilterSystemCheckBox" Content="System" Style="{StaticResource FilterChipCheckBox}" IsChecked="True" Checked="TranscriptFilter_Changed" Unchecked="TranscriptFilter_Changed" Margin="{DynamicResource Arena.Gap.Inline.After.Compact}" />
+                                <CheckBox x:Name="TranscriptFilterAgentsCheckBox" Content="Agents" Style="{StaticResource FilterChipCheckBox}" IsChecked="True" Checked="TranscriptFilter_Changed" Unchecked="TranscriptFilter_Changed" Margin="{DynamicResource Arena.Gap.Inline.After.Compact}" />
+                                <CheckBox x:Name="TranscriptFilterNarratorCheckBox" Content="Narrator" Style="{StaticResource FilterChipCheckBox}" IsChecked="True" Checked="TranscriptFilter_Changed" Unchecked="TranscriptFilter_Changed" Margin="{DynamicResource Arena.Gap.Inline.After.Compact}" />
                                 <CheckBox x:Name="TranscriptFilterOperatorCheckBox" Content="Operator" Style="{StaticResource FilterChipCheckBox}" IsChecked="True" Checked="TranscriptFilter_Changed" Unchecked="TranscriptFilter_Changed" />
                             </WrapPanel>
                         </DockPanel>
@@ -1364,7 +1388,7 @@
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <Grid Margin="0,0,0,10">
+                    <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
@@ -1380,7 +1404,7 @@
                                 MinWidth="34"
                                 MinHeight="30"
                                 Padding="0"
-                                Margin="12,0,0,0"
+                                Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}"
                                 VerticalAlignment="Center"
                                 ToolTip="Close Match Setup" />
                     </Grid>
@@ -1404,27 +1428,25 @@
                                            Style="{StaticResource HintText}"
                                            AutomationProperties.Name="Match setup readiness"
                                            AutomationProperties.HelpText="Summarizes whether the current match setup is ready to run."
-                                           Margin="0,3,0,0"
+                                           Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
                                            TextTrimming="CharacterEllipsis"
                                            ToolTip="Setup readiness will appear after a session loads." />
                             </StackPanel>
                         </Expander.Header>
-                        <StackPanel Margin="0,4,0,0">
+                        <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}">
                             <WrapPanel x:Name="ScenarioSeedInspector" />
                             <WrapPanel x:Name="SetupReadinessBadgeItems"
                                        Margin="0,8,0,-4"
                                        AutomationProperties.Name="Match setup readiness badges"
                                        AutomationProperties.HelpText="Shows the setup checks that need attention, and can reveal the checks that already pass." />
                             <StackPanel x:Name="SetupReadinessChecklistItems"
-                                        Margin="0,8,0,0"
+                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
                                         AutomationProperties.Name="Match setup preflight checklist"
                                         AutomationProperties.HelpText="Lists required blockers and advisory warnings for the current match setup." />
                             <Grid x:Name="CurrentSetupTransferHost" HorizontalAlignment="Left" Margin="0,10,0,0">
                                 <Button x:Name="CurrentSetupTransferButton"
                                         Click="CurrentSetupTransferButton_Click"
-                                        Style="{StaticResource SecondaryButton}"
-                                        FontSize="11"
-                                        Padding="11,6"
+                                        Style="{StaticResource MatchSetupSecondaryActionButton}"
                                         AutomationProperties.Name="Copy or import match setup"
                                         AutomationProperties.HelpText="Copy the current match setup as a brief or JSON receipt, or import a portable setup."
                                         ToolTip="Copy or import this match setup">
@@ -1493,17 +1515,17 @@
                                            Style="{StaticResource HintText}"
                                            AutomationProperties.Name="Generation recipe status"
                                            AutomationProperties.HelpText="Summarizes what the selected generation controls will produce."
-                                           Margin="0,3,0,0"
+                                           Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
                                            TextTrimming="CharacterEllipsis"
                                            ToolTip="Manual setup: auto style, normal pressure, grounded personas." />
                             </StackPanel>
                         </Expander.Header>
-                    <WrapPanel Margin="0,8,0,0"
+                    <WrapPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
                                HorizontalAlignment="Left"
                                VerticalAlignment="Top">
                         <Border Style="{StaticResource ConfigToolbarCard}">
                             <StackPanel>
-                                <Grid Margin="0,0,0,6">
+                                <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Compact}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
@@ -1518,14 +1540,14 @@
                                             Style="{StaticResource HelpIconButton}"
                                             AutomationProperties.Name="Generation help"
                                             AutomationProperties.HelpText="Explain the Match Setup generation methods."
-                                            Margin="8,0,0,0"
+                                            Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
                                             ToolTip="Explain generation methods" />
                                 </Grid>
                                 <WrapPanel>
                                     <ComboBox x:Name="RandomSeedPresetPicker"
                                               Width="142"
                                               Style="{StaticResource CompactComboBox}"
-                                              Margin="0,0,6,0"
+                                              Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                               AutomationProperties.Name="Generation preset"
                                               AutomationProperties.HelpText="Choose a preset for the Match Setup generation controls."
                                               ToolTip="Generation preset"
@@ -1561,49 +1583,41 @@
                                     <Button x:Name="RandomSeedButton"
                                             Content="Random Seed"
                                             Click="RandomSeedButton_Click"
-                                            Style="{StaticResource PrimaryButton}"
+                                            Style="{StaticResource MatchSetupPrimaryActionButton}"
                                             AutomationProperties.Name="Generate random seed"
                                             AutomationProperties.HelpText="Generate a local seeded match from the selected tuning controls."
-                                            FontSize="11"
-                                            Padding="11,6"
                                             ToolTip="Generate a local seeded match from the selected tuning controls"
-                                            Margin="0,0,6,0" />
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Compact}" />
                                     <Button x:Name="AiChoiceButton"
                                             Content="AI Choice"
                                             Click="AiChoiceButton_Click"
-                                            Style="{StaticResource SecondaryButton}"
+                                            Style="{StaticResource MatchSetupSecondaryActionButton}"
                                             AutomationProperties.Name="Generate AI Choice match"
                                             AutomationProperties.HelpText="Ask the narrator model to generate a match setup."
-                                            FontSize="11"
-                                            Padding="11,6"
                                             ToolTip="Ask the narrator model to generate a match setup"
-                                            Margin="0,0,6,0" />
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Compact}" />
                                     <Button x:Name="CurrentTopicsButton"
                                             Content="Current Topics"
                                             Click="CurrentTopicsButton_Click"
-                                            Style="{StaticResource SecondaryButton}"
+                                            Style="{StaticResource MatchSetupSecondaryActionButton}"
                                             AutomationProperties.Name="Generate Current Topics match"
                                             AutomationProperties.HelpText="Search local internet access for current topics, then generate a match setup from source signals."
-                                            FontSize="11"
-                                            Padding="11,6"
                                             ToolTip="Search local internet access for current topics, then generate a match setup from source signals"
-                                            Margin="0,0,6,0" />
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Compact}" />
                                     <Button x:Name="YoloScenarioButton"
                                             Content="Wild Seed"
                                             Click="YoloScenarioButton_Click"
-                                            Style="{StaticResource SecondaryButton}"
+                                            Style="{StaticResource MatchSetupSecondaryActionButton}"
                                             AutomationProperties.Name="Generate Wild Seed"
                                             AutomationProperties.HelpText="Generate a bolder local seeded setup while respecting locks."
-                                            FontSize="11"
-                                            Padding="11,6"
                                             ToolTip="Generate a bolder local seeded setup while respecting locks"
-                                            Margin="0,0,8,0" />
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Default}" />
                                 </WrapPanel>
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource ConfigToolbarCard}">
                             <StackPanel>
-                                <Grid Margin="0,0,0,6">
+                                <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Compact}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
@@ -1618,14 +1632,14 @@
                                             Style="{StaticResource HelpIconButton}"
                                             AutomationProperties.Name="Tuning help"
                                             AutomationProperties.HelpText="Explain role pack, style, pressure, and absurdity controls."
-                                            Margin="8,0,0,0"
+                                            Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
                                             ToolTip="Explain preset tuning controls" />
                                 </Grid>
                                 <WrapPanel>
                                     <ComboBox x:Name="RandomSeedRolePackPicker"
                                           Width="132"
                                           Style="{StaticResource CompactComboBox}"
-                                          Margin="0,0,6,0"
+                                          Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                           AutomationProperties.Name="Adversarial role pack"
                                           AutomationProperties.HelpText="Choose the persona pack used by random, AI Choice, and Wild Seed generation."
                                           ToolTip="Adversarial role pack"
@@ -1647,7 +1661,7 @@
                                     <ComboBox x:Name="RandomSeedStylePicker"
                                           Width="112"
                                           Style="{StaticResource CompactComboBox}"
-                                          Margin="0,0,6,0"
+                                          Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                           AutomationProperties.Name="Random Seed scenario style"
                                           AutomationProperties.HelpText="Choose the topic and scenario style used by local seeded generation."
                                           ToolTip="Random Seed scenario style"
@@ -1669,7 +1683,7 @@
                                     <ComboBox x:Name="RandomSeedIntensityPicker"
                                           Width="90"
                                           Style="{StaticResource CompactComboBox}"
-                                          Margin="0,0,6,0"
+                                          Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                           AutomationProperties.Name="Debate pressure level"
                                           AutomationProperties.HelpText="Choose how intense or constrained the generated match should feel."
                                           ToolTip="Debate pressure level"
@@ -1698,7 +1712,7 @@
                         </Border>
                         <Border Style="{StaticResource ConfigToolbarCard}">
                             <StackPanel>
-                                <Grid Margin="0,0,0,6">
+                                <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Compact}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
@@ -1712,13 +1726,13 @@
                                                Foreground="{DynamicResource MutedTextBrush}"
                                                FontSize="11"
                                                VerticalAlignment="Center"
-                                               Margin="8,0,0,0" />
+                                               Margin="{DynamicResource Arena.Gap.Inline.Before.Default}" />
                                 </Grid>
                                 <WrapPanel>
                                     <ComboBox x:Name="AgentCountPresetPicker"
                                               Width="112"
                                               Style="{StaticResource CompactComboBox}"
-                                              Margin="0,0,6,0"
+                                              Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                               AutomationProperties.Name="Agent roster preset"
                                               AutomationProperties.HelpText="Choose a common active-agent roster size."
                                               ToolTip="Agent roster preset"
@@ -1732,7 +1746,7 @@
                                     <ComboBox x:Name="AgentCountPicker"
                                               Width="92"
                                               Style="{StaticResource CompactComboBox}"
-                                              Margin="0,0,6,0"
+                                              Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                               AutomationProperties.Name="Active AI agents"
                                               AutomationProperties.HelpText="Choose the exact number of active AI agents in this match."
                                               ToolTip="Active AI agents"
@@ -1749,11 +1763,9 @@
                                     <Button x:Name="ApplyAgentCountButton"
                                             Content="Apply"
                                             Click="ApplyAgentCountButton_Click"
-                                            Style="{StaticResource SecondaryButton}"
+                                            Style="{StaticResource MatchSetupSecondaryActionButton}"
                                             AutomationProperties.Name="Apply agent count"
                                             AutomationProperties.HelpText="Resize the active cast for this session."
-                                            FontSize="11"
-                                            Padding="11,6"
                                             ToolTip="Resize the active cast for this session" />
                                 </WrapPanel>
                             </StackPanel>
@@ -1773,7 +1785,7 @@
                                            Foreground="{DynamicResource TextBrush}"
                                            FontSize="13"
                                            FontWeight="SemiBold"
-                                           Margin="0,0,0,6" />
+                                           Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
                                 <TextBlock x:Name="GenerationHelpBodyText"
                                            Text="Choose how Match Setup generates scenarios and casts."
                                            Style="{StaticResource HintText}"
@@ -1789,7 +1801,7 @@
                                     Click="MatchSetupSectionTab_Click"
                                     Style="{StaticResource SecondaryButton}"
                                     Padding="14,7"
-                                    Margin="0,0,6,0"
+                                    Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                     AutomationProperties.Name="Show scenario preview"
                                     ToolTip="Show the scenario preview" />
                             <Button x:Name="MatchSetupCastTabButton"
@@ -1798,7 +1810,7 @@
                                     Click="MatchSetupSectionTab_Click"
                                     Style="{StaticResource SecondaryButton}"
                                     Padding="14,7"
-                                    Margin="0,0,6,0"
+                                    Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                     AutomationProperties.Name="Show cast preview"
                                     ToolTip="Show the cast personas" />
                             <Button x:Name="MatchSetupMatrixTabButton"
@@ -1807,7 +1819,7 @@
                                     Click="MatchSetupSectionTab_Click"
                                     Style="{StaticResource SecondaryButton}"
                                     Padding="14,7"
-                                    Margin="0,0,6,0"
+                                    Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                     AutomationProperties.Name="Show relationship matrix"
                                     ToolTip="Show the relationship pressure matrix" />
                             <Button x:Name="MatchSetupSavedTabButton"
@@ -1816,7 +1828,7 @@
                                     Click="MatchSetupSectionTab_Click"
                                     Style="{StaticResource SecondaryButton}"
                                     Padding="14,7"
-                                    Margin="0,0,6,0"
+                                    Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                     AutomationProperties.Name="Show saved match state"
                                     ToolTip="Show checkpoints, templates, and session switching" />
                         </WrapPanel>
@@ -1848,12 +1860,12 @@
                                                        FontWeight="SemiBold" />
                                             <TextBlock Text="Give each agent one relationship target and stance. This steers behavior without changing public personas."
                                                        Style="{StaticResource HintText}"
-                                                       Margin="0,3,0,0" />
+                                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}" />
                                             <WrapPanel Margin="0,10,0,0">
                                                 <ComboBox x:Name="RivalryMatrixPatternPicker"
                                                           Width="180"
                                                           Style="{StaticResource CompactComboBox}"
-                                                          Margin="0,0,6,0"
+                                                          Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                                           AutomationProperties.Name="Relationship matrix pattern"
                                                           AutomationProperties.HelpText="Choose a draft relationship pressure pattern for the active cast."
                                                           ToolTip="Relationship matrix pattern">
@@ -1871,11 +1883,9 @@
                                                 <Button x:Name="ApplyRivalryMatrixPatternButton"
                                                         Content="Draft Pattern"
                                                         Click="ApplyRivalryMatrixPatternButton_Click"
-                                                        Style="{StaticResource SecondaryButton}"
+                                                        Style="{StaticResource MatchSetupSecondaryActionButton}"
                                                         AutomationProperties.Name="Draft relationship pattern"
                                                         AutomationProperties.HelpText="Apply the selected relationship pattern locally. Apply Matrix saves it."
-                                                        FontSize="11"
-                                                        Padding="11,6"
                                                         ToolTip="Apply the selected relationship pattern locally. Apply Matrix saves it." />
                                             </WrapPanel>
                                             <TextBlock x:Name="RivalryMatrixInsightText"
@@ -1898,7 +1908,7 @@
                                                   AutomationProperties.Name="Enable relationship matrix"
                                                   AutomationProperties.HelpText="Enable saved relationship pressure between active agents."
                                                   VerticalAlignment="Top"
-                                                  Margin="12,0,0,0"
+                                                  Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}"
                                                   ToolTip="Enable saved relationship pressure between active agents" />
                                     </Grid>
                                 </Border>
@@ -1928,7 +1938,7 @@
                                                 AutomationProperties.Name="Clear relationship matrix"
                                                 AutomationProperties.HelpText="Clear the draft relationship targets and stances. Apply Matrix saves the cleared matrix."
                                                 Padding="12,7"
-                                                Margin="12,0,0,0"
+                                                Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}"
                                                 ToolTip="Clear the draft relationship matrix" />
                                         <Button x:Name="ApplyRivalryMatrixButton"
                                                 Grid.Column="2"
@@ -1938,7 +1948,7 @@
                                                 AutomationProperties.Name="Apply relationship matrix"
                                                 AutomationProperties.HelpText="Save the current relationship matrix to this match."
                                                 Padding="12,7"
-                                                Margin="12,0,0,0"
+                                                Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}"
                                                 ToolTip="Save the current relationship matrix" />
                                     </Grid>
                                 </Border>
@@ -1952,7 +1962,7 @@
                                 Margin="{DynamicResource Arena.Gap.Section}"
                                 HorizontalAlignment="Left">
                             <StackPanel>
-                                <Grid Margin="0,0,0,6">
+                                <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Compact}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
@@ -1967,14 +1977,14 @@
                                             Style="{StaticResource HelpIconButton}"
                                             AutomationProperties.Name="Generation history help"
                                             AutomationProperties.HelpText="Explain replay, new run, and seed copy actions."
-                                            Margin="8,0,0,0"
+                                            Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
                                             ToolTip="Explain generation history" />
                                 </Grid>
                                 <WrapPanel>
                                 <ComboBox x:Name="GenerationHistoryFilterPicker"
                                           Width="116"
                                           Style="{StaticResource CompactComboBox}"
-                                          Margin="0,0,6,0"
+                                          Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                           AutomationProperties.Name="Recent generated match filter"
                                           AutomationProperties.HelpText="Filter recent generated matches by generation type."
                                           ToolTip="Filter recent generated matches"
@@ -1988,7 +1998,7 @@
                                 <ComboBox x:Name="GenerationHistoryPicker"
                                            Width="260"
                                           Style="{StaticResource CompactComboBox}"
-                                          Margin="0,0,6,0"
+                                          Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                           AutomationProperties.Name="Recent generated matches"
                                           AutomationProperties.HelpText="Choose a previously generated match to replay, copy, or open in a new run."
                                           ToolTip="Recent generated matches"
@@ -1996,29 +2006,23 @@
                                 <Button x:Name="ReplayGenerationButton"
                                         Content="Replay"
                                         Click="ReplayGenerationButton_Click"
-                                        Style="{StaticResource SecondaryButton}"
+                                        Style="{StaticResource MatchSetupSecondaryActionButton}"
                                         AutomationProperties.Name="Replay generated match"
                                         AutomationProperties.HelpText="Replay the selected generated match without calling a model."
-                                        FontSize="11"
-                                        Padding="11,6"
-                                        Margin="0,0,6,0"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         ToolTip="Replay the selected generated match without calling a model" />
                                 <Button x:Name="ReplayNewRunButton"
                                         Content="New Run"
                                         Click="ReplayNewRunButton_Click"
-                                        Style="{StaticResource SecondaryButton}"
+                                        Style="{StaticResource MatchSetupSecondaryActionButton}"
                                         AutomationProperties.Name="Create replay run"
                                         AutomationProperties.HelpText="Create a clean session from the selected generated match."
-                                        FontSize="11"
-                                        Padding="11,6"
-                                        Margin="0,0,6,0"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         ToolTip="Create a clean session from the selected generated match for comparison" />
                                 <Grid x:Name="GenerationCopyHost">
                                     <Button x:Name="GenerationCopyButton"
                                             Click="GenerationCopyButton_Click"
-                                            Style="{StaticResource SecondaryButton}"
-                                            FontSize="11"
-                                            Padding="11,6"
+                                            Style="{StaticResource MatchSetupSecondaryActionButton}"
                                             AutomationProperties.Name="Copy from the selected generated match"
                                             AutomationProperties.HelpText="Copy the seed, brief, setup spec, diff, or evaluation rubric for the selected generated match."
                                             ToolTip="Copy seed, brief, spec, diff, or rubric">
@@ -2133,7 +2137,7 @@
                                                     BorderThickness="1"
                                                     CornerRadius="5"
                                                     Padding="8,5"
-                                                    Margin="0,8,0,0"
+                                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
                                                     Visibility="Collapsed">
                                                 <DockPanel LastChildFill="True">
                                                     <Button x:Name="OpenForkParentButton"
@@ -2221,14 +2225,14 @@
                                             Click="SavedStateSaveButton_Click"
                                             Style="{StaticResource PrimaryButton}"
                                             MinWidth="100"
-                                            Margin="0,0,8,0" />
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Default}" />
                                     <Button x:Name="SavedStateLoadButton"
                                             Grid.Column="1"
                                             Content="Load"
                                             Click="SavedStateLoadButton_Click"
                                             Style="{StaticResource SecondaryButton}"
                                             MinWidth="100"
-                                            Margin="0,0,8,0" />
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Default}" />
                                     <Button x:Name="SavedStateDeleteButton"
                                             Grid.Column="2"
                                             Content="Delete"
@@ -2251,7 +2255,7 @@
                                                        Foreground="{DynamicResource MutedTextBrush}"
                                                        AutomationProperties.LiveSetting="Polite"
                                                        TextWrapping="Wrap"
-                                                       Margin="0,4,0,0" />
+                                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}" />
                                         </StackPanel>
                                     </Border>
                                 </Grid>
@@ -2308,7 +2312,7 @@
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <Grid Margin="0,0,0,10">
+                <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -2330,7 +2334,7 @@
                             Click="AgentClearHistoryButton_Click"
                             Style="{StaticResource SecondaryButton}"
                             Padding="12,7"
-                            Margin="12,0,0,0"
+                            Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}"
                             VerticalAlignment="Top"
                             AutomationProperties.Name="Clear Agent chat history"
                             AutomationProperties.HelpText="Clear the Agent conversation, staged command state, and persisted Agent history for this workspace."
@@ -2342,7 +2346,7 @@
                           IsExpanded="False"
                           Style="{StaticResource AgentControlsExpander}">
                 <Border Style="{StaticResource AgentWorkspaceStrip}"
-                        Margin="0,8,0,0">
+                        Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
@@ -2435,7 +2439,7 @@
                                 Style="{StaticResource IconToolbarButton}"
                                 AutomationProperties.Name="Open Agent controls"
                                 AutomationProperties.HelpText="Open prompt presets, Auto Continue, and thread actions."
-                                Margin="0,0,8,0"
+                                Margin="{DynamicResource Arena.Gap.Inline.After.Default}"
                                 VerticalAlignment="Top"
                                 ToolTip="Agent controls">
                             <TextBlock Text="+"
@@ -2459,68 +2463,52 @@
                                                Style="{StaticResource FlyoutSectionLabel}" />
                                     <TextBlock Text="Prompt Presets"
                                                Style="{StaticResource FieldLabel}" />
-                                    <WrapPanel Margin="0,0,0,6">
+                                    <WrapPanel Margin="{DynamicResource Arena.Gap.Stack.After.Compact}">
                                         <Button x:Name="AgentPlanPromptButton"
                                                 Content="Plan"
                                                 Click="AgentComposerMenuAction_Click"
                                                 Style="{StaticResource AgentComposerChipButton}"
-                                                MinHeight="28"
-                                                Padding="10,4"
                                                 ToolTip="Stage a planning prompt." />
                                         <Button x:Name="AgentBreakdownPromptButton"
                                                 Content="Breakdown"
                                                 Click="AgentComposerMenuAction_Click"
                                                 Style="{StaticResource AgentComposerChipButton}"
-                                                MinHeight="28"
-                                                Padding="10,4"
                                                 ToolTip="Stage a task breakdown prompt." />
                                         <Button x:Name="AgentProgressPromptButton"
                                                 Content="Progress"
                                                 Click="AgentComposerMenuAction_Click"
                                                 Style="{StaticResource AgentComposerChipButton}"
-                                                MinHeight="28"
-                                                Padding="10,4"
                                                 ToolTip="Stage a progress update prompt." />
                                         <Button x:Name="AgentCommandPromptButton"
                                                 Content="Commands"
                                                 Click="AgentComposerMenuAction_Click"
                                                 Style="{StaticResource AgentComposerChipButton}"
-                                                MinHeight="28"
-                                                Padding="10,4"
                                                 ToolTip="Stage a command proposal prompt." />
                                         <Button x:Name="AgentBuildAppPromptButton"
                                                 Content="Build App"
                                                 Click="AgentComposerMenuAction_Click"
                                                 Style="{StaticResource AgentComposerChipButton}"
-                                                MinHeight="28"
-                                                Padding="10,4"
                                                 ToolTip="Stage an app-building prompt that asks for an approvable first command." />
                                         <Button x:Name="AgentNextStepPromptButton"
                                                 Content="Next Step"
                                                 Click="AgentComposerMenuAction_Click"
                                                 Style="{StaticResource AgentComposerChipButton}"
-                                                MinHeight="28"
-                                                Padding="10,4"
                                                 ToolTip="Stage a follow-up prompt that reviews terminal output and asks for the next command." />
                                         <Button x:Name="AgentVerifyPromptButton"
                                                 Content="Verify"
                                                 Click="AgentComposerMenuAction_Click"
                                                 Style="{StaticResource AgentComposerChipButton}"
-                                                MinHeight="28"
-                                                Padding="10,4"
                                                 ToolTip="Stage a verification prompt that asks for one build, run, or test command." />
                                         <Button x:Name="AgentRescueCommandButton"
                                                 Content="Rescue"
                                                 Click="AgentComposerMenuAction_Click"
                                                 Style="{StaticResource AgentComposerChipButton}"
-                                                MinHeight="28"
-                                                Padding="10,4"
                                                 ToolTip="Stage a recovery prompt that forces one runnable command proposal." />
                                     </WrapPanel>
                                     <Border Height="1"
                                             Background="{DynamicResource DisabledBorderBrush}"
                                             Opacity="0.7"
-                                            Margin="0,0,0,10" />
+                                            Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
                                     <TextBlock Text="Session"
                                                Style="{StaticResource FieldLabel}" />
                                     <UniformGrid Columns="2"
@@ -2529,8 +2517,6 @@
                                                 Content="Auto Continue"
                                                 Click="AgentComposerMenuAction_Click"
                                                 Style="{StaticResource AgentComposerChipButton}"
-                                                MinHeight="28"
-                                                Padding="10,4"
                                                 AutomationProperties.Name="Auto continue Agent next steps"
                                                 AutomationProperties.HelpText="Automatically ask for follow-up Agent commands after command output while preserving working-directory preview validation and loop guards."
                                                 ToolTip="Enable bounded follow-up loop" />
@@ -2538,8 +2524,6 @@
                                                 Content="Clear"
                                                 Click="AgentComposerMenuAction_Click"
                                                 Style="{StaticResource AgentComposerChipButton}"
-                                                MinHeight="28"
-                                                Padding="10,4"
                                                 AutomationProperties.Name="Clear Agent thread"
                                                 AutomationProperties.HelpText="Clear the visible Agent thread and reset staged command state."
                                                 ToolTip="Clear Agent thread" />
@@ -2547,8 +2531,6 @@
                                                 Content="Team: Full"
                                                 Click="AgentTeamModeButton_Click"
                                                 Style="{StaticResource AgentComposerChipButton}"
-                                                MinHeight="28"
-                                                Padding="10,4"
                                                 AutomationProperties.Name="Toggle Agent team mode"
                                                 AutomationProperties.HelpText="Switch between the full Planner, Reviewer, and Builder loop and a faster Builder-only loop for this session."
                                                 ToolTip="Toggle Planner and Reviewer for this session" />
@@ -2575,7 +2557,7 @@
                                 Style="{StaticResource IconToolbarButton}"
                                 AutomationProperties.Name="Stop Agent collaboration"
                                 AutomationProperties.HelpText="Cancel the active Agent response."
-                                Margin="8,0,0,0"
+                                Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
                                 BorderBrush="{DynamicResource DangerBorderBrush}"
                                 Foreground="{DynamicResource DangerTextBrush}"
                                 IsEnabled="False"
@@ -2626,8 +2608,6 @@
                                 <Button x:Name="AgentCommandApproveAllButton"
                                         Content="Approval"
                                         Style="{StaticResource AgentAutonomyButton}"
-                                        MinHeight="28"
-                                        Padding="10,4"
                                         AutomationProperties.Name="Approval mode for Agent commands"
                                         AutomationProperties.HelpText="Auto-run preview-ready Agent commands for this workspace session while preserving working-directory preview validation and blocked-preview stops."
                                         ToolTip="Approval mode is active. Click to enable Full Access session autonomy." />
@@ -2670,7 +2650,7 @@
                             Click="CollaborateClearButton_Click"
                             Style="{StaticResource SecondaryButton}"
                             Padding="12,7"
-                            Margin="12,0,0,0"
+                            Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}"
                             VerticalAlignment="Top" />
                 </Grid>
                 <Border Grid.Row="1"
@@ -2698,37 +2678,29 @@
                             <ColumnDefinition Width="58" />
                         </Grid.ColumnDefinitions>
                         <WrapPanel Grid.ColumnSpan="3"
-                                   Margin="0,0,0,10">
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
                             <Button x:Name="CollaboratePlanPromptButton"
                                     Content="Plan"
                                     Click="CollaboratePlanPromptButton_Click"
-                                    Style="{StaticResource CompactButton}"
-                                    MinHeight="28"
-                                    Padding="10,4"
-                                    Margin="0,0,8,0"
+                                    Style="{StaticResource CollaborateQuickActionButton}"
+                                    Margin="{DynamicResource Arena.Gap.Inline.After.Default}"
                                     ToolTip="Shape the current prompt into an implementation-plan request." />
                             <Button x:Name="CollaborateCritiquePromptButton"
                                     Content="Critique"
                                     Click="CollaborateCritiquePromptButton_Click"
-                                    Style="{StaticResource CompactButton}"
-                                    MinHeight="28"
-                                    Padding="10,4"
-                                    Margin="0,0,8,0"
+                                    Style="{StaticResource CollaborateQuickActionButton}"
+                                    Margin="{DynamicResource Arena.Gap.Inline.After.Default}"
                                     ToolTip="Shape the current prompt into a review and risk-finding request." />
                             <Button x:Name="CollaborateShipPromptButton"
                                     Content="Ship"
                                     Click="CollaborateShipPromptButton_Click"
-                                    Style="{StaticResource CompactButton}"
-                                    MinHeight="28"
-                                    Padding="10,4"
-                                    Margin="0,0,8,0"
+                                    Style="{StaticResource CollaborateQuickActionButton}"
+                                    Margin="{DynamicResource Arena.Gap.Inline.After.Default}"
                                     ToolTip="Shape the current prompt into a release checklist request." />
                             <Button x:Name="CollaborateExplainPromptButton"
                                     Content="Explain"
                                     Click="CollaborateExplainPromptButton_Click"
-                                    Style="{StaticResource CompactButton}"
-                                    MinHeight="28"
-                                    Padding="10,4"
+                                    Style="{StaticResource CollaborateQuickActionButton}"
                                     ToolTip="Shape the current prompt into a clear explanation request." />
                         </WrapPanel>
                         <TextBox x:Name="CollaboratePromptText"
@@ -2749,7 +2721,7 @@
                                 Style="{StaticResource IconToolbarButton}"
                                 AutomationProperties.Name="Stop collaboration"
                                 AutomationProperties.HelpText="Cancel the active AI Collaborate response."
-                                Margin="8,0,0,0"
+                                Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
                                 VerticalAlignment="Center"
                                 BorderBrush="{DynamicResource DangerBorderBrush}"
                                 Foreground="{DynamicResource DangerTextBrush}"
@@ -2794,7 +2766,7 @@
                                        FontSize="11"
                                        TextAlignment="Right"
                                        VerticalAlignment="Center"
-                                       Margin="0,0,8,0" />
+                                       Margin="{DynamicResource Arena.Gap.Inline.After.Default}" />
                             <Button x:Name="CollaborateContextReceiptButton"
                                     Content="Receipt"
                                     Style="{StaticResource CompactButton}"
@@ -2821,7 +2793,7 @@
                     <StackPanel>
                         <TextBlock Text="Arena Controls"
                                    Style="{StaticResource RightRailSectionTitle}"
-                                   Margin="0,0,0,6" />
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
                         <UniformGrid x:Name="ArenaControlGrid" Columns="3" Margin="0,0,-6,-6">
                             <Grid>
                                 <Button x:Name="AutoChatButton"
@@ -2899,7 +2871,7 @@
                             </Button>
                         </UniformGrid>
                         <TextBlock x:Name="ArenaControlReadinessText"
-                                   Margin="0,8,0,0"
+                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
                                    Style="{StaticResource HintText}"
                                    Foreground="{DynamicResource DangerTextBrush}"
                                    Visibility="Collapsed"
@@ -2966,7 +2938,7 @@
 
                 <Border Style="{StaticResource RightRailCard}">
                     <StackPanel>
-                        <Grid Margin="0,0,0,10">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
@@ -2987,13 +2959,13 @@
                                     Content="Public"
                                     Click="OperatorPublicRouteButton_Click"
                                     Style="{StaticResource OperatorRouteButton}"
-                                    Margin="0,0,5,0"
+                                    Margin="{DynamicResource Arena.Gap.Inline.After.Tight}"
                                     ToolTip="Add a public operator turn to the transcript." />
                             <Button x:Name="OperatorPrivateRouteButton"
                                     Content="Private"
                                     Click="OperatorPrivateRouteButton_Click"
                                     Style="{StaticResource OperatorRouteButton}"
-                                    Margin="0,0,5,0"
+                                    Margin="{DynamicResource Arena.Gap.Inline.After.Tight}"
                                     ToolTip="Write private guidance into agent memory notes." />
                             <Button x:Name="OperatorNarratorRouteButton"
                                     Content="Narrator"
@@ -3007,7 +2979,7 @@
                                    ToolTip="Operator route visibility"
                                    AutomationProperties.Name="Operator route visibility"
                                    AutomationProperties.HelpText="Explains who can see the staged operator turn."
-                                   Margin="0,0,0,10" />
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
                         <Grid x:Name="OperatorPrivateTargetRow" Visibility="Collapsed" Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -3022,7 +2994,7 @@
                                        FontSize="11"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center"
-                                       Margin="0,0,8,0" />
+                                       Margin="{DynamicResource Arena.Gap.Inline.After.Default}" />
                             <ComboBox x:Name="OperatorPrivateTargetPicker"
                                       Grid.Column="1"
                                       Style="{StaticResource CompactComboBox}"
@@ -3034,7 +3006,7 @@
                                        Foreground="{DynamicResource MutedTextBrush}"
                                        FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                        TextWrapping="Wrap"
-                                       Margin="0,4,0,0"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}"
                                        Text="Writes private memory notes; no public transcript turn." />
                         </Grid>
                         <Expander Header="Steering aids"
@@ -3050,31 +3022,23 @@
                                            ToolTip="Route-aware operator interventions"
                                            AutomationProperties.Name="Operator quick interventions"
                                            AutomationProperties.HelpText="Lists suggested operator interventions and their routes."
-                                           Margin="0,0,0,6" />
+                                           Margin="{DynamicResource Arena.Gap.Stack.After.Compact}" />
                                 <UniformGrid Columns="2" Margin="0,0,-5,6">
                                     <Button x:Name="OperatorQuickInterventionAButton"
-                                            Style="{StaticResource CompactButton}"
-                                            MinHeight="30"
-                                            Padding="7,4"
+                                            Style="{StaticResource CompactRailActionButton}"
                                             Margin="0,0,5,5"
                                             ToolTip="Stage an operator intervention." />
                                     <Button x:Name="OperatorQuickInterventionBButton"
-                                            Style="{StaticResource CompactButton}"
-                                            MinHeight="30"
-                                            Padding="7,4"
+                                            Style="{StaticResource CompactRailActionButton}"
                                             Margin="0,0,5,5"
                                             ToolTip="Stage an operator intervention." />
                                     <Button x:Name="OperatorQuickInterventionCButton"
-                                            Style="{StaticResource CompactButton}"
-                                            MinHeight="30"
-                                            Padding="7,4"
-                                            Margin="0,0,5,0"
+                                            Style="{StaticResource CompactRailActionButton}"
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Tight}"
                                             ToolTip="Stage an operator intervention." />
                                     <Button x:Name="OperatorQuickInterventionDButton"
-                                            Style="{StaticResource CompactButton}"
-                                            MinHeight="30"
-                                            Padding="7,4"
-                                            Margin="0,0,5,0"
+                                            Style="{StaticResource CompactRailActionButton}"
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Tight}"
                                             ToolTip="Stage an operator intervention." />
                                 </UniformGrid>
                                 <Grid>
@@ -3162,7 +3126,7 @@
                                 Click="SendTurnButton_Click"
                                 Style="{StaticResource PrimaryButton}"
                                 MinHeight="36"
-                                Margin="0,8,0,0" />
+                                Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                     </StackPanel>
                 </Border>
 
@@ -3176,7 +3140,7 @@
                                        Text="Ready for a software task."
                                        Style="{StaticResource HintText}"
                                        TextWrapping="Wrap"
-                                       Margin="0,0,0,4" />
+                                       Margin="{DynamicResource Arena.Gap.Stack.After.Tight}" />
                             <TextBlock x:Name="AgentRunbookMetaText"
                                        Text="No active runbook. A task creates one automatically."
                                        Style="{StaticResource HintText}"
@@ -3209,10 +3173,8 @@
                             <StackPanel x:Name="AgentOutputItems" />
                             <Button x:Name="AgentCommandStageArtifactButton"
                                     Content="Use Artifact"
-                                    Style="{StaticResource CompactButton}"
-                                    MinHeight="30"
-                                    Padding="7,4"
-                                    Margin="0,8,0,0"
+                                    Style="{StaticResource CompactRailActionButton}"
+                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
                                     IsEnabled="False"
                                     AutomationProperties.Name="Stage Agent artifact command"
                                     AutomationProperties.HelpText="Stage the suggested generated-artifact preview command in the approval rail."
@@ -3231,11 +3193,11 @@
                                        Text="Source: manual command"
                                        Style="{StaticResource HintText}"
                                        TextWrapping="Wrap"
-                                       Margin="0,0,0,10" />
+                                       Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
                             <TextBlock Text="Shell" Style="{StaticResource FieldLabel}" />
                             <ComboBox x:Name="AgentCommandShellPicker"
                                       Style="{StaticResource FormComboBox}"
-                                      Margin="0,0,0,10">
+                                      Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
                                 <ComboBoxItem Content="Terminal" Tag="Terminal" IsSelected="True" />
                                 <ComboBoxItem Content="PowerShell" Tag="PowerShell" />
                             </ComboBox>
@@ -3255,23 +3217,17 @@
                                          Margin="0,8,-6,8">
                                 <Button x:Name="AgentCommandPreviewButton"
                                         Content="Preview"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0" />
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}" />
                                 <Button x:Name="AgentCommandRunButton"
                                         Content="Approve"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0"
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         IsEnabled="False" />
                                 <Button x:Name="AgentCommandStopButton"
                                         Content="Stop"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0"
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         IsEnabled="False"
                                         BorderBrush="{DynamicResource DangerBorderBrush}"
                                         Foreground="{DynamicResource DangerTextBrush}"
@@ -3280,38 +3236,30 @@
                                         ToolTip="Stop active command" />
                                 <Button x:Name="AgentCommandRejectButton"
                                         Content="Reject"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0"
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         IsEnabled="False" />
                             </UniformGrid>
                             <UniformGrid Columns="3"
                                          Margin="0,0,-6,8">
                                 <Button x:Name="AgentCommandCopyButton"
                                         Content="Copy"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0"
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         AutomationProperties.Name="Copy Agent command proposal"
                                         AutomationProperties.HelpText="Copy the staged command proposal."
                                         ToolTip="Copy command proposal" />
                                 <Button x:Name="AgentCommandClearButton"
                                         Content="Clear"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0"
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         AutomationProperties.Name="Clear Agent command proposal"
                                         AutomationProperties.HelpText="Clear the staged command proposal and reset preview state."
                                         ToolTip="Clear command proposal" />
                                 <Button x:Name="AgentCommandUseHeldButton"
                                         Content="Use Held"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0"
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         IsEnabled="False"
                                         AutomationProperties.Name="Use held Agent command proposal"
                                         AutomationProperties.HelpText="Stage the latest Builder proposal that was held while another command was in the approval rail."
@@ -3357,20 +3305,16 @@
                                          Margin="0,8,-6,0">
                                 <Button x:Name="AgentCommandCopyOutputButton"
                                         Content="Copy Output"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0"
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         IsEnabled="False"
                                         AutomationProperties.Name="Copy Agent command output"
                                         AutomationProperties.HelpText="Copy the latest Agent terminal output, including stdout and stderr."
                                         ToolTip="Copy terminal output" />
                                 <Button x:Name="AgentCommandCopyReceiptButton"
                                         Content="Copy Receipt"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0"
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         IsEnabled="False"
                                         AutomationProperties.Name="Copy Agent file receipt"
                                         AutomationProperties.HelpText="Copy the latest Agent file-change receipt."
@@ -3380,35 +3324,29 @@
                                        Text="No command result yet. Run an approved command to produce a brief."
                                        Style="{StaticResource HintText}"
                                        TextWrapping="Wrap"
-                                       Margin="0,8,0,0" />
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                             <UniformGrid Columns="3"
                                           Margin="0,8,-6,0">
                                 <Button x:Name="AgentCommandCopyBriefButton"
                                         Content="Copy Brief"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0"
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         IsEnabled="False"
                                         AutomationProperties.Name="Copy Agent work brief"
                                         AutomationProperties.HelpText="Copy a compact handoff brief with task, autonomy, latest command result, changed files, and next action."
                                         ToolTip="Copy Agent work brief" />
                                 <Button x:Name="AgentCommandStageNextButton"
                                         Content="Stage Next"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0"
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         IsEnabled="False"
                                         AutomationProperties.Name="Stage Agent next-step prompt"
                                         AutomationProperties.HelpText="Stage a result-aware follow-up or repair prompt from the latest command output."
                                         ToolTip="Stage result-aware follow-up prompt" />
                                 <Button x:Name="AgentCommandStageVerifyButton"
                                         Content="Stage Verify"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0"
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         IsEnabled="False"
                                         AutomationProperties.Name="Stage Agent verification prompt"
                                         AutomationProperties.HelpText="Stage a verification prompt based on the latest Agent command output and file receipt."
@@ -3429,20 +3367,16 @@
                                          Margin="0,8,-6,0">
                                 <Button x:Name="AgentCommandReplayLastButton"
                                         Content="Replay Last"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0"
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         IsEnabled="False"
                                         AutomationProperties.Name="Replay last Agent command"
                                         AutomationProperties.HelpText="Stage the most recent Agent command from history for preview."
                                         ToolTip="Replay latest command" />
                                 <Button x:Name="AgentCommandCopyHistoryButton"
                                         Content="Copy History"
-                                        Style="{StaticResource CompactButton}"
-                                        MinHeight="30"
-                                        Padding="7,4"
-                                        Margin="0,0,6,0"
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
                                         IsEnabled="False"
                                         AutomationProperties.Name="Copy Agent command history"
                                         AutomationProperties.HelpText="Copy recent Agent commands with statuses and file-change summaries."
@@ -3490,7 +3424,7 @@
                                 <ComboBoxItem Content="8" Tag="8" />
                             </ComboBox>
                             <TextBlock Text="Provider" Style="{StaticResource FieldLabel}" />
-                            <Border Style="{StaticResource WorkflowInfoCard}" Margin="0,0,0,10">
+                            <Border Style="{StaticResource WorkflowInfoCard}" Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
                                 <TextBlock x:Name="CollaborateProviderText"
                                            Text="-"
                                            Style="{StaticResource HintText}" />
@@ -3522,21 +3456,17 @@
                                 <Button x:Name="CollaborateAddDocumentButton"
                                         Content="Add Doc"
                                         Click="CollaborateAddDocumentButton_Click"
-                                        Style="{StaticResource CompactButton}"
-                                        FontSize="{DynamicResource Arena.Type.CaptionSize}"
-                                        MinHeight="30"
-                                        Padding="7,4" />
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        FontSize="{DynamicResource Arena.Type.CaptionSize}" />
                                 <Button x:Name="CollaborateClearDocumentsButton"
                                         Grid.Column="2"
                                         Content="Clear"
                                         Click="CollaborateClearDocumentsButton_Click"
-                                        Style="{StaticResource CompactButton}"
-                                        FontSize="{DynamicResource Arena.Type.CaptionSize}"
-                                        MinHeight="30"
-                                        Padding="7,4" />
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        FontSize="{DynamicResource Arena.Type.CaptionSize}" />
                             </Grid>
                             <StackPanel x:Name="CollaborateToolDocumentItems"
-                                        Margin="0,8,0,0" />
+                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                             </StackPanel>
                             </Expander>
 
@@ -3562,21 +3492,17 @@
                                 <Button x:Name="CollaborateRunCalculatorButton"
                                         Content="Run"
                                         Click="CollaborateRunCalculatorButton_Click"
-                                        Style="{StaticResource CompactButton}"
-                                        FontSize="{DynamicResource Arena.Type.CaptionSize}"
-                                        MinHeight="30"
-                                        Padding="7,4" />
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        FontSize="{DynamicResource Arena.Type.CaptionSize}" />
                                 <Button x:Name="CollaborateClearCalculationsButton"
                                         Grid.Column="2"
                                         Content="Clear"
                                         Click="CollaborateClearCalculationsButton_Click"
-                                        Style="{StaticResource CompactButton}"
-                                        FontSize="{DynamicResource Arena.Type.CaptionSize}"
-                                        MinHeight="30"
-                                        Padding="7,4" />
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        FontSize="{DynamicResource Arena.Type.CaptionSize}" />
                             </Grid>
                             <StackPanel x:Name="CollaborateCalculationItems"
-                                        Margin="0,8,0,0" />
+                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                             </StackPanel>
                             </Expander>
 
@@ -3602,21 +3528,17 @@
                                 <Button x:Name="CollaborateSaveMemoryButton"
                                         Content="Save"
                                         Click="CollaborateSaveMemoryButton_Click"
-                                        Style="{StaticResource CompactButton}"
-                                        FontSize="{DynamicResource Arena.Type.CaptionSize}"
-                                        MinHeight="30"
-                                        Padding="7,4" />
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        FontSize="{DynamicResource Arena.Type.CaptionSize}" />
                                 <Button x:Name="CollaborateClearMemoryButton"
                                         Grid.Column="2"
                                         Content="Clear"
                                         Click="CollaborateClearMemoryButton_Click"
-                                        Style="{StaticResource CompactButton}"
-                                        FontSize="{DynamicResource Arena.Type.CaptionSize}"
-                                        MinHeight="30"
-                                        Padding="7,4" />
+                                        Style="{StaticResource CompactRailActionButton}"
+                                        FontSize="{DynamicResource Arena.Type.CaptionSize}" />
                             </Grid>
                             <StackPanel x:Name="CollaborateMemoryItems"
-                                        Margin="0,8,0,0" />
+                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                             </StackPanel>
                             </Expander>
                         </StackPanel>
@@ -3682,7 +3604,7 @@
                         <TextBlock Text="Models, internet, appearance, and app behavior"
                                    Style="{StaticResource PanelSubtitle}" />
                         <Border Style="{StaticResource SettingsStatusCard}"
-                                Margin="0,8,0,0">
+                                Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                             <TextBlock x:Name="SettingsProviderStatusText"
                                        Foreground="{DynamicResource MutedTextBrush}"
                                        FontWeight="SemiBold"
@@ -3692,7 +3614,7 @@
                         </Border>
                         <TextBox x:Name="SettingsSearchText"
                                  Style="{StaticResource FormTextBox}"
-                                  Margin="0,8,0,0"
+                                  Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
                                   TextChanged="SettingsSearchText_TextChanged"
                                   Tag="Search settings..."
                                   ToolTip="Filter settings sections by name or field text. Matching sections expand automatically." />
@@ -3715,7 +3637,7 @@
                                     Click="SettingsSearchClearButton_Click"
                                     Style="{StaticResource CompactButton}"
                                     MinHeight="28"
-                                    Margin="8,0,0,0"
+                                    Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
                                     AutomationProperties.Name="Clear settings search" />
                         </Grid>
                     </StackPanel>
@@ -3744,7 +3666,7 @@
                     <StackPanel>
                         <TextBlock Text="Connect a provider and choose the model AI Arena should call. The optional groups below handle saved setups, role routing, and local-model tuning."
                                    Style="{StaticResource HintText}"
-                                   Margin="0,0,0,10"
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                    TextWrapping="Wrap" />
                         <TextBlock Text="Provider" Style="{StaticResource FieldLabel}" />
                         <Grid Margin="{DynamicResource Arena.Gap.Stack}">
@@ -3843,7 +3765,7 @@
                         <TextBlock x:Name="ProviderTestStatus"
                                    Style="{StaticResource CollapsibleHintText}"
                                    AutomationProperties.LiveSetting="Polite"
-                                   Margin="0,8,0,0" />
+                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                         <TextBlock x:Name="ProviderModelsStatus"
                                    Style="{StaticResource HintText}"
                                    AutomationProperties.LiveSetting="Polite"
@@ -3862,7 +3784,7 @@
                                           Style="{StaticResource FormComboBox}"
                                           Margin="{DynamicResource Arena.Gap.Stack}"
                                           ToolTip="Pick a saved provider + model routing setup, or type a new name and press Save." />
-                                <Grid Margin="0,0,0,6">
+                                <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Compact}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="8" />
@@ -3974,7 +3896,7 @@
                         </Grid>
 
                         <TextBlock Text="Per-role response overrides" Style="{StaticResource FieldLabel}" Margin="0,2,0,6" />
-                        <Grid Margin="0,0,0,4">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Tight}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="96" />
                                 <ColumnDefinition Width="8" />
@@ -4038,7 +3960,7 @@
                                   IsExpanded="False">
                             <StackPanel>
                         <Border Style="{StaticResource SettingsStatusCard}"
-                                Margin="0,0,0,10">
+                                Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
                             <StackPanel>
                                 <TextBlock Text="Scan this PC and the connected provider, then recommend a model spread for the arena roles."
                                            Style="{StaticResource HintText}"
@@ -4087,10 +4009,10 @@
                                                    Style="{StaticResource HintText}" />
                                         <TextBlock x:Name="AutoConfigureHardwareText"
                                                    Style="{StaticResource CollapsibleHintText}"
-                                                   Margin="0,4,0,0" />
+                                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}" />
                                         <TextBlock x:Name="AutoConfigureProviderText"
                                                    Style="{StaticResource CollapsibleHintText}"
-                                                   Margin="0,4,0,0" />
+                                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}" />
                                     </StackPanel>
                                     <Button x:Name="ApplyAutoConfigureButton"
                                             Grid.Column="2"
@@ -4296,7 +4218,7 @@
                                   Style="{StaticResource ToggleSwitchCheckBox}"
                                   Foreground="{DynamicResource TextBrush}"
                                   FontWeight="SemiBold"
-                                  Margin="0,0,0,10"
+                                  Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                   IsChecked="True"
                                   Checked="ProviderNativeOptions_CheckedChanged"
                                   Unchecked="ProviderNativeOptions_CheckedChanged"
@@ -4307,13 +4229,13 @@
                 </Expander>
 
                 <Expander x:Name="AgentSettingsExpander" Header="Agent workspace" Tag="&#xE99A;" Style="{StaticResource SettingsExpander}" IsExpanded="False">
-                    <StackPanel Margin="0,8,0,0">
+                    <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                         <CheckBox x:Name="AgentWorkspaceCheckBox"
                                   Content="Show Agent workspace in navigation"
                                   Style="{StaticResource ToggleSwitchCheckBox}"
                                   Foreground="{DynamicResource TextBrush}"
                                   FontWeight="SemiBold"
-                                  Margin="0,0,0,10"
+                                  Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                   Checked="AgentWorkspaceCheckBox_Changed"
                                   Unchecked="AgentWorkspaceCheckBox_Changed"
                                   AutomationProperties.Name="Toggle Agent workspace navigation"
@@ -4324,7 +4246,7 @@
                                   Style="{StaticResource ToggleSwitchCheckBox}"
                                   Foreground="{DynamicResource TextBrush}"
                                   FontWeight="SemiBold"
-                                  Margin="0,0,0,10"
+                                  Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                   Checked="AgentSettingsCheckBox_CheckedChanged"
                                   Unchecked="AgentSettingsCheckBox_CheckedChanged"
                                   ToolTip="Start Agent sessions in the faster Builder-only loop instead of the full Planner, Reviewer, and Builder loop. The composer Team button still toggles it per session." />
@@ -4333,7 +4255,7 @@
                                   Style="{StaticResource ToggleSwitchCheckBox}"
                                   Foreground="{DynamicResource TextBrush}"
                                   FontWeight="SemiBold"
-                                  Margin="0,0,0,10"
+                                  Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                   IsChecked="True"
                                   Checked="StreamModelResponsesCheckBox_CheckedChanged"
                                   Unchecked="StreamModelResponsesCheckBox_CheckedChanged"
@@ -4402,17 +4324,17 @@
                         <TextBlock x:Name="AgentSettingsStatusText"
                                    Style="{StaticResource HintText}"
                                    AutomationProperties.LiveSetting="Polite"
-                                   Margin="0,8,0,0"
+                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
                                    Text="Changes apply to the next Agent step; token budgets and timeouts take effect immediately." />
                     </StackPanel>
                 </Expander>
 
                 <Expander Header="Auto Chat" Tag="&#xE768;" Style="{StaticResource SettingsExpander}" IsExpanded="False">
-                    <StackPanel Margin="0,8,0,0">
+                    <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                         <TextBlock Text="Auto Chat cadence" Style="{StaticResource FieldLabel}" />
                         <ComboBox x:Name="AutoChatCadencePicker"
                                   Style="{StaticResource FormComboBox}"
-                                  Margin="0,0,0,4">
+                                  Margin="{DynamicResource Arena.Gap.Stack.After.Tight}">
                             <ComboBoxItem Content="0.5s" Tag="0.5" />
                             <ComboBoxItem Content="1.2s" Tag="1.2" IsSelected="True" />
                             <ComboBoxItem Content="3s" Tag="3" />
@@ -4422,7 +4344,7 @@
                 </Expander>
 
                 <Expander Header="Voice TTS" Tag="&#xE189;" Style="{StaticResource SettingsExpander}" IsExpanded="False">
-                    <StackPanel Margin="0,8,0,0">
+                    <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                         <CheckBox x:Name="VoiceTtsEnabledCheckBox"
                                   Content="Enable voice playback"
                                   Style="{StaticResource ToggleSwitchCheckBox}"
@@ -4432,7 +4354,7 @@
                                   Unchecked="VoiceTtsSettings_Changed"
                                   AutomationProperties.Name="Enable voice TTS"
                                   AutomationProperties.HelpText="Enable local Windows text to speech playback for arena narration."
-                                  Margin="0,0,0,6"
+                                  Margin="{DynamicResource Arena.Gap.Stack.After.Compact}"
                                   ToolTip="Enable local Windows text to speech playback" />
                         <CheckBox x:Name="VoiceTtsAutoNarratorCheckBox"
                                   Content="Auto-read narrator turns"
@@ -4442,7 +4364,7 @@
                                   Unchecked="VoiceTtsSettings_Changed"
                                   AutomationProperties.Name="Auto-read narrator turns"
                                   AutomationProperties.HelpText="Automatically read Narrator turns aloud after they are added to the transcript."
-                                  Margin="0,0,0,10"
+                                  Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                   ToolTip="Automatically read Narrator turns aloud" />
                         <TextBlock Text="Windows voice" Style="{StaticResource FieldLabel}" />
                         <ComboBox x:Name="VoiceTtsVoicePicker"
@@ -4450,7 +4372,7 @@
                                   Style="{StaticResource FormComboBox}"
                                   AutomationProperties.Name="Voice TTS voice"
                                   AutomationProperties.HelpText="Choose an installed Windows voice for AI Arena text to speech."
-                                  Margin="0,0,0,10"
+                                  Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                   ToolTip="Choose an installed Windows voice" />
                         <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
@@ -4476,7 +4398,7 @@
                                        TextAlignment="Right"
                                        VerticalAlignment="Center" />
                         </Grid>
-                        <Grid Margin="0,0,0,10">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="72" />
                                 <ColumnDefinition Width="*" />
@@ -4536,7 +4458,7 @@
                 </Expander>
 
                 <Expander Header="Visuals" Tag="&#xE8A7;" Style="{StaticResource SettingsExpander}" IsExpanded="False">
-                    <StackPanel Margin="0,8,0,0">
+                    <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                         <TextBlock Text="Application theme" Style="{StaticResource FieldLabel}" />
                         <ComboBox x:Name="ThemePicker"
                                   Style="{StaticResource FormComboBox}"
@@ -4546,10 +4468,10 @@
                                   AutomationProperties.Name="Application theme"
                                   AutomationProperties.HelpText="Choose an AI Arena color theme. System automatically follows the Windows high-contrast preference."
                                   ToolTip="Choose an application theme"
-                                  Margin="0,0,0,4" />
+                                  Margin="{DynamicResource Arena.Gap.Stack.After.Tight}" />
                         <TextBlock Text="System follows the Windows high-contrast preference. Other themes stay fixed until you change them."
                                    Style="{StaticResource HintText}"
-                                   Margin="0,0,0,10"
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                    TextWrapping="Wrap" />
                         <TextBlock Text="Transcript avatars" Style="{StaticResource FieldLabel}" />
                         <ComboBox x:Name="AvatarStylePicker"
@@ -4564,7 +4486,7 @@
                         </ComboBox>
                         <TextBlock Text="Stronger robot identities make agents easier to recognize at a glance."
                                    Style="{StaticResource HintText}"
-                                   Margin="0,0,0,10" />
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
                         <TextBlock Text="System event avatar" Style="{StaticResource FieldLabel}" />
                         <ComboBox x:Name="SystemGlyphStylePicker"
                                   SelectionChanged="VisualSettings_Changed"
@@ -4578,7 +4500,7 @@
                         <ComboBox x:Name="TopStripModePicker"
                                   SelectionChanged="VisualSettings_Changed"
                                   Style="{StaticResource FormComboBox}"
-                                  Margin="0,0,0,10"
+                                  Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                   ToolTip="Choose what appears above the transcript cards.">
                             <ComboBoxItem Content="Discourse diagnostics" Tag="diagnostics" />
                             <ComboBoxItem Content="System telemetry" Tag="telemetry" />
@@ -4592,7 +4514,7 @@
                                   FontWeight="SemiBold"
                                   Checked="VisualSettings_Changed"
                                   Unchecked="VisualSettings_Changed"
-                                  Margin="0,0,0,6"
+                                  Margin="{DynamicResource Arena.Gap.Stack.After.Compact}"
                                   ToolTip="Show the top-rail Debug menu for experimental diagnostics. Remembered across restarts." />
                         <TextBlock Text="Debug controls expose optional diagnostics, AI World, and other experimental tools without cluttering the default shell."
                                    Style="{StaticResource HintText}"
@@ -4601,7 +4523,7 @@
                 </Expander>
 
                 <Expander Header="PowerShell Control" Tag="&#xE756;" Style="{StaticResource SettingsExpander}" IsExpanded="False">
-                    <StackPanel Margin="0,8,0,0">
+                    <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                         <CheckBox x:Name="ControlPlaneCheckBox"
                                   Content="PowerShell control plane"
                                   Style="{StaticResource ToggleSwitchCheckBox}"
@@ -4620,28 +4542,28 @@
                 </Expander>
 
                 <Expander Header="Internet Access" Tag="&#xE774;" Style="{StaticResource SettingsExpander}" IsExpanded="False">
-                    <StackPanel Margin="0,8,0,0">
+                    <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                         <CheckBox x:Name="UseInternetCheckBox"
                                   Content="Internet Access"
                                   Style="{StaticResource ToggleSwitchCheckBox}"
                                   Foreground="{DynamicResource TextBrush}"
                                   FontWeight="SemiBold"
-                                  Margin="0,0,0,10" />
+                                  Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
                         <TextBlock x:Name="InternetHintText"
                                    Text="Internet On lets agents and narrator use local search and fetch whenever current or external facts would improve a turn. Internet Off blocks app-level internet."
                                    Style="{StaticResource HintText}"
-                                   Margin="0,0,0,10" />
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
                         <TextBlock x:Name="InternetBackendStatusText"
                                    Text="Local search: checking..."
                                    Style="{StaticResource HintText}"
                                    AutomationProperties.LiveSetting="Polite"
-                                   Margin="0,0,0,10" />
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
                         <Button x:Name="TestInternetButton"
                                 Content="Test Internet"
                                 Style="{StaticResource SecondaryButton}"
                                 HorizontalAlignment="Left"
                                 MinWidth="132"
-                                Margin="0,0,0,10"
+                                Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                 AutomationProperties.Name="Test Internet"
                                 AutomationProperties.HelpText="Run a real local web search and fetch a safe public HTTPS page. This does not require an active arena session." />
                         <TextBlock x:Name="InternetDiagnosticResultText"
@@ -4650,19 +4572,19 @@
                                    TextWrapping="Wrap"
                                    AutomationProperties.LiveSetting="Polite"
                                    AutomationProperties.Name="Internet test result"
-                                   Margin="0,0,0,10" />
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
                         <TextBlock Text="Search context is gathered quietly and folded into the same agent reply."
                                    Style="{StaticResource HintText}"
-                                   Margin="0,0,0,10" />
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
                     </StackPanel>
                 </Expander>
 
                 <Expander Header="Context Windows" Tag="&#xE8F1;" Style="{StaticResource SettingsExpander}" IsExpanded="False">
-                    <StackPanel Margin="0,8,0,0">
+                    <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                         <TextBlock Text="Controls how much recent arena state is sent to model calls."
                                    Style="{StaticResource HintText}"
-                                   Margin="0,0,0,10" />
-                        <Grid Margin="0,0,0,10">
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="8" />
@@ -4702,7 +4624,7 @@
                 </Expander>
 
                 <Expander Header="Help / About" Tag="&#xE897;" Style="{StaticResource SettingsExpander}" IsExpanded="False">
-                    <StackPanel Margin="0,8,0,0">
+                    <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                         <TextBlock Text="AI Arena"
                                    Foreground="{DynamicResource TextBrush}"
                                    FontSize="18"
@@ -4728,14 +4650,14 @@
                         <Button x:Name="OpenUserGuideButton"
                                 Click="OpenUserGuideButton_Click"
                                 Style="{StaticResource SecondaryButton}"
-                                Margin="0,8,0,0"
+                                Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
                                 ToolTip="Open the AI Arena user guide">
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                                 <TextBlock Text="&#xE897;" Style="{StaticResource CommandButtonIcon}" />
                                 <TextBlock Text="Open User Guide" Style="{StaticResource CommandButtonLabel}" />
                             </StackPanel>
                         </Button>
-                        <Grid Margin="0,8,0,0">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="8" />
@@ -4764,7 +4686,7 @@
                         <TextBlock x:Name="SettingsTransferStatusText"
                                    Style="{StaticResource CollapsibleHintText}"
                                    AutomationProperties.LiveSetting="Polite"
-                                   Margin="0,8,0,0"
+                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
                                    Text="" />
                     </StackPanel>
                 </Expander>
@@ -4778,7 +4700,7 @@
                     <StackPanel>
                         <TextBlock Text="Apply saves advanced model-call and context-window edits to this session. Connection, model routing, internet, appearance, Agent, and voice preferences save as you change them."
                                    Style="{StaticResource HintText}"
-                                   Margin="0,0,0,4"
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Tight}"
                                    TextWrapping="Wrap" />
                         <TextBlock x:Name="SettingsPendingChangesText"
                                    Text="No session-scoped changes pending."

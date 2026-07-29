@@ -62,7 +62,7 @@
                         FontSize="10.5"
                         MinHeight="28"
                         Padding="9,3"
-                        Margin="0,0,5,0"
+                        Margin="{DynamicResource Arena.Gap.Inline.After.Tight}"
                         ToolTip="Camera follows the current speaker" />
                 <Button x:Name="FreeCameraButton"
                         Content="FREE"
@@ -70,7 +70,7 @@
                         FontSize="10.5"
                         MinHeight="28"
                         Padding="9,3"
-                        Margin="0,0,5,0"
+                        Margin="{DynamicResource Arena.Gap.Inline.After.Tight}"
                         ToolTip="Camera stays where you move it" />
                 <Button x:Name="OverviewCameraButton"
                         Content="OVERVIEW"
@@ -147,30 +147,30 @@
                             MinWidth="28"
                             MinHeight="26"
                             Padding="0"
-                            Margin="8,0,0,0"
+                            Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
                             VerticalAlignment="Top" />
                 </Grid>
                 <WrapPanel x:Name="InspectorEventItems"
                            Grid.Row="1"
-                           Margin="0,8,0,0" />
+                           Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                 <TextBlock x:Name="InspectorRoleText"
                            Grid.Row="2"
                            Foreground="{DynamicResource TextBrush}"
                            FontSize="12"
                            TextWrapping="Wrap"
-                           Margin="0,8,0,0" />
+                           Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                 <TextBlock x:Name="InspectorLastMessageText"
                            Grid.Row="3"
                            Foreground="{DynamicResource MutedTextBrush}"
                            FontSize="12"
                            TextWrapping="Wrap"
-                           Margin="0,8,0,0" />
+                           Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                 <TextBlock x:Name="InspectorNotesText"
                            Grid.Row="4"
                            Foreground="{DynamicResource MutedTextBrush}"
                            FontSize="11"
                            TextWrapping="Wrap"
-                           Margin="0,8,0,0" />
+                           Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
             </Grid>
         </Border>
         <Border x:Name="WorldMiniMapPanel"
@@ -223,7 +223,7 @@
                            TextAlignment="Center" />
                 <TextBlock Text="Load or start a session to populate the world."
                            Foreground="{DynamicResource MutedTextBrush}"
-                           Margin="0,4,0,0"
+                           Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}"
                            TextWrapping="Wrap"
                            TextAlignment="Center" />
             </StackPanel>
