@@ -99,7 +99,7 @@ function Get-ConstructorDependencies {
     return $dependencies | Sort-Object -Unique
 }
 
-$excludedPathPattern = '[\\/](bin|obj|dist|\.git)[\\/]'
+$excludedPathPattern = '[\\/](bin|obj|dist|map|\.git)[\\/]'
 $projects = @(Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.csproj" -File |
     Where-Object { $_.FullName -notmatch $excludedPathPattern } |
     Sort-Object FullName)
