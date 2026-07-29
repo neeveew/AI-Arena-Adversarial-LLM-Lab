@@ -16,6 +16,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Xml.Linq;
@@ -547,6 +548,101 @@ static void ThemeBrushDefaultsMirrorTheDefaultPalette()
         "MainWindow.xaml should not redeclare themed brushes that ThemeBrushes.xaml owns");
 }
 
+static ResourceDictionary LoadDesignTokenDictionary()
+{
+    var markup = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Theming/DesignTokens.xaml"));
+    return (ResourceDictionary)XamlReader.Parse(markup);
+}
+
+static void DesignTokenResourcesMatchTheirWpfContract()
+{
+    RunStaTest(() =>
+    {
+        var dictionary = LoadDesignTokenDictionary();
+        var expectedThickness = new (string Key, Thickness Value)[]
+        {
+            ("Arena.Inset.Control", new Thickness(8, 4, 8, 4)),
+            ("Arena.Inset.Card", new Thickness(10)),
+            ("Arena.Inset.Panel", new Thickness(12)),
+            ("Arena.Inset.RailAction", new Thickness(7, 4, 7, 4)),
+            ("Arena.Inset.QuickAction", new Thickness(10, 4, 10, 4)),
+            ("Arena.Inset.MatchSetupAction", new Thickness(11, 6, 11, 6)),
+            ("Arena.Gap.Inline.Before.Compact", new Thickness(6, 0, 0, 0)),
+            ("Arena.Gap.Inline.Before.Default", new Thickness(8, 0, 0, 0)),
+            ("Arena.Gap.Inline.Before.Spacious", new Thickness(12, 0, 0, 0)),
+            ("Arena.Gap.Inline.After.Tight", new Thickness(0, 0, 5, 0)),
+            ("Arena.Gap.Inline.After.Compact", new Thickness(0, 0, 6, 0)),
+            ("Arena.Gap.Inline.After.Default", new Thickness(0, 0, 8, 0)),
+            ("Arena.Gap.Stack.Before.Micro", new Thickness(0, 3, 0, 0)),
+            ("Arena.Gap.Stack.Before.Tight", new Thickness(0, 4, 0, 0)),
+            ("Arena.Gap.Stack.Before.Default", new Thickness(0, 8, 0, 0)),
+            ("Arena.Gap.Stack.After.Tight", new Thickness(0, 0, 0, 4)),
+            ("Arena.Gap.Stack.After.Compact", new Thickness(0, 0, 0, 6)),
+            ("Arena.Gap.Stack.After.Default", new Thickness(0, 0, 0, 8)),
+            ("Arena.Gap.Stack.After.Comfortable", new Thickness(0, 0, 0, 10)),
+            ("Arena.Gap.Stack.After.Section", new Thickness(0, 0, 0, 12)),
+            ("Arena.Gap.Inline", new Thickness(6, 0, 0, 0)),
+            ("Arena.Gap.Stack", new Thickness(0, 0, 0, 8)),
+            ("Arena.Gap.Section", new Thickness(0, 0, 0, 12)),
+        };
+
+        foreach (var (key, expected) in expectedThickness)
+        {
+            Require(dictionary.Contains(key), $"DesignTokens.xaml should define {key}");
+            var resource = dictionary[key];
+            Require(resource is Thickness, $"{key} should resolve as Thickness");
+            var actual = (Thickness)resource;
+            Require(actual.Equals(expected), $"{key} should remain {expected}, found {actual}");
+        }
+
+        Require(
+            ((Thickness)dictionary["Arena.Gap.Inline"]).Equals(
+                (Thickness)dictionary["Arena.Gap.Inline.Before.Compact"]),
+            "legacy inline gap should equal its canonical compatibility resource");
+        Require(
+            ((Thickness)dictionary["Arena.Gap.Stack"]).Equals(
+                (Thickness)dictionary["Arena.Gap.Stack.After.Default"]),
+            "legacy stack gap should equal its canonical compatibility resource");
+        Require(
+            ((Thickness)dictionary["Arena.Gap.Section"]).Equals(
+                (Thickness)dictionary["Arena.Gap.Stack.After.Section"]),
+            "legacy section gap should equal its canonical compatibility resource");
+
+        foreach (DictionaryEntry entry in dictionary)
+        {
+            if (entry.Key is not string key)
+            {
+                continue;
+            }
+            if (key.StartsWith("Arena.Gap.", StringComparison.Ordinal) ||
+                key.StartsWith("Arena.Inset.", StringComparison.Ordinal))
+            {
+                Require(entry.Value is Thickness, $"{key} should resolve as Thickness");
+            }
+            if ((key.StartsWith("Arena.Type.", StringComparison.Ordinal) &&
+                 key.EndsWith("Size", StringComparison.Ordinal)) ||
+                key.StartsWith("Arena.Space.", StringComparison.Ordinal))
+            {
+                Require(entry.Value is double, $"{key} should resolve as Double");
+            }
+            if (key.StartsWith("Arena.Radius.", StringComparison.Ordinal))
+            {
+                Require(entry.Value is CornerRadius, $"{key} should resolve as CornerRadius");
+            }
+        }
+
+        var appMarkup = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/App.xaml"));
+        var brushesIndex = appMarkup.IndexOf("ThemeBrushes.xaml", StringComparison.Ordinal);
+        var tokensIndex = appMarkup.IndexOf("DesignTokens.xaml", StringComparison.Ordinal);
+        var controlsIndex = appMarkup.IndexOf("ControlStyles.xaml", StringComparison.Ordinal);
+        var surfacesIndex = appMarkup.IndexOf("SurfaceStyles.xaml", StringComparison.Ordinal);
+        Require(brushesIndex >= 0, "App.xaml should merge themed brushes");
+        Require(tokensIndex > brushesIndex, "App.xaml should merge design tokens after themed brushes");
+        Require(controlsIndex > tokensIndex, "App.xaml should merge control styles after design tokens");
+        Require(surfacesIndex > controlsIndex, "App.xaml should merge surface styles after control styles");
+    });
+}
+
 static void MainWindowCollaboratePromptUsesMultilineAlignment()
 {
     var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
@@ -570,11 +666,20 @@ static void MainWindowCollaboratePromptAssistButtonsStayCompact()
              })
     {
         var button = XamlElementBlock(xaml, name, "Button");
-        Require(button.Contains("Style=\"{StaticResource CompactButton}\"", StringComparison.Ordinal), $"{name} should use the compact command style");
+        Require(button.Contains("Style=\"{StaticResource CollaborateQuickActionButton}\"", StringComparison.Ordinal), $"{name} should use the shared collaborate quick-action style");
         Require(button.Contains("Click=\"", StringComparison.Ordinal), $"{name} should wire a click handler");
         Require(button.Contains("ToolTip=\"", StringComparison.Ordinal), $"{name} should describe its prompt-assist action");
-        Require(button.Contains("MinHeight=\"28\"", StringComparison.Ordinal), $"{name} should keep a stable compact height");
+        Require(!button.Contains("MinHeight=\"", StringComparison.Ordinal), $"{name} should inherit its compact height from the shared style");
+        Require(!button.Contains("Padding=\"", StringComparison.Ordinal), $"{name} should inherit its padding from the shared style");
     }
+
+    var quickActionStyle = Regex.Match(
+        xaml,
+        "<Style x:Key=\"CollaborateQuickActionButton\"[\\s\\S]*?</Style>",
+        RegexOptions.CultureInvariant).Value;
+    Require(quickActionStyle.Length > 0, "collaborate quick-action style should exist");
+    Require(quickActionStyle.Contains("Arena.Target.Compact", StringComparison.Ordinal), "collaborate quick actions should retain a 28-DIP target");
+    Require(quickActionStyle.Contains("Arena.Inset.QuickAction", StringComparison.Ordinal), "collaborate quick actions should use the measured inset");
 
     var budget = XamlElementBlock(xaml, "CollaboratePromptBudgetText", "TextBlock");
     Require(budget.Contains("MutedTextBrush", StringComparison.Ordinal), "prompt budget should use muted text styling");
@@ -953,8 +1058,23 @@ static void MainWindowAgentCommandRailExposesApprovalContract()
     Require(autoContinue.Contains("AutomationProperties.HelpText=\"", StringComparison.Ordinal), "Auto Continue should explain its follow-up command behavior");
     Require(autoContinue.Contains("loop guards", StringComparison.Ordinal), "Auto Continue help text should mention loop guards");
     Require(autoContinueStatus.Contains("Auto Continue is off", StringComparison.Ordinal), "Auto Continue status should start in manual next-step mode");
-    // Arena.Gap.Stack is 0,0,0,8; the host spacing is unchanged, only its spelling.
-    Require(risks.Contains("Margin=\"{DynamicResource Arena.Gap.Stack}\"", StringComparison.Ordinal), "Agent risk chips should have a stable host");
+    var riskMargin = Regex.Match(
+        risks,
+        "Margin=\\\"\\{DynamicResource (?<key>Arena\\.[^}]+)\\}\\\"",
+        RegexOptions.CultureInvariant);
+    Require(riskMargin.Success, "Agent risk chips should use a design-token margin");
+    RunStaTest(() =>
+    {
+        var tokens = LoadDesignTokenDictionary();
+        var key = riskMargin.Groups["key"].Value;
+        Require(tokens.Contains(key), $"Agent risk-chip margin token {key} should exist");
+        var resource = tokens[key];
+        Require(resource is Thickness, $"Agent risk-chip margin token {key} should be a Thickness");
+        var margin = (Thickness)resource;
+        Require(
+            margin.Equals(new Thickness(0, 0, 0, 8)),
+            $"Agent risk chips should retain a bottom margin of 8, found {margin}");
+    });
     Require(approval.Contains("TextWrapping=\"Wrap\"", StringComparison.Ordinal), "Agent approval preview should wrap long invocations");
     Require(output.Contains("IsReadOnly=\"True\"", StringComparison.Ordinal), "Agent terminal output should not be editable");
     Require(output.Contains("HorizontalScrollBarVisibility=\"Auto\"", StringComparison.Ordinal), "Agent terminal output should preserve wide command lines");
@@ -1191,10 +1311,20 @@ static void MainWindowOperatorQuickInterventionsExposeAutomation()
     })
     {
         var button = XamlStartTag(xaml, name, "Button");
-        Require(button.Contains("Style=\"{StaticResource CompactButton}\"", StringComparison.Ordinal), $"{name} should use compact button styling");
+        Require(button.Contains("Style=\"{StaticResource CompactRailActionButton}\"", StringComparison.Ordinal), $"{name} should use the shared compact rail-action style");
         Require(button.Contains("ToolTip=\"Stage an operator intervention.\"", StringComparison.Ordinal), $"{name} should explain the staging behavior before dynamic tooltips load");
-        Require(button.Contains("MinHeight=\"30\"", StringComparison.Ordinal), $"{name} should reserve stable height");
+        Require(!button.Contains("MinHeight=\"", StringComparison.Ordinal), $"{name} should inherit its stable height from the shared style");
+        Require(!button.Contains("Padding=\"", StringComparison.Ordinal), $"{name} should inherit its padding from the shared style");
     }
+
+    var railActionStyle = Regex.Match(
+        xaml,
+        "<Style x:Key=\"CompactRailActionButton\"[\\s\\S]*?</Style>",
+        RegexOptions.CultureInvariant).Value;
+    Require(railActionStyle.Length > 0, "compact rail-action style should exist");
+    Require(railActionStyle.Contains("BasedOn=\"{StaticResource CompactButton}\"", StringComparison.Ordinal), "compact rail actions should retain compact button behavior");
+    Require(railActionStyle.Contains("Arena.Target.Icon", StringComparison.Ordinal), "compact rail actions should retain a 30-DIP target");
+    Require(railActionStyle.Contains("Arena.Inset.RailAction", StringComparison.Ordinal), "compact rail actions should use the measured rail inset");
 }
 
 static void MainWindowVoiceTtsSettingsExposeAutomation()

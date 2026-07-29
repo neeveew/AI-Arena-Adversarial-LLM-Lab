@@ -167,7 +167,7 @@
                                    FontWeight="SemiBold"
                                    TextTrimming="CharacterEllipsis" />
                         <TextBlock x:Name="SubtitleText"
-                                   Margin="0,4,0,0"
+                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}"
                                    MaxHeight="40"
                                    FontFamily="Segoe UI Variable Text, Segoe UI"
                                    FontSize="12"

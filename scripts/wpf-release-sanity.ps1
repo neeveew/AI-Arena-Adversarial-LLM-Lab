@@ -52,6 +52,7 @@ $installerReleaseSigningReport = Join-Path $installerDir "release-signing.json"
 $installerSigningReport = Join-Path $installerDir "installer-signing.json"
 $dependencyIndexScript = Join-Path $Root "scripts/dependency-index.ps1"
 $xamlBaselineScript = Join-Path $Root "scripts/xaml-hardcoded-values.ps1"
+$xamlBaselineTests = Join-Path $Root "scripts/tests/xaml-hardcoded-values.tests.ps1"
 $solutionFile = Join-Path $Root "AI Arena - WPF.sln"
 $coreTests = Join-Path $Root "tests/AIArena.Tests/AIArena.Tests.csproj"
 $wpfTests = Join-Path $Root "tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj"
@@ -104,6 +105,7 @@ Assert-PathExists $releaseChangelog "release changelog"
 Assert-PathExists $releaseGithubReleaseNotes "release GitHub release notes"
 Assert-PathExists $dependencyIndexScript "dependency index script"
 Assert-PathExists $xamlBaselineScript "XAML hard-coded baseline script"
+Assert-PathExists $xamlBaselineTests "XAML hard-coded baseline fixture tests"
 Assert-PathExists $solutionFile "WPF solution"
 Assert-PathExists $coreTests "core console test harness"
 Assert-PathExists $wpfTests "WPF console test harness"
@@ -117,6 +119,7 @@ Assert-PathExists $coreProject "core project"
 
 & $dependencyIndexScript -Check
 & $xamlBaselineScript -Check
+& $xamlBaselineTests
 
 $solutionText = Get-Content -LiteralPath $solutionFile -Raw
 if ($solutionText -notmatch [regex]::Escape("tests\AIArena.Tests\AIArena.Tests.csproj")) {

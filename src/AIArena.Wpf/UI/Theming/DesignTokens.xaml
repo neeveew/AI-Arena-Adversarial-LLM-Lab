@@ -21,7 +21,11 @@
     <sys:Double x:Key="Arena.Type.LabelSize">11.5</sys:Double>
     <sys:Double x:Key="Arena.Type.CaptionSize">10.5</sys:Double>
 
-    <!-- A 4-DIP rhythm keeps groups easy to scan without wasting workspace. -->
+    <!--
+        Scalar lengths are for Width, Height, offsets, and code-behind. WPF
+        Margin and Padding require Thickness resources; never change these keys'
+        type to make them fit those properties.
+    -->
     <sys:Double x:Key="Arena.Space.1">4</sys:Double>
     <sys:Double x:Key="Arena.Space.2">8</sys:Double>
     <sys:Double x:Key="Arena.Space.3">10</sys:Double>
@@ -32,6 +36,33 @@
     <Thickness x:Key="Arena.Inset.Control">8,4</Thickness>
     <Thickness x:Key="Arena.Inset.Card">10</Thickness>
     <Thickness x:Key="Arena.Inset.Panel">12</Thickness>
+
+    <!-- Component insets measured from the established compact interface. -->
+    <Thickness x:Key="Arena.Inset.RailAction">7,4</Thickness>
+    <Thickness x:Key="Arena.Inset.QuickAction">10,4</Thickness>
+    <Thickness x:Key="Arena.Inset.MatchSetupAction">11,6</Thickness>
+
+    <!--
+        Directional layout tokens preserve the current geometry exactly. Before
+        and After describe item order in an LTR inline flow or top-to-bottom
+        stack; the values remain physical WPF Thickness values.
+    -->
+    <Thickness x:Key="Arena.Gap.Inline.Before.Compact">6,0,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Inline.Before.Default">8,0,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Inline.Before.Spacious">12,0,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Inline.After.Tight">0,0,5,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Inline.After.Compact">0,0,6,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Inline.After.Default">0,0,8,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.Before.Micro">0,3,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.Before.Tight">0,4,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.Before.Default">0,8,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.After.Tight">0,0,0,4</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.After.Compact">0,0,0,6</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.After.Default">0,0,0,8</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.After.Comfortable">0,0,0,10</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.After.Section">0,0,0,12</Thickness>
+
+    <!-- Compatibility keys retained until their existing consumers migrate. -->
     <Thickness x:Key="Arena.Gap.Inline">6,0,0,0</Thickness>
     <Thickness x:Key="Arena.Gap.Stack">0,0,0,8</Thickness>
     <Thickness x:Key="Arena.Gap.Section">0,0,0,12</Thickness>

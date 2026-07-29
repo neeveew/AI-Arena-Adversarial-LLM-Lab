@@ -144,7 +144,7 @@
                     </ScrollViewer>
                     <TextBlock x:Name="ShortcutText"
                                Grid.Row="1"
-                               Margin="0,8,0,0"
+                               Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
                                FontFamily="Segoe UI Variable Text, Segoe UI"
                                FontSize="11"
                                Text="Esc cancels · Enter confirms"
