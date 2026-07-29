@@ -14,3 +14,4 @@ TestResults/
 *.snupkg
 .DS_Store
 artifacts/
+map/
