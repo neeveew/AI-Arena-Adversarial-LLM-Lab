@@ -6,6 +6,7 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="UI/Theming/ThemeBrushes.xaml" />
                 <ResourceDictionary Source="UI/Theming/DesignTokens.xaml" />
                 <ResourceDictionary Source="UI/Theming/ControlStyles.xaml" />
                 <ResourceDictionary Source="UI/Theming/SurfaceStyles.xaml" />

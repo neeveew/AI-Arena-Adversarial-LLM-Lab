@@ -10,6 +10,7 @@ using System.Collections;
 using System.Runtime.ExceptionServices;
 using System.Resources;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
@@ -477,6 +478,73 @@ static void MainWindowComboBoxTemplateUsesThemeResources()
     Require(controlStyles.Contains("PART_EditableTextBox", StringComparison.Ordinal), "combo box template should keep editable model picker support");
     Require(controlStyles.Contains("DisabledTextBrush", StringComparison.Ordinal), "combo box template should dim disabled editable controls");
     Require(xaml.Contains("TargetType=\"ComboBox\" BasedOn=\"{StaticResource Arena.ComboBox}\"", StringComparison.Ordinal), "the shell combo box should adopt the Arena control system");
+}
+
+static void ThemeBrushDefaultsMirrorTheDefaultPalette()
+{
+    // These brushes are startup and design-time defaults; ApplyTheme overwrites
+    // every one of them at runtime. That is exactly why they drifted unnoticed
+    // while they lived in MainWindow.xaml - three Nav brushes held literals for
+    // values ThemePalette computes, and nothing compared the two. This pins the
+    // mirror so the designer cannot start lying about the shipped theme again.
+    var markup = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Theming/ThemeBrushes.xaml"));
+    var theme = ThemePalette.Resolve("dark-arena");
+
+    var expected = new (string Key, Color Color)[]
+    {
+        ("AppBackgroundBrush", theme.AppBackground),
+        ("TopBarBrush", theme.TopBar),
+        ("PanelBrush", theme.Panel),
+        ("CardBrush", theme.Card),
+        ("InputBrush", theme.Input),
+        ("TranscriptHeaderBrush", theme.Panel),
+        ("TranscriptBodyBrush", theme.Card),
+        ("ControlBorderBrush", theme.Border),
+        ("TextBrush", theme.Text),
+        ("MutedTextBrush", theme.MutedText),
+        ("PrimaryBrush", theme.Primary),
+        ("PrimaryBorderBrush", theme.PrimaryBorder),
+        ("AssistBrush", theme.Assist),
+        ("AssistBorderBrush", theme.AssistBorder),
+        ("DangerBrush", theme.Danger),
+        ("DangerBorderBrush", theme.DangerBorder),
+        ("DangerTextBrush", theme.DangerText),
+        ("DisabledBrush", theme.Disabled),
+        ("DisabledBorderBrush", theme.DisabledBorder),
+        ("DisabledTextBrush", theme.DisabledText),
+        ("HoverBorderBrush", theme.HoverBorder),
+        ("NavHoverBrush", theme.NavHover),
+        ("NavActiveBrush", theme.NavActive),
+        ("NavPressedBrush", theme.NavPressed),
+        ("PressedPrimaryBrush", theme.PressedPrimary),
+        ("OverlayBrush", theme.Overlay),
+        ("AlphaAccentBrush", theme.AlphaAccent),
+        ("BetaAccentBrush", theme.BetaAccent),
+        ("GammaAccentBrush", theme.GammaAccent),
+        ("DeltaAccentBrush", theme.DeltaAccent),
+        ("NarratorAccentBrush", theme.NarratorAccent),
+        ("OperatorAccentBrush", theme.OperatorAccent),
+    };
+
+    foreach (var (key, color) in expected)
+    {
+        var match = Regex.Match(markup, "<SolidColorBrush x:Key=\"" + Regex.Escape(key) + "\" Color=\"(?<value>#[0-9A-Fa-f]+)\"");
+        Require(match.Success, $"ThemeBrushes.xaml should define {key}");
+
+        var declared = match.Groups["value"].Value;
+        var expectedHex = color.A == 255
+            ? $"#{color.R:X2}{color.G:X2}{color.B:X2}"
+            : $"#{color.A:X2}{color.R:X2}{color.G:X2}{color.B:X2}";
+        Require(
+            string.Equals(declared, expectedHex, StringComparison.OrdinalIgnoreCase),
+            $"{key} default {declared} should match the dark-arena palette value {expectedHex}");
+    }
+
+    // The window must not reintroduce its own copies; the application scope owns them.
+    var window = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    Require(
+        !window.Contains("<SolidColorBrush x:Key=\"AppBackgroundBrush\"", StringComparison.Ordinal),
+        "MainWindow.xaml should not redeclare themed brushes that ThemeBrushes.xaml owns");
 }
 
 static void MainWindowCollaboratePromptUsesMultilineAlignment()
