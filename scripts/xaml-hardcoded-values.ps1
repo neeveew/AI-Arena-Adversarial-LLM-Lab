@@ -388,8 +388,24 @@ function Read-AIArenaBaselineAtGitRef {
     param([string]$Ref)
 
     $gitPath = "$Ref`:$baselineRelativePath"
-    $content = @(& git -C $Root show $gitPath 2>&1)
-    if ($LASTEXITCODE -ne 0) {
+
+    # Native command output is decoded with [Console]::OutputEncoding, which on a
+    # default Windows console is an OEM code page rather than UTF-8. An earlier
+    # baseline may carry a UTF-8 BOM, and under an OEM page those three bytes
+    # arrive as three mojibake characters instead of U+FEFF, so trimming the BOM
+    # finds nothing and the JSON fails to parse at position 0. Whether this bites
+    # depends on the console encoding of whoever runs it, which is the worst way
+    # for a gate to fail, so decode as UTF-8 explicitly.
+    $previousOutputEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        $content = @(& git -C $Root show $gitPath 2>&1)
+        $gitExitCode = $LASTEXITCODE
+    } finally {
+        [Console]::OutputEncoding = $previousOutputEncoding
+    }
+
+    if ($gitExitCode -ne 0) {
         throw "Could not read $baselineRelativePath at ${Ref}: $($content -join [Environment]::NewLine)"
     }
     try {

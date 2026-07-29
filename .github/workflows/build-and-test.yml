@@ -61,10 +61,13 @@ jobs:
         env:
           XAML_BASELINE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: |
-          $gateArguments = @('-Check')
+          # Hashtable splatting, not array. Splatting an array passes its
+          # elements positionally, so '-BaselineRef' and the SHA arrived as bare
+          # arguments and the gate rejected the SHA as an unexpected positional.
+          $gateArguments = @{ Check = $true }
           if ($env:XAML_BASELINE_REF -match '^[0-9a-fA-F]{40}$' -and
               $env:XAML_BASELINE_REF -notmatch '^0{40}$') {
-            $gateArguments += @('-BaselineRef', $env:XAML_BASELINE_REF)
+            $gateArguments.BaselineRef = $env:XAML_BASELINE_REF
           }
           & ./scripts/xaml-hardcoded-values.ps1 @gateArguments
 
