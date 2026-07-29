@@ -1,0 +1,3 @@
+- Makes Solution Doctor verification safe for project-only, partial-solution, empty-solution, and equivalent-solution workspaces by selecting only useful complete solution builds and placing the owning project build before every `--no-build` Test or Run action.
+- Narrows repair retries only to the deepest unambiguous owning project, preserving explicit project evidence and refusing guesses when projects share the same directory or a sibling path only looks related.
+- Treats `$()` text in solution project paths literally and safely, retaining exact typed and PowerShell-quoted targets while marking unmatched membership partial with a diagnostic.

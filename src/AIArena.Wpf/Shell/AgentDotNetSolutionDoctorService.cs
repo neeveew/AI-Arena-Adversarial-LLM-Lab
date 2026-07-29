@@ -170,26 +170,116 @@ internal static class AgentDotNetSolutionDoctorService
 
     internal static IReadOnlyList<DotNetCommandPlan> RecommendedVerificationPlans(
         DotNetWorkspaceSnapshot? snapshot,
-        int maximum = 4)
+        int maximum = 5)
     {
         if (snapshot is null || maximum <= 0)
         {
             return [];
         }
 
-        var solutionBuilds = snapshot.CommandPlans
-            .Where(plan => plan.Kind == DotNetCommandKind.Build && plan.TargetKind == DotNetCommandTargetKind.Solution);
+        var selectedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pairedPlans = new List<DotNetCommandPlan>(Math.Min(maximum, snapshot.CommandPlans.Count));
+        var pairedProjectTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var testActions = snapshot.CommandPlans
-            .Where(plan => plan.Kind == DotNetCommandKind.Test
-                || (plan.Kind == DotNetCommandKind.Run
-                    && snapshot.Projects.Any(project =>
-                        project.IsExecutableTestHarness
-                        && project.RelativePath.Equals(plan.TargetRelativePath, StringComparison.OrdinalIgnoreCase))));
+            .Where(plan => plan.TargetKind == DotNetCommandTargetKind.Project
+                && snapshot.Projects.Any(project =>
+                    NormalizePathToken(project.RelativePath).Equals(
+                        NormalizePathToken(plan.TargetRelativePath),
+                        StringComparison.OrdinalIgnoreCase)
+                    && ((plan.Kind == DotNetCommandKind.Test && project.IsConventionalTestProject)
+                        || (plan.Kind == DotNetCommandKind.Run && project.IsExecutableTestHarness))))
+            .ToArray();
+        foreach (var action in testActions)
+        {
+            var actionTarget = NormalizePathToken(action.TargetRelativePath);
+            var requiresProjectBuild = !pairedProjectTargets.Contains(actionTarget);
+            var requiredSlots = requiresProjectBuild ? 2 : 1;
+            if (pairedPlans.Count + requiredSlots > maximum || selectedIds.Contains(action.Id))
+            {
+                continue;
+            }
+
+            if (requiresProjectBuild)
+            {
+                var projectBuild = snapshot.CommandPlans.FirstOrDefault(plan =>
+                    plan.Kind == DotNetCommandKind.Build
+                    && plan.TargetKind == DotNetCommandTargetKind.Project
+                    && NormalizePathToken(plan.TargetRelativePath).Equals(actionTarget, StringComparison.OrdinalIgnoreCase)
+                    && !selectedIds.Contains(plan.Id)
+                    && !plan.Id.Equals(action.Id, StringComparison.OrdinalIgnoreCase));
+                if (projectBuild is null)
+                {
+                    continue;
+                }
+
+                selectedIds.Add(projectBuild.Id);
+                pairedPlans.Add(projectBuild);
+                pairedProjectTargets.Add(actionTarget);
+            }
+
+            selectedIds.Add(action.Id);
+            pairedPlans.Add(action);
+        }
+
+        var solutionBuilds = new List<DotNetCommandPlan>();
+        var solutionCoveredProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var solutionBuild in snapshot.CommandPlans.Where(plan =>
+                     plan.Kind == DotNetCommandKind.Build
+                     && plan.TargetKind == DotNetCommandTargetKind.Solution))
+        {
+            if (pairedPlans.Count + solutionBuilds.Count >= maximum || selectedIds.Contains(solutionBuild.Id))
+            {
+                continue;
+            }
+
+            var matchingSolutions = snapshot.Solutions
+                .Where(solution =>
+                    !solution.IsPartial
+                    && NormalizePathToken(solution.RelativePath).Equals(
+                        NormalizePathToken(solutionBuild.TargetRelativePath),
+                        StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            var solutionProjects = matchingSolutions
+                .SelectMany(solution => solution.ProjectRelativePaths)
+                .Select(NormalizePathToken)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (matchingSolutions.Length == 0 || solutionProjects.IsSubsetOf(solutionCoveredProjects))
+            {
+                continue;
+            }
+
+            selectedIds.Add(solutionBuild.Id);
+            solutionBuilds.Add(solutionBuild);
+            solutionCoveredProjects.UnionWith(solutionProjects);
+        }
+
+        var standaloneProjectBuilds = new List<DotNetCommandPlan>();
+        var selectedProjectTargets = new HashSet<string>(
+            pairedProjectTargets,
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var projectBuild in snapshot.CommandPlans.Where(plan =>
+                     plan.Kind == DotNetCommandKind.Build
+                     && plan.TargetKind == DotNetCommandTargetKind.Project))
+        {
+            if (pairedPlans.Count + solutionBuilds.Count + standaloneProjectBuilds.Count >= maximum)
+            {
+                break;
+            }
+
+            var projectTarget = NormalizePathToken(projectBuild.TargetRelativePath);
+            if (selectedIds.Contains(projectBuild.Id) || selectedProjectTargets.Contains(projectTarget))
+            {
+                continue;
+            }
+
+            selectedIds.Add(projectBuild.Id);
+            selectedProjectTargets.Add(projectTarget);
+            standaloneProjectBuilds.Add(projectBuild);
+        }
 
         return solutionBuilds
-            .Concat(testActions)
-            .DistinctBy(plan => plan.Id, StringComparer.OrdinalIgnoreCase)
-            .Take(maximum)
+            .Concat(pairedPlans)
+            .Concat(standaloneProjectBuilds)
             .ToArray();
     }
 
@@ -483,7 +573,7 @@ internal static class AgentDotNetSolutionDoctorService
 
     private static string NormalizePathToken(string relativePath)
     {
-        var normalized = relativePath.Replace('\\', '/').Trim();
+        var normalized = relativePath.Replace('\\', '/');
         while (normalized.StartsWith("./", StringComparison.Ordinal))
         {
             normalized = normalized[2..];

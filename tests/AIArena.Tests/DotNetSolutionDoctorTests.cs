@@ -142,6 +142,85 @@ internal static class DotNetSolutionDoctorTests
                 "the PowerShell-encoded display invocation must declare its shell");
             Require(AllPublicPathsAreRelative(snapshot, root), "public path fields should remain workspace-relative");
         });
+
+        WithFixture(root =>
+        {
+            const string literalProjectPath = "src/Literal $(whoami)/Literal $(whoami).csproj";
+            WriteProject(
+                root,
+                literalProjectPath,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                  </PropertyGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                "Literal.sln",
+                """
+                Microsoft Visual Studio Solution File, Format Version 12.00
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Literal", "src\Literal $(whoami)\Literal $(whoami).csproj", "{00000000-0000-0000-0000-000000000001}"
+                EndProject
+                Global
+                EndGlobal
+                """);
+            WriteProject(
+                root,
+                "Literal.slnx",
+                """
+                <Solution>
+                  <Project Path="src/Literal $(whoami)/Literal $(whoami).csproj" />
+                </Solution>
+                """);
+            WriteProject(
+                root,
+                "Unmatched Literal.slnx",
+                """
+                <Solution>
+                  <Project Path="src/Missing $(whoami)/Missing $(whoami).csproj" />
+                </Solution>
+                """);
+
+            var snapshot = new DotNetWorkspaceIntelligenceService()
+                .DiscoverAsync(root)
+                .GetAwaiter()
+                .GetResult();
+
+            Require(snapshot.Projects.Count == 1, "literal-expression fixture should discover its project");
+            Require(snapshot.Solutions.Count == 3, "literal-expression fixture should discover valid and unmatched solutions");
+            var validSolutions = snapshot.Solutions
+                .Where(solution => solution.RelativePath is "Literal.sln" or "Literal.slnx")
+                .ToArray();
+            Require(
+                validSolutions.Length == 2
+                && validSolutions.All(solution =>
+                    !solution.IsPartial
+                    && solution.ProjectRelativePaths.SequenceEqual([literalProjectPath])),
+                "solution project paths containing literal $() text should use normal safe membership validation");
+            var unmatchedSolution = snapshot.Solutions.Single(solution => solution.RelativePath == "Unmatched Literal.slnx");
+            Require(
+                unmatchedSolution.IsPartial && unmatchedSolution.ProjectRelativePaths.Count == 0,
+                "an unmatched literal $() project path should be partial rather than silently accepted or ignored");
+            Require(
+                snapshot.Diagnostics.Any(diagnostic =>
+                    diagnostic.Code == "DNW202"
+                    && diagnostic.RelativePath == unmatchedSolution.RelativePath),
+                "unmatched literal $() membership should emit DNW202 against the affected solution");
+
+            var literalProjectBuild = snapshot.CommandPlans.Single(plan =>
+                plan.Kind == DotNetCommandKind.Build
+                && plan.TargetKind == DotNetCommandTargetKind.Project
+                && plan.TargetRelativePath == literalProjectPath);
+            Require(
+                literalProjectBuild.Arguments.SequenceEqual(["build", literalProjectPath, "--no-restore"]),
+                "literal $() text should be preserved exactly in typed project build arguments");
+            Require(
+                literalProjectBuild.DisplayInvocation
+                    == "dotnet build 'src/Literal $(whoami)/Literal $(whoami).csproj' --no-restore",
+                "the PowerShell project-build preview should safely single-quote literal $() text");
+        });
     }
 
     internal static void ParsesCompilerMsBuildAndExecutableHarnessEvidence()
@@ -229,6 +308,93 @@ internal static class DotNetSolutionDoctorTests
             Require(retry.IsNarrowed, "compiler evidence should narrow a build retry");
             Require(retry.Command.TargetRelativePath == "src/App/App.csproj", "retry should target the project that emitted the error");
             Require(retry.Command.Arguments.SequenceEqual(["build", "src/App/App.csproj", "--no-restore"]), "narrowed build should remain offline by default");
+        });
+
+        WithFixture(root =>
+        {
+            const string projectFile = """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                  </PropertyGroup>
+                </Project>
+                """;
+            WriteProject(root, "src/Parent/ParentProjectWithAnIntentionallyLongName.csproj", projectFile);
+            WriteProject(root, "src/Parent/N/N.csproj", projectFile);
+            WriteProject(root, "src/Parent/N/Broken.cs", "class Broken { }");
+            WriteProject(root, "src/Shared/A.csproj", projectFile);
+            WriteProject(root, "src/Shared/ProjectWithAnIntentionallyLongName.csproj", projectFile);
+            WriteProject(root, "src/Shared/Broken.cs", "class Broken { }");
+            WriteProject(root, "src/App/App.csproj", projectFile);
+            WriteProject(root, "src/App2/Broken.cs", "class Broken { }");
+
+            var service = new DotNetWorkspaceIntelligenceService();
+            var snapshot = service.DiscoverAsync(root).GetAwaiter().GetResult();
+            var parser = new DotNetOutputParser();
+
+            var parentCommand = snapshot.CommandPlans.Single(plan =>
+                plan.Kind == DotNetCommandKind.Build
+                && plan.TargetRelativePath == "src/Parent/ParentProjectWithAnIntentionallyLongName.csproj");
+            var nestedSourcePath = Path.Combine(root, "src", "Parent", "N", "Broken.cs");
+            var nestedResult = parser.Parse(
+                root,
+                parentCommand,
+                1,
+                $"{nestedSourcePath}(3,2): error CS1002: ; expected",
+                "");
+
+            Require(nestedResult.Diagnostics.Single().ProjectRelativePath is null, "nested fixture should exercise inferred ownership");
+            var nestedRetry = service.CreateNarrowedRetryPlan(snapshot, nestedResult)
+                ?? throw new InvalidOperationException("nested source evidence did not produce a retry");
+            Require(
+                nestedRetry.Command.TargetRelativePath == "src/Parent/N/N.csproj",
+                "inferred ownership should prefer the deepest containing project directory, not the longest project path");
+
+            var sharedCommand = snapshot.CommandPlans.Single(plan =>
+                plan.Kind == DotNetCommandKind.Build
+                && plan.TargetRelativePath == "src/Shared/A.csproj");
+            var sharedSourcePath = Path.Combine(root, "src", "Shared", "Broken.cs");
+            var sharedResult = parser.Parse(
+                root,
+                sharedCommand,
+                1,
+                $"{sharedSourcePath}(4,1): error CS1002: ; expected",
+                "");
+
+            Require(sharedResult.Diagnostics.Single().ProjectRelativePath is null, "shared-directory fixture should exercise inferred ownership");
+            Require(
+                service.CreateNarrowedRetryPlan(snapshot, sharedResult) is null,
+                "inferred ownership should refuse to choose between projects in the same deepest directory");
+
+            var sharedProjectPath = Path.Combine(root, "src", "Shared", "A.csproj");
+            var explicitSharedResult = parser.Parse(
+                root,
+                sharedCommand,
+                1,
+                $"{sharedSourcePath}(5,1): error CS1002: ; expected [{sharedProjectPath}]",
+                "");
+            Require(
+                explicitSharedResult.Diagnostics.Single().ProjectRelativePath == "src/Shared/A.csproj",
+                "shared-directory fixture should preserve explicit project evidence");
+            var explicitSharedRetry = service.CreateNarrowedRetryPlan(snapshot, explicitSharedResult)
+                ?? throw new InvalidOperationException("explicit shared-directory project evidence did not produce a retry");
+            Require(
+                explicitSharedRetry.Command.TargetRelativePath == "src/Shared/A.csproj",
+                "explicit project evidence should remain authoritative when path-only ownership is ambiguous");
+
+            var appCommand = snapshot.CommandPlans.Single(plan =>
+                plan.Kind == DotNetCommandKind.Build
+                && plan.TargetRelativePath == "src/App/App.csproj");
+            var app2SourcePath = Path.Combine(root, "src", "App2", "Broken.cs");
+            var boundaryResult = parser.Parse(
+                root,
+                appCommand,
+                1,
+                $"{app2SourcePath}(6,1): error CS1002: ; expected",
+                "");
+            Require(
+                service.CreateNarrowedRetryPlan(snapshot, boundaryResult) is null,
+                "project-directory matching should not treat sibling App2 as a child of App");
         });
     }
 

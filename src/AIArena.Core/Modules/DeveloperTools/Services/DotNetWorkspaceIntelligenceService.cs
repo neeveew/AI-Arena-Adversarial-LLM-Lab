@@ -740,8 +740,7 @@ public sealed partial class DotNetWorkspaceIntelligenceService
         ref bool partial)
     {
         if (string.IsNullOrWhiteSpace(path)
-            || !Path.GetExtension(path).Equals(".csproj", StringComparison.OrdinalIgnoreCase)
-            || path.Contains("$(", StringComparison.Ordinal))
+            || !Path.GetExtension(path).Equals(".csproj", StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
@@ -924,16 +923,43 @@ public sealed partial class DotNetWorkspaceIntelligenceService
 
     private static string? FindOwningProject(DotNetWorkspaceSnapshot snapshot, string? fileRelativePath)
     {
-        if (fileRelativePath is null)
+        if (!TryNormalizeRelativeModelPath(fileRelativePath, out var normalizedFileRelativePath)
+            || normalizedFileRelativePath == ".")
         {
             return null;
         }
 
-        return snapshot.Projects
-            .Where(project => IsRelativePathWithin(Path.GetDirectoryName(project.RelativePath)?.Replace('\\', '/') ?? ".", fileRelativePath))
-            .OrderByDescending(project => project.RelativePath.Length)
-            .Select(project => project.RelativePath)
-            .FirstOrDefault();
+        var candidates = snapshot.Projects
+            .Select(project =>
+            {
+                if (!TryNormalizeRelativeModelPath(project.RelativePath, out var normalizedProjectRelativePath))
+                {
+                    return (Project: project, Directory: "", Depth: -1);
+                }
+
+                var separatorIndex = normalizedProjectRelativePath.LastIndexOf('/');
+                var directory = separatorIndex < 0 ? "." : normalizedProjectRelativePath[..separatorIndex];
+                var depth = directory == "." ? 0 : directory.Count(character => character == '/') + 1;
+                return (Project: project, Directory: directory, Depth: depth);
+            })
+            .Where(candidate =>
+                candidate.Depth >= 0
+                && IsRelativePathWithin(candidate.Directory, normalizedFileRelativePath))
+            .ToArray();
+
+        if (candidates.Length == 0)
+        {
+            return null;
+        }
+
+        var deepestDirectoryDepth = candidates.Max(candidate => candidate.Depth);
+        var deepestCandidates = candidates
+            .Where(candidate => candidate.Depth == deepestDirectoryDepth)
+            .ToArray();
+
+        return deepestCandidates.Length == 1
+            ? deepestCandidates[0].Project.RelativePath
+            : null;
     }
 
     private static bool IsRelativePathWithin(string directory, string path)
@@ -943,7 +969,36 @@ public sealed partial class DotNetWorkspaceIntelligenceService
             return true;
         }
 
-        return path.StartsWith(directory.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
+        return path.Equals(directory, StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith(directory.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryNormalizeRelativeModelPath(string? path, out string normalizedPath)
+    {
+        normalizedPath = "";
+        if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path))
+        {
+            return false;
+        }
+
+        var segments = new List<string>();
+        foreach (var segment in path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment == ".")
+            {
+                continue;
+            }
+
+            if (segment == "..")
+            {
+                return false;
+            }
+
+            segments.Add(segment);
+        }
+
+        normalizedPath = segments.Count == 0 ? "." : string.Join('/', segments);
+        return true;
     }
 
     private static IEnumerable<string> PropertyValues(IEnumerable<XElement> properties, string name)

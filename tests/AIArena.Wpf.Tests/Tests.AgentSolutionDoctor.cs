@@ -31,8 +31,191 @@ internal static partial class Program
         Require(AgentDotNetSolutionDoctorService.FindCommandPlan(snapshot, "dotnet build /Arena.sln --no-restore") is null, "an absolute-looking target must not be normalized onto a workspace target");
 
         var verification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(snapshot);
-        Require(verification.Count == 2, "solution build and executable harness should be the two verification actions");
+        Require(
+            verification.Select(plan => plan.Kind).SequenceEqual(
+                [DotNetCommandKind.Build, DotNetCommandKind.Build, DotNetCommandKind.Run])
+            && verification.Select(plan => plan.TargetKind).SequenceEqual(
+                [DotNetCommandTargetKind.Solution, DotNetCommandTargetKind.Project, DotNetCommandTargetKind.Project]),
+            "default verification should show the solution Build and exact project Build before the harness Run");
         Require(verification.All(plan => plan.Kind != DotNetCommandKind.Restore), "restore should never enter automatic verification recommendations");
+        Require(verification.Any(plan =>
+            plan.Kind == DotNetCommandKind.Build
+            && plan.TargetKind == DotNetCommandTargetKind.Project
+            && plan.TargetRelativePath.Equals(
+                "src/Arena.App/Arena.App.csproj",
+                StringComparison.OrdinalIgnoreCase)), "solution membership must not suppress the exact project Build required by --no-build Run");
+        Require(
+            verification
+                .Select((plan, index) => (Plan: plan, Index: index))
+                .Where(item => item.Plan.Kind is DotNetCommandKind.Test or DotNetCommandKind.Run)
+                .All(item => HasEarlierExactProjectBuild(verification, item.Index)),
+            "every default no-build action should have an earlier exact project Build");
+
+        const string secondHarnessPath = "tests/Arena.SecondHarness/Arena.SecondHarness.csproj";
+        var secondHarness = snapshot.Projects[0] with
+        {
+            Id = "project:Arena.SecondHarness",
+            Name = "Arena.SecondHarness",
+            RelativePath = secondHarnessPath
+        };
+        var secondHarnessBuild = DotNetPlan(
+            "build:second-harness",
+            DotNetCommandKind.Build,
+            DotNetCommandTargetKind.Project,
+            secondHarnessPath,
+            ["build", secondHarnessPath, "--no-restore"],
+            $"dotnet build {secondHarnessPath} --no-restore");
+        var secondHarnessRun = DotNetPlan(
+            "run:second-harness",
+            DotNetCommandKind.Run,
+            DotNetCommandTargetKind.Project,
+            secondHarnessPath,
+            ["run", "--project", secondHarnessPath, "--no-build"],
+            $"dotnet run --project {secondHarnessPath} --no-build");
+        var twoHarnessSnapshot = snapshot with
+        {
+            Solutions = snapshot.Solutions
+                .Select(solution => solution with
+                {
+                    ProjectRelativePaths = [.. solution.ProjectRelativePaths, secondHarnessPath]
+                })
+                .ToArray(),
+            Projects = [.. snapshot.Projects, secondHarness],
+            CommandPlans = [.. snapshot.CommandPlans, secondHarnessBuild, secondHarnessRun]
+        };
+        var twoHarnessVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(twoHarnessSnapshot);
+        Require(
+            twoHarnessVerification.Select(plan => plan.Kind).SequenceEqual(
+                [
+                    DotNetCommandKind.Build,
+                    DotNetCommandKind.Build,
+                    DotNetCommandKind.Run,
+                    DotNetCommandKind.Build,
+                    DotNetCommandKind.Run
+                ]),
+            "the five-plan default should retain one solution Build and two complete harness pairs");
+        Require(
+            twoHarnessVerification
+                .Select((plan, index) => (Plan: plan, Index: index))
+                .Where(item => item.Plan.Kind is DotNetCommandKind.Test or DotNetCommandKind.Run)
+                .All(item => HasEarlierExactProjectBuild(twoHarnessVerification, item.Index)),
+            "both default harness actions should follow their exact project Builds");
+        var boundedTwoHarnessVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(
+            twoHarnessSnapshot,
+            maximum: 2);
+        Require(
+            boundedTwoHarnessVerification.Select(plan => plan.Kind).SequenceEqual(
+                [DotNetCommandKind.Build, DotNetCommandKind.Run])
+            && boundedTwoHarnessVerification.All(plan =>
+                plan.TargetKind == DotNetCommandTargetKind.Project
+                && plan.TargetRelativePath.Equals(
+                    "src/Arena.App/Arena.App.csproj",
+                    StringComparison.OrdinalIgnoreCase)),
+            "a two-plan bound should retain one deterministic exact-project Build and Run pair without a solution Build");
+
+        const string plainRootHarnessPath = "Foo.csproj";
+        const string whitespaceRootHarnessPath = " Foo.csproj";
+        var plainRootHarness = CreateDotNetSnapshot("Foo", plainRootHarnessPath);
+        var whitespaceRootHarness = plainRootHarness.Projects[0] with
+        {
+            Id = "project:WhitespaceFoo",
+            Name = "WhitespaceFoo",
+            RelativePath = whitespaceRootHarnessPath
+        };
+        var whitespaceRootBuild = DotNetPlan(
+            "build:whitespace-root",
+            DotNetCommandKind.Build,
+            DotNetCommandTargetKind.Project,
+            whitespaceRootHarnessPath,
+            ["build", whitespaceRootHarnessPath, "--no-restore"],
+            "dotnet build ' Foo.csproj' --no-restore");
+        var whitespaceRootRun = DotNetPlan(
+            "run:whitespace-root",
+            DotNetCommandKind.Run,
+            DotNetCommandTargetKind.Project,
+            whitespaceRootHarnessPath,
+            ["run", "--project", whitespaceRootHarnessPath, "--no-build"],
+            "dotnet run --project ' Foo.csproj' --no-build");
+        var whitespaceDistinctHarnesses = plainRootHarness with
+        {
+            Solutions = [],
+            Projects = [.. plainRootHarness.Projects, whitespaceRootHarness],
+            CommandPlans =
+            [
+                .. plainRootHarness.CommandPlans.Where(plan =>
+                    plan.TargetKind == DotNetCommandTargetKind.Project),
+                whitespaceRootBuild,
+                whitespaceRootRun
+            ]
+        };
+        var whitespaceDistinctVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(
+            whitespaceDistinctHarnesses,
+            maximum: 4);
+        Require(
+            whitespaceDistinctVerification.Select(plan => plan.Kind).SequenceEqual(
+                [
+                    DotNetCommandKind.Build,
+                    DotNetCommandKind.Run,
+                    DotNetCommandKind.Build,
+                    DotNetCommandKind.Run
+                ])
+            && whitespaceDistinctVerification.Take(2).All(plan =>
+                plan.TargetRelativePath.Equals(plainRootHarnessPath, StringComparison.Ordinal))
+            && whitespaceDistinctVerification.Skip(2).All(plan =>
+                plan.TargetRelativePath.Equals(whitespaceRootHarnessPath, StringComparison.Ordinal)),
+            "leading-whitespace project names must retain two distinct complete Build and Run pairs");
+        Require(
+            whitespaceDistinctVerification
+                .Select((plan, index) => (Plan: plan, Index: index))
+                .Where(item => item.Plan.Kind == DotNetCommandKind.Run)
+                .All(item => HasEarlierExactProjectBuild(whitespaceDistinctVerification, item.Index)),
+            "each whitespace-distinct Run should follow its own exact project Build");
+        var whitespaceRunInvocation = AgentDotNetSolutionDoctorService.FormatPowerShellInvocation(whitespaceRootRun);
+        Require(
+            whitespaceRunInvocation.Contains("--project ' Foo.csproj' --no-build", StringComparison.Ordinal)
+            && AgentDotNetSolutionDoctorService.FindCommandPlan(
+                whitespaceDistinctHarnesses,
+                whitespaceRunInvocation) == whitespaceRootRun,
+            "PowerShell formatting and typed command matching should preserve leading project-path whitespace");
+
+        var projectOnlyHarness = snapshot with
+        {
+            Solutions = [],
+            CommandPlans = snapshot.CommandPlans
+                .Where(plan => plan.TargetKind == DotNetCommandTargetKind.Project)
+                .ToArray()
+        };
+        var projectOnlyHarnessVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(projectOnlyHarness);
+        Require(
+            projectOnlyHarnessVerification.Select(plan => plan.Kind).SequenceEqual(
+                [DotNetCommandKind.Build, DotNetCommandKind.Run]),
+            "a csproj-only executable harness should build before its --no-build Run action");
+        Require(
+            projectOnlyHarnessVerification.All(plan =>
+                plan.TargetRelativePath.Equals("src/Arena.App/Arena.App.csproj", StringComparison.OrdinalIgnoreCase)),
+            "project-only harness verification should stay on the discovered project target");
+        var unrelatedProjectBuild = DotNetPlan(
+            "build:unrelated",
+            DotNetCommandKind.Build,
+            DotNetCommandTargetKind.Project,
+            "src/Unrelated/Unrelated.csproj",
+            ["build", "src/Unrelated/Unrelated.csproj", "--no-restore"],
+            "dotnet build src/Unrelated/Unrelated.csproj --no-restore");
+        var crowdedProjectOnlyHarness = projectOnlyHarness with
+        {
+            CommandPlans = [unrelatedProjectBuild, .. projectOnlyHarness.CommandPlans]
+        };
+        var boundedHarnessVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(
+            crowdedProjectOnlyHarness,
+            maximum: 2);
+        Require(
+            boundedHarnessVerification.Select(plan => plan.Kind).SequenceEqual(
+                [DotNetCommandKind.Build, DotNetCommandKind.Run]),
+            "an unrelated project build must not crowd a harness Build and Run out of a tight recommendation bound");
+        Require(
+            boundedHarnessVerification.All(plan =>
+                plan.TargetRelativePath.Equals("src/Arena.App/Arena.App.csproj", StringComparison.OrdinalIgnoreCase)),
+            "the tightly bounded harness recommendations should include only the relevant project target");
 
         const string hostilePath = "src/$([System.IO.File]::WriteAllText('pwned','x')) & O'Brien/O'Brien.csproj";
         var hostileSnapshot = CreateDotNetSnapshot("Hostile.Project", hostilePath);
@@ -61,6 +244,250 @@ internal static partial class Program
                 conventionalSnapshot,
                 $"{canonicalTest} --filter FullyQualifiedName=Arena.UnitTests.*") is null,
             "an unsafe or non-FQN filter must not become a typed focused retry");
+
+        var membershipOnlyVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(
+            conventionalSnapshot,
+            maximum: 2);
+        Require(
+            membershipOnlyVerification.Select(plan => plan.Kind).SequenceEqual(
+                [DotNetCommandKind.Build, DotNetCommandKind.Test])
+            && membershipOnlyVerification.All(plan =>
+                plan.TargetKind == DotNetCommandTargetKind.Project
+                && plan.TargetRelativePath.Equals(
+                    "tests/Arena.UnitTests/Arena.UnitTests.csproj",
+                    StringComparison.OrdinalIgnoreCase)),
+            "complete solution membership without default-configuration inclusion evidence must yield project Build then Test");
+        var membershipOnlyWithoutProjectBuild = conventionalSnapshot with
+        {
+            CommandPlans = conventionalSnapshot.CommandPlans
+                .Where(plan => plan.Kind != DotNetCommandKind.Build
+                    || plan.TargetKind != DotNetCommandTargetKind.Project)
+                .ToArray()
+        };
+        var orphanTestVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(
+            membershipOnlyWithoutProjectBuild);
+        Require(
+            orphanTestVerification.Count == 1
+            && orphanTestVerification[0] is
+            {
+                Kind: DotNetCommandKind.Build,
+                TargetKind: DotNetCommandTargetKind.Solution
+            }
+            && !orphanTestVerification.Any(plan => plan.Kind == DotNetCommandKind.Test),
+            "solution membership alone must not admit an orphan --no-build Test when its exact project Build is unavailable");
+
+        var projectOnlyConventional = conventionalSnapshot with
+        {
+            Solutions = [],
+            CommandPlans = conventionalSnapshot.CommandPlans
+                .Where(plan => plan.TargetKind == DotNetCommandTargetKind.Project)
+                .ToArray()
+        };
+        var projectOnlyConventionalVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(projectOnlyConventional);
+        Require(
+            projectOnlyConventionalVerification.Select(plan => plan.Kind).SequenceEqual(
+                [DotNetCommandKind.Build, DotNetCommandKind.Test]),
+            "a csproj-only conventional test project should build before its --no-build Test action");
+        var crowdedProjectOnlyConventional = projectOnlyConventional with
+        {
+            CommandPlans = [unrelatedProjectBuild, .. projectOnlyConventional.CommandPlans]
+        };
+        var boundedConventionalVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(
+            crowdedProjectOnlyConventional,
+            maximum: 2);
+        Require(
+            boundedConventionalVerification.Select(plan => plan.Kind).SequenceEqual(
+                [DotNetCommandKind.Build, DotNetCommandKind.Test]),
+            "an unrelated project build must not crowd a conventional Build and Test out of a tight recommendation bound");
+        Require(
+            boundedConventionalVerification.All(plan =>
+                plan.TargetRelativePath.Equals("tests/Arena.UnitTests/Arena.UnitTests.csproj", StringComparison.OrdinalIgnoreCase)),
+            "the tightly bounded conventional recommendations should include only the relevant test target");
+
+        var partialSolutionConventional = conventionalSnapshot with
+        {
+            Solutions = conventionalSnapshot.Solutions
+                .Select(solution => solution with { IsPartial = true })
+                .ToArray(),
+            CommandPlans = conventionalSnapshot.CommandPlans
+                .Where(plan => plan.Kind != DotNetCommandKind.Restore)
+                .ToArray(),
+            IsPartial = true
+        };
+        var partialSolutionVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(partialSolutionConventional);
+        Require(
+            partialSolutionVerification.Select(plan => plan.Kind).SequenceEqual(
+                [DotNetCommandKind.Build, DotNetCommandKind.Test]),
+            "a partial solution Build should be excluded while the project Build still precedes Test");
+        Require(
+            partialSolutionVerification.Select(plan => plan.TargetKind).SequenceEqual(
+                [DotNetCommandTargetKind.Project, DotNetCommandTargetKind.Project]),
+            "membership in a partial solution must not count as complete project Build coverage");
+
+        var unrelatedSolutionBuild = DotNetPlan(
+            "build:solution",
+            DotNetCommandKind.Build,
+            DotNetCommandTargetKind.Solution,
+            "Unrelated.sln",
+            ["build", "Unrelated.sln", "--no-restore"],
+            "dotnet build Unrelated.sln --no-restore");
+        var duplicateSolutionBuildIds = conventionalSnapshot with
+        {
+            Solutions =
+            [
+                new(
+                    "Unrelated",
+                    "Unrelated.sln",
+                    ["src/Unrelated/Unrelated.csproj"],
+                    IsPartial: false),
+                .. conventionalSnapshot.Solutions
+            ],
+            CommandPlans =
+            [
+                unrelatedSolutionBuild,
+                .. conventionalSnapshot.CommandPlans.Where(plan => plan.Kind != DotNetCommandKind.Restore)
+            ]
+        };
+        var duplicateIdBoundedVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(
+            duplicateSolutionBuildIds,
+            maximum: 2);
+        Require(
+            duplicateIdBoundedVerification.Select(plan => plan.Kind).SequenceEqual(
+                [DotNetCommandKind.Build, DotNetCommandKind.Test])
+            && duplicateIdBoundedVerification.All(plan =>
+                plan.TargetKind == DotNetCommandTargetKind.Project),
+            "solution Build ID collisions must not crowd the exact project Build and Test pair out of a tight bound");
+        Require(
+            duplicateIdBoundedVerification
+                .Select((plan, index) => (Plan: plan, Index: index))
+                .Where(item => item.Plan.Kind is DotNetCommandKind.Test or DotNetCommandKind.Run)
+                .All(item => HasEarlierExactProjectBuild(duplicateIdBoundedVerification, item.Index)),
+            "a tightly bounded recommendation must never emit a no-build action without an earlier exact project Build");
+
+        var equivalentSolutionBuild = DotNetPlan(
+            "build:equivalent-solution",
+            DotNetCommandKind.Build,
+            DotNetCommandTargetKind.Solution,
+            "Arena.slnx",
+            ["build", "Arena.slnx", "--no-restore"],
+            "dotnet build Arena.slnx --no-restore");
+        var equivalentSolutionMembership = conventionalSnapshot with
+        {
+            Solutions =
+            [
+                .. conventionalSnapshot.Solutions,
+                new(
+                    "Arena equivalent",
+                    "Arena.slnx",
+                    ["TESTS\\Arena.UnitTests\\Arena.UnitTests.csproj"],
+                    IsPartial: false)
+            ],
+            CommandPlans =
+            [
+                .. conventionalSnapshot.CommandPlans.Where(plan => plan.Kind != DotNetCommandKind.Restore),
+                equivalentSolutionBuild
+            ]
+        };
+        var equivalentSolutionVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(
+            equivalentSolutionMembership,
+            maximum: 2);
+        Require(
+            equivalentSolutionVerification.Select(plan => plan.Kind).SequenceEqual(
+                [DotNetCommandKind.Build, DotNetCommandKind.Test])
+            && equivalentSolutionVerification.All(plan =>
+                plan.TargetKind == DotNetCommandTargetKind.Project),
+            "equivalent solution membership under a tight bound must prioritize project Build then Test");
+        Require(
+            equivalentSolutionVerification
+                .Select((plan, index) => (Plan: plan, Index: index))
+                .Where(item => item.Plan.Kind is DotNetCommandKind.Test or DotNetCommandKind.Run)
+                .All(item => HasEarlierExactProjectBuild(equivalentSolutionVerification, item.Index)),
+            "the equivalent-solution recommendation must preserve earlier exact project Build coverage");
+        var equivalentSolutionWithOptionalCapacity = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(
+            equivalentSolutionMembership,
+            maximum: 4);
+        Require(
+            equivalentSolutionWithOptionalCapacity.Count == 3
+            && equivalentSolutionWithOptionalCapacity[0].TargetRelativePath.Equals(
+                "Arena.sln",
+                StringComparison.OrdinalIgnoreCase)
+            && !equivalentSolutionWithOptionalCapacity.Any(plan =>
+                plan.TargetRelativePath.Equals("Arena.slnx", StringComparison.OrdinalIgnoreCase)),
+            "optional equivalent solution Builds should remain normalized and nonredundant");
+
+        var mixedSolutionMembership = equivalentSolutionMembership with
+        {
+            Solutions = equivalentSolutionMembership.Solutions
+                .Select(solution => solution.RelativePath.Equals("Arena.slnx", StringComparison.OrdinalIgnoreCase)
+                    ? solution with
+                    {
+                        ProjectRelativePaths =
+                        [
+                            .. solution.ProjectRelativePaths,
+                            "src/Unique/Unique.csproj"
+                        ]
+                    }
+                    : solution)
+                .ToArray()
+        };
+        var mixedSolutionVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(
+            mixedSolutionMembership,
+            maximum: 4);
+        Require(
+            mixedSolutionVerification.Select(plan => plan.Kind).SequenceEqual(
+                [
+                    DotNetCommandKind.Build,
+                    DotNetCommandKind.Build,
+                    DotNetCommandKind.Build,
+                    DotNetCommandKind.Test
+                ])
+            && mixedSolutionVerification[1].TargetRelativePath.Equals("Arena.slnx", StringComparison.OrdinalIgnoreCase),
+            "a solution with mixed shared and unique membership should retain its Build");
+
+        var emptySolutionBuild = DotNetPlan(
+            "build:empty-solution",
+            DotNetCommandKind.Build,
+            DotNetCommandTargetKind.Solution,
+            "Empty.sln",
+            ["build", "Empty.sln", "--no-restore"],
+            "dotnet build Empty.sln --no-restore");
+        var emptySolutionWithOutsideProject = conventionalSnapshot with
+        {
+            Solutions =
+            [
+                new(
+                    "Empty",
+                    "Empty.sln",
+                    [],
+                    IsPartial: false)
+            ],
+            CommandPlans =
+            [
+                emptySolutionBuild,
+                .. conventionalSnapshot.CommandPlans.Where(plan =>
+                    plan.TargetKind == DotNetCommandTargetKind.Project)
+            ]
+        };
+        var emptySolutionVerification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(
+            emptySolutionWithOutsideProject,
+            maximum: 2);
+        Require(
+            emptySolutionVerification.Select(plan => plan.Kind).SequenceEqual(
+                [DotNetCommandKind.Build, DotNetCommandKind.Test])
+            && emptySolutionVerification.All(plan =>
+                plan.TargetKind == DotNetCommandTargetKind.Project
+                && plan.TargetRelativePath.Equals(
+                    "tests/Arena.UnitTests/Arena.UnitTests.csproj",
+                    StringComparison.OrdinalIgnoreCase)),
+            "an empty complete solution must not crowd the outside project Build and Test out of a tight bound");
+        var emptySolutionWithOptionalCapacity = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(
+            emptySolutionWithOutsideProject,
+            maximum: 3);
+        Require(
+            emptySolutionWithOptionalCapacity.Count == 2
+            && emptySolutionWithOptionalCapacity.All(plan =>
+                plan.TargetKind == DotNetCommandTargetKind.Project),
+            "an empty complete solution should remain excluded when optional solution capacity is available");
     }
 
     private static void AgentSolutionDoctorDrivesStructuredRepairEvidence()
@@ -473,5 +900,18 @@ internal static partial class Program
             networkRisk,
             display,
             $"{kind} {target}");
+    }
+
+    private static bool HasEarlierExactProjectBuild(
+        IReadOnlyList<DotNetCommandPlan> plans,
+        int actionIndex)
+    {
+        var action = plans[actionIndex];
+        return plans.Take(actionIndex).Any(plan =>
+            plan.Kind == DotNetCommandKind.Build
+            && plan.TargetKind == DotNetCommandTargetKind.Project
+            && plan.TargetRelativePath.Replace('\\', '/').Equals(
+                action.TargetRelativePath.Replace('\\', '/'),
+                StringComparison.OrdinalIgnoreCase));
     }
 }
