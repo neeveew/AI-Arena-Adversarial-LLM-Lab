@@ -101,6 +101,8 @@ $reducedMarkup = @'
 </Grid>
 '@
 
+$fixturesFailed = $false
+
 try {
     [void](New-Item -ItemType Directory -Path $sourceRoot -Force)
     [void](New-Item -ItemType Directory -Path $docsRoot -Force)
@@ -217,12 +219,35 @@ try {
     Require ($baseComparison.Output -match 'grew relative') "BaselineRef inflation failure should identify the base comparison."
 
     Write-Host "PASS XAML hard-coded ratchet fixtures"
+} catch {
+    $fixturesFailed = $true
+    Write-Host "FAIL XAML hard-coded ratchet fixtures: $($_.Exception.Message)"
 } finally {
     if (Test-Path -LiteralPath $fixtureRoot) {
         $resolvedFixture = (Resolve-Path -LiteralPath $fixtureRoot).Path
-        if (-not $resolvedFixture.StartsWith($temporaryBase + '\', [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Refusing fixture cleanup outside the temporary directory: $resolvedFixture"
+        if ($resolvedFixture.StartsWith($temporaryBase + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            # Best effort. The fixture holds a git repository, and git marks its
+            # objects read-only, so removal can fail on Windows for reasons that
+            # say nothing about the tests. Cleanup must not decide the verdict.
+            try {
+                Remove-Item -LiteralPath $resolvedFixture -Recurse -Force
+            } catch {
+                Write-Warning "Fixture cleanup left $resolvedFixture behind: $($_.Exception.Message)"
+            }
+        } else {
+            Write-Warning "Refusing fixture cleanup outside the temporary directory: $resolvedFixture"
         }
-        Remove-Item -LiteralPath $resolvedFixture -Recurse -Force
     }
 }
+
+# The exit code has to be stated rather than inherited. These fixtures invoke the
+# gate expecting it to fail, so $LASTEXITCODE is 1 by the time the suite passes.
+# GitHub's `shell: pwsh` appends `exit $LASTEXITCODE`, which turned a passing run
+# red; running the same file with -File hid it, because that path uses the
+# script's own exit instead. The inverse is worse: a failing suite could inherit
+# a 0 from the last successful child process and report green.
+if ($fixturesFailed) {
+    exit 1
+}
+
+exit 0
