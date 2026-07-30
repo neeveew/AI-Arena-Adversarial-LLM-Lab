@@ -36,13 +36,20 @@ public sealed partial class DotNetWorkspaceIntelligenceService
         var diagnostics = new List<DotNetWorkspaceDiagnostic>();
         var candidateProjects = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         var candidateSolutions = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-        var scanLimitReached = ScanCandidates(
-            root,
-            options,
-            candidateProjects,
-            candidateSolutions,
-            diagnostics,
-            cancellationToken);
+        var scanLimitReached = options.AllowedProjectRelativePaths is null
+            ? ScanCandidates(
+                root,
+                options,
+                candidateProjects,
+                candidateSolutions,
+                diagnostics,
+                cancellationToken)
+            : LoadAllowedProjectCandidates(
+                root,
+                options,
+                candidateProjects,
+                diagnostics,
+                cancellationToken);
 
         var projects = new List<DotNetProjectInfo>();
         foreach (var projectRelativePath in candidateProjects.Take(options.MaxProjects))
@@ -51,7 +58,8 @@ public sealed partial class DotNetWorkspaceIntelligenceService
             projects.Add(ParseProject(root, projectRelativePath, options, diagnostics));
         }
 
-        if (candidateProjects.Count > options.MaxProjects)
+        if (candidateProjects.Count > options.MaxProjects
+            || (options.AllowedProjectRelativePaths?.Count ?? 0) > options.MaxProjects)
         {
             scanLimitReached = true;
             AddDiagnostic(
@@ -88,6 +96,19 @@ public sealed partial class DotNetWorkspaceIntelligenceService
 
         projects.Sort((left, right) => StringComparer.OrdinalIgnoreCase.Compare(left.RelativePath, right.RelativePath));
         solutions.Sort((left, right) => StringComparer.OrdinalIgnoreCase.Compare(left.RelativePath, right.RelativePath));
+        var (findings, findingsLimitReached) = DotNetDoctorFindingFactory.CreateWorkspaceFindings(
+            projects,
+            options.MaxDiagnostics);
+        if (findingsLimitReached)
+        {
+            AddDiagnostic(
+                diagnostics,
+                options.MaxDiagnostics,
+                new(
+                    "DNW010",
+                    DotNetWorkspaceDiagnosticSeverity.Warning,
+                    $"Solution Doctor findings stopped at the configured diagnostic limit of {options.MaxDiagnostics.ToString(CultureInfo.InvariantCulture)}."));
+        }
 
         var (plans, commandPlansTruncated) = CreateCommandPlans(solutions, projects, options.MaxCommandPlans);
         if (commandPlansTruncated)
@@ -103,6 +124,7 @@ public sealed partial class DotNetWorkspaceIntelligenceService
 
         var isPartial = scanLimitReached
             || commandPlansTruncated
+            || findingsLimitReached
             || diagnostics.Any(diagnostic =>
                 diagnostic.Code != "DNW114"
                 && diagnostic.Severity is DotNetWorkspaceDiagnosticSeverity.Warning or DotNetWorkspaceDiagnosticSeverity.Error)
@@ -116,7 +138,11 @@ public sealed partial class DotNetWorkspaceIntelligenceService
             plans,
             diagnostics,
             isPartial,
-            scanLimitReached);
+            scanLimitReached)
+        {
+            Findings = findings,
+            FindingsLimitReached = findingsLimitReached
+        };
     }
 
     public IReadOnlyList<DotNetCommandPlan> CreateCommandPlans(DotNetWorkspaceSnapshot snapshot)
@@ -193,8 +219,79 @@ public sealed partial class DotNetWorkspaceIntelligenceService
             MaxDepth = Math.Clamp(options.MaxDepth, 0, 64),
             MaxProjectFileBytes = Math.Clamp(options.MaxProjectFileBytes, 4 * 1024, 32L * 1024 * 1024),
             MaxDiagnostics = Math.Clamp(options.MaxDiagnostics, 1, 10_000),
-            MaxCommandPlans = Math.Clamp(options.MaxCommandPlans, 1, 50_000)
+            MaxCommandPlans = Math.Clamp(options.MaxCommandPlans, 1, 50_000),
+            AllowedProjectRelativePaths = options.AllowedProjectRelativePaths?.ToArray()
         };
+    }
+
+    private static bool LoadAllowedProjectCandidates(
+        string root,
+        DotNetDiscoveryOptions options,
+        ISet<string> projects,
+        ICollection<DotNetWorkspaceDiagnostic> diagnostics,
+        CancellationToken cancellationToken)
+    {
+        var inspected = 0;
+        foreach (var suppliedPath in options.AllowedProjectRelativePaths!)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (++inspected > options.MaxProjects + 1)
+            {
+                return true;
+            }
+
+            var value = suppliedPath?.Trim();
+            if (string.IsNullOrWhiteSpace(value)
+                || Path.IsPathRooted(value)
+                || !Path.GetExtension(value).Equals(".csproj", StringComparison.OrdinalIgnoreCase))
+            {
+                AddDiagnostic(
+                    diagnostics,
+                    options.MaxDiagnostics,
+                    new(
+                        "DNW011",
+                        DotNetWorkspaceDiagnosticSeverity.Warning,
+                        "An explicitly allowed project path was invalid and was omitted."));
+                continue;
+            }
+
+            string absolutePath;
+            try
+            {
+                absolutePath = Path.GetFullPath(
+                    value.Replace('/', Path.DirectorySeparatorChar),
+                    root);
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                AddDiagnostic(
+                    diagnostics,
+                    options.MaxDiagnostics,
+                    new(
+                        "DNW011",
+                        DotNetWorkspaceDiagnosticSeverity.Warning,
+                        "An explicitly allowed project path was invalid and was omitted."));
+                continue;
+            }
+
+            if (!TryGetSafeRelativePath(root, absolutePath, out var relativePath)
+                || !File.Exists(absolutePath)
+                || PathContainsReparsePoint(root, absolutePath))
+            {
+                AddDiagnostic(
+                    diagnostics,
+                    options.MaxDiagnostics,
+                    new(
+                        "DNW012",
+                        DotNetWorkspaceDiagnosticSeverity.Warning,
+                        "An explicitly allowed project was unavailable or outside the workspace and was omitted."));
+                continue;
+            }
+
+            projects.Add(relativePath);
+        }
+
+        return options.AllowedProjectRelativePaths.Count > options.MaxProjects;
     }
 
     private static bool ScanCandidates(
@@ -354,6 +451,7 @@ public sealed partial class DotNetWorkspaceIntelligenceService
         var name = Path.GetFileNameWithoutExtension(relativePath);
         var frameworks = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         var references = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        var packageReferences = new List<DotNetPackageReferenceInfo>();
         var outputType = DotNetProjectOutputType.Unknown;
         var useWpf = false;
         var conventionalTest = false;
@@ -435,6 +533,30 @@ public sealed partial class DotNetWorkspaceIntelligenceService
                     .Select(element => (string?)element.Attribute("Include") ?? (string?)element.Attribute("Update"))
                     .Any(package => package?.Equals("Microsoft.NET.Test.Sdk", StringComparison.OrdinalIgnoreCase) == true)
                 || HasConventionalTestSdk(document);
+
+            foreach (var packageElement in document.Descendants().Where(element => element.Name.LocalName == "PackageReference"))
+            {
+                if (HasCondition(packageElement))
+                {
+                    continue;
+                }
+
+                var packageName = ((string?)packageElement.Attribute("Include"))?.Trim();
+                var versionElement = packageElement.Elements()
+                    .FirstOrDefault(element => element.Name.LocalName == "Version");
+                var packageVersion = ((string?)packageElement.Attribute("Version"))?.Trim()
+                    ?? versionElement?.Value.Trim();
+                if (IsLiteralPackageIdentity(packageName)
+                    && TryNormalizeLiteralPackageVersion(packageVersion, out var normalizedPackageVersion))
+                {
+                    if (versionElement is not null && HasCondition(versionElement))
+                    {
+                        continue;
+                    }
+
+                    packageReferences.Add(new(packageName!, normalizedPackageVersion));
+                }
+            }
 
             if (evaluationIsPartial)
             {
@@ -595,7 +717,16 @@ public sealed partial class DotNetWorkspaceIntelligenceService
             testKind,
             partial,
             diagnostics,
-            restoreState);
+            restoreState)
+        {
+            PackageReferences = packageReferences
+                .DistinctBy(
+                    package => $"{package.Name}\u001f{package.Version}",
+                    StringComparer.OrdinalIgnoreCase)
+                .OrderBy(package => package.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(package => package.Version, StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+        };
     }
 
     private static void ValidateIndexedProjectReferences(
@@ -1023,7 +1154,7 @@ public sealed partial class DotNetWorkspaceIntelligenceService
             .Where(value => !string.IsNullOrWhiteSpace(value))!);
         return sdkValues
             .SelectMany(value => value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            .Any(value => value.StartsWith("MSTest.Sdk", StringComparison.OrdinalIgnoreCase));
+            .Any(IsRecognizedMSTestSdk);
     }
 
     private static bool HasPlainMicrosoftNetSdk(XDocument document)
@@ -1098,9 +1229,13 @@ public sealed partial class DotNetWorkspaceIntelligenceService
 
         var rootSdk = ((string?)document.Root?.Attribute("Sdk"))?.Trim();
         return string.IsNullOrWhiteSpace(rootSdk)
-            || (!rootSdk.StartsWith("MSTest.Sdk", StringComparison.OrdinalIgnoreCase)
-                && !rootSdk.Equals("Microsoft.NET.Sdk", StringComparison.OrdinalIgnoreCase)
-                && !PropertyValues(properties, "OutputType").Any());
+            || (!IsRecognizedMSTestSdk(rootSdk)
+                && !rootSdk.Equals("Microsoft.NET.Sdk", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsRecognizedMSTestSdk(string value)
+    {
+        return LiteralMSTestSdkRegex().IsMatch(value.Trim());
     }
 
     private static bool HasCondition(XElement element)
@@ -1206,6 +1341,91 @@ public sealed partial class DotNetWorkspaceIntelligenceService
                 frameworks.Add(framework);
             }
         }
+    }
+
+    private static bool IsLiteralPackageIdentity(string? value)
+    {
+        return !string.IsNullOrWhiteSpace(value)
+            && value.Length <= 256
+            && value.All(character =>
+                char.IsLetterOrDigit(character)
+                || character is '.' or '-' or '_');
+    }
+
+    private static bool TryNormalizeLiteralPackageVersion(
+        string? value,
+        out string normalizedVersion)
+    {
+        normalizedVersion = "";
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 128)
+        {
+            return false;
+        }
+
+        var match = LiteralPackageVersionRegex().Match(value);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var components = new List<int>();
+        foreach (var component in match.Groups["core"].Value.Split('.'))
+        {
+            if (!int.TryParse(
+                    component,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var parsed)
+                || parsed < 0)
+            {
+                return false;
+            }
+
+            components.Add(parsed);
+        }
+
+        while (components.Count < 3)
+        {
+            components.Add(0);
+        }
+
+        if (components.Count == 4 && components[3] == 0)
+        {
+            components.RemoveAt(3);
+        }
+
+        normalizedVersion = string.Join(
+            ".",
+            components.Select(component => component.ToString(CultureInfo.InvariantCulture)));
+        if (match.Groups["prerelease"].Success)
+        {
+            var labels = new List<string>();
+            foreach (var label in match.Groups["prerelease"].Value.Split('.'))
+            {
+                if (!label.All(char.IsDigit))
+                {
+                    labels.Add(label.ToLowerInvariant());
+                    continue;
+                }
+
+                if (!int.TryParse(
+                        label,
+                        NumberStyles.None,
+                        CultureInfo.InvariantCulture,
+                        out var numericLabel)
+                    || numericLabel < 0)
+                {
+                    normalizedVersion = "";
+                    return false;
+                }
+
+                labels.Add(numericLabel.ToString(CultureInfo.InvariantCulture));
+            }
+
+            normalizedVersion += $"-{string.Join(".", labels)}";
+        }
+
+        return true;
     }
 
     private static DotNetProjectOutputType ParseOutputType(string? outputType)
@@ -1354,4 +1574,14 @@ public sealed partial class DotNetWorkspaceIntelligenceService
 
     [GeneratedRegex("""^[A-Za-z_][A-Za-z0-9_.+`]*$""", RegexOptions.CultureInvariant)]
     private static partial Regex SafeFullyQualifiedTestNameRegex();
+
+    [GeneratedRegex(
+        """^(?<core>[0-9]+(?:\.[0-9]+){0,3})(?:-(?<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$""",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex LiteralPackageVersionRegex();
+
+    [GeneratedRegex(
+        """^MSTest\.Sdk(?:/[0-9]+(?:\.[0-9]+){1,3}(?:[-+][0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?)?$""",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex LiteralMSTestSdkRegex();
 }

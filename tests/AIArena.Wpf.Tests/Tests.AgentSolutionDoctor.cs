@@ -1,4 +1,5 @@
 using AIArena.Core.Models;
+using AIArena.Core.Services;
 using AIArena.Wpf;
 using AIArena.Wpf.Services;
 
@@ -6,7 +7,30 @@ internal static partial class Program
 {
     private static void AgentSolutionDoctorPresentsTypedWorkspaceActions()
     {
-        var snapshot = CreateDotNetSnapshot("Arena.App", "src/Arena.App/Arena.App.csproj");
+        var snapshot = CreateDotNetSnapshot("Arena.App", "src/Arena.App/Arena.App.csproj") with
+        {
+            Findings =
+            [
+                new(
+                    "doctor:target-framework:0123456789abcdef",
+                    "DND302",
+                    DotNetWorkspaceDiagnosticSeverity.Error,
+                    DotNetFindingCategory.TargetFrameworkIncompatibility,
+                    DotNetFindingConfidence.High,
+                    "Incompatible project target frameworks",
+                    "The project reference has no compatible target.",
+                    "src/Arena.App/Arena.App.csproj",
+                    ["src/Arena.App/Arena.App.csproj", "src/Arena.Core/Arena.Core.csproj"],
+                    [
+                        new(
+                            1,
+                            DotNetFindingEvidenceKind.ProjectReference,
+                            "Project reference",
+                            "src/Arena.App/Arena.App.csproj",
+                            "src/Arena.Core/Arena.Core.csproj")
+                    ])
+            ]
+        };
 
         var profile = AgentDotNetSolutionDoctorService.FormatWorkspaceProfile(
             "Project signals: .NET",
@@ -15,6 +39,7 @@ internal static partial class Program
         Require(profile.Contains("dotnet build Arena.sln --no-restore", StringComparison.Ordinal), "typed profile should offer the solution build without restore");
         Require(profile.Contains("dotnet run --project src/Arena.App/Arena.App.csproj --no-build", StringComparison.Ordinal), "executable harness should use dotnet run --project --no-build");
         Require(profile.Contains("separate approval", StringComparison.OrdinalIgnoreCase), "restore should be labelled as a separate approval");
+        Require(profile.Contains("DND302", StringComparison.Ordinal) && profile.Contains("Incompatible project target frameworks", StringComparison.Ordinal), "typed profile should expose bounded root-cause findings");
         Require(!profile.Contains("dotnet test", StringComparison.OrdinalIgnoreCase), "an executable harness must not be presented as dotnet test");
 
         var build = AgentDotNetSolutionDoctorService.FindCommandPlan(snapshot, "dotnet build .\\Arena.sln --no-restore");
@@ -29,6 +54,62 @@ internal static partial class Program
         Require(AgentDotNetSolutionDoctorService.FindCommandPlan(snapshot, "dotnet build Missing.csproj --no-restore") is null, "an unrelated explicit target must not fall back to the only solution");
         Require(AgentDotNetSolutionDoctorService.FindCommandPlan(snapshot, "dotnet build ../Arena.sln --no-restore") is null, "a parent-relative target must not be normalized onto a workspace target");
         Require(AgentDotNetSolutionDoctorService.FindCommandPlan(snapshot, "dotnet build /Arena.sln --no-restore") is null, "an absolute-looking target must not be normalized onto a workspace target");
+
+        var discoverySnapshot = CreateDotNetSnapshot(
+            "Arena.Tests",
+            "tests/Arena.Tests/Arena.Tests.csproj",
+            testKind: DotNetProjectTestKind.Conventional);
+        var conventionalTest = discoverySnapshot.CommandPlans.Single(plan => plan.Kind == DotNetCommandKind.Test);
+        var discoveryFailure = new DotNetOutputParser().Parse(
+            Directory.GetCurrentDirectory(),
+            conventionalTest,
+            0,
+            "No test is available in discarded.dll. Make sure that test discoverer & executors are registered.",
+            "");
+        Require(
+            AgentDotNetSolutionDoctorService.ResultEvidenceState(discoveryFailure) == "Test discovery failed"
+            && AgentDotNetSolutionDoctorService.TestEvidenceState(discoveryFailure) == "Discovery failed"
+            && AgentDotNetSolutionDoctorService.PrimaryFailureState(discoveryFailure).StartsWith("DND402", StringComparison.Ordinal),
+            "WPF evidence states should surface discovery failure instead of contradictory zero-error or no-total labels");
+        var warningSnapshot = snapshot with
+        {
+            Findings =
+            [
+                snapshot.Findings[0] with
+                {
+                    Severity = DotNetWorkspaceDiagnosticSeverity.Warning,
+                    Category = DotNetFindingCategory.PackageVersionConflict,
+                    Code = "DND303"
+                }
+            ]
+        };
+        var cleanSnapshot = snapshot with { Findings = [], Diagnostics = [], IsPartial = false };
+        Require(
+            AgentDotNetSolutionDoctorService.WorkspaceEvidenceBrushKey(snapshot) == "DangerBorderBrush"
+            && AgentDotNetSolutionDoctorService.WorkspaceEvidenceBrushKey(warningSnapshot) == "PrimaryBorderBrush"
+            && AgentDotNetSolutionDoctorService.WorkspaceEvidenceBrushKey(cleanSnapshot) == "AssistBorderBrush"
+            && AgentDotNetSolutionDoctorService.WorkspaceEvidenceBrushKey(cleanSnapshot with { IsPartial = true }) == "PrimaryBorderBrush",
+            "workspace evidence tone should reserve green for complete zero-finding scans and use warning-neutral chrome for partial or warning-only evidence");
+        var typedBuild = snapshot.CommandPlans.Single(plan =>
+            plan.Kind == DotNetCommandKind.Build
+            && plan.TargetKind == DotNetCommandTargetKind.Solution);
+        var cleanBuildResult = new DotNetOutputParser().Parse(
+            Directory.GetCurrentDirectory(),
+            typedBuild,
+            0,
+            "Build succeeded.",
+            "");
+        var warningBuildResult = new DotNetOutputParser().Parse(
+            Directory.GetCurrentDirectory(),
+            typedBuild,
+            0,
+            "warning CS0168: The variable is declared but never used.",
+            "");
+        Require(
+            AgentDotNetSolutionDoctorService.ResultEvidenceBrushKey(discoveryFailure) == "DangerBorderBrush"
+            && AgentDotNetSolutionDoctorService.ResultEvidenceBrushKey(warningBuildResult) == "PrimaryBorderBrush"
+            && AgentDotNetSolutionDoctorService.ResultEvidenceBrushKey(cleanBuildResult) == "AssistBorderBrush",
+            "command evidence tone should show structured failure as danger, warning-only success as neutral primary, and only clean success as assist");
 
         var verification = AgentDotNetSolutionDoctorService.RecommendedVerificationPlans(snapshot);
         Require(
@@ -520,7 +601,8 @@ internal static partial class Program
                     && plan.TargetKind == DotNetCommandTargetKind.Project).DisplayInvocation;
                 var stdout = $"""
                     {sourcePath}(4,2): error CS1002: ; expected [{projectPath}]
-                        0 Warning(s)
+                    warning NU1605: Detected package downgrade: Example.Dependency from 4.0.0 to 3.0.0. Reference the package directly from the project to select a different version. [{projectPath}]
+                        1 Warning(s)
                         1 Error(s)
                     """;
                 var result = new AgentCommandResult(
@@ -542,6 +624,11 @@ internal static partial class Program
                 Require(coordinator.DebugApplyCompletedCommandForTest(result, receipt), "current-workspace command result should be accepted");
                 Require(coordinator.DebugBuildEvidenceSummary.Contains(".NET Build", StringComparison.Ordinal), "Build Evidence summary should prioritize the structured .NET result");
                 Require(coordinator.DebugDotNetResultPacket.Contains("CS1002", StringComparison.Ordinal), "structured packet should contain the compiler diagnostic");
+                Require(
+                    coordinator.DebugDotNetResultPacket.Contains("Root-cause findings:", StringComparison.Ordinal)
+                    && coordinator.DebugDotNetResultPacket.Contains("DND401", StringComparison.Ordinal)
+                    && coordinator.DebugDotNetResultPacket.Contains("4.0.0 -> 3.0.0", StringComparison.Ordinal),
+                    "structured packet should expose the downgrade finding and ordered evidence chain");
                 Require(coordinator.DebugDotNetResultPacket.Contains("src/App/Broken.cs", StringComparison.Ordinal), "structured packet should contain only the relative source location");
                 Require(!coordinator.DebugDotNetResultPacket.Contains(workspaceRoot, StringComparison.OrdinalIgnoreCase), "structured packet should not expose the absolute workspace");
                 Require(coordinator.DebugStageNextLabel == "Stage Repair", "a compiler failure should expose Stage Repair");
@@ -551,6 +638,20 @@ internal static partial class Program
                 Require(coordinator.DebugPromptText.Contains("dotnet build src/App/App.csproj --no-restore", StringComparison.Ordinal), "repair prompt should carry the narrowed project-correct command");
                 Require(coordinator.DebugPromptText.Contains("C# Diagnostics", StringComparison.OrdinalIgnoreCase)
                     || coordinator.DebugPromptText.Contains("CS1002", StringComparison.Ordinal), "repair prompt should carry bounded structured failure evidence");
+
+                var warningOnly = result with
+                {
+                    Ok = true,
+                    ExitCode = 0,
+                    StandardOutput = "warning CS0168: The variable is declared but never used.",
+                    Error = ""
+                };
+                Require(coordinator.DebugApplyCompletedCommandForTest(warningOnly, receipt), "warning-only typed success should be captured");
+                Require(
+                    coordinator.DebugBuildEvidenceTones.Contains("Command Run: PrimaryBorderBrush", StringComparison.Ordinal)
+                    && coordinator.DebugBuildEvidenceTones.Contains("C# Diagnostics: PrimaryBorderBrush", StringComparison.Ordinal)
+                    && coordinator.DebugOutputTones.Contains("Command: PrimaryBorderBrush", StringComparison.Ordinal),
+                    "warning-only typed success should use warning-neutral primary tone on every command evidence surface");
 
                 var cancelled = result with
                 {
@@ -750,6 +851,109 @@ internal static partial class Program
                 };
                 Require(coordinator.DebugApplyCompletedCommandForTest(buildResult, emptyReceipt), "post-restore typed build result should be accepted");
                 Require(coordinator.DebugRunbookStatus == "Completed", "the retained verification state should complete only after a non-restore typed gate passes");
+                coordinator.Dispose();
+            }
+            finally
+            {
+                if (Directory.Exists(testRoot))
+                {
+                    Directory.Delete(testRoot, recursive: true);
+                }
+            }
+        });
+    }
+
+    private static void AgentSolutionDoctorTreatsStructuredFailureAsAuthoritative()
+    {
+        RunStaTest(() =>
+        {
+            var testRoot = Path.Combine(Path.GetTempPath(), "ai-arena-agent-dotnet-effective-result", Guid.NewGuid().ToString("N"));
+            var workspaceRoot = Path.Combine(testRoot, "workspace");
+            Directory.CreateDirectory(workspaceRoot);
+            try
+            {
+                const string projectRelativePath = "tests/Discovery.Tests/Discovery.Tests.csproj";
+                var snapshot = CreateDotNetSnapshot(
+                    "Discovery.Tests",
+                    projectRelativePath,
+                    testKind: DotNetProjectTestKind.Conventional);
+                var runbook = new AgentRunbookService();
+                var now = new DateTimeOffset(2026, 7, 30, 12, 0, 0, TimeSpan.Zero);
+                runbook.Begin(workspaceRoot, "Run typed test verification.", builderOnly: false, now);
+                runbook.MarkExecutionStarted("Typed test verification started.", now.AddMinutes(1));
+                runbook.MarkExecutionFinished(
+                    ok: true,
+                    canceled: false,
+                    "A verification result is pending review.",
+                    now.AddMinutes(2));
+                var settings = new WpfSettings
+                {
+                    AgentWorkspacePath = workspaceRoot,
+                    AgentRunbook = runbook.State
+                };
+                var coordinator = CreateWorkspaceProfileTestCoordinator(
+                    settings,
+                    new WpfSettingsStore(Path.Combine(testRoot, "settings.json")),
+                    (_, _) => Task.FromResult("Project signals: .NET"),
+                    (_, _) => Task.FromResult(snapshot));
+                coordinator.Initialize();
+                coordinator.DebugWorkspaceProfileRefreshTask.GetAwaiter().GetResult();
+                Require(coordinator.DebugRunbookStatus == "Needs verification", "fixture should begin at the verification checkpoint");
+
+                coordinator.DebugSetCommandRequiredForTest(true);
+                coordinator.DebugSetAutoContinueForSession(true, remainingSteps: 2);
+                var testPlan = snapshot.CommandPlans.Single(plan =>
+                    plan.Kind == DotNetCommandKind.Test
+                    && plan.TargetRelativePath == projectRelativePath);
+                var rawExitZero = new AgentCommandResult(
+                    true,
+                    "Terminal",
+                    testPlan.DisplayInvocation,
+                    workspaceRoot,
+                    0,
+                    "No test is available in Discovery.Tests.dll. Make sure that test discoverer & executors are registered and platform & framework version settings are appropriate and try again.",
+                    "",
+                    TimeSpan.FromMilliseconds(30),
+                    false,
+                    false,
+                    "");
+                var emptyReceipt = AgentWorkspaceCoordinator.BuildFileReceipt(
+                    new Dictionary<string, AgentWorkspaceCoordinator.AgentWorkspaceFileStamp>(StringComparer.OrdinalIgnoreCase),
+                    new Dictionary<string, AgentWorkspaceCoordinator.AgentWorkspaceFileStamp>(StringComparer.OrdinalIgnoreCase));
+
+                Require(
+                    coordinator.DebugApplyCompletedCommandForTest(rawExitZero, emptyReceipt),
+                    "typed exit-zero test discovery result should be captured");
+                Require(
+                    coordinator.DebugDotNetResultPacket.Contains("DND402", StringComparison.Ordinal)
+                    && coordinator.DebugDotNetResultPacket.Contains("Outcome: failed", StringComparison.Ordinal),
+                    "structured test discovery evidence should authoritatively classify the raw exit-zero result as failed");
+                Require(coordinator.DebugRunbookStatus == "Blocked", "a structured failure must block rather than complete the active runbook");
+                Require(coordinator.DebugStageNextLabel == "Stage Repair", "a structured failure must route the next action to Stage Repair");
+                Require(
+                    coordinator.DebugLastMessageKind == "Warning"
+                    && coordinator.DebugLastMessageBody.Contains("failed with exit 0", StringComparison.OrdinalIgnoreCase),
+                    "the visible command result must not describe contradictory raw exit-zero evidence as completed");
+                Require(
+                    coordinator.DebugBuildEvidenceTones.Contains("Command Run: DangerBorderBrush", StringComparison.Ordinal)
+                    && coordinator.DebugBuildEvidenceTones.Contains("C# Diagnostics: DangerBorderBrush", StringComparison.Ordinal)
+                    && coordinator.DebugOutputTones.Contains("Command: DangerBorderBrush", StringComparison.Ordinal),
+                    "structured failure tone should remain danger across build evidence and output surfaces");
+                Require(
+                    coordinator.DebugCommandHistorySummary.Contains("Failed (exit 0)", StringComparison.Ordinal),
+                    "command history should retain the raw exit while labelling the effective structured failure");
+
+                var promptBeforeAutoContinue = coordinator.DebugPromptText;
+                coordinator.DebugTryAutoContinueAfterCommandForTestAsync(rawExitZero, emptyReceipt).GetAwaiter().GetResult();
+                Require(
+                    !coordinator.DebugAutoContinueEnabled
+                    && coordinator.DebugAutoContinueRemaining == 0
+                    && coordinator.DebugPromptText == promptBeforeAutoContinue,
+                    "structured .NET failure must pause Auto Continue before spending a step or asking the model for a follow-up");
+                Require(
+                    coordinator.DebugTopModeText == "Repair next"
+                    && coordinator.DebugAutoContinueStatus.Contains("Auto Continue is off", StringComparison.Ordinal),
+                    "after the structured-failure pause, shell lifecycle state should consistently direct the operator to repair");
                 coordinator.Dispose();
             }
             finally

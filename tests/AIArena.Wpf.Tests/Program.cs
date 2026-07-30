@@ -334,6 +334,7 @@ var tests = new List<(string Name, Action Test)>
     ("agent solution doctor refresh ignores stale typed results", AgentSolutionDoctorRefreshIgnoresStaleTypedResults),
     ("agent solution doctor survives legacy profile failure", AgentSolutionDoctorSurvivesLegacyProfileFailure),
     ("agent solution doctor refreshes assets after restore", AgentSolutionDoctorRefreshesAfterRestore),
+    ("agent solution doctor treats structured failure as authoritative", AgentSolutionDoctorTreatsStructuredFailureAsAuthoritative),
     ("agent workspace profile refresh disposes safely", AgentWorkspaceProfileRefreshDisposesSafely)
 };
 

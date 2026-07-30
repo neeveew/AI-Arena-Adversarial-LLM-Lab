@@ -29,6 +29,32 @@ public enum DotNetRestoreState
     AssetsMissing
 }
 
+public enum DotNetFindingCategory
+{
+    ProjectReferenceCycle,
+    TargetFrameworkIncompatibility,
+    PackageVersionConflict,
+    PackageDowngrade,
+    TestDiscoveryFailure
+}
+
+public enum DotNetFindingConfidence
+{
+    Medium,
+    High
+}
+
+public enum DotNetFindingEvidenceKind
+{
+    Project,
+    ProjectReference,
+    TargetFramework,
+    PackageReference,
+    Command,
+    Diagnostic,
+    TestRunner
+}
+
 public enum DotNetCommandKind
 {
     Restore,
@@ -62,13 +88,44 @@ public sealed record DotNetDiscoveryOptions(
     int MaxDepth = 12,
     long MaxProjectFileBytes = 2 * 1024 * 1024,
     int MaxDiagnostics = 256,
-    int MaxCommandPlans = 512);
+    int MaxCommandPlans = 512)
+{
+    /// <summary>
+    /// When non-null, discovery is bounded to these workspace-relative .csproj
+    /// paths and does not traverse the workspace for other projects or solutions.
+    /// </summary>
+    public IReadOnlyList<string>? AllowedProjectRelativePaths { get; init; }
+}
 
 public sealed record DotNetWorkspaceDiagnostic(
     string Code,
     DotNetWorkspaceDiagnosticSeverity Severity,
     string Message,
     string? RelativePath = null);
+
+public sealed record DotNetPackageReferenceInfo(
+    string Name,
+    string Version);
+
+public sealed record DotNetFindingEvidenceStep(
+    int Sequence,
+    DotNetFindingEvidenceKind Kind,
+    string Label,
+    string? RelativePath = null,
+    string? RelatedRelativePath = null,
+    string? Value = null);
+
+public sealed record DotNetDoctorFinding(
+    string Id,
+    string Code,
+    DotNetWorkspaceDiagnosticSeverity Severity,
+    DotNetFindingCategory Category,
+    DotNetFindingConfidence Confidence,
+    string Title,
+    string Summary,
+    string? PrimaryRelativePath,
+    IReadOnlyList<string> RelatedProjectRelativePaths,
+    IReadOnlyList<DotNetFindingEvidenceStep> RootCauseChain);
 
 public sealed record DotNetSolutionInfo(
     string Name,
@@ -92,6 +149,7 @@ public sealed record DotNetProjectInfo(
     public bool IsExecutable => OutputType is DotNetProjectOutputType.Exe or DotNetProjectOutputType.WinExe;
     public bool IsConventionalTestProject => TestKind == DotNetProjectTestKind.Conventional;
     public bool IsExecutableTestHarness => TestKind == DotNetProjectTestKind.ExecutableHarness;
+    public IReadOnlyList<DotNetPackageReferenceInfo> PackageReferences { get; init; } = [];
 }
 
 public sealed record DotNetCommandPlan(
@@ -116,7 +174,11 @@ public sealed record DotNetWorkspaceSnapshot(
     IReadOnlyList<DotNetCommandPlan> CommandPlans,
     IReadOnlyList<DotNetWorkspaceDiagnostic> Diagnostics,
     bool IsPartial,
-    bool ScanLimitReached);
+    bool ScanLimitReached)
+{
+    public IReadOnlyList<DotNetDoctorFinding> Findings { get; init; } = [];
+    public bool FindingsLimitReached { get; init; }
+}
 
 public enum DotNetBuildDiagnosticSeverity
 {
@@ -165,7 +227,10 @@ public sealed record DotNetCommandResult(
     DotNetTestTotals? TestTotals,
     IReadOnlyList<DotNetFailingTest> FailingTests,
     DotNetRawOutput RawOutput,
-    bool StructuredEvidenceLimitReached);
+    bool StructuredEvidenceLimitReached)
+{
+    public IReadOnlyList<DotNetDoctorFinding> Findings { get; init; } = [];
+}
 
 public sealed record DotNetNarrowedRetryPlan(
     DotNetCommandPlan Command,

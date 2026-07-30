@@ -1,5 +1,49 @@
 Set-StrictMode -Version Latest
 
+$script:AIArenaCodeSigningEkuOid = '1.3.6.1.5.5.7.3.3'
+$script:AIArenaTimestampingEkuOid = '1.3.6.1.5.5.7.3.8'
+
+function Get-AIArenaOptionalPropertyValue {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$InputObject,
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [AllowNull()]
+        [object]$DefaultValue = $null
+    )
+
+    if ($null -eq $InputObject) {
+        return $DefaultValue
+    }
+
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $DefaultValue
+    }
+
+    return $property.Value
+}
+
+function Assert-AIArenaSigningPolicyState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Optional', 'Required', 'Disabled')]
+        [string]$Policy,
+        [Parameter(Mandatory = $true)]
+        [bool]$SigningEnabled
+    )
+
+    if ($Policy -eq 'Required' -and -not $SigningEnabled) {
+        throw "Signing policy 'Required' cannot be recorded with signing disabled."
+    }
+    if ($Policy -eq 'Disabled' -and $SigningEnabled) {
+        throw "Signing policy 'Disabled' cannot be recorded with signing enabled."
+    }
+}
+
 function Assert-AIArenaReleaseVersion {
     [CmdletBinding()]
     param(
@@ -156,7 +200,7 @@ function Get-AIArenaSignTool {
     return $selected
 }
 
-function Get-AIArenaCodeSigningCertificate {
+function Normalize-AIArenaCertificateThumbprint {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -168,20 +212,306 @@ function Get-AIArenaCodeSigningCertificate {
         throw "Signing certificate thumbprint must contain 40 to 128 hexadecimal characters."
     }
 
-    foreach ($storePath in @('Cert:\CurrentUser\My', 'Cert:\LocalMachine\My')) {
-        $certificate = Get-ChildItem -LiteralPath $storePath -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.Thumbprint -eq $normalized `
-                    -and $_.HasPrivateKey `
-                    -and @($_.EnhancedKeyUsageList | Where-Object { [string]$_.ObjectId -eq '1.3.6.1.5.5.7.3.3' }).Count -gt 0
-            } |
-            Select-Object -First 1
-        if ($null -ne $certificate) {
-            return $certificate
+    return $normalized
+}
+
+function Test-AIArenaCertificateEnhancedKeyUsage {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+        [Parameter(Mandatory = $true)]
+        [string]$Oid
+    )
+
+    foreach ($extension in $Certificate.Extensions) {
+        if ($extension -isnot [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]) {
+            continue
+        }
+
+        foreach ($usage in $extension.EnhancedKeyUsages) {
+            if ($usage.Value -eq $Oid) {
+                return $true
+            }
         }
     }
 
-    return $null
+    return $false
+}
+
+function Test-AIArenaCertificateDigitalSignatureUsage {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate
+    )
+
+    $keyUsageExtensions = @($Certificate.Extensions | Where-Object {
+        $_ -is [System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]
+    })
+    if ($keyUsageExtensions.Count -eq 0) {
+        return $true
+    }
+
+    foreach ($extension in $keyUsageExtensions) {
+        if (($extension.KeyUsages -band [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature) -ne 0) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Find-AIArenaCodeSigningCertificates {
+    [CmdletBinding()]
+    param(
+        [switch]$IncludeInvalid
+    )
+
+    $now = [DateTime]::Now
+    foreach ($store in @(
+        [pscustomobject]@{ Path = 'Cert:\CurrentUser\My'; Location = 'CurrentUser' },
+        [pscustomobject]@{ Path = 'Cert:\LocalMachine\My'; Location = 'LocalMachine' }
+    )) {
+        foreach ($certificate in @(Get-ChildItem -LiteralPath $store.Path -ErrorAction SilentlyContinue)) {
+            if ($certificate -isnot [System.Security.Cryptography.X509Certificates.X509Certificate2]) {
+                continue
+            }
+
+            $hasCodeSigningEku = Test-AIArenaCertificateEnhancedKeyUsage `
+                -Certificate $certificate `
+                -Oid $script:AIArenaCodeSigningEkuOid
+            $hasDigitalSignatureUsage = Test-AIArenaCertificateDigitalSignatureUsage -Certificate $certificate
+            $timeValid = $certificate.NotBefore -le $now -and $certificate.NotAfter -gt $now
+            $candidate = $certificate.HasPrivateKey `
+                -and $hasCodeSigningEku `
+                -and $hasDigitalSignatureUsage `
+                -and $timeValid
+            if ($IncludeInvalid.IsPresent -or $candidate) {
+                [pscustomobject]@{
+                    Certificate = $certificate
+                    StoreLocation = $store.Location
+                    Thumbprint = $certificate.Thumbprint
+                    Subject = $certificate.Subject
+                    NotBefore = $certificate.NotBefore
+                    NotAfter = $certificate.NotAfter
+                    HasPrivateKey = $certificate.HasPrivateKey
+                    HasCodeSigningEku = $hasCodeSigningEku
+                    HasDigitalSignatureUsage = $hasDigitalSignatureUsage
+                    TimeValid = $timeValid
+                    Candidate = $candidate
+                }
+            }
+        }
+    }
+}
+
+function Get-AIArenaCodeSigningCertificateRecord {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Thumbprint
+    )
+
+    $normalized = Normalize-AIArenaCertificateThumbprint -Thumbprint $Thumbprint
+    return Find-AIArenaCodeSigningCertificates -IncludeInvalid |
+        Where-Object { $_.Thumbprint -eq $normalized } |
+        Select-Object -First 1
+}
+
+function Get-AIArenaCodeSigningCertificate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Thumbprint
+    )
+
+    $record = Get-AIArenaCodeSigningCertificateRecord -Thumbprint $Thumbprint
+    if ($null -eq $record -or -not $record.Candidate) {
+        return $null
+    }
+
+    return $record.Certificate
+}
+
+function Assert-AIArenaCertificateChain {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate
+    )
+
+    $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
+    try {
+        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+        $chain.ChainPolicy.RevocationFlag = [System.Security.Cryptography.X509Certificates.X509RevocationFlag]::ExcludeRoot
+        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
+        $chain.ChainPolicy.UrlRetrievalTimeout = [TimeSpan]::FromSeconds(15)
+        if (-not $chain.Build($Certificate)) {
+            $failures = @($chain.ChainStatus |
+                ForEach-Object { "$($_.Status): $($_.StatusInformation.Trim())" } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $detail = if ($failures.Count -gt 0) { $failures -join '; ' } else { 'unknown chain error' }
+            throw "The requested Authenticode certificate does not build to a trusted root: $detail"
+        }
+    }
+    finally {
+        $chain.Dispose()
+    }
+}
+
+function Assert-AIArenaCertificatePrivateKey {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate
+    )
+
+    $challenge = [Text.Encoding]::UTF8.GetBytes("AI Arena Authenticode preflight $([Guid]::NewGuid().ToString('N'))")
+    $rsaPrivate = $null
+    $rsaPublic = $null
+    try {
+        $rsaPrivate = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($Certificate)
+        if ($null -ne $rsaPrivate) {
+            if ($rsaPrivate.KeySize -lt 2048) {
+                throw "The requested Authenticode RSA key is only $($rsaPrivate.KeySize) bits; at least 2048 bits are required."
+            }
+
+            $rsaPublic = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($Certificate)
+            $proof = $rsaPrivate.SignData(
+                $challenge,
+                [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+            if ($null -eq $rsaPublic -or -not $rsaPublic.VerifyData(
+                $challenge,
+                $proof,
+                [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)) {
+                throw 'The requested Authenticode RSA private key failed its signing proof.'
+            }
+
+            return [pscustomobject]@{ Algorithm = 'RSA'; KeySize = $rsaPrivate.KeySize }
+        }
+    }
+    catch {
+        throw "The requested Authenticode private key is not usable for RSA signing: $($_.Exception.Message)"
+    }
+    finally {
+        if ($null -ne $rsaPublic) {
+            $rsaPublic.Dispose()
+        }
+        if ($null -ne $rsaPrivate) {
+            $rsaPrivate.Dispose()
+        }
+    }
+
+    $ecdsaPrivate = $null
+    $ecdsaPublic = $null
+    try {
+        $ecdsaPrivate = [System.Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($Certificate)
+        if ($null -ne $ecdsaPrivate) {
+            if ($ecdsaPrivate.KeySize -lt 256) {
+                throw "The requested Authenticode ECDSA key is only $($ecdsaPrivate.KeySize) bits; at least 256 bits are required."
+            }
+
+            $ecdsaPublic = [System.Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPublicKey($Certificate)
+            $proof = $ecdsaPrivate.SignData($challenge, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+            if ($null -eq $ecdsaPublic -or -not $ecdsaPublic.VerifyData(
+                $challenge,
+                $proof,
+                [System.Security.Cryptography.HashAlgorithmName]::SHA256)) {
+                throw 'The requested Authenticode ECDSA private key failed its signing proof.'
+            }
+
+            return [pscustomobject]@{ Algorithm = 'ECDSA'; KeySize = $ecdsaPrivate.KeySize }
+        }
+    }
+    catch {
+        throw "The requested Authenticode private key is not usable for ECDSA signing: $($_.Exception.Message)"
+    }
+    finally {
+        if ($null -ne $ecdsaPublic) {
+            $ecdsaPublic.Dispose()
+        }
+        if ($null -ne $ecdsaPrivate) {
+            $ecdsaPrivate.Dispose()
+        }
+    }
+
+    throw 'The requested Authenticode certificate does not expose a supported RSA or ECDSA private key.'
+}
+
+function Get-AIArenaCertificatePublicKeyInfo {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate
+    )
+
+    $rsa = $null
+    try {
+        $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($Certificate)
+        if ($null -ne $rsa) {
+            return [pscustomobject]@{ Algorithm = 'RSA'; KeySize = $rsa.KeySize }
+        }
+    }
+    finally {
+        if ($null -ne $rsa) {
+            $rsa.Dispose()
+        }
+    }
+
+    $ecdsa = $null
+    try {
+        $ecdsa = [System.Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPublicKey($Certificate)
+        if ($null -ne $ecdsa) {
+            return [pscustomobject]@{ Algorithm = 'ECDSA'; KeySize = $ecdsa.KeySize }
+        }
+    }
+    finally {
+        if ($null -ne $ecdsa) {
+            $ecdsa.Dispose()
+        }
+    }
+
+    throw 'The Authenticode signer certificate does not expose a supported RSA or ECDSA public key.'
+}
+
+function Assert-AIArenaCodeSigningCertificate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$CertificateRecord
+    )
+
+    $certificate = $CertificateRecord.Certificate
+    if ($null -eq $certificate) {
+        throw 'The requested Authenticode certificate record has no certificate.'
+    }
+    if (-not $certificate.HasPrivateKey) {
+        throw 'The requested Authenticode certificate does not have an accessible private key.'
+    }
+    if (-not (Test-AIArenaCertificateEnhancedKeyUsage -Certificate $certificate -Oid $script:AIArenaCodeSigningEkuOid)) {
+        throw 'The requested Authenticode certificate is not valid for code signing.'
+    }
+    if (-not (Test-AIArenaCertificateDigitalSignatureUsage -Certificate $certificate)) {
+        throw 'The requested Authenticode certificate key usage does not permit digital signatures.'
+    }
+    if ($certificate.NotAfter -le [DateTime]::Now) {
+        throw "The requested Authenticode certificate expired on $($certificate.NotAfter.ToString('u'))."
+    }
+    if ($certificate.NotBefore -gt [DateTime]::Now) {
+        throw "The requested Authenticode certificate is not valid until $($certificate.NotBefore.ToString('u'))."
+    }
+
+    Assert-AIArenaCertificateChain -Certificate $certificate
+    $key = Assert-AIArenaCertificatePrivateKey -Certificate $certificate
+    return [pscustomobject]@{
+        Algorithm = $key.Algorithm
+        KeySize = $key.KeySize
+        ChainTrusted = $true
+        PrivateKeyVerified = $true
+    }
 }
 
 function Resolve-AIArenaSigningConfiguration {
@@ -208,8 +538,18 @@ function Resolve-AIArenaSigningConfiguration {
     }
 
     if ([string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+        $candidates = @(Find-AIArenaCodeSigningCertificates)
+        $discovery = if ($candidates.Count -eq 0) {
+            'No current code-signing certificate candidates were discovered.'
+        }
+        elseif ($candidates.Count -eq 1) {
+            "One candidate was discovered in $($candidates[0].StoreLocation)\My: $($candidates[0].Thumbprint). Selection remains explicit."
+        }
+        else {
+            "$($candidates.Count) candidates were discovered. Select one explicitly by thumbprint: $($candidates.Thumbprint -join ', ')."
+        }
         if ($Policy -eq 'Required') {
-            throw 'Authenticode signing is required, but no certificate thumbprint was supplied. Set -SigningCertificateThumbprint or AIARENA_SIGNING_CERT_THUMBPRINT.'
+            throw "Authenticode signing is required, but no certificate thumbprint was supplied. Set -SigningCertificateThumbprint or AIARENA_SIGNING_CERT_THUMBPRINT. $discovery"
         }
 
         return [pscustomobject]@{
@@ -220,20 +560,16 @@ function Resolve-AIArenaSigningConfiguration {
             CertificateStoreLocation = ""
             SignToolPath = ""
             TimestampUrl = $TimestampUrl
-            Reason = 'No signing certificate thumbprint was supplied.'
+            Reason = 'No signing certificate thumbprint was supplied. Run Find-AIArenaCodeSigningCertificates to inspect local candidates; selection remains explicit.'
         }
     }
 
-    $certificate = Get-AIArenaCodeSigningCertificate -Thumbprint $CertificateThumbprint
-    if ($null -eq $certificate) {
-        throw 'The requested Authenticode certificate was not found with an accessible private key in CurrentUser\My or LocalMachine\My.'
+    $certificateRecord = Get-AIArenaCodeSigningCertificateRecord -Thumbprint $CertificateThumbprint
+    if ($null -eq $certificateRecord) {
+        throw 'The requested Authenticode certificate was not found in CurrentUser\My or LocalMachine\My.'
     }
-    if ($certificate.NotAfter -le [DateTime]::Now) {
-        throw "The requested Authenticode certificate expired on $($certificate.NotAfter.ToString('u'))."
-    }
-    if ($certificate.NotBefore -gt [DateTime]::Now) {
-        throw "The requested Authenticode certificate is not valid until $($certificate.NotBefore.ToString('u'))."
-    }
+    $certificate = $certificateRecord.Certificate
+    $certificatePreflight = Assert-AIArenaCodeSigningCertificate -CertificateRecord $certificateRecord
 
     $resolvedSignTool = Get-AIArenaSignTool -ExplicitPath $SignToolPath
     if ([string]::IsNullOrWhiteSpace($resolvedSignTool)) {
@@ -252,10 +588,91 @@ function Resolve-AIArenaSigningConfiguration {
         Enabled = $true
         Certificate = $certificate
         CertificateThumbprint = $certificate.Thumbprint
-        CertificateStoreLocation = if ($certificate.PSParentPath -match 'Certificate::LocalMachine\\') { 'LocalMachine' } else { 'CurrentUser' }
+        CertificateStoreLocation = $certificateRecord.StoreLocation
+        CertificateKeyAlgorithm = $certificatePreflight.Algorithm
+        CertificateKeySize = $certificatePreflight.KeySize
+        CertificateChainTrusted = $certificatePreflight.ChainTrusted
+        PrivateKeyVerified = $certificatePreflight.PrivateKeyVerified
         SignToolPath = $resolvedSignTool
         TimestampUrl = $timestamp.AbsoluteUri
         Reason = 'Signing prerequisites are available.'
+    }
+}
+
+function Test-AIArenaSigningPreflight {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CertificateThumbprint,
+        [string]$SignToolPath = "",
+        [string]$TimestampUrl = 'http://timestamp.digicert.com'
+    )
+
+    $configuration = Resolve-AIArenaSigningConfiguration `
+        -Policy Required `
+        -CertificateThumbprint $CertificateThumbprint `
+        -SignToolPath $SignToolPath `
+        -TimestampUrl $TimestampUrl
+    return [pscustomobject]@{
+        Ready = $configuration.Enabled
+        CertificateThumbprint = $configuration.CertificateThumbprint
+        CertificateSubject = $configuration.Certificate.Subject
+        CertificateStoreLocation = $configuration.CertificateStoreLocation
+        CertificateNotAfter = $configuration.Certificate.NotAfter
+        CertificateKeyAlgorithm = $configuration.CertificateKeyAlgorithm
+        CertificateKeySize = $configuration.CertificateKeySize
+        CertificateChainTrusted = $configuration.CertificateChainTrusted
+        PrivateKeyVerified = $configuration.PrivateKeyVerified
+        SignToolPath = $configuration.SignToolPath
+        TimestampUrl = $configuration.TimestampUrl
+    }
+}
+
+function Assert-AIArenaAuthenticodeSignature {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Signature,
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedSignerThumbprint,
+        [switch]$RequireTimestamp,
+        [string]$Label = 'Authenticode artifact'
+    )
+
+    $expected = Normalize-AIArenaCertificateThumbprint -Thumbprint $ExpectedSignerThumbprint
+    if ($Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid `
+        -or $null -eq $Signature.SignerCertificate) {
+        throw "$Label does not have a valid Authenticode signature; status is $($Signature.Status)."
+    }
+    if ($Signature.SignerCertificate.Thumbprint -ne $expected) {
+        throw "$Label was signed by $($Signature.SignerCertificate.Thumbprint), not the requested certificate $expected."
+    }
+
+    $timestampVerified = $false
+    if ($RequireTimestamp.IsPresent) {
+        if ($null -eq $Signature.TimeStamperCertificate) {
+            throw "$Label does not have the required RFC 3161 timestamp countersignature."
+        }
+        if (-not (Test-AIArenaCertificateEnhancedKeyUsage `
+            -Certificate $Signature.TimeStamperCertificate `
+            -Oid $script:AIArenaTimestampingEkuOid)) {
+            throw "$Label timestamp certificate is not valid for RFC 3161 timestamping."
+        }
+        $timestampVerified = $true
+    }
+
+    $publicKey = Get-AIArenaCertificatePublicKeyInfo -Certificate $Signature.SignerCertificate
+    return [pscustomobject]@{
+        Status = $Signature.Status.ToString()
+        SignerThumbprint = $Signature.SignerCertificate.Thumbprint
+        SignerKeyAlgorithm = $publicKey.Algorithm
+        SignerKeySize = $publicKey.KeySize
+        TimeStamperThumbprint = if ($null -ne $Signature.TimeStamperCertificate) {
+            $Signature.TimeStamperCertificate.Thumbprint
+        } else {
+            $null
+        }
+        TimestampVerified = $timestampVerified
     }
 }
 
@@ -289,11 +706,20 @@ function Invoke-AIArenaAuthenticodeSigning {
                 $fullPath
             )
             Invoke-AIArenaNativeCommand -FilePath $Configuration.SignToolPath -ArgumentList $arguments -Label "Authenticode signing of $fullPath"
+            Invoke-AIArenaNativeCommand `
+                -FilePath $Configuration.SignToolPath `
+                -ArgumentList @('verify', '/pa', '/all', '/v', '/tw', $fullPath) `
+                -Label "SignTool verification of $fullPath"
         }
 
         $signature = Get-AuthenticodeSignature -LiteralPath $fullPath
-        if ($Configuration.Enabled -and $signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-            throw "Authenticode verification failed for $fullPath with status $($signature.Status)."
+        $verification = $null
+        if ($Configuration.Enabled) {
+            $verification = Assert-AIArenaAuthenticodeSignature `
+                -Signature $signature `
+                -ExpectedSignerThumbprint $Configuration.CertificateThumbprint `
+                -RequireTimestamp `
+                -Label $fullPath
         }
 
         $records += [pscustomobject]@{
@@ -301,6 +727,7 @@ function Invoke-AIArenaAuthenticodeSigning {
             status = $signature.Status.ToString()
             signerThumbprint = if ($null -ne $signature.SignerCertificate) { $signature.SignerCertificate.Thumbprint } else { $null }
             timeStamperThumbprint = if ($null -ne $signature.TimeStamperCertificate) { $signature.TimeStamperCertificate.Thumbprint } else { $null }
+            timestampVerified = if ($null -ne $verification) { [bool]$verification.TimestampVerified } else { $false }
         }
     }
 

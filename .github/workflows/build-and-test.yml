@@ -56,6 +56,10 @@ jobs:
         shell: pwsh
         run: ./scripts/tests/xaml-hardcoded-values.tests.ps1
 
+      - name: Test Authenticode release preflight
+        shell: pwsh
+        run: ./scripts/tests/release-security.tests.ps1
+
       - name: Check XAML gained no hard-coded values
         shell: pwsh
         env:

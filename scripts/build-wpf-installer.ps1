@@ -160,13 +160,20 @@ $installerSigning = [ordered]@{
     reason = [string]$signing.Reason
     certificateThumbprint = if ($signing.Enabled) { [string]$signing.CertificateThumbprint } else { $null }
     certificateStoreLocation = if ($signing.Enabled) { [string]$signing.CertificateStoreLocation } else { $null }
+    certificateKeyAlgorithm = if ($signing.Enabled) { [string]$signing.CertificateKeyAlgorithm } else { $null }
+    certificateKeySize = if ($signing.Enabled) { [int]$signing.CertificateKeySize } else { $null }
+    certificateChainTrusted = if ($signing.Enabled) { [bool]$signing.CertificateChainTrusted } else { $false }
+    privateKeyVerified = if ($signing.Enabled) { [bool]$signing.PrivateKeyVerified } else { $false }
     timestampUrl = if ($signing.Enabled) { [string]$signing.TimestampUrl } else { $null }
+    timestampRequired = [bool]$signing.Enabled
     artifacts = @(
         [ordered]@{
             path = 'AI Arena.exe'
             location = 'release'
             status = $releaseExeSignature.Status.ToString()
             signerThumbprint = if ($null -ne $releaseExeSignature.SignerCertificate) { $releaseExeSignature.SignerCertificate.Thumbprint } else { $null }
+            timeStamperThumbprint = if ($null -ne $releaseExeSignature.TimeStamperCertificate) { $releaseExeSignature.TimeStamperCertificate.Thumbprint } else { $null }
+            timestampVerified = [bool]($null -ne $releaseExeSignature.TimeStamperCertificate)
         },
         [ordered]@{
             path = [IO.Path]::GetFileName($installerSignatureRecords[0].path)
@@ -174,6 +181,7 @@ $installerSigning = [ordered]@{
             status = $installerSignatureRecords[0].status
             signerThumbprint = $installerSignatureRecords[0].signerThumbprint
             timeStamperThumbprint = $installerSignatureRecords[0].timeStamperThumbprint
+            timestampVerified = [bool]$installerSignatureRecords[0].timestampVerified
         }
     )
 }

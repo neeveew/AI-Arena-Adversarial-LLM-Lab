@@ -20,6 +20,14 @@ User-facing changes ship with a version bump and installer. Update:
 - `scripts/build-wpf-installer.ps1`
 - `scripts/wpf-release-sanity.ps1`
 
+Development work is intentionally batched between releases. Keep the declared
+product version and README download link on the latest published release while
+changes accumulate in `packaging/changes/UNRELEASED.md`. Do not create a new
+version or installer for every small change. When the repository owner decides
+the batch is substantial enough to publish, promote the verified unreleased
+bullets into `packaging/changes/<version>.txt`, bump every release surface, then
+build, tag, and publish that version as one operation.
+
 Also add `packaging/changes/<version>.txt`, refresh the dependency index with `scripts/dependency-index.ps1`, then build the installer:
 
 ```powershell

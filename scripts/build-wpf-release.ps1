@@ -149,13 +149,19 @@ $releaseSigning = [ordered]@{
     certificateThumbprint = if ($signing.Enabled) { [string]$signing.CertificateThumbprint } else { $null }
     certificateSubject = if ($signing.Enabled) { [string]$signing.Certificate.Subject } else { $null }
     certificateStoreLocation = if ($signing.Enabled) { [string]$signing.CertificateStoreLocation } else { $null }
+    certificateKeyAlgorithm = if ($signing.Enabled) { [string]$signing.CertificateKeyAlgorithm } else { $null }
+    certificateKeySize = if ($signing.Enabled) { [int]$signing.CertificateKeySize } else { $null }
+    certificateChainTrusted = if ($signing.Enabled) { [bool]$signing.CertificateChainTrusted } else { $false }
+    privateKeyVerified = if ($signing.Enabled) { [bool]$signing.PrivateKeyVerified } else { $false }
     timestampUrl = if ($signing.Enabled) { [string]$signing.TimestampUrl } else { $null }
+    timestampRequired = [bool]$signing.Enabled
     artifacts = @($signatureRecords | ForEach-Object {
         [ordered]@{
             path = [IO.Path]::GetFileName($_.path)
             status = $_.status
             signerThumbprint = $_.signerThumbprint
             timeStamperThumbprint = $_.timeStamperThumbprint
+            timestampVerified = [bool]$_.timestampVerified
         }
     })
 }

@@ -146,6 +146,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private long workspaceGeneration;
     private AgentCommandPreview? pendingPreview;
     private AgentCommandResult? lastCommandResult;
+    private AgentCommandEffectiveOutcome lastCommandEffectiveOutcome;
     private AIArena.Core.Models.DotNetCommandResult? lastDotNetCommandResult;
     private DotNetWorkspaceSnapshot? lastDotNetCommandSnapshot;
     private DotNetWorkspaceSnapshot? dotNetWorkspaceSnapshot;
@@ -270,7 +271,15 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         Environment.NewLine,
         CurrentBuildEvidence().Select(item => $"{item.Label}: {item.State}"));
 
+    internal string DebugBuildEvidenceTones => string.Join(
+        Environment.NewLine,
+        CurrentBuildEvidence().Select(item => $"{item.Label}: {item.BorderResourceKey}"));
+
     internal string DebugOutputSummary => outputSummaryText.Text;
+
+    internal string DebugOutputTones => string.Join(
+        Environment.NewLine,
+        CurrentOutputs().Select(item => $"{item.Label}: {item.BorderResourceKey}"));
 
     internal int DebugOutputCount => outputItems.Children.Count;
 
@@ -465,6 +474,13 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             result,
             receipt,
             runningArtifactSuggestion: null);
+    }
+
+    internal Task DebugTryAutoContinueAfterCommandForTestAsync(
+        AgentCommandResult result,
+        AgentWorkspaceFileReceipt receipt)
+    {
+        return TryAutoContinueAfterCommandAsync(result, receipt);
     }
 
     internal void DebugPreviewCommand()
@@ -1937,10 +1953,12 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             commandDotNetSnapshot,
             preview.WorkspacePath,
             result);
+        var effectiveOutcome = ResolveEffectiveOutcome(result, structuredResult);
+        var effectiveResult = WithEffectiveOutcome(result, effectiveOutcome);
         var inferredArtifactSuggestion = InferArtifactSuggestion(preview.WorkspacePath, receipt);
         var artifactVerification = runningArtifactSuggestion is null
             ? null
-            : AgentArtifactVerification.From(runningArtifactSuggestion, result);
+            : AgentArtifactVerification.From(runningArtifactSuggestion, effectiveResult);
         var dotNetStructureChanged = ReceiptTouchesDotNetWorkspaceStructure(receipt);
         var dotNetRefreshRequired = dotNetStructureChanged
             || structuredResult?.Command.Kind == DotNetCommandKind.Restore;
@@ -1960,6 +1978,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             applied = true;
             lastFileReceipt = receipt;
             lastCommandResult = result;
+            lastCommandEffectiveOutcome = effectiveOutcome;
             lastDotNetCommandResult = dotNetStructureChanged ? null : structuredResult;
             lastDotNetCommandSnapshot = lastDotNetCommandResult is null ? null : commandDotNetSnapshot;
             latestArtifactSuggestion = inferredArtifactSuggestion ?? runningArtifactSuggestion;
@@ -1976,8 +1995,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             SetBuildEvidenceSummary(BuildCommandResultEvidenceSummary(result, lastFileReceipt));
             if (runbook.HasActiveRun)
             {
-                runbook.MarkExecutionFinished(result.Ok, result.Canceled, lastFileReceipt.Summary, DateTimeOffset.Now);
-                if (result.Ok
+                runbook.MarkExecutionFinished(effectiveOutcome.Succeeded, result.Canceled, lastFileReceipt.Summary, DateTimeOffset.Now);
+                if (effectiveOutcome.Succeeded
                     && structuredResult?.Command.Kind != DotNetCommandKind.Restore
                     && (runbookVerificationPending || runningArtifactSuggestion is not null))
                 {
@@ -1989,7 +2008,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 RenderPhases();
             }
 
-            AddActivity(result.Ok ? "Exit 0" : result.Canceled ? "Canceled" : "Exit", commandStatusText.Text);
+            AddActivity(effectiveOutcome.Succeeded ? "Exit 0" : result.Canceled ? "Canceled" : "Exit", commandStatusText.Text);
             AddActivity("Files", lastFileReceipt.Summary);
             publishControlEvent(
                 "file.receipt.captured",
@@ -2444,13 +2463,14 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private void AddCommandResultMessage(AgentCommandResult result, AgentWorkspaceFileReceipt receipt)
     {
-        var state = result.Ok ? "completed" : result.Canceled ? "was cancelled" : result.TimedOut ? "timed out" : "failed";
+        var effectiveResult = EffectivePolicyResult(result);
+        var state = effectiveResult.Ok ? "completed" : result.Canceled ? "was cancelled" : result.TimedOut ? "timed out" : "failed";
         var noChangeAction = SuccessfulNoChangeRequiresRepair(result, receipt);
         var next = CommandNextAction(result, receipt);
         AddCenterMessage(
             "Command result",
             $"{result.Shell} {state} with exit {result.ExitCode.ToString(CultureInfo.InvariantCulture)} in {FormatElapsed(result.Elapsed)}.\n{receipt.Summary}.{ReceiptPreviewText(receipt)}\n{next}",
-            result.Ok && !noChangeAction ? "Result" : "Warning");
+            effectiveResult.Ok && !noChangeAction ? "Result" : "Warning");
     }
 
     private string CommandNextAction(AgentCommandResult result, AgentWorkspaceFileReceipt receipt)
@@ -2481,7 +2501,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
 
         return AgentCommandResultService.CommandNextAction(
-            result,
+            EffectivePolicyResult(result),
             receipt,
             currentPromptRequiresCommand,
             IsLatestArtifactVerificationResult(result),
@@ -2491,7 +2511,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private AgentResultFollowUpDescriptor ResultFollowUpDescriptor(AgentCommandResult result, AgentWorkspaceFileReceipt? receipt)
     {
         var descriptor = AgentCommandResultService.ResultFollowUpDescriptor(
-            result,
+            EffectivePolicyResult(result),
             receipt,
             currentPromptRequiresCommand,
             IsLatestArtifactVerificationResult(result),
@@ -2567,10 +2587,40 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         return ReferenceEquals(lastCommandResult, result) ? lastDotNetCommandResult : null;
     }
 
+    private AgentCommandEffectiveOutcome EffectiveOutcome(AgentCommandResult result)
+    {
+        return ReferenceEquals(lastCommandResult, result)
+            ? lastCommandEffectiveOutcome
+            : ResolveEffectiveOutcome(result, structuredResult: null);
+    }
+
+    private AgentCommandResult EffectivePolicyResult(AgentCommandResult result)
+    {
+        return WithEffectiveOutcome(result, EffectiveOutcome(result));
+    }
+
+    private static AgentCommandEffectiveOutcome ResolveEffectiveOutcome(
+        AgentCommandResult result,
+        AIArena.Core.Models.DotNetCommandResult? structuredResult)
+    {
+        return structuredResult is null
+            ? new(result.Ok, HasStructuredDotNetEvidence: false)
+            : new(structuredResult.Succeeded, HasStructuredDotNetEvidence: true);
+    }
+
+    private static AgentCommandResult WithEffectiveOutcome(
+        AgentCommandResult result,
+        AgentCommandEffectiveOutcome outcome)
+    {
+        return result.Ok == outcome.Succeeded
+            ? result
+            : result with { Ok = outcome.Succeeded };
+    }
+
     private AgentCommandRailViewModel CommandRailViewModel(AgentCommandResult result, AgentWorkspaceFileReceipt receipt)
     {
         return AgentCommandResultService.CommandRailViewModel(
-            result,
+            EffectivePolicyResult(result),
             receipt,
             currentPromptRequiresCommand && !SuccessfulNoChangeIsExpected(result),
             IsLatestArtifactVerificationResult(result),
@@ -2581,7 +2631,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     {
         return !SuccessfulNoChangeIsExpected(result)
             && AgentCommandResultService.SuccessfulNoChangeRequiresRepair(
-                result,
+                EffectivePolicyResult(result),
                 receipt,
                 currentPromptRequiresCommand,
                 IsLatestArtifactVerificationResult(result));
@@ -2594,7 +2644,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 Succeeded: true,
                 Command.Kind: DotNetCommandKind.Restore
             }
-            || AgentCommandResultService.SuccessfulNoChangeIsExpected(result, IsLatestArtifactVerificationResult(result));
+            || AgentCommandResultService.SuccessfulNoChangeIsExpected(EffectivePolicyResult(result), IsLatestArtifactVerificationResult(result));
     }
 
     private bool IsLatestArtifactVerificationResult(AgentCommandResult result)
@@ -2934,11 +2984,17 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
         if (lastCommandResult is not null)
         {
+            var effectiveResult = EffectivePolicyResult(lastCommandResult);
+            var commandBrush = lastDotNetCommandResult is not null
+                ? AgentDotNetSolutionDoctorService.ResultEvidenceBrushKey(lastDotNetCommandResult)
+                : effectiveResult.Ok
+                    ? "AssistBorderBrush"
+                    : lastCommandResult.Canceled ? "DisabledBorderBrush" : "DangerBorderBrush";
             items.Add(new AgentOutputItem(
                 "Command",
                 CommandResultLabel(lastCommandResult),
                 $"{lastCommandResult.Shell}: {lastCommandResult.Command}",
-                lastCommandResult.Ok ? "AssistBorderBrush" : lastCommandResult.Canceled ? "DisabledBorderBrush" : "DangerBorderBrush"));
+                commandBrush));
         }
         else if (pendingPreview is not null)
         {
@@ -3012,7 +3068,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         return card;
     }
 
-    private static string CommandResultLabel(AgentCommandResult result)
+    private string CommandResultLabel(AgentCommandResult result)
     {
         if (result.Canceled)
         {
@@ -3024,7 +3080,15 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return "Timed out";
         }
 
-        return result.Ok ? $"Exit {result.ExitCode.ToString(CultureInfo.InvariantCulture)}" : "Failed";
+        var effectiveResult = EffectivePolicyResult(result);
+        if (effectiveResult.Ok)
+        {
+            return $"Exit {result.ExitCode.ToString(CultureInfo.InvariantCulture)}";
+        }
+
+        return result.Ok
+            ? $"Failed (exit {result.ExitCode.ToString(CultureInfo.InvariantCulture)})"
+            : "Failed";
     }
 
     private IReadOnlyList<AgentEvidenceItem> CurrentBuildEvidence()
@@ -3036,7 +3100,15 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         var hasChanges = lastFileReceipt is not null && ReceiptHasChanges(lastFileReceipt);
         var hasLimitedUnknownChanges = lastFileReceipt is not null && ReceiptScanIsLimitedWithoutTrackedChanges(lastFileReceipt);
         var artifactCheck = lastCommandResult is not null && IsLatestArtifactVerificationResult(lastCommandResult);
-        var artifactCheckOk = artifactCheck && lastCommandResult!.Ok;
+        var effectiveCommandSucceeded = lastCommandResult is not null
+            && EffectiveOutcome(lastCommandResult).Succeeded;
+        var structuredCommandFailed = lastCommandResult is not null
+            && EffectiveOutcome(lastCommandResult) is
+                {
+                    HasStructuredDotNetEvidence: true,
+                    Succeeded: false
+                };
+        var artifactCheckOk = artifactCheck && effectiveCommandSucceeded;
         var noChangeExpected = artifactCheckOk || (lastCommandResult is not null && SuccessfulNoChangeIsExpected(lastCommandResult));
         var artifactState = latestArtifactVerification is not null
             ? latestArtifactVerification.EvidenceState
@@ -3063,10 +3135,14 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         var verifyState = hasResult
             ? noChangeExpected
                 ? "Checked"
-                : lastCommandResult!.Ok && hasChanges ? "Verify next" : hasLimitedUnknownChanges ? "Review scan" : lastCommandResult.Canceled ? "Retry smaller" : "Repair next"
+                : structuredCommandFailed
+                    ? "Repair next"
+                    : effectiveCommandSucceeded && hasChanges
+                        ? "Verify next"
+                        : hasLimitedUnknownChanges ? "Review scan" : lastCommandResult!.Canceled ? "Retry smaller" : "Repair next"
             : "Pending";
         var verifyBrush = hasResult
-            ? noChangeExpected || (lastCommandResult!.Ok && (hasChanges || hasLimitedUnknownChanges))
+            ? noChangeExpected || (effectiveCommandSucceeded && (hasChanges || hasLimitedUnknownChanges))
                 ? "PrimaryBorderBrush"
                 : "DangerBorderBrush"
             : "DisabledBorderBrush";
@@ -3096,7 +3172,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 idleRows.Add(new AgentEvidenceItem(
                     ".NET",
                     AgentDotNetSolutionDoctorService.WorkspaceEvidenceState(dotNetWorkspaceSnapshot),
-                    dotNetWorkspaceSnapshot!.IsPartial ? "PrimaryBorderBrush" : "AssistBorderBrush"));
+                    AgentDotNetSolutionDoctorService.WorkspaceEvidenceBrushKey(dotNetWorkspaceSnapshot!)));
             }
 
             if (autoContinueForSession || autoApproveCommandsForSession)
@@ -3114,7 +3190,22 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             new("Command Need", currentPromptRequiresCommand ? "Required" : "Optional", currentPromptRequiresCommand ? "PrimaryBorderBrush" : "DisabledBorderBrush"),
             new("Proposal", heldCommandSuggestion is not null ? "Held" : hasCommand ? "Staged" : currentPromptRequiresCommand ? "Missing" : "None", heldCommandSuggestion is not null || hasCommand ? "PrimaryBorderBrush" : currentPromptRequiresCommand ? "DangerBorderBrush" : "DisabledBorderBrush"),
             new("Preview", pendingPreview is not null ? "Ready" : hasCommand ? "Needs preview" : "None", pendingPreview is not null ? "AssistBorderBrush" : hasCommand ? "PrimaryBorderBrush" : "DisabledBorderBrush"),
-            new("Command Run", isRunningCommand ? "Running" : hasResult ? lastCommandResult!.Ok ? $"Exit {lastCommandResult.ExitCode.ToString(CultureInfo.InvariantCulture)}" : lastCommandResult.Canceled ? "Cancelled" : "Failed" : "Not run", isRunningCommand ? "PrimaryBorderBrush" : hasResult ? lastCommandResult!.Ok ? "AssistBorderBrush" : "DangerBorderBrush" : "DisabledBorderBrush"),
+            new(
+                "Command Run",
+                isRunningCommand
+                    ? "Running"
+                    : hasResult
+                        ? effectiveCommandSucceeded
+                            ? $"Exit {lastCommandResult!.ExitCode.ToString(CultureInfo.InvariantCulture)}"
+                            : lastCommandResult!.Canceled ? "Cancelled" : "Failed"
+                        : "Not run",
+                isRunningCommand
+                    ? "PrimaryBorderBrush"
+                    : hasResult
+                        ? lastDotNetCommandResult is not null
+                            ? AgentDotNetSolutionDoctorService.ResultEvidenceBrushKey(lastDotNetCommandResult)
+                            : effectiveCommandSucceeded ? "AssistBorderBrush" : "DangerBorderBrush"
+                        : "DisabledBorderBrush"),
             new("Files", hasReceipt ? hasChanges ? lastFileReceipt!.Summary : hasLimitedUnknownChanges ? "Scan limited" : noChangeExpected ? "No changes expected" : "No changes" : "Waiting", filesBrush),
             new("Artifact", artifactState, artifactBrush),
             new("Verify", verifyState, verifyBrush)
@@ -3124,7 +3215,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             rows.Insert(1, new AgentEvidenceItem(
                 ".NET",
                 AgentDotNetSolutionDoctorService.WorkspaceEvidenceState(dotNetWorkspaceSnapshot),
-                dotNetWorkspaceSnapshot!.IsPartial ? "PrimaryBorderBrush" : "AssistBorderBrush"));
+                AgentDotNetSolutionDoctorService.WorkspaceEvidenceBrushKey(dotNetWorkspaceSnapshot!)));
         }
 
         if (lastDotNetCommandResult is not null)
@@ -3132,15 +3223,16 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             rows.Add(new AgentEvidenceItem(
                 "C# Diagnostics",
                 AgentDotNetSolutionDoctorService.ResultEvidenceState(lastDotNetCommandResult),
-                lastDotNetCommandResult.Succeeded
-                    ? "AssistBorderBrush"
-                    : lastDotNetCommandResult.WasCancelled ? "PrimaryBorderBrush" : "DangerBorderBrush"));
-            if (lastDotNetCommandResult.TestTotals is not null || lastDotNetCommandResult.FailingTests.Count > 0)
+                AgentDotNetSolutionDoctorService.ResultEvidenceBrushKey(lastDotNetCommandResult)));
+            if (lastDotNetCommandResult.TestTotals is not null
+                || lastDotNetCommandResult.FailingTests.Count > 0
+                || lastDotNetCommandResult.Findings.Any(finding =>
+                    finding.Category == DotNetFindingCategory.TestDiscoveryFailure))
             {
                 rows.Add(new AgentEvidenceItem(
                     ".NET Tests",
                     AgentDotNetSolutionDoctorService.TestEvidenceState(lastDotNetCommandResult),
-                    lastDotNetCommandResult.Succeeded ? "AssistBorderBrush" : "DangerBorderBrush"));
+                    AgentDotNetSolutionDoctorService.ResultEvidenceBrushKey(lastDotNetCommandResult)));
             }
 
             if (!lastDotNetCommandResult.Succeeded && !lastDotNetCommandResult.WasCancelled)
@@ -3158,7 +3250,10 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private static bool HasDotNetWorkspaceEvidence(DotNetWorkspaceSnapshot? snapshot)
     {
         return snapshot is not null
-            && (snapshot.Projects.Count > 0 || snapshot.Solutions.Count > 0 || snapshot.Diagnostics.Count > 0);
+            && (snapshot.Projects.Count > 0
+                || snapshot.Solutions.Count > 0
+                || snapshot.Diagnostics.Count > 0
+                || snapshot.Findings.Count > 0);
     }
 
     private Border CreateEvidenceRow(AgentEvidenceItem item)
@@ -3605,6 +3700,21 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return "Needs preview";
         }
 
+        if (lastCommandResult is not null && IsLatestArtifactVerificationResult(lastCommandResult))
+        {
+            return EffectiveOutcome(lastCommandResult).Succeeded ? "Artifact checked" : "Artifact repair";
+        }
+
+        if (lastCommandResult is not null
+            && EffectiveOutcome(lastCommandResult) is
+                {
+                    HasStructuredDotNetEvidence: true,
+                    Succeeded: false
+                })
+        {
+            return "Repair next";
+        }
+
         if (lastFileReceipt is not null && ReceiptHasChanges(lastFileReceipt))
         {
             return "Files changed";
@@ -3615,11 +3725,6 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return "Scan limited";
         }
 
-        if (lastCommandResult is not null && IsLatestArtifactVerificationResult(lastCommandResult))
-        {
-            return lastCommandResult.Ok ? "Artifact checked" : "Artifact repair";
-        }
-
         if (autoContinueForSession)
         {
             return "Full access loop";
@@ -3627,7 +3732,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
         if (lastCommandResult is not null)
         {
-            return lastCommandResult.Ok ? "Verify next" : "Repair next";
+            return EffectiveOutcome(lastCommandResult).Succeeded ? "Verify next" : "Repair next";
         }
 
         return autoApproveCommandsForSession ? "Full access" : "Manual approval";
@@ -4025,6 +4130,13 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return;
         }
 
+        var effectiveOutcome = EffectiveOutcome(result);
+        if (effectiveOutcome.HasStructuredDotNetEvidence && !effectiveOutcome.Succeeded)
+        {
+            PauseAutoContinue("Structured .NET verification failed; review Stage Repair before continuing.");
+            return;
+        }
+
         if (!autoApproveCommandsForSession)
         {
             PauseAutoContinue("Approval mode is active.");
@@ -4071,7 +4183,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private string BuildAutoContinuePrompt(AgentCommandResult result, AgentWorkspaceFileReceipt receipt)
     {
         return AgentAutonomyPolicyService.BuildAutoContinuePrompt(
-            result,
+            EffectivePolicyResult(result),
             receipt,
             FormatLatestCommandContext(),
             IsLatestArtifactVerificationResult(result));
@@ -4087,7 +4199,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private bool ShouldPauseAutoContinueAfterResult(AgentCommandResult result, AgentWorkspaceFileReceipt receipt, out string reason)
     {
         var policy = AgentAutonomyPolicyService.EvaluateAutoContinueResult(
-            result,
+            EffectivePolicyResult(result),
             receipt,
             consecutiveAutoContinueNoChangeResults,
             currentPromptRequiresCommand,
@@ -4470,13 +4582,16 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private void FinishCommandHistory(AgentCommandResult result, AgentWorkspaceFileReceipt receipt)
     {
-        var status = result.Ok
+        var effectiveResult = EffectivePolicyResult(result);
+        var status = effectiveResult.Ok
             ? $"Exit {result.ExitCode.ToString(CultureInfo.InvariantCulture)}"
             : result.Canceled
                 ? "Cancelled"
                 : result.TimedOut
                     ? "Timed out"
-                    : $"Exit {result.ExitCode.ToString(CultureInfo.InvariantCulture)}";
+                    : result.Ok
+                        ? $"Failed (exit {result.ExitCode.ToString(CultureInfo.InvariantCulture)})"
+                        : $"Exit {result.ExitCode.ToString(CultureInfo.InvariantCulture)}";
         var detail = $"{FormatElapsed(result.Elapsed)} | {receipt.Summary}";
         var index = activeCommandHistoryId is null
             ? -1
@@ -5450,6 +5565,10 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         string Workspace,
         string ReceiptSummary,
         int? ExitCode);
+
+    private readonly record struct AgentCommandEffectiveOutcome(
+        bool Succeeded,
+        bool HasStructuredDotNetEvidence);
 
     internal readonly record struct AgentResultFollowUpDescriptor(
         string ButtonLabel,

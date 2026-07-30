@@ -26,17 +26,41 @@ The release folder includes `release-checksums.sha256`, `release-manifest.txt`, 
 The release and installer builders accept `-SigningPolicy Optional`, `Required`, or `Disabled`.
 
 - `Optional` is the default. With no certificate configured, the build remains unsigned and records that fact. If a certificate is configured, signing or verification failure stops the build.
-- `Required` fails during preflight unless a usable certificate and SignTool are available. Both `AI Arena.exe` and the installer must verify as valid.
+- `Required` fails during preflight unless a usable, trusted certificate and SignTool are available. Both `AI Arena.exe` and the installer must verify as valid under the Windows Authenticode policy and carry an RFC 3161 timestamp.
 - `Disabled` intentionally skips signing and records the policy.
 
 For a production signed build, install a trusted Authenticode code-signing certificate with an accessible private key into `CurrentUser\My` or `LocalMachine\My`. Install the Windows SDK Signing Tools and Inno Setup 6, ensure the timestamp service is reachable, then run:
 
 ```powershell
+. ./scripts/release-security.ps1
+
+# Discovery is read-only and never auto-selects a certificate.
+Find-AIArenaCodeSigningCertificates |
+    Format-Table StoreLocation, Thumbprint, Subject, NotAfter
+
 $env:AIARENA_SIGNING_CERT_THUMBPRINT = "YOUR_CERTIFICATE_THUMBPRINT"
+Test-AIArenaSigningPreflight `
+    -CertificateThumbprint $env:AIARENA_SIGNING_CERT_THUMBPRINT
+
 ./scripts/build-wpf-installer.ps1 -Version 0.4.89-beta -SigningPolicy Required
 ```
 
-The helper discovers the newest x64 Windows SDK `signtool.exe` and verifies its Microsoft Authenticode signature before use. The installer builder likewise requires a valid Authenticode signature on the selected Inno Setup compiler. Use `-SignTool` to pass an explicit trusted executable path or `-TimestampUrl` to select another RFC 3161 timestamp service. Never put a PFX password on a command line or commit a private key, certificate password, or signing token.
+Certificate selection remains explicit even when discovery finds exactly one candidate, so an unrelated development certificate can never silently sign a release. Preflight verifies the code-signing EKU, digital-signature key usage, validity dates, trusted Windows chain, RSA/ECDSA key strength, and a live private-key signing proof without exporting the key. It also discovers the newest x64 Windows SDK `signtool.exe` and verifies the tool's Microsoft Authenticode signature before use. The installer builder likewise requires a valid Authenticode signature on the selected Inno Setup compiler.
+
+Signing uses SHA-256 for the file digest and RFC 3161 timestamp digest. Immediately after each signing operation, SignTool verifies every embedded signature under the Windows Authenticode policy and warns on a missing timestamp; the release helper independently requires the requested signer thumbprint and a timestamp certificate with the time-stamping EKU. Release sanity repeats those checks against both the app and installer and rejects:
+
+- a valid signature from a different certificate;
+- a missing, invalid, or unrecorded timestamp;
+- disagreement between release and installer signing reports; and
+- any signed artifact when the reports say signing was disabled.
+
+Use `-SignTool` to pass an explicit trusted executable path or `-TimestampUrl` to select another RFC 3161 timestamp service. Never put a PFX password on a command line or commit a private key, certificate password, or signing token.
+
+The focused fixture uses short-lived, non-exported certificates in `CurrentUser\My`, confirms that their keys are usable, confirms that an untrusted development chain is rejected for production, and removes the certificates in `finally`. It never writes a certificate to a trusted-root store:
+
+```powershell
+./scripts/tests/release-security.tests.ps1
+```
 
 Before publishing, run release sanity with the same policy:
 

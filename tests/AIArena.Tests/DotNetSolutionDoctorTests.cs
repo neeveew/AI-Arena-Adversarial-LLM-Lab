@@ -476,6 +476,621 @@ internal static class DotNetSolutionDoctorTests
         });
     }
 
+    internal static void DiagnosesDependencyRootCausesDeterministically()
+    {
+        WithFixture(root =>
+        {
+            const string firstProjectPath = "src/A & B's/A.csproj";
+            const string secondProjectPath = "src/B/B.csproj";
+            const string independentProjectPath = "tools/Independent/Independent.csproj";
+            WriteProject(
+                root,
+                firstProjectPath,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net8.0</TargetFramework>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../B/B.csproj" />
+                    <PackageReference Include="Example.Dependency" Version="1.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                independentProjectPath,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageReference Include="Example.Dependency" Version="9.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                secondProjectPath,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net9.0</TargetFramework>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../A &amp; B's/A.csproj" />
+                    <PackageReference Include="Example.Dependency">
+                      <Version>2.0.0</Version>
+                    </PackageReference>
+                  </ItemGroup>
+                </Project>
+                """);
+
+            var service = new DotNetWorkspaceIntelligenceService();
+            var first = service.DiscoverAsync(root).GetAwaiter().GetResult();
+            var second = service.DiscoverAsync(root).GetAwaiter().GetResult();
+
+            Require(
+                first.Findings.Count == 3,
+                $"cycle, framework incompatibility, and package conflict should each produce one finding; actual: {string.Join(", ", first.Findings.Select(finding => finding.Category))}");
+            Require(
+                first.Findings.Select(finding => finding.Category).SequenceEqual(
+                    [
+                        DotNetFindingCategory.ProjectReferenceCycle,
+                        DotNetFindingCategory.TargetFrameworkIncompatibility,
+                        DotNetFindingCategory.PackageVersionConflict
+                    ]),
+                "workspace findings should use stable category ordering");
+            Require(
+                first.Findings.Select(finding => finding.Id).SequenceEqual(second.Findings.Select(finding => finding.Id), StringComparer.Ordinal),
+                "unchanged workspace findings should retain deterministic IDs and order");
+            Require(
+                first.Findings.All(finding =>
+                    finding.Id.StartsWith("doctor:", StringComparison.Ordinal)
+                    && finding.RootCauseChain.Select(step => step.Sequence).SequenceEqual(
+                        Enumerable.Range(1, finding.RootCauseChain.Count))),
+                "every finding should expose a stable ID and contiguous evidence sequence");
+
+            var cycle = first.Findings.Single(finding => finding.Category == DotNetFindingCategory.ProjectReferenceCycle);
+            Require(cycle.Code == "DND301" && cycle.Confidence == DotNetFindingConfidence.High, "project SCC should be a high-confidence cycle finding");
+            Require(
+                cycle.RelatedProjectRelativePaths.SequenceEqual(
+                    [firstProjectPath, secondProjectPath],
+                    StringComparer.OrdinalIgnoreCase),
+                "cycle membership should be relative and deterministically sorted");
+            Require(
+                cycle.RootCauseChain.Count == 3
+                && cycle.RootCauseChain[1].RelativePath == firstProjectPath
+                && cycle.RootCauseChain[1].RelatedRelativePath == secondProjectPath
+                && cycle.RootCauseChain[2].RelatedRelativePath == firstProjectPath,
+                "cycle evidence should close a concrete reference path");
+
+            var framework = first.Findings.Single(finding => finding.Category == DotNetFindingCategory.TargetFrameworkIncompatibility);
+            Require(
+                framework.PrimaryRelativePath == firstProjectPath
+                && framework.RelatedProjectRelativePaths.Contains(secondProjectPath, StringComparer.OrdinalIgnoreCase),
+                "framework incompatibility should connect the referencing and referenced projects");
+            Require(
+                framework.RootCauseChain.Any(step =>
+                    step.Kind == DotNetFindingEvidenceKind.TargetFramework
+                    && step.RelativePath == firstProjectPath
+                    && step.Value == "net8.0"),
+                "framework evidence should retain the incompatible consumer TFM");
+            Require(
+                !first.Findings.Any(finding =>
+                    finding.Category == DotNetFindingCategory.TargetFrameworkIncompatibility
+                    && finding.PrimaryRelativePath == secondProjectPath),
+                "a higher framework referencing a lower compatible framework should not be flagged");
+
+            var package = first.Findings.Single(finding => finding.Category == DotNetFindingCategory.PackageVersionConflict);
+            Require(package.Confidence == DotNetFindingConfidence.Medium, "static cross-project package drift should not claim build-time certainty");
+            Require(
+                package.RootCauseChain
+                    .Where(step => step.Kind == DotNetFindingEvidenceKind.PackageReference)
+                    .Select(step => step.Value)
+                    .SequenceEqual(["1.0.0", "2.0.0"], StringComparer.Ordinal),
+                "package evidence should retain sorted literal versions without unrelated-project noise");
+            Require(
+                !package.RelatedProjectRelativePaths.Contains(independentProjectPath, StringComparer.OrdinalIgnoreCase)
+                && !package.Summary.Contains("9.0.0", StringComparison.Ordinal),
+                "package drift in an unrelated project-reference component should not be reported as a conflict");
+            Require(
+                Project(first, firstProjectPath).PackageReferences.SequenceEqual(
+                    [new DotNetPackageReferenceInfo("Example.Dependency", "1.0.0")]),
+                "literal direct package references should enter the public project contract");
+            Require(AllPublicPathsAreRelative(first, root), "finding and evidence paths should remain workspace-relative");
+
+            var bounded = service.DiscoverAsync(
+                root,
+                new DotNetDiscoveryOptions(MaxDiagnostics: 2)).GetAwaiter().GetResult();
+            Require(
+                bounded.Findings.Count == 2
+                && bounded.FindingsLimitReached
+                && bounded.IsPartial,
+                "finding output should obey the configured bound and disclose truncation");
+        });
+    }
+
+    internal static void DiagnosesPackageDowngradeAndTestDiscoveryFailure()
+    {
+        WithFixture(root =>
+        {
+            const string projectRelativePath = "tests/Discovery.Tests/Discovery.Tests.csproj";
+            WriteProject(
+                root,
+                projectRelativePath,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            var snapshot = new DotNetWorkspaceIntelligenceService()
+                .DiscoverAsync(root)
+                .GetAwaiter()
+                .GetResult();
+            var command = snapshot.CommandPlans.Single(plan =>
+                plan.Kind == DotNetCommandKind.Test
+                && plan.TargetRelativePath == projectRelativePath);
+            var absoluteProjectPath = Path.Combine(
+                root,
+                projectRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            var outsidePath = Path.Combine(Path.GetTempPath(), "outside doctor", "secret.dll");
+            var output = $"""
+                warning NU1605: Detected package downgrade: Example.Dependency from 4.0.0 to 3.0.0. Reference the package directly from the project to select a different version. [{absoluteProjectPath}]
+                No test is available in {outsidePath}. Make sure that test discoverer & executors are registered and platform & framework version settings are appropriate and try again.
+                """;
+
+            var first = new DotNetOutputParser().Parse(root, command, 0, output, "");
+            var second = new DotNetOutputParser().Parse(root, command, 0, output, "");
+
+            Require(first.Diagnostics.Single().Code == "NU1605", "NuGet diagnostics should join compiler and MSBuild structured evidence");
+            Require(first.Findings.Count == 2, "package downgrade and no-test output should each produce a finding");
+            Require(!first.Succeeded, "explicit test-discovery failure should fail structured verification even when the process exits zero");
+            Require(
+                first.Findings.Select(finding => finding.Id).SequenceEqual(second.Findings.Select(finding => finding.Id), StringComparer.Ordinal),
+                "command finding IDs should not depend on raw-output receipt IDs");
+
+            var downgrade = first.Findings.Single(finding => finding.Category == DotNetFindingCategory.PackageDowngrade);
+            Require(
+                downgrade.Code == "DND401"
+                && downgrade.Severity == DotNetWorkspaceDiagnosticSeverity.Warning
+                && downgrade.PrimaryRelativePath == projectRelativePath
+                && downgrade.Summary.Contains("4.0.0", StringComparison.Ordinal)
+                && downgrade.Summary.Contains("3.0.0", StringComparison.Ordinal),
+                "NU1605 should expose the affected project and resolved version transition");
+            var discovery = first.Findings.Single(finding => finding.Category == DotNetFindingCategory.TestDiscoveryFailure);
+            Require(
+                discovery.Code == "DND402"
+                && discovery.RootCauseChain.All(step => step.RelativePath == projectRelativePath),
+                "test discovery evidence should remain tied to the typed project target");
+            Require(
+                first.Findings
+                    .SelectMany(finding => finding.RootCauseChain)
+                    .All(step =>
+                        (step.RelativePath is null || !Path.IsPathRooted(step.RelativePath))
+                        && (step.RelatedRelativePath is null || !Path.IsPathRooted(step.RelatedRelativePath))
+                        && !step.Label.Contains(outsidePath, StringComparison.OrdinalIgnoreCase)),
+                "hostile or outside output paths must not enter structured finding evidence");
+
+            var hostileCommand = command with
+            {
+                Id = "test:hostile-target",
+                TargetRelativePath = outsidePath,
+                Arguments = ["test", outsidePath, "--no-build"]
+            };
+            var hostileResult = new DotNetOutputParser().Parse(
+                root,
+                hostileCommand,
+                0,
+                "No test is available in discarded.dll. Make sure that test discoverer & executors are registered and platform & framework version settings are appropriate and try again.",
+                "");
+            var hostileFinding = hostileResult.Findings.Single();
+            Require(
+                hostileFinding.PrimaryRelativePath is null
+                && hostileFinding.RelatedProjectRelativePaths.Count == 0
+                && hostileFinding.RootCauseChain.All(step =>
+                    step.RelativePath is null && step.RelatedRelativePath is null)
+                && !hostileFinding.Summary.Contains(outsidePath, StringComparison.OrdinalIgnoreCase),
+                "even an externally constructed hostile command plan must not leak rooted paths into public findings");
+        });
+    }
+
+    internal static void ScopesDependencyFindingsToDirectedCompleteProjects()
+    {
+        WithFixture(root =>
+        {
+            WriteProject(
+                root,
+                "src/Core/Core.csproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                "src/A/A.csproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../Core/Core.csproj" />
+                    <PackageReference Include="Example.Dependency" Version="1.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                "src/B/B.csproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../Core/Core.csproj" />
+                    <PackageReference Include="Example.Dependency" Version="2.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            var service = new DotNetWorkspaceIntelligenceService();
+            var siblingSnapshot = service.DiscoverAsync(root).GetAwaiter().GetResult();
+            Require(
+                !siblingSnapshot.Findings.Any(finding =>
+                    finding.Category == DotNetFindingCategory.PackageVersionConflict),
+                "sibling projects that merely share a dependency must not be treated as one package-resolution closure");
+
+            WriteProject(
+                root,
+                "src/App/App.csproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../A/A.csproj" />
+                    <ProjectReference Include="../B/B.csproj" />
+                  </ItemGroup>
+                </Project>
+                """);
+            var rootedSnapshot = service.DiscoverAsync(root).GetAwaiter().GetResult();
+            var conflict = rootedSnapshot.Findings.Single(finding =>
+                finding.Category == DotNetFindingCategory.PackageVersionConflict);
+            Require(
+                conflict.RootCauseChain[0].RelativePath == "src/App/App.csproj"
+                && conflict.RelatedProjectRelativePaths.SequenceEqual(
+                    ["src/A/A.csproj", "src/B/B.csproj"],
+                    StringComparer.OrdinalIgnoreCase),
+                "a package conflict should require and identify one directed root that reaches every conflicting reference");
+        });
+
+        WithFixture(root =>
+        {
+            const string rootProject = "src/Root/Root.csproj";
+            var partialProjects = new[]
+            {
+                "src/Conditional/Conditional.csproj",
+                "src/Imported/Imported.csproj",
+                "src/DirectoryScoped/DirectoryScoped.csproj",
+                "src/CustomSdk/CustomSdk.csproj",
+                "src/MisleadingMSTestSdk/MisleadingMSTestSdk.csproj"
+            };
+            WriteProject(
+                root,
+                rootProject,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../Conditional/Conditional.csproj" />
+                    <ProjectReference Include="../Imported/Imported.csproj" />
+                    <ProjectReference Include="../DirectoryScoped/DirectoryScoped.csproj" />
+                    <ProjectReference Include="../CustomSdk/CustomSdk.csproj" />
+                    <ProjectReference Include="../MisleadingMSTestSdk/MisleadingMSTestSdk.csproj" />
+                    <PackageReference Include="Example.Dependency" Version="1.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                partialProjects[0],
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework Condition="'$(Configuration)' == 'Debug'">net10.0</TargetFramework>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../Root/Root.csproj" />
+                    <PackageReference Include="Example.Dependency" Version="2.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                partialProjects[1],
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <Import Project="Imported.props" />
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../Root/Root.csproj" />
+                    <PackageReference Include="Example.Dependency" Version="3.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "src/Imported/Imported.props", "<Project />");
+            WriteProject(root, "src/DirectoryScoped/Directory.Build.props", "<Project />");
+            WriteProject(
+                root,
+                partialProjects[2],
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../Root/Root.csproj" />
+                    <PackageReference Include="Example.Dependency" Version="4.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                partialProjects[3],
+                """
+                <Project Sdk="Example.Custom.Sdk/1.0.0">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <OutputType>Exe</OutputType>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../Root/Root.csproj" />
+                    <PackageReference Include="Example.Dependency" Version="5.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                partialProjects[4],
+                """
+                <Project Sdk="MSTest.Sdk.Custom">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <OutputType>Exe</OutputType>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../Root/Root.csproj" />
+                    <PackageReference Include="Example.Dependency" Version="6.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            var snapshot = new DotNetWorkspaceIntelligenceService()
+                .DiscoverAsync(root)
+                .GetAwaiter()
+                .GetResult();
+            Require(
+                partialProjects.All(path => Project(snapshot, path).IsPartial),
+                "conditional properties, explicit imports, Directory.Build inputs, custom SDK imports, and misleading SDK-name prefixes should each mark static project evidence partial");
+            Require(
+                snapshot.Findings.All(finding =>
+                    !finding.RelatedProjectRelativePaths.Any(path =>
+                        partialProjects.Contains(path, StringComparer.OrdinalIgnoreCase))),
+                "DND301, DND302, and DND303 must not claim findings from projects with unevaluated MSBuild inputs");
+        });
+    }
+
+    internal static void NormalizesFrameworkAndPackageEvidenceConservatively()
+    {
+        AssertFrameworkCompatibility("net8.0-windows7.0", "net8.0-windows10.0", shouldReport: true);
+        AssertFrameworkCompatibility("net8.0-windows10.0", "net8.0-windows7.0", shouldReport: false);
+        AssertFrameworkCompatibility("netcoreapp1.1", "netstandard1.6", shouldReport: false);
+        AssertFrameworkCompatibility("netcoreapp1.1", "netstandard1.7", shouldReport: true);
+        AssertFrameworkCompatibility("netcoreapp2.0", "netstandard2.0", shouldReport: false);
+        AssertFrameworkCompatibility("netcoreapp2.0", "netstandard2.1", shouldReport: true);
+        AssertFrameworkCompatibility("netcoreapp3.0", "netstandard2.1", shouldReport: false);
+
+        WithFixture(root =>
+        {
+            WriteProject(
+                root,
+                "src/Dependency/Dependency.csproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net8.0-windows10.0/../../secret</TargetFramework></PropertyGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                "src/Consumer/Consumer.csproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net8.0-windows7.0</TargetFramework></PropertyGroup>
+                  <ItemGroup><ProjectReference Include="../Dependency/Dependency.csproj" /></ItemGroup>
+                </Project>
+                """);
+            var snapshot = new DotNetWorkspaceIntelligenceService()
+                .DiscoverAsync(root)
+                .GetAwaiter()
+                .GetResult();
+            Require(
+                !snapshot.Findings.Any(finding =>
+                    finding.Category == DotNetFindingCategory.TargetFrameworkIncompatibility),
+                "unsupported or hostile target framework text should suppress bounded compatibility claims");
+            Require(
+                snapshot.Findings.All(finding =>
+                    !finding.Summary.Contains("secret", StringComparison.OrdinalIgnoreCase)
+                    && finding.RootCauseChain.All(step =>
+                        step.Value?.Contains("secret", StringComparison.OrdinalIgnoreCase) != true)),
+                "raw unsupported TFM suffixes must not enter finding summaries or evidence");
+        });
+
+        WithFixture(root =>
+        {
+            WriteProject(
+                root,
+                "src/Root/Root.csproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../A/A.csproj" />
+                    <ProjectReference Include="../B/B.csproj" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                "src/A/A.csproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <PackageReference Include="Stable.Package" Version="1.0" />
+                    <PackageReference Include="Preview.Package" Version="1.0.0-RC.1" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                "src/B/B.csproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <PackageReference Include="Stable.Package" Version="1.0.0" />
+                    <PackageReference Include="Preview.Package" Version="1.0.0-rc.1" />
+                  </ItemGroup>
+                </Project>
+                """);
+            var snapshot = new DotNetWorkspaceIntelligenceService()
+                .DiscoverAsync(root)
+                .GetAwaiter()
+                .GetResult();
+            Require(
+                !snapshot.Findings.Any(finding =>
+                    finding.Category == DotNetFindingCategory.PackageVersionConflict),
+                "semantically equivalent stable and prerelease package versions should not produce DND303");
+            Require(
+                Project(snapshot, "src/A/A.csproj").PackageReferences.Select(package => package.Version)
+                    .SequenceEqual(["1.0.0-rc.1", "1.0.0"], StringComparer.Ordinal)
+                && Project(snapshot, "src/B/B.csproj").PackageReferences.Select(package => package.Version)
+                    .SequenceEqual(["1.0.0-rc.1", "1.0.0"], StringComparer.Ordinal),
+                "public direct package evidence should use deterministic canonical versions");
+        });
+    }
+
+    internal static void RequiresExactRuntimeFailureEvidence()
+    {
+        WithFixture(root =>
+        {
+            var command = new DotNetCommandPlan(
+                "test:solution",
+                DotNetCommandKind.Test,
+                DotNetCommandTargetKind.Solution,
+                "Arena.sln",
+                "dotnet",
+                ["test", "Arena.sln", "--no-build"],
+                ".",
+                true,
+                false,
+                DotNetNetworkRisk.None,
+                "dotnet test Arena.sln --no-build",
+                "Test solution.");
+            var firstProject = Path.Combine(root, "tests", "A.Tests", "A.Tests.csproj");
+            var secondProject = Path.Combine(root, "tests", "B.Tests", "B.Tests.csproj");
+            var output = $"""
+                warning NU1605: Detected package downgrade: Example.Dependency from 4.0.0 to 3.0.0. Reference the package directly from the project to select a different version. [{firstProject}]
+                warning NU1605: Detected package downgrade: Example.Dependency from 5.0.0 to 3.0.0. Reference the package directly from the project to select a different version. [{secondProject}]
+                """;
+            var downgradeResult = new DotNetOutputParser().Parse(root, command, 0, output, "");
+            var downgrades = downgradeResult.Findings
+                .Where(finding => finding.Category == DotNetFindingCategory.PackageDowngrade)
+                .OrderBy(finding => finding.PrimaryRelativePath, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            Require(
+                downgrades.Length == 2
+                && downgrades.Select(finding => finding.Id).Distinct(StringComparer.Ordinal).Count() == 2
+                && downgrades.Select(finding => finding.PrimaryRelativePath).SequenceEqual(
+                    ["tests/A.Tests/A.Tests.csproj", "tests/B.Tests/B.Tests.csproj"],
+                    StringComparer.OrdinalIgnoreCase),
+                "same-package NU1605 diagnostics from two projects must retain distinct stable findings");
+
+            foreach (var nearMiss in new[]
+                     {
+                         "Build note: No test is available in Passed.Tests.dll. Make sure that test discoverer & executors are registered and platform & framework version settings are appropriate and try again.",
+                         "No test is available in Passed.Tests.dll.",
+                         "No test is available in Passed.Tests.dll. This sentence is not runner guidance."
+                     })
+            {
+                var result = new DotNetOutputParser().Parse(root, command, 0, nearMiss, "");
+                Require(
+                    result.Succeeded
+                    && !result.Findings.Any(finding =>
+                        finding.Category == DotNetFindingCategory.TestDiscoveryFailure),
+                    "near-match prose must not turn a successful test process into DND402");
+            }
+        });
+    }
+
+    internal static void BoundsDiscoveryToExplicitProjectPaths()
+    {
+        WithFixture(root =>
+        {
+            const string productProject = "src/Product/Product.csproj";
+            const string toolingProject = "map/indexer/Tooling.csproj";
+            WriteProject(
+                root,
+                productProject,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                toolingProject,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                "Arena.sln",
+                """
+                Microsoft Visual Studio Solution File, Format Version 12.00
+                Global
+                EndGlobal
+                """);
+
+            var snapshot = new DotNetWorkspaceIntelligenceService()
+                .DiscoverAsync(
+                    root,
+                    new DotNetDiscoveryOptions
+                    {
+                        AllowedProjectRelativePaths = [productProject]
+                    })
+                .GetAwaiter()
+                .GetResult();
+            Require(
+                snapshot.Projects.Select(project => project.RelativePath).SequenceEqual([productProject])
+                && snapshot.Solutions.Count == 0
+                && snapshot.CommandPlans.All(plan =>
+                    plan.TargetRelativePath.Equals(productProject, StringComparison.OrdinalIgnoreCase)),
+                "explicit project discovery should not traverse, plan, or diagnose tooling and solution inputs outside its allow-list");
+            Require(
+                !snapshot.Diagnostics.Any(diagnostic =>
+                    diagnostic.RelativePath?.Contains("map/", StringComparison.OrdinalIgnoreCase) == true)
+                && !snapshot.Findings.SelectMany(finding => finding.RelatedProjectRelativePaths)
+                    .Any(path => path.Contains("map/", StringComparison.OrdinalIgnoreCase)),
+                "explicit discovery scope must not persist excluded tooling paths");
+        });
+    }
+
     internal static void ReportsPartialProjectsAndHonorsCancellation()
     {
         WithFixture(root =>
@@ -682,6 +1297,53 @@ internal static class DotNetSolutionDoctorTests
             project.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase));
     }
 
+    private static void AssertFrameworkCompatibility(
+        string consumerFramework,
+        string dependencyFramework,
+        bool shouldReport)
+    {
+        WithFixture(root =>
+        {
+            WriteProject(
+                root,
+                "src/Dependency/Dependency.csproj",
+                $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>{dependencyFramework}</TargetFramework></PropertyGroup>
+                </Project>
+                """);
+            WriteProject(
+                root,
+                "src/Consumer/Consumer.csproj",
+                $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>{consumerFramework}</TargetFramework></PropertyGroup>
+                  <ItemGroup><ProjectReference Include="../Dependency/Dependency.csproj" /></ItemGroup>
+                </Project>
+                """);
+            var snapshot = new DotNetWorkspaceIntelligenceService()
+                .DiscoverAsync(root)
+                .GetAwaiter()
+                .GetResult();
+            var frameworkFindings = snapshot.Findings
+                .Where(finding =>
+                    finding.Category == DotNetFindingCategory.TargetFrameworkIncompatibility)
+                .ToArray();
+            Require(
+                shouldReport ? frameworkFindings.Length == 1 : frameworkFindings.Length == 0,
+                $"{consumerFramework} -> {dependencyFramework} compatibility classification was incorrect");
+            Require(
+                frameworkFindings.All(finding =>
+                    finding.RootCauseChain
+                        .Where(step => step.Kind == DotNetFindingEvidenceKind.TargetFramework)
+                        .All(step =>
+                            step.Value is not null
+                            && !step.Value.Contains('/')
+                            && !step.Value.Contains('\\'))),
+                "published framework evidence should contain only normalized bounded TFM values");
+        });
+    }
+
     private static bool AllPublicPathsAreRelative(DotNetWorkspaceSnapshot snapshot, string root)
     {
         var paths = snapshot.Solutions.Select(solution => solution.RelativePath)
@@ -691,6 +1353,11 @@ internal static class DotNetSolutionDoctorTests
             .Concat(snapshot.CommandPlans.Select(plan => plan.TargetRelativePath))
             .Concat(snapshot.CommandPlans.Select(plan => plan.WorkingDirectoryRelativePath))
             .Concat(snapshot.Diagnostics.Select(diagnostic => diagnostic.RelativePath).OfType<string>())
+            .Concat(snapshot.Findings.Select(finding => finding.PrimaryRelativePath).OfType<string>())
+            .Concat(snapshot.Findings.SelectMany(finding => finding.RelatedProjectRelativePaths))
+            .Concat(snapshot.Findings.SelectMany(finding => finding.RootCauseChain)
+                .SelectMany(step => new[] { step.RelativePath, step.RelatedRelativePath })
+                .OfType<string>())
             .ToArray();
         return paths.All(path => !Path.IsPathRooted(path) && !path.Contains(root, StringComparison.OrdinalIgnoreCase));
     }

@@ -508,6 +508,20 @@ $installerSigning = Get-Content -LiteralPath $installerSigningReport -Raw | Conv
 if ($releaseSigning.formatVersion -ne 1 -or $installerSigning.formatVersion -ne 1) {
     throw "Unsupported release or installer signing-report schema."
 }
+$releaseSigningEnabled = [bool](Get-AIArenaOptionalPropertyValue -InputObject $releaseSigning -Name 'signingEnabled' -DefaultValue $false)
+$installerSigningEnabled = [bool](Get-AIArenaOptionalPropertyValue -InputObject $installerSigning -Name 'signingEnabled' -DefaultValue $false)
+$releaseCertificateThumbprint = [string](Get-AIArenaOptionalPropertyValue -InputObject $releaseSigning -Name 'certificateThumbprint' -DefaultValue '')
+$installerCertificateThumbprint = [string](Get-AIArenaOptionalPropertyValue -InputObject $installerSigning -Name 'certificateThumbprint' -DefaultValue '')
+$releaseCertificateKeyAlgorithm = [string](Get-AIArenaOptionalPropertyValue -InputObject $releaseSigning -Name 'certificateKeyAlgorithm' -DefaultValue '')
+$installerCertificateKeyAlgorithm = [string](Get-AIArenaOptionalPropertyValue -InputObject $installerSigning -Name 'certificateKeyAlgorithm' -DefaultValue '')
+$releaseCertificateKeySize = [int](Get-AIArenaOptionalPropertyValue -InputObject $releaseSigning -Name 'certificateKeySize' -DefaultValue 0)
+$installerCertificateKeySize = [int](Get-AIArenaOptionalPropertyValue -InputObject $installerSigning -Name 'certificateKeySize' -DefaultValue 0)
+$releaseCertificateChainTrusted = [bool](Get-AIArenaOptionalPropertyValue -InputObject $releaseSigning -Name 'certificateChainTrusted' -DefaultValue $false)
+$installerCertificateChainTrusted = [bool](Get-AIArenaOptionalPropertyValue -InputObject $installerSigning -Name 'certificateChainTrusted' -DefaultValue $false)
+$releasePrivateKeyVerified = [bool](Get-AIArenaOptionalPropertyValue -InputObject $releaseSigning -Name 'privateKeyVerified' -DefaultValue $false)
+$installerPrivateKeyVerified = [bool](Get-AIArenaOptionalPropertyValue -InputObject $installerSigning -Name 'privateKeyVerified' -DefaultValue $false)
+$releaseTimestampRequired = [bool](Get-AIArenaOptionalPropertyValue -InputObject $releaseSigning -Name 'timestampRequired' -DefaultValue $false)
+$installerTimestampRequired = [bool](Get-AIArenaOptionalPropertyValue -InputObject $installerSigning -Name 'timestampRequired' -DefaultValue $false)
 $recordedPolicy = [string]$releaseSigning.policy
 if ($recordedPolicy -notin @('Optional', 'Required', 'Disabled') -or [string]$installerSigning.policy -ne $recordedPolicy) {
     throw "Release and installer signing policies are invalid or inconsistent."
@@ -515,20 +529,47 @@ if ($recordedPolicy -notin @('Optional', 'Required', 'Disabled') -or [string]$in
 if (-not [string]::IsNullOrWhiteSpace($SigningPolicy) -and $SigningPolicy -ne $recordedPolicy) {
     throw "Requested signing policy '$SigningPolicy' does not match recorded policy '$recordedPolicy'."
 }
-if ([bool]$releaseSigning.signingEnabled -ne [bool]$installerSigning.signingEnabled) {
+if ($releaseSigningEnabled -ne $installerSigningEnabled) {
     throw "Release and installer signing-enabled records are inconsistent."
+}
+Assert-AIArenaSigningPolicyState -Policy $recordedPolicy -SigningEnabled $releaseSigningEnabled
+if ($releaseCertificateThumbprint -ne $installerCertificateThumbprint) {
+    throw "Release and installer signing-certificate records are inconsistent."
+}
+if ($releaseCertificateKeyAlgorithm -ne $installerCertificateKeyAlgorithm `
+    -or $releaseCertificateKeySize -ne $installerCertificateKeySize) {
+    throw "Release and installer signing-key records are inconsistent."
+}
+if ($releaseTimestampRequired -ne $installerTimestampRequired) {
+    throw "Release and installer timestamp requirements are inconsistent."
 }
 
 $releaseSignature = Get-AuthenticodeSignature -LiteralPath $releaseExe
 $installerSignature = Get-AuthenticodeSignature -LiteralPath $installer
 $releaseArtifactRecord = @($releaseSigning.artifacts | Where-Object { $_.path -eq 'AI Arena.exe' })
+$installerReleaseArtifactRecord = @($installerSigning.artifacts | Where-Object {
+    $_.path -eq 'AI Arena.exe' -and $_.location -eq 'release'
+})
 $installerArtifactRecord = @($installerSigning.artifacts | Where-Object { $_.location -eq 'installer' })
 if ($releaseArtifactRecord.Count -ne 1 -or $releaseArtifactRecord[0].status -ne $releaseSignature.Status.ToString()) {
     throw "Release executable signature status does not match the signing report."
 }
+if ($installerReleaseArtifactRecord.Count -ne 1 `
+    -or $installerReleaseArtifactRecord[0].status -ne $releaseSignature.Status.ToString()) {
+    throw "Installer report release-executable status does not match the artifact."
+}
 if ($installerArtifactRecord.Count -ne 1 -or $installerArtifactRecord[0].status -ne $installerSignature.Status.ToString()) {
     throw "Installer signature status does not match the signing report."
 }
+$releaseArtifactTimestampVerified = [bool](Get-AIArenaOptionalPropertyValue -InputObject $releaseArtifactRecord[0] -Name 'timestampVerified' -DefaultValue $false)
+$installerReleaseArtifactTimestampVerified = [bool](Get-AIArenaOptionalPropertyValue -InputObject $installerReleaseArtifactRecord[0] -Name 'timestampVerified' -DefaultValue $false)
+$installerArtifactTimestampVerified = [bool](Get-AIArenaOptionalPropertyValue -InputObject $installerArtifactRecord[0] -Name 'timestampVerified' -DefaultValue $false)
+$releaseArtifactSignerThumbprint = [string](Get-AIArenaOptionalPropertyValue -InputObject $releaseArtifactRecord[0] -Name 'signerThumbprint' -DefaultValue '')
+$installerReleaseArtifactSignerThumbprint = [string](Get-AIArenaOptionalPropertyValue -InputObject $installerReleaseArtifactRecord[0] -Name 'signerThumbprint' -DefaultValue '')
+$installerArtifactSignerThumbprint = [string](Get-AIArenaOptionalPropertyValue -InputObject $installerArtifactRecord[0] -Name 'signerThumbprint' -DefaultValue '')
+$releaseArtifactTimeStamperThumbprint = [string](Get-AIArenaOptionalPropertyValue -InputObject $releaseArtifactRecord[0] -Name 'timeStamperThumbprint' -DefaultValue '')
+$installerReleaseArtifactTimeStamperThumbprint = [string](Get-AIArenaOptionalPropertyValue -InputObject $installerReleaseArtifactRecord[0] -Name 'timeStamperThumbprint' -DefaultValue '')
+$installerArtifactTimeStamperThumbprint = [string](Get-AIArenaOptionalPropertyValue -InputObject $installerArtifactRecord[0] -Name 'timeStamperThumbprint' -DefaultValue '')
 foreach ($signature in @($releaseSignature, $installerSignature)) {
     if ($signature.Status -notin @(
         [System.Management.Automation.SignatureStatus]::Valid,
@@ -536,18 +577,62 @@ foreach ($signature in @($releaseSignature, $installerSignature)) {
         throw "Release artifact has an unacceptable Authenticode status: $($signature.Status)."
     }
 }
-if ([bool]$releaseSigning.signingEnabled -or $recordedPolicy -eq 'Required') {
-    if ($releaseSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid `
-        -or $installerSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-        throw "Signing policy '$recordedPolicy' requires valid Authenticode signatures on the app and installer."
+if ($releaseSigningEnabled -or $recordedPolicy -eq 'Required') {
+    if ([string]::IsNullOrWhiteSpace($releaseCertificateThumbprint) `
+        -or -not $releaseCertificateChainTrusted `
+        -or -not $releasePrivateKeyVerified `
+        -or -not $installerCertificateChainTrusted `
+        -or -not $installerPrivateKeyVerified) {
+        throw "Signing reports do not attest the selected certificate's trusted chain and usable private key."
     }
-    if ($null -eq $releaseSignature.TimeStamperCertificate -or $null -eq $installerSignature.TimeStamperCertificate) {
-        throw "Signed app and installer must have RFC 3161 timestamp countersignatures."
+    if (-not $releaseTimestampRequired -or -not $installerTimestampRequired) {
+        throw "Signed release reports must require RFC 3161 timestamps."
     }
-    if ([string]::IsNullOrWhiteSpace([string]$releaseSigning.certificateThumbprint) `
-        -or $releaseSignature.SignerCertificate.Thumbprint -ne $releaseSigning.certificateThumbprint `
-        -or $installerSignature.SignerCertificate.Thumbprint -ne $releaseSigning.certificateThumbprint) {
-        throw "App and installer signer certificates do not match the signing report."
+
+    $releaseVerification = Assert-AIArenaAuthenticodeSignature `
+        -Signature $releaseSignature `
+        -ExpectedSignerThumbprint $releaseCertificateThumbprint `
+        -RequireTimestamp `
+        -Label 'Release executable'
+    $installerVerification = Assert-AIArenaAuthenticodeSignature `
+        -Signature $installerSignature `
+        -ExpectedSignerThumbprint $releaseCertificateThumbprint `
+        -RequireTimestamp `
+        -Label 'Installer'
+    if ($releaseCertificateKeyAlgorithm -ne $releaseVerification.SignerKeyAlgorithm `
+        -or $releaseCertificateKeySize -ne $releaseVerification.SignerKeySize `
+        -or $installerCertificateKeyAlgorithm -ne $installerVerification.SignerKeyAlgorithm `
+        -or $installerCertificateKeySize -ne $installerVerification.SignerKeySize) {
+        throw "Signing-report key metadata does not match the signed app and installer."
+    }
+
+    if (-not $releaseArtifactTimestampVerified `
+        -or $releaseArtifactSignerThumbprint -ne $releaseVerification.SignerThumbprint `
+        -or $releaseArtifactTimeStamperThumbprint -ne $releaseVerification.TimeStamperThumbprint) {
+        throw "Release executable signer or timestamp does not match its signing report."
+    }
+    if (-not $installerReleaseArtifactTimestampVerified `
+        -or $installerReleaseArtifactSignerThumbprint -ne $releaseVerification.SignerThumbprint `
+        -or $installerReleaseArtifactTimeStamperThumbprint -ne $releaseVerification.TimeStamperThumbprint) {
+        throw "Installer report release-executable signer or timestamp is inconsistent."
+    }
+    if (-not $installerArtifactTimestampVerified `
+        -or $installerArtifactSignerThumbprint -ne $installerVerification.SignerThumbprint `
+        -or $installerArtifactTimeStamperThumbprint -ne $installerVerification.TimeStamperThumbprint) {
+        throw "Installer signer or timestamp does not match its signing report."
+    }
+}
+else {
+    if ($releaseSignature.Status -ne [System.Management.Automation.SignatureStatus]::NotSigned `
+        -or $installerSignature.Status -ne [System.Management.Automation.SignatureStatus]::NotSigned) {
+        throw "Signing is recorded as disabled, but a release artifact carries an unrecorded signature."
+    }
+    if ($releaseTimestampRequired `
+        -or $installerTimestampRequired `
+        -or $releaseArtifactTimestampVerified `
+        -or $installerReleaseArtifactTimestampVerified `
+        -or $installerArtifactTimestampVerified) {
+        throw "Unsigned signing reports must not claim timestamp verification."
     }
 }
 

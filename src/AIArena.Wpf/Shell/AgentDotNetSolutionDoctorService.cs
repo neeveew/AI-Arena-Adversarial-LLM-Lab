@@ -46,7 +46,8 @@ internal static class AgentDotNetSolutionDoctorService
         ArgumentNullException.ThrowIfNull(snapshot);
         if (snapshot.Solutions.Count == 0
             && snapshot.Projects.Count == 0
-            && snapshot.Diagnostics.Count == 0)
+            && snapshot.Diagnostics.Count == 0
+            && snapshot.Findings.Count == 0)
         {
             return filesystemProfile;
         }
@@ -71,6 +72,12 @@ internal static class AgentDotNetSolutionDoctorService
         if (restore is not null)
         {
             lines.Add($"Restore (PowerShell; separate approval; may use package sources): {FormatPowerShellInvocation(restore)}");
+        }
+
+        foreach (var finding in snapshot.Findings.Take(3))
+        {
+            var path = string.IsNullOrWhiteSpace(finding.PrimaryRelativePath) ? "" : $" [{finding.PrimaryRelativePath}]";
+            lines.Add($".NET finding {finding.Severity}: {finding.Code}{path} — {finding.Title}. {finding.Summary}");
         }
 
         foreach (var diagnostic in snapshot.Diagnostics.Take(3))
@@ -322,6 +329,23 @@ internal static class AgentDotNetSolutionDoctorService
             lines.Add($"Tests: {totals.Passed.ToString(CultureInfo.InvariantCulture)} passed, {totals.Failed.ToString(CultureInfo.InvariantCulture)} failed, {totals.Skipped.ToString(CultureInfo.InvariantCulture)} skipped, {totals.Total.ToString(CultureInfo.InvariantCulture)} total.");
         }
 
+        if (result.Findings.Count > 0)
+        {
+            lines.Add("Root-cause findings:");
+            foreach (var finding in result.Findings.Take(8))
+            {
+                var path = string.IsNullOrWhiteSpace(finding.PrimaryRelativePath) ? "" : $" [{finding.PrimaryRelativePath}]";
+                lines.Add($"- {finding.Severity} {finding.Code}{path}: {finding.Title}. {ShellUiHelpers.Truncate(finding.Summary, MaxDiagnosticMessageCharacters, ShellUiHelpers.TruncatedNoticeSuffix)}");
+                foreach (var evidence in finding.RootCauseChain.Take(4))
+                {
+                    var evidencePath = string.IsNullOrWhiteSpace(evidence.RelativePath) ? "" : $" [{evidence.RelativePath}]";
+                    var relatedPath = string.IsNullOrWhiteSpace(evidence.RelatedRelativePath) ? "" : $" -> {evidence.RelatedRelativePath}";
+                    var value = string.IsNullOrWhiteSpace(evidence.Value) ? "" : $" ({evidence.Value})";
+                    lines.Add($"  {evidence.Sequence.ToString(CultureInfo.InvariantCulture)}. {evidence.Label}{evidencePath}{relatedPath}{value}");
+                }
+            }
+        }
+
         if (result.Diagnostics.Count > 0)
         {
             lines.Add("Diagnostics:");
@@ -376,7 +400,33 @@ internal static class AgentDotNetSolutionDoctorService
         }
 
         var suffix = snapshot.IsPartial ? " · partial" : "";
-        return $"{snapshot.Projects.Count.ToString(CultureInfo.InvariantCulture)} projects{suffix}";
+        var findings = snapshot.Findings.Count == 0
+            ? ""
+            : $" · {snapshot.Findings.Count.ToString(CultureInfo.InvariantCulture)} finding(s)";
+        return $"{snapshot.Projects.Count.ToString(CultureInfo.InvariantCulture)} projects{findings}{suffix}";
+    }
+
+    internal static string WorkspaceEvidenceBrushKey(DotNetWorkspaceSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.Findings.Any(finding =>
+                finding.Severity == DotNetWorkspaceDiagnosticSeverity.Error)
+            || snapshot.Diagnostics.Any(diagnostic =>
+                diagnostic.Severity == DotNetWorkspaceDiagnosticSeverity.Error))
+        {
+            return "DangerBorderBrush";
+        }
+
+        if (snapshot.IsPartial
+            || snapshot.Findings.Any(finding =>
+                finding.Severity == DotNetWorkspaceDiagnosticSeverity.Warning)
+            || snapshot.Diagnostics.Any(diagnostic =>
+                diagnostic.Severity == DotNetWorkspaceDiagnosticSeverity.Warning))
+        {
+            return "PrimaryBorderBrush";
+        }
+
+        return "AssistBorderBrush";
     }
 
     internal static string ResultEvidenceState(StructuredDotNetResult result)
@@ -387,14 +437,55 @@ internal static class AgentDotNetSolutionDoctorService
             return "Cancelled";
         }
 
+        if (result.Findings.Any(finding =>
+                finding.Category == DotNetFindingCategory.TestDiscoveryFailure))
+        {
+            return "Test discovery failed";
+        }
+
         return result.Succeeded
             ? result.WarningCount == 0 ? "Passed" : $"Passed · {result.WarningCount.ToString(CultureInfo.InvariantCulture)} warnings"
             : $"{result.ErrorCount.ToString(CultureInfo.InvariantCulture)} errors · {result.WarningCount.ToString(CultureInfo.InvariantCulture)} warnings";
     }
 
+    internal static string ResultEvidenceBrushKey(StructuredDotNetResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (result.WasCancelled)
+        {
+            return "PrimaryBorderBrush";
+        }
+
+        if (!result.Succeeded
+            || result.Findings.Any(finding =>
+                finding.Severity == DotNetWorkspaceDiagnosticSeverity.Error)
+            || result.Diagnostics.Any(diagnostic =>
+                diagnostic.Severity == DotNetBuildDiagnosticSeverity.Error))
+        {
+            return "DangerBorderBrush";
+        }
+
+        if (result.WarningCount > 0
+            || result.Findings.Any(finding =>
+                finding.Severity == DotNetWorkspaceDiagnosticSeverity.Warning)
+            || result.Diagnostics.Any(diagnostic =>
+                diagnostic.Severity == DotNetBuildDiagnosticSeverity.Warning))
+        {
+            return "PrimaryBorderBrush";
+        }
+
+        return "AssistBorderBrush";
+    }
+
     internal static string TestEvidenceState(StructuredDotNetResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
+        if (result.Findings.Any(finding =>
+                finding.Category == DotNetFindingCategory.TestDiscoveryFailure))
+        {
+            return "Discovery failed";
+        }
+
         if (result.TestTotals is not { } totals)
         {
             return result.FailingTests.Count == 0
@@ -412,6 +503,12 @@ internal static class AgentDotNetSolutionDoctorService
         {
             var path = string.IsNullOrWhiteSpace(diagnostic.RelativePath) ? "" : $"{diagnostic.RelativePath}:";
             return ShellUiHelpers.Truncate($"{diagnostic.Code} · {path}{diagnostic.Line?.ToString(CultureInfo.InvariantCulture) ?? "?"}", 72, ShellUiHelpers.TruncatedNoticeSuffix);
+        }
+
+        if (result.Findings.FirstOrDefault(finding => finding.Severity == DotNetWorkspaceDiagnosticSeverity.Error) is { } finding)
+        {
+            var path = string.IsNullOrWhiteSpace(finding.PrimaryRelativePath) ? "" : $" · {finding.PrimaryRelativePath}";
+            return ShellUiHelpers.Truncate($"{finding.Code}{path}", 72, ShellUiHelpers.TruncatedNoticeSuffix);
         }
 
         return result.FailingTests.FirstOrDefault() is { } failure

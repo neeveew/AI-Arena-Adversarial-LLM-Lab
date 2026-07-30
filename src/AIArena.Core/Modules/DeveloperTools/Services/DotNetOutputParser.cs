@@ -41,6 +41,7 @@ public sealed partial class DotNetOutputParser
         DotNetTestTotals? testTotals = null;
         var harnessPassedCount = 0;
         var harnessFailedCount = 0;
+        var testDiscoveryFailed = false;
         var limitReached = standardOutput.Length > maximumParsedCharactersPerStream
             || standardError.Length > maximumParsedCharactersPerStream;
 
@@ -94,6 +95,11 @@ public sealed partial class DotNetOutputParser
             {
                 harnessPassedCount++;
             }
+
+            if (command.Kind == DotNetCommandKind.Test && IsTestDiscoveryFailureLine(line))
+            {
+                testDiscoveryFailed = true;
+            }
         }
 
         if (testTotals is null && harnessPassedCount + harnessFailedCount > 0)
@@ -117,7 +123,12 @@ public sealed partial class DotNetOutputParser
             && exitCode == 0
             && errorCount == 0
             && (testTotals?.Failed ?? 0) == 0
-            && failingTests.Count == 0;
+            && failingTests.Count == 0
+            && !testDiscoveryFailed;
+        var findings = DotNetDoctorFindingFactory.CreateCommandFindings(
+            command,
+            diagnostics,
+            testDiscoveryFailed);
 
         return new(
             command,
@@ -130,7 +141,10 @@ public sealed partial class DotNetOutputParser
             testTotals,
             failingTests,
             rawOutput,
-            limitReached);
+            limitReached)
+        {
+            Findings = findings
+        };
     }
 
     private static bool TryParseDiagnostic(string root, string line, out DotNetBuildDiagnostic diagnostic)
@@ -276,6 +290,12 @@ public sealed partial class DotNetOutputParser
             || XunitFailedTestRegex().IsMatch(line)
             || HarnessFailedTestRegex().IsMatch(line)
             || XunitSuffixFailedTestRegex().IsMatch(line);
+    }
+
+    private static bool IsTestDiscoveryFailureLine(string line)
+    {
+        return NoTestsAvailableRegex().IsMatch(line)
+            || MissingTestSourceRegex().IsMatch(line);
     }
 
     private static IEnumerable<string> EnumerateBoundedLines(string value, int maximumCharacters)
@@ -445,16 +465,16 @@ public sealed partial class DotNetOutputParser
     }
 
     [GeneratedRegex(
-        """^\s*(?<file>.+?)\((?<line>\d+)(?:,(?<column>\d+))?\)\s*:\s*(?<severity>error|warning|info)\s+(?<code>(?:CS|MSB)\d{4})\s*:\s*(?<message>.*?)(?:\s+\[(?<project>[^\]]+\.csproj)\])?\s*$""",
+        """^\s*(?<file>.+?)\((?<line>\d+)(?:,(?<column>\d+))?\)\s*:\s*(?<severity>error|warning|info)\s+(?<code>(?:(?:CS|MSB|NU)\d{4}|NETSDK\d{4}))\s*:\s*(?<message>.*?)(?:\s+\[(?<project>[^\]]+\.csproj)\])?\s*$""",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex LocatedDiagnosticRegex();
 
     [GeneratedRegex(
-        """^\s*(?:(?<file>.+?)\s*:\s*)?(?<severity>error|warning|info)\s+(?<code>(?:CS|MSB)\d{4})\s*:\s*(?<message>.*?)(?:\s+\[(?<project>[^\]]+\.csproj)\])?\s*$""",
+        """^\s*(?:(?<file>.+?)\s*:\s*)?(?<severity>error|warning|info)\s+(?<code>(?:(?:CS|MSB|NU)\d{4}|NETSDK\d{4}))\s*:\s*(?<message>.*?)(?:\s+\[(?<project>[^\]]+\.csproj)\])?\s*$""",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex UnlocatedDiagnosticRegex();
 
-    [GeneratedRegex("""\b(?:CS|MSB)\d{4}\b""", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex("""\b(?:(?:CS|MSB|NU)\d{4}|NETSDK\d{4})\b""", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex DiagnosticCodeRegex();
 
     [GeneratedRegex("""^\s*(?<count>\d+)\s+Warning\(s\)\s*$""", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
@@ -502,6 +522,16 @@ public sealed partial class DotNetOutputParser
         """^\s*(?:\[[^\]]+\]\s+)?(?<name>.+?)\s+\[FAIL\]\s*$""",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex XunitSuffixFailedTestRegex();
+
+    [GeneratedRegex(
+        """^\s*No test is available in\s+.+?\.\s+Make sure that test discoverer\s*&\s*executors are registered(?:\s+and platform\s*&\s*framework version settings are appropriate)?(?:\s+and try again)?\.?\s*$""",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex NoTestsAvailableRegex();
+
+    [GeneratedRegex(
+        """^\s*The test source file\s+["']?.+?["']?\s+provided was not found\.?\s*$""",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex MissingTestSourceRegex();
 
     [GeneratedRegex(
         """(?<quote>["'])(?:[A-Za-z]:[\\/]|\\\\|/)[^"']+\k<quote>""",
