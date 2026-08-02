@@ -619,6 +619,9 @@ static void AgentWorkspaceFileReceiptScanIsBounded()
         Require(
             AgentWorkspaceCoordinator.ShouldSkipWorkspaceReceiptDirectory("node_modules", FileAttributes.Directory),
             "workspace receipt scanner should continue skipping dependency cache folders");
+        Require(
+            AgentWorkspaceCoordinator.ShouldSkipWorkspaceReceiptDirectory(".ai-arena", FileAttributes.Directory),
+            "workspace receipt scanner should exclude generated AI Arena analysis history");
     }
     finally
     {

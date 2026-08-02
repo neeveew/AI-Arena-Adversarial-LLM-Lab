@@ -14,4 +14,5 @@ TestResults/
 *.snupkg
 .DS_Store
 artifacts/
+.ai-arena/analysis/
 map/

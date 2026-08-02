@@ -7,6 +7,9 @@ verified bullets into the new versioned `.txt` change file.
 
 ## Verified
 
+- Add an opt-in Roslyn Impact Explorer for symbol definitions and references, callers/callees, inheritance, project/package/XAML/test relationships, and evidence-labelled predictions for affected files, features, and focused tests.
+- Turn Solution Doctor findings into an explicit two-approval repair loop with explanations, exact stale-guarded diffs, focused project builds and dependency-evidenced tests, before/after classifications, and bounded secret-safe local history.
+- Add commit and release-baseline comparison to Map, including feature additions/removals/rewrites, recurring repairs, dynamically weighted overhaul candidates, focused-test reliability, and non-colour Doctor regression overlays without inferring unavailable coverage.
 - Extend the local Map with feature lifecycle/rework analytics, bounded commit evidence, reliable chart remounting, a populated architecture canvas, and product-scoped structured Solution Doctor findings.
 - Add conservative .NET root-cause findings for project-reference cycles, bounded target-framework incompatibility, literal package conflicts within directed dependency closures, command-proven package downgrades, and test-discovery failures.
 - Harden Authenticode readiness with explicit certificate discovery, trusted-chain and private-key preflight, timestamp verification, and fail-closed release checks.

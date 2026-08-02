@@ -196,6 +196,7 @@ internal static class WorkspaceScannerService
     {
         var name = Path.GetFileName(directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         return name.Equals(".git", StringComparison.OrdinalIgnoreCase)
+            || name.Equals(".ai-arena", StringComparison.OrdinalIgnoreCase)
             || name.Equals(".vs", StringComparison.OrdinalIgnoreCase)
             || name.Equals(".idea", StringComparison.OrdinalIgnoreCase)
             || name.Equals(".vscode", StringComparison.OrdinalIgnoreCase)

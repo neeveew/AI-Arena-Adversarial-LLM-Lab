@@ -1180,8 +1180,10 @@ internal static class DotNetSolutionDoctorTests
             .GetResult();
         var expectedProjects = new HashSet<string>(
             [
+                "src/AIArena.CodeIntelligence/AIArena.CodeIntelligence.csproj",
                 "src/AIArena.Core/AIArena.Core.csproj",
                 "src/AIArena.Wpf/AIArena.Wpf.csproj",
+                "tests/AIArena.CodeIntelligence.Tests/AIArena.CodeIntelligence.Tests.csproj",
                 "tests/AIArena.Tests/AIArena.Tests.csproj",
                 "tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj"
             ],
@@ -1193,14 +1195,14 @@ internal static class DotNetSolutionDoctorTests
                 candidate.RelativePath.Equals(solutionPath, StringComparison.OrdinalIgnoreCase));
             Require(
                 expectedProjects.SetEquals(solution.ProjectRelativePaths),
-                $"{solutionPath} should contain the four AI Arena product projects");
+                $"{solutionPath} should contain the six AI Arena product and intelligence projects");
             Require(!solution.IsPartial, $"{solutionPath} should resolve without partial membership");
         }
 
         var productProjects = snapshot.Projects
             .Where(project => expectedProjects.Contains(project.RelativePath))
             .ToArray();
-        Require(productProjects.Length == 4, "the real product solutions should resolve all four projects");
+        Require(productProjects.Length == 6, "the real product solutions should resolve all six projects");
         foreach (var project in productProjects)
         {
             var projectDirectory = Path.GetDirectoryName(
@@ -1221,15 +1223,16 @@ internal static class DotNetSolutionDoctorTests
             .Where(project => project.IsExecutableTestHarness)
             .OrderBy(project => project.RelativePath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        Require(harnesses.Length == 2, "both product test projects should classify as executable harnesses");
+        Require(harnesses.Length == 3, "all product test projects should classify as executable harnesses");
         Require(
             harnesses.Select(project => project.RelativePath).SequenceEqual(
                 [
+                    "tests/AIArena.CodeIntelligence.Tests/AIArena.CodeIntelligence.Tests.csproj",
                     "tests/AIArena.Tests/AIArena.Tests.csproj",
                     "tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj"
                 ],
                 StringComparer.OrdinalIgnoreCase),
-            "the executable harness classification should identify the two real test projects");
+            "the executable harness classification should identify the three real test projects");
         foreach (var harness in harnesses)
         {
             var run = snapshot.CommandPlans.Single(plan =>
@@ -1241,6 +1244,446 @@ internal static class DotNetSolutionDoctorTests
         }
 
         Require(AllPublicPathsAreRelative(snapshot, root), "the real workspace contract must not expose absolute paths");
+    }
+
+    internal static void PlansAndComparesSafeRepairLoops()
+    {
+        WithFixture(root =>
+        {
+            const string appProject = "src/App/App.csproj";
+            const string sourceRelativePath = "src/App/Broken.cs";
+            const string testProject = "tests/App.Tests/App.Tests.csproj";
+            WriteProject(
+                root,
+                appProject,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                </Project>
+                """);
+            WriteProject(root, sourceRelativePath, "class Broken {");
+            WriteProject(
+                root,
+                testProject,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <ProjectReference Include="../../src/App/App.csproj" />
+                    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            var snapshot = new DotNetWorkspaceIntelligenceService()
+                .DiscoverAsync(root)
+                .GetAwaiter()
+                .GetResult();
+            var command = snapshot.CommandPlans.Single(plan =>
+                plan.Kind == DotNetCommandKind.Build
+                && plan.TargetKind == DotNetCommandTargetKind.Project
+                && plan.TargetRelativePath == appProject);
+            var sourcePath = Path.Combine(root, sourceRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            var projectPath = Path.Combine(root, appProject.Replace('/', Path.DirectorySeparatorChar));
+            var failure = new DotNetOutputParser().Parse(
+                root,
+                command,
+                1,
+                $"{sourcePath}(1,15): error CS1513: }} expected [{projectPath}]",
+                "",
+                rawOutputReferenceId: "first");
+            var service = new DotNetRepairLoopService();
+            var proposal = service.CreateProposal(snapshot, failure);
+
+            Require(proposal.Id.StartsWith("doctor:repair:", StringComparison.Ordinal), "repair proposal should expose a stable bounded id");
+            Require(proposal.SourceId.StartsWith("doctor:diagnostic:", StringComparison.Ordinal), "compiler evidence should produce a stable diagnostic source id");
+            Require(proposal.RequiresExplicitApproval, "Doctor repair proposals must always require explicit approval");
+            Require(
+                proposal.DiffPreview.Count == 1
+                && proposal.DiffPreview[0].RelativePath == sourceRelativePath
+                && proposal.DiffPreview[0].Readiness == DotNetRepairDiffReadiness.RequiresInspection,
+                "compiler evidence should create a source-free intent hunk, never an apply-ready patch");
+            Require(
+                proposal.Verification.BuildPlans.Any(plan => plan.TargetRelativePath == appProject)
+                && proposal.Verification.BuildPlans.Any(plan => plan.TargetRelativePath == testProject)
+                && proposal.Verification.TestPlans.Any(plan => plan.TargetRelativePath == testProject),
+                "focused verification should build the affected project and select the dependency-reachable test project");
+            Require(
+                proposal.Verification.BuildPlans
+                    .Concat(proposal.Verification.TestPlans)
+                    .All(plan =>
+                        plan.Kind != DotNetCommandKind.Restore
+                        && plan.NetworkRisk == DotNetNetworkRisk.None
+                        && plan.RequiresUserApproval),
+                "repair verification must remain offline, restore-free, and approval-gated");
+
+            var sameFailure = new DotNetOutputParser().Parse(
+                root,
+                command,
+                1,
+                $"{sourcePath}(8,2): error CS1513: }} expected [{projectPath}]",
+                "",
+                rawOutputReferenceId: "second");
+            var repeated = service.CreateProposal(snapshot, sameFailure);
+            Require(
+                proposal.Id == repeated.Id && proposal.SourceId == repeated.SourceId,
+                "repair and diagnostic ids should not depend on receipt ids or compiler line drift");
+            Require(
+                service.IsProposalCurrent(proposal, snapshot, failure),
+                "unchanged baseline evidence should keep the proposal current");
+            Require(
+                !service.IsProposalCurrent(proposal, snapshot, sameFailure),
+                "line-drifted command evidence should invalidate the exact baseline fingerprint even when the stable diagnostic id remains");
+
+            var clean = new DotNetOutputParser().Parse(
+                root,
+                command,
+                0,
+                "Build succeeded.\n    0 Warning(s)\n    0 Error(s)",
+                "");
+            var baseline = service.CaptureEvidence(snapshot, failure);
+            var fixedComparison = service.Compare(
+                baseline,
+                service.CaptureEvidence(snapshot, clean),
+                verificationSucceeded: true,
+                wasCancelled: false);
+            Require(
+                fixedComparison.Outcome == DotNetRepairLoopOutcome.Fixed
+                && fixedComparison.FindingTransitions.All(transition =>
+                    transition.State == DotNetRepairFindingTransitionState.Fixed),
+                "a clean complete typed verification should classify absent baseline diagnostics as fixed");
+
+            var unchangedComparison = service.Compare(
+                baseline,
+                service.CaptureEvidence(snapshot, sameFailure),
+                verificationSucceeded: false,
+                wasCancelled: false);
+            Require(
+                unchangedComparison.Outcome == DotNetRepairLoopOutcome.Unchanged
+                && unchangedComparison.FindingTransitions.Any(transition =>
+                    transition.State == DotNetRepairFindingTransitionState.Unchanged),
+                "the same stable diagnostic should remain unchanged despite line drift");
+
+            var newFailure = new DotNetOutputParser().Parse(
+                root,
+                command,
+                1,
+                $"{sourcePath}(2,3): error CS0103: The name 'missing' does not exist [{projectPath}]",
+                "");
+            var regressed = service.Compare(
+                baseline,
+                service.CaptureEvidence(snapshot, newFailure),
+                verificationSucceeded: false,
+                wasCancelled: false);
+            Require(
+                regressed.Outcome == DotNetRepairLoopOutcome.Regressed
+                && regressed.FindingTransitions.Any(transition =>
+                    transition.State == DotNetRepairFindingTransitionState.New),
+                "a new diagnostic after repair should classify the loop as regressed");
+
+            var partialCurrent = service.CaptureEvidence(snapshot with { IsPartial = true }, clean);
+            var partial = service.Compare(
+                baseline,
+                partialCurrent,
+                verificationSucceeded: true,
+                wasCancelled: false);
+            Require(
+                partial.Outcome == DotNetRepairLoopOutcome.Partial
+                && partial.FindingTransitions.Any(transition =>
+                    transition.State == DotNetRepairFindingTransitionState.Unknown),
+                "partial after-evidence must not claim a fixed finding");
+        });
+    }
+
+    internal static void PersistsBoundedRelativeRepairHistory()
+    {
+        WithFixture(root =>
+        {
+            var transition = new DotNetSolutionDoctorFindingTransition(
+                "doctor:diagnostic:0123456789abcdef",
+                "CS1513",
+                DotNetRepairFindingTransitionState.Fixed,
+                "src/App/Broken.cs",
+                ["src/App/App.csproj"]);
+            var run = new DotNetSolutionDoctorHistoryRun(
+                "doctor-run:0123456789abcdef",
+                new DateTimeOffset(2026, 7, 30, 10, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 7, 30, 10, 2, 0, TimeSpan.Zero),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                DotNetRepairLoopOutcome.Fixed,
+                ["src/App/Broken.cs"],
+                [transition],
+                new(
+                    Available: true,
+                    Complete: true,
+                    Passed: 3,
+                    Failed: 0,
+                    Flaky: [],
+                    Failing: [],
+                    Observations:
+                    [
+                        new(
+                            "test:app:loads",
+                            "App.Tests.Loads",
+                            "tests/App.Tests/App.Tests.csproj",
+                            DotNetSolutionDoctorTestOutcome.Passed)
+                    ]));
+            var store = new DotNetSolutionDoctorHistoryStore();
+            var write = store.Append(root, run);
+            Require(write.Succeeded, $"bounded repair history should write atomically: {write.Message}");
+            Require(
+                write.RelativePath == DotNetSolutionDoctorHistoryStore.HistoryRelativePath,
+                "history should expose only its workspace-relative destination");
+            Require(store.TryRead(root, out var history, out _), "written history should be readable");
+            Require(
+                history.SchemaVersion == DotNetSolutionDoctorHistoryStore.Schema
+                && history.Runs.Count == 1
+                && history.Runs[0].TestEvidence.Observations.Single().TestId == "test:app:loads",
+                "history should preserve the v1 schema and structured test observation");
+
+            var historyPath = Path.Combine(
+                root,
+                DotNetSolutionDoctorHistoryStore.HistoryRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            var json = File.ReadAllText(historyPath);
+            Require(
+                json.Contains("\"schemaVersion\": \"ai-arena.solution-doctor-history.v1\"", StringComparison.Ordinal)
+                && json.Contains("\"generatedAt\":", StringComparison.Ordinal)
+                && json.Contains("\"transitions\":", StringComparison.Ordinal)
+                && !json.Contains("\"findingTransitions\":", StringComparison.Ordinal)
+                && json.Contains("\"outcome\": \"fixed\"", StringComparison.Ordinal)
+                && json.Contains("\"findingId\": \"doctor:diagnostic:0123456789abcdef\"", StringComparison.Ordinal)
+                && json.Contains("\"primaryRelativePath\": \"src/App/Broken.cs\"", StringComparison.Ordinal)
+                && json.Contains("\"flaky\": []", StringComparison.Ordinal)
+                && json.Contains("\"observations\"", StringComparison.Ordinal),
+                "history JSON should use the public camel-case string-enum contract");
+            Require(
+                !json.Contains(root, StringComparison.OrdinalIgnoreCase)
+                && !json.Contains("command", StringComparison.OrdinalIgnoreCase)
+                && !json.Contains("diff", StringComparison.OrdinalIgnoreCase),
+                "history must not contain absolute paths, raw commands, or diff/source payloads");
+
+            var hostile = run with
+            {
+                Id = "doctor-run:hostile",
+                AffectedRelativePaths = [Path.Combine(root, "outside.cs")]
+            };
+            var rejected = store.Append(root, hostile);
+            Require(!rejected.Succeeded, "history should reject rooted affected paths");
+
+            var invalidRevision = store.Append(
+                root,
+                run with
+                {
+                    Id = "doctor-run:invalid-revision",
+                    BaselineRevision = "not-a-git-object"
+                });
+            Require(
+                !invalidRevision.Succeeded,
+                "history should reject revisions outside Map's strict 40/64-hex contract");
+            Require(
+                !store.Append(
+                    root,
+                    run with
+                    {
+                        Id = "doctor-run:invalid-outcome",
+                        Outcome = (DotNetRepairLoopOutcome)999
+                    }).Succeeded,
+                "history should reject undefined repair outcomes before serialization");
+            Require(
+                !store.Append(
+                    root,
+                    run with
+                    {
+                        Id = "doctor-run:invalid-transition",
+                        Transitions =
+                        [
+                            transition with
+                            {
+                                State = (DotNetRepairFindingTransitionState)999
+                            }
+                        ]
+                    }).Succeeded,
+                "history should reject undefined finding-transition states");
+            Require(
+                !store.Append(
+                    root,
+                    run with
+                    {
+                        Id = "doctor-run:invalid-observation",
+                        TestEvidence = run.TestEvidence with
+                        {
+                            Observations =
+                            [
+                                run.TestEvidence.Observations[0] with
+                                {
+                                    Outcome = (DotNetSolutionDoctorTestOutcome)999
+                                }
+                            ]
+                        }
+                    }).Succeeded,
+                "history should reject undefined test-observation outcomes");
+            Require(
+                !store.Append(
+                    root,
+                    run with
+                    {
+                        Id = "doctor-run:unavailable-complete",
+                        TestEvidence = new(
+                            Available: false,
+                            Complete: true,
+                            Passed: 0,
+                            Failed: 0,
+                            Flaky: [],
+                            Failing: [],
+                            Observations: [])
+                    }).Succeeded,
+                "unavailable test evidence must never claim complete verification");
+            Require(
+                !store.Append(
+                    root,
+                    run with
+                    {
+                        Id = "doctor-run:unavailable-counts",
+                        TestEvidence = new(
+                            Available: false,
+                            Complete: false,
+                            Passed: 1,
+                            Failed: 0,
+                            Flaky: [],
+                            Failing: [],
+                            Observations: [])
+                    }).Succeeded,
+                "unavailable test evidence must not carry invented counts");
+            Require(
+                store.TryRead(root, out var unchanged, out _)
+                && unchanged.Runs.Count == 1
+                && unchanged.Runs[0].Id == run.Id,
+                "a rejected append must leave the prior atomic history unchanged");
+            Require(
+                Directory.GetFiles(
+                    Path.GetDirectoryName(historyPath)!,
+                    "*.tmp",
+                    SearchOption.TopDirectoryOnly).Length == 0,
+                "atomic history writes should leave no temporary files behind");
+
+            var secretRun = run with
+            {
+                Id = "doctor-run:credential-redaction",
+                StartedAt = run.CompletedAt.AddMinutes(1),
+                CompletedAt = run.CompletedAt.AddMinutes(2),
+                Outcome = DotNetRepairLoopOutcome.Regressed,
+                Transitions =
+                [
+                    transition with
+                    {
+                        State = DotNetRepairFindingTransitionState.Regressed
+                    }
+                ],
+                TestEvidence = new(
+                    Available: true,
+                    Complete: true,
+                    Passed: 0,
+                    Failed: 8,
+                    Flaky:
+                    [
+                        "ConnectionString=Server=localhost;Password=hunter2"
+                    ],
+                    Failing:
+                    [
+                        "App.Tests.Risk-Scoring",
+                        "Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456",
+                        "Proxy-Authorization=Custom opaque-credential-value",
+                        "AWS credential AKIA1234567890ABCDEF",
+                        "App.Tests.Secret(secret=super-private-value)"
+                    ],
+                    Observations:
+                    [
+                        new(
+                            "github_pat_0123456789abcdefghijklmnopqrstuvwxyz",
+                            "-----BEGIN PRIVATE KEY-----",
+                            "tests/App.Tests/App.Tests.csproj",
+                            DotNetSolutionDoctorTestOutcome.Failed),
+                        new(
+                            "hf_0123456789abcdefghijklmnop",
+                            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhcmVuYSJ9.abcdefghijklmnop",
+                            "tests/App.Tests/App.Tests.csproj",
+                            DotNetSolutionDoctorTestOutcome.Failed)
+                    ])
+            };
+            var secretWrite = store.Append(root, secretRun);
+            Require(
+                secretWrite.Succeeded,
+                $"credential-bearing test labels should be safely redacted before persistence: {secretWrite.Message}");
+            Require(
+                store.TryRead(root, out var redactedHistory, out _),
+                "redacted repair history should remain readable");
+            var redactedRun = redactedHistory.Runs.Single(item => item.Id == secretRun.Id);
+            Require(
+                redactedRun.TestEvidence.Failed == secretRun.TestEvidence.Failed
+                && redactedRun.TestEvidence.Failing.SequenceEqual(
+                    ["App.Tests.Risk-Scoring"],
+                    StringComparer.Ordinal)
+                && redactedRun.TestEvidence.Flaky.Count == 0
+                && redactedRun.TestEvidence.Observations.Count == 0,
+                "credential-bearing identities should be omitted while aggregate failures and ordinary labels remain");
+            var redactedJson = File.ReadAllText(historyPath);
+            Require(
+                new[]
+                {
+                    "ghp_abcdefghijklmnopqrstuvwxyz123456",
+                    "opaque-credential-value",
+                    "AKIA1234567890ABCDEF",
+                    "super-private-value",
+                    "hunter2",
+                    "github_pat_0123456789abcdefghijklmnopqrstuvwxyz",
+                    "hf_0123456789abcdefghijklmnop",
+                    "BEGIN PRIVATE KEY",
+                    "eyJhbGciOiJIUzI1NiJ9"
+                }.All(value => !redactedJson.Contains(value, StringComparison.Ordinal)),
+                "raw bearer, GitHub, AWS, assignment, connection-string, PEM, and JWT material must not reach disk");
+            Require(
+                !redactedJson.Contains("<redacted>", StringComparison.Ordinal),
+                "sanitization must not fabricate one shared flaky or repeated-failure identity");
+
+            const int historyByteLimit = 2 * 1024 * 1024;
+            var multibyteText = new string('\u00E9', (historyByteLimit / 2) + 1);
+            var multibyteBytes = System.Text.Encoding.UTF8.GetBytes(multibyteText);
+            Require(
+                multibyteText.Length < historyByteLimit
+                && multibyteBytes.Length > historyByteLimit
+                && !DotNetSolutionDoctorHistoryStore.IsWithinHistoryByteLimit(multibyteBytes)
+                && DotNetSolutionDoctorHistoryStore.IsWithinHistoryByteLimit(
+                    new byte[historyByteLimit]),
+                "history limits must be evaluated in UTF-8 bytes rather than UTF-16 character count");
+            Require(
+                new FileInfo(historyPath).Length <= historyByteLimit,
+                "successful atomic history writes must remain within the persisted UTF-8 byte cap");
+
+            var linkTarget = Path.Combine(root, "history-link-target.json");
+            File.WriteAllText(linkTarget, json);
+            File.Delete(historyPath);
+            try
+            {
+                File.CreateSymbolicLink(historyPath, linkTarget);
+                Require(
+                    !store.TryRead(root, out _, out var linkReadMessage)
+                    && linkReadMessage.Contains("reparse-point", StringComparison.OrdinalIgnoreCase),
+                    "history reads must refuse an existing reparse-point history file");
+                var linkWrite = store.Append(root, run with { Id = "doctor-run:linked" });
+                Require(
+                    !linkWrite.Succeeded
+                    && linkWrite.Message.Contains("reparse-point", StringComparison.OrdinalIgnoreCase),
+                    "history writes must refuse to replace an existing reparse-point history file");
+                Require(
+                    File.ReadAllText(linkTarget) == json,
+                    "refused history writes must not mutate the reparse-point target");
+            }
+            catch (Exception exception) when (exception is
+                UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+            {
+            }
+        });
     }
 
     private static void AssertReparseProjectFileIsSkipped(

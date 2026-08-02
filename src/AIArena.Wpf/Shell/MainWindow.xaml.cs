@@ -102,6 +102,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     private readonly ShellNavigationCoordinator? _shellNavigationCoordinator;
     private readonly CollaborateCoordinator? _collaborateCoordinator;
     private readonly AgentWorkspaceCoordinator? _agentWorkspaceCoordinator;
+    private readonly AgentImpactExplorerCoordinator? _agentImpactExplorerCoordinator;
     private readonly MatchQualityTimelineCoordinator? _matchQualityTimelineCoordinator;
     private readonly AgentBoardCoordinator? _agentBoardCoordinator;
     private readonly ArenaOperationCoordinator? _arenaOperationCoordinator;
@@ -613,6 +614,21 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             AgentOutputItems,
             (type, message, data) => _controlPlaneEvents.Publish(type, message, data),
             runbookMetaText: AgentRunbookMetaText);
+        _agentImpactExplorerCoordinator = new AgentImpactExplorerCoordinator(
+            AgentImpactExplorerExpander,
+            AgentImpactStatusText,
+            AgentImpactSolutionPicker,
+            AgentImpactTargetText,
+            AgentImpactAnalyzeButton,
+            AgentImpactAnalyzeChangesButton,
+            AgentImpactSummaryText,
+            AgentImpactItems,
+            AgentImpactStageTestsButton,
+            AgentImpactCopyButton,
+            () => AgentWorkspace.CurrentWorkspacePath,
+            () => AgentWorkspace.CurrentChangedRelativePaths,
+            (command, shell) => AgentWorkspace.ControlStageCommand(command, shell),
+            ResourceBrush);
         _scenarioWorkflowCoordinator = new ScenarioWorkflowCoordinator(
             this,
             _matchGeneration,
@@ -1323,6 +1339,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             _voiceTtsSettingsSaveDebouncer.Dispose();
             TelemetryWorkflow.Stop();
             _transcriptSearchCoordinator?.Dispose();
+            _agentImpactExplorerCoordinator?.Dispose();
             _agentWorkspaceCoordinator?.Dispose();
             _voiceNarrationService.Dispose();
             _matchGeneration.Dispose();

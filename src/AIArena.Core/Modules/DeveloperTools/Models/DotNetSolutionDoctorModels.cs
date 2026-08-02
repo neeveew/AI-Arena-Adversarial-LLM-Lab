@@ -236,3 +236,158 @@ public sealed record DotNetNarrowedRetryPlan(
     DotNetCommandPlan Command,
     string Reason,
     bool IsNarrowed);
+
+public enum DotNetRepairAvailability
+{
+    Ready,
+    Partial,
+    Unavailable
+}
+
+public enum DotNetRepairDiffReadiness
+{
+    RequiresInspection,
+    Unavailable
+}
+
+public enum DotNetRepairTestEvidenceState
+{
+    Available,
+    Partial,
+    Unavailable
+}
+
+public enum DotNetRepairFindingTransitionState
+{
+    Fixed,
+    Unchanged,
+    Regressed,
+    New,
+    Unknown
+}
+
+public enum DotNetRepairLoopOutcome
+{
+    Fixed,
+    Unchanged,
+    Regressed,
+    Partial,
+    Cancelled
+}
+
+/// <summary>
+/// Optional product-owned impact evidence. Roslyn or another local index may
+/// supply these paths without coupling Solution Doctor to that implementation.
+/// </summary>
+public sealed record DotNetRepairImpactHint(
+    IReadOnlyList<string> AffectedProjectRelativePaths,
+    IReadOnlyList<string> LikelyTestProjectRelativePaths,
+    bool IsPartial,
+    string Source);
+
+/// <summary>
+/// A bounded, source-free description of an intended change. It is never an
+/// executable patch: the exact edit still has to be inspected and staged in the
+/// normal command preview rail.
+/// </summary>
+public sealed record DotNetRepairDiffHunk(
+    string RelativePath,
+    string Location,
+    string Before,
+    string After,
+    DotNetRepairDiffReadiness Readiness,
+    string Rationale);
+
+public sealed record DotNetRepairVerificationPlan(
+    IReadOnlyList<DotNetCommandPlan> BuildPlans,
+    IReadOnlyList<DotNetCommandPlan> TestPlans,
+    DotNetRepairTestEvidenceState TestEvidenceState,
+    string TestSelectionBasis,
+    bool IsPartial);
+
+public sealed record DotNetRepairProposal(
+    string Id,
+    string SourceId,
+    string Code,
+    string BaselineFingerprint,
+    string Explanation,
+    IReadOnlyList<string> AffectedRelativePaths,
+    IReadOnlyList<DotNetRepairDiffHunk> DiffPreview,
+    DotNetRepairVerificationPlan Verification,
+    DotNetRepairAvailability Availability,
+    bool RequiresExplicitApproval,
+    string? Limitation);
+
+public sealed record DotNetRepairFindingEvidence(
+    string Id,
+    string Code,
+    DotNetWorkspaceDiagnosticSeverity Severity,
+    IReadOnlyList<string> RelativePaths);
+
+public sealed record DotNetRepairEvidenceSnapshot(
+    string Fingerprint,
+    IReadOnlyList<DotNetRepairFindingEvidence> Findings,
+    bool IsPartial);
+
+public sealed record DotNetRepairFindingTransition(
+    string Id,
+    string Code,
+    DotNetRepairFindingTransitionState State,
+    IReadOnlyList<string> RelativePaths);
+
+public sealed record DotNetRepairComparison(
+    DotNetRepairLoopOutcome Outcome,
+    IReadOnlyList<DotNetRepairFindingTransition> FindingTransitions,
+    bool IsPartial,
+    string Summary);
+
+public enum DotNetSolutionDoctorTestOutcome
+{
+    Passed,
+    Failed,
+    Skipped,
+    Unavailable
+}
+
+public sealed record DotNetSolutionDoctorTestObservation(
+    string? TestId,
+    string TestName,
+    string ProjectRelativePath,
+    DotNetSolutionDoctorTestOutcome Outcome);
+
+public sealed record DotNetSolutionDoctorTestEvidence(
+    bool Available,
+    bool Complete,
+    int Passed,
+    int Failed,
+    IReadOnlyList<string> Flaky,
+    IReadOnlyList<string> Failing,
+    IReadOnlyList<DotNetSolutionDoctorTestObservation> Observations);
+
+public sealed record DotNetSolutionDoctorFindingTransition(
+    string FindingId,
+    string Code,
+    DotNetRepairFindingTransitionState State,
+    string? PrimaryRelativePath,
+    IReadOnlyList<string> RelatedRelativePaths);
+
+public sealed record DotNetSolutionDoctorHistoryRun(
+    string Id,
+    DateTimeOffset StartedAt,
+    DateTimeOffset CompletedAt,
+    string? BaselineRevision,
+    string? TargetRevision,
+    DotNetRepairLoopOutcome Outcome,
+    IReadOnlyList<string> AffectedRelativePaths,
+    IReadOnlyList<DotNetSolutionDoctorFindingTransition> Transitions,
+    DotNetSolutionDoctorTestEvidence TestEvidence);
+
+public sealed record DotNetSolutionDoctorHistory(
+    string SchemaVersion,
+    DateTimeOffset GeneratedAt,
+    IReadOnlyList<DotNetSolutionDoctorHistoryRun> Runs);
+
+public sealed record DotNetSolutionDoctorHistoryWriteResult(
+    bool Succeeded,
+    string RelativePath,
+    string Message);

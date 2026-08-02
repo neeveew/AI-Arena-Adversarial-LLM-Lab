@@ -150,6 +150,9 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private AIArena.Core.Models.DotNetCommandResult? lastDotNetCommandResult;
     private DotNetWorkspaceSnapshot? lastDotNetCommandSnapshot;
     private DotNetWorkspaceSnapshot? dotNetWorkspaceSnapshot;
+    private AgentDotNetRepairLoop? dotNetRepairLoop;
+    private AgentRepairExactDiffPreview? dotNetRepairExactDiff;
+    private string dotNetRepairHistoryState = "No completed repair loop recorded.";
     private AgentWorkspaceFileReceipt? lastFileReceipt;
     private AgentArtifactSuggestion? latestArtifactSuggestion;
     private AgentArtifactSuggestion? stagedArtifactSuggestion;
@@ -180,6 +183,18 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private bool disposed;
 
     internal string DebugWorkspacePath => workspacePath;
+
+    internal string CurrentWorkspacePath => workspacePath;
+
+    internal IReadOnlyList<string> CurrentChangedRelativePaths =>
+        lastFileReceipt is null
+            ? []
+            : lastFileReceipt.Created
+                .Concat(lastFileReceipt.Modified)
+                .Concat(lastFileReceipt.Deleted)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
 
     internal long DebugWorkspaceGeneration => Volatile.Read(ref workspaceGeneration);
 
@@ -226,6 +241,18 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     internal string DebugDotNetWorkspaceState => AgentDotNetSolutionDoctorService.WorkspaceEvidenceState(dotNetWorkspaceSnapshot);
 
     internal string DebugDotNetResultPacket => AgentDotNetSolutionDoctorService.FormatResultPacket(lastDotNetCommandSnapshot, lastDotNetCommandResult);
+
+    internal string DebugDotNetRepairPhase => dotNetRepairLoop?.Phase.ToString() ?? "None";
+
+    internal string DebugDotNetRepairProposal => dotNetRepairLoop is null
+        ? "No Solution Doctor repair proposal is staged."
+        : AgentDotNetSolutionDoctorService.FormatRepairProposal(dotNetRepairLoop.Proposal);
+
+    internal string DebugDotNetRepairExactDiff => dotNetRepairExactDiff?.Available == true
+        ? dotNetRepairExactDiff.Text
+        : dotNetRepairExactDiff?.Message ?? "Exact proposed diff unavailable.";
+
+    internal string DebugDotNetRepairHistoryState => dotNetRepairHistoryState;
 
     internal string DebugArtifactSuggestion => latestArtifactSuggestion?.Summary ?? "";
 
@@ -451,9 +478,29 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         StageArtifactSuggestionCommand();
     }
 
+    internal void DebugStageFirstCommandSuggestion(
+        string text,
+        string roleName = "Builder")
+    {
+        StageFirstCommandSuggestion(text, roleName);
+    }
+
     internal Task DebugRunApprovedCommandAsync()
     {
         return RunApprovedCommandAsync();
+    }
+
+    internal Task DebugTryAutoRunPendingPreviewAsync()
+    {
+        return TryAutoRunPendingPreviewAsync("Test requested an automatic preview attempt.");
+    }
+
+    internal bool DebugApprovePendingDotNetRepairForTest()
+    {
+        return pendingPreview is not null
+            && TryBeginDotNetRepairCommand(
+                pendingPreview,
+                explicitUserApproval: true);
     }
 
     internal bool DebugApplyCompletedCommandForTest(
@@ -918,6 +965,9 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         lastCommandResult = null;
         lastDotNetCommandResult = null;
         lastDotNetCommandSnapshot = null;
+        dotNetRepairLoop = null;
+        dotNetRepairExactDiff = null;
+        dotNetRepairHistoryState = "No completed repair loop recorded.";
         lastFileReceipt = null;
         latestArtifactSuggestion = null;
         stagedArtifactSuggestion = null;
@@ -1009,6 +1059,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             lastCommandResult = null;
             lastDotNetCommandResult = null;
             lastDotNetCommandSnapshot = null;
+            dotNetRepairLoop = null;
+            dotNetRepairExactDiff = null;
             lastFileReceipt = null;
             lastWorkBrief = "";
             commandHistory.Clear();
@@ -1060,6 +1112,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             lastCommandResult = null;
             lastDotNetCommandResult = null;
             lastDotNetCommandSnapshot = null;
+            dotNetRepairLoop = null;
+            dotNetRepairExactDiff = null;
             lastFileReceipt = null;
             lastWorkBrief = "";
             commandHistory.Clear();
@@ -1795,7 +1849,60 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         RefreshProviderState();
     }
 
-    private async Task RunApprovedCommandAsync()
+    private bool TryBeginDotNetRepairCommand(
+        AgentCommandPreview preview,
+        bool explicitUserApproval)
+    {
+        if (dotNetRepairLoop is not { } repairLoop
+            || repairLoop.Phase is not (
+                AgentDotNetRepairPhase.StagedRepair
+                or AgentDotNetRepairPhase.VerificationStaged))
+        {
+            return true;
+        }
+
+        if (!explicitUserApproval)
+        {
+            commandStatusText.Text = "Solution Doctor is waiting for explicit operator approval.";
+            approvalText.Text = $"Review this Solution Doctor command, then approve it manually or reject it.{Environment.NewLine}{Environment.NewLine}{preview.DisplayInvocation}";
+            UpdateStatus("Solution Doctor command requires explicit approval.");
+            return false;
+        }
+
+        if (repairLoop.WorkspaceGeneration != Volatile.Read(ref workspaceGeneration)
+            || !AgentDotNetSolutionDoctorService.RepairProposalIsCurrent(
+                repairLoop.Proposal,
+                repairLoop.BaselineSnapshot,
+                repairLoop.BaselineResult))
+        {
+            dotNetRepairLoop = null;
+            dotNetRepairExactDiff = null;
+            InvalidatePreview("Solution Doctor evidence became stale. Stage Repair again from current evidence.");
+            UpdateStatus("Stale Solution Doctor repair was discarded.");
+            return false;
+        }
+
+        if (repairLoop.Phase == AgentDotNetRepairPhase.StagedRepair)
+        {
+            repairLoop.RepairExplicitlyApproved = true;
+            repairLoop.Phase = AgentDotNetRepairPhase.RepairRunning;
+            AddActivity(
+                "Doctor repair approved",
+                dotNetRepairExactDiff?.Available == true
+                    ? "Operator approved the previewed exact file diff command."
+                    : "Operator approved an opaque or inspection command; no exact source diff was implied.");
+        }
+        else
+        {
+            repairLoop.VerificationExplicitlyApproved = true;
+            repairLoop.Phase = AgentDotNetRepairPhase.VerificationRunning;
+            AddActivity("Doctor verify approved", "Operator explicitly approved one focused typed verification action.");
+        }
+
+        return true;
+    }
+
+    private async Task RunApprovedCommandAsync(bool explicitUserApproval = true)
     {
         if (isRunningCommand)
         {
@@ -1818,6 +1925,11 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
 
         var preview = pendingPreview;
+        if (!TryBeginDotNetRepairCommand(preview, explicitUserApproval))
+        {
+            return;
+        }
+
         var commandWorkspaceGeneration = Volatile.Read(ref workspaceGeneration);
         var commandDotNetSnapshot = dotNetWorkspaceSnapshot;
         var runningArtifactSuggestion = ArtifactSuggestionForPreview(preview);
@@ -1984,6 +2096,12 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             latestArtifactSuggestion = inferredArtifactSuggestion ?? runningArtifactSuggestion;
             latestArtifactVerification = artifactVerification;
             lastCommandWasArtifactVerification = runningArtifactSuggestion is not null;
+            AdvanceDotNetRepairLoopAfterCommand(
+                commandDotNetSnapshot,
+                structuredResult,
+                effectiveOutcome,
+                result,
+                receipt);
             outputText.Text = $"{FormatCommandResult(result)}{Environment.NewLine}{Environment.NewLine}{FormatFileReceipt(lastFileReceipt)}";
             outputText.ScrollToEnd();
             RefreshOutputActions();
@@ -2046,6 +2164,257 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
 
         return applied;
+    }
+
+    private void AdvanceDotNetRepairLoopAfterCommand(
+        DotNetWorkspaceSnapshot? commandSnapshot,
+        AIArena.Core.Models.DotNetCommandResult? structuredResult,
+        AgentCommandEffectiveOutcome effectiveOutcome,
+        AgentCommandResult result,
+        AgentWorkspaceFileReceipt receipt)
+    {
+        if (dotNetRepairLoop is not { } repairLoop)
+        {
+            return;
+        }
+
+        if (repairLoop.Phase == AgentDotNetRepairPhase.RepairRunning)
+        {
+            dotNetRepairExactDiff = null;
+            if (result.Canceled)
+            {
+                repairLoop.Phase = AgentDotNetRepairPhase.StagedRepair;
+                AddActivity("Doctor repair cancelled", "No repair outcome was persisted before focused verification.");
+                return;
+            }
+
+            foreach (var path in receipt.Created
+                         .Concat(receipt.Modified)
+                         .Concat(receipt.Deleted)
+                         .Take(64))
+            {
+                repairLoop.AffectedRelativePaths.Add(path);
+            }
+
+            repairLoop.EvidenceIsPartial |= receipt.ScannedLimit;
+            if (!ReceiptHasChanges(receipt))
+            {
+                repairLoop.Phase = AgentDotNetRepairPhase.StagedRepair;
+                AddActivity(
+                    "Doctor repair unchanged",
+                    "The approved command changed no tracked files; no repair outcome was recorded.");
+                return;
+            }
+
+            repairLoop.Phase = AgentDotNetRepairPhase.AwaitingVerification;
+            AddActivity(
+                "Doctor repair applied",
+                "Tracked files changed. Focused build/test verification is required before an outcome can be recorded.");
+            return;
+        }
+
+        if (repairLoop.Phase != AgentDotNetRepairPhase.VerificationRunning)
+        {
+            return;
+        }
+
+        if (result.Canceled)
+        {
+            FinalizeDotNetRepairLoop(
+                repairLoop,
+                commandSnapshot,
+                structuredResult,
+                verificationSucceeded: false,
+                wasCancelled: true);
+            return;
+        }
+
+        if (structuredResult is null)
+        {
+            repairLoop.EvidenceIsPartial = true;
+            repairLoop.Phase = AgentDotNetRepairPhase.AwaitingVerification;
+            AddActivity(
+                "Doctor verify untyped",
+                "The approved command did not match a typed focused action; no coverage was claimed.");
+            return;
+        }
+
+        var expected = repairLoop.RemainingVerificationPlans();
+        var matched = expected.FirstOrDefault(plan =>
+            plan.Id.Equals(structuredResult.Command.Id, StringComparison.OrdinalIgnoreCase)
+            || (plan.Kind == structuredResult.Command.Kind
+                && plan.TargetKind == structuredResult.Command.TargetKind
+                && plan.TargetRelativePath.Replace('\\', '/').Equals(
+                    structuredResult.Command.TargetRelativePath.Replace('\\', '/'),
+                    StringComparison.OrdinalIgnoreCase)));
+        if (matched is null && expected.Count > 0)
+        {
+            repairLoop.EvidenceIsPartial = true;
+            repairLoop.Phase = AgentDotNetRepairPhase.AwaitingVerification;
+            AddActivity(
+                "Doctor verify outside plan",
+                "The typed command was not one of the focused repair gates; it was not counted as complete coverage.");
+            return;
+        }
+
+        if (matched is not null)
+        {
+            repairLoop.CompletedVerificationPlanIds.Add(matched.Id);
+            if (matched.Kind is DotNetCommandKind.Test or DotNetCommandKind.Run)
+            {
+                repairLoop.TestResultsByPlanId[matched.Id] = structuredResult;
+            }
+        }
+
+        repairLoop.EvidenceIsPartial |= structuredResult.StructuredEvidenceLimitReached;
+        var remaining = repairLoop.RemainingVerificationPlans();
+        if (!structuredResult.Succeeded || remaining.Count == 0)
+        {
+            FinalizeDotNetRepairLoop(
+                repairLoop,
+                commandSnapshot,
+                structuredResult,
+                effectiveOutcome.Succeeded,
+                wasCancelled: false);
+            return;
+        }
+
+        repairLoop.Phase = AgentDotNetRepairPhase.AwaitingVerification;
+        AddActivity(
+            "Doctor verify continues",
+            $"{remaining.Count.ToString(CultureInfo.InvariantCulture)} focused build/test action(s) remain.");
+    }
+
+    private void FinalizeDotNetRepairLoop(
+        AgentDotNetRepairLoop repairLoop,
+        DotNetWorkspaceSnapshot? commandSnapshot,
+        AIArena.Core.Models.DotNetCommandResult? structuredResult,
+        bool verificationSucceeded,
+        bool wasCancelled)
+    {
+        if (!repairLoop.RepairExplicitlyApproved
+            || !repairLoop.VerificationExplicitlyApproved)
+        {
+            repairLoop.Phase = AgentDotNetRepairPhase.AwaitingVerification;
+            dotNetRepairHistoryState = "Repair evidence was not recorded because both repair and verification require explicit approval.";
+            return;
+        }
+
+        var currentEvidence = AgentDotNetSolutionDoctorService.CaptureRepairEvidence(
+            commandSnapshot ?? dotNetWorkspaceSnapshot,
+            structuredResult);
+        if (repairLoop.EvidenceIsPartial && !currentEvidence.IsPartial)
+        {
+            currentEvidence = currentEvidence with { IsPartial = true };
+        }
+
+        var comparison = AgentDotNetSolutionDoctorService.CompareRepairEvidence(
+            repairLoop.BaselineEvidence,
+            currentEvidence,
+            verificationSucceeded,
+            wasCancelled);
+        var affected = repairLoop.AffectedRelativePaths
+            .Concat(comparison.FindingTransitions.SelectMany(transition => transition.RelativePaths))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Take(64)
+            .ToArray();
+        var historyTransitions = comparison.FindingTransitions
+            .Select(transition => new DotNetSolutionDoctorFindingTransition(
+                transition.Id,
+                transition.Code,
+                transition.State,
+                transition.RelativePaths.FirstOrDefault(),
+                transition.RelativePaths.Skip(1).ToArray()))
+            .ToArray();
+        var historyRun = new DotNetSolutionDoctorHistoryRun(
+            repairLoop.RunId,
+            repairLoop.StartedAt,
+            DateTimeOffset.Now,
+            BaselineRevision: null,
+            TargetRevision: null,
+            comparison.Outcome,
+            affected,
+            historyTransitions,
+            BuildDotNetRepairTestEvidence(repairLoop));
+        var write = new DotNetSolutionDoctorHistoryStore().Append(workspacePath, historyRun);
+        dotNetRepairHistoryState = write.Message;
+        repairLoop.Phase = AgentDotNetRepairPhase.Completed;
+        AddActivity(
+            "Doctor outcome",
+            $"{comparison.Outcome}: {comparison.Summary} {write.Message}");
+        AddCenterMessage(
+            "Solution Doctor repair evidence",
+            $"{comparison.Summary}\nOutcome: {comparison.Outcome}.\nHistory: {write.Message}\nNo raw command, diff, source text, or absolute path was stored.",
+            comparison.Outcome is DotNetRepairLoopOutcome.Fixed
+                ? "Result"
+                : comparison.Outcome is DotNetRepairLoopOutcome.Regressed
+                    ? "Warning"
+                    : "Status");
+        publishControlEvent(
+            "solution-doctor.repair.completed",
+            "Solution Doctor repair loop completed.",
+            new
+            {
+                repairLoop.RunId,
+                Outcome = comparison.Outcome.ToString(),
+                HistoryWritten = write.Succeeded,
+                AffectedPathCount = affected.Length,
+                FindingTransitionCount = comparison.FindingTransitions.Count
+            });
+    }
+
+    private static DotNetSolutionDoctorTestEvidence BuildDotNetRepairTestEvidence(
+        AgentDotNetRepairLoop repairLoop)
+    {
+        return BuildDotNetRepairTestEvidence(
+            repairLoop.Proposal.Verification.TestEvidenceState,
+            repairLoop.Proposal.Verification.TestPlans,
+            repairLoop.CompletedVerificationPlanIds,
+            repairLoop.TestResultsByPlanId.Values.ToArray());
+    }
+
+    internal static DotNetSolutionDoctorTestEvidence BuildDotNetRepairTestEvidence(
+        DotNetRepairTestEvidenceState expectedEvidenceState,
+        IReadOnlyList<DotNetCommandPlan> expectedTests,
+        IReadOnlySet<string> completedVerificationPlanIds,
+        IReadOnlyList<AIArena.Core.Models.DotNetCommandResult> results)
+    {
+        var totals = results
+            .Select(result => result.TestTotals)
+            .OfType<DotNetTestTotals>()
+            .ToArray();
+        var failingTests = results
+            .SelectMany(result => result.FailingTests)
+            .GroupBy(test => $"{test.ProjectRelativePath}\u001f{test.Name}", StringComparer.Ordinal)
+            .Select(group => group.First())
+            .Take(64)
+            .ToArray();
+        var available = totals.Length > 0 || failingTests.Length > 0;
+        var complete = available
+            && expectedEvidenceState == DotNetRepairTestEvidenceState.Available
+            && expectedTests.All(plan =>
+                completedVerificationPlanIds.Contains(plan.Id))
+            && results.All(result => !result.StructuredEvidenceLimitReached);
+        var observations = failingTests
+            .Where(test => !string.IsNullOrWhiteSpace(test.ProjectRelativePath))
+            .Select(test => new DotNetSolutionDoctorTestObservation(
+                TestId: null,
+                test.Name,
+                test.ProjectRelativePath!,
+                DotNetSolutionDoctorTestOutcome.Failed))
+            .ToArray();
+        complete &= observations.Length == failingTests.Length;
+        return new(
+            Available: available,
+            Complete: complete,
+            Passed: totals.Sum(total => total.Passed),
+            Failed: totals.Length > 0
+                ? totals.Sum(total => total.Failed)
+                : failingTests.Length,
+            Flaky: [],
+            Failing: failingTests.Select(test => test.Name).ToArray(),
+            Observations: observations);
     }
 
     private AgentArtifactSuggestion? ArtifactSuggestionForPreview(AgentCommandPreview preview)
@@ -2358,11 +2727,14 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         var suggestion = ExtractCommandSuggestion(text);
         var suggestionSource = $"{roleName} proposal";
         var materializedFiles = "";
+        AgentFileSuggestion? fileSuggestion = null;
         if (currentPromptRequiresCommand)
         {
-            var fileSuggestion = ExtractFileWriteSuggestion(text);
+            fileSuggestion = ExtractFileWriteSuggestion(text);
             if (fileSuggestion is not null
-                && (suggestion is null || !CommandLooksLikeWorkspaceMutation(suggestion.Command)))
+                && (dotNetRepairLoop is { Phase: AgentDotNetRepairPhase.StagedRepair }
+                    || suggestion is null
+                    || !CommandLooksLikeWorkspaceMutation(suggestion.Command)))
             {
                 suggestion = new AgentCommandSuggestion("PowerShell", BuildFileWriteCommand(fileSuggestion));
                 suggestionSource = $"{roleName} file snippets";
@@ -2380,6 +2752,23 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
 
         suggestion = NormalizeCommandSuggestion(suggestion);
+        if (dotNetRepairLoop is { Phase: AgentDotNetRepairPhase.StagedRepair })
+        {
+            dotNetRepairExactDiff = fileSuggestion is null || string.IsNullOrWhiteSpace(materializedFiles)
+                ? AgentRepairExactDiffPreview.Unavailable(
+                    "Exact proposed diff unavailable because Builder supplied only an opaque command.")
+                : AgentDotNetSolutionDoctorService.BuildExactFileDiff(workspacePath, fileSuggestion);
+            if (dotNetRepairExactDiff.Available && fileSuggestion is not null)
+            {
+                suggestion = NormalizeCommandSuggestion(
+                    new AgentCommandSuggestion(
+                        "PowerShell",
+                        AgentDotNetSolutionDoctorService.BuildGuardedRepairFileWriteCommand(
+                            fileSuggestion,
+                            dotNetRepairExactDiff)));
+                suggestionSource = $"{roleName} exact diff";
+            }
+        }
 
         if (isRunningCommand)
         {
@@ -2431,6 +2820,23 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
 
         PreviewCommand(allowWhileChat: true);
+        if (pendingPreview is not null
+            && dotNetRepairLoop is { Phase: AgentDotNetRepairPhase.StagedRepair }
+            && dotNetRepairExactDiff is not null)
+        {
+            approvalText.Text = dotNetRepairExactDiff.Available
+                ? $"{approvalText.Text}{Environment.NewLine}{Environment.NewLine}Exact proposed file diff (not applied):{Environment.NewLine}{dotNetRepairExactDiff.Text}"
+                : $"{approvalText.Text}{Environment.NewLine}{Environment.NewLine}{dotNetRepairExactDiff.Message}";
+            AddTransientCenterMessage(
+                dotNetRepairExactDiff.Available
+                    ? "Solution Doctor exact diff preview"
+                    : "Solution Doctor diff unavailable",
+                dotNetRepairExactDiff.Available
+                    ? $"This bounded before/after diff is shown for review only. Approve applies the separately previewed write command; Reject applies nothing.{Environment.NewLine}{Environment.NewLine}{dotNetRepairExactDiff.Text}"
+                    : $"{dotNetRepairExactDiff.Message} Review the opaque command directly; no source diff is implied.",
+                dotNetRepairExactDiff.Available ? "Action" : "Warning");
+        }
+
         AddActivity(
             pendingPreview is null ? "Command blocked" : "Command staged",
             pendingPreview is null
@@ -2459,6 +2865,18 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         messages.Add(message);
         messageItems.Children.Add(CreateMessageCard(message));
         PersistConversation();
+    }
+
+    private void AddTransientCenterMessage(string title, string body, string kind)
+    {
+        var message = new AgentWorkspaceMessage(
+            "system",
+            title,
+            ShellUiHelpers.Truncate(body, 24_000, ShellUiHelpers.TruncatedNoticeSuffix),
+            kind,
+            "",
+            DateTimeOffset.Now);
+        messageItems.Children.Add(CreateMessageCard(message));
     }
 
     private void AddCommandResultMessage(AgentCommandResult result, AgentWorkspaceFileReceipt receipt)
@@ -3531,6 +3949,27 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return "Review the current Agent conversation and propose exactly one safest next command to preview. If no command is safe yet, propose a read-only workspace inspection command in a fenced powershell Command proposal block.";
         }
 
+        if (dotNetRepairLoop is { Phase: AgentDotNetRepairPhase.StagedRepair } repairLoop)
+        {
+            var exactDiffState = dotNetRepairExactDiff?.Available == true
+                ? $"An exact proposed file diff is already available in the approval evidence:{Environment.NewLine}{dotNetRepairExactDiff.Text}"
+                : "No exact proposed file diff is available yet. Do not imply that Doctor's intent hunks are source edits.";
+            return $"""
+                Prepare the next safe step for this Solution Doctor repair case.
+
+                {AgentDotNetSolutionDoctorService.FormatRepairProposal(repairLoop.Proposal)}
+
+                {exactDiffState}
+
+                Inspect the affected relative file before changing it. If the exact repair is proven, return complete bounded file snippets with explicit relative file paths so AI Arena can render an exact before/after diff and materialize one write command for preview.
+                If the exact edit is not proven, return exactly one read-only inspection command instead.
+                Do not restore packages, access the network, or claim a fix. Any write remains blocked until the operator reviews the exact command/diff and explicitly approves it.
+
+                Latest command evidence:
+                {FormatLatestCommandContext()}
+                """;
+        }
+
         var nextAction = lastFileReceipt is null
             ? "Review the latest command output and choose the safest next action."
             : CommandNextAction(lastCommandResult, lastFileReceipt);
@@ -3591,6 +4030,35 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private string BuildVerifyPrompt()
     {
+        if (dotNetRepairLoop is
+            {
+                Phase: AgentDotNetRepairPhase.VerificationStaged
+                    or AgentDotNetRepairPhase.AwaitingVerification
+            } repairLoop)
+        {
+            var remaining = repairLoop.RemainingVerificationPlans();
+            var actions = remaining.Count == 0
+                ? "No complete typed verification action remains; preserve partial status and do not invent coverage."
+                : string.Join(
+                    Environment.NewLine,
+                    remaining.Select(plan =>
+                        $"- {AgentDotNetSolutionDoctorService.FormatPowerShellInvocation(plan)}"));
+            return $"""
+                Verify the explicitly approved Solution Doctor repair with exactly one of the remaining typed offline actions below.
+                Return exactly one command in a fenced powershell Command proposal block. Do not restore packages or add network flags.
+
+                Repair case: {repairLoop.Proposal.Code} · {repairLoop.Proposal.Id}
+                Remaining focused build/test actions:
+                {actions}
+
+                Focused test evidence: {repairLoop.Proposal.Verification.TestEvidenceState}.
+                {repairLoop.Proposal.Verification.TestSelectionBasis}
+
+                A successful build is not test evidence. If no affected test mapping is available, retain that unavailable state instead of claiming coverage.
+                The verification command will still require explicit operator approval.
+                """;
+        }
+
         var context = lastCommandResult is null
             ? "No command has run yet. Prefer one read-only inspection command if the verification target is unclear."
             : FormatLatestCommandContext();
@@ -3813,6 +4281,12 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return;
         }
 
+        if (dotNetRepairLoop is { Phase: AgentDotNetRepairPhase.AwaitingVerification } repairLoop)
+        {
+            repairLoop.Phase = AgentDotNetRepairPhase.VerificationStaged;
+            dotNetRepairExactDiff = null;
+        }
+
         ApplyPromptTemplate("verify");
         runbookVerificationPending = true;
         if (runbook.HasActiveRun)
@@ -3824,6 +4298,46 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
         AddActivity("Verify staged", "Verification prompt staged from the latest work brief.");
         UpdateStatus("Verification prompt staged.");
+    }
+
+    private void StageDotNetRepairLoop(
+        AIArena.Core.Models.DotNetCommandResult structuredFailure)
+    {
+        var baselineSnapshot = lastDotNetCommandSnapshot ?? dotNetWorkspaceSnapshot;
+        var proposal = AgentDotNetSolutionDoctorService.CreateRepairProposal(
+            baselineSnapshot,
+            structuredFailure);
+        if (dotNetRepairLoop is { } existing
+            && existing.Proposal.Id.Equals(proposal.Id, StringComparison.Ordinal)
+            && existing.Proposal.BaselineFingerprint.Equals(
+                proposal.BaselineFingerprint,
+                StringComparison.Ordinal)
+            && existing.Phase is
+                AgentDotNetRepairPhase.StagedRepair
+                or AgentDotNetRepairPhase.AwaitingVerification
+                or AgentDotNetRepairPhase.VerificationStaged)
+        {
+            if (existing.Phase == AgentDotNetRepairPhase.StagedRepair)
+            {
+                dotNetRepairExactDiff = null;
+            }
+
+            return;
+        }
+
+        dotNetRepairLoop = new(
+            proposal,
+            AgentDotNetSolutionDoctorService.CaptureRepairEvidence(
+                baselineSnapshot,
+                structuredFailure),
+            baselineSnapshot,
+            structuredFailure,
+            DateTimeOffset.Now,
+            Volatile.Read(ref workspaceGeneration));
+        dotNetRepairExactDiff = null;
+        AddActivity(
+            "Doctor repair",
+            $"{proposal.Code} staged with {proposal.Verification.BuildPlans.Count.ToString(CultureInfo.InvariantCulture)} build and {proposal.Verification.TestPlans.Count.ToString(CultureInfo.InvariantCulture)} affected-test action(s).");
     }
 
     private void StageRunbookResumePrompt(WpfAgentRunbookStep step)
@@ -3867,6 +4381,15 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         {
             UpdateStatus("Run an approved command before staging a result-aware next step.");
             return;
+        }
+
+        if (CurrentStructuredDotNetResult(lastCommandResult) is
+            {
+                Succeeded: false,
+                WasCancelled: false
+            } structuredFailure)
+        {
+            StageDotNetRepairLoop(structuredFailure);
         }
 
         var descriptor = ResultFollowUpDescriptor(lastCommandResult, lastFileReceipt);
@@ -3993,7 +4516,12 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         {
             AddActivity("Manual approval needed", riskReason);
             commandStatusText.Text = "Full Access paused for a risky preview. Review and approve manually.";
-            approvalText.Text = $"{riskReason}{Environment.NewLine}{Environment.NewLine}{preview.DisplayInvocation}";
+            var repairDiffEvidence = dotNetRepairLoop is not null && dotNetRepairExactDiff is not null
+                ? dotNetRepairExactDiff.Available
+                    ? $"{Environment.NewLine}{Environment.NewLine}Exact proposed file diff (not applied):{Environment.NewLine}{dotNetRepairExactDiff.Text}"
+                    : $"{Environment.NewLine}{Environment.NewLine}{dotNetRepairExactDiff.Message}"
+                : "";
+            approvalText.Text = $"{riskReason}{Environment.NewLine}{Environment.NewLine}{preview.DisplayInvocation}{repairDiffEvidence}";
             SetBuildEvidenceSummary("Full Access paused for manual review of a risky preview.");
             UpdateStatus("Full Access paused for manual command review.");
             RefreshOutputs();
@@ -4040,7 +4568,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         UpdateStatus("Full Access running Agent command...");
         try
         {
-            await RunApprovedCommandAsync();
+            await RunApprovedCommandAsync(explicitUserApproval: false);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
@@ -4054,8 +4582,18 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
     }
 
-    private static bool RequiresManualApprovalUnderAutonomy(AgentCommandPreview preview, out string reason)
+    private bool RequiresManualApprovalUnderAutonomy(AgentCommandPreview preview, out string reason)
     {
+        if (dotNetRepairLoop is
+            {
+                Phase: AgentDotNetRepairPhase.StagedRepair
+                    or AgentDotNetRepairPhase.VerificationStaged
+            })
+        {
+            reason = "Solution Doctor repair and verification commands require explicit operator approval; Full Access cannot apply or verify them automatically.";
+            return true;
+        }
+
         var risky = preview.Risks
             .Where(IsManualApprovalRisk)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -5615,6 +6153,79 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     internal sealed record AgentFileSuggestion(IReadOnlyList<AgentSuggestedFile> Files);
 
     internal sealed record AgentSuggestedFile(string Path, string Content, string Language);
+
+    private enum AgentDotNetRepairPhase
+    {
+        StagedRepair,
+        RepairRunning,
+        AwaitingVerification,
+        VerificationStaged,
+        VerificationRunning,
+        Completed
+    }
+
+    private sealed class AgentDotNetRepairLoop
+    {
+        internal AgentDotNetRepairLoop(
+            DotNetRepairProposal proposal,
+            DotNetRepairEvidenceSnapshot baselineEvidence,
+            DotNetWorkspaceSnapshot? baselineSnapshot,
+            AIArena.Core.Models.DotNetCommandResult baselineResult,
+            DateTimeOffset startedAt,
+            long workspaceGeneration)
+        {
+            Proposal = proposal;
+            BaselineEvidence = baselineEvidence;
+            BaselineSnapshot = baselineSnapshot;
+            BaselineResult = baselineResult;
+            StartedAt = startedAt;
+            WorkspaceGeneration = workspaceGeneration;
+            RunId = $"doctor-run:{Guid.NewGuid():N}";
+            foreach (var path in proposal.AffectedRelativePaths)
+            {
+                AffectedRelativePaths.Add(path);
+            }
+        }
+
+        internal string RunId { get; }
+
+        internal DotNetRepairProposal Proposal { get; }
+
+        internal DotNetRepairEvidenceSnapshot BaselineEvidence { get; }
+
+        internal DotNetWorkspaceSnapshot? BaselineSnapshot { get; }
+
+        internal AIArena.Core.Models.DotNetCommandResult BaselineResult { get; }
+
+        internal DateTimeOffset StartedAt { get; }
+
+        internal long WorkspaceGeneration { get; }
+
+        internal AgentDotNetRepairPhase Phase { get; set; } = AgentDotNetRepairPhase.StagedRepair;
+
+        internal bool RepairExplicitlyApproved { get; set; }
+
+        internal bool VerificationExplicitlyApproved { get; set; }
+
+        internal bool EvidenceIsPartial { get; set; }
+
+        internal HashSet<string> AffectedRelativePaths { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        internal HashSet<string> CompletedVerificationPlanIds { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        internal Dictionary<string, AIArena.Core.Models.DotNetCommandResult> TestResultsByPlanId { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        internal IReadOnlyList<DotNetCommandPlan> RemainingVerificationPlans()
+        {
+            return Proposal.Verification.BuildPlans
+                .Concat(Proposal.Verification.TestPlans)
+                .Where(plan => !CompletedVerificationPlanIds.Contains(plan.Id))
+                .ToArray();
+        }
+    }
 
     internal readonly record struct AgentWorkspaceFileStamp(long Length, DateTime LastWriteTimeUtc);
 

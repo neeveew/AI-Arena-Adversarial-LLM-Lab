@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using AIArena.Core.Models;
 using AIArena.Core.Services;
@@ -17,6 +18,8 @@ internal static class AgentDotNetSolutionDoctorService
     private const int MaxProfileCharacters = 3_200;
     private const int MaxPromptPacketCharacters = 4_000;
     private const int MaxDiagnosticMessageCharacters = 260;
+    private const int MaxExactDiffCharacters = 24_000;
+    private const long MaxExactDiffExistingFileBytes = 16 * 1024;
     internal const int MaxSuggestedCommandCharacters = 600;
 
     internal static DotNetWorkspaceSnapshot CreateUnavailableSnapshot(string workspaceRoot, Exception exception)
@@ -297,6 +300,262 @@ internal static class AgentDotNetSolutionDoctorService
         return snapshot is null || result is null
             ? null
             : new DotNetWorkspaceIntelligenceService().CreateNarrowedRetryPlan(snapshot, result);
+    }
+
+    internal static DotNetRepairProposal CreateRepairProposal(
+        DotNetWorkspaceSnapshot? snapshot,
+        StructuredDotNetResult? result,
+        DotNetRepairImpactHint? impactHint = null)
+    {
+        return new DotNetRepairLoopService().CreateProposal(snapshot, result, impactHint);
+    }
+
+    internal static DotNetRepairEvidenceSnapshot CaptureRepairEvidence(
+        DotNetWorkspaceSnapshot? snapshot,
+        StructuredDotNetResult? result)
+    {
+        return new DotNetRepairLoopService().CaptureEvidence(snapshot, result);
+    }
+
+    internal static DotNetRepairComparison CompareRepairEvidence(
+        DotNetRepairEvidenceSnapshot baseline,
+        DotNetRepairEvidenceSnapshot current,
+        bool verificationSucceeded,
+        bool wasCancelled)
+    {
+        return new DotNetRepairLoopService().Compare(
+            baseline,
+            current,
+            verificationSucceeded,
+            wasCancelled);
+    }
+
+    internal static bool RepairProposalIsCurrent(
+        DotNetRepairProposal proposal,
+        DotNetWorkspaceSnapshot? snapshot,
+        StructuredDotNetResult? result)
+    {
+        return new DotNetRepairLoopService().IsProposalCurrent(proposal, snapshot, result);
+    }
+
+    internal static string FormatRepairProposal(DotNetRepairProposal proposal)
+    {
+        ArgumentNullException.ThrowIfNull(proposal);
+        var lines = new List<string>
+        {
+            $"Repair case: {proposal.Code} · {proposal.Id}",
+            $"Availability: {proposal.Availability}",
+            $"Explanation: {proposal.Explanation}",
+            "Deterministic diff intent (not apply-ready):"
+        };
+        if (proposal.DiffPreview.Count == 0)
+        {
+            lines.Add("- No bounded diff intent is available.");
+        }
+        else
+        {
+            foreach (var hunk in proposal.DiffPreview)
+            {
+                lines.Add($"--- a/{hunk.RelativePath}");
+                lines.Add($"+++ b/{hunk.RelativePath}");
+                lines.Add($"@@ {hunk.Location} @@");
+                lines.Add($"- {hunk.Before}");
+                lines.Add($"+ {hunk.After}");
+                lines.Add($"  Review boundary: {hunk.Rationale}");
+            }
+        }
+
+        lines.Add("Focused verification (each command still requires preview and explicit approval):");
+        var plans = proposal.Verification.BuildPlans
+            .Concat(proposal.Verification.TestPlans)
+            .ToArray();
+        lines.AddRange(plans.Length == 0
+            ? ["- No complete typed verification command is available."]
+            : plans.Select(plan => $"- {FormatPowerShellInvocation(plan)}"));
+        lines.Add($"Focused test evidence: {proposal.Verification.TestEvidenceState}. {proposal.Verification.TestSelectionBasis}");
+        if (!string.IsNullOrWhiteSpace(proposal.Limitation))
+        {
+            lines.Add($"Limitation: {proposal.Limitation}");
+        }
+
+        return ShellUiHelpers.Truncate(
+            string.Join(Environment.NewLine, lines),
+            MaxPromptPacketCharacters,
+            ShellUiHelpers.TruncatedNoticeSuffix);
+    }
+
+    internal static AgentRepairExactDiffPreview BuildExactFileDiff(
+        string workspaceRoot,
+        AgentWorkspaceCoordinator.AgentFileSuggestion suggestion)
+    {
+        ArgumentNullException.ThrowIfNull(suggestion);
+        if (string.IsNullOrWhiteSpace(workspaceRoot) || !Directory.Exists(workspaceRoot))
+        {
+            return AgentRepairExactDiffPreview.Unavailable(
+                "Exact proposed diff unavailable because the workspace root is not available.");
+        }
+
+        var output = new StringBuilder();
+        var paths = new List<string>();
+        var baselines = new List<AgentRepairFileBaseline>();
+        foreach (var file in suggestion.Files)
+        {
+            if (!TryResolveBoundedDiffTarget(workspaceRoot, file.Path, out var relativePath, out var fullPath, out var error))
+            {
+                return AgentRepairExactDiffPreview.Unavailable(error);
+            }
+
+            string before;
+            byte[]? beforeBytes;
+            if (!File.Exists(fullPath))
+            {
+                before = "";
+                beforeBytes = null;
+            }
+            else
+            {
+                try
+                {
+                    var info = new FileInfo(fullPath);
+                    if (info.Length > MaxExactDiffExistingFileBytes)
+                    {
+                        return AgentRepairExactDiffPreview.Unavailable(
+                            $"Exact proposed diff unavailable because {relativePath} exceeds the bounded read limit.");
+                    }
+
+                    var bytes = File.ReadAllBytes(fullPath);
+                    beforeBytes = bytes;
+                    before = new UTF8Encoding(
+                            encoderShouldEmitUTF8Identifier: false,
+                            throwOnInvalidBytes: true)
+                        .GetString(bytes)
+                        .TrimStart('\uFEFF');
+                }
+                catch (DecoderFallbackException)
+                {
+                    return AgentRepairExactDiffPreview.Unavailable(
+                        $"Exact proposed diff unavailable because {relativePath} is not bounded UTF-8 text.");
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    return AgentRepairExactDiffPreview.Unavailable(
+                        $"Exact proposed diff unavailable because {relativePath} could not be read ({exception.GetType().Name}).");
+                }
+            }
+
+            AppendWholeFileUnifiedDiff(output, relativePath, before, file.Content);
+            if (output.Length > MaxExactDiffCharacters)
+            {
+                return AgentRepairExactDiffPreview.Unavailable(
+                    "Exact proposed diff unavailable because the bounded preview limit was exceeded.");
+            }
+
+            paths.Add(relativePath);
+            baselines.Add(new(
+                relativePath,
+                Exists: beforeBytes is not null,
+                Sha256: beforeBytes is null
+                    ? null
+                    : Convert.ToHexString(SHA256.HashData(beforeBytes))));
+        }
+
+        return paths.Count == 0
+            ? AgentRepairExactDiffPreview.Unavailable(
+                "Exact proposed diff unavailable because Builder supplied no bounded file snippets.")
+            : new(
+                Available: true,
+                output.ToString().TrimEnd(),
+                $"Exact before/after text preview for {paths.Count.ToString(CultureInfo.InvariantCulture)} file(s).",
+                paths,
+                baselines);
+    }
+
+    internal static string BuildGuardedRepairFileWriteCommand(
+        AgentWorkspaceCoordinator.AgentFileSuggestion suggestion,
+        AgentRepairExactDiffPreview preview)
+    {
+        ArgumentNullException.ThrowIfNull(suggestion);
+        ArgumentNullException.ThrowIfNull(preview);
+        if (!preview.Available
+            || suggestion.Files.Count != preview.Baselines.Count
+            || suggestion.Files.Any(file =>
+                !AgentCommandProposalService.TryNormalizeSuggestedFilePath(file.Path, out var normalizedPath)
+                || !normalizedPath.Equals(
+                    file.Path.Replace('\\', '/'),
+                    StringComparison.Ordinal))
+            || !suggestion.Files.Select(file => file.Path).SequenceEqual(
+                preview.Baselines.Select(baseline => baseline.RelativePath),
+                StringComparer.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "A guarded repair command requires an exact diff baseline for every file.");
+        }
+
+        var lines = new List<string>
+        {
+            "$ErrorActionPreference = 'Stop'",
+            "$cwd = (Get-Location).Path",
+            "$workspaceRootPath = [System.IO.Path]::GetFullPath($cwd).TrimEnd([char]92, [char]47)",
+            "$workspaceRootItem = Get-Item -LiteralPath $workspaceRootPath -Force",
+            "if (($workspaceRootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {",
+            "    throw \"Refusing to write through a workspace-root link.\"",
+            "}",
+            "$workspaceRoot = $workspaceRootPath + [System.IO.Path]::DirectorySeparatorChar",
+            "$utf8NoBom = New-Object System.Text.UTF8Encoding $false",
+            "$files = @("
+        };
+        for (var index = 0; index < suggestion.Files.Count; index++)
+        {
+            var file = suggestion.Files[index];
+            var baseline = preview.Baselines[index];
+            var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(file.Content));
+            lines.Add(
+                $"    @{{ Path = '{EscapePowerShellSingleQuoted(file.Path)}'; ExpectedExists = ${baseline.Exists.ToString().ToLowerInvariant()}; ExpectedSha256 = '{baseline.Sha256 ?? ""}'; Base64 = '{base64}' }}");
+        }
+
+        lines.AddRange(
+        [
+            ")",
+            "foreach ($file in $files) {",
+            "    $targetPath = Join-Path -Path $cwd -ChildPath $file.Path",
+            "    $fullPath = [System.IO.Path]::GetFullPath($targetPath)",
+            "    if (-not $fullPath.StartsWith($workspaceRoot, [System.StringComparison]::OrdinalIgnoreCase)) {",
+            "        throw \"Refusing to write outside workspace: $($file.Path)\"",
+            "    }",
+            "    $probePath = $fullPath",
+            "    while (-not [string]::IsNullOrWhiteSpace($probePath) -and $probePath.StartsWith($workspaceRoot, [System.StringComparison]::OrdinalIgnoreCase)) {",
+            "        if (Test-Path -LiteralPath $probePath) {",
+            "            $probeItem = Get-Item -LiteralPath $probePath -Force",
+            "            if (($probeItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {",
+            "                throw \"Refusing to write through a workspace link: $($file.Path)\"",
+            "            }",
+            "        }",
+            "        $probePath = Split-Path -Parent $probePath",
+            "    }",
+            "    $exists = Test-Path -LiteralPath $fullPath -PathType Leaf",
+            "    if ($exists -ne [bool]$file.ExpectedExists) {",
+            "        throw \"Repair preview is stale for $($file.Path); inspect and preview again.\"",
+            "    }",
+            "    if ($exists) {",
+            "        $actualSha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash",
+            "        if (-not $actualSha256.Equals([string]$file.ExpectedSha256, [System.StringComparison]::OrdinalIgnoreCase)) {",
+            "            throw \"Repair preview is stale for $($file.Path); inspect and preview again.\"",
+            "        }",
+            "    }",
+            "}",
+            "foreach ($file in $files) {",
+            "    $targetPath = Join-Path -Path $cwd -ChildPath $file.Path",
+            "    $fullPath = [System.IO.Path]::GetFullPath($targetPath)",
+            "    $parent = Split-Path -Parent $fullPath",
+            "    if (-not [string]::IsNullOrWhiteSpace($parent)) {",
+            "        New-Item -ItemType Directory -Path $parent -Force | Out-Null",
+            "    }",
+            "    $content = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($file.Base64))",
+            "    [System.IO.File]::WriteAllText($fullPath, $content, $utf8NoBom)",
+            "}",
+            "Write-Host (\"Applied reviewed repair to {0} file(s): {1}\" -f $files.Count, (($files | ForEach-Object { $_.Path }) -join ', '))"
+        ]);
+        return string.Join(Environment.NewLine, lines);
     }
 
     internal static string FormatPowerShellInvocation(DotNetCommandPlan plan)
@@ -679,6 +938,131 @@ internal static class AgentDotNetSolutionDoctorService
         return normalized;
     }
 
+    private static bool TryResolveBoundedDiffTarget(
+        string workspaceRoot,
+        string suggestedPath,
+        out string relativePath,
+        out string fullPath,
+        out string error)
+    {
+        relativePath = "";
+        fullPath = "";
+        error = "";
+        if (!AgentCommandProposalService.TryNormalizeSuggestedFilePath(suggestedPath, out relativePath))
+        {
+            error = "Exact proposed diff unavailable because Builder supplied an unsafe file path.";
+            return false;
+        }
+        try
+        {
+            var root = Path.GetFullPath(workspaceRoot)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+            {
+                error = "Exact proposed diff unavailable because the workspace root is a link.";
+                fullPath = "";
+                return false;
+            }
+
+            fullPath = Path.GetFullPath(Path.Combine(
+                root,
+                relativePath.Replace('/', Path.DirectorySeparatorChar)));
+            var rootPrefix = $"{root}{Path.DirectorySeparatorChar}";
+            if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                error = "Exact proposed diff unavailable because the target escaped the workspace.";
+                return false;
+            }
+
+            for (var probe = fullPath;
+                 !string.IsNullOrWhiteSpace(probe)
+                 && probe.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase);
+                 probe = Path.GetDirectoryName(probe) ?? "")
+            {
+                if ((File.Exists(probe) || Directory.Exists(probe))
+                    && (File.GetAttributes(probe) & FileAttributes.ReparsePoint) != 0)
+                {
+                    error = $"Exact proposed diff unavailable because {relativePath} crosses a workspace link.";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception exception) when (exception is
+            IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            error = $"Exact proposed diff unavailable because the target path could not be inspected ({exception.GetType().Name}).";
+            fullPath = "";
+            return false;
+        }
+    }
+
+    private static void AppendWholeFileUnifiedDiff(
+        StringBuilder output,
+        string relativePath,
+        string before,
+        string after)
+    {
+        var beforeLines = SplitDiffLines(before, out var beforeTrailingNewline);
+        var afterLines = SplitDiffLines(after, out var afterTrailingNewline);
+        output.Append("--- a/").AppendLine(relativePath);
+        output.Append("+++ b/").AppendLine(relativePath);
+        output.Append("@@ -")
+            .Append(beforeLines.Count == 0 ? "0,0" : $"1,{beforeLines.Count.ToString(CultureInfo.InvariantCulture)}")
+            .Append(" +")
+            .Append(afterLines.Count == 0 ? "0,0" : $"1,{afterLines.Count.ToString(CultureInfo.InvariantCulture)}")
+            .AppendLine(" @@");
+        foreach (var line in beforeLines)
+        {
+            output.Append('-').AppendLine(line);
+        }
+
+        if (beforeLines.Count > 0 && !beforeTrailingNewline)
+        {
+            output.AppendLine(@"\ No newline at end of original file");
+        }
+
+        foreach (var line in afterLines)
+        {
+            output.Append('+').AppendLine(line);
+        }
+
+        if (afterLines.Count > 0 && !afterTrailingNewline)
+        {
+            output.AppendLine(@"\ No newline at end of proposed file");
+        }
+
+        output.AppendLine();
+    }
+
+    private static IReadOnlyList<string> SplitDiffLines(
+        string value,
+        out bool hasTrailingNewline)
+    {
+        var normalized = (value ?? "")
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n');
+        hasTrailingNewline = normalized.EndsWith('\n');
+        if (normalized.Length == 0)
+        {
+            return [];
+        }
+
+        var lines = normalized.Split('\n').ToList();
+        if (hasTrailingNewline)
+        {
+            lines.RemoveAt(lines.Count - 1);
+        }
+
+        return lines;
+    }
+
+    private static string EscapePowerShellSingleQuoted(string value)
+    {
+        return value.Replace("'", "''", StringComparison.Ordinal);
+    }
+
     private static bool TryTokenizeCommand(string command, out IReadOnlyList<string> tokens)
     {
         var values = new List<string>();
@@ -789,3 +1173,21 @@ internal static class AgentDotNetSolutionDoctorService
         return $"'{argument.Replace("'", "''", StringComparison.Ordinal)}'";
     }
 }
+
+internal sealed record AgentRepairExactDiffPreview(
+    bool Available,
+    string Text,
+    string Message,
+    IReadOnlyList<string> RelativePaths,
+    IReadOnlyList<AgentRepairFileBaseline> Baselines)
+{
+    internal static AgentRepairExactDiffPreview Unavailable(string message)
+    {
+        return new(false, "", message, [], []);
+    }
+}
+
+internal sealed record AgentRepairFileBaseline(
+    string RelativePath,
+    bool Exists,
+    string? Sha256);

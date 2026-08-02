@@ -571,6 +571,471 @@ internal static partial class Program
             "an empty complete solution should remain excluded when optional solution capacity is available");
     }
 
+    private static void AgentSolutionDoctorPreviewsExactRepairsAndRequiresManualApproval()
+    {
+        RunStaTest(() =>
+        {
+            var testRoot = Path.Combine(
+                Path.GetTempPath(),
+                "ai-arena-agent-dotnet-repair-preview",
+                Guid.NewGuid().ToString("N"));
+            var workspaceRoot = Path.Combine(testRoot, "workspace");
+            const string projectRelativePath = "src/App/App.csproj";
+            const string sourceRelativePath = "src/App/Broken.cs";
+            var projectPath = Path.Combine(
+                workspaceRoot,
+                projectRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            var sourcePath = Path.Combine(
+                workspaceRoot,
+                sourceRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
+            File.WriteAllText(
+                projectPath,
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+            File.WriteAllText(sourcePath, "class Broken {");
+            try
+            {
+                Require(
+                    AgentCommandProposalService.TryNormalizeSuggestedFilePath(
+                        sourceRelativePath,
+                        out var normalizedSourcePath)
+                    && normalizedSourcePath == sourceRelativePath,
+                    "a normal workspace-relative repair target should remain available");
+                foreach (var unsafePath in new[]
+                         {
+                             "src/App/Broken.cs:stream",
+                             "src/CON",
+                             "src/con.txt",
+                             "src/CON .txt",
+                             "src/AUX.cs",
+                             "src/COM1.json",
+                             "src/LPT9",
+                             "src/COM\u00B9.log",
+                             "src/App./Broken.cs",
+                             "src/App /Broken.cs",
+                             "src//Broken.cs"
+                         })
+                {
+                    Require(
+                        !AgentCommandProposalService.TryNormalizeSuggestedFilePath(unsafePath, out _),
+                        $"repair proposals should reject the Windows-special target '{unsafePath}'");
+                    var bypassedSuggestion = new AgentWorkspaceCoordinator.AgentFileSuggestion(
+                    [
+                        new AgentWorkspaceCoordinator.AgentSuggestedFile(
+                            unsafePath,
+                            "class Unsafe { }",
+                            "csharp")
+                    ]);
+                    var bypassedPreview = AgentDotNetSolutionDoctorService.BuildExactFileDiff(
+                        workspaceRoot,
+                        bypassedSuggestion);
+                    Require(
+                        !bypassedPreview.Available
+                        && bypassedPreview.Message.Contains("unsafe file path", StringComparison.OrdinalIgnoreCase),
+                        $"exact-diff construction should defensively reject '{unsafePath}'");
+                }
+
+                const string forgedAdsPath = "src/App/Broken.cs:stream";
+                var forgedAdsSuggestion = new AgentWorkspaceCoordinator.AgentFileSuggestion(
+                [
+                    new AgentWorkspaceCoordinator.AgentSuggestedFile(
+                        forgedAdsPath,
+                        "hidden stream",
+                        "txt")
+                ]);
+                var forgedAdsPreview = new AgentRepairExactDiffPreview(
+                    Available: true,
+                    Text: "forged",
+                    Message: "forged",
+                    RelativePaths: [forgedAdsPath],
+                    Baselines:
+                    [
+                        new AgentRepairFileBaseline(
+                            forgedAdsPath,
+                            Exists: false,
+                            Sha256: null)
+                    ]);
+                var forgedApplyRejected = false;
+                try
+                {
+                    _ = AgentDotNetSolutionDoctorService.BuildGuardedRepairFileWriteCommand(
+                        forgedAdsSuggestion,
+                        forgedAdsPreview);
+                }
+                catch (InvalidOperationException)
+                {
+                    forgedApplyRejected = true;
+                }
+
+                Require(
+                    forgedApplyRejected,
+                    "guarded repair command construction should reject a forged ADS target before application");
+
+                var safeSuggestion = new AgentWorkspaceCoordinator.AgentFileSuggestion(
+                [
+                    new AgentWorkspaceCoordinator.AgentSuggestedFile(
+                        sourceRelativePath,
+                        "class Broken { }",
+                        "csharp")
+                ]);
+                var safePreview = AgentDotNetSolutionDoctorService.BuildExactFileDiff(
+                    workspaceRoot,
+                    safeSuggestion);
+                Require(safePreview.Available, "a normal exact repair diff should remain available");
+                var guardedWrite = AgentDotNetSolutionDoctorService.BuildGuardedRepairFileWriteCommand(
+                    safeSuggestion,
+                    safePreview);
+                Require(
+                    guardedWrite.Contains(
+                        "workspace-root link",
+                        StringComparison.OrdinalIgnoreCase)
+                    && guardedWrite.Contains(
+                        "$workspaceRootItem.Attributes",
+                        StringComparison.Ordinal),
+                    "the generated apply command should reject a reparse-point workspace root");
+
+                var linkedWorkspaceRoot = Path.Combine(testRoot, "linked-workspace");
+                try
+                {
+                    Directory.CreateSymbolicLink(linkedWorkspaceRoot, workspaceRoot);
+                    var linkedRootPreview = AgentDotNetSolutionDoctorService.BuildExactFileDiff(
+                        linkedWorkspaceRoot,
+                        safeSuggestion);
+                    Require(
+                        !linkedRootPreview.Available
+                        && linkedRootPreview.Message.Contains(
+                            "workspace root is a link",
+                            StringComparison.OrdinalIgnoreCase),
+                        "exact repair previews should reject a reparse-point workspace root");
+                }
+                catch (Exception exception) when (exception is
+                    UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+                {
+                }
+                finally
+                {
+                    if (Directory.Exists(linkedWorkspaceRoot))
+                    {
+                        Directory.Delete(linkedWorkspaceRoot);
+                    }
+                }
+
+                var snapshot = CreateDotNetSnapshot(
+                    "App",
+                    projectRelativePath,
+                    solutionRelativePath: "App.sln",
+                    testKind: DotNetProjectTestKind.None);
+                var coordinator = CreateWorkspaceProfileTestCoordinator(
+                    new WpfSettings(),
+                    new WpfSettingsStore(Path.Combine(testRoot, "settings.json")),
+                    (_, _) => Task.FromResult("Project signals: .NET"),
+                    (_, _) => Task.FromResult(snapshot));
+                coordinator.Initialize();
+                coordinator.ControlSetWorkspace(workspaceRoot);
+                coordinator.DebugWorkspaceProfileRefreshTask.GetAwaiter().GetResult();
+                coordinator.DebugSetCommandRequiredForTest(true);
+
+                var build = snapshot.CommandPlans.Single(plan =>
+                    plan.Kind == DotNetCommandKind.Build
+                    && plan.TargetKind == DotNetCommandTargetKind.Project);
+                var failure = new AgentCommandResult(
+                    false,
+                    "Terminal",
+                    build.DisplayInvocation,
+                    workspaceRoot,
+                    1,
+                    $"{sourcePath}(1,15): error CS1513: }} expected [{projectPath}]",
+                    "",
+                    TimeSpan.FromMilliseconds(30),
+                    false,
+                    false,
+                    "");
+                var emptyReceipt = AgentWorkspaceCoordinator.BuildFileReceipt(
+                    new Dictionary<string, AgentWorkspaceCoordinator.AgentWorkspaceFileStamp>(
+                        StringComparer.OrdinalIgnoreCase),
+                    new Dictionary<string, AgentWorkspaceCoordinator.AgentWorkspaceFileStamp>(
+                        StringComparer.OrdinalIgnoreCase));
+                Require(
+                    coordinator.DebugApplyCompletedCommandForTest(failure, emptyReceipt),
+                    "typed build failure should seed the repair loop");
+                coordinator.DebugStageNextPromptFromResult();
+                Require(
+                    coordinator.DebugDotNetRepairPhase == "StagedRepair"
+                    && coordinator.DebugDotNetRepairProposal.Contains("CS1513", StringComparison.Ordinal)
+                    && coordinator.DebugPromptText.Contains("exact before/after diff", StringComparison.OrdinalIgnoreCase),
+                    "Stage Repair should expose deterministic explanation and request exact bounded file snippets");
+
+                coordinator.DebugSetAutoApproveForSession(true);
+                coordinator.DebugStageFirstCommandSuggestion(
+                    """
+                    File: src/App/Broken.cs
+                    Content:
+                    class Broken { }
+                    """);
+                coordinator.DebugTryAutoRunPendingPreviewAsync().GetAwaiter().GetResult();
+                Require(
+                    coordinator.DebugDotNetRepairExactDiff.Contains("--- a/src/App/Broken.cs", StringComparison.Ordinal)
+                    && coordinator.DebugDotNetRepairExactDiff.Contains("-class Broken {", StringComparison.Ordinal)
+                    && coordinator.DebugDotNetRepairExactDiff.Contains("+class Broken { }", StringComparison.Ordinal),
+                    "Builder file snippets should render an exact bounded before/after unified diff");
+                Require(
+                    coordinator.DebugApprovalText.Contains("Exact proposed file diff (not applied)", StringComparison.Ordinal)
+                    && coordinator.DebugApprovalText.Contains("+class Broken { }", StringComparison.Ordinal),
+                    "the exact diff should remain visible in approval evidence before apply");
+                Require(
+                    File.ReadAllText(sourcePath) == "class Broken {"
+                    && coordinator.DebugCommandRunEnabled,
+                    "Full Access must not auto-run a Doctor repair; the file and manual Approve action should remain pending");
+                Require(
+                    coordinator.DebugCommandText.Contains("ExpectedSha256", StringComparison.Ordinal)
+                    && coordinator.DebugCommandText.Contains(
+                        "Repair preview is stale",
+                        StringComparison.Ordinal),
+                    "snippet-backed repair commands should guard the exact reviewed baseline against stale writes");
+                File.WriteAllText(sourcePath, "class ExternalEdit { }");
+                var stalePreview = AgentWorkspaceCommand.BuildPreview(
+                    workspaceRoot,
+                    "PowerShell",
+                    coordinator.DebugCommandText);
+                var staleApply = AgentWorkspaceCommand.RunAsync(
+                        stalePreview,
+                        TimeSpan.FromSeconds(15))
+                    .GetAwaiter()
+                    .GetResult();
+                Require(
+                    !staleApply.Ok
+                    && $"{staleApply.StandardOutput}\n{staleApply.StandardError}".Contains(
+                        "Repair preview is stale",
+                        StringComparison.OrdinalIgnoreCase)
+                    && File.ReadAllText(sourcePath) == "class ExternalEdit { }",
+                    "a file changed after diff preview must fail closed without overwriting the newer content");
+                File.WriteAllText(sourcePath, "class Broken {");
+
+                coordinator.ControlReject();
+                coordinator.DebugStageFirstCommandSuggestion(
+                    """
+                    Command proposal:
+                    ```powershell
+                    Set-Content -LiteralPath .\src\App\Broken.cs -Value 'class Broken { }'
+                    ```
+                    """);
+                coordinator.DebugTryAutoRunPendingPreviewAsync().GetAwaiter().GetResult();
+                Require(
+                    coordinator.DebugDotNetRepairExactDiff.Contains(
+                        "opaque command",
+                        StringComparison.OrdinalIgnoreCase)
+                    && coordinator.DebugApprovalText.Contains(
+                        "Exact proposed diff unavailable",
+                        StringComparison.OrdinalIgnoreCase),
+                    "opaque repair commands should explicitly report that no exact source diff is available");
+                Require(
+                    File.ReadAllText(sourcePath) == "class Broken {",
+                    "an opaque Doctor command must also remain unapplied until explicit approval");
+                coordinator.Dispose();
+            }
+            finally
+            {
+                if (Directory.Exists(testRoot))
+                {
+                    Directory.Delete(testRoot, recursive: true);
+                }
+            }
+        });
+    }
+
+    private static void AgentSolutionDoctorRecordsOnlyApprovedVerifiedRepairLoops()
+    {
+        RunStaTest(() =>
+        {
+            var opaqueHarnessPlan = DotNetPlan(
+                "run:opaque-harness",
+                DotNetCommandKind.Run,
+                DotNetCommandTargetKind.Project,
+                "tests/Opaque.Tests/Opaque.Tests.csproj",
+                ["run", "--project", "tests/Opaque.Tests/Opaque.Tests.csproj", "--no-build"],
+                "dotnet run --project tests/Opaque.Tests/Opaque.Tests.csproj --no-build");
+            var opaqueHarnessResult = new AIArena.Core.Models.DotNetCommandResult(
+                opaqueHarnessPlan,
+                ExitCode: 0,
+                WasCancelled: false,
+                Succeeded: true,
+                Diagnostics: [],
+                WarningCount: 0,
+                ErrorCount: 0,
+                TestTotals: null,
+                FailingTests: [],
+                new DotNetRawOutput("opaque", "Harness completed.", ""),
+                StructuredEvidenceLimitReached: false);
+            var opaqueEvidence = AgentWorkspaceCoordinator.BuildDotNetRepairTestEvidence(
+                DotNetRepairTestEvidenceState.Available,
+                [opaqueHarnessPlan],
+                new HashSet<string>(StringComparer.Ordinal) { opaqueHarnessPlan.Id },
+                [opaqueHarnessResult]);
+            Require(
+                !opaqueEvidence.Available
+                && !opaqueEvidence.Complete
+                && opaqueEvidence.Passed == 0
+                && opaqueEvidence.Failed == 0,
+                "an executable harness without parsed test evidence must remain unavailable and incomplete");
+
+            var testRoot = Path.Combine(
+                Path.GetTempPath(),
+                "ai-arena-agent-dotnet-repair-history",
+                Guid.NewGuid().ToString("N"));
+            var workspaceRoot = Path.Combine(testRoot, "workspace");
+            const string projectRelativePath = "src/App/App.csproj";
+            const string sourceRelativePath = "src/App/Broken.cs";
+            var projectPath = Path.Combine(
+                workspaceRoot,
+                projectRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            var sourcePath = Path.Combine(
+                workspaceRoot,
+                sourceRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
+            File.WriteAllText(
+                projectPath,
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+            File.WriteAllText(sourcePath, "class Broken {");
+            try
+            {
+                var snapshot = CreateDotNetSnapshot(
+                    "App",
+                    projectRelativePath,
+                    solutionRelativePath: "App.sln",
+                    testKind: DotNetProjectTestKind.None);
+                var coordinator = CreateWorkspaceProfileTestCoordinator(
+                    new WpfSettings(),
+                    new WpfSettingsStore(Path.Combine(testRoot, "settings.json")),
+                    (_, _) => Task.FromResult("Project signals: .NET"),
+                    (_, _) => Task.FromResult(snapshot));
+                coordinator.Initialize();
+                coordinator.ControlSetWorkspace(workspaceRoot);
+                coordinator.DebugWorkspaceProfileRefreshTask.GetAwaiter().GetResult();
+                coordinator.DebugSetCommandRequiredForTest(true);
+                var build = snapshot.CommandPlans.Single(plan =>
+                    plan.Kind == DotNetCommandKind.Build
+                    && plan.TargetKind == DotNetCommandTargetKind.Project);
+                var failure = new AgentCommandResult(
+                    false,
+                    "Terminal",
+                    build.DisplayInvocation,
+                    workspaceRoot,
+                    1,
+                    $"{sourcePath}(1,15): error CS1513: }} expected [{projectPath}]",
+                    "",
+                    TimeSpan.FromMilliseconds(20),
+                    false,
+                    false,
+                    "");
+                var emptyReceipt = AgentWorkspaceCoordinator.BuildFileReceipt(
+                    new Dictionary<string, AgentWorkspaceCoordinator.AgentWorkspaceFileStamp>(
+                        StringComparer.OrdinalIgnoreCase),
+                    new Dictionary<string, AgentWorkspaceCoordinator.AgentWorkspaceFileStamp>(
+                        StringComparer.OrdinalIgnoreCase));
+                Require(coordinator.DebugApplyCompletedCommandForTest(failure, emptyReceipt), "typed failure should seed the repair history fixture");
+                coordinator.DebugStageNextPromptFromResult();
+                coordinator.DebugStageFirstCommandSuggestion(
+                    """
+                    File: src/App/Broken.cs
+                    Content:
+                    class Broken { }
+                    """);
+                var historyPath = Path.Combine(
+                    workspaceRoot,
+                    DotNetSolutionDoctorHistoryStore.HistoryRelativePath.Replace('/', Path.DirectorySeparatorChar));
+                Require(
+                    !File.Exists(historyPath),
+                    "staging an exact repair diff must not write history before explicit apply and verification");
+                Require(
+                    coordinator.DebugApprovePendingDotNetRepairForTest()
+                    && coordinator.DebugDotNetRepairPhase == "RepairRunning",
+                    "manual approval should move the staged repair into its running phase");
+
+                var repairCommand = coordinator.DebugCommandText;
+                var oldStamp = new AgentWorkspaceCoordinator.AgentWorkspaceFileStamp(
+                    new FileInfo(sourcePath).Length,
+                    File.GetLastWriteTimeUtc(sourcePath));
+                File.WriteAllText(sourcePath, "class Broken { }");
+                var newStamp = new AgentWorkspaceCoordinator.AgentWorkspaceFileStamp(
+                    new FileInfo(sourcePath).Length,
+                    File.GetLastWriteTimeUtc(sourcePath));
+                var changedReceipt = AgentWorkspaceCoordinator.BuildFileReceipt(
+                    new Dictionary<string, AgentWorkspaceCoordinator.AgentWorkspaceFileStamp>(
+                        StringComparer.OrdinalIgnoreCase)
+                    {
+                        [sourceRelativePath] = oldStamp
+                    },
+                    new Dictionary<string, AgentWorkspaceCoordinator.AgentWorkspaceFileStamp>(
+                        StringComparer.OrdinalIgnoreCase)
+                    {
+                        [sourceRelativePath] = newStamp
+                    });
+                var appliedRepair = new AgentCommandResult(
+                    true,
+                    "PowerShell",
+                    repairCommand,
+                    workspaceRoot,
+                    0,
+                    "Wrote 1 file.",
+                    "",
+                    TimeSpan.FromMilliseconds(20),
+                    false,
+                    false,
+                    "");
+                Require(
+                    coordinator.DebugApplyCompletedCommandForTest(appliedRepair, changedReceipt)
+                    && coordinator.DebugDotNetRepairPhase == "AwaitingVerification",
+                    "an explicitly approved tracked edit should require focused verification");
+                Require(
+                    !File.Exists(historyPath),
+                    "an approved edit alone must not write a repair outcome");
+
+                coordinator.DebugStageVerifyPromptFromBrief();
+                coordinator.ControlStageCommand(build.DisplayInvocation, "Terminal");
+                Require(
+                    coordinator.DebugApprovePendingDotNetRepairForTest()
+                    && coordinator.DebugDotNetRepairPhase == "VerificationRunning",
+                    "focused verification should require and record a second explicit approval");
+                var verification = failure with
+                {
+                    Ok = true,
+                    ExitCode = 0,
+                    StandardOutput = "Build succeeded.\n    0 Warning(s)\n    0 Error(s)",
+                    Error = ""
+                };
+                Require(
+                    coordinator.DebugApplyCompletedCommandForTest(verification, emptyReceipt)
+                    && coordinator.DebugDotNetRepairPhase == "Completed",
+                    "clean typed verification should complete the repair loop");
+                Require(
+                    File.Exists(historyPath)
+                    && new DotNetSolutionDoctorHistoryStore().TryRead(
+                        workspaceRoot,
+                        out var history,
+                        out _)
+                    && history.Runs.Count == 1
+                    && history.Runs[0].Outcome == DotNetRepairLoopOutcome.Fixed
+                    && history.Runs[0].AffectedRelativePaths.Contains(
+                        sourceRelativePath,
+                        StringComparer.OrdinalIgnoreCase),
+                    "only the approved-and-verified loop should write a relative fixed outcome");
+                Require(
+                    coordinator.DebugDotNetRepairHistoryState.Contains(
+                        "recorded",
+                        StringComparison.OrdinalIgnoreCase),
+                    "the coordinator should expose the successful bounded history write");
+                coordinator.Dispose();
+            }
+            finally
+            {
+                if (Directory.Exists(testRoot))
+                {
+                    Directory.Delete(testRoot, recursive: true);
+                }
+            }
+        });
+    }
+
     private static void AgentSolutionDoctorDrivesStructuredRepairEvidence()
     {
         RunStaTest(() =>

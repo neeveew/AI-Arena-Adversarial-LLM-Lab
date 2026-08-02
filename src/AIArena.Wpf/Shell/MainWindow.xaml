@@ -3162,6 +3162,76 @@
                             <StackPanel x:Name="AgentBuildEvidenceItems" />
                         </StackPanel>
                     </Border>
+                    <Expander x:Name="AgentImpactExplorerExpander"
+                              Header="Impact Explorer"
+                              IsExpanded="False"
+                              Style="{StaticResource AgentControlsExpander}"
+                              AutomationProperties.Name="Roslyn Impact Explorer">
+                        <Border Style="{StaticResource AgentRailCard}">
+                            <StackPanel>
+                                <TextBlock x:Name="AgentImpactStatusText"
+                                           Text="Choose a trusted .NET workspace to inspect semantic change impact."
+                                           Style="{StaticResource HintText}"
+                                           TextWrapping="Wrap"
+                                           AutomationProperties.LiveSetting="Polite"
+                                           AutomationProperties.Name="Impact Explorer status" />
+                                <TextBlock Text="Solution"
+                                           Style="{StaticResource FieldLabel}"
+                                           Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
+                                <ComboBox x:Name="AgentImpactSolutionPicker"
+                                          Style="{StaticResource FormComboBox}"
+                                          AutomationProperties.Name="Impact Explorer solution"
+                                          AutomationProperties.HelpText="Choose the trusted solution whose MSBuild projects Roslyn may evaluate." />
+                                <TextBlock Text="Symbol or relative file"
+                                           Style="{StaticResource FieldLabel}"
+                                           Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
+                                <TextBox x:Name="AgentImpactTargetText"
+                                         Style="{StaticResource FormTextBox}"
+                                         Tag="Type, method, or src/File.cs"
+                                         AutomationProperties.Name="Impact Explorer target"
+                                         AutomationProperties.HelpText="Enter a qualified symbol name, simple symbol name, or workspace-relative source file." />
+                                <UniformGrid Columns="2"
+                                             Margin="{DynamicResource Arena.Layout.RailButtonGridBleed}">
+                                    <Button x:Name="AgentImpactAnalyzeButton"
+                                            Content="Analyze"
+                                            Style="{StaticResource CompactRailActionButton}"
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
+                                            AutomationProperties.Name="Analyze semantic impact"
+                                            AutomationProperties.HelpText="Evaluate the selected trusted solution and predict impact for the entered symbol or file." />
+                                    <Button x:Name="AgentImpactAnalyzeChangesButton"
+                                            Content="Last Changes"
+                                            Style="{StaticResource CompactRailActionButton}"
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
+                                            AutomationProperties.Name="Analyze latest Agent file changes"
+                                            AutomationProperties.HelpText="Predict semantic impact from the latest bounded Agent file receipt." />
+                                </UniformGrid>
+                                <TextBlock x:Name="AgentImpactSummaryText"
+                                           Text="No semantic impact analysis yet."
+                                           Style="{StaticResource HintText}"
+                                           TextWrapping="Wrap"
+                                           Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
+                                <StackPanel x:Name="AgentImpactItems"
+                                            Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}" />
+                                <UniformGrid Columns="2"
+                                             Margin="{DynamicResource Arena.Layout.RailButtonGridBleed}">
+                                    <Button x:Name="AgentImpactStageTestsButton"
+                                            Content="Stage Tests"
+                                            Style="{StaticResource CompactRailActionButton}"
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
+                                            IsEnabled="False"
+                                            AutomationProperties.Name="Stage focused impact tests"
+                                            AutomationProperties.HelpText="Stage the first evidence-backed focused test command in the existing approval rail." />
+                                    <Button x:Name="AgentImpactCopyButton"
+                                            Content="Copy Impact"
+                                            Style="{StaticResource CompactRailActionButton}"
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
+                                            IsEnabled="False"
+                                            AutomationProperties.Name="Copy Impact Explorer evidence"
+                                            AutomationProperties.HelpText="Copy the relative-path-only semantic impact summary and focused test recommendations." />
+                                </UniformGrid>
+                            </StackPanel>
+                        </Border>
+                    </Expander>
                     <Border Style="{StaticResource AgentRailCard}">
                         <StackPanel>
                             <TextBlock Text="Outputs" Style="{StaticResource RightRailSectionTitle}" />
@@ -3302,7 +3372,7 @@
                                      FontSize="{DynamicResource Arena.Type.LabelSize}"
                                      Text="No command output." />
                             <UniformGrid Columns="2"
-                                         Margin="0,8,-6,0">
+                                         Margin="{DynamicResource Arena.Layout.RailButtonGridBleed}">
                                 <Button x:Name="AgentCommandCopyOutputButton"
                                         Content="Copy Output"
                                         Style="{StaticResource CompactRailActionButton}"
@@ -3326,7 +3396,7 @@
                                        TextWrapping="Wrap"
                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                             <UniformGrid Columns="3"
-                                          Margin="0,8,-6,0">
+                                          Margin="{DynamicResource Arena.Layout.RailButtonGridBleed}">
                                 <Button x:Name="AgentCommandCopyBriefButton"
                                         Content="Copy Brief"
                                         Style="{StaticResource CompactRailActionButton}"
@@ -3364,7 +3434,7 @@
                                        Margin="{DynamicResource Arena.Gap.Stack}" />
                             <StackPanel x:Name="AgentCommandHistoryItems" />
                             <UniformGrid Columns="2"
-                                         Margin="0,8,-6,0">
+                                         Margin="{DynamicResource Arena.Layout.RailButtonGridBleed}">
                                 <Button x:Name="AgentCommandReplayLastButton"
                                         Content="Replay Last"
                                         Style="{StaticResource CompactRailActionButton}"

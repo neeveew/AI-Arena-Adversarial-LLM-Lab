@@ -20,6 +20,8 @@ internal static class AgentCommandProposalService
     private const int MaxMaterializedFiles = 8;
     private const int MaxMaterializedFileChars = 12000;
     private const int MaxMaterializedTotalChars = 30000;
+    private static readonly char[] WindowsInvalidFileNameCharacters =
+        ['<', '>', ':', '"', '/', '\\', '|', '?', '*', '\0'];
 
     private static readonly Regex FencedCommandBlockRegex = new(
         @"```(?<lang>[^\r\n`]*)\r?\n(?<body>[\s\S]*?)```",
@@ -692,8 +694,8 @@ internal static class AgentCommandProposalService
             return false;
         }
 
-        var parts = trimmed.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length == 0)
+        var parts = trimmed.Split('/');
+        if (parts.Length == 0 || parts.Any(string.IsNullOrEmpty))
         {
             return false;
         }
@@ -701,9 +703,14 @@ internal static class AgentCommandProposalService
         var invalid = Path.GetInvalidFileNameChars();
         foreach (var part in parts)
         {
-            if (part.Equals(".", StringComparison.Ordinal)
+            if (!part.Equals(part.Trim(), StringComparison.Ordinal)
+                || part.Equals(".", StringComparison.Ordinal)
                 || part.Equals("..", StringComparison.Ordinal)
-                || part.IndexOfAny(invalid) >= 0)
+                || part.IndexOfAny(invalid) >= 0
+                || part.IndexOfAny(WindowsInvalidFileNameCharacters) >= 0
+                || part.Any(char.IsControl)
+                || part.EndsWith(".", StringComparison.Ordinal)
+                || IsReservedWindowsDeviceName(part))
             {
                 return false;
             }
@@ -719,6 +726,32 @@ internal static class AgentCommandProposalService
 
         path = string.Join("/", parts);
         return true;
+    }
+
+    private static bool IsReservedWindowsDeviceName(string segment)
+    {
+        var extensionIndex = segment.IndexOf('.');
+        var fileName = (extensionIndex >= 0 ? segment[..extensionIndex] : segment)
+            .TrimEnd(' ', '.');
+        if (fileName.Equals("CON", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("PRN", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("AUX", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("NUL", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("CLOCK$", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("CONIN$", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("CONOUT$", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (fileName.Length != 4
+            || !(fileName.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
+                || fileName.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return fileName[3] is >= '1' and <= '9' or '\u00B9' or '\u00B2' or '\u00B3';
     }
 
     private static string DefaultFileNameForLanguage(string language, string body)

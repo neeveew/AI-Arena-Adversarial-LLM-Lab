@@ -33,6 +33,8 @@ var tests = new List<(string Name, Action Test)>
     ("solution doctor bounds discovery to explicit project paths", DotNetSolutionDoctorTests.BoundsDiscoveryToExplicitProjectPaths),
     ("solution doctor reports partial projects and honors cancellation", DotNetSolutionDoctorTests.ReportsPartialProjectsAndHonorsCancellation),
     ("solution doctor validates the real AI Arena product solutions", DotNetSolutionDoctorTests.ValidatesAiArenaProductSolutions),
+    ("solution doctor plans and compares safe repair loops", DotNetSolutionDoctorTests.PlansAndComparesSafeRepairLoops),
+    ("solution doctor history is bounded relative and atomic", DotNetSolutionDoctorTests.PersistsBoundedRelativeRepairHistory),
     ("loads legacy snapshot shape", LoadLegacySnapshotShape),
     ("session store scrubs removed rss and news extension data", SessionStoreScrubsRemovedInternetExtensions),
     ("normalizes provider base urls", NormalizeProviderBaseUrls),

@@ -4,12 +4,12 @@
   "generatedBy": "scripts/xaml-hardcoded-values.ps1",
   "trackedProperties": ["Margin", "Padding", "CornerRadius", "FontSize"],
   "properties": {
-    "Margin": 189,
+    "Margin": 186,
     "Padding": 133,
     "CornerRadius": 51,
     "FontSize": 114
   },
-  "total": 487,
+  "total": 484,
   "files": {
     "src/AIArena.Wpf/Shell/Dialogs/AiChoicePromptDialog.xaml": {
       "Margin": {
@@ -173,7 +173,6 @@
         "0,6,0,0": 1,
         "0,7,0,0": 6,
         "0,7,12,0": 1,
-        "0,8,-6,0": 3,
         "0,8,-6,8": 1,
         "0,8,0,-4": 1,
         "0,8,0,-6": 1,
