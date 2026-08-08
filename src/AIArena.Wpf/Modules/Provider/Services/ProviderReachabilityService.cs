@@ -387,6 +387,7 @@ public sealed class ProviderReachabilityService
         {
             ModelProviderApiModes.LmStudioNative => "Start LM Studio server",
             ModelProviderApiModes.OllamaNative => "Start Ollama server",
+            ModelProviderApiModes.LlamaCppNative => "Start llama-server",
             _ => "Start the provider server"
         };
         return $"Provider unreachable at {baseUrl}. {action} or check the base URL.";

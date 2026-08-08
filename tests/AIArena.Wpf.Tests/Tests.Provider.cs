@@ -524,6 +524,7 @@ static void ProviderRoutingKeepsCurrentNativeOptions()
 
     Require(ProviderSettingsCoordinator.NativeLifecycleAvailable(ModelProviderApiModes.LmStudioNative), "native lifecycle controls should enable in LM Studio native mode");
     Require(ProviderSettingsCoordinator.NativeLifecycleAvailable(ModelProviderApiModes.OllamaNative), "native lifecycle controls should enable in Ollama native mode");
+    Require(!ProviderSettingsCoordinator.NativeLifecycleAvailable(ModelProviderApiModes.LlamaCppNative), "legacy native lifecycle controls should stay disabled when the dedicated llama.cpp capability-driven card owns those actions");
     Require(!ProviderSettingsCoordinator.NativeLifecycleAvailable(ModelProviderApiModes.OpenAiCompatible), "native lifecycle controls should disable in OpenAI-compatible mode");
     Require(ProviderSettingsCoordinator.ShouldEnableNativeOptionControls(ModelProviderApiModes.LmStudioNative), "native option inputs should enable in LM Studio native mode");
     Require(ProviderSettingsCoordinator.ShouldEnableNativeOptionControls(ModelProviderApiModes.OllamaNative), "native option inputs should enable in Ollama native mode");
@@ -545,6 +546,10 @@ static void ProviderRoutingKeepsCurrentNativeOptions()
     Require(ollamaNativeControls.NativeOptionsEnabled, "Ollama native lifecycle state should enable native option inputs");
     Require(!ollamaNativeControls.StatefulChatEnabled, "Ollama native lifecycle state should not enable LM Studio stateful chat");
     Require(!ollamaNativeControls.QuantizationEnabled, "Ollama native lifecycle state should disable LM Studio quantization");
+    var llamaCppNativeControls = ProviderSettingsCoordinator.NativeLifecycleControlStateFor(ModelProviderApiModes.LlamaCppNative, "", isBusy: false);
+    Require(!llamaCppNativeControls.LifecycleControlsEnabled, "llama.cpp should not route through legacy preload or unload controls");
+    Require(!llamaCppNativeControls.DownloadControlsEnabled, "llama.cpp should not expose an unimplemented model download action");
+    Require(!llamaCppNativeControls.NativeOptionsEnabled, "llama.cpp startup-time runtime values should remain read-only in the legacy native-options editor");
 
     var ollamaExisting = new ModelProviderConfig
     {
@@ -565,6 +570,567 @@ static void ProviderRoutingKeepsCurrentNativeOptions()
     };
     Require(ProviderSettingsCoordinator.ProviderReadinessChanged(ollamaExisting, ollamaExisting.BaseUrl, ModelProviderApiModes.OllamaNative, ollamaExisting.ApiToken, ollamaExisting.Model, 8192, "low", true, 1200), "Ollama native readiness should reset on context changes");
     Require(!ProviderSettingsCoordinator.ProviderReadinessChanged(ollamaExisting, ollamaExisting.BaseUrl, ModelProviderApiModes.OllamaNative, ollamaExisting.ApiToken, ollamaExisting.Model, ollamaExisting.ContextLength, ollamaExisting.Reasoning, false, ollamaExisting.NativeIdleTtlSeconds), "Ollama native readiness should ignore LM Studio-only stateful chat changes");
+}
+
+static void LlamaCppSettingsRefreshPreservesRouterModelDiscovery()
+{
+    Require(ProviderSettingsCoordinator.ShouldUseCompatibleModelListFallback(ModelProviderApiModes.LmStudioNative), "LM Studio native catalog failure should use its compatible model-list fallback");
+    Require(ProviderSettingsCoordinator.ShouldUseCompatibleModelListFallback(ModelProviderApiModes.OllamaNative), "Ollama native catalog failure should use its compatible model-list fallback");
+    Require(!ProviderSettingsCoordinator.ShouldUseCompatibleModelListFallback(ModelProviderApiModes.LlamaCppNative), "llama.cpp model refresh must preserve native mode so router /models is probed before /v1/models");
+    Require(!ProviderSettingsCoordinator.ShouldUseCompatibleModelListFallback(ModelProviderApiModes.OpenAiCompatible), "compatible providers should not be rewritten through a native fallback path");
+
+    var existing = new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8080/v1",
+        ApiMode = ModelProviderApiModes.LlamaCppNative,
+        ApiToken = "local-token",
+        Model = "model.gguf",
+        ContextLength = 4096,
+        Reasoning = "",
+        NativeStatefulChat = true,
+        NativeIdleTtlSeconds = 0,
+        LastTestOk = true
+    };
+    Require(
+        !ProviderSettingsCoordinator.ProviderReadinessChanged(
+            existing,
+            existing.BaseUrl,
+            existing.ApiMode,
+            existing.ApiToken,
+            existing.Model,
+            contextLength: 32768,
+            reasoning: "high",
+            nativeStatefulChat: false,
+            nativeIdleTtlSeconds: 600),
+        "unsupported legacy native options must not invalidate llama.cpp readiness because they are not sent to llama-server");
+}
+
+static void LlamaCppRuntimeInspectionExtractsSafeObservedEvidence()
+{
+    const string privateModelPath = @"C:\Users\someone\private-models\qwen3-8b-Q4_K_M.gguf";
+    var handler = new TestHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        return path switch
+        {
+            "/health" => JsonResponse("""{  "status"  :  "ok"  }"""),
+            "/models" => JsonResponse("""
+                {
+                  "data": [{
+                    "id": "C:\\Users\\someone\\private-models\\qwen3-8b-Q4_K_M.gguf",
+                    "status": {
+                      "value": "loaded",
+                      "args": ["llama-server", "-m", "C:\\Users\\someone\\private-models\\qwen3-8b-Q4_K_M.gguf", "--ctx-size", "8192", "--gpu-layers=33", "--parallel", "2"]
+                    }
+                  }]
+                }
+                """),
+            "/v1/models" => JsonResponse("""
+                {
+                  "data" : [ {
+                    "id" : "qwen3-8b-Q4_K_M.gguf",
+                    "owned_by"     :     "llamacpp",
+                    "meta" : { "size_bytes" : 5368709120, "n_params" : 8000000000 }
+                  } ]
+                }
+                """),
+            "/props" => JsonResponse("""{"default_generation_settings":{"n_ctx":8192},"total_slots":2,"build_info":"llama.cpp b7000","is_sleeping":false}"""),
+            "/slots" => JsonResponse("""[{"id":0,"is_processing":true,"n_ctx":8192,"next_token":{"n_decoded":24},"timings":{"predicted_per_second":48.5}},{"id":1,"is_processing":false,"n_ctx":8192}]"""),
+            _ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+        };
+    });
+    var service = new LlamaCppRuntimeService(new HttpClient(handler));
+    var snapshot = service.InspectAsync(new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8080/v1",
+        ApiMode = ModelProviderApiModes.LlamaCppNative,
+        ApiToken = "runtime-token",
+        Model = "qwen3-8b-Q4_K_M.gguf",
+        Timeout = 5
+    }).GetAwaiter().GetResult();
+
+    Require(snapshot.Available && snapshot.Ready && snapshot.IsLlamaCpp, $"llama.cpp runtime should be identified and ready: {snapshot.Error}");
+    Require(snapshot.RouterMode && snapshot.Loaded == true, "router model status should identify a loaded model");
+    Require(snapshot.BuildInfo == "llama.cpp b7000", "llama.cpp build evidence mismatch");
+    Require(snapshot.Model == "qwen3-8b-Q4_K_M.gguf", "runtime model should use a safe identifier rather than a filesystem path");
+    Require(snapshot.Quantization == "Q4_K_M", "GGUF quantization should be labelled as identifier-derived evidence");
+    Require(snapshot.ContextLength == 8192 && snapshot.GpuLayers == 33, "router startup arguments should expose observed context and GPU layers");
+    Require(snapshot.SlotCount == 2 && snapshot.BusySlots == 1, "slot capacity evidence mismatch");
+    Require(snapshot.Sleeping == false, "sleeping evidence mismatch");
+    Require(snapshot.ModelSizeBytes == 5368709120 && snapshot.ParameterCount == 8000000000, "model metadata evidence mismatch");
+    Require(snapshot.MemoryBytes is null, "runtime inspection must not invent memory usage from model file size");
+    Require(Math.Abs(snapshot.TokensPerSecond.GetValueOrDefault() - 48.5) < 0.001, "slot throughput evidence mismatch");
+    Require(snapshot.Capabilities.Health && snapshot.Capabilities.OpenAiModels && snapshot.Capabilities.Props && snapshot.Capabilities.Slots, "available runtime capabilities should be explicit");
+    Require(snapshot.Capabilities.RouterModels && snapshot.Capabilities.ModelLifecycle, "router evidence should enable model lifecycle capability");
+    Require(snapshot.Warnings.Count == 0, $"complete runtime evidence should not produce warnings: {string.Join(" | ", snapshot.Warnings)}");
+    Require(handler.Requests.Count == 5, "runtime inspection should use the bounded health/models/props/slots probe set");
+    Require(handler.Requests.Where(uri => uri.AbsolutePath is "/props" or "/slots").All(uri => uri.Query.Contains("autoload=false", StringComparison.Ordinal)), "router telemetry probes must not silently autoload a model");
+    Require(handler.AuthorizationHeaders.All(header => header == "Bearer runtime-token"), "runtime probes should retain configured bearer authorization");
+    var renderedEvidence = JsonSerializer.Serialize(snapshot);
+    Require(!renderedEvidence.Contains(privateModelPath, StringComparison.OrdinalIgnoreCase), "runtime evidence must not retain an absolute model path");
+    Require(!renderedEvidence.Contains("private-models", StringComparison.OrdinalIgnoreCase), "runtime evidence must not retain private path segments from router arguments");
+
+    static HttpResponseMessage JsonResponse(string body) => new(System.Net.HttpStatusCode.OK)
+    {
+        Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
+    };
+}
+
+static void LlamaCppRuntimeInspectionDegradesOptionalEndpointsIndependently()
+{
+    var handler = new TestHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        return path switch
+        {
+            "/health" => JsonResponse("""{"status":"ok"}"""),
+            "/models" => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound),
+            "/v1/models" => JsonResponse("""
+                {
+                  "data": [
+                    { "id": "single-model.gguf", "owned_by" :  "llama.cpp" }
+                  ]
+                }
+                """),
+            "/props" => JsonResponse("{"),
+            "/slots" => new HttpResponseMessage(System.Net.HttpStatusCode.NotImplemented),
+            _ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+        };
+    });
+    var snapshot = new LlamaCppRuntimeService(new HttpClient(handler)).InspectAsync(new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8080/v1",
+        ApiMode = ModelProviderApiModes.LlamaCppNative,
+        Model = "single-model.gguf",
+        Timeout = 5
+    }).GetAwaiter().GetResult();
+
+    Require(snapshot.Available && snapshot.Ready && snapshot.IsLlamaCpp, "valid health and structured owned_by evidence should survive missing optional endpoints");
+    Require(!snapshot.RouterMode && snapshot.Capabilities.OpenAiModels, "single-model inventory should remain available without implying router mode");
+    Require(!snapshot.Capabilities.Props && !snapshot.Capabilities.Slots && !snapshot.Capabilities.ModelLifecycle, "unreadable or unsupported optional endpoints must disable only their capabilities");
+    Require(snapshot.Error == "", "optional capability failures must not become a global runtime error");
+    Require(snapshot.Warnings.Any(value => value.Contains("properties returned unreadable JSON", StringComparison.OrdinalIgnoreCase)), "malformed props should produce a bounded capability warning");
+    Require(snapshot.Warnings.Any(value => value.Contains("Slot telemetry is not exposed", StringComparison.OrdinalIgnoreCase)), "unsupported slots should remain explicit");
+
+    var malformedModelsHandler = new TestHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        return path switch
+        {
+            "/health" => JsonResponse("""{"status":"ok"}"""),
+            "/models" or "/v1/models" => JsonResponse("{"),
+            "/props" => JsonResponse("""{"build_info":"llama.cpp b7001","total_slots":1}"""),
+            "/slots" => JsonResponse("[]"),
+            _ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+        };
+    });
+    var partial = new LlamaCppRuntimeService(new HttpClient(malformedModelsHandler)).InspectAsync(new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8080/v1",
+        ApiMode = ModelProviderApiModes.LlamaCppNative,
+        Model = "configured-model.gguf",
+        Timeout = 5
+    }).GetAwaiter().GetResult();
+    Require(partial.Available && partial.BuildInfo == "llama.cpp b7001", "valid props evidence should survive malformed model inventories");
+    Require(partial.Warnings.Count(value => value.Contains("unreadable JSON", StringComparison.OrdinalIgnoreCase)) >= 2, "each malformed model capability should be reported independently");
+
+    static HttpResponseMessage JsonResponse(string body) => new(System.Net.HttpStatusCode.OK)
+    {
+        Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
+    };
+}
+
+static void LlamaCppRuntimeContinuesAfterOptionalTransportFailure()
+{
+    var handler = new TestHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        return path switch
+        {
+            "/health" => JsonResponse("""{"status":"ok"}"""),
+            "/models" => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound),
+            "/v1/models" => JsonResponse("""{"data":[{"id":"transport-model.gguf","owned_by":"llamacpp"}]}"""),
+            "/props" => throw new HttpRequestException("simulated props connection reset"),
+            "/slots" => JsonResponse("""[{"id":0,"is_processing":true,"n_ctx":4096,"timings":{"predicted_per_second":22.5}}]"""),
+            _ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+        };
+    });
+
+    var snapshot = new LlamaCppRuntimeService(new HttpClient(handler)).InspectAsync(LlamaRuntimeConfig("transport-model.gguf"))
+        .GetAwaiter()
+        .GetResult();
+
+    Require(snapshot.Available && snapshot.Ready, "a thrown optional props request must not discard valid health and model evidence");
+    Require(!snapshot.Capabilities.Props && snapshot.Capabilities.Slots, "the failed transport should disable only props capability");
+    Require(snapshot.Slots.Count == 1 && snapshot.BusySlots == 1, "slot evidence after the thrown props request should still be retained");
+    Require(snapshot.Error == "", "an optional transport failure must not become a global runtime failure");
+    Require(snapshot.Warnings.Any(value => value.Contains("Runtime properties unavailable", StringComparison.OrdinalIgnoreCase)
+        && value.Contains("connection reset", StringComparison.OrdinalIgnoreCase)), "the thrown transport failure should remain visible as a capability warning");
+    Require(handler.Requests.Last().AbsolutePath == "/slots", "inspection must continue to later probes after an optional transport exception");
+
+    static HttpResponseMessage JsonResponse(string body) => new(System.Net.HttpStatusCode.OK)
+    {
+        Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
+    };
+}
+
+static void LlamaCppRuntimeGivesEachOptionalProbeAnIndependentTimeout()
+{
+    Require(LlamaCppRuntimeService.ProbeTimeoutSeconds(0) == 1, "runtime probes should retain the one-second minimum timeout");
+    Require(LlamaCppRuntimeService.ProbeTimeoutSeconds(3) == 3, "short configured timeouts should be preserved per probe");
+    Require(LlamaCppRuntimeService.ProbeTimeoutSeconds(30) == 5, "long generation timeouts should not make five runtime probes block for minutes");
+
+    var handler = new AsyncProbeHttpMessageHandler(async (request, cancellationToken) =>
+    {
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        if (path == "/props")
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("timed-out props probe unexpectedly resumed");
+        }
+
+        return path switch
+        {
+            "/health" => JsonResponse("""{"status":"ok"}"""),
+            "/models" => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound),
+            "/v1/models" => JsonResponse("""{"data":[{"id":"timeout-model.gguf","owned_by":"llama.cpp"}]}"""),
+            "/slots" => JsonResponse("""[{"id":0,"is_processing":false,"n_ctx":8192}]"""),
+            _ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+        };
+    });
+    var config = LlamaRuntimeConfig("timeout-model.gguf", timeoutSeconds: 1);
+    var snapshot = new LlamaCppRuntimeService(new HttpClient(handler)).InspectAsync(config)
+        .GetAwaiter()
+        .GetResult();
+
+    Require(snapshot.Available && snapshot.Ready, "an optional per-probe timeout must preserve valid runtime evidence");
+    Require(!snapshot.Capabilities.Props && snapshot.Capabilities.Slots, "a timed-out props probe must not cancel the later slots probe");
+    Require(snapshot.Slots.Count == 1, "slot evidence should survive the earlier per-probe timeout");
+    Require(snapshot.Warnings.Any(value => value.Contains("Runtime properties unavailable", StringComparison.OrdinalIgnoreCase)
+        && value.Contains("Timed out", StringComparison.OrdinalIgnoreCase)), "the optional timeout should be reported as a bounded capability warning");
+    Require(handler.Requests.Last().AbsolutePath == "/slots", "a per-probe timeout token must not remain canceled for subsequent endpoints");
+
+    var callerCancellationHandler = new AsyncProbeHttpMessageHandler(async (_, cancellationToken) =>
+    {
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        throw new InvalidOperationException("caller-canceled runtime probe unexpectedly resumed");
+    });
+    using var callerCancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(40));
+    try
+    {
+        _ = new LlamaCppRuntimeService(new HttpClient(callerCancellationHandler))
+            .InspectAsync(config, callerCancellation.Token)
+            .GetAwaiter()
+            .GetResult();
+        throw new InvalidOperationException("runtime inspection converted caller cancellation into partial evidence");
+    }
+    catch (OperationCanceledException) when (callerCancellation.IsCancellationRequested)
+    {
+    }
+
+    static HttpResponseMessage JsonResponse(string body) => new(System.Net.HttpStatusCode.OK)
+    {
+        Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
+    };
+}
+
+static void LlamaCppRuntimeContinuesAfterOversizedOptionalResponse()
+{
+    var handler = new TestHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        if (path == "/models")
+        {
+            var oversized = new StreamContent(new CountingReadStream((1024 * 1024) + 8192));
+            oversized.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = oversized };
+        }
+
+        return path switch
+        {
+            "/health" => JsonResponse("""{"status":"ok"}"""),
+            "/v1/models" => JsonResponse("""{"data":[{"id":"bounded-model.gguf","owned_by":"llamacpp"}]}"""),
+            "/props" => JsonResponse("""{"build_info":"llama.cpp bounded-test","total_slots":1}"""),
+            "/slots" => JsonResponse("[]"),
+            _ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+        };
+    });
+
+    var snapshot = new LlamaCppRuntimeService(new HttpClient(handler)).InspectAsync(LlamaRuntimeConfig("bounded-model.gguf"))
+        .GetAwaiter()
+        .GetResult();
+
+    Require(snapshot.Available && snapshot.Ready, "an oversized optional router response must not discard later compatible evidence");
+    Require(!snapshot.RouterMode && snapshot.Capabilities.OpenAiModels, "the rejected oversized router inventory should degrade independently");
+    Require(snapshot.Capabilities.Props && snapshot.Capabilities.Slots, "later props and slots probes should still complete after bounded-body rejection");
+    Require(snapshot.BuildInfo == "llama.cpp bounded-test", "valid props evidence after the oversized response should be retained");
+    Require(snapshot.Error == "", "an oversized optional response must not become a global failure when other evidence identifies llama.cpp");
+    Require(snapshot.Warnings.Any(value => value.Contains("Router model inventory unavailable", StringComparison.OrdinalIgnoreCase)
+        && value.Contains("safety limit", StringComparison.OrdinalIgnoreCase)), "bounded-body rejection should remain visible as a capability warning");
+    Require(handler.Requests.Select(uri => uri.AbsolutePath).SequenceEqual(["/health", "/models", "/v1/models", "/props", "/slots"]), "oversized optional evidence must not stop the remaining bounded probe sequence");
+
+    static HttpResponseMessage JsonResponse(string body) => new(System.Net.HttpStatusCode.OK)
+    {
+        Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
+    };
+}
+
+static ModelProviderConfig LlamaRuntimeConfig(string model, int timeoutSeconds = 5)
+{
+    return new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8080/v1",
+        ApiMode = ModelProviderApiModes.LlamaCppNative,
+        Model = model,
+        Timeout = timeoutSeconds
+    };
+}
+
+static void LlamaCppRuntimeLifecycleIsCapabilitySafeAndCancelable()
+{
+    const string privateModelPath = @"C:\Users\someone\models\router-model.gguf";
+    var loadHandler = new TestHttpMessageHandler(request => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+    {
+        Content = new StringContent("""{"success":true}""", System.Text.Encoding.UTF8, "application/json")
+    });
+    var config = new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8080/v1",
+        ApiMode = ModelProviderApiModes.LlamaCppNative,
+        ApiToken = "lifecycle-token",
+        Timeout = 5
+    };
+    var loaded = new LlamaCppRuntimeService(new HttpClient(loadHandler))
+        .LoadAsync(config, privateModelPath)
+        .GetAwaiter()
+        .GetResult();
+    Require(loaded.Supported && loaded.Ok, $"supported router load should succeed: {loaded.Error}");
+    Require(loaded.Model == "router-model.gguf", "lifecycle result must not expose an absolute model path");
+    Require(loadHandler.Requests.Single().AbsolutePath == "/models/load", "load should use the official router lifecycle endpoint");
+    Require(loadHandler.AuthorizationHeaders.Single() == "Bearer lifecycle-token", "lifecycle requests should retain bearer authorization");
+    Require(loadHandler.Bodies.Single().Contains(privateModelPath.Replace("\\", "\\\\"), StringComparison.Ordinal), "lifecycle request should preserve the exact server model identifier");
+
+    var mappedHandler = new TestHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        if (request.Method == HttpMethod.Post && path == "/models/load")
+        {
+            return JsonResponse("""{"success":true}""");
+        }
+
+        return path switch
+        {
+            "/health" => JsonResponse("""{"status":"ok"}"""),
+            "/models" => JsonResponse("""{"data":[{"id":"C:\\Users\\someone\\models\\router-model.gguf","status":{"value":"unloaded"}}]}"""),
+            "/v1/models" => JsonResponse("""{"data":[]}"""),
+            "/props" => JsonResponse("""{"build_info":"llama.cpp test"}"""),
+            "/slots" => JsonResponse("[]"),
+            _ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+        };
+    });
+    var mappedService = new LlamaCppRuntimeService(new HttpClient(mappedHandler));
+    var mappedSnapshot = mappedService.InspectAsync(config).GetAwaiter().GetResult();
+    var mappedLoad = mappedService.LoadAsync(config, mappedSnapshot.Model).GetAwaiter().GetResult();
+    Require(mappedLoad.Ok, "a safe displayed model id should resolve back to the inspected router identifier for lifecycle requests");
+    Require(mappedHandler.Bodies.Last().Contains(privateModelPath.Replace("\\", "\\\\"), StringComparison.Ordinal), "lifecycle mapping should keep private router paths in transport only, not presentation evidence");
+
+    var unsupportedHandler = new TestHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+    var unsupported = new LlamaCppRuntimeService(new HttpClient(unsupportedHandler))
+        .UnloadAsync(config, "router-model.gguf")
+        .GetAwaiter()
+        .GetResult();
+    Require(!unsupported.Supported && !unsupported.Ok, "missing router lifecycle endpoints should be reported as unsupported");
+
+    var cancellationHandler = new CancellationBlockingHttpMessageHandler();
+    var cancellationService = new LlamaCppRuntimeService(new HttpClient(cancellationHandler));
+    using var cancellation = new CancellationTokenSource();
+    var pending = cancellationService.LoadAsync(config, "router-model.gguf", cancellation.Token);
+    Require(cancellationHandler.Started.Task.Wait(TimeSpan.FromSeconds(2)), "cancelable lifecycle request did not start");
+    cancellation.Cancel();
+    try
+    {
+        _ = pending.GetAwaiter().GetResult();
+        throw new InvalidOperationException("llama.cpp lifecycle converted caller cancellation into an action result");
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+    }
+
+    static HttpResponseMessage JsonResponse(string body) => new(System.Net.HttpStatusCode.OK)
+    {
+        Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
+    };
+}
+
+static void LlamaCppRuntimePresentationFormatsOnlyObservedEvidence()
+{
+    var checkedAt = new DateTimeOffset(2026, 8, 2, 10, 30, 0, TimeSpan.Zero);
+    var evidence = new LlamaCppRuntimePresentationInput(
+        Available: true,
+        Ready: true,
+        Status: "ok",
+        BuildInfo: "llama.cpp b6123",
+        Model: "qwen3-8b-q4_k_m.gguf",
+        Quantization: "Q4_K_M",
+        ContextLength: 32768,
+        GpuLayers: 33,
+        SlotCount: 4,
+        BusySlots: 1,
+        Sleeping: false,
+        RouterMode: true,
+        Loaded: true,
+        MemoryBytes: 8L * 1024 * 1024 * 1024,
+        ModelSizeBytes: 5L * 1024 * 1024 * 1024,
+        ParameterCount: 8_000_000_000,
+        TokensPerSecond: 51.25,
+        ModelLifecycleAvailable: true,
+        Warnings: ["Slot telemetry is partial."],
+        Error: "",
+        CheckedAt: checkedAt);
+    var state = LlamaCppRuntimePresentation.FromEvidence(evidence);
+
+    Require(state.Build == "llama.cpp b6123", "llama.cpp build evidence should be displayed verbatim");
+    Require(state.Model == "qwen3-8b-q4_k_m.gguf", "llama.cpp selected model evidence should be displayed");
+    Require(state.Quantization == "Q4_K_M", "llama.cpp quantization should be displayed only when observed");
+    Require(state.Context == "32.8k tokens", "llama.cpp context should use deterministic compact formatting");
+    Require(state.GpuLayers == "33", "llama.cpp GPU-layer evidence should be displayed");
+    Require(state.Slots == "1 busy / 4 total", "llama.cpp slot evidence should distinguish busy and total slots");
+    Require(state.Memory.Contains("8 GiB runtime", StringComparison.Ordinal), "binary runtime bytes should be accurately labelled as GiB runtime evidence");
+    Require(state.Memory.Contains("5 GiB file", StringComparison.Ordinal), "binary model bytes should be accurately labelled as GiB file size rather than memory usage");
+    Require(state.Memory.Contains("8B params", StringComparison.Ordinal), "reported parameter count should stay separately labelled");
+    Require(state.Throughput == "51.3 tok/s", "llama.cpp throughput should use deterministic one-decimal formatting");
+    Require(state.Warning == "Slot telemetry is partial.", "runtime capability warnings should remain visible");
+    Require(state.WarningBrushKey == "BetaAccentBrush", "partial optional runtime evidence should use warning rather than failure styling");
+    var saturated = LlamaCppRuntimePresentation.FromEvidence(evidence with { GpuLayers = -1, BusySlots = 4 });
+    Require(saturated.GpuLayers == "All", "the llama.cpp all-GPU-layers sentinel should remain observed evidence");
+    Require(saturated.Warning.Contains("All reported llama.cpp slots are busy", StringComparison.Ordinal), "observed slot saturation should surface a bounded capacity warning");
+
+    var unavailable = LlamaCppRuntimePresentation.FromEvidence(new LlamaCppRuntimePresentationInput(
+        Available: false,
+        Ready: false,
+        Status: "unavailable",
+        BuildInfo: "",
+        Model: "",
+        Quantization: "",
+        ContextLength: null,
+        GpuLayers: null,
+        SlotCount: null,
+        BusySlots: null,
+        Sleeping: null,
+        RouterMode: null,
+        Loaded: null,
+        MemoryBytes: null,
+        ModelSizeBytes: null,
+        ParameterCount: null,
+        TokensPerSecond: null,
+        ModelLifecycleAvailable: false,
+        Warnings: [],
+        Error: "Connection refused.",
+        CheckedAt: checkedAt));
+    foreach (var value in new[]
+             {
+                 unavailable.Build,
+                 unavailable.Model,
+                 unavailable.Quantization,
+                 unavailable.Context,
+                 unavailable.GpuLayers,
+                 unavailable.Slots,
+                 unavailable.Memory,
+                 unavailable.Throughput
+             })
+    {
+        Require(value == LlamaCppRuntimePresentation.NotReported, "missing llama.cpp evidence must say Not reported rather than inventing a value");
+    }
+
+    Require(unavailable.Warning.Contains("Connection refused.", StringComparison.Ordinal), "inspection failure should remain visible as explicit evidence");
+    Require(unavailable.WarningBrushKey == "DangerTextBrush", "unavailable runtime evidence should retain failure styling");
+}
+
+static void LlamaCppRuntimePresentationGatesRouterLifecycleActions()
+{
+    LlamaCppRuntimePresentationInput Evidence(bool available, bool router, bool lifecycle, bool? loaded, string model = "model.gguf") => new(
+        available,
+        available,
+        available ? "ok" : "unavailable",
+        "",
+        model,
+        "",
+        null,
+        null,
+        null,
+        null,
+        null,
+        router,
+        loaded,
+        null,
+        null,
+        null,
+        null,
+        lifecycle,
+        [],
+        "",
+        DateTimeOffset.UtcNow);
+
+    var unloaded = LlamaCppRuntimePresentation.FromEvidence(Evidence(true, true, true, false));
+    Require(unloaded.PreloadEnabled && !unloaded.UnloadEnabled, "an inspected unloaded router model should enable only preload");
+    var loaded = LlamaCppRuntimePresentation.FromEvidence(Evidence(true, true, true, true));
+    Require(!loaded.PreloadEnabled && loaded.UnloadEnabled, "an inspected loaded router model should enable only unload");
+    var noRouter = LlamaCppRuntimePresentation.FromEvidence(Evidence(true, false, true, false));
+    Require(!noRouter.PreloadEnabled && !noRouter.UnloadEnabled, "single-model llama-server should not imply router lifecycle support");
+    var unsupported = LlamaCppRuntimePresentation.FromEvidence(Evidence(true, true, false, false));
+    Require(!unsupported.PreloadEnabled && !unsupported.UnloadEnabled, "missing lifecycle capability should disable both model actions");
+    var noModel = LlamaCppRuntimePresentation.FromEvidence(Evidence(true, true, true, false, ""));
+    Require(!noModel.PreloadEnabled && !noModel.UnloadEnabled, "lifecycle actions should require an observed selected model");
+    var busy = LlamaCppRuntimePresentation.FromEvidence(Evidence(true, true, true, true), isBusy: true);
+    Require(!busy.InspectEnabled && !busy.ReconnectEnabled && !busy.PreloadEnabled && !busy.UnloadEnabled, "all llama.cpp controls should disable while another operation is running");
+    Require(LlamaCppRuntimePresentation.IsVisible(ModelProviderApiModes.LlamaCppNative), "runtime card should show in llama.cpp native mode");
+    Require(!LlamaCppRuntimePresentation.IsVisible(ModelProviderApiModes.OpenAiCompatible), "runtime card should stay hidden in generic compatible mode");
+}
+
+static void LlamaCppSettingsSurfaceStaysCapabilityDrivenAndAccessible()
+{
+    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var coordinator = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/LlamaCppRuntimeCoordinator.cs"));
+    var providerSettings = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ProviderSettingsCoordinator.cs"));
+    Require(xaml.Contains("Content=\"llama.cpp\" Tag=\"llama_cpp\"", StringComparison.Ordinal), "provider presets should expose llama.cpp");
+    Require(xaml.Contains("Tag=\"llamacpp_native\"", StringComparison.Ordinal), "API modes should expose llama.cpp native mode");
+    Require(providerSettings.Contains("http://127.0.0.1:8080/v1", StringComparison.Ordinal), "llama.cpp preset should use the documented local llama-server port");
+
+    var cardStart = xaml.IndexOf("x:Name=\"LlamaCppRuntimeStatusCard\"", StringComparison.Ordinal);
+    var localToolsStart = xaml.IndexOf("x:Name=\"ProviderLocalModelToolsExpander\"", StringComparison.Ordinal);
+    var advancedStart = xaml.IndexOf("x:Name=\"ProviderAdvancedCallsExpander\"", StringComparison.Ordinal);
+    Require(localToolsStart >= 0 && cardStart > localToolsStart && cardStart < advancedStart, "llama.cpp runtime evidence should live inside Local model tools");
+    var cardMarkup = xaml[cardStart..advancedStart];
+    foreach (var name in new[]
+             {
+                 "LlamaCppRuntimeBuildValue",
+                 "LlamaCppRuntimeModelValue",
+                 "LlamaCppRuntimeQuantizationValue",
+                 "LlamaCppRuntimeContextValue",
+                 "LlamaCppRuntimeGpuLayersValue",
+                 "LlamaCppRuntimeSlotsValue",
+                 "LlamaCppRuntimeMemoryValue",
+                 "LlamaCppRuntimeThroughputValue"
+             })
+    {
+        Require(cardMarkup.Contains($"<TextBlock x:Name=\"{name}\"", StringComparison.Ordinal), $"{name} should be read-only evidence");
+        Require(!cardMarkup.Contains($"<TextBox x:Name=\"{name}\"", StringComparison.Ordinal), $"{name} must not imply editable runtime ownership");
+    }
+
+    foreach (var name in new[] { "LlamaCppInspectButton", "LlamaCppReconnectButton", "LlamaCppPreloadButton", "LlamaCppUnloadButton" })
+    {
+        var buttonStart = cardMarkup.IndexOf($"x:Name=\"{name}\"", StringComparison.Ordinal);
+        Require(buttonStart >= 0, $"{name} should exist");
+        var buttonEnd = cardMarkup.IndexOf('>', buttonStart);
+        var buttonMarkup = cardMarkup[buttonStart..buttonEnd];
+        Require(buttonMarkup.Contains("AutomationProperties.Name=", StringComparison.Ordinal), $"{name} should expose an automation name");
+        Require(buttonMarkup.Contains("ToolTip=", StringComparison.Ordinal), $"{name} should explain its operation and unsupported state");
+    }
+
+    Require(coordinator.Contains("Capabilities.ModelLifecycle", StringComparison.Ordinal), "lifecycle action enablement should consume inspected capability evidence");
+    Require(coordinator.Contains("AI Arena does not start or restart the llama-server process", StringComparison.Ordinal), "reconnect help should truthfully preserve user ownership of llama-server");
+    Require(coordinator.Contains("AutomationProperties.SetHelpText", StringComparison.Ordinal), "runtime evidence and actions should expose dynamic automation help");
+    Require(coordinator.Contains("Model load and unload endpoints are unsupported", StringComparison.Ordinal), "unsupported lifecycle endpoints should remain explicit instead of silently failing");
 }
 
 static void AutoConfigureLowVramSingleModel()
@@ -1468,6 +2034,55 @@ static void AutoConfigureOllamaNativeIgnoresLmStudioDefaultEndpoint()
     Require(handler.Requests.Any(uri => uri.Port == 11434 && uri.AbsolutePath.EndsWith("/api/tags", StringComparison.OrdinalIgnoreCase)), "Ollama native mode should probe Ollama's native tags endpoint");
 }
 
+static void AutoConfigureLlamaNativeStaysOnConfiguredEndpoint()
+{
+    Require(ProviderAutoConfigureService.ProviderModeLabel(ModelProviderApiModes.LlamaCppNative) == "llama.cpp native", "llama.cpp plans need an honest provider-mode label");
+    Require(!ProviderAutoConfigureService.ShouldProbeLmStudioNative("http://127.0.0.1:1234/v1", ModelProviderApiModes.LlamaCppNative), "explicit llama.cpp mode must never opportunistically probe LM Studio native metadata");
+
+    var handler = new TestHttpMessageHandler(request =>
+    {
+        var port = request.RequestUri?.Port ?? 0;
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        if (port == 8080 && path == "/models")
+        {
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"data":[{"id":"llama-router-8b-q4.gguf","status":{"value":"unloaded"}}]}""", System.Text.Encoding.UTF8, "application/json")
+            };
+        }
+
+        if (port == 1234)
+        {
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"data":[{"id":"wrong-lm-studio-model"}]}""", System.Text.Encoding.UTF8, "application/json")
+            };
+        }
+
+        return new HttpResponseMessage(System.Net.HttpStatusCode.NotFound);
+    });
+    var httpClient = new HttpClient(handler);
+    var service = new ProviderAutoConfigureService(
+        new ModelProviderHealthService(httpClient),
+        new LmStudioModelCatalogService(httpClient),
+        new OllamaModelCatalogService(httpClient));
+
+    var plan = service
+        .DetectAsync("http://127.0.0.1:8080/v1", "balanced", ModelProviderApiModes.LlamaCppNative)
+        .GetAwaiter()
+        .GetResult();
+
+    Require(plan.ProviderOnline, "the configured llama.cpp router inventory should make auto configure available");
+    Require(plan.ApiMode == ModelProviderApiModes.LlamaCppNative, "llama.cpp auto configure must preserve the selected API mode");
+    Require(plan.ProviderBaseUrl == "http://127.0.0.1:8080/v1", "llama.cpp auto configure must preserve the configured endpoint");
+    Require(plan.Models.Any(model => model.Name == "llama-router-8b-q4.gguf"), "llama.cpp router models should drive recommendations");
+    Require(!plan.Models.Any(model => model.Name == "wrong-lm-studio-model"), "LM Studio defaults must not bleed into explicit llama.cpp recommendations");
+    Require(handler.Requests.Count > 0 && handler.Requests.All(uri => uri.Port == 8080), "explicit llama.cpp mode should probe only the configured llama-server endpoint");
+    Require(
+        ProviderSettingsCoordinator.AutoConfigureProviderLabel(plan) == "Provider: http://127.0.0.1:8080/v1 - llama.cpp native.",
+        "auto-configure UI label should derive from plan.ApiMode instead of classifying every non-LM plan as OpenAI-compatible");
+}
+
 static void AutoConfigureDetectsLmStudioNativeCatalogOnDefaultEndpoint()
 {
     Require(ProviderAutoConfigureService.ShouldProbeLmStudioNative("http://127.0.0.1:1234/v1", ModelProviderApiModes.OpenAiCompatible), "LM Studio default endpoint should opportunistically probe native catalog");
@@ -2020,6 +2635,24 @@ private static AIArenaProviderConfigurationPatch ProviderControlPatch(
         nativeIdleTtlSeconds,
         roleModels ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
         refreshModels);
+}
+
+private sealed class AsyncProbeHttpMessageHandler(
+    Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond) : HttpMessageHandler
+{
+    public List<Uri> Requests { get; } = [];
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        if (request.RequestUri is not null)
+        {
+            Requests.Add(request.RequestUri);
+        }
+
+        return respond(request, cancellationToken);
+    }
 }
 
 }

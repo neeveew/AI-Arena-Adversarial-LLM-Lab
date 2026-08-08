@@ -843,6 +843,8 @@ internal sealed class ProviderSettingsCoordinator
         var nativeAvailable = state.NativeAvailable;
         var modeHint = state.IsBusy
             ? busyHint
+            : ModelProviderApiModes.IsLlamaCppNative(apiMode)
+            ? "Use the llama.cpp runtime card above; lifecycle controls appear only after router support is inspected."
             : nativeAvailable
             ? NativeLifecycleHint(apiMode)
             : "Switch API mode to LM Studio native or Ollama native to use model lifecycle controls.";
@@ -862,6 +864,8 @@ internal sealed class ProviderSettingsCoordinator
             : "Switch API mode to LM Studio native to choose a quantization.";
         var nativeOptionsHint = state.IsBusy
             ? busyHint
+            : ModelProviderApiModes.IsLlamaCppNative(apiMode)
+            ? "llama.cpp context and GPU-layer values are startup-time server settings; inspect their read-only runtime evidence above."
             : nativeAvailable
             ? NativeOptionsHint(apiMode)
             : "Switch API mode to LM Studio native or Ollama native to edit native-only options.";
@@ -887,7 +891,10 @@ internal sealed class ProviderSettingsCoordinator
 
     internal static bool NativeLifecycleAvailable(string apiMode)
     {
-        return ModelProviderApiModes.IsNative(apiMode);
+        // These are the legacy controls below the dedicated llama.cpp runtime
+        // card. llama.cpp lifecycle calls are capability-detected there.
+        return ModelProviderApiModes.IsLmStudioNative(apiMode)
+            || ModelProviderApiModes.IsOllamaNative(apiMode);
     }
 
     internal static bool ShouldEnableDownloadStatusButton(string apiMode, string jobId)
@@ -1316,10 +1323,10 @@ internal sealed class ProviderSettingsCoordinator
                 nativeCatalogError = ollamaCatalog.Error;
             }
 
-            // Native discovery already ran above. If it is unavailable, make one
-            // explicit OpenAI-compatible fallback instead of repeating the same
-            // native endpoint two more times.
-            var listConfig = ModelProviderApiModes.IsNative(config.ApiMode)
+            // LM Studio/Ollama native discovery already ran above. If it is
+            // unavailable, make one explicit compatible fallback. llama.cpp must
+            // keep its mode so ModelProviderClient can probe router /models first.
+            var listConfig = ShouldUseCompatibleModelListFallback(config.ApiMode)
                 ? new CoreModelProviderConfig
                 {
                     BaseUrl = config.BaseUrl,
@@ -1393,6 +1400,13 @@ internal sealed class ProviderSettingsCoordinator
         {
             isRefreshingModels = false;
         }
+    }
+
+    internal static bool ShouldUseCompatibleModelListFallback(string apiMode)
+    {
+        var normalized = ModelProviderApiModes.Normalize(apiMode);
+        return normalized.Equals(ModelProviderApiModes.LmStudioNative, StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase);
     }
 
     public (string BaseUrl, string ApiMode, string Model, IReadOnlyDictionary<string, string> RoleModels) CaptureProviderProfile()
@@ -1531,6 +1545,31 @@ internal sealed class ProviderSettingsCoordinator
         return ModelProviderApiModes.Normalize(ShellUiHelpers.SelectedComboTag(providerApiModePicker, ModelProviderApiModes.OpenAiCompatible));
     }
 
+    public CoreModelProviderConfig CaptureRuntimeConfig()
+    {
+        var timeout = int.TryParse(
+            providerTimeoutText.Text.Trim(),
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var parsedTimeout)
+            ? Math.Clamp(parsedTimeout, 1, 30)
+            : 5;
+        return new CoreModelProviderConfig
+        {
+            BaseUrl = providerBaseUrlText.Text.Trim(),
+            ApiMode = CurrentApiMode(),
+            ApiToken = CurrentProviderApiTokenText(),
+            Model = providerModelText.Text.Trim(),
+            Timeout = timeout,
+            ContextLength = CurrentProviderContextLength(),
+            Reasoning = ModelProviderReasoningModes.Normalize(ShellUiHelpers.SelectedComboTag(providerReasoningPicker, "")),
+            NativeStatefulChat = providerNativeStatefulChatCheckBox.IsChecked == true,
+            NativeIdleTtlSeconds = TryNormalizeProviderNativeIdleTtlSeconds(providerNativeIdleTtlText.Text, out var idleTtl)
+                ? idleTtl
+                : 0
+        };
+    }
+
     public static void SaveRoleModelConfig(
         IDictionary<string, CoreModelProviderConfig> configs,
         string key,
@@ -1663,6 +1702,7 @@ internal sealed class ProviderSettingsCoordinator
 
     private void PopulateAutoConfigurePlan(ProviderAutoConfigurePlan plan)
     {
+        var providerModeLabel = ProviderAutoConfigureService.ProviderModeLabel(plan.ApiMode);
         autoConfigureRecommendationItems.Children.Clear();
         autoConfigureStatusText.Foreground = plan.ProviderOnline
             ? resourceBrush("AlphaAccentBrush")
@@ -1671,7 +1711,7 @@ internal sealed class ProviderSettingsCoordinator
             ? $"Detected {plan.Models.Count} chat model(s). Strategy: {DisplayAutoConfigureStrategy(plan.Strategy)}."
             : "Provider offline or no advertised models found.";
         autoConfigureHardwareText.Text = FormatHardwareSummary(plan.Hardware);
-        autoConfigureProviderText.Text = $"Provider: {plan.ProviderBaseUrl} - {(plan.LmStudioNativeApi ? "LM Studio enhanced mode" : "OpenAI-compatible mode")}. {FormatAutoConfigureCapabilitySummary(plan)} {plan.PreloadGuidance}";
+        autoConfigureProviderText.Text = $"{AutoConfigureProviderLabel(plan)} {FormatAutoConfigureCapabilitySummary(plan)} {plan.PreloadGuidance}";
 
         foreach (var assignment in plan.Assignments)
         {
@@ -1686,8 +1726,13 @@ internal sealed class ProviderSettingsCoordinator
         applyAutoConfigureButton.IsEnabled = plan.ProviderOnline && plan.Assignments.Count > 0;
         providerModelsStatus.Text = plan.ProviderOnline
             ? $"{plan.Models.Count} advertised chat models found during the scan."
-            : "The scan could not reach an OpenAI-compatible provider.";
+            : $"The scan could not reach the configured {providerModeLabel} provider.";
         UpdateLoadPlanPreview();
+    }
+
+    internal static string AutoConfigureProviderLabel(ProviderAutoConfigurePlan plan)
+    {
+        return $"Provider: {plan.ProviderBaseUrl} - {ProviderAutoConfigureService.ProviderModeLabel(plan.ApiMode)}.";
     }
 
     private Border CreateAutoConfigureBadge(ModelAssignmentRecommendation assignment)
@@ -2172,6 +2217,7 @@ internal sealed class ProviderSettingsCoordinator
         return preset switch
         {
             "ollama" => "http://127.0.0.1:11434/v1",
+            "llama_cpp" => "http://127.0.0.1:8080/v1",
             "local_8000" => "http://127.0.0.1:8000/v1",
             "lm_studio" => "http://127.0.0.1:1234/v1",
             _ => ""
@@ -2184,6 +2230,7 @@ internal sealed class ProviderSettingsCoordinator
         {
             "lm_studio" => ModelProviderApiModes.LmStudioNative,
             "ollama" => ModelProviderApiModes.OllamaNative,
+            "llama_cpp" => ModelProviderApiModes.LlamaCppNative,
             _ => ModelProviderApiModes.OpenAiCompatible
         };
     }
@@ -2197,6 +2244,8 @@ internal sealed class ProviderSettingsCoordinator
             "http://localhost:1234/v1" => "lm_studio",
             "http://127.0.0.1:11434/v1" => "ollama",
             "http://localhost:11434/v1" => "ollama",
+            "http://127.0.0.1:8080/v1" => "llama_cpp",
+            "http://localhost:8080/v1" => "llama_cpp",
             "http://127.0.0.1:8000/v1" => "local_8000",
             "http://localhost:8000/v1" => "local_8000",
             _ => "manual"

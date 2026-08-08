@@ -52,7 +52,10 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 - Operator quick intervention chips for evidence checks, consensus breaking, private role resets, narrator judgments, repairs, scope gates, handoff notes, and next-step framing.
 - Per-agent personas, model assignments, voice styles, pressure profiles, and absurd persona-mixer constraints.
 - Optional debug voice/style cue chips and voice drift enforcement for constrained agents.
-- OpenAI-compatible provider support, including LM Studio.
+- OpenAI-compatible provider support, including LM Studio, plus a first-class `llamacpp_native` mode for a user-installed, user-owned `llama-server`. AI Arena sends chat through `/v1/chat/completions`; it does not bundle, download, start, stop, replace, or silently reconfigure llama.cpp.
+- Capability-detected llama.cpp runtime inspection for optional `/health`, `/props`, `/slots`, router `/models`, and router model load/unload endpoints. Missing measurements stay unavailable, and model file size or parameter count is never presented as measured RAM or VRAM use.
+- Conservative llama.cpp transient handling: bounded retries are limited to 429, 503, loading, busy, unavailable, no-slot, or queue-full responses rejected before acceptance; an accepted stream is never replayed.
+- AI Lab right-rail **Model Comparison & QA** for capturing a baseline, comparing another model against the same model-neutral Match Setup, copying exact secret-free replay JSON and aggregate-only evidence, and reporting runtime QA as ready, partial, or blocked with unavailable evidence called out explicitly.
 - Wide Match Setup flyout for scenario framing, readiness badges, preset-gallery metadata, run-shape preview, pressure graph preview, copyable setup receipts, personas, locks, checkpoints, sessions, and operator controls.
 - Random Seed presets with category, best-use, risk, and exact preset-match metadata, plus role-pack, pressure, style, absurdity controls, AI Choice, Wild Seed, and replayable generation history.
 - Scenario and cast locks for controlled regeneration.
@@ -75,7 +78,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 
 1. Download and run the latest beta installer from the
    [GitHub releases page](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases).
-2. Start LM Studio or another OpenAI-compatible provider.
+2. Start LM Studio, another OpenAI-compatible provider, or your own `llama-server` process.
 3. Open Settings, then **Models & provider**.
 4. Choose a provider preset, press **Use preset**, and select a **Default model**.
 5. Press **Test connection**.
@@ -84,6 +87,8 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
    ```text
    http://127.0.0.1:1234/v1
    ```
+
+   For a typical user-started llama.cpp server, choose **llama.cpp** / **llama.cpp native /v1** and use `http://127.0.0.1:8080/v1`.
 
 7. Optionally open **Model recommendations** to scan local hardware and spread different models across roles.
 8. Open AI Lab, then Match Setup, to create or replay a setup with Random Seed, AI Choice, or Wild Seed.
@@ -104,7 +109,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 
 - Windows.
 - The release installer includes the required .NET Desktop Runtime; no separate .NET installation is needed.
-- LM Studio or any OpenAI-compatible `/v1` provider.
+- LM Studio, a user-run `llama-server`, or any OpenAI-compatible `/v1` provider.
 - Local models are optional depending on your provider setup.
 
 Model execution depends on the provider you connect to.
@@ -125,6 +130,14 @@ For LM Studio:
    ```
 
 If the provider is offline, AI Arena can still open sessions and display local data, but model turns will not run until the provider is reachable.
+
+For llama.cpp, install and start `llama-server` yourself, then choose the **llama.cpp** preset or `llamacpp_native` connection mode and use its OpenAI-compatible base URL, commonly:
+
+```text
+http://127.0.0.1:8080/v1
+```
+
+AI Arena uses `/v1/chat/completions` for model turns. Under **Settings -> Models & provider -> Local model tools**, **Inspect** and **Reconnect** probe the configured process without taking ownership of it. `/health`, `/props`, `/slots`, and router `/models` vary by llama.cpp build and mode, so unsupported evidence remains visibly unavailable. Preload and Unload are enabled only when router lifecycle support is detected. Context and GPU-layer values are treated as server startup evidence, and model file size is labelled as file size rather than inferred RAM or VRAM consumption.
 
 ## PowerShell Control
 
@@ -187,6 +200,14 @@ With no path, screenshots use `%LOCALAPPDATA%\AI Arena\exports\screenshots\AI-Ar
 ```powershell
 dotnet build .\src\AIArena.Wpf\AIArena.Wpf.csproj
 ```
+
+For the focused local-provider and comparison QA gates, run:
+
+```powershell
+.\scripts\local-runtime-qa.ps1
+```
+
+The script builds the solution, runs the llama.cpp contract/runtime and arena-evaluation harnesses, and verifies that no `llama-server` or `llama-cli` binary is bundled under `src` or `packaging`. Supply `-LlamaBaseUrl http://127.0.0.1:8080/v1` to add an optional read-only loopback `/health` probe; without it, live readiness is reported as unavailable rather than assumed.
 
 For local web search, a development run uses a valid `searxng` payload beside the executable or from the newest versioned folder under `dist`. Set `AIARENA_SEARXNG_PAYLOAD_DIR` to either a payload root or its parent to override discovery. Release builds create and package the payload automatically.
 

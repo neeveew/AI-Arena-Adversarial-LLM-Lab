@@ -7,6 +7,8 @@ verified bullets into the new versioned `.txt` change file.
 
 ## Verified
 
+- Add a first-class `llamacpp_native` provider for a user-owned `llama-server`, using OpenAI-compatible `/v1` chat plus capability-detected health, properties, slots, router inventory, and router load/unload controls, with honest unavailable telemetry, no file-size-derived RAM/VRAM claims, and bounded pre-accept transient retry without accepted-stream replay.
+- Add right-rail Model Comparison & QA with model-neutral baseline matching, exact secret-free Match Setup replay JSON, aggregate-only evidence, bounded corruption-recovering local history, and explicit ready/partial/blocked gates that preserve unavailable evidence.
 - Add an opt-in Roslyn Impact Explorer for symbol definitions and references, callers/callees, inheritance, project/package/XAML/test relationships, and evidence-labelled predictions for affected files, features, and focused tests.
 - Turn Solution Doctor findings into an explicit two-approval repair loop with explanations, exact stale-guarded diffs, focused project builds and dependency-evidenced tests, before/after classifications, and bounded secret-safe local history.
 - Add commit and release-baseline comparison to Map, including feature additions/removals/rewrites, recurring repairs, dynamically weighted overhaul candidates, focused-test reliability, and non-colour Doctor regression overlays without inferring unavailable coverage.

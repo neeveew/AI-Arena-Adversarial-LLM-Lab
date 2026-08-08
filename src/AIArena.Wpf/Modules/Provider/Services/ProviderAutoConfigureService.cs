@@ -876,6 +876,17 @@ public sealed class ProviderAutoConfigureService
 
     private static IReadOnlyList<string> CandidateBaseUrls(string currentProviderBaseUrl, string apiMode)
     {
+        if (ModelProviderApiModes.IsLlamaCppNative(apiMode))
+        {
+            // llama.cpp native mode is an explicit user-owned server choice.
+            // Do not silently drift into LM Studio's default endpoints when the
+            // configured llama-server is unavailable.
+            var configured = string.IsNullOrWhiteSpace(currentProviderBaseUrl)
+                ? "http://127.0.0.1:8080/v1"
+                : currentProviderBaseUrl;
+            return [NormalizeProviderBaseUrl(configured)];
+        }
+
         var values = new[]
             {
                 currentProviderBaseUrl,
@@ -908,6 +919,7 @@ public sealed class ProviderAutoConfigureService
         {
             ModelProviderApiModes.LmStudioNative => "LM Studio native",
             ModelProviderApiModes.OllamaNative => "Ollama native",
+            ModelProviderApiModes.LlamaCppNative => "llama.cpp native",
             _ => "OpenAI-compatible"
         };
     }
@@ -921,6 +933,11 @@ public sealed class ProviderAutoConfigureService
         }
 
         if (normalizedApiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (normalizedApiMode.Equals(ModelProviderApiModes.LlamaCppNative, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }

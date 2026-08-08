@@ -17,6 +17,11 @@ The current WPF shell includes:
 - native dark title bar/app border on supported Windows builds
 - settings overlay with collapsed sections, a normal default-on Agent workspace visibility toggle, Debug-gated/default-off AI World controls, and active participant count under Model Provider
 - provider health test through the configured OpenAI-compatible endpoint
+- first-class `llamacpp_native` provider mode for a user-owned `llama-server`, with OpenAI-compatible `/v1/chat/completions`, bearer-token support, router-first model inventory, and no bundled, downloaded, launched, stopped, or replaced llama.cpp process
+- capability-detected llama.cpp runtime card for optional `/health`, `/props`, `/slots`, router `/models`, and router `/models/load` and `/models/unload`; unsupported endpoints degrade independently, missing telemetry stays unavailable, and file size/parameter count is not relabelled as measured RAM or VRAM
+- bounded llama.cpp pre-accept retry for 429, 503, loading, busy, unavailable, no-slot, and queue-full rejection signals, with caller cancellation and no replay after a streaming response is accepted
+- AI Lab right-rail Model Comparison & QA with baseline capture, model-neutral scenario matching, aggregate telemetry/quality comparisons, exact secret-free Match Setup replay JSON, secret-free aggregate evidence export, and explicit ready/partial/blocked QA gates with unavailable evidence
+- bounded atomic local evaluation history with baseline preservation, corruption recovery, and no transcript bodies, raw provider responses, provider error bodies, or credentials
 - first native `1 TURN` path through the shared core service layer
 - operator turn injection from WPF, kept available during other arena operations
 - transcript copy, pin/unpin, delete, model reasoning display, generated/context token pills, and agent-tinted framed transcript cards
@@ -111,5 +116,14 @@ dotnet run --project .\tests\AIArena.Wpf.Tests\AIArena.Wpf.Tests.csproj
 .\scripts\dependency-index.ps1 -Check
 .\scripts\wpf-release-sanity.ps1 -Version "0.3.95-beta"
 ```
+
+Focused local-runtime and evaluation QA is available through:
+
+```powershell
+.\scripts\local-runtime-qa.ps1
+.\scripts\local-runtime-qa.ps1 -LlamaBaseUrl http://127.0.0.1:8080/v1
+```
+
+The second form adds an optional read-only loopback `/health` probe against a user-started `llama-server`; omitting it leaves live readiness explicitly unavailable. The deterministic gates cover llama.cpp routing, telemetry parsing, optional-endpoint degradation, lifecycle capability gating, pre-accept retry/no accepted-stream replay, aggregate comparison, secret-free replay/evidence, bounded history, QA states, accessibility, and absence of bundled llama.cpp executables.
 
 For shell refactors, also smoke-launch both the debug executable and the current release executable long enough to catch startup-time XAML/event wiring failures.

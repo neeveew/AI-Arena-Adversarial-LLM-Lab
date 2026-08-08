@@ -204,7 +204,7 @@ internal sealed class ProviderConfigurationControlService
 
         if (patch.ApiMode is not null && !IsSupportedApiMode(patch.ApiMode))
         {
-            return (false, "invalid_argument", "args.apiMode must be openai_compatible, lmstudio_native, or ollama_native.");
+            return (false, "invalid_argument", "args.apiMode must be openai_compatible, lmstudio_native, ollama_native, or llamacpp_native.");
         }
 
         if (patch.ApiToken is not null
@@ -421,9 +421,18 @@ internal sealed class ProviderConfigurationControlService
             || !ModelProviderApiModes.Normalize(existing.ApiMode).Equals(ModelProviderApiModes.Normalize(apiMode), StringComparison.OrdinalIgnoreCase)
             || !existing.ApiToken.Equals(apiToken, StringComparison.Ordinal)
             || !existing.Model.Trim().Equals(model.Trim(), StringComparison.Ordinal);
-        if (identityChanged || !ModelProviderApiModes.IsNative(apiMode))
+        if (identityChanged)
         {
-            return identityChanged;
+            return true;
+        }
+
+        if (!ModelProviderApiModes.IsLmStudioNative(apiMode)
+            && !ModelProviderApiModes.IsOllamaNative(apiMode))
+        {
+            // llama.cpp startup-time context/GPU configuration is inspected,
+            // not sent as a per-request option by AI Arena. Generic compatible
+            // providers likewise do not use these legacy native controls.
+            return false;
         }
 
         var nativeOptionChanged = existing.ContextLength != contextLength
@@ -677,7 +686,8 @@ internal sealed class ProviderConfigurationControlService
         var normalized = value.Trim().ToLowerInvariant();
         return normalized is ModelProviderApiModes.OpenAiCompatible
             or ModelProviderApiModes.LmStudioNative
-            or ModelProviderApiModes.OllamaNative;
+            or ModelProviderApiModes.OllamaNative
+            or ModelProviderApiModes.LlamaCppNative;
     }
 
     private static bool IsSupportedReasoning(string value)

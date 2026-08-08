@@ -974,9 +974,12 @@ internal static class MatchSetupPackageCodec
             {
                 errors.Add($"setup.providers.{key}.nativeIdleTtlSeconds must be between 0 and 86400.");
             }
-            if (provider.ApiMode is not (ModelProviderApiModes.OpenAiCompatible or ModelProviderApiModes.LmStudioNative or ModelProviderApiModes.OllamaNative))
+            if (provider.ApiMode is not (ModelProviderApiModes.OpenAiCompatible
+                or ModelProviderApiModes.LmStudioNative
+                or ModelProviderApiModes.OllamaNative
+                or ModelProviderApiModes.LlamaCppNative))
             {
-                errors.Add($"setup.providers.{key}.apiMode must be openai_compatible, lmstudio_native, or ollama_native.");
+                errors.Add($"setup.providers.{key}.apiMode must be openai_compatible, lmstudio_native, ollama_native, or llamacpp_native.");
             }
             if (!string.IsNullOrWhiteSpace(provider.Reasoning)
                 && ModelProviderReasoningModes.Normalize(provider.Reasoning) != provider.Reasoning.Trim().ToLowerInvariant())

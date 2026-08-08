@@ -2936,6 +2936,149 @@
                     </Border>
                 </Popup>
 
+                <Expander x:Name="ArenaEvaluationExpander"
+                          Header="Model Comparison &amp; QA"
+                          Style="{StaticResource SettingsExpander}"
+                          Tag="&#xE9D9;"
+                          IsExpanded="False"
+                          AutomationProperties.Name="Model comparison and runtime QA"
+                          AutomationProperties.HelpText="Expand to capture a repeatable baseline, compare the current run, inspect evidence gates, and copy a secret-free replay setup.">
+                    <Border Background="Transparent"
+                            BorderThickness="0">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="ArenaEvaluationStatusText"
+                                           Text="Capture a baseline, then replay the same setup with another model to compare it."
+                                           Style="{StaticResource HintText}"
+                                           TextWrapping="Wrap"
+                                           AutomationProperties.Name="Evaluation and QA status"
+                                           AutomationProperties.LiveSetting="Polite" />
+                                <TextBlock x:Name="ArenaEvaluationHistoryText"
+                                           Grid.Column="1"
+                                           Text="No local evaluation history"
+                                           Style="{StaticResource SettingsInlineStatusText}"
+                                           Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
+                                           AutomationProperties.Name="Local evaluation history count" />
+                            </Grid>
+
+                            <TextBlock x:Name="ArenaEvaluationBaselineText"
+                                       Text="Baseline: not selected"
+                                       Style="{StaticResource HintText}"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                                       TextWrapping="Wrap"
+                                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                            <TextBlock x:Name="ArenaEvaluationCandidateText"
+                                       Text="Current: not captured"
+                                       Style="{StaticResource HintText}"
+                                       TextWrapping="Wrap"
+                                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+
+                            <TextBlock Text="Comparison"
+                                       Style="{StaticResource FieldLabel}"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
+                            <TextBlock x:Name="ArenaEvaluationComparisonSummaryText"
+                                       Text="No comparison evidence."
+                                       Style="{StaticResource HintText}"
+                                       TextWrapping="Wrap" />
+                            <StackPanel x:Name="ArenaEvaluationComparisonItems" />
+
+                            <TextBlock Text="Model evidence"
+                                       Style="{StaticResource FieldLabel}"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
+                            <StackPanel x:Name="ArenaEvaluationModelItems" />
+
+                            <TextBlock Text="Runtime QA"
+                                       Style="{StaticResource FieldLabel}"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
+                            <TextBlock x:Name="ArenaEvaluationQaSummaryText"
+                                       Text="QA has not run."
+                                       Style="{StaticResource HintText}"
+                                       TextWrapping="Wrap"
+                                       AutomationProperties.Name="Runtime QA summary" />
+                            <StackPanel x:Name="ArenaEvaluationQaItems" />
+
+                            <Grid Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Button x:Name="ArenaEvaluationCaptureBaselineButton"
+                                        Click="ArenaEvaluationCaptureBaselineButton_Click"
+                                        Style="{StaticResource RightRailActionButton}"
+                                        AutomationProperties.Name="Capture evaluation baseline"
+                                        AutomationProperties.HelpText="Capture aggregate evidence and make this run the baseline for its model-neutral Match Setup."
+                                        ToolTip="Capture this run as the comparison baseline">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE74E;" Style="{StaticResource RightRailActionIcon}" />
+                                        <TextBlock Text="Baseline" Style="{StaticResource RightRailActionLabel}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="ArenaEvaluationCompareCurrentButton"
+                                        Grid.Column="1"
+                                        Click="ArenaEvaluationCompareCurrentButton_Click"
+                                        Style="{StaticResource RightRailActionButton}"
+                                        AutomationProperties.Name="Compare current arena run"
+                                        AutomationProperties.HelpText="Compare this run only with a baseline that has the same model-neutral Match Setup fingerprint."
+                                        ToolTip="Compare current run with its matching baseline">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE8AB;" Style="{StaticResource RightRailActionIcon}" />
+                                        <TextBlock Text="Compare" Style="{StaticResource RightRailActionLabel}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="ArenaEvaluationRunQaButton"
+                                        Grid.Row="1"
+                                        Click="ArenaEvaluationRunQaButton_Click"
+                                        Style="{StaticResource RightRailActionButton}"
+                                        AutomationProperties.Name="Run local arena QA inspection"
+                                        AutomationProperties.HelpText="Inspect replay identity, runtime errors, stuck states, telemetry completeness, quality evidence, and comparable-baseline regressions."
+                                        ToolTip="Run evidence-based local QA gates">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE73E;" Style="{StaticResource RightRailActionIcon}" />
+                                        <TextBlock Text="Run QA" Style="{StaticResource RightRailActionLabel}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="ArenaEvaluationCopyEvidenceButton"
+                                        Grid.Row="1"
+                                        Grid.Column="1"
+                                        Click="ArenaEvaluationCopyEvidenceButton_Click"
+                                        Style="{StaticResource RightRailActionButton}"
+                                        AutomationProperties.Name="Copy aggregate evaluation evidence"
+                                        AutomationProperties.HelpText="Copy aggregate evaluation, comparison, and QA evidence without transcript bodies, raw provider responses, or credentials."
+                                        ToolTip="Copy secret-free aggregate evaluation evidence">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE8C8;" Style="{StaticResource RightRailActionIcon}" />
+                                        <TextBlock Text="Evidence" Style="{StaticResource RightRailActionLabel}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="ArenaEvaluationCopyReplaySetupButton"
+                                        Grid.Row="2"
+                                        Grid.ColumnSpan="2"
+                                        Click="ArenaEvaluationCopyReplaySetupButton_Click"
+                                        Style="{StaticResource RightRailActionButton}"
+                                        AutomationProperties.Name="Copy exact evaluation replay setup"
+                                        AutomationProperties.HelpText="Copy the exact secret-free Match Setup JSON used by the captured run for import into a clean session."
+                                        ToolTip="Copy the exact secret-free Match Setup JSON for replay">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE72C;" Style="{StaticResource RightRailActionIcon}" />
+                                        <TextBlock Text="Copy replay setup" Style="{StaticResource RightRailActionLabel}" />
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </Expander>
+
                 <Border Style="{StaticResource RightRailCard}">
                     <StackPanel>
                         <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
@@ -3750,6 +3893,7 @@
                                       ToolTip="Choose a common provider base URL and API mode preset.">
                                 <ComboBoxItem Content="LM Studio" Tag="lm_studio" IsSelected="True" />
                                 <ComboBoxItem Content="Ollama" Tag="ollama" />
+                                <ComboBoxItem Content="llama.cpp" Tag="llama_cpp" />
                                 <ComboBoxItem Content="Local server :8000" Tag="local_8000" />
                                 <ComboBoxItem Content="Remote / manual" Tag="manual" />
                             </ComboBox>
@@ -3780,10 +3924,11 @@
                                   SelectionChanged="ProviderApiModePicker_SelectionChanged"
                                   Style="{StaticResource FormComboBox}"
                                   Margin="{DynamicResource Arena.Gap.Stack}"
-                                  ToolTip="OpenAI-compatible works with most local providers. LM Studio native enables /api/v1 features; Ollama native enables /api/chat, /api/tags, thinking output, and keep-alive lifecycle requests.">
+                                  ToolTip="OpenAI-compatible works with most local providers. LM Studio and Ollama native modes enable provider-specific features. llama.cpp native adds bounded runtime inspection and capability-detected router lifecycle actions.">
                             <ComboBoxItem Content="OpenAI-compatible /v1" Tag="openai_compatible" IsSelected="True" />
                             <ComboBoxItem Content="LM Studio native /api/v1" Tag="lmstudio_native" />
                             <ComboBoxItem Content="Ollama native /api" Tag="ollama_native" />
+                            <ComboBoxItem Content="llama.cpp native /v1" Tag="llamacpp_native" />
                         </ComboBox>
                         <TextBlock Text="Server address" Style="{StaticResource FieldLabel}" />
                         <TextBox x:Name="ProviderBaseUrlText"
@@ -4107,8 +4252,166 @@
                                   Header="Local model tools"
                                   Style="{StaticResource SettingsSubsectionExpander}"
                                   IsExpanded="False"
-                                  ToolTip="Preload, unload, or download models when using an LM Studio or Ollama native connection.">
+                                  ToolTip="Inspect llama.cpp runtime evidence, or preload, unload, and download models when the selected local provider supports those actions.">
                             <StackPanel>
+                        <Border x:Name="LlamaCppRuntimeStatusCard"
+                                Style="{StaticResource SettingsStatusCard}"
+                                Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
+                                Visibility="Collapsed"
+                                AutomationProperties.Name="llama.cpp runtime status">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="llama.cpp runtime"
+                                                   Style="{StaticResource FieldLabel}" />
+                                        <TextBlock x:Name="LlamaCppRuntimeStatusText"
+                                                   Text="Inspect the configured llama-server to load runtime evidence."
+                                                   Style="{StaticResource HintText}"
+                                                   TextWrapping="Wrap"
+                                                   AutomationProperties.LiveSetting="Polite" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="LlamaCppRuntimeCheckedAtText"
+                                               Grid.Column="1"
+                                               Text="Not checked"
+                                               Style="{StaticResource SettingsInlineStatusText}"
+                                               Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
+                                               VerticalAlignment="Top" />
+                                </Grid>
+
+                                <UniformGrid Columns="2"
+                                             Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
+                                    <StackPanel>
+                                        <TextBlock Text="Build" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock x:Name="LlamaCppRuntimeBuildValue"
+                                                   Text="Not reported"
+                                                   Style="{StaticResource HintText}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="Model" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock x:Name="LlamaCppRuntimeModelValue"
+                                                   Text="Not reported"
+                                                   Style="{StaticResource HintText}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="Quantization (model ID)" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock x:Name="LlamaCppRuntimeQuantizationValue"
+                                                   Text="Not reported"
+                                                   Style="{StaticResource HintText}" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="Context" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock x:Name="LlamaCppRuntimeContextValue"
+                                                   Text="Not reported"
+                                                   Style="{StaticResource HintText}" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="GPU layers" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock x:Name="LlamaCppRuntimeGpuLayersValue"
+                                                   Text="Not reported"
+                                                   Style="{StaticResource HintText}" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="Slots" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock x:Name="LlamaCppRuntimeSlotsValue"
+                                                   Text="Not reported"
+                                                   Style="{StaticResource HintText}" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="Memory / model size" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock x:Name="LlamaCppRuntimeMemoryValue"
+                                                   Text="Not reported"
+                                                   Style="{StaticResource HintText}"
+                                                   ToolTip="Runtime memory is shown only when reported; model file size and parameter count remain separately labelled and are not claimed as measured RAM or VRAM." />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="Throughput" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock x:Name="LlamaCppRuntimeThroughputValue"
+                                                   Text="Not reported"
+                                                   Style="{StaticResource HintText}" />
+                                    </StackPanel>
+                                </UniformGrid>
+
+                                <Border x:Name="LlamaCppRuntimeCapacityWarning"
+                                        Background="{DynamicResource DangerBrush}"
+                                        BorderBrush="{DynamicResource DangerBorderBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="{DynamicResource Arena.Radius.Small}"
+                                        Padding="{DynamicResource Arena.Inset.Control}"
+                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                                        Visibility="Collapsed">
+                                    <TextBlock x:Name="LlamaCppRuntimeCapacityWarningText"
+                                               Foreground="{DynamicResource DangerTextBrush}"
+                                               Style="{StaticResource HintText}"
+                                               TextWrapping="Wrap"
+                                               AutomationProperties.LiveSetting="Polite" />
+                                </Border>
+
+                                <Grid Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="8" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="LlamaCppInspectButton"
+                                            Click="LlamaCppInspectButton_Click"
+                                            Style="{StaticResource SecondaryButton}"
+                                            AutomationProperties.Name="Inspect llama.cpp runtime"
+                                            ToolTip="Read health, model, context, slot, and performance evidence from the configured llama-server.">
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                            <TextBlock Text="&#xE721;" Style="{StaticResource CommandButtonIcon}" />
+                                            <TextBlock Text="Inspect" Style="{StaticResource CommandButtonLabel}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button x:Name="LlamaCppReconnectButton"
+                                            Grid.Column="2"
+                                            Click="LlamaCppReconnectButton_Click"
+                                            Style="{StaticResource SecondaryButton}"
+                                            AutomationProperties.Name="Reconnect llama.cpp runtime"
+                                            ToolTip="Recheck the configured llama-server and refresh its runtime evidence without starting a cloud or download operation.">
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                            <TextBlock Text="&#xE72C;" Style="{StaticResource CommandButtonIcon}" />
+                                            <TextBlock Text="Reconnect" Style="{StaticResource CommandButtonLabel}" />
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+                                <Grid Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="8" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="LlamaCppPreloadButton"
+                                            Click="LlamaCppPreloadButton_Click"
+                                            Style="{StaticResource SecondaryButton}"
+                                            AutomationProperties.Name="Preload llama.cpp model"
+                                            ToolTip="Ask a llama.cpp router with model lifecycle support to load the selected model.">
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                            <TextBlock Text="&#xE72C;" Style="{StaticResource CommandButtonIcon}" />
+                                            <TextBlock Text="Preload" Style="{StaticResource CommandButtonLabel}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button x:Name="LlamaCppUnloadButton"
+                                            Grid.Column="2"
+                                            Click="LlamaCppUnloadButton_Click"
+                                            Style="{StaticResource SecondaryButton}"
+                                            AutomationProperties.Name="Unload llama.cpp model"
+                                            ToolTip="Ask a llama.cpp router with model lifecycle support to unload the selected model.">
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                            <TextBlock Text="&#xE74D;" Style="{StaticResource CommandButtonIcon}" />
+                                            <TextBlock Text="Unload" Style="{StaticResource CommandButtonLabel}" />
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
                         <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />

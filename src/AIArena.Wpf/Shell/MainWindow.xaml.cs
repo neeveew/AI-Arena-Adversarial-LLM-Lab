@@ -86,6 +86,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     private readonly InternetWorkflowCoordinator? _internetWorkflowCoordinator;
     private readonly ArenaRunCoordinator? _arenaRunCoordinator;
     private readonly ProviderSettingsCoordinator? _providerSettingsCoordinator;
+    private readonly LlamaCppRuntimeCoordinator? _llamaCppRuntimeCoordinator;
+    private readonly ArenaEvaluationCoordinator? _arenaEvaluationCoordinator;
     private readonly ProviderQuickSetupCoordinator? _providerQuickSetupCoordinator;
     private readonly ProviderReachabilityCoordinator? _providerReachabilityCoordinator;
     private readonly TranscriptViewCoordinator? _transcriptViewCoordinator;
@@ -494,6 +496,51 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             (force, cancellationToken) => ProviderReachability.RefreshAsync(force, cancellationToken),
             () => ProviderReachability.UpdatePopup(),
             RoleGenerationOverrideFor);
+        _llamaCppRuntimeCoordinator = new LlamaCppRuntimeCoordinator(
+            new LlamaCppRuntimeService(),
+            new LlamaCppRuntimeControls(
+                LlamaCppRuntimeStatusCard,
+                LlamaCppRuntimeStatusText,
+                LlamaCppRuntimeCheckedAtText,
+                LlamaCppRuntimeBuildValue,
+                LlamaCppRuntimeModelValue,
+                LlamaCppRuntimeQuantizationValue,
+                LlamaCppRuntimeContextValue,
+                LlamaCppRuntimeGpuLayersValue,
+                LlamaCppRuntimeSlotsValue,
+                LlamaCppRuntimeMemoryValue,
+                LlamaCppRuntimeThroughputValue,
+                LlamaCppRuntimeCapacityWarning,
+                LlamaCppRuntimeCapacityWarningText,
+                LlamaCppInspectButton,
+                LlamaCppReconnectButton,
+                LlamaCppPreloadButton,
+                LlamaCppUnloadButton),
+            () => ProviderSettings.CaptureRuntimeConfig(),
+            () => _arenaBusy,
+            ResourceBrush);
+        _arenaEvaluationCoordinator = new ArenaEvaluationCoordinator(
+            _coreSessionStore,
+            new ArenaEvaluationService(_discourseDiagnostics, _voiceStyleAdherenceService),
+            new ArenaEvaluationHistoryStore(),
+            ArenaEvaluationStatusText,
+            ArenaEvaluationHistoryText,
+            ArenaEvaluationBaselineText,
+            ArenaEvaluationCandidateText,
+            ArenaEvaluationComparisonSummaryText,
+            ArenaEvaluationComparisonItems,
+            ArenaEvaluationModelItems,
+            ArenaEvaluationQaSummaryText,
+            ArenaEvaluationQaItems,
+            ArenaEvaluationCaptureBaselineButton,
+            ArenaEvaluationCompareCurrentButton,
+            ArenaEvaluationRunQaButton,
+            ArenaEvaluationCopyEvidenceButton,
+            ArenaEvaluationCopyReplaySetupButton,
+            () => _activeSession,
+            () => _arenaBusy,
+            ResourceBrush,
+            SetArenaRunStatus);
         _providerQuickSetupCoordinator = new ProviderQuickSetupCoordinator(
             TranscriptActions,
             () => ProviderSettings.AdvertisedModels,
@@ -1293,6 +1340,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             () =>
             {
                 _providerSettingsCoordinator?.UpdateNativeLifecycleControls();
+                _llamaCppRuntimeCoordinator?.UpdateBusyState();
+                _arenaEvaluationCoordinator?.RefreshAvailability();
                 RefreshSessionSettingsPendingState();
             },
             readinessStatus: ArenaControlReadinessText);
@@ -3113,6 +3162,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             var activeCount = snapshot.Agents.Count(agent => agent.Active);
             AgentRoster.ApplySnapshot(activeCount);
             ProviderSettings.ApplySnapshot(snapshot);
+            _llamaCppRuntimeCoordinator?.ConfigurationChanged();
             ApplyRoleOverrideFields(snapshot);
             ProviderTimeoutText.Text = snapshot.ProviderTimeout.ToString(System.Globalization.CultureInfo.InvariantCulture);
             ProviderTemperatureText.Text = snapshot.ProviderTemperature.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
@@ -3146,6 +3196,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         AgentBoard.Populate(snapshot, CurrentTurnAgent(snapshot)?.Id);
         PopulateCustomMatch(snapshot);
         _collaborateCoordinator?.RefreshProviderState();
+        _arenaEvaluationCoordinator?.RefreshAvailability();
         OperatorTurn.UpdatePrivateTargetSummary();
     }
 
@@ -3160,6 +3211,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         };
         AgentBoard.PopulateFallback();
         _collaborateCoordinator?.RefreshProviderState();
+        _arenaEvaluationCoordinator?.RefreshAvailability();
     }
 
     private void UpdateTopBarStatus(ArenaViewSnapshot snapshot)
@@ -3292,6 +3344,94 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     {
         await RunProviderCommitSafelyAsync(
             (coordinator, cancellationToken) => coordinator.ApplyProviderPresetAsync(cancellationToken));
+        _llamaCppRuntimeCoordinator?.ConfigurationChanged();
+    }
+
+    private async void LlamaCppInspectButton_Click(object sender, RoutedEventArgs e)
+    {
+        var coordinator = _llamaCppRuntimeCoordinator;
+        if (coordinator is not null)
+        {
+            await RunTrackedBackgroundOperationSafelyAsync(
+                "llama.cpp runtime inspection",
+                coordinator.InspectAsync);
+        }
+    }
+
+    private async void LlamaCppReconnectButton_Click(object sender, RoutedEventArgs e)
+    {
+        var coordinator = _llamaCppRuntimeCoordinator;
+        if (coordinator is not null)
+        {
+            await RunTrackedBackgroundOperationSafelyAsync(
+                "llama.cpp runtime reconnect",
+                coordinator.ReconnectAsync);
+        }
+    }
+
+    private async void LlamaCppPreloadButton_Click(object sender, RoutedEventArgs e)
+    {
+        var coordinator = _llamaCppRuntimeCoordinator;
+        if (coordinator is not null)
+        {
+            await RunTrackedBackgroundOperationSafelyAsync(
+                "llama.cpp model preload",
+                coordinator.PreloadAsync);
+        }
+    }
+
+    private async void LlamaCppUnloadButton_Click(object sender, RoutedEventArgs e)
+    {
+        var coordinator = _llamaCppRuntimeCoordinator;
+        if (coordinator is not null)
+        {
+            await RunTrackedBackgroundOperationSafelyAsync(
+                "llama.cpp model unload",
+                coordinator.UnloadAsync);
+        }
+    }
+
+    private async void ArenaEvaluationCaptureBaselineButton_Click(object sender, RoutedEventArgs e)
+    {
+        var coordinator = _arenaEvaluationCoordinator;
+        if (coordinator is not null)
+        {
+            await RunTrackedBackgroundOperationSafelyAsync(
+                "arena evaluation baseline capture",
+                coordinator.CaptureBaselineAsync);
+        }
+    }
+
+    private async void ArenaEvaluationCompareCurrentButton_Click(object sender, RoutedEventArgs e)
+    {
+        var coordinator = _arenaEvaluationCoordinator;
+        if (coordinator is not null)
+        {
+            await RunTrackedBackgroundOperationSafelyAsync(
+                "arena model comparison",
+                coordinator.CompareCurrentAsync);
+        }
+    }
+
+    private async void ArenaEvaluationRunQaButton_Click(object sender, RoutedEventArgs e)
+    {
+        var coordinator = _arenaEvaluationCoordinator;
+        if (coordinator is not null)
+        {
+            await RunTrackedBackgroundOperationSafelyAsync(
+                "arena runtime QA inspection",
+                coordinator.RunQaAsync);
+        }
+    }
+
+    private void ArenaEvaluationCopyEvidenceButton_Click(object sender, RoutedEventArgs e)
+    {
+        _arenaEvaluationCoordinator?.CopyEvidence();
+    }
+
+    private void ArenaEvaluationCopyReplaySetupButton_Click(object sender, RoutedEventArgs e)
+    {
+        _arenaEvaluationCoordinator?.CopyReplaySetup();
     }
 
     private async void PreloadSelectedModelsButton_Click(object sender, RoutedEventArgs e)
@@ -5939,6 +6079,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private async void ProviderBaseUrlText_Commit(object sender, KeyboardFocusChangedEventArgs e)
     {
+        _llamaCppRuntimeCoordinator?.ConfigurationChanged();
         await RunProviderCommitSafelyAsync(
             (coordinator, cancellationToken) => coordinator.ProviderBaseUrlCommittedAsync(cancellationToken));
     }
@@ -5951,12 +6092,14 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
 
         e.Handled = true;
+        _llamaCppRuntimeCoordinator?.ConfigurationChanged();
         await RunProviderCommitSafelyAsync(
             (coordinator, cancellationToken) => coordinator.ProviderBaseUrlCommittedAsync(cancellationToken));
     }
 
     private async void ProviderApiTokenBox_Commit(object sender, KeyboardFocusChangedEventArgs e)
     {
+        _llamaCppRuntimeCoordinator?.ConfigurationChanged();
         await RunProviderCommitSafelyAsync(
             (coordinator, cancellationToken) => coordinator.PersistModelRoutingAsync(
                 "Provider API token saved.",
@@ -5972,6 +6115,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
 
         e.Handled = true;
+        _llamaCppRuntimeCoordinator?.ConfigurationChanged();
         await RunProviderCommitSafelyAsync(
             (coordinator, cancellationToken) => coordinator.PersistModelRoutingAsync(
                 "Provider API token saved.",
@@ -5981,12 +6125,14 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private async void ProviderModelText_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        _llamaCppRuntimeCoordinator?.ConfigurationChanged();
         await RunProviderCommitSafelyAsync(
             (coordinator, cancellationToken) => coordinator.ProviderModelSelectionChangedAsync(cancellationToken));
     }
 
     private async void ProviderApiModePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        _llamaCppRuntimeCoordinator?.ConfigurationChanged();
         await RunProviderCommitSafelyAsync(async (coordinator, cancellationToken) =>
         {
             coordinator.UpdateNativeLifecycleControls();
@@ -6011,6 +6157,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private async void ProviderModelText_Commit(object sender, KeyboardFocusChangedEventArgs e)
     {
+        _llamaCppRuntimeCoordinator?.ConfigurationChanged();
         await RunProviderCommitSafelyAsync(
             (coordinator, cancellationToken) => coordinator.ProviderModelCommittedAsync(cancellationToken));
     }
@@ -6023,6 +6170,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
 
         e.Handled = true;
+        _llamaCppRuntimeCoordinator?.ConfigurationChanged();
         await RunProviderCommitSafelyAsync(
             (coordinator, cancellationToken) => coordinator.ProviderModelCommittedAsync(cancellationToken));
     }

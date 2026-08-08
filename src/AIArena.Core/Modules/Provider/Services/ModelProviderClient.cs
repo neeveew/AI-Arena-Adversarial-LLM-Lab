@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -29,6 +30,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
 {
     private const int MaxProviderErrorLength = 360;
     private const string EmptyCompletionError = "Provider returned a successful response without assistant content.";
+    private const int LlamaCppMaximumRetries = 2;
     private readonly HttpClient _httpClient;
 
     public ModelProviderClient(HttpClient? httpClient = null)
@@ -43,6 +45,11 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
     {
         var baseUrl = NormalizeBaseUrl(config.BaseUrl);
         var apiMode = ModelProviderApiModes.Normalize(config.ApiMode);
+        if (apiMode.Equals(ModelProviderApiModes.LlamaCppNative, StringComparison.OrdinalIgnoreCase))
+        {
+            return await ListLlamaCppModelsAsync(config, cancellationToken);
+        }
+
         var listBaseUrl = apiMode switch
         {
             ModelProviderApiModes.LmStudioNative => NormalizeNativeApiBase(config.BaseUrl),
@@ -83,6 +90,112 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         }
     }
 
+    private async Task<ModelProviderModels> ListLlamaCppModelsAsync(
+        ModelProviderConfig config,
+        CancellationToken cancellationToken)
+    {
+        var baseUrl = NormalizeBaseUrl(config.BaseUrl);
+        try
+        {
+            var rootEndpoint = new Uri(new Uri(NormalizeLlamaCppApiBase(config.BaseUrl) + "/"), "models");
+            var rootResult = await TryListLlamaCppModelsAsync(rootEndpoint, config, cancellationToken);
+            if (rootResult.Ok && rootResult.Models.Count > 0)
+            {
+                // Router mode lists available models here, including unloaded
+                // models. This keeps an idle but healthy router from appearing
+                // offline merely because /v1/models only reports live instances.
+                return new ModelProviderModels(true, baseUrl, rootResult.Models, "", DateTimeOffset.Now);
+            }
+
+            var compatibleEndpoint = new Uri(new Uri(baseUrl + "/"), "models");
+            var compatibleResult = await TryListLlamaCppModelsAsync(compatibleEndpoint, config, cancellationToken);
+            if (compatibleResult.Ok)
+            {
+                return new ModelProviderModels(true, baseUrl, compatibleResult.Models, "", DateTimeOffset.Now);
+            }
+
+            if (rootResult.Ok)
+            {
+                return new ModelProviderModels(true, baseUrl, rootResult.Models, "", DateTimeOffset.Now);
+            }
+
+            var error = string.IsNullOrWhiteSpace(compatibleResult.Error)
+                ? rootResult.Error
+                : compatibleResult.Error;
+            return new ModelProviderModels(false, baseUrl, Array.Empty<string>(), error, DateTimeOffset.Now);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or JsonException)
+        {
+            return new ModelProviderModels(false, baseUrl, Array.Empty<string>(), FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
+        }
+    }
+
+    private async Task<(bool Ok, IReadOnlyList<string> Models, string Error)> TryListModelsAsync(
+        Uri endpoint,
+        ModelProviderConfig config,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+        ApplyAuthorization(request, config);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            return (false, Array.Empty<string>(), FriendlyProviderHttpError(body, response.ReasonPhrase, NormalizeBaseUrl(config.BaseUrl), config.ApiToken));
+        }
+
+        try
+        {
+            return (true, ParseModelNames(body), "");
+        }
+        catch (JsonException)
+        {
+            return (false, Array.Empty<string>(), $"Provider returned an unreadable model inventory at {SafeProviderEndpoint(endpoint.AbsoluteUri, config.ApiToken)}.");
+        }
+    }
+
+    private async Task<(bool Ok, IReadOnlyList<string> Models, string Error)> TryListLlamaCppModelsAsync(
+        Uri endpoint,
+        ModelProviderConfig config,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(LlamaCppModelProbeTimeoutSeconds(config.Timeout)));
+        try
+        {
+            return await TryListModelsAsync(endpoint, config, timeout.Token);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return (
+                false,
+                Array.Empty<string>(),
+                $"llama.cpp model inventory probe timed out after {LlamaCppModelProbeTimeoutSeconds(config.Timeout)}s at {SafeProviderEndpoint(endpoint.AbsoluteUri, config.ApiToken)}.");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException)
+        {
+            return (
+                false,
+                Array.Empty<string>(),
+                FriendlyProviderError(ex, NormalizeBaseUrl(config.BaseUrl), config.Timeout, config.ApiMode, config.ApiToken));
+        }
+    }
+
+    internal static int LlamaCppModelProbeTimeoutSeconds(int configuredTimeoutSeconds)
+    {
+        // Router and compatible inventories are independent fallbacks. Keep
+        // each attempt short so a hung router cannot block settings refresh.
+        return Math.Clamp(configuredTimeoutSeconds, 1, 5);
+    }
+
     public async Task<ModelCompletionResult> CompleteChatAsync(
         ModelProviderConfig config,
         IReadOnlyList<ModelChatMessage> messages,
@@ -99,6 +212,19 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             return await CompleteOllamaNativeChatAsync(config, messages, cancellationToken);
         }
 
+        return await CompleteOpenAiCompatibleChatAsync(
+            config,
+            messages,
+            retryLlamaCppTransientFailures: apiMode.Equals(ModelProviderApiModes.LlamaCppNative, StringComparison.OrdinalIgnoreCase),
+            cancellationToken);
+    }
+
+    private async Task<ModelCompletionResult> CompleteOpenAiCompatibleChatAsync(
+        ModelProviderConfig config,
+        IReadOnlyList<ModelChatMessage> messages,
+        bool retryLlamaCppTransientFailures,
+        CancellationToken cancellationToken)
+    {
         var baseUrl = NormalizeBaseUrl(config.BaseUrl);
         var model = string.IsNullOrWhiteSpace(config.Model) ? "" : config.Model;
         if (string.IsNullOrWhiteSpace(model))
@@ -119,49 +245,68 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         try
         {
             var endpoint = new Uri(new Uri(baseUrl + "/"), "chat/completions");
-            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
-            {
-                Content = JsonContent.Create(payload)
-            };
-            ApplyAuthorization(request, config);
             using var timeout = TimeoutToken(config, cancellationToken);
-            using var response = await _httpClient.SendAsync(request, timeout.Token);
-            var body = await response.Content.ReadAsStringAsync(timeout.Token);
-            if (!response.IsSuccessStatusCode)
+            for (var attempt = 0; ; attempt++)
             {
-                watch.Stop();
-                return new ModelCompletionResult(
-                    false,
-                    baseUrl,
-                    model,
-                    "",
-                    "",
-                    (int)watch.ElapsedMilliseconds,
-                    0,
-                    0,
-                    0,
-                    FriendlyProviderHttpError(body, response.ReasonPhrase, baseUrl, config.ApiToken),
-                    DateTimeOffset.Now);
-            }
+                using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+                {
+                    Content = JsonContent.Create(payload)
+                };
+                ApplyAuthorization(request, config);
+                using var response = await _httpClient.SendAsync(request, timeout.Token);
+                var body = await response.Content.ReadAsStringAsync(timeout.Token);
+                if (!response.IsSuccessStatusCode)
+                {
+                    if (retryLlamaCppTransientFailures
+                        && attempt < LlamaCppMaximumRetries
+                        && IsTransientLlamaCppFailure(response.StatusCode, body))
+                    {
+                        await DelayLlamaCppRetryAsync(attempt, timeout.Token);
+                        continue;
+                    }
 
-            watch.Stop();
-            using var completionDocument = JsonDocument.Parse(body);
-            var completionRoot = completionDocument.RootElement;
-            var usage = ExtractUsage(completionRoot);
-            var text = ExtractAssistantContent(completionRoot).Trim();
-            var reasoning = ExtractReasoning(completionRoot).Trim();
-            return new ModelCompletionResult(
-                !string.IsNullOrWhiteSpace(text),
-                baseUrl,
-                model,
-                text,
-                reasoning,
-                (int)watch.ElapsedMilliseconds,
-                usage.PromptTokens,
-                usage.CompletionTokens,
-                usage.TotalTokens,
-                string.IsNullOrWhiteSpace(text) ? EmptyCompletionError : "",
-                DateTimeOffset.Now);
+                    watch.Stop();
+                    return new ModelCompletionResult(
+                        false,
+                        baseUrl,
+                        model,
+                        "",
+                        "",
+                        (int)watch.ElapsedMilliseconds,
+                        0,
+                        0,
+                        0,
+                        FriendlyProviderHttpError(body, response.ReasonPhrase, baseUrl, config.ApiToken),
+                        DateTimeOffset.Now);
+                }
+
+                watch.Stop();
+                using var completionDocument = JsonDocument.Parse(body);
+                var completionRoot = completionDocument.RootElement;
+                var usage = ExtractUsage(completionRoot);
+                var telemetry = retryLlamaCppTransientFailures
+                    ? ExtractLlamaCppTelemetry(completionRoot)
+                    : new ModelProviderTelemetry(0, 0, "");
+                var text = ExtractAssistantContent(completionRoot).Trim();
+                var reasoning = ExtractReasoning(completionRoot).Trim();
+                var responseModel = FirstString(completionRoot, "model");
+                return new ModelCompletionResult(
+                    !string.IsNullOrWhiteSpace(text),
+                    baseUrl,
+                    retryLlamaCppTransientFailures && !string.IsNullOrWhiteSpace(responseModel) ? responseModel : model,
+                    text,
+                    reasoning,
+                    (int)watch.ElapsedMilliseconds,
+                    usage.PromptTokens,
+                    usage.CompletionTokens,
+                    usage.TotalTokens,
+                    string.IsNullOrWhiteSpace(text) ? EmptyCompletionError : "",
+                    DateTimeOffset.Now,
+                    telemetry.TokensPerSecond,
+                    telemetry.TimeToFirstTokenMs,
+                    telemetry.ResponseId,
+                    telemetry.ModelLoadTimeMs);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -275,7 +420,12 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             return await CompleteOllamaNativeChatAsync(config, messages, cancellationToken);
         }
 
-        return await CompleteOpenAiChatStreamingAsync(config, messages, progress, cancellationToken);
+        return await CompleteOpenAiChatStreamingAsync(
+            config,
+            messages,
+            progress,
+            retryLlamaCppTransientFailures: apiMode.Equals(ModelProviderApiModes.LlamaCppNative, StringComparison.OrdinalIgnoreCase),
+            cancellationToken);
     }
 
     private async Task<ModelCompletionResult> CompleteNativeChatStreamingAsync(
@@ -427,6 +577,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         ModelProviderConfig config,
         IReadOnlyList<ModelChatMessage> messages,
         IProgress<string>? progress,
+        bool retryLlamaCppTransientFailures,
         CancellationToken cancellationToken)
     {
         var baseUrl = NormalizeBaseUrl(config.BaseUrl);
@@ -450,114 +601,150 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         try
         {
             var endpoint = new Uri(new Uri(baseUrl + "/"), "chat/completions");
-            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
-            {
-                Content = JsonContent.Create(payload)
-            };
-            ApplyAuthorization(request, config);
             using var timeout = TimeoutToken(config, cancellationToken);
-            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-            if (!response.IsSuccessStatusCode)
+            for (var attempt = 0; ; attempt++)
             {
-                var errorBody = await response.Content.ReadAsStringAsync(timeout.Token);
+                using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+                {
+                    Content = JsonContent.Create(payload)
+                };
+                ApplyAuthorization(request, config);
+                using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorBody = await response.Content.ReadAsStringAsync(timeout.Token);
+                    if (retryLlamaCppTransientFailures
+                        && attempt < LlamaCppMaximumRetries
+                        && IsTransientLlamaCppFailure(response.StatusCode, errorBody))
+                    {
+                        await DelayLlamaCppRetryAsync(attempt, timeout.Token);
+                        continue;
+                    }
+
+                    watch.Stop();
+                    return new ModelCompletionResult(
+                        false,
+                        baseUrl,
+                        model,
+                        "",
+                        "",
+                        (int)watch.ElapsedMilliseconds,
+                        0,
+                        0,
+                        0,
+                        FriendlyProviderHttpError(errorBody, response.ReasonPhrase, baseUrl, config.ApiToken),
+                        DateTimeOffset.Now);
+                }
+
+                // From this point on the provider has accepted the request. Never
+                // replay it: a dropped or malformed stream may already have emitted
+                // tokens or committed provider-side state.
+                var content = new StringBuilder();
+                var reasoning = new StringBuilder();
+                var responseModel = "";
+                var usage = new ModelTokenUsage(0, 0, 0);
+                var telemetry = new ModelProviderTelemetry(0, 0, "");
+                var firstTokenMs = 0;
+                await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
+                using var reader = new StreamReader(stream);
+                while (await reader.ReadLineAsync(timeout.Token) is { } line)
+                {
+                    if (!line.StartsWith("data:", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var data = line[5..].Trim();
+                    if (string.IsNullOrWhiteSpace(data))
+                    {
+                        continue;
+                    }
+
+                    if (data.Equals("[DONE]", StringComparison.OrdinalIgnoreCase))
+                    {
+                        break;
+                    }
+
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(data);
+                        if (string.IsNullOrWhiteSpace(responseModel))
+                        {
+                            responseModel = FirstString(doc.RootElement, "model");
+                        }
+
+                        if (retryLlamaCppTransientFailures)
+                        {
+                            var chunkTelemetry = ExtractLlamaCppTelemetry(doc.RootElement);
+                            telemetry = new ModelProviderTelemetry(
+                                chunkTelemetry.TokensPerSecond > 0 ? chunkTelemetry.TokensPerSecond : telemetry.TokensPerSecond,
+                                telemetry.TimeToFirstTokenMs,
+                                string.IsNullOrWhiteSpace(chunkTelemetry.ResponseId) ? telemetry.ResponseId : chunkTelemetry.ResponseId,
+                                chunkTelemetry.ModelLoadTimeMs > 0 ? chunkTelemetry.ModelLoadTimeMs : telemetry.ModelLoadTimeMs);
+                        }
+
+                        if (doc.RootElement.TryGetProperty("usage", out var usageElement)
+                            && usageElement.ValueKind == JsonValueKind.Object)
+                        {
+                            var promptTokens = GetTokenCount(usageElement, "prompt_tokens");
+                            var completionTokens = GetTokenCount(usageElement, "completion_tokens");
+                            var totalTokens = GetTokenCount(usageElement, "total_tokens");
+                            usage = new ModelTokenUsage(promptTokens, completionTokens, totalTokens <= 0 ? promptTokens + completionTokens : totalTokens);
+                        }
+
+                        if (!doc.RootElement.TryGetProperty("choices", out var choices)
+                            || choices.ValueKind != JsonValueKind.Array)
+                        {
+                            continue;
+                        }
+
+                        var first = choices.EnumerateArray().FirstOrDefault();
+                        if (first.ValueKind != JsonValueKind.Object
+                            || !first.TryGetProperty("delta", out var delta)
+                            || delta.ValueKind != JsonValueKind.Object)
+                        {
+                            continue;
+                        }
+
+                        var contentDelta = FirstString(delta, "content");
+                        var reasoningDelta = FirstString(delta, "reasoning_content", "reasoning");
+                        if (firstTokenMs <= 0 && (contentDelta.Length > 0 || reasoningDelta.Length > 0))
+                        {
+                            firstTokenMs = Math.Max(1, (int)watch.ElapsedMilliseconds);
+                        }
+
+                        if (contentDelta.Length > 0)
+                        {
+                            content.Append(contentDelta);
+                            progress?.Report(contentDelta);
+                        }
+
+                        reasoning.Append(reasoningDelta);
+                    }
+                    catch (JsonException)
+                    {
+                    }
+                }
+
                 watch.Stop();
+                var streamedContent = content.ToString().Trim();
                 return new ModelCompletionResult(
-                    false,
+                    !string.IsNullOrWhiteSpace(streamedContent),
                     baseUrl,
-                    model,
-                    "",
-                    "",
+                    string.IsNullOrWhiteSpace(responseModel) ? model : responseModel,
+                    streamedContent,
+                    reasoning.ToString().Trim(),
                     (int)watch.ElapsedMilliseconds,
-                    0,
-                    0,
-                    0,
-                    FriendlyProviderHttpError(errorBody, response.ReasonPhrase, baseUrl, config.ApiToken),
-                    DateTimeOffset.Now);
+                    usage.PromptTokens,
+                    usage.CompletionTokens,
+                    usage.TotalTokens,
+                    string.IsNullOrWhiteSpace(streamedContent) ? EmptyCompletionError : "",
+                    DateTimeOffset.Now,
+                    telemetry.TokensPerSecond,
+                    firstTokenMs,
+                    telemetry.ResponseId,
+                    telemetry.ModelLoadTimeMs);
             }
-
-            var content = new StringBuilder();
-            var reasoning = new StringBuilder();
-            var responseModel = "";
-            var usage = new ModelTokenUsage(0, 0, 0);
-            await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
-            using var reader = new StreamReader(stream);
-            while (await reader.ReadLineAsync(timeout.Token) is { } line)
-            {
-                if (!line.StartsWith("data:", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var data = line[5..].Trim();
-                if (string.IsNullOrWhiteSpace(data))
-                {
-                    continue;
-                }
-
-                if (data.Equals("[DONE]", StringComparison.OrdinalIgnoreCase))
-                {
-                    break;
-                }
-
-                try
-                {
-                    using var doc = JsonDocument.Parse(data);
-                    if (string.IsNullOrWhiteSpace(responseModel))
-                    {
-                        responseModel = FirstString(doc.RootElement, "model");
-                    }
-
-                    if (doc.RootElement.TryGetProperty("usage", out var usageElement)
-                        && usageElement.ValueKind == JsonValueKind.Object)
-                    {
-                        var promptTokens = GetTokenCount(usageElement, "prompt_tokens");
-                        var completionTokens = GetTokenCount(usageElement, "completion_tokens");
-                        var totalTokens = GetTokenCount(usageElement, "total_tokens");
-                        usage = new ModelTokenUsage(promptTokens, completionTokens, totalTokens <= 0 ? promptTokens + completionTokens : totalTokens);
-                    }
-
-                    if (!doc.RootElement.TryGetProperty("choices", out var choices)
-                        || choices.ValueKind != JsonValueKind.Array)
-                    {
-                        continue;
-                    }
-
-                    var first = choices.EnumerateArray().FirstOrDefault();
-                    if (first.ValueKind != JsonValueKind.Object
-                        || !first.TryGetProperty("delta", out var delta)
-                        || delta.ValueKind != JsonValueKind.Object)
-                    {
-                        continue;
-                    }
-
-                    var contentDelta = FirstString(delta, "content");
-                    if (contentDelta.Length > 0)
-                    {
-                        content.Append(contentDelta);
-                        progress?.Report(contentDelta);
-                    }
-
-                    reasoning.Append(FirstString(delta, "reasoning_content", "reasoning"));
-                }
-                catch (JsonException)
-                {
-                }
-            }
-
-            watch.Stop();
-            var streamedContent = content.ToString().Trim();
-            return new ModelCompletionResult(
-                !string.IsNullOrWhiteSpace(streamedContent),
-                baseUrl,
-                string.IsNullOrWhiteSpace(responseModel) ? model : responseModel,
-                streamedContent,
-                reasoning.ToString().Trim(),
-                (int)watch.ElapsedMilliseconds,
-                usage.PromptTokens,
-                usage.CompletionTokens,
-                usage.TotalTokens,
-                string.IsNullOrWhiteSpace(streamedContent) ? EmptyCompletionError : "",
-                DateTimeOffset.Now);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -697,6 +884,21 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         return $"{trimmed}/api";
     }
 
+    public static string NormalizeLlamaCppApiBase(string value)
+    {
+        var trimmed = string.IsNullOrWhiteSpace(value) ? "http://127.0.0.1:8080" : value.Trim().TrimEnd('/');
+        if (trimmed.EndsWith("/api/v1", StringComparison.OrdinalIgnoreCase))
+        {
+            trimmed = trimmed[..^7].TrimEnd('/');
+        }
+        else if (trimmed.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+        {
+            trimmed = trimmed[..^3].TrimEnd('/');
+        }
+
+        return trimmed;
+    }
+
     public static int CountModels(string json)
     {
         return ParseModelNames(json).Count;
@@ -787,6 +989,34 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         }
 
         return new ModelTokenUsage(promptTokens, completionTokens, totalTokens);
+    }
+
+    public static ModelProviderTelemetry ExtractLlamaCppTelemetry(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return ExtractLlamaCppTelemetry(doc.RootElement);
+    }
+
+    private static ModelProviderTelemetry ExtractLlamaCppTelemetry(JsonElement root)
+    {
+        var responseId = FirstString(root, "id", "response_id");
+        if (!root.TryGetProperty("timings", out var timings) || timings.ValueKind != JsonValueKind.Object)
+        {
+            return new ModelProviderTelemetry(0, 0, responseId);
+        }
+
+        // llama-server's OpenAI-compatible response adds its native timings
+        // object. Only consume explicitly reported values; prompt duration is
+        // not time-to-first-token and must not be presented as such.
+        var tokensPerSecond = FirstDouble(
+            timings,
+            "predicted_per_second",
+            "tokens_per_second");
+        var timeToFirstTokenMs = FirstDurationMs(
+            timings,
+            ("time_to_first_token_ms", 1d),
+            ("ttft_ms", 1d));
+        return new ModelProviderTelemetry(tokensPerSecond, timeToFirstTokenMs, responseId);
     }
 
     public static string ExtractNativeChatContent(string json)
@@ -1264,6 +1494,33 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         return timeout;
     }
 
+    private static bool IsTransientLlamaCppFailure(HttpStatusCode statusCode, string body)
+    {
+        if (statusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable)
+        {
+            return true;
+        }
+
+        if ((int)statusCode is < 409 or >= 600 || string.IsNullOrWhiteSpace(body))
+        {
+            return false;
+        }
+
+        var safePrefix = body.Length <= 4096 ? body : body[..4096];
+        return safePrefix.Contains("loading", StringComparison.OrdinalIgnoreCase)
+            || safePrefix.Contains("busy", StringComparison.OrdinalIgnoreCase)
+            || safePrefix.Contains("temporarily unavailable", StringComparison.OrdinalIgnoreCase)
+            || safePrefix.Contains("unavailable_error", StringComparison.OrdinalIgnoreCase)
+            || safePrefix.Contains("no slot", StringComparison.OrdinalIgnoreCase)
+            || safePrefix.Contains("queue full", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Task DelayLlamaCppRetryAsync(int attempt, CancellationToken cancellationToken)
+    {
+        var delay = attempt <= 0 ? TimeSpan.FromMilliseconds(150) : TimeSpan.FromMilliseconds(400);
+        return Task.Delay(delay, cancellationToken);
+    }
+
     private static void ApplyAuthorization(HttpRequestMessage request, ModelProviderConfig config)
     {
         if (!string.IsNullOrWhiteSpace(config.ApiToken))
@@ -1315,6 +1572,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         {
             ModelProviderApiModes.LmStudioNative => "LM Studio native",
             ModelProviderApiModes.OllamaNative => "Ollama native",
+            ModelProviderApiModes.LlamaCppNative => "llama.cpp native",
             _ => "OpenAI-compatible"
         };
     }

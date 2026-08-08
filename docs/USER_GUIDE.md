@@ -7,11 +7,11 @@ The app is designed for local experimentation with model behavior. You can creat
 ## Quick Start
 
 1. Install AI Arena from the versioned setup file.
-2. Start LM Studio or another OpenAI-compatible provider.
+2. Start LM Studio, another OpenAI-compatible provider, or your own `llama-server` process.
 3. Open Settings, then **Models & provider**.
 4. Choose a provider preset, press **Use preset**, and select a **Default model**.
 5. Press **Test connection**.
-6. Open **Custom connection** only when you need to change the connection type, server address, or access token. A standard LM Studio OpenAI-compatible address is `http://127.0.0.1:1234/v1`.
+6. Open **Custom connection** only when you need to change the connection type, server address, or access token. A standard LM Studio OpenAI-compatible address is `http://127.0.0.1:1234/v1`; a typical user-started llama.cpp server uses **llama.cpp native /v1** at `http://127.0.0.1:8080/v1`.
 7. Optionally use **Model recommendations** to scan local hardware and recommend a multi-model role spread.
 8. Open AI Lab, then use Match Setup in the top rail to choose a preset, role pack, style, pressure, absurdity level, AI Choice, or Wild Seed.
 9. Close Match Setup and run 1 TURN or AUTO CHAT.
@@ -42,6 +42,7 @@ The right rail contains:
 
 - Arena Controls.
 - Agent Performance.
+- Model Comparison & QA.
 - Operator Turn.
 
 In AI Collaborate, the right rail changes to Collaborate controls: mode, provider, and team model assignments.
@@ -173,6 +174,20 @@ Agent Performance cards show each participant's activity:
 - Activity bars.
 
 Click a performance card to open a compact detail popup. The popup shows persona preview, memory count, recent turns, latency, context, tokens, failures, web usage, and activity bars.
+
+## Model Comparison & QA
+
+Open **Model Comparison & QA** in the AI Lab right rail when you want repeatable, local evidence for a model change. First run the scenario and choose **Capture baseline**. Import or keep the same Match Setup, change only the provider/model assignment you intend to test, run it again, then choose **Compare current**. Comparison is allowed only when the model-neutral scenario fingerprint matches; a different scenario is labelled not comparable instead of producing a misleading delta.
+
+The card compares evidenced aggregates such as completed and failed turns, latency, generated tokens, throughput, and local Battle Review quality. Each metric includes sample counts and a non-colour status marker. Missing telemetry remains **unavailable** and is not converted to zero. **Copy evidence** exports aggregate evaluation JSON without transcript bodies, raw provider responses, provider error bodies, or credentials. **Copy replay setup** copies the exact secret-free Match Setup JSON used for replay.
+
+**Run QA** evaluates setup identity, the replay package, minimum turn sample, provider/transcript errors, stuck thinking state, telemetry completeness, quality sample, optional Internet evidence, and baseline comparability/regression. The result is:
+
+- **Ready** when every required gate passes.
+- **Partial** when no required gate fails but required evidence is warned or unavailable.
+- **Blocked** when a required gate fails.
+
+Interruption-recovery and provider-reconnect evidence is reported as optional and unavailable unless a probe supplied it; the app does not infer that those paths passed. Once supplied, either probe becomes a required gate and a failed result blocks readiness. Local evaluation history is bounded to 48 aggregate records and 4 MiB under `%LOCALAPPDATA%\AI Arena\configs\arena-evaluation-history.json`. It preserves matching baselines and separately timed repeat trials where possible, uses atomic replacement and corruption recovery, and does not retain transcript bodies or API credentials.
 
 ## AI World
 
@@ -632,7 +647,7 @@ Restore points save the current transcript, cast, locks, provider settings, and 
 
 Scenario templates save match framing, cast, locks, participants, and model assignments for reuse under `%LOCALAPPDATA%\AI Arena\templates`.
 
-App settings and AI Collaborate history are saved under `%LOCALAPPDATA%\AI Arena\configs`. Exports, logs, and cache files have their own folders under the same AI Arena data root.
+App settings, AI Collaborate history, and bounded aggregate Model Comparison & QA history are saved under `%LOCALAPPDATA%\AI Arena\configs`. Exports, logs, and cache files have their own folders under the same AI Arena data root.
 
 ## Settings
 
@@ -644,14 +659,18 @@ The primary setup path stays short: choose a provider, choose the default model,
 
 Optional controls are grouped separately:
 
-- **Custom connection**: connection type, server address, and optional access token. OpenAI-compatible, LM Studio native, and Ollama native connections are supported.
+- **Custom connection**: connection type, server address, and optional access token. OpenAI-compatible, LM Studio native, Ollama native, and llama.cpp native connections are supported.
 - **Saved setups**: save or reuse provider and role-routing configurations. Access tokens are never included.
 - **Role routing**: assign Alpha, Beta, Gamma, Delta, and Narrator individually, add per-role temperature or response-limit overrides, test role-model access, or make every role follow the default model again.
 - **Model recommendations**: scans GPU/RAM and provider models, then recommends a conservative, balanced, performance, max-variety, low-VRAM, or Absurd Lab spread. **Use recommendation** saves it to the current session. LM Studio still controls final GPU offload and device placement.
-- **Local model tools**: preload, unload, download, or pull models when using an LM Studio or Ollama native connection.
+- **Local model tools**: preload, unload, download, or pull models when using an LM Studio or Ollama native connection. In `llamacpp_native` mode, the dedicated runtime card inspects the configured user-owned `llama-server`; it never downloads, launches, stops, or replaces that process.
 - **Advanced model calls**: timeout, temperature, response token limit, provider context, reasoning, idle unload, and LM Studio stateful-chat behavior.
 
 The footer's **Save session changes** action saves model-call, context, and internet changes to the current session. Appearance and Agent workspace preferences save immediately.
+
+For llama.cpp, model turns use the standard OpenAI-compatible `/v1/chat/completions` route. **Inspect** or **Reconnect** capability-detects the optional `/health`, `/props`, `/slots`, router `/models`, and OpenAI `/v1/models` endpoints. Router **Preload** and **Unload** controls are enabled only after model lifecycle support is observed. Unsupported endpoints and absent fields remain **Not reported** or unavailable. File size and parameter count stay separately labelled and are not claimed as measured RAM or VRAM use; context and GPU-layer settings belong to the user-started server process.
+
+When llama.cpp rejects a request before acceptance with 429, 503, or an explicit loading/busy/unavailable/no-slot/queue-full signal, AI Arena makes at most two short retries. Generic OpenAI-compatible providers keep their existing no-retry behavior. Once a streaming response has been accepted, AI Arena never replays it, even if the stream later ends early or is malformed.
 
 ### Auto Chat
 
@@ -700,14 +719,14 @@ For an automated silent full install, pass `/TYPE=full /SEARXNGLICENSE=accept` t
 
 ## Provider Troubleshooting
 
-If LM Studio or another provider is closed, the app may show a provider unreachable message.
+If LM Studio, llama.cpp, or another provider is closed, the app may show a provider unreachable message.
 
 Check:
 
-- LM Studio server is running.
+- The selected provider server is running. For llama.cpp, you own and start `llama-server`; AI Arena does not install or manage the process.
 - A model is loaded.
 - The base URL and port are correct.
-- The selected connection type matches the provider: OpenAI-compatible `/v1`, LM Studio native `/api/v1`, or Ollama native `/api`.
+- The selected connection type matches the provider: OpenAI-compatible `/v1`, LM Studio native `/api/v1`, Ollama native `/api`, or llama.cpp native `/v1`.
 - The chosen model name exactly matches the provider model list.
 
 If a model times out:
@@ -719,6 +738,8 @@ If a model times out:
 - Stop Auto Chat and test with 1 TURN.
 
 If GPU telemetry is unavailable, the app can still run. Model execution depends on your provider, not on AI Arena being tied to a specific GPU vendor.
+
+If llama.cpp runtime fields show **Not reported**, press **Inspect** and review the capability warning. A healthy build may omit `/props`, `/slots`, or router lifecycle endpoints; that limits evidence and controls but does not by itself prove `/v1` chat is unavailable. A 503/loading state can also mean the user-owned server is still loading a model.
 
 ## Practical Tips
 

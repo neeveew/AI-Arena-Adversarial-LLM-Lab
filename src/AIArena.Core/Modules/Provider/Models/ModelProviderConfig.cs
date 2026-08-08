@@ -60,6 +60,7 @@ public static class ModelProviderApiModes
     public const string OpenAiCompatible = "openai_compatible";
     public const string LmStudioNative = "lmstudio_native";
     public const string OllamaNative = "ollama_native";
+    public const string LlamaCppNative = "llamacpp_native";
 
     public static string Normalize(string value)
     {
@@ -72,6 +73,8 @@ public static class ModelProviderApiModes
         {
             "lm_studio_native" or "lmstudio" or "lmstudio_native" or "native" => LmStudioNative,
             "ollama" or "ollama_native" or "ollama-native" or "ollama_api" or "ollama-api" => OllamaNative,
+            "llama.cpp" or "llama_cpp" or "llama-cpp" or "llamacpp" or "llama_server" or "llama-server"
+                or "llama_cpp_native" or "llama-cpp-native" or "llamacpp_native" => LlamaCppNative,
             "openai" or "openai_compatible" or "openai-compatible" or "compat" => OpenAiCompatible,
             _ => OpenAiCompatible
         };
@@ -81,7 +84,8 @@ public static class ModelProviderApiModes
     {
         var normalized = Normalize(value);
         return normalized.Equals(LmStudioNative, StringComparison.OrdinalIgnoreCase)
-            || normalized.Equals(OllamaNative, StringComparison.OrdinalIgnoreCase);
+            || normalized.Equals(OllamaNative, StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals(LlamaCppNative, StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsLmStudioNative(string value)
@@ -92,6 +96,11 @@ public static class ModelProviderApiModes
     public static bool IsOllamaNative(string value)
     {
         return Normalize(value).Equals(OllamaNative, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsLlamaCppNative(string value)
+    {
+        return Normalize(value).Equals(LlamaCppNative, StringComparison.OrdinalIgnoreCase);
     }
 }
 

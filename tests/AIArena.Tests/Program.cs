@@ -47,6 +47,11 @@ var tests = new List<(string Name, Action Test)>
     ("extracts assistant reasoning content", ExtractAssistantReasoningContent),
     ("extracts fallback assistant reasoning field", ExtractFallbackAssistantReasoningField),
     ("extracts OpenAI-compatible token usage", ExtractOpenAiCompatibleTokenUsage),
+    ("normalizes llama.cpp native routing", NormalizesLlamaCppNativeRouting),
+    ("runs llama.cpp compatible chat with native timings", RunsLlamaCppCompatibleChatWithNativeTimings),
+    ("lists llama.cpp router models before compatible fallback", ListsLlamaCppRouterModelsBeforeCompatibleFallback),
+    ("retries only unaccepted transient llama.cpp requests", RetriesOnlyUnacceptedTransientLlamaCppRequests),
+    ("llama.cpp retry delay honors caller cancellation", LlamaCppRetryDelayHonorsCallerCancellation),
     ("extracts LM Studio native chat response", ExtractLmStudioNativeChatResponse),
     ("runs LM Studio native chat endpoint", RunsLmStudioNativeChatEndpoint),
     ("continues LM Studio native chat by response id", ContinuesLmStudioNativeChatByResponseId),
@@ -535,6 +540,195 @@ static void ExtractOpenAiCompatibleTokenUsage()
     Require(usage.PromptTokens == 12, "prompt tokens mismatch");
     Require(usage.CompletionTokens == 34, "completion tokens mismatch");
     Require(usage.TotalTokens == 46, "total tokens mismatch");
+}
+
+static void NormalizesLlamaCppNativeRouting()
+{
+    foreach (var alias in new[] { "llama.cpp", "llama_cpp", "llama-server", "llamacpp_native" })
+    {
+        Require(
+            ModelProviderApiModes.Normalize(alias) == ModelProviderApiModes.LlamaCppNative,
+            $"llama.cpp alias '{alias}' did not normalize to the native mode");
+    }
+
+    Require(ModelProviderApiModes.IsNative(ModelProviderApiModes.LlamaCppNative), "llama.cpp mode should be a native local-provider mode");
+    Require(ModelProviderApiModes.IsLlamaCppNative(" LLAMA.CPP "), "llama.cpp mode predicate should normalize aliases");
+    Require(
+        ModelProviderClient.NormalizeLlamaCppApiBase("http://127.0.0.1:8080/v1") == "http://127.0.0.1:8080",
+        "llama.cpp runtime base should remove /v1");
+    Require(
+        ModelProviderClient.NormalizeBaseUrl("http://127.0.0.1:8080") == "http://127.0.0.1:8080/v1",
+        "llama.cpp compatible base should retain the standard /v1 route");
+}
+
+static void RunsLlamaCppCompatibleChatWithNativeTimings()
+{
+    var handler = new CaptureHandler("""
+    {
+      "id": "chatcmpl-llama-42",
+      "model": "qwen3-4b-q4_k_m.gguf",
+      "choices": [
+        {"message":{"role":"assistant","reasoning_content":"check constraints","content":"native-compatible answer"}}
+      ],
+      "usage": {"prompt_tokens":11,"completion_tokens":7,"total_tokens":18},
+      "timings": {"predicted_per_second":42.75,"prompt_ms":900}
+    }
+    """);
+    var client = new ModelProviderClient(new HttpClient(handler));
+
+    var result = client.CompleteChatAsync(
+        new ModelProviderConfig
+        {
+            BaseUrl = "http://127.0.0.1:8080",
+            ApiMode = ModelProviderApiModes.LlamaCppNative,
+            ApiToken = "local-token",
+            Model = "qwen3-4b-q4_k_m.gguf",
+            ContextLength = 32768,
+            Reasoning = "high",
+            Timeout = 5
+        },
+        [new ModelChatMessage("user", "answer locally")]).GetAwaiter().GetResult();
+
+    Require(result.Ok, $"llama.cpp compatible completion failed: {result.Error}");
+    Require(handler.RequestUri?.AbsoluteUri == "http://127.0.0.1:8080/v1/chat/completions", "llama.cpp chat should use its OpenAI-compatible route");
+    Require(handler.Authorization == "Bearer local-token", "llama.cpp chat should retain bearer-token support");
+    Require(result.Model == "qwen3-4b-q4_k_m.gguf", "llama.cpp response model should be preserved");
+    Require(result.Text == "native-compatible answer", "llama.cpp response content mismatch");
+    Require(result.Reasoning == "check constraints", "llama.cpp reasoning_content mismatch");
+    Require(result.PromptTokens == 11 && result.CompletionTokens == 7 && result.TotalTokens == 18, "llama.cpp usage mismatch");
+    Require(Math.Abs(result.TokensPerSecond - 42.75) < 0.001, "llama.cpp native throughput mismatch");
+    Require(result.ResponseId == "chatcmpl-llama-42", "llama.cpp response id mismatch");
+    Require(result.TimeToFirstTokenMs == 0, "prompt duration must not be reported as llama.cpp TTFT");
+    Require(!handler.Body.Contains("context_length", StringComparison.Ordinal), "llama.cpp compatible requests must not invent a context-length request option");
+    Require(!handler.Body.Contains("gpu_layers", StringComparison.Ordinal), "llama.cpp compatible requests must not invent GPU-layer request options");
+    Require(!handler.Body.Contains("reasoning", StringComparison.Ordinal), "llama.cpp compatible requests must not send unsupported reasoning levels");
+}
+
+static void ListsLlamaCppRouterModelsBeforeCompatibleFallback()
+{
+    Require(ModelProviderClient.LlamaCppModelProbeTimeoutSeconds(0) == 1, "llama.cpp model probes should retain a one-second minimum");
+    Require(ModelProviderClient.LlamaCppModelProbeTimeoutSeconds(3) == 3, "short llama.cpp model probe timeouts should be preserved");
+    Require(ModelProviderClient.LlamaCppModelProbeTimeoutSeconds(60) == 5, "router discovery should not inherit a minute-long generation timeout");
+
+    var handler = new ProviderSequenceHandler(
+        (HttpStatusCode.OK, """{"data":[{"id":"alpha-q4_k_m.gguf","status":{"value":"unloaded"}},{"id":"beta-q8_0.gguf","status":{"value":"loaded"}}]}"""),
+        (HttpStatusCode.InternalServerError, """{"error":{"message":"fallback should not be requested"}}"""));
+    var client = new ModelProviderClient(new HttpClient(handler));
+
+    var result = client.ListModelsAsync(new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8080/v1",
+        ApiMode = ModelProviderApiModes.LlamaCppNative,
+        Timeout = 5
+    }).GetAwaiter().GetResult();
+
+    Require(result.Ok, $"llama.cpp router model list failed: {result.Error}");
+    Require(result.Models.SequenceEqual(["alpha-q4_k_m.gguf", "beta-q8_0.gguf"]), "router inventory should include loaded and unloaded llama.cpp models");
+    Require(handler.Requests.Count == 1, "a successful router inventory should not request the compatible fallback");
+    Require(handler.Requests[0].AbsoluteUri == "http://127.0.0.1:8080/models", "llama.cpp model listing should probe the router endpoint first");
+
+    var fallbackHandler = new ProviderSequenceHandler(
+        (HttpStatusCode.OK, "not-json"),
+        (HttpStatusCode.OK, """{"data":[{"id":"single-model.gguf","owned_by":"llamacpp"}]}"""));
+    var fallback = new ModelProviderClient(new HttpClient(fallbackHandler)).ListModelsAsync(new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8080/v1",
+        ApiMode = ModelProviderApiModes.LlamaCppNative,
+        Timeout = 5
+    }).GetAwaiter().GetResult();
+    Require(fallback.Ok && fallback.Models.SequenceEqual(["single-model.gguf"]), "an unreadable or unavailable router inventory should fall back to /v1/models");
+    Require(fallbackHandler.Requests.Select(uri => uri.AbsolutePath).SequenceEqual(["/models", "/v1/models"]), "llama.cpp fallback should stay on the compatible model inventory route");
+
+    var transportHandler = new AsyncProviderHttpHandler((request, _) =>
+    {
+        if (request.RequestUri?.AbsolutePath == "/models")
+        {
+            throw new HttpRequestException("simulated router transport failure");
+        }
+
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"data":[{"id":"transport-fallback.gguf","owned_by":"llamacpp"}]}""", Encoding.UTF8, "application/json")
+        });
+    });
+    var transportFallback = new ModelProviderClient(new HttpClient(transportHandler)).ListModelsAsync(new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8080/v1",
+        ApiMode = ModelProviderApiModes.LlamaCppNative,
+        Timeout = 60
+    }).GetAwaiter().GetResult();
+    Require(transportFallback.Ok && transportFallback.Models.SequenceEqual(["transport-fallback.gguf"]), "a router transport exception should degrade into an independent compatible inventory attempt");
+    Require(transportHandler.Requests.Select(uri => uri.AbsolutePath).SequenceEqual(["/models", "/v1/models"]), "router transport failure must not suppress the compatible fallback request");
+}
+
+static void RetriesOnlyUnacceptedTransientLlamaCppRequests()
+{
+    const string success = """{"id":"retry-ok","choices":[{"message":{"content":"accepted once"}}]}""";
+    var transient = (HttpStatusCode.ServiceUnavailable, """{"error":{"message":"all slots are busy","type":"unavailable_error"}}""");
+
+    var llamaHandler = new ProviderSequenceHandler(transient, (HttpStatusCode.OK, success));
+    var llamaClient = new ModelProviderClient(new HttpClient(llamaHandler));
+    var llamaResult = llamaClient.CompleteChatAsync(
+        LlamaConfig(),
+        [new ModelChatMessage("user", "retry before acceptance")]).GetAwaiter().GetResult();
+    Require(llamaResult.Ok && llamaResult.Text == "accepted once", $"transient llama.cpp request did not recover: {llamaResult.Error}");
+    Require(llamaHandler.Requests.Count == 2, "llama.cpp should retry a transient request rejected before acceptance");
+
+    var compatibleHandler = new ProviderSequenceHandler(transient, (HttpStatusCode.OK, success));
+    var compatibleClient = new ModelProviderClient(new HttpClient(compatibleHandler));
+    var compatibleResult = compatibleClient.CompleteChatAsync(
+        LlamaConfig(ModelProviderApiModes.OpenAiCompatible),
+        [new ModelChatMessage("user", "do not broaden retry policy")]).GetAwaiter().GetResult();
+    Require(!compatibleResult.Ok, "generic OpenAI-compatible requests should retain their existing no-retry behavior");
+    Require(compatibleHandler.Requests.Count == 1, "llama.cpp retry policy must not affect generic compatible providers");
+
+    var streamingHandler = new ProviderSequenceHandler(
+        (HttpStatusCode.OK, "data: {\"id\":\"stream-once\",\"choices\":[{\"delta\":{\"content\":\"partial accepted response\"}}]}\n\n"),
+        (HttpStatusCode.OK, "data: {\"choices\":[{\"delta\":{\"content\":\"duplicate\"}}]}\n\ndata: [DONE]\n\n"));
+    var streamingClient = (IStreamingModelProviderClient)new ModelProviderClient(new HttpClient(streamingHandler));
+    var streamingResult = streamingClient.CompleteChatStreamingAsync(
+        LlamaConfig(),
+        [new ModelChatMessage("user", "never replay accepted streams")],
+        null).GetAwaiter().GetResult();
+    Require(streamingResult.Ok && streamingResult.Text == "partial accepted response", $"accepted llama.cpp stream failed: {streamingResult.Error}");
+    Require(streamingHandler.Requests.Count == 1, "an accepted llama.cpp stream must never be replayed");
+
+    static ModelProviderConfig LlamaConfig(string apiMode = ModelProviderApiModes.LlamaCppNative) => new()
+    {
+        BaseUrl = "http://127.0.0.1:8080/v1",
+        ApiMode = apiMode,
+        Model = "local-model",
+        Timeout = 5
+    };
+}
+
+static void LlamaCppRetryDelayHonorsCallerCancellation()
+{
+    var handler = new ProviderSequenceHandler(
+        (HttpStatusCode.TooManyRequests, """{"error":{"message":"queue full"}}"""),
+        (HttpStatusCode.OK, """{"choices":[{"message":{"content":"too late"}}]}"""));
+    var client = new ModelProviderClient(new HttpClient(handler));
+    using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(40));
+
+    try
+    {
+        _ = client.CompleteChatAsync(
+            new ModelProviderConfig
+            {
+                BaseUrl = "http://127.0.0.1:8080/v1",
+                ApiMode = ModelProviderApiModes.LlamaCppNative,
+                Model = "local-model",
+                Timeout = 30
+            },
+            [new ModelChatMessage("user", "cancel queued retry")],
+            cancellation.Token).GetAwaiter().GetResult();
+        throw new InvalidOperationException("llama.cpp retry converted caller cancellation into a provider result");
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+    }
+
+    Require(handler.Requests.Count == 1, "caller cancellation should stop llama.cpp before the retry request is issued");
 }
 
 static void ExtractLmStudioNativeChatResponse()
@@ -1093,8 +1287,16 @@ static void ProviderClientPropagatesCallerCancellation()
         Model = "test-model",
         Timeout = 60
     };
+    var llamaCpp = new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8080/v1",
+        ApiMode = ModelProviderApiModes.LlamaCppNative,
+        Model = "test-model",
+        Timeout = 60
+    };
 
     RequireCallerCancellation(token => client.ListModelsAsync(openAi, token), "model listing");
+    RequireCallerCancellation(token => client.ListModelsAsync(llamaCpp, token), "llama.cpp router model listing");
     RequireCallerCancellation(token => client.CompleteChatAsync(openAi, messages, token), "OpenAI-compatible chat");
     RequireCallerCancellation(token => client.CompleteChatAsync(native, messages, token), "native chat");
     RequireCallerCancellation(token => client.CompleteChatAsync(ollama, messages, token), "Ollama chat");
@@ -6393,6 +6595,49 @@ public sealed class CaptureHandler : HttpMessageHandler
         {
             Content = new StringContent(_responseBody, Encoding.UTF8, "application/json")
         };
+    }
+}
+
+public sealed class ProviderSequenceHandler : HttpMessageHandler
+{
+    private readonly Queue<(HttpStatusCode StatusCode, string Body)> responses;
+
+    public ProviderSequenceHandler(params (HttpStatusCode StatusCode, string Body)[] responses)
+    {
+        this.responses = new Queue<(HttpStatusCode StatusCode, string Body)>(responses);
+    }
+
+    public List<Uri> Requests { get; } = new();
+
+    public List<string> Bodies { get; } = new();
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Requests.Add(request.RequestUri!);
+        Bodies.Add(request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken));
+        if (responses.Count == 0)
+        {
+            throw new InvalidOperationException("Provider test issued more HTTP requests than expected.");
+        }
+
+        var response = responses.Dequeue();
+        var mediaType = response.Body.StartsWith("data:", StringComparison.Ordinal) ? "text/event-stream" : "application/json";
+        return new HttpResponseMessage(response.StatusCode)
+        {
+            Content = new StringContent(response.Body, Encoding.UTF8, mediaType)
+        };
+    }
+}
+
+public sealed class AsyncProviderHttpHandler(
+    Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond) : HttpMessageHandler
+{
+    public List<Uri> Requests { get; } = new();
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Requests.Add(request.RequestUri!);
+        return respond(request, cancellationToken);
     }
 }
 
