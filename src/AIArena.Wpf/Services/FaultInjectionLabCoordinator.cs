@@ -251,10 +251,20 @@ public sealed class FaultInjectionLabCoordinator : IDisposable
         control.SetObservations(observations
             .OrderByDescending(item => item.Sequence)
             .Take(256)
-            .Select(item => new FaultObservationItem(
-                $"Sequence {item.Sequence} · occurrence {item.Occurrence} · {FaultLabel(item.InjectedCause)}",
-                $"Cause: {item.CauseEvidence.State} at the {OperationLabel(item.Operation)} boundary.",
-                $"Recovery: {item.RecoveryEvidence.State} — no higher-level recovery measurement is claimed.")));
+            .Select(ObservationItem));
+
+    internal static FaultObservationItem ObservationItem(ArenaFaultObservation item)
+    {
+        var effect = EffectLabel(item.InjectedEffect);
+        var effectText = item.ObservedOutcome == ArenaFaultObservedOutcome.CallerCancelledBeforeEffect
+            ? $"Effect not observed: caller cancellation pre-empted the scheduled {FaultLabel(item.InjectedCause)} condition."
+            : $"Effect: {effect}.";
+        return new(
+            $"Sequence {item.Sequence} · occurrence {item.Occurrence} · {FaultLabel(item.InjectedCause)}",
+            effectText,
+            $"Cause: {item.CauseEvidence.State} at the {OperationLabel(item.Operation)} boundary.",
+            $"Recovery: {item.RecoveryEvidence.State} — no higher-level recovery measurement is claimed.");
+    }
 
     private static int ParseInt(string value, string label, int minimum, int maximum)
     {
@@ -288,6 +298,19 @@ public sealed class FaultInjectionLabCoordinator : IDisposable
         ArenaProviderFaultOperation.ChatCompletion => "chat completion",
         ArenaProviderFaultOperation.StreamingChatCompletion => "streaming chat completion",
         _ => "provider"
+    };
+
+    private static string EffectLabel(ArenaFaultInjectedEffect effect) => effect switch
+    {
+        ArenaFaultInjectedEffect.CallerCancelledBeforeEffect => "caller cancelled before the scheduled effect",
+        ArenaFaultInjectedEffect.TimeoutElapsed => "bounded timeout elapsed",
+        ArenaFaultInjectedEffect.ConnectionDropped => "connection dropped",
+        ArenaFaultInjectedEffect.MalformedStreamRejected => "malformed stream rejected before assistant progress",
+        ArenaFaultInjectedEffect.CapacityRejected => "provider capacity rejected the request",
+        ArenaFaultInjectedEffect.EmptyCompletion => "empty completion rejected",
+        ArenaFaultInjectedEffect.StreamInterrupted => "partial stream interrupted",
+        ArenaFaultInjectedEffect.ContextLimitRejected => "context limit rejected the request",
+        _ => "provider failure injected"
     };
 
     private void ThrowIfDisposed()

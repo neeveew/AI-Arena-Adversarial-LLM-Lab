@@ -12,6 +12,7 @@ public partial class InAppQaInspectorControl : UserControl
     internal const double CompactLayoutThreshold = 760;
     private InAppQaInspectorCoordinator? coordinator;
     private bool suppressArtifactSelection;
+    private bool readOnlyMode;
 
     public InAppQaInspectorControl()
     {
@@ -30,6 +31,21 @@ public partial class InAppQaInspectorControl : UserControl
 
     internal void Initialize(InAppQaInspectorCoordinator value) =>
         coordinator = value ?? throw new ArgumentNullException(nameof(value));
+
+    internal void SetReadOnlyMode(bool value)
+    {
+        readOnlyMode = value;
+        RunSuiteButton.IsEnabled = !value;
+        CancelSuiteButton.IsEnabled = false;
+        AcceptInspectionButton.IsEnabled = false;
+        AutomationProperties.SetItemStatus(QaInspectorRoot, value ? "read-only-capture" : "interactive");
+        if (value)
+        {
+            AutomationProperties.SetHelpText(
+                QaInspectorRoot,
+                "Isolated QA capture is read-only. Existing inspection reviews are preserved, and suite execution and acceptance are disabled.");
+        }
+    }
 
     internal void SetEvidenceChoices(IReadOnlyList<QaEvidenceChoice> choices, string? selectedRelativePath)
     {
@@ -87,14 +103,14 @@ public partial class InAppQaInspectorControl : UserControl
         RefreshEvidenceButton.IsEnabled = !busy;
         EvidenceRunPicker.IsEnabled = !busy;
         ArtifactList.IsEnabled = !busy;
-        AcceptInspectionButton.IsEnabled = !busy && AcceptInspectionButton.Tag as bool? == true;
+        AcceptInspectionButton.IsEnabled = !readOnlyMode && !busy && AcceptInspectionButton.Tag as bool? == true;
     }
 
     internal void SetAcceptanceAvailable(bool available)
     {
         AcceptInspectionButton.Tag = available;
-        AcceptInspectionButton.IsEnabled = available && RefreshEvidenceButton.IsEnabled;
-        AutomationProperties.SetItemStatus(AcceptInspectionButton, available ? "available" : "unavailable");
+        AcceptInspectionButton.IsEnabled = !readOnlyMode && available && RefreshEvidenceButton.IsEnabled;
+        AutomationProperties.SetItemStatus(AcceptInspectionButton, !readOnlyMode && available ? "available" : "unavailable");
     }
 
     internal void SetReviewProgress(int reviewed, int total, int unacceptedLimitations)
@@ -117,9 +133,9 @@ public partial class InAppQaInspectorControl : UserControl
 
     internal void SetSuiteBusy(bool busy)
     {
-        RunSuiteButton.IsEnabled = !busy;
+        RunSuiteButton.IsEnabled = !readOnlyMode && !busy;
         SuitePicker.IsEnabled = !busy;
-        CancelSuiteButton.IsEnabled = busy;
+        CancelSuiteButton.IsEnabled = !readOnlyMode && busy;
     }
 
     internal void SetSuiteProgress(string value)

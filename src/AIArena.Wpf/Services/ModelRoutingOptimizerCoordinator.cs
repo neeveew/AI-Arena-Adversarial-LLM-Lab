@@ -12,6 +12,7 @@ namespace AIArena.Wpf.Services;
 internal sealed record PersistedRoutingEvidenceContext(
     ArenaExperimentContract Experiment,
     string CurrentSetupFingerprint,
+    string CurrentPlanFingerprint,
     string? SelectedScenarioId,
     string AgentId,
     string CurrentModelId,
@@ -67,6 +68,7 @@ internal sealed class PersistedRoutingEvidenceSource : IRoutingEvidenceSource
         if (context is null)
             return Unavailable("No active experiment context is available.");
         if (!IsHash(context.CurrentSetupFingerprint)
+            || !IsHash(context.CurrentPlanFingerprint)
             || string.IsNullOrWhiteSpace(context.AgentId)
             || string.IsNullOrWhiteSpace(context.CurrentModelId))
             return Unavailable("The active routing context has no valid setup identity or current route.");
@@ -113,7 +115,7 @@ internal sealed class PersistedRoutingEvidenceSource : IRoutingEvidenceSource
         var setupFingerprint = scenario.SetupFingerprint;
 
         var cellByKey = expansion.Cells.ToDictionary(item => item.CellKey, StringComparer.Ordinal);
-        var compatibleRuns = loadedRuns.Runs
+        var identityCompatibleRuns = loadedRuns.Runs
             .Where(item => item.State == ArenaExperimentRunState.Completed
                 && string.Equals(item.ExperimentId, context.Experiment.Id, StringComparison.Ordinal)
                 && string.Equals(item.ExperimentFingerprint, expansion.ExperimentFingerprint, StringComparison.Ordinal)
@@ -121,6 +123,11 @@ internal sealed class PersistedRoutingEvidenceSource : IRoutingEvidenceSource
                 && string.Equals(cell.VariantFingerprint, item.VariantFingerprint, StringComparison.Ordinal))
             .OrderBy(item => item.CellKey, StringComparer.Ordinal)
             .ToImmutableArray();
+        var compatibleRuns = identityCompatibleRuns
+            .Where(item => ArenaExperimentRunPolicy.LatestAttemptMatchesPlan(item, context.CurrentPlanFingerprint))
+            .ToImmutableArray();
+        if (identityCompatibleRuns.Length != compatibleRuns.Length)
+            diagnostics.Add($"Ignored {identityCompatibleRuns.Length - compatibleRuns.Length} completed run(s) whose latest attempt does not match the current execution plan.");
         if (compatibleRuns.IsEmpty)
             diagnostics.Add("No completed runs match the active experiment fingerprint.");
 
@@ -198,6 +205,8 @@ internal sealed class PersistedRoutingEvidenceSource : IRoutingEvidenceSource
                 .ToImmutableArray();
             if (constraints.IsEmpty)
                 diagnostics.Add($"Trial-scoped execution constraints are unavailable for model {SafeReference(model)} because it has no compatible completed run.");
+            if (!constraints.Any(item => item.Kind == ArenaRouteConstraintKind.Hardware))
+                diagnostics.Add($"Current observed hardware evidence is unavailable for model {SafeReference(model)}; historical trials do not establish the current machine.");
             return new ArenaRouteCandidateEvidence(model, samplesByModel[model].ToImmutable(), constraints);
         }).ToImmutableArray();
 
@@ -224,7 +233,12 @@ internal sealed class PersistedRoutingEvidenceSource : IRoutingEvidenceSource
         ImmutableArray<ArenaRubricEvaluationResultContract> results,
         IReadOnlyDictionary<(string Id, string Version), ArenaRubricContract> rubrics)
     {
-        var runReferences = run.TrialIds.Append(run.Id).ToHashSet(StringComparer.Ordinal);
+        if (run.Attempts < 1)
+            return new(ObservedScoreKind.Unavailable, null, null);
+        var latestTrialId = ArenaExperimentRunPolicy.CreateTrialId(run.CellKey, run.Attempts);
+        if (!run.TrialIds.Contains(latestTrialId, StringComparer.Ordinal))
+            return new(ObservedScoreKind.Unavailable, null, null);
+        IReadOnlySet<string> runReferences = new HashSet<string>([latestTrialId], StringComparer.Ordinal);
         var scores = new List<(decimal Score, string ResultId)>();
         foreach (var result in results.OrderBy(item => item.Id, StringComparer.Ordinal))
         {
@@ -281,16 +295,6 @@ internal sealed class PersistedRoutingEvidenceSource : IRoutingEvidenceSource
         var suffix = StableSuffix(model, string.Join("\n", ordered.Select(item => item.Id)));
         return
         [
-            new(
-                $"constraint:trial-hardware:{suffix}",
-                ArenaRouteConstraintKind.Hardware,
-                $"Completed {ordered.Length} compatible trial(s) in this current local execution environment; no general hardware fitness is claimed.",
-                true,
-                new(
-                    $"constraint-evidence:trial-hardware:{suffix}",
-                    ArenaEvidenceState.Observed,
-                    "A compatible completed trial observed that this model executed in the current local environment.",
-                    ReferenceId: referenceRunId)),
             new(
                 $"constraint:trial-capability:{suffix}",
                 ArenaRouteConstraintKind.Capability,

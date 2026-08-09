@@ -1,6 +1,9 @@
 using System.Collections.Immutable;
 using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Automation;
 using AIArena.Core.Models;
@@ -54,6 +57,22 @@ internal static partial class Program
         RequireExperimentThrows<ExperimentLabInputException>(
             () => ExperimentLabCoordinator.BuildMatrixPreview(input with { MaxParallelism = "33" }, at),
             "matrix accepted unsafe parallelism");
+        Require(!ExperimentLabCoordinator.ShouldRetryTerminalCell(
+                    ArenaExperimentStatus.Interrupted,
+                    ArenaExperimentRunState.Completed)
+                && !ExperimentLabCoordinator.ShouldRetryTerminalCell(
+                    ArenaExperimentStatus.Cancelled,
+                    ArenaExperimentRunState.Completed)
+                && ExperimentLabCoordinator.ShouldRetryTerminalCell(
+                    ArenaExperimentStatus.Interrupted,
+                    ArenaExperimentRunState.Interrupted)
+                && ExperimentLabCoordinator.ShouldRetryTerminalCell(
+                    ArenaExperimentStatus.Cancelled,
+                    ArenaExperimentRunState.Failed)
+                && ExperimentLabCoordinator.ShouldRetryTerminalCell(
+                    ArenaExperimentStatus.Completed,
+                    ArenaExperimentRunState.Completed),
+            "status-aware retry scope did not preserve Completed cells for continuation or allow an intentional full repeat");
 
         var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ExperimentLabControl.xaml"));
         Require(
@@ -462,6 +481,961 @@ internal static partial class Program
                         && !json.Contains("Private second transcript text", StringComparison.Ordinal)
                         && !json.Contains(root, StringComparison.OrdinalIgnoreCase),
                     "ledger persisted transcript content or an absolute path");
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        });
+    }
+
+    static void ExperimentLabRejectsClaimPickerAcrossSessionChange()
+    {
+        RunStaTest(() =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ai-arena-claim-session-generation-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                var sessions = new SessionStore(root);
+                ArenaSnapshot Source(string messageId, string text) => new()
+                {
+                    Engine = new EngineSnapshot
+                    {
+                        Agents = SessionStore.CreateDefaultSnapshot().Engine.Agents,
+                        Messages =
+                        [
+                            new DialogueMessage
+                            {
+                                MessageId = messageId,
+                                Turn = 1,
+                                SpeakerId = "agent:alpha",
+                                Speaker = "Alpha",
+                                Text = text,
+                                CreatedAt = 1
+                            }
+                        ],
+                        TurnCount = 1
+                    }
+                };
+                sessions.SaveSnapshotAsync(Source("message:a", "private A provenance"), "source-a").GetAwaiter().GetResult();
+                sessions.SaveSnapshotAsync(Source("message:b", "private B provenance"), "source-b").GetAwaiter().GetResult();
+                var branchA = sessions.ForkSessionAsync("source-a", "branch-a").GetAwaiter().GetResult();
+                var branchB = sessions.ForkSessionAsync("source-b", "branch-b").GetAwaiter().GetResult();
+                var activeSession = branchA.TargetSessionId;
+                var control = new ExperimentLabControl();
+                using var coordinator = new ExperimentLabCoordinator(
+                    control,
+                    sessions,
+                    new FixedCollaborateModelClient("unused"),
+                    () => activeSession,
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(new DateTimeOffset(2038, 1, 2, 3, 4, 5, TimeSpan.Zero)));
+                control.Initialize(coordinator);
+                coordinator.NotifyActiveSessionChanged(activeSession);
+
+                var branchASnapshot = sessions.LoadSnapshotAsync(activeSession).GetAwaiter().GetResult()!;
+                var ledger = coordinator.CreateClaimLedger(new(
+                    "experiment:claim-session-generation",
+                    branchASnapshot.BranchReceipt!.Id));
+                Require(coordinator.SaveClaimLedgerAsync(ledger).GetAwaiter().GetResult().Succeeded,
+                    "session-generation claim ledger could not be persisted");
+                RunExperimentDispatcherTask(coordinator.RefreshClaimsAsync);
+                var staleMessage = (ExperimentForkCursorItem)control.SelectedClaimMessage!;
+                ledger = coordinator.AddClaim(ledger, staleMessage, "Original A claim.");
+                Require(coordinator.SaveClaimLedgerAsync(ledger).GetAwaiter().GetResult().Succeeded,
+                    "original session A claim could not be persisted");
+                RunExperimentDispatcherTask(coordinator.RefreshClaimsAsync);
+                var staleLedger = (ExperimentLedgerItem)control.SelectedLedger!;
+                var beforeSwitchJson = ArenaContractCodec.Serialize(
+                    coordinator.ListClaimLedgersAsync().GetAwaiter().GetResult().Artifacts.Single(item => item.Id == ledger.Id));
+
+                activeSession = branchB.TargetSessionId;
+                coordinator.NotifyActiveSessionChanged(activeSession);
+                Require(control.SelectedClaimMessage is null && control.SelectedLedger is null,
+                    "session notification did not synchronously clear cached claim provenance state");
+                RunExperimentDispatcherTask(coordinator.RefreshClaimsAsync);
+                Require(control.SelectedLedger is null,
+                    "Claims refresh repopulated a session A ledger while session B was active");
+
+                // Reinsert the stale objects to prove AddClaim independently
+                // re-resolves both message and branch against the active session.
+                control.SetClaimLedgers([staleLedger]);
+                control.SetClaimMessages([staleMessage]);
+                control.ClaimSummaryText.Text = "Must remain unavailable.";
+                RunExperimentDispatcherTask(coordinator.AddClaimAsync);
+                control.SetClaimLedgers([staleLedger]);
+                control.SetClaims([new ExperimentClaimItem(ledger.Claims.Single())]);
+                RunExperimentDispatcherTask(() => coordinator.ReviewSelectedClaimAsync("supported"));
+
+                var copiedSessionId = "branch-a-copied-as-b";
+                var copiedBranchA = sessions.LoadSnapshotAsync(branchA.TargetSessionId).GetAwaiter().GetResult()!;
+                copiedBranchA.PersistenceRevision = 0;
+                sessions.SaveSnapshotAsync(copiedBranchA, copiedSessionId).GetAwaiter().GetResult();
+                activeSession = copiedSessionId;
+                coordinator.NotifyActiveSessionChanged(activeSession);
+                RunExperimentDispatcherTask(coordinator.RefreshClaimsAsync);
+                Require(control.SelectedLedger is null,
+                    "a copied A branch receipt exposed its ledger under a different active session identity");
+                control.SetClaimLedgers([staleLedger]);
+                control.SetClaims([new ExperimentClaimItem(ledger.Claims.Single())]);
+                RunExperimentDispatcherTask(() => coordinator.ReviewSelectedClaimAsync("supported"));
+
+                var staleCursorLoadStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var releaseStaleCursorLoad = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                activeSession = branchA.TargetSessionId;
+                var staleControl = new ExperimentLabControl();
+                using (var staleCoordinator = new ExperimentLabCoordinator(
+                    staleControl,
+                    sessions,
+                    new FixedCollaborateModelClient("unused"),
+                    () => activeSession,
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(new DateTimeOffset(2038, 1, 2, 3, 4, 5, TimeSpan.Zero)),
+                    forkCursorLoadOverride: async (sessionId, token) =>
+                    {
+                        if (sessionId.Equals(branchA.TargetSessionId, StringComparison.Ordinal))
+                        {
+                            staleCursorLoadStarted.TrySetResult(true);
+                            await releaseStaleCursorLoad.Task.WaitAsync(token);
+                            return [staleMessage];
+                        }
+                        return [];
+                    }))
+                {
+                    staleControl.Initialize(staleCoordinator);
+                    staleCoordinator.NotifyActiveSessionChanged(activeSession);
+                    RunExperimentDispatcherTask(async () =>
+                    {
+                        var staleRefresh = staleCoordinator.RefreshForkCursorsAsync();
+                        await staleCursorLoadStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                        activeSession = branchB.TargetSessionId;
+                        staleCoordinator.NotifyActiveSessionChanged(activeSession);
+                        releaseStaleCursorLoad.TrySetResult(true);
+                        await staleRefresh.WaitAsync(TimeSpan.FromSeconds(2));
+                    });
+                    Require(staleControl.SelectedForkCursor is null
+                            && staleControl.SelectedClaimMessage is null
+                            && staleControl.ForkCursorPicker.Items.Count == 0
+                            && staleControl.ClaimMessagePicker.Items.Count == 0,
+                        "an in-flight A cursor refresh repopulated claim provenance after switching to B");
+                }
+                var persisted = coordinator.ListClaimLedgersAsync().GetAwaiter().GetResult().Artifacts
+                    .Single(item => item.Id == ledger.Id);
+                Require(ArenaContractCodec.Serialize(persisted) == beforeSwitchJson
+                        && control.ClaimStatusText.Text.Contains("unavailable", StringComparison.OrdinalIgnoreCase)
+                        && !ArenaContractCodec.Serialize(persisted).Contains("Must remain unavailable", StringComparison.Ordinal),
+                    "session B accepted stale session A add/review provenance into its claim ledger");
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        });
+    }
+
+    static void ExperimentLabRestoresNewestRepresentableDefinition()
+    {
+        RunStaTest(() =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ai-arena-matrix-restore-order-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                var at = new DateTimeOffset(2038, 2, 3, 4, 5, 6, TimeSpan.Zero);
+                var sessions = new SessionStore(root);
+                sessions.SaveSnapshotAsync(SessionStore.CreateDefaultSnapshot(), "active").GetAwaiter().GetResult();
+                ExperimentMatrixPreviewResult Definition(string title, DateTimeOffset createdAt) =>
+                    ExperimentLabCoordinator.BuildMatrixPreview(
+                        new(
+                            title,
+                            "scenario-pack:restore-order",
+                            "provider:shared",
+                            "temperature",
+                            "0.2",
+                            "1",
+                            "1",
+                            "1",
+                            "",
+                            "rubric:restore-order"),
+                        createdAt);
+
+                var definitions = new ExperimentDefinitionStore(Path.Combine(root, "experimentation"));
+                var old = Definition("D1 old interrupted", at);
+                Require(definitions.SaveAsync(old.Contract).GetAwaiter().GetResult().Succeeded,
+                    "D1 draft could not be persisted");
+                var oldOwner = definitions.AcquireExecutionLeaseAsync().AsTask().GetAwaiter().GetResult();
+                try
+                {
+                    Require(definitions.SaveForExecutionAsync(
+                            oldOwner,
+                            old.Contract with { Status = ArenaExperimentStatus.Running }).GetAwaiter().GetResult().Succeeded,
+                        "D1 could not enter Running");
+                }
+                finally
+                {
+                    oldOwner.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
+                var newerDraft = Definition("D2 newer draft", at.AddHours(1));
+                Require(definitions.SaveAsync(newerDraft.Contract).GetAwaiter().GetResult().Succeeded,
+                    "D2 draft could not be persisted");
+                var draftControl = new ExperimentLabControl();
+                using (var draftCoordinator = new ExperimentLabCoordinator(
+                    draftControl,
+                    sessions,
+                    new FixedCollaborateModelClient("unused"),
+                    () => "active",
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(at.AddHours(2))))
+                {
+                    draftControl.Initialize(draftCoordinator);
+                    RunExperimentDispatcherTask(draftCoordinator.RefreshRunHistoryAsync);
+                    Require(draftControl.ReadMatrixInput().Title == "D2 newer draft"
+                            && definitions.LoadAllAsync().GetAwaiter().GetResult().Definitions
+                                .Single(item => item.Id == old.Contract.Id).Status == ArenaExperimentStatus.Interrupted
+                            && !draftControl.MatrixStatusText.Text.Contains(
+                                "Recovered abandoned Running matrix state",
+                                StringComparison.Ordinal),
+                        "older recovered D1 either pinned restoration or was misreported as the selected newer D2 Draft");
+                }
+
+                var newerAbandoned = Definition("D3 newest abandoned running", at.AddHours(3));
+                Require(definitions.SaveAsync(newerAbandoned.Contract).GetAwaiter().GetResult().Succeeded,
+                    "D3 draft could not be persisted");
+                var newestOwner = definitions.AcquireExecutionLeaseAsync().AsTask().GetAwaiter().GetResult();
+                try
+                {
+                    Require(definitions.SaveForExecutionAsync(
+                            newestOwner,
+                            newerAbandoned.Contract with { Status = ArenaExperimentStatus.Running }).GetAwaiter().GetResult().Succeeded,
+                        "D3 could not enter Running");
+                }
+                finally
+                {
+                    newestOwner.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
+
+                var runningControl = new ExperimentLabControl();
+                using var runningCoordinator = new ExperimentLabCoordinator(
+                    runningControl,
+                    sessions,
+                    new FixedCollaborateModelClient("unused"),
+                    () => "active",
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(at.AddHours(4)));
+                runningControl.Initialize(runningCoordinator);
+                RunExperimentDispatcherTask(runningCoordinator.RefreshRunHistoryAsync);
+                Require(runningControl.ReadMatrixInput().Title == "D3 newest abandoned running"
+                        && definitions.LoadAllAsync().GetAwaiter().GetResult().Definitions
+                            .Single(item => item.Id == newerAbandoned.Contract.Id).Status == ArenaExperimentStatus.Interrupted
+                        && runningControl.MatrixStatusText.Text.Contains(
+                            "Recovered abandoned Running matrix state",
+                            StringComparison.Ordinal),
+                    "newest representable abandoned Running definition was not recovered and selected");
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        });
+    }
+
+    static void ExperimentLabRestoresInterruptedMatrixOnlyAfterApproval()
+    {
+        RunStaTest(() =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ai-arena-matrix-restart-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                var at = new DateTimeOffset(2036, 2, 3, 4, 5, 6, TimeSpan.Zero);
+                var sessions = new SessionStore(root);
+                var source = SessionStore.CreateDefaultSnapshot();
+                source.Configs[ModelProviderRouting.SharedConfigKey] = new ModelProviderConfig
+                {
+                    BaseUrl = "http://127.0.0.1:1234",
+                    ApiMode = ModelProviderApiModes.OpenAiCompatible,
+                    ApiToken = "restart-test-token-never-persisted",
+                    Model = "local-restart-model",
+                    Timeout = 30,
+                    Temperature = 0.4,
+                    MaxOutputTokens = 96,
+                    ContextLength = 4096
+                };
+                sessions.SaveSnapshotAsync(source, "active").GetAwaiter().GetResult();
+                sessions.SaveSnapshotAsync(SessionStore.CreateDefaultSnapshot(), "prior-child").GetAwaiter().GetResult();
+
+                ExperimentMatrixPreviewResult preview;
+                using (var firstCoordinator = new ExperimentLabCoordinator(
+                    new ExperimentLabControl(),
+                    sessions,
+                    new FixedCollaborateModelClient("unused"),
+                    () => "active",
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(at)))
+                {
+                    var scenario = firstCoordinator.CreateScenarioPackAsync(
+                        new("Restart scenario", "1.0.0", "3")).GetAwaiter().GetResult();
+                    Require(firstCoordinator.SaveScenarioPackAsync(scenario).GetAwaiter().GetResult().Succeeded,
+                        "restart scenario pack could not be persisted");
+                    var rubric = firstCoordinator.CreateRubric(new("Restart rubric", "1.0.0", "Completes the cell"));
+                    Require(firstCoordinator.SaveRubricContractAsync(rubric).GetAwaiter().GetResult().Succeeded,
+                        "restart rubric could not be persisted");
+                    var benchmark = firstCoordinator.CreateBenchmarkPack(
+                        new("Restart benchmark", "1.0.0", "3"),
+                        scenario,
+                        [rubric.Id]);
+                    Require(firstCoordinator.SaveBenchmarkPackAsync(benchmark).GetAwaiter().GetResult().Succeeded,
+                        "restart benchmark could not be persisted");
+                    var input = new ExperimentMatrixInput(
+                        "Restart matrix",
+                        scenario.Id,
+                        "provider:shared",
+                        "temperature",
+                        "0.2, 0.7, 0.9",
+                        "1",
+                        "3",
+                        "2",
+                        benchmark.Id,
+                        rubric.Id);
+                    preview = ExperimentLabCoordinator.BuildMatrixPreview(input, at);
+                }
+
+                var experimentRoot = Path.Combine(root, "experimentation");
+                var definitions = new ExperimentDefinitionStore(experimentRoot);
+                Require(definitions.SaveAsync(preview.Contract).GetAwaiter().GetResult().Succeeded,
+                    "restart matrix draft could not be persisted");
+                var definitionOwner = definitions.AcquireExecutionLeaseAsync().AsTask().GetAwaiter().GetResult();
+                try
+                {
+                    Require(definitions.SaveForExecutionAsync(
+                            definitionOwner,
+                            preview.Contract with { Status = ArenaExperimentStatus.Running }).GetAwaiter().GetResult().Succeeded,
+                        "restart matrix could not enter Running before simulated process exit");
+                }
+                finally
+                {
+                    definitionOwner.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
+
+                var firstCell = preview.Expansion.Cells[0];
+                var priorCompleted = new ArenaExperimentRunContract(
+                    ArenaContractSchemas.ExperimentRun,
+                    firstCell.RunId,
+                    at,
+                    firstCell.ExperimentId,
+                    firstCell.ExperimentFingerprint,
+                    firstCell.VariantFingerprint,
+                    firstCell.Repetition,
+                    firstCell.CellKey,
+                    ArenaExperimentRunState.Completed,
+                    1,
+                    at,
+                    ["trial:prior"],
+                    null,
+                    [new(
+                        "evidence:prior-child",
+                        ArenaEvidenceState.Observed,
+                        "A prior isolated child session was created.",
+                        "prior-child")]);
+                var interruptedCell = preview.Expansion.Cells[1];
+                var priorInterrupted = new ArenaExperimentRunContract(
+                    ArenaContractSchemas.ExperimentRun,
+                    interruptedCell.RunId,
+                    at,
+                    interruptedCell.ExperimentId,
+                    interruptedCell.ExperimentFingerprint,
+                    interruptedCell.VariantFingerprint,
+                    interruptedCell.Repetition,
+                    interruptedCell.CellKey,
+                    ArenaExperimentRunState.Running,
+                    1,
+                    at,
+                    ["trial:interrupted-prior"],
+                    null,
+                    [new(
+                        "evidence:interrupted-prior",
+                        ArenaEvidenceState.Observed,
+                        "A prior interrupted child session was created.",
+                        "prior-child")]);
+                var restartRuns = new ExperimentRunStore(experimentRoot);
+                Require(restartRuns.SaveAsync(priorCompleted).GetAwaiter().GetResult().Succeeded
+                        && restartRuns.SaveAsync(priorInterrupted).GetAwaiter().GetResult().Succeeded,
+                    "prior Completed and Running cells could not be persisted");
+
+                var restartedControl = new ExperimentLabControl();
+                var restartedProvider = new FixedCollaborateModelClient("restart completion");
+                using var restartedCoordinator = new ExperimentLabCoordinator(
+                    restartedControl,
+                    sessions,
+                    restartedProvider,
+                    () => "active",
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(at.AddMinutes(1)));
+                restartedControl.Initialize(restartedCoordinator);
+                RunExperimentDispatcherTask(restartedCoordinator.RefreshRunHistoryAsync);
+                var restoredInput = restartedControl.ReadMatrixInput();
+                Require(restoredInput.Title == "Restart matrix"
+                        && restoredInput.ScenarioPackId == preview.Contract.ScenarioPackId
+                        && restoredInput.BenchmarkPackId == preview.Contract.BenchmarkPackId
+                        && restoredInput.ProviderProfileIds == "provider:shared"
+                        && restoredInput.DimensionValues == "0.2, 0.7, 0.9",
+                    "new coordinator did not reconstruct the durable matrix definition");
+                Require(definitions.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single().Status
+                        == ArenaExperimentStatus.Interrupted
+                        && restartedControl.MatrixStatusText.Text.Contains("requires explicit retry approval", StringComparison.Ordinal),
+                    "new coordinator did not normalize and explain the abandoned matrix definition");
+
+                RunExperimentDispatcherTask(restartedCoordinator.ExecuteMatrixAsync);
+                Require(restartedProvider.CompleteCalls == 0
+                        && restartedControl.MatrixStatusText.Text.Contains("Retry approval required", StringComparison.Ordinal)
+                        && restartedControl.MatrixStatusText.Text.Contains("zero cells started", StringComparison.Ordinal)
+                        && definitions.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single().Status
+                            == ArenaExperimentStatus.Interrupted,
+                    "restored Interrupted matrix ran or claimed completion without approval");
+
+                restartedControl.SetMatrixRetryApproval(true);
+                RunExperimentDispatcherTask(restartedCoordinator.ExecuteMatrixAsync);
+                var resumedRuns = new ExperimentRunStore(experimentRoot).LoadAllAsync(at.AddMinutes(2)).GetAwaiter().GetResult().Runs
+                    .Where(item => item.ExperimentId == preview.Contract.Id)
+                    .OrderBy(item => item.CellKey, StringComparer.Ordinal)
+                    .ToArray();
+                var resumedPrior = resumedRuns.Single(item => item.CellKey == firstCell.CellKey);
+                var resumedInterrupted = resumedRuns.Single(item => item.CellKey == interruptedCell.CellKey);
+                Require(restartedProvider.CompleteCalls > 0
+                        && resumedRuns.Length == preview.Expansion.Cells.Length
+                        && resumedPrior.Attempts == 2
+                        && resumedPrior.TrialIds.Contains("trial:prior", StringComparer.Ordinal)
+                        && resumedPrior.TrialIds.Length == 2
+                        && resumedPrior.Evidence.Any(item => item.Id == "evidence:prior-child" && item.ReferenceId == "prior-child")
+                        && resumedInterrupted.Attempts == 2
+                        && resumedInterrupted.TrialIds.Contains("trial:interrupted-prior", StringComparer.Ordinal)
+                        && resumedInterrupted.TrialIds.Length == 2
+                        && resumedInterrupted.Evidence.Any(item => item.Id == "evidence:interrupted-prior")
+                        && definitions.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single().Status
+                            == ArenaExperimentStatus.Completed,
+                    $"approved new-coordinator resume failed to re-establish the current plan for mismatched Completed/Interrupted cells, lost prior evidence, or skipped missing cells; provider calls {restartedProvider.CompleteCalls}; runs {string.Join(" | ", resumedRuns.Select(item => $"{item.CellKey}:{item.State}:attempts={item.Attempts}:trials={string.Join(',', item.TrialIds)}"))}");
+                var persistedDefinitions = string.Join('\n', Directory
+                    .EnumerateFiles(Path.Combine(experimentRoot, "experiment-definitions"), "*.json")
+                    .Select(File.ReadAllText));
+                Require(!persistedDefinitions.Contains(root, StringComparison.OrdinalIgnoreCase)
+                        && !persistedDefinitions.Contains("restart-test-token-never-persisted", StringComparison.Ordinal),
+                    "durable matrix definition leaked a path or provider credential");
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        });
+    }
+
+    static void ExperimentLabRechecksRecoveryAfterObservedOwnerExits()
+    {
+        RunStaTest(() =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ai-arena-matrix-owner-handoff-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            ExperimentDefinitionStore.ExecutionLease? originalOwner = null;
+            try
+            {
+                var at = new DateTimeOffset(2036, 2, 3, 5, 5, 6, TimeSpan.Zero);
+                var sessions = new SessionStore(root);
+                var source = SessionStore.CreateDefaultSnapshot();
+                source.Configs[ModelProviderRouting.SharedConfigKey] = new ModelProviderConfig
+                {
+                    BaseUrl = "http://127.0.0.1:1234",
+                    ApiMode = ModelProviderApiModes.OpenAiCompatible,
+                    ApiToken = "owner-handoff-token-never-persisted",
+                    Model = "local-owner-handoff-model",
+                    Timeout = 30,
+                    Temperature = 0.4,
+                    MaxOutputTokens = 96,
+                    ContextLength = 4096
+                };
+                sessions.SaveSnapshotAsync(source, "active").GetAwaiter().GetResult();
+
+                ExperimentMatrixPreviewResult preview;
+                using (var seed = new ExperimentLabCoordinator(
+                    new ExperimentLabControl(),
+                    sessions,
+                    new FixedCollaborateModelClient("unused"),
+                    () => "active",
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(at)))
+                {
+                    var scenario = seed.CreateScenarioPackAsync(
+                        new("Owner handoff scenario", "1.0.0", "2")).GetAwaiter().GetResult();
+                    Require(seed.SaveScenarioPackAsync(scenario).GetAwaiter().GetResult().Succeeded,
+                        "owner-handoff scenario could not be persisted");
+                    var rubric = seed.CreateRubric(new("Owner handoff rubric", "1.0.0", "Completes the cell"));
+                    Require(seed.SaveRubricContractAsync(rubric).GetAwaiter().GetResult().Succeeded,
+                        "owner-handoff rubric could not be persisted");
+                    preview = ExperimentLabCoordinator.BuildMatrixPreview(
+                        new(
+                            "Owner handoff matrix",
+                            scenario.Id,
+                            "provider:shared",
+                            "temperature",
+                            "0.4",
+                            "1",
+                            "2",
+                            "1",
+                            "",
+                            rubric.Id),
+                        at);
+                }
+
+                var experimentRoot = Path.Combine(root, "experimentation");
+                var definitions = new ExperimentDefinitionStore(experimentRoot);
+                Require(definitions.SaveAsync(preview.Contract).GetAwaiter().GetResult().Succeeded,
+                    "owner-handoff draft could not be persisted");
+                originalOwner = definitions.AcquireExecutionLeaseAsync().AsTask().GetAwaiter().GetResult();
+                Require(definitions.SaveForExecutionAsync(
+                        originalOwner,
+                        preview.Contract with { Status = ArenaExperimentStatus.Running }).GetAwaiter().GetResult().Succeeded,
+                    "original owner could not persist Running");
+
+                var control = new ExperimentLabControl();
+                var provider = new FixedCollaborateModelClient("owner handoff completion");
+                using var coordinator = new ExperimentLabCoordinator(
+                    control,
+                    sessions,
+                    provider,
+                    () => "active",
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(at.AddMinutes(1)));
+                control.Initialize(coordinator);
+                RunExperimentDispatcherTask(coordinator.RefreshRunHistoryAsync);
+                Require(control.MatrixStatusText.Text.Contains("owner is active", StringComparison.OrdinalIgnoreCase)
+                        && control.MatrixStatusText.Text.Contains("Recovery remains pending", StringComparison.Ordinal)
+                        && definitions.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single().Status
+                            == ArenaExperimentStatus.Running,
+                    "passive coordinator observation normalized or forgot an active owner's definition");
+
+                originalOwner.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                originalOwner = null;
+                RunExperimentDispatcherTask(coordinator.ExecuteMatrixAsync);
+                Require(provider.CompleteCalls == 0
+                        && control.MatrixStatusText.Text.Contains("Retry approval required", StringComparison.Ordinal)
+                        && control.MatrixStatusText.Text.Contains("zero cells started", StringComparison.Ordinal)
+                        && definitions.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single().Status
+                            == ArenaExperimentStatus.Interrupted,
+                    "owner release allowed Running-to-Running execution without owner-held restart normalization and approval");
+            }
+            finally
+            {
+                originalOwner?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                Directory.Delete(root, recursive: true);
+            }
+        });
+    }
+
+    static void ExperimentLabPreservesRestoredReferencesAcrossSourceDrift()
+    {
+        RunStaTest(() =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ai-arena-matrix-source-drift-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                var at = new DateTimeOffset(2036, 2, 3, 5, 25, 6, TimeSpan.Zero);
+                var sessions = new SessionStore(root);
+                var source = SessionStore.CreateDefaultSnapshot();
+                source.Configs[ModelProviderRouting.SharedConfigKey] = new ModelProviderConfig
+                {
+                    BaseUrl = "http://127.0.0.1:1234",
+                    ApiMode = ModelProviderApiModes.OpenAiCompatible,
+                    ApiToken = "source-drift-token-never-persisted",
+                    Model = "local-source-drift-model",
+                    Timeout = 30,
+                    Temperature = 0.4,
+                    MaxOutputTokens = 96,
+                    ContextLength = 4096
+                };
+                sessions.SaveSnapshotAsync(source, "active").GetAwaiter().GetResult();
+
+                ExperimentMatrixPreviewResult preview;
+                string scenarioId;
+                string benchmarkId;
+                string retainedRubricId;
+                using (var seed = new ExperimentLabCoordinator(
+                    new ExperimentLabControl(),
+                    sessions,
+                    new FixedCollaborateModelClient("unused"),
+                    () => "active",
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(at)))
+                {
+                    var scenario = seed.CreateScenarioPackAsync(
+                        new("Source drift scenario", "1.0.0", "2")).GetAwaiter().GetResult();
+                    Require(seed.SaveScenarioPackAsync(scenario).GetAwaiter().GetResult().Succeeded,
+                        "source-drift scenario could not be persisted");
+                    var retainedRubric = seed.CreateRubric(new("Retained rubric", "1.0.0", "Retained criterion"));
+                    var addedRubric = seed.CreateRubric(new("Added benchmark rubric", "1.0.0", "Added criterion"));
+                    Require(seed.SaveRubricContractAsync(retainedRubric).GetAwaiter().GetResult().Succeeded
+                            && seed.SaveRubricContractAsync(addedRubric).GetAwaiter().GetResult().Succeeded,
+                        "source-drift rubrics could not be persisted");
+                    var benchmark = seed.CreateBenchmarkPack(
+                        new("Source drift benchmark", "1.0.0", "2"),
+                        scenario,
+                        [retainedRubric.Id, addedRubric.Id]);
+                    Require(seed.SaveBenchmarkPackAsync(benchmark).GetAwaiter().GetResult().Succeeded,
+                        "source-drift benchmark could not be persisted");
+                    scenarioId = scenario.Id;
+                    benchmarkId = benchmark.Id;
+                    retainedRubricId = retainedRubric.Id;
+                    preview = ExperimentLabCoordinator.BuildMatrixPreview(
+                        new(
+                            "Source drift matrix",
+                            scenario.Id,
+                            "provider:missing-after-restart",
+                            "temperature",
+                            "0.4",
+                            "1",
+                            "2",
+                            "1",
+                            benchmark.Id,
+                            retainedRubric.Id),
+                        at);
+                }
+
+                var experimentRoot = Path.Combine(root, "experimentation");
+                var definitions = new ExperimentDefinitionStore(experimentRoot);
+                Require(definitions.SaveAsync(preview.Contract).GetAwaiter().GetResult().Succeeded,
+                    "source-drift draft could not be persisted");
+                var owner = definitions.AcquireExecutionLeaseAsync().AsTask().GetAwaiter().GetResult();
+                try
+                {
+                    Require(definitions.SaveForExecutionAsync(
+                            owner,
+                            preview.Contract with { Status = ArenaExperimentStatus.Running }).GetAwaiter().GetResult().Succeeded,
+                        "source-drift definition could not enter Running");
+                }
+                finally
+                {
+                    owner.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
+
+                var control = new ExperimentLabControl();
+                var provider = new FixedCollaborateModelClient("must not be called");
+                using var coordinator = new ExperimentLabCoordinator(
+                    control,
+                    sessions,
+                    provider,
+                    () => "active",
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(at.AddMinutes(1)));
+                control.Initialize(coordinator);
+                RunExperimentDispatcherTask(coordinator.RefreshRunHistoryAsync);
+                RunExperimentDispatcherTask(coordinator.RefreshPacksAsync);
+                var restored = control.ReadMatrixInput();
+                Require(restored.ScenarioPackId == scenarioId
+                        && restored.BenchmarkPackId == benchmarkId
+                        && restored.ProviderProfileIds == "provider:missing-after-restart"
+                        && restored.RubricIds == retainedRubricId,
+                    "source reconciliation rewrote exact restored provider/pack/rubric references");
+
+                RunExperimentDispatcherTask(coordinator.ExecuteMatrixAsync);
+                var after = control.ReadMatrixInput();
+                Require(provider.CompleteCalls == 0
+                        && after.ScenarioPackId == scenarioId
+                        && after.BenchmarkPackId == benchmarkId
+                        && after.ProviderProfileIds == "provider:missing-after-restart"
+                        && after.RubricIds == retainedRubricId
+                        && control.MatrixStatusText.Text.Contains("Execution unavailable", StringComparison.Ordinal)
+                        && definitions.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single().Status
+                            == ArenaExperimentStatus.Interrupted,
+                    "missing/drifted sources changed or ran the restored definition instead of failing unavailable");
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        });
+    }
+
+    static void ExperimentLabClosesCompletedCrashWindowWithoutDuplicateTrials()
+    {
+        RunStaTest(() =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ai-arena-matrix-completed-crash-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                var at = new DateTimeOffset(2036, 2, 3, 6, 5, 6, TimeSpan.Zero);
+                var sessions = new SessionStore(root);
+                var source = SessionStore.CreateDefaultSnapshot();
+                source.Configs[ModelProviderRouting.SharedConfigKey] = new ModelProviderConfig
+                {
+                    BaseUrl = "http://127.0.0.1:1234",
+                    ApiMode = ModelProviderApiModes.OpenAiCompatible,
+                    ApiToken = "completed-crash-token-never-persisted",
+                    Model = "local-completed-crash-model",
+                    Timeout = 30,
+                    Temperature = 0.4,
+                    MaxOutputTokens = 96,
+                    ContextLength = 4096
+                };
+                sessions.SaveSnapshotAsync(source, "active").GetAwaiter().GetResult();
+
+                ExperimentMatrixPreviewResult preview;
+                string planFingerprint;
+                using (var firstCoordinator = new ExperimentLabCoordinator(
+                    new ExperimentLabControl(),
+                    sessions,
+                    new FixedCollaborateModelClient("unused"),
+                    () => "active",
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(at)))
+                {
+                    var scenario = firstCoordinator.CreateScenarioPackAsync(
+                        new("Completed crash scenario", "1.0.0", "3")).GetAwaiter().GetResult();
+                    Require(firstCoordinator.SaveScenarioPackAsync(scenario).GetAwaiter().GetResult().Succeeded,
+                        "completed-crash scenario pack could not be persisted");
+                    var rubric = firstCoordinator.CreateRubric(
+                        new("Completed crash rubric", "1.0.0", "Completes the cell"));
+                    Require(firstCoordinator.SaveRubricContractAsync(rubric).GetAwaiter().GetResult().Succeeded,
+                        "completed-crash rubric could not be persisted");
+                    preview = ExperimentLabCoordinator.BuildMatrixPreview(
+                        new(
+                            "Completed crash matrix",
+                            scenario.Id,
+                            "provider:shared",
+                            "temperature",
+                            "0.2, 0.7",
+                            "1",
+                            "3",
+                            "2",
+                            "",
+                            rubric.Id),
+                        at);
+                    var resolution = firstCoordinator.ResolveMatrixExecutionAsync(preview.Contract)
+                        .GetAwaiter().GetResult();
+                    Require(resolution.Binding is not null,
+                        "completed-crash execution plan could not be resolved");
+                    planFingerprint = resolution.Binding!.Plan.PlanFingerprint;
+                }
+
+                var experimentRoot = Path.Combine(root, "experimentation");
+                var definitions = new ExperimentDefinitionStore(experimentRoot);
+                Require(definitions.SaveAsync(preview.Contract).GetAwaiter().GetResult().Succeeded,
+                    "completed-crash draft could not be persisted");
+                var owner = definitions.AcquireExecutionLeaseAsync().AsTask().GetAwaiter().GetResult();
+                try
+                {
+                    Require(definitions.SaveForExecutionAsync(
+                            owner,
+                            preview.Contract with { Status = ArenaExperimentStatus.Running }).GetAwaiter().GetResult().Succeeded,
+                        "completed-crash definition could not enter Running");
+                }
+                finally
+                {
+                    owner.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
+
+                var runs = new ExperimentRunStore(experimentRoot);
+                foreach (var cell in preview.Expansion.Cells)
+                {
+                    var trialId = ArenaExperimentRunPolicy.CreateTrialId(cell.CellKey, 1);
+                    var completed = new ArenaExperimentRunContract(
+                        ArenaContractSchemas.ExperimentRun,
+                        cell.RunId,
+                        at,
+                        cell.ExperimentId,
+                        cell.ExperimentFingerprint,
+                        cell.VariantFingerprint,
+                        cell.Repetition,
+                        cell.CellKey,
+                        ArenaExperimentRunState.Completed,
+                        1,
+                        at,
+                        [trialId],
+                        null,
+                        [new(
+                            ArenaExperimentRunPolicy.CreateExecutionPlanEvidenceId(trialId),
+                            ArenaEvidenceState.Observed,
+                            "The cell completed under the currently resolved execution plan.",
+                            $"plan:{planFingerprint}")]);
+                    Require(runs.SaveAsync(completed).GetAwaiter().GetResult().Succeeded,
+                        "completed-crash cell could not be persisted");
+                }
+                var before = string.Join('\n', runs.LoadAllAsync(at.AddMinutes(1)).GetAwaiter().GetResult().Runs
+                    .Where(item => item.ExperimentId == preview.Contract.Id)
+                    .OrderBy(item => item.CellKey, StringComparer.Ordinal)
+                    .Select(item => ArenaContractCodec.Serialize(item)));
+
+                var control = new ExperimentLabControl();
+                var provider = new FixedCollaborateModelClient("must not be called");
+                using var coordinator = new ExperimentLabCoordinator(
+                    control,
+                    sessions,
+                    provider,
+                    () => "active",
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(at.AddMinutes(2)));
+                control.Initialize(coordinator);
+                RunExperimentDispatcherTask(coordinator.RefreshRunHistoryAsync);
+                Require(definitions.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single().Status
+                        == ArenaExperimentStatus.Interrupted,
+                    "completed-crash definition was not made restart-safe before continuation");
+
+                control.SetMatrixRetryApproval(true);
+                RunExperimentDispatcherTask(coordinator.ExecuteMatrixAsync);
+                var after = string.Join('\n', runs.LoadAllAsync(at.AddMinutes(3)).GetAwaiter().GetResult().Runs
+                    .Where(item => item.ExperimentId == preview.Contract.Id)
+                    .OrderBy(item => item.CellKey, StringComparer.Ordinal)
+                    .Select(item => ArenaContractCodec.Serialize(item)));
+                Require(provider.CompleteCalls == 0
+                        && before == after
+                        && control.MatrixStatusText.Text.Contains("eligible 0", StringComparison.Ordinal)
+                        && control.MatrixStatusText.Text.Contains("started 0", StringComparison.Ordinal)
+                        && definitions.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single().Status
+                            == ArenaExperimentStatus.Completed,
+                    $"approved crash recovery repeated completed trials or failed to close the durable lifecycle; "
+                    + $"providerCalls={provider.CompleteCalls}; unchanged={before == after}; "
+                    + $"status={control.MatrixStatusText.Text}; "
+                    + $"definition={definitions.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single().Status}");
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        });
+    }
+
+    static void ExperimentLabLeavesUnsupportedDurableMatrixUntouched()
+    {
+        RunStaTest(() =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ai-arena-matrix-unsupported-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                var at = new DateTimeOffset(2036, 2, 4, 5, 6, 7, TimeSpan.Zero);
+                var sessions = new SessionStore(root);
+                sessions.SaveSnapshotAsync(SessionStore.CreateDefaultSnapshot(), "active").GetAwaiter().GetResult();
+                var preview = ExperimentLabCoordinator.BuildMatrixPreview(
+                    new(
+                        "Stored matrix with unsupported execution inputs",
+                        "scenario-pack:unsupported-restore",
+                        "provider:shared",
+                        "temperature",
+                        "0.3",
+                        "1",
+                        "3",
+                        "1",
+                        "",
+                        "rubric:unsupported-restore"),
+                    at);
+                var unsupported = preview.Contract with
+                {
+                    FaultProfileIds = ["fault-profile:unsupported-restore"],
+                    BranchIds = ["branch:unsupported-restore"]
+                };
+                var definitions = new ExperimentDefinitionStore(Path.Combine(root, "experimentation"));
+                Require(definitions.SaveAsync(unsupported).GetAwaiter().GetResult().Succeeded,
+                    "unsupported durable definition fixture could not be persisted");
+                var before = ArenaContractCodec.Serialize(
+                    definitions.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single());
+
+                var control = new ExperimentLabControl();
+                using var coordinator = new ExperimentLabCoordinator(
+                    control,
+                    sessions,
+                    new FixedCollaborateModelClient("unused"),
+                    () => "active",
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(at.AddMinutes(1)));
+                control.Initialize(coordinator);
+                RunExperimentDispatcherTask(coordinator.RefreshRunHistoryAsync);
+
+                var after = ArenaContractCodec.Serialize(
+                    definitions.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single());
+                Require(control.ReadMatrixInput().Title == "Local comparison"
+                        && control.MatrixStatusText.Text.Contains("cannot represent", StringComparison.Ordinal)
+                        && before == after
+                        && after.Contains("fault-profile:unsupported-restore", StringComparison.Ordinal)
+                        && after.Contains("branch:unsupported-restore", StringComparison.Ordinal),
+                    "unsupported stored definition was partially selected, rewritten, or not explained");
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        });
+    }
+
+    static void ExperimentLabImportsLegacyPacksWithMigrationReceipt()
+    {
+        RunStaTest(() =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ai-arena-pack-migration-ui-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                var at = new DateTimeOffset(2036, 3, 4, 5, 6, 7, TimeSpan.Zero);
+                var sessions = new SessionStore(root);
+                sessions.SaveSnapshotAsync(SessionStore.CreateDefaultSnapshot(), "active").GetAwaiter().GetResult();
+                var sourceControl = new ExperimentLabControl();
+                using var sourceCoordinator = new ExperimentLabCoordinator(
+                    sourceControl,
+                    sessions,
+                    new FixedCollaborateModelClient("unused"),
+                    () => "active",
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(at));
+                var source = sourceCoordinator.CreateScenarioPackAsync(
+                    new("Legacy import", "0.7.0", "3")).GetAwaiter().GetResult();
+                var legacy = JsonNode.Parse(ArenaContractCodec.Serialize(source))!.AsObject();
+                legacy["schema"] = ArenaExperimentPackCodec.ScenarioPackV0Schema;
+                legacy.Remove("createdAtUtc");
+                legacy.Remove("contentFingerprint");
+                legacy.Remove("migration");
+                var legacyBytes = Encoding.UTF8.GetBytes(legacy.ToJsonString());
+                var importPath = Path.Combine(root, "selected-v0.json");
+                File.WriteAllBytes(importPath, legacyBytes);
+
+                var control = new ExperimentLabControl();
+                using var coordinator = new ExperimentLabCoordinator(
+                    control,
+                    sessions,
+                    new FixedCollaborateModelClient("unused"),
+                    () => "active",
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    new FixedExperimentTimeProvider(at),
+                    new FixedExperimentFileDialogs(importPath));
+                control.Initialize(coordinator);
+                RunExperimentDispatcherTask(coordinator.ImportPackAsync);
+                var sourceSha = Convert.ToHexStringLower(SHA256.HashData(legacyBytes));
+                Require(control.PackStatusText.Text.Contains("Explicit migration receipt", StringComparison.Ordinal)
+                        && control.PackStatusText.Text.Contains(ArenaExperimentPackCodec.ScenarioPackV0Schema, StringComparison.Ordinal)
+                        && control.PackStatusText.Text.Contains(sourceSha[..12], StringComparison.Ordinal)
+                        && control.PackStatusText.Text.Contains(ArenaExperimentPackCodec.ScenarioPackV0MigratorVersion, StringComparison.Ordinal)
+                        && !control.PackStatusText.Text.Contains(importPath, StringComparison.OrdinalIgnoreCase),
+                    $"UI import did not show a privacy-safe explicit migration receipt: {control.PackStatusText.Text}");
+                var stored = coordinator.ListScenarioPacksAsync().GetAwaiter().GetResult().Artifacts.Single();
+                Require(stored.Migration?.SourceContentFingerprint == sourceSha
+                        && stored.ContentFingerprint == ArenaExperimentFingerprints.ScenarioPackContent(stored.Invariants, stored.Scenarios),
+                    "UI import did not persist validated migration provenance and recomputed identity");
+                RunExperimentDispatcherTask(coordinator.ImportPackAsync);
+                Require(control.PackStatusText.Text.StartsWith("Already stored", StringComparison.Ordinal)
+                        && coordinator.ListScenarioPacksAsync().GetAwaiter().GetResult().Artifacts.Length == 1,
+                    "repeated migrated UI import created a duplicate artifact");
             }
             finally
             {
@@ -911,6 +1885,13 @@ internal static partial class Program
                 Directory.Delete(root, recursive: true);
             }
         });
+    }
+
+    private sealed class FixedExperimentFileDialogs(string importPath) : IExperimentLabFileDialogService
+    {
+        public string? OpenJson() => importPath;
+
+        public string? SaveJson(string suggestedFileName) => null;
     }
 
     private sealed class FixedExperimentTimeProvider(DateTimeOffset value) : TimeProvider

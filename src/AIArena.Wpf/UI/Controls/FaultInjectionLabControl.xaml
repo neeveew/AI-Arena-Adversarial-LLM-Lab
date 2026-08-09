@@ -208,6 +208,10 @@
                                                    Text="{Binding Heading}"
                                                    TextWrapping="Wrap" />
                                         <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                   Foreground="{DynamicResource SecondaryTextBrush}"
+                                                   Text="{Binding EffectText}"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Nano}"
                                                    Foreground="{DynamicResource Arena.Brush.Success}"
                                                    Text="{Binding CauseText}"
                                                    TextWrapping="Wrap" />

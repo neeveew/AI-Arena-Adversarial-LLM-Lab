@@ -96,6 +96,7 @@ internal static class AIArenaControlCommands
     public const string AppQaWindowSize = "app.qa.window.size";
     public const string AppQaStructureCapture = "app.qa.structure.capture";
     public const string AppQaFocusAdvance = "app.qa.focus.advance";
+    public const string AppQaFocusFeature = "app.qa.focus.feature";
     public const string AppQaMotionSet = "app.qa.motion.set";
     public const string ExperimentState = "experiment.state";
     public const string ExperimentFeatureSelect = "experiment.feature.select";

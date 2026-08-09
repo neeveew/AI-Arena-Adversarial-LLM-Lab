@@ -92,9 +92,17 @@ public static partial class ArenaContractPrivacyRules
     {
         if (element.ValueKind == JsonValueKind.Object)
         {
+            var propertyNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var property in element.EnumerateObject())
             {
                 var propertyPath = $"{path}.{property.Name}";
+                if (!propertyNames.Add(property.Name))
+                {
+                    issues.Add(new ArenaContractValidationIssue(
+                        "json.duplicate_member",
+                        $"{path}.*",
+                        "Duplicate JSON members are ambiguous and prohibited."));
+                }
                 if (ForbiddenContentProperties.Contains(property.Name))
                 {
                     issues.Add(new ArenaContractValidationIssue("privacy.source_content", propertyPath, SourceContentRule));
@@ -146,7 +154,7 @@ public static partial class ArenaContractPrivacyRules
 
 /// <summary>
 /// Strict v1 validator and canonical JSON codec. Properties are ordinally sorted,
-/// enums are snake-case strings, unknown members are rejected, and array order is
+/// enums are snake-case strings, unknown or duplicate members are rejected, and array order is
 /// preserved. Domain validators require deterministic ordering where order has no
 /// product meaning.
 /// </summary>
@@ -261,6 +269,13 @@ public static partial class ArenaContractCodec
         contract = null;
         try
         {
+            var sourceIssues = ArenaContractPrivacyRules.InspectJson(json);
+            if (!sourceIssues.IsEmpty)
+            {
+                issues = sourceIssues;
+                return false;
+            }
+
             contract = JsonSerializer.Deserialize<T>(json, JsonOptions);
             var validation = Validate(contract);
             issues = validation.Issues;
@@ -960,9 +975,9 @@ public static partial class ArenaContractCodec
         RequireHash(value.SourceRevision, "$.sourceRevision", true, issues);
         RequireHash(value.TreeFingerprint, "$.treeFingerprint", false, issues);
         RequireId(value.SealManifestId, "$.sealManifestId", issues);
-        if (!string.Equals(value.SealManifestId, ArenaQaSealManifestV1.Id, StringComparison.Ordinal))
+        if (!IsKnownQaSealManifest(value.SealManifestId))
         {
-            Add(issues, "qa.manifest", "$.sealManifestId", $"Expected QA seal manifest '{ArenaQaSealManifestV1.Id}'.");
+            Add(issues, "qa.manifest", "$.sealManifestId", $"Expected QA seal manifest '{ArenaQaSealManifestV1.Id}' or '{ArenaQaSealManifestV2.Id}'.");
         }
         ValidateQaRepositories(value.NestedRepositories, value.Verdict == ArenaQaVerdict.Sealed, issues);
         RequireUtc(value.StartedAtUtc, "$.startedAtUtc", issues);
@@ -989,9 +1004,10 @@ public static partial class ArenaContractCodec
             {
                 Add(issues, "qa.clean_tree", "$.isWorkingTreeClean", "A sealed verdict requires a clean matching tree.");
             }
-            if (value.CleanFullPasses < ArenaQaSealManifestV1.RequiredCleanPasses)
+            var requiredCleanPasses = RequiredQaCleanPasses(value.SealManifestId);
+            if (value.CleanFullPasses < requiredCleanPasses)
             {
-                Add(issues, "qa.clean_passes", "$.cleanFullPasses", $"A sealed verdict requires {ArenaQaSealManifestV1.RequiredCleanPasses} clean full passes.");
+                Add(issues, "qa.clean_passes", "$.cleanFullPasses", $"A sealed verdict requires {requiredCleanPasses} clean full passes.");
             }
             if (!value.Inspection.UserAccepted || value.Inspection.AcceptedAtUtc is null)
             {
@@ -1355,32 +1371,43 @@ public static partial class ArenaContractCodec
         ArenaQaEvidenceContract value,
         ImmutableArray<ArenaContractValidationIssue>.Builder issues)
     {
-        if (!string.Equals(value.SealManifestId, ArenaQaSealManifestV1.Id, StringComparison.Ordinal))
+        if (!IsKnownQaSealManifest(value.SealManifestId))
         {
             return;
         }
 
+        var isV2 = string.Equals(value.SealManifestId, ArenaQaSealManifestV2.Id, StringComparison.Ordinal);
+
         var gates = Safe(value.Gates)
             .GroupBy(item => item.Id, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
-        var passCount = Math.Max(ArenaQaSealManifestV1.RequiredCleanPasses, value.CleanFullPasses);
-        foreach (var requiredId in ArenaQaSealManifestV1.RequiredGateIds(passCount))
+        var requiredCleanPasses = isV2
+            ? ArenaQaSealManifestV2.RequiredCleanPasses
+            : ArenaQaSealManifestV1.RequiredCleanPasses;
+        var passCount = Math.Max(requiredCleanPasses, value.CleanFullPasses);
+        var requiredGateIds = isV2
+            ? ArenaQaSealManifestV2.RequiredGateIds(passCount)
+            : ArenaQaSealManifestV1.RequiredGateIds(passCount);
+        foreach (var requiredId in requiredGateIds)
         {
             if (!gates.TryGetValue(requiredId, out var gate))
             {
-                Add(issues, "qa.gate_manifest", "$.gates", $"Required v1 seal gate '{requiredId}' is absent.");
+                Add(issues, "qa.gate_manifest", "$.gates", $"Required {(isV2 ? "v2" : "v1")} seal gate '{requiredId}' is absent.");
                 continue;
             }
             if (!gate.Required || gate.Outcome != ArenaQaGateOutcome.Pass || gate.Evidence.State != ArenaEvidenceState.Observed)
             {
-                Add(issues, "qa.gate_manifest", "$.gates", $"Required v1 seal gate '{requiredId}' must be required, passing, and observed.");
+                Add(issues, "qa.gate_manifest", "$.gates", $"Required {(isV2 ? "v2" : "v1")} seal gate '{requiredId}' must be required, passing, and observed.");
             }
         }
 
         var schemas = Safe(value.SchemaChecks)
             .GroupBy(item => item.Schema, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
-        foreach (var requiredSchema in ArenaQaSealManifestV1.RequiredSchemaIds)
+        var requiredSchemaIds = isV2
+            ? ArenaQaSealManifestV2.RequiredSchemaIds
+            : ArenaQaSealManifestV1.RequiredSchemaIds;
+        foreach (var requiredSchema in requiredSchemaIds)
         {
             if (!schemas.TryGetValue(requiredSchema, out var check)
                 || check.Outcome != ArenaQaGateOutcome.Pass
@@ -1393,7 +1420,10 @@ public static partial class ArenaContractCodec
         var metrics = Safe(value.Performance)
             .Select(item => item.Metric)
             .ToHashSet(StringComparer.Ordinal);
-        foreach (var requiredMetric in ArenaQaSealManifestV1.RequiredPerformanceMetrics)
+        var requiredMetrics = isV2
+            ? ArenaQaSealManifestV2.RequiredPerformanceMetrics
+            : ArenaQaSealManifestV1.RequiredPerformanceMetrics;
+        foreach (var requiredMetric in requiredMetrics)
         {
             if (!metrics.Contains(requiredMetric))
             {
@@ -1404,14 +1434,88 @@ public static partial class ArenaContractCodec
         var artifactKinds = Safe(value.Artifacts)
             .Select(item => item.Kind)
             .ToHashSet(StringComparer.Ordinal);
-        foreach (var requiredKind in ArenaQaSealManifestV1.RequiredArtifactKinds)
+        var requiredArtifactKinds = isV2
+            ? ArenaQaSealManifestV2.RequiredArtifactKinds
+            : ArenaQaSealManifestV1.RequiredArtifactKinds;
+        foreach (var requiredKind in requiredArtifactKinds)
         {
             if (!artifactKinds.Contains(requiredKind))
             {
                 Add(issues, "qa.artifact_manifest", "$.artifacts", $"Required artifact kind '{requiredKind}' is absent.");
             }
         }
+
+        if (isV2)
+        {
+            ValidateQaSealManifestV2Migration(value, gates, schemas, issues);
+        }
     }
+
+    private static void ValidateQaSealManifestV2Migration(
+        ArenaQaEvidenceContract value,
+        IReadOnlyDictionary<string, ArenaQaGateEvidence> gates,
+        IReadOnlyDictionary<string, ArenaQaSchemaCheck> schemas,
+        ImmutableArray<ArenaContractValidationIssue>.Builder issues)
+    {
+        if (!gates.TryGetValue(ArenaQaSealManifestV2.ExplicitMigrationGateId, out var gate)
+            || !gate.Required
+            || gate.Outcome != ArenaQaGateOutcome.Pass
+            || gate.Evidence.State != ArenaEvidenceState.Observed
+            || !string.Equals(gate.Evidence.ReferenceId, ArenaQaSealManifestV2.ExplicitMigrationArtifactId, StringComparison.Ordinal))
+        {
+            Add(issues, "qa.v2_migration_gate", "$.gates", "The v2 explicit migration gate must be required, passing, observed, and reference its exact sanitized log artifact.");
+        }
+
+        var migrationArtifacts = Safe(value.Artifacts)
+            .Where(item => string.Equals(item.Id, ArenaQaSealManifestV2.ExplicitMigrationArtifactId, StringComparison.Ordinal))
+            .ToArray();
+        if (migrationArtifacts.Length != 1
+            || !string.Equals(migrationArtifacts[0].Kind, ArenaQaSealManifestV2.ExplicitMigrationArtifactKind, StringComparison.Ordinal)
+            || !string.Equals(migrationArtifacts[0].RelativePath, ArenaQaSealManifestV2.ExplicitMigrationArtifactPath, StringComparison.Ordinal))
+        {
+            Add(issues, "qa.v2_migration_artifact", "$.artifacts", "The v2 migration gate requires its exact sanitized log artifact identity, kind, and relative path.");
+        }
+
+        ValidateQaSealManifestV2MigrationSchema(
+            schemas,
+            ArenaContractSchemas.ScenarioPack,
+            ArenaQaSealManifestV2.ScenarioPackV0Schema,
+            ArenaQaSealManifestV2.ScenarioMigrationEvidenceId,
+            issues);
+        ValidateQaSealManifestV2MigrationSchema(
+            schemas,
+            ArenaContractSchemas.BenchmarkPack,
+            ArenaQaSealManifestV2.BenchmarkPackV0Schema,
+            ArenaQaSealManifestV2.BenchmarkMigrationEvidenceId,
+            issues);
+    }
+
+    private static void ValidateQaSealManifestV2MigrationSchema(
+        IReadOnlyDictionary<string, ArenaQaSchemaCheck> schemas,
+        string currentSchema,
+        string sourceSchema,
+        string evidenceId,
+        ImmutableArray<ArenaContractValidationIssue>.Builder issues)
+    {
+        if (!schemas.TryGetValue(currentSchema, out var check)
+            || check.Outcome != ArenaQaGateOutcome.Pass
+            || !string.Equals(check.MigratedFromSchema, sourceSchema, StringComparison.Ordinal)
+            || check.Evidence.State != ArenaEvidenceState.Observed
+            || !string.Equals(check.Evidence.Id, evidenceId, StringComparison.Ordinal)
+            || !string.Equals(check.Evidence.ReferenceId, ArenaQaSealManifestV2.ExplicitMigrationArtifactId, StringComparison.Ordinal))
+        {
+            Add(issues, "qa.v2_migration_schema", "$.schemaChecks", $"The v2 schema check for '{currentSchema}' must record the exact explicit v0 migration and observed log reference.");
+        }
+    }
+
+    private static bool IsKnownQaSealManifest(string value) =>
+        string.Equals(value, ArenaQaSealManifestV1.Id, StringComparison.Ordinal)
+        || string.Equals(value, ArenaQaSealManifestV2.Id, StringComparison.Ordinal);
+
+    private static int RequiredQaCleanPasses(string manifestId) =>
+        string.Equals(manifestId, ArenaQaSealManifestV2.Id, StringComparison.Ordinal)
+            ? ArenaQaSealManifestV2.RequiredCleanPasses
+            : ArenaQaSealManifestV1.RequiredCleanPasses;
 
     private static bool MeetsThreshold(ArenaQaPerformanceMeasurement value) =>
         value.ThresholdKind == ArenaQaThresholdKind.Maximum

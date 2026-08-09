@@ -420,6 +420,82 @@ internal static partial class Program
                 Require(!InAppQaInspectorCoordinator.IsInspectionAcceptanceReady(staleSnapshot, completedReview), "stale source evidence enabled acceptance");
                 var dirtySnapshot = snapshot with { Contract = snapshot.Contract with { IsWorkingTreeClean = false } };
                 Require(!InAppQaInspectorCoordinator.IsInspectionAcceptanceReady(dirtySnapshot, completedReview), "dirty-tree evidence enabled acceptance");
+                var historicalManifest = snapshot with
+                {
+                    Contract = snapshot.Contract with { SealManifestId = ArenaQaSealManifestV1.Id }
+                };
+                Require(!InAppQaInspectorCoordinator.IsInspectionAcceptanceReady(historicalManifest, completedReview),
+                    "historical V1 evidence enabled current in-app acceptance");
+
+                var migrationGateIndex = snapshot.Contract.Gates.IndexOf(snapshot.Contract.Gates.Single(gate =>
+                    gate.Id == ArenaQaSealManifestV2.ExplicitMigrationGateId));
+                var deletedMigrationGate = snapshot with
+                {
+                    Contract = snapshot.Contract with { Gates = snapshot.Contract.Gates.RemoveAt(migrationGateIndex) }
+                };
+                Require(!InAppQaInspectorCoordinator.IsInspectionAcceptanceReady(deletedMigrationGate, completedReview),
+                    "deleted explicit migration gate enabled acceptance");
+                var optionalMigrationGate = snapshot with
+                {
+                    Contract = snapshot.Contract with
+                    {
+                        Gates = snapshot.Contract.Gates.SetItem(
+                            migrationGateIndex,
+                            snapshot.Contract.Gates[migrationGateIndex] with { Required = false })
+                    }
+                };
+                Require(!InAppQaInspectorCoordinator.IsInspectionAcceptanceReady(optionalMigrationGate, completedReview),
+                    "optional explicit migration gate enabled acceptance");
+                var partialMigrationGate = snapshot with
+                {
+                    Contract = snapshot.Contract with
+                    {
+                        Gates = snapshot.Contract.Gates.SetItem(
+                            migrationGateIndex,
+                            snapshot.Contract.Gates[migrationGateIndex] with { Outcome = ArenaQaGateOutcome.Partial })
+                    }
+                };
+                Require(!InAppQaInspectorCoordinator.IsInspectionAcceptanceReady(partialMigrationGate, completedReview),
+                    "non-passing explicit migration gate enabled acceptance");
+
+                var scenarioSchemaIndex = snapshot.Contract.SchemaChecks.IndexOf(snapshot.Contract.SchemaChecks.Single(check =>
+                    check.Schema == ArenaContractSchemas.ScenarioPack));
+                var substitutedMigrationSource = snapshot with
+                {
+                    Contract = snapshot.Contract with
+                    {
+                        SchemaChecks = snapshot.Contract.SchemaChecks.SetItem(
+                            scenarioSchemaIndex,
+                            snapshot.Contract.SchemaChecks[scenarioSchemaIndex] with
+                            {
+                                MigratedFromSchema = "ai_arena.scenario_pack.v0-renamed"
+                            })
+                    }
+                };
+                Require(!InAppQaInspectorCoordinator.IsInspectionAcceptanceReady(substitutedMigrationSource, completedReview),
+                    "substituted migration source schema enabled acceptance");
+
+                var migrationArtifactIndex = snapshot.Artifacts.IndexOf(snapshot.Artifacts.Single(item =>
+                    item.Artifact.Id == ArenaQaSealManifestV2.ExplicitMigrationArtifactId));
+                var substitutedMigrationArtifact = snapshot with
+                {
+                    Artifacts = snapshot.Artifacts.SetItem(
+                        migrationArtifactIndex,
+                        snapshot.Artifacts[migrationArtifactIndex] with
+                        {
+                            Artifact = snapshot.Artifacts[migrationArtifactIndex].Artifact with { Kind = "generic-log" }
+                        })
+                };
+                Require(!InAppQaInspectorCoordinator.IsInspectionAcceptanceReady(substitutedMigrationArtifact, completedReview),
+                    "substituted migration artifact kind enabled acceptance");
+                var missingFeatureMatrix = snapshot with
+                {
+                    Artifacts = [.. snapshot.Artifacts.Where(item =>
+                        item.Artifact.Id != "artifact.pass-02.feature-surface-matrix")]
+                };
+                Require(!InAppQaInspectorCoordinator.IsInspectionAcceptanceReady(missingFeatureMatrix, completedReview),
+                    "missing clean-pass feature matrix enabled acceptance");
+
                 var missingLimitation = snapshot with
                 {
                     Contract = snapshot.Contract with { AcceptedLimitations = snapshot.Contract.AcceptedLimitations.RemoveAt(0) }
@@ -467,6 +543,96 @@ internal static partial class Program
                     Require(!InAppQaInspectorCoordinator.IsInspectionAcceptanceReady(tamperedSnapshot, completedReview),
                         "required limitation semantic tamper enabled acceptance");
                 }
+            });
+        });
+    }
+
+    static void QaInspectorIsolatedCapturePreservesExistingReviewsReadOnly()
+    {
+        RunStaTest(() =>
+        {
+            WithQaRoot(root =>
+            {
+                var bundle = CreateAcceptanceReadyBundle(root, "read-only-capture");
+                var bundlePath = Path.GetDirectoryName(bundle.EvidencePath)
+                    ?? throw new InvalidOperationException("QA fixture bundle path is unavailable.");
+                var reviewPath = Path.Combine(
+                    bundlePath,
+                    QaEvidenceRepository.ReviewManifestRelativePath.Replace('/', Path.DirectorySeparatorChar));
+                var repository = new QaEvidenceRepository(
+                    root,
+                    new FakeQaCurrentnessValidator(QaCurrentnessResult.Current()));
+                var initialLoad = repository.LoadAsync(bundle.RelativeEvidencePath).GetAwaiter().GetResult();
+                var initialSnapshot = initialLoad.Snapshot
+                    ?? throw new InvalidOperationException("Read-only QA fixture could not load its valid evidence.");
+                var reviewedIds = initialSnapshot.Artifacts
+                    .Where(item => item.Artifact.Kind == "rendered-ui-screenshot")
+                    .Select(item => item.Artifact.Id)
+                    .ToHashSet(StringComparer.Ordinal);
+                var reviewHandle = repository.WriteReviewManifestAsync(initialSnapshot, reviewedIds).GetAwaiter().GetResult()
+                    ?? throw new InvalidOperationException("Read-only QA fixture could not persist a valid completed review.");
+                Require(InAppQaInspectorCoordinator.ReviewManifestMatches(initialSnapshot, reviewHandle.Manifest),
+                    "read-only preservation fixture did not begin with a valid hash-bound completed review");
+                var sentinel = File.ReadAllBytes(reviewPath);
+
+                var isolatedDataRoot = Path.Combine(root, "isolated-data");
+                Directory.CreateDirectory(isolatedDataRoot);
+                var ownerMarker = Path.Combine(isolatedDataRoot, ".ai-arena-qa-owner");
+                File.WriteAllText(ownerMarker, "fixture-owner\n", new UTF8Encoding(false));
+                var previousDataRoot = Environment.GetEnvironmentVariable("AI_ARENA_DATA_DIR");
+                bool readOnlyPreserveReviews;
+                try
+                {
+                    Environment.SetEnvironmentVariable("AI_ARENA_DATA_DIR", isolatedDataRoot);
+                    readOnlyPreserveReviews = InAppQaInspectorCoordinator.ShouldPreserveReviewsForIsolatedCapture(isolatedDataRoot);
+                    Require(readOnlyPreserveReviews,
+                        "owned isolated QA data root did not activate read-only review preservation");
+                    File.Delete(ownerMarker);
+                    Require(!InAppQaInspectorCoordinator.ShouldPreserveReviewsForIsolatedCapture(isolatedDataRoot),
+                        "isolated QA data root without its owner marker activated read-only preservation");
+                    File.WriteAllText(ownerMarker, "fixture-owner\n", new UTF8Encoding(false));
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable("AI_ARENA_DATA_DIR", previousDataRoot);
+                }
+
+                var suiteRunner = new FakeQaSuiteRunner();
+                var acceptanceRunner = new FakeQaAcceptanceRunner();
+                var control = new InAppQaInspectorControl();
+                using var coordinator = new InAppQaInspectorCoordinator(
+                    control,
+                    root,
+                    new FakeQaCurrentnessValidator(QaCurrentnessResult.Current()),
+                    suiteRunner,
+                    acceptanceRunner,
+                    new FakeQaClipboard(),
+                    () => true,
+                    readOnlyPreserveReviews: readOnlyPreserveReviews);
+
+                QaEvidenceLoadResult? loaded = null;
+                RunExperimentDispatcherTask(async () => loaded = await coordinator.RefreshAsync(bundle.RelativeEvidencePath));
+                var screenshot = loaded?.Snapshot?.Artifacts.First(item => item.Artifact.Kind == "rendered-ui-screenshot")
+                    ?? throw new InvalidOperationException("Read-only QA fixture screenshot is unavailable.");
+                RunExperimentDispatcherTask(() => coordinator.SelectScreenshotAsync(screenshot.Artifact.Id));
+                QaSuiteRunResult? suite = null;
+                RunExperimentDispatcherTask(async () => suite = await coordinator.RunSuiteAsync(QaLocalSuite.Core));
+                QaAcceptanceResult? acceptance = null;
+                RunExperimentDispatcherTask(async () => acceptance = await coordinator.AcceptInspectionAsync());
+                RunExperimentDispatcherTask(async () => loaded = await coordinator.RefreshAsync(bundle.RelativeEvidencePath));
+
+                Require(File.Exists(reviewPath)
+                    && File.ReadAllBytes(reviewPath).SequenceEqual(sentinel),
+                    "isolated QA capture deleted or rewrote an existing human inspection review");
+                Require(suite?.Code == "qa.capture_read_only"
+                    && acceptance?.Code == "qa.capture_read_only"
+                    && suiteRunner.CallCount == 0
+                    && acceptanceRunner.CallCount == 0,
+                    "isolated QA capture reached a mutating suite or acceptance runner");
+                Require(!control.RunSuiteButton.IsEnabled
+                    && !control.CancelSuiteButton.IsEnabled
+                    && !control.AcceptInspectionButton.IsEnabled,
+                    "isolated QA capture exposed mutating QA Inspector commands");
             });
         });
     }
@@ -640,14 +806,21 @@ internal static partial class Program
         var bundlePath = Path.Combine(root, "artifacts", "qa", runId);
         Directory.CreateDirectory(Path.Combine(bundlePath, "screenshots"));
         Directory.CreateDirectory(Path.Combine(bundlePath, "automation"));
+        Directory.CreateDirectory(Path.Combine(bundlePath, "logs"));
+        Directory.CreateDirectory(Path.Combine(bundlePath, "metadata"));
         var screenshotBytes = CreatePngBytes(320, 240, 0x28, 0x74, 0xA1);
         var secondScreenshotBytes = CreatePngBytes(320, 240, 0x49, 0x8A, 0xB8);
         var baselineBytes = CreatePngBytes(320, 240, 0x16, 0x33, 0x4A);
         var automationBytes = Encoding.UTF8.GetBytes("{\"schema\":\"ai_arena.automation_tree.v1\",\"nodes\":[]}");
+        var migrationLogBytes = Encoding.UTF8.GetBytes("AI Arena QA gate evidence\ngate=schema.explicit-v0-pack-migration\noutcome=pass\n");
+        var featureMatrixBytes = Encoding.UTF8.GetBytes("{\"schema\":\"ai_arena.qa_feature_surface_matrix.v1\",\"fixture\":true}");
         File.WriteAllBytes(Path.Combine(bundlePath, "screenshots", "current.png"), screenshotBytes);
         File.WriteAllBytes(Path.Combine(bundlePath, "screenshots", "current-secondary.png"), secondScreenshotBytes);
         File.WriteAllBytes(Path.Combine(bundlePath, "screenshots", "baseline.png"), baselineBytes);
         File.WriteAllBytes(Path.Combine(bundlePath, "automation", "tree.json"), automationBytes);
+        File.WriteAllBytes(Path.Combine(bundlePath, "logs", "schema.explicit-v0-pack-migration.log"), migrationLogBytes);
+        File.WriteAllBytes(Path.Combine(bundlePath, "metadata", "pass-01.feature-surface-matrix.json"), featureMatrixBytes);
+        File.WriteAllBytes(Path.Combine(bundlePath, "metadata", "pass-02.feature-surface-matrix.json"), featureMatrixBytes);
 
         var baseContract = CreateQaContract();
         var at = baseContract.StartedAtUtc.AddSeconds(10);
@@ -676,21 +849,52 @@ internal static partial class Program
                 "rendered-ui-screenshot",
                 "screenshots/current-secondary.png",
                 Hash(secondScreenshotBytes),
-                new(tree, at, "light", 960, 700, 1.5m, "qa-inspector", "artifact:automation", null)));
-        var gates = ArenaQaSealManifestV1.RequiredGateIds(ArenaQaSealManifestV1.RequiredCleanPasses)
+                new(tree, at, "light", 960, 700, 1.5m, "qa-inspector", "artifact:automation", null)),
+            new ArenaQaArtifact(
+                ArenaQaSealManifestV2.ExplicitMigrationArtifactId,
+                ArenaQaSealManifestV2.ExplicitMigrationArtifactKind,
+                ArenaQaSealManifestV2.ExplicitMigrationArtifactPath,
+                Hash(migrationLogBytes),
+                null),
+            new ArenaQaArtifact(
+                "artifact.pass-01.feature-surface-matrix",
+                ArenaQaSealManifestV2.FeatureSurfaceMatrixArtifactKind,
+                "metadata/pass-01.feature-surface-matrix.json",
+                Hash(featureMatrixBytes),
+                null),
+            new ArenaQaArtifact(
+                "artifact.pass-02.feature-surface-matrix",
+                ArenaQaSealManifestV2.FeatureSurfaceMatrixArtifactKind,
+                "metadata/pass-02.feature-surface-matrix.json",
+                Hash(featureMatrixBytes),
+                null));
+        var gates = ArenaQaSealManifestV2.RequiredGateIds(ArenaQaSealManifestV2.RequiredCleanPasses)
             .Select((id, index) => id.Equals("inspection.user-acceptance", StringComparison.Ordinal)
                 ? new ArenaQaGateEvidence(id, ArenaQaGateOutcome.Unavailable, true, 0, new(0, 0, 0, 0), QaUnavailable($"evidence:gate:{index}"))
-                : new ArenaQaGateEvidence(id, ArenaQaGateOutcome.Pass, true, 10, new(1, 0, 0, 1), QaObserved($"evidence:gate:{index}")))
+                : new ArenaQaGateEvidence(
+                    id,
+                    ArenaQaGateOutcome.Pass,
+                    true,
+                    10,
+                    new(1, 0, 0, 1),
+                    id == ArenaQaSealManifestV2.ExplicitMigrationGateId
+                        ? QaObserved($"evidence:gate:{index}") with { ReferenceId = ArenaQaSealManifestV2.ExplicitMigrationArtifactId }
+                        : QaObserved($"evidence:gate:{index}")))
             .ToImmutableArray();
-        var schemas = ArenaQaSealManifestV1.RequiredSchemaIds
-            .Select((schema, index) => new ArenaQaSchemaCheck(
-                $"schema:check:{index}",
-                schema,
-                null,
-                ArenaQaGateOutcome.Pass,
-                QaObserved($"evidence:schema:{index}")))
+        var schemas = ArenaQaSealManifestV2.RequiredSchemaIds
+            .Select((schema, index) => schema switch
+            {
+                ArenaContractSchemas.ScenarioPack => new ArenaQaSchemaCheck(
+                    $"schema:check:{index}", schema, ArenaQaSealManifestV2.ScenarioPackV0Schema, ArenaQaGateOutcome.Pass,
+                    QaObserved(ArenaQaSealManifestV2.ScenarioMigrationEvidenceId) with { ReferenceId = ArenaQaSealManifestV2.ExplicitMigrationArtifactId }),
+                ArenaContractSchemas.BenchmarkPack => new ArenaQaSchemaCheck(
+                    $"schema:check:{index}", schema, ArenaQaSealManifestV2.BenchmarkPackV0Schema, ArenaQaGateOutcome.Pass,
+                    QaObserved(ArenaQaSealManifestV2.BenchmarkMigrationEvidenceId) with { ReferenceId = ArenaQaSealManifestV2.ExplicitMigrationArtifactId }),
+                _ => new ArenaQaSchemaCheck(
+                    $"schema:check:{index}", schema, null, ArenaQaGateOutcome.Pass, QaObserved($"evidence:schema:{index}"))
+            })
             .ToImmutableArray();
-        var performance = ArenaQaSealManifestV1.RequiredPerformanceMetrics
+        var performance = ArenaQaSealManifestV2.RequiredPerformanceMetrics
             .Select(metric => new ArenaQaPerformanceMeasurement(
                 $"performance:{metric}",
                 metric,
@@ -703,7 +907,8 @@ internal static partial class Program
         var contract = baseContract with
         {
             Id = $"qa:{runId}",
-            CleanFullPasses = ArenaQaSealManifestV1.RequiredCleanPasses,
+            SealManifestId = ArenaQaSealManifestV2.Id,
+            CleanFullPasses = ArenaQaSealManifestV2.RequiredCleanPasses,
             Gates = gates,
             Artifacts = artifacts,
             SchemaChecks = schemas,

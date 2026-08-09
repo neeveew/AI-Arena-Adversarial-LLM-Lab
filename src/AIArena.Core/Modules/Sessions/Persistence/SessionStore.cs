@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AIArena.Core.Models;
+using AIArena.Core.Providers;
 using AIArena.Core.Services;
 
 namespace AIArena.Core.Persistence;
@@ -165,10 +166,29 @@ public sealed class SessionStore
     {
         var path = SnapshotPath(sessionId);
         var fullPath = Path.GetFullPath(path);
+        var snapshotDirectory = Path.GetDirectoryName(fullPath)!;
         using var processLock = await SnapshotWriteLocks.AcquireAsync(fullPath, cancellationToken);
-        using var writeLease = await CrossProcessWriteLease.AcquireAsync(fullPath, SnapshotWriteLeaseTimeout, cancellationToken);
-        await SaveSnapshotCoreAsync(snapshot, fullPath, rejectStaleRevision: true, cancellationToken);
+        var snapshotDirectoryExisted = Directory.Exists(snapshotDirectory);
+        try
+        {
+            using var experimentCallLease = await CrossProcessWriteLease.AcquireAsync(
+                ExperimentProviderLeaseTarget(fullPath),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            using var writeLease = await CrossProcessWriteLease.AcquireAsync(fullPath, SnapshotWriteLeaseTimeout, cancellationToken);
+            await SaveSnapshotCoreAsync(snapshot, fullPath, rejectStaleRevision: true, cancellationToken);
+        }
+        finally
+        {
+            if (!snapshotDirectoryExisted && !File.Exists(fullPath))
+            {
+                TryDeleteEmptyDirectory(snapshotDirectory);
+            }
+        }
     }
+
+    private static string ExperimentProviderLeaseTarget(string fullSnapshotPath) =>
+        $"{fullSnapshotPath}.experiment-provider-call";
 
     private static async Task SaveSnapshotCoreAsync(
         ArenaSnapshot snapshot,
@@ -181,7 +201,11 @@ public sealed class SessionStore
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         var currentRevision = await ReadPersistenceRevisionAsync(fullPath, cancellationToken);
         var expectedRevision = Math.Max(0, snapshot.PersistenceRevision);
-        if (rejectStaleRevision && File.Exists(fullPath) && currentRevision != expectedRevision)
+        var snapshotExists = File.Exists(fullPath);
+        if (rejectStaleRevision
+            && (snapshotExists
+                ? currentRevision != expectedRevision
+                : expectedRevision != 0))
         {
             throw new SnapshotConcurrencyException(fullPath, expectedRevision, currentRevision);
         }
@@ -524,6 +548,207 @@ public sealed class SessionStore
     }
 
     /// <summary>
+    /// Atomically creates one experiment-owned child. The source revision and
+    /// replayable setup are validated while the source write leases are held,
+    /// and the only durable child representation already contains its experiment
+    /// identity and token-empty replacement provider setup.
+    /// </summary>
+    public async Task<SessionForkResult> ForkExperimentSessionAsync(
+        string sourceSessionId,
+        string targetSessionId,
+        long expectedSourcePersistenceRevision,
+        string expectedSourceSetupFingerprint,
+        string experimentId,
+        ModelProviderConfig replacementConfig,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(expectedSourcePersistenceRevision, 1);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedSourceSetupFingerprint);
+        ArgumentException.ThrowIfNullOrWhiteSpace(experimentId);
+        ArgumentNullException.ThrowIfNull(replacementConfig);
+        if (expectedSourceSetupFingerprint.Length != 64
+            || !expectedSourceSetupFingerprint.All(Uri.IsHexDigit))
+        {
+            throw new ArgumentException("Expected source setup fingerprint must be a SHA-256 value.", nameof(expectedSourceSetupFingerprint));
+        }
+        if (experimentId.Length > 160 || experimentId.Any(char.IsControl))
+        {
+            throw new ArgumentException("Experiment identity must be bounded and contain no control characters.", nameof(experimentId));
+        }
+        if (!string.IsNullOrEmpty(replacementConfig.ApiToken))
+        {
+            throw new ArgumentException("Experiment child replacement configuration must not contain a provider credential.", nameof(replacementConfig));
+        }
+
+        var safeSourceSessionId = SafeSessionId(sourceSessionId);
+        var safeTargetSessionId = ValidateExplicitForkTargetSessionId(targetSessionId);
+        var sourcePath = Path.GetFullPath(SnapshotPath(safeSourceSessionId));
+        if (!File.Exists(sourcePath))
+        {
+            throw new FileNotFoundException($"Session '{safeSourceSessionId}' has no persisted snapshot to fork.", sourcePath);
+        }
+
+        using var sourceProcessLock = await SnapshotWriteLocks.AcquireAsync(sourcePath, cancellationToken);
+        using var sourceExperimentCallLease = await CrossProcessWriteLease.AcquireAsync(
+            ExperimentProviderLeaseTarget(sourcePath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        using var sourceWriteLease = await CrossProcessWriteLease.AcquireAsync(
+            sourcePath,
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        var sourceSnapshot = await LoadSnapshotAsync(safeSourceSessionId, cancellationToken)
+            ?? throw new InvalidDataException($"Session '{safeSourceSessionId}' has an unreadable snapshot and cannot be forked.");
+        var sourceRevision = Math.Max(0, sourceSnapshot.PersistenceRevision);
+        var sourceSetupFingerprint = SetupFingerprint(sourceSnapshot);
+        if (sourceRevision != expectedSourcePersistenceRevision
+            || !sourceSetupFingerprint.Equals(expectedSourceSetupFingerprint, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArenaExperimentSourceChangedException();
+        }
+
+        var targetPath = Path.GetFullPath(SnapshotPath(safeTargetSessionId));
+        var targetDirectory = Path.GetDirectoryName(targetPath)!;
+        var targetDirectoryExisted = Directory.Exists(targetDirectory);
+        if (SessionIdentityExists(safeTargetSessionId, targetPath))
+        {
+            throw new IOException("The exact experiment child session identity is already reserved.");
+        }
+
+        try
+        {
+            using var targetProcessLock = await SnapshotWriteLocks.AcquireAsync(targetPath, cancellationToken);
+            using var targetExperimentCallLease = await CrossProcessWriteLease.AcquireAsync(
+                ExperimentProviderLeaseTarget(targetPath),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            using var targetWriteLease = await CrossProcessWriteLease.AcquireAsync(
+                targetPath,
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            if (File.Exists(targetPath)
+                || SessionSideArtifactsExist(safeTargetSessionId)
+                || TargetDirectoryContainsUnexpectedEntries(targetDirectory, targetPath))
+            {
+                throw new IOException("The exact experiment child session identity is already reserved.");
+            }
+
+            var forkedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var child = CloneSnapshot(sourceSnapshot);
+            NormalizeForkSnapshot(child, safeSourceSessionId, sourceRevision, forkedAt);
+            var receipt = AttachBranchReceipt(
+                child,
+                sourceSnapshot,
+                safeSourceSessionId,
+                safeTargetSessionId,
+                sourceRevision,
+                forkedAt,
+                sourceSnapshot.Engine.Messages.Count - 1,
+                ImmutableArray<ArenaEvidenceAssertion>.Empty) with
+            {
+                ExperimentId = experimentId
+            };
+            child.BranchReceipt = receipt;
+            RebaseRetainedMemory(child, sourceSnapshot.BranchReceipt?.Id ?? "", receipt.Id);
+            child.Configs.Clear();
+            child.Configs[ModelProviderRouting.SharedConfigKey] = ExperimentProviderSetup(replacementConfig);
+            child.PersistenceRevision = 0;
+            var childSetupFingerprint = SetupFingerprint(child);
+            if (!await TryCreateSnapshotFileAsync(child, targetPath, cancellationToken))
+            {
+                throw new IOException("The exact experiment child session identity is already reserved.");
+            }
+
+            return new SessionForkResult(
+                safeSourceSessionId,
+                safeTargetSessionId,
+                sourceRevision,
+                child.PersistenceRevision,
+                child.Engine.TurnCount,
+                child.Engine.Messages.Count,
+                child.Engine.Narration.Count,
+                child.Engine.Agents.Count(agent => agent.Active),
+                child.GenerationHistory.Count,
+                forkedAt)
+            {
+                BranchReceiptId = receipt.Id,
+                CursorMessageId = receipt.ForkPoint.MessageId,
+                ChildSetupFingerprint = childSetupFingerprint
+            };
+        }
+        finally
+        {
+            if (!targetDirectoryExisted && !File.Exists(targetPath))
+            {
+                TryDeleteEmptyDirectory(targetDirectory);
+            }
+        }
+    }
+
+    internal async ValueTask<ArenaExperimentProviderCallLease> AcquireExperimentProviderCallLeaseAsync(
+        ArenaExperimentChildGuard guard,
+        long expectedPersistenceRevision,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(guard);
+        ArgumentOutOfRangeException.ThrowIfLessThan(expectedPersistenceRevision, 1);
+        var fullPath = Path.GetFullPath(SnapshotPath(guard.SessionId));
+        var callLease = await CrossProcessWriteLease.AcquireAsync(
+            ExperimentProviderLeaseTarget(fullPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var snapshot = await LoadSnapshotAsync(guard.SessionId, cancellationToken).ConfigureAwait(false);
+            ValidateExperimentChild(snapshot, guard, expectedPersistenceRevision);
+            return new ArenaExperimentProviderCallLease(callLease, expectedPersistenceRevision);
+        }
+        catch
+        {
+            callLease.Dispose();
+            throw;
+        }
+    }
+
+    internal async Task<long> ValidateExperimentChildAsync(
+        ArenaExperimentChildGuard guard,
+        long expectedPersistenceRevision,
+        CancellationToken cancellationToken = default)
+    {
+        using var callLease = await AcquireExperimentProviderCallLeaseAsync(
+            guard,
+            expectedPersistenceRevision,
+            cancellationToken).ConfigureAwait(false);
+        return callLease.PersistenceRevision;
+    }
+
+    private static void ValidateExperimentChild(
+        ArenaSnapshot? snapshot,
+        ArenaExperimentChildGuard guard,
+        long expectedPersistenceRevision)
+    {
+        if (snapshot is null
+            || snapshot.PersistenceRevision != expectedPersistenceRevision
+            || snapshot.BranchReceipt is not { } receipt
+            || !string.Equals(receipt.ExperimentId, guard.ExperimentId, StringComparison.Ordinal)
+            || !receipt.ParentSessionId.Equals(guard.ParentSessionId, StringComparison.Ordinal)
+            || receipt.ParentRevision != guard.ParentPersistenceRevision
+            || !receipt.SetupFingerprint.Equals(guard.ParentSetupFingerprint, StringComparison.OrdinalIgnoreCase)
+            || !receipt.ChildSessionId.Equals(guard.SessionId, StringComparison.Ordinal)
+            || snapshot.ForkLineage is not { } lineage
+            || !lineage.ParentSessionId.Equals(guard.ParentSessionId, StringComparison.Ordinal)
+            || lineage.ParentPersistenceRevision != guard.ParentPersistenceRevision
+            || !SetupFingerprint(snapshot).Equals(guard.ChildSetupFingerprint, StringComparison.OrdinalIgnoreCase)
+            || snapshot.Configs.Count != 1
+            || !snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var config)
+            || !string.IsNullOrEmpty(config.ApiToken)
+            || config.Extra is { Count: > 0 })
+        {
+            throw new ArenaExperimentChildDriftException();
+        }
+    }
+
+    /// <summary>
     /// Creates an isolated branch at one exact stable transcript message. State
     /// that cannot be proven to exist at the cursor is omitted rather than copied
     /// from the future. The source snapshot remains unchanged.
@@ -850,6 +1075,27 @@ public sealed class SessionStore
         Extra = config.Extra
     };
 
+    private static ModelProviderConfig ExperimentProviderSetup(ModelProviderConfig config) => new()
+    {
+        BaseUrl = config.BaseUrl,
+        ApiMode = config.ApiMode,
+        ApiToken = "",
+        Model = config.Model,
+        Timeout = config.Timeout,
+        Temperature = config.Temperature,
+        MaxOutputTokens = config.MaxOutputTokens,
+        ContextLength = config.ContextLength,
+        Reasoning = config.Reasoning,
+        NativeStatefulChat = config.NativeStatefulChat,
+        NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
+        PreviousResponseId = "",
+        RequestInspectionContext = null,
+        LastError = "",
+        LastLatencyMs = 0,
+        LastTestOk = false,
+        Extra = null
+    };
+
     private static string SafeProviderEndpoint(string baseUrl)
     {
         if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
@@ -917,10 +1163,12 @@ public sealed class SessionStore
         }
 
         var activeLeasePath = $"{snapshotPath}.write.lock";
+        var activeExperimentCallLeasePath = $"{ExperimentProviderLeaseTarget(snapshotPath)}.write.lock";
         try
         {
             return Directory.EnumerateFileSystemEntries(targetDirectory)
-                .Any(path => !path.Equals(activeLeasePath, StringComparison.OrdinalIgnoreCase));
+                .Any(path => !path.Equals(activeLeasePath, StringComparison.OrdinalIgnoreCase)
+                    && !path.Equals(activeExperimentCallLeasePath, StringComparison.OrdinalIgnoreCase));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
         {
@@ -1077,30 +1325,40 @@ public sealed class SessionStore
         return snapshot;
     }
 
-    public Task<bool> DeleteSessionAsync(string sessionId, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteSessionAsync(string sessionId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var safeSession = SafeSessionId(sessionId);
         if (string.IsNullOrWhiteSpace(safeSession) || safeSession.Equals("default", StringComparison.OrdinalIgnoreCase))
         {
-            return Task.FromResult(false);
+            return false;
         }
 
         var sessionsRoot = Path.GetFullPath(NativeDataPaths.SessionsRoot(DataRoot));
         var sessionPath = Path.GetFullPath(Path.Combine(sessionsRoot, safeSession));
         if (!PathIsInsideDirectory(sessionsRoot, sessionPath) || !Directory.Exists(sessionPath))
         {
-            return Task.FromResult(false);
+            return false;
         }
 
         try
         {
+            var snapshotPath = Path.GetFullPath(SnapshotPath(safeSession));
+            using var processLock = await SnapshotWriteLocks.AcquireAsync(snapshotPath, cancellationToken);
+            using var experimentCallLease = await CrossProcessWriteLease.AcquireAsync(
+                ExperimentProviderLeaseTarget(snapshotPath),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            using var writeLease = await CrossProcessWriteLease.AcquireAsync(
+                snapshotPath,
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
             DeleteDirectoryTree(sessionPath, cancellationToken);
-            return Task.FromResult(true);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
         {
-            return Task.FromResult(false);
+            return false;
         }
     }
 
@@ -1348,6 +1606,10 @@ public sealed class SessionStore
 
         var snapshotPath = Path.GetFullPath(SnapshotPath(sessionId));
         using var processLock = await SnapshotWriteLocks.AcquireAsync(snapshotPath, cancellationToken);
+        using var experimentCallLease = await CrossProcessWriteLease.AcquireAsync(
+            ExperimentProviderLeaseTarget(snapshotPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
         using var writeLease = await CrossProcessWriteLease.AcquireAsync(snapshotPath, SnapshotWriteLeaseTimeout, cancellationToken);
         // Restoring a checkpoint is an explicit whole-snapshot replacement, so
         // it intentionally supersedes the live revision while still advancing it.
@@ -1712,6 +1974,43 @@ public sealed record SessionForkResult(
     public int UnprojectableMemoryEntryCount { get; init; }
 
     public bool HistoricalSetupProjectionUnavailable { get; init; }
+
+    public string ChildSetupFingerprint { get; init; } = "";
+}
+
+internal sealed record ArenaExperimentChildGuard(
+    string SessionId,
+    string ExperimentId,
+    string ParentSessionId,
+    long ParentPersistenceRevision,
+    string ParentSetupFingerprint,
+    string ChildSetupFingerprint);
+
+internal sealed class ArenaExperimentProviderCallLease(
+    CrossProcessWriteLease lease,
+    long persistenceRevision) : IDisposable
+{
+    private CrossProcessWriteLease? _lease = lease;
+
+    internal long PersistenceRevision { get; } = persistenceRevision;
+
+    public void Dispose() => Interlocked.Exchange(ref _lease, null)?.Dispose();
+}
+
+public sealed class ArenaExperimentSourceChangedException : InvalidOperationException
+{
+    public ArenaExperimentSourceChangedException()
+        : base("The experiment source changed after its execution plan was resolved.")
+    {
+    }
+}
+
+internal sealed class ArenaExperimentChildDriftException : IOException
+{
+    internal ArenaExperimentChildDriftException()
+        : base("The experiment child changed outside its guarded execution boundary.")
+    {
+    }
 }
 
 public sealed class SnapshotConcurrencyException : IOException

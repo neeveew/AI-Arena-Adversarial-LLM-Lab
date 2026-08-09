@@ -42,12 +42,14 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'qa-ui-matrix.ps1')
+. (Join-Path $PSScriptRoot 'qa-feature-surface-matrix.ps1')
 
 $script:Schema = 'ai_arena.qa_evidence.v1'
 $script:RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $script:SolutionPath = Join-Path $script:RepositoryRoot 'AI Arena.slnx'
 $script:MapRoot = Join-Path $script:RepositoryRoot 'map'
 $script:ArtifactRoot = Join-Path $script:RepositoryRoot 'artifacts\qa'
+$script:RejectedArtifactRoot = Join-Path $script:RepositoryRoot 'artifacts\qa-rejected'
 $script:PowerShellExecutable = (Get-Process -Id $PID).Path
 $script:GateResults = [System.Collections.Generic.List[object]]::new()
 $script:Artifacts = [System.Collections.Generic.List[object]]::new()
@@ -58,6 +60,7 @@ $script:CurrentGateTimedOut = $false
 $script:ExecutionFailure = $false
 $script:UiStartupMeasurements = [System.Collections.Generic.List[object]]::new()
 $script:UiMatrixCells = [System.Collections.Generic.List[object]]::new()
+$script:FeatureSurfaceMatrixCells = [System.Collections.Generic.List[object]]::new()
 $script:VerificationMeasurements = @()
 $script:LastAuthoritativeValidationIssues = @()
 
@@ -840,6 +843,325 @@ function Test-AIArenaQaFocusCycle {
         (Test-AIArenaQaSameFocus $Next.afterIdentity $Next.afterControlType $Capture.afterIdentity $Capture.afterControlType)
 }
 
+function Test-AIArenaQaRenderedDescendant {
+    param(
+        [Parameter(Mandatory)] [object[]]$Nodes,
+        [Parameter(Mandatory)] [string]$Identity,
+        [Parameter(Mandatory)] [string]$AncestorIdentity,
+        [switch]$RequireFocusable)
+
+    $matches = @($Nodes | Where-Object { [string]$_.Identity -ceq $Identity })
+    if ($matches.Count -ne 1 -or
+        -not [bool]$matches[0].IsVisible -or
+        -not [bool]$matches[0].IsRendered -or
+        ($RequireFocusable -and -not [bool]$matches[0].IsFocusable)) {
+        return $false
+    }
+    $bySequence = @{}
+    foreach ($node in $Nodes) {
+        $bySequence[[int]$node.Sequence] = $node
+    }
+    $parentSequence = $matches[0].ParentSequence
+    for ($remaining = $Nodes.Count; $remaining -gt 0 -and $null -ne $parentSequence; $remaining--) {
+        $sequence = [int]$parentSequence
+        if (-not $bySequence.ContainsKey($sequence)) {
+            return $false
+        }
+        $parent = $bySequence[$sequence]
+        if ([string]$parent.Identity -ceq $AncestorIdentity) {
+            return [bool]$parent.IsRendered
+        }
+        $parentSequence = $parent.ParentSequence
+    }
+    return $false
+}
+
+function ConvertTo-AIArenaQaFocusEvidence {
+    param([Parameter(Mandatory)] [object]$Step)
+
+    return [ordered]@{
+        direction = [string]$Step.direction
+        beforeIdentity = [string]$Step.beforeIdentity
+        beforeControlType = [string]$Step.beforeControlType
+        afterIdentity = [string]$Step.afterIdentity
+        afterControlType = [string]$Step.afterControlType
+        moved = [bool]$Step.moved
+        focusChanged = [bool]$Step.focusChanged
+    }
+}
+
+function Assert-AIArenaQaFeatureControlState {
+    param(
+        [Parameter(Mandatory)] [object]$Response,
+        [Parameter(Mandatory)] [string]$SelectedFeatureKey,
+        [Parameter(Mandatory)] [string[]]$RequiredFeatureKeys)
+
+    if (-not [bool]$Response.ok -or
+        [string]$Response.data.selectedKey -cne $SelectedFeatureKey -or
+        [bool]$Response.data.busy) {
+        throw 'Experiment Lab control-plane selection did not reach the requested idle feature state.'
+    }
+    $features = @($Response.data.features)
+    $actualKeys = @($features | ForEach-Object { [string]$_.key })
+    if ($features.Count -ne $RequiredFeatureKeys.Count -or
+        ($actualKeys -join [char]0) -cne ($RequiredFeatureKeys -join [char]0) -or
+        @($features | Where-Object { -not [bool]$_.registered -or -not [bool]$_.selectable -or [bool]$_.busy }).Count -ne 0) {
+        throw 'Experiment Lab control-plane state did not expose the exact idle registered feature set.'
+    }
+    $selected = @($features | Where-Object { [string]$_.key -ceq $SelectedFeatureKey })
+    if ($selected.Count -ne 1 -or [string]$selected[0].status -cne 'ready') {
+        throw 'Experiment Lab feature refresh did not complete successfully.'
+    }
+}
+
+function Invoke-AIArenaFeatureSurfaceMatrixPass {
+    param(
+        [Parameter(Mandatory)] [int]$PassNumber,
+        [Parameter(Mandatory)] [string]$IsolatedData)
+
+    $requiredFeatureKeys = @(Get-AIArenaQaFeatureSurfaceKeys)
+    Add-GateTrace ("featureStage=registry; pass={0}" -f $PassNumber)
+    $initial = Get-AIArenaExperiment -TimeoutMs 10000
+    if (-not [bool]$initial.ok -or [bool]$initial.data.busy) {
+        throw 'Experiment Lab control-plane state was unavailable before feature verification.'
+    }
+    $initialFeatures = @($initial.data.features)
+    if ($initialFeatures.Count -ne $requiredFeatureKeys.Count -or
+        (@($initialFeatures | ForEach-Object { [string]$_.key }) -join [char]0) -cne ($requiredFeatureKeys -join [char]0)) {
+        throw 'Experiment Lab did not register the exact required feature set.'
+    }
+
+    Add-GateTrace ("featureStage=motion; pass={0}" -f $PassNumber)
+    $motion = Set-AIArenaQAMotion -Mode normal -TimeoutMs 10000
+    if (-not [bool]$motion.ok -or
+        [string]$motion.data.preferenceSource -cne 'qa-normal' -or
+        -not [bool]$motion.data.animationsEnabled) {
+        throw 'Feature-surface verification could not establish normal process-only motion state.'
+    }
+
+    foreach ($theme in @('dark-blue', 'light', 'high-contrast')) {
+        Add-GateTrace ("featureStage=theme; pass={0}; theme={1}" -f $PassNumber, $theme)
+        $themeResult = Set-AIArenaTheme $theme
+        if (-not [bool]$themeResult.ok) {
+            throw 'Feature-surface verification could not select the required theme.'
+        }
+        foreach ($viewport in @(
+            [pscustomobject]@{ Width = 960; Height = 640 },
+            [pscustomobject]@{ Width = 1500; Height = 960 })) {
+            Add-GateTrace ("featureStage=viewport; pass={0}; theme={1}; width={2}" -f $PassNumber, $theme, $viewport.Width)
+            $sized = Set-AIArenaQAWindowSize -Width $viewport.Width -Height $viewport.Height -TimeoutMs 10000
+            if (-not [bool]$sized.ok) {
+                throw 'Feature-surface verification could not establish the required viewport.'
+            }
+            foreach ($featureKey in $requiredFeatureKeys) {
+                $featureStage = 'selection'
+                try {
+                $selection = Select-AIArenaExperimentFeature -Key $featureKey -TimeoutMs 30000
+                Assert-AIArenaQaFeatureControlState `
+                    -Response $selection `
+                    -SelectedFeatureKey $featureKey `
+                    -RequiredFeatureKeys $requiredFeatureKeys
+
+                Start-Sleep -Milliseconds 100
+                $featureStage = 'focus-boundary'
+                $featureFocus = Set-AIArenaQAFeatureFocus -TimeoutMs 10000
+                if (-not [bool]$featureFocus.ok -or
+                    [string]$featureFocus.data.direction -cne 'feature-content' -or
+                    -not [bool]$featureFocus.data.moved -or
+                    [string]$featureFocus.data.afterIdentity -ceq 'none') {
+                    throw 'Feature-surface focus could not enter the selected feature content.'
+                }
+                $featureStage = 'focus-cycle'
+                $nextFocus = Move-AIArenaQAFocus -Direction next -TimeoutMs 10000
+                $previousFocus = Move-AIArenaQAFocus -Direction previous -TimeoutMs 10000
+                $captureFocus = Move-AIArenaQAFocus -Direction next -TimeoutMs 10000
+                if (-not [bool]$nextFocus.ok -or -not [bool]$previousFocus.ok -or -not [bool]$captureFocus.ok -or
+                    -not (Test-AIArenaQaSameFocus `
+                        $featureFocus.data.afterIdentity `
+                        $featureFocus.data.afterControlType `
+                        $nextFocus.data.beforeIdentity `
+                        $nextFocus.data.beforeControlType) -or
+                    -not (Test-AIArenaQaFocusCycle `
+                        -Next $nextFocus.data `
+                        -Previous $previousFocus.data `
+                        -Capture $captureFocus.data)) {
+                    throw 'Feature-surface programmatic WPF focus traversal failed.'
+                }
+
+                $cellKey = "p$($PassNumber.ToString('D2')).feature.$featureKey.$theme.w$($viewport.Width)"
+                $expectedState = "experiment-lab.feature-$featureKey.closed.$theme.w$($viewport.Width).d1-0.normal"
+                $featureStage = 'structure'
+                $structure = Save-AIArenaUIStructure `
+                    -TreeFingerprint $sourceFingerprintStart `
+                    -ExpectedState $expectedState `
+                    -Path ("feature-pass-{0:D2}/{1}.json" -f $PassNumber, $cellKey) `
+                    -RenderDpiScale 1.0 `
+                    -TimeoutMs 10000
+                if (-not [bool]$structure.ok -or
+                    [string]$structure.data.artifactKind -cne 'automation-tree' -or
+                    [string]$structure.data.pathBase -cne 'data-root' -or
+                    [bool]$structure.data.truncated -or
+                    [string]$structure.data.expectedState -cne $expectedState -or
+                    [string]$structure.data.expectedStateSource -cne 'observed-visible-roots' -or
+                    [string]$structure.data.selectedView -cne 'experiment-lab' -or
+                    [string]$structure.data.observedSurfaceState -cne 'experiment-lab' -or
+                    [string]$structure.data.dialogState -cne 'closed' -or
+                    @($structure.data.visibleRootIdentities).Count -ne 1 -or
+                    [string]$structure.data.visibleRootIdentities[0] -cne 'ExperimentLabPanel' -or
+                    [string]$structure.data.theme -cne $theme -or
+                    [int]$structure.data.viewportWidthDip -ne $viewport.Width -or
+                    [int]$structure.data.viewportHeightDip -ne $viewport.Height -or
+                    [math]::Abs([double]$structure.data.renderDpiScale - 1.0) -gt 0.001 -or
+                    -not [bool]$structure.data.renderDpiOverride -or
+                    [string]$structure.data.motionPreferenceSource -cne 'qa-normal' -or
+                    -not [bool]$structure.data.animationsEnabled -or
+                    [string]$structure.data.focusIdentity -cne [string]$captureFocus.data.afterIdentity) {
+                    throw 'Feature-surface automation evidence did not match the selected control-plane state.'
+                }
+
+                $structureSource = Resolve-IsolatedQaArtifact `
+                    -DataRoot $IsolatedData `
+                    -RelativePath ([string]$structure.data.relativePath)
+                if (-not (Test-Path -LiteralPath $structureSource -PathType Leaf) -or
+                    (Get-Sha256File $structureSource) -cne ([string]$structure.data.sha256).ToLowerInvariant()) {
+                    throw 'Feature-surface automation evidence failed integrity validation.'
+                }
+                $requiredContentIdentity = Get-AIArenaQaFeatureSurfaceIdentity -FeatureKey $featureKey
+                $featureStage = 'render-root'
+                $structureDocument = Get-Content -LiteralPath $structureSource -Raw | ConvertFrom-Json
+                $renderedContentMatches = @($structureDocument.Nodes | Where-Object {
+                    [bool]$_.IsRendered -and [string]$_.Identity -ceq $requiredContentIdentity
+                })
+                $renderedExperimentRoots = @($structureDocument.Nodes | Where-Object {
+                    [bool]$_.IsRendered -and [string]$_.Identity -ceq 'ExperimentLabPanel'
+                })
+                $allFeatureRootIdentities = @($requiredFeatureKeys | ForEach-Object {
+                    Get-AIArenaQaFeatureSurfaceIdentity -FeatureKey $_
+                })
+                $renderedFeatureRoots = @($structureDocument.Nodes | Where-Object {
+                    [bool]$_.IsRendered -and [string]$_.Identity -cin $allFeatureRootIdentities
+                })
+                $focusIdentities = @(
+                    [string]$nextFocus.data.beforeIdentity,
+                    [string]$nextFocus.data.afterIdentity,
+                    [string]$previousFocus.data.beforeIdentity,
+                    [string]$previousFocus.data.afterIdentity,
+                    [string]$captureFocus.data.beforeIdentity,
+                    [string]$captureFocus.data.afterIdentity
+                ) | Select-Object -Unique
+                $focusIsWithinFeature = @($focusIdentities | Where-Object {
+                    -not (Test-AIArenaQaRenderedDescendant `
+                        -Nodes @($structureDocument.Nodes) `
+                        -Identity $_ `
+                        -AncestorIdentity $requiredContentIdentity `
+                        -RequireFocusable)
+                }).Count -eq 0
+                $featureRootIsWithinExperiment = Test-AIArenaQaRenderedDescendant `
+                    -Nodes @($structureDocument.Nodes) `
+                    -Identity $requiredContentIdentity `
+                    -AncestorIdentity 'ExperimentLabPanel'
+                if ($renderedContentMatches.Count -ne 1 -or
+                    $renderedExperimentRoots.Count -ne 1 -or
+                    $renderedFeatureRoots.Count -ne 1 -or
+                    [string]$renderedFeatureRoots[0].Identity -cne $requiredContentIdentity -or
+                    -not $featureRootIsWithinExperiment -or
+                    -not $focusIsWithinFeature) {
+                    throw 'The selected Experiment Lab feature did not expose one exclusive rendered root with an internal focus cycle.'
+                }
+                $automationPath = Join-Path $script:AutomationRoot ("$cellKey.automation-tree.json")
+                Copy-QaArtifactAtomic -Source $structureSource -Destination $automationPath
+                $automationHash = Get-Sha256File $automationPath
+                $automationArtifactId = "artifact.$cellKey.automation"
+                $provenance = [ordered]@{
+                    treeFingerprint = $sourceFingerprintStart
+                    capturedAtUtc = ([DateTimeOffset]$structure.data.capturedAtUtc).ToUniversalTime().ToString('o')
+                    theme = $theme
+                    viewportWidthDip = $viewport.Width
+                    viewportHeightDip = $viewport.Height
+                    dpiScale = [decimal]1.0
+                    expectedState = $expectedState
+                    linkedAutomationArtifactId = $null
+                    baselineArtifactId = $null
+                }
+                Add-QaArtifact -Id $automationArtifactId -Kind 'automation-tree' -Path $automationPath -Provenance $provenance
+
+                $featureStage = 'screenshot'
+                $screenshotPath = Join-Path $script:ScreenshotsRoot ("$cellKey.rendered-ui.png")
+                $capture = Save-AIArenaScreenshot $screenshotPath -RenderDpiScale 1.0 -TimeoutMs 10000
+                if (-not [bool]$capture.ok -or
+                    -not (Test-Path -LiteralPath $screenshotPath -PathType Leaf) -or
+                    [math]::Abs([double]$capture.data.renderDpiScale - 1.0) -gt 0.001 -or
+                    -not [bool]$capture.data.renderDpiOverride -or
+                    [int]$capture.data.viewportWidthDip -ne $viewport.Width -or
+                    [int]$capture.data.viewportHeightDip -ne $viewport.Height) {
+                    throw 'Feature-surface screenshot did not match the selected matrix cell.'
+                }
+                $null = Get-PngRenderEvidence -Path $screenshotPath
+                $screenshotHash = Get-Sha256File $screenshotPath
+                $screenshotArtifactId = "artifact.$cellKey.screenshot"
+                $screenshotProvenance = [ordered]@{}
+                foreach ($entry in $provenance.GetEnumerator()) {
+                    $screenshotProvenance[$entry.Key] = $entry.Value
+                }
+                $screenshotProvenance.linkedAutomationArtifactId = $automationArtifactId
+                $screenshotProvenance.capturedAtUtc = ([DateTimeOffset]$capture.data.capturedAt).ToUniversalTime().ToString('o')
+                Add-QaArtifact -Id $screenshotArtifactId -Kind 'rendered-ui-screenshot' -Path $screenshotPath -Provenance $screenshotProvenance
+
+                $selectedStatus = [string](@($selection.data.features | Where-Object { [string]$_.key -ceq $featureKey })[0].status)
+                $script:FeatureSurfaceMatrixCells.Add([pscustomobject][ordered]@{
+                    key = $cellKey
+                    featureKey = $featureKey
+                    selectedFeatureStatus = $selectedStatus
+                    controlPlaneBusy = [bool]$selection.data.busy
+                    theme = $theme
+                    viewportWidthDip = $viewport.Width
+                    viewportHeightDip = $viewport.Height
+                    renderDpiScale = [decimal]1.0
+                    motionMode = 'normal'
+                    motionPreferenceSource = [string]$structure.data.motionPreferenceSource
+                    animationsEnabled = [bool]$structure.data.animationsEnabled
+                    expectedState = $expectedState
+                    visibleRootIdentity = 'ExperimentLabPanel'
+                    requiredContentIdentity = $requiredContentIdentity
+                    focusNext = ConvertTo-AIArenaQaFocusEvidence $nextFocus.data
+                    focusPrevious = ConvertTo-AIArenaQaFocusEvidence $previousFocus.data
+                    focusCapture = ConvertTo-AIArenaQaFocusEvidence $captureFocus.data
+                    automationArtifactId = $automationArtifactId
+                    automationSha256 = $automationHash
+                    screenshotArtifactId = $screenshotArtifactId
+                    screenshotSha256 = $screenshotHash
+                })
+                $featureStage = 'complete'
+                Add-GateTrace ("featureCell={0}; automation={1}; screenshot={2}" -f $cellKey, $automationArtifactId, $screenshotArtifactId)
+                }
+                catch {
+                    Add-GateTrace ("featureFailureStage={0}; pass={1}; feature={2}; theme={3}; width={4}" -f $featureStage, $PassNumber, $featureKey, $theme, $viewport.Width)
+                    throw 'Feature-surface matrix cell failed at a bounded QA stage.'
+                }
+            }
+        }
+    }
+
+    $passCells = @(Get-AIArenaQaFeatureSurfacePassCells -Cells @($script:FeatureSurfaceMatrixCells) -PassNumber $PassNumber)
+    if ($passCells.Count -ne 60) {
+        throw 'Feature-surface matrix did not produce every required cell.'
+    }
+    $matrixPath = Join-Path $script:MetadataRoot ("pass-{0:D2}.feature-surface-matrix.json" -f $PassNumber)
+    $matrixDocument = [ordered]@{
+        schema = 'ai_arena.qa_feature_surface_matrix.v1'
+        passNumber = $PassNumber
+        treeFingerprint = $sourceFingerprintStart
+        registeredFeatureKeys = $requiredFeatureKeys
+        cellCount = $passCells.Count
+        cells = @($passCells | Sort-Object key)
+    }
+    Write-Utf8NoBom -Path $matrixPath -Text (($matrixDocument | ConvertTo-Json -Depth 10) + "`n")
+    Add-QaArtifact `
+        -Id "artifact.pass-$($PassNumber.ToString('D2')).feature-surface-matrix" `
+        -Kind 'qa-feature-surface-matrix' `
+        -Path $matrixPath
+}
+
 function Invoke-RenderedUiSmoke {
     param([Parameter(Mandatory)] [int]$PassNumber)
 
@@ -1090,6 +1412,7 @@ function Invoke-RenderedUiSmoke {
         }
         Write-Utf8NoBom -Path $matrixPath -Text (($matrixDocument | ConvertTo-Json -Depth 8) + "`n")
         Add-QaArtifact -Id "artifact.pass-$($PassNumber.ToString('D2')).ui-matrix" -Kind 'qa-ui-matrix' -Path $matrixPath
+        Invoke-AIArenaFeatureSurfaceMatrixPass -PassNumber $PassNumber -IsolatedData $isolatedData
         Add-GateTrace 'dataIsolation=temporary AI_ARENA_DATA_DIR; screenshot contains only the empty QA session'
         Add-GateTrace 'interactionBoundary=programmatic in-process WPF focus traversal and visual-tree snapshot; no OS SendInput or external UI Automation'
         Add-GateTrace 'densityBoundary=render scale is off-screen raster density, not physical or per-monitor display DPI'
@@ -1187,6 +1510,808 @@ function Assert-EvidenceBundlePrivacy {
         if ((Get-Sha256File $path) -ne $artifact.sha256) {
             throw 'An evidence artifact changed after it was recorded.'
         }
+    }
+}
+
+function Resolve-QaPathWithinDirectory {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$Directory,
+        [switch]$AllowDirectory
+    )
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $fullDirectory = [IO.Path]::GetFullPath($Directory).TrimEnd('\', '/')
+    if ($AllowDirectory -and [string]::Equals($fullPath.TrimEnd('\', '/'), $fullDirectory, [StringComparison]::OrdinalIgnoreCase)) {
+        return $fullPath
+    }
+    $prefix = $fullDirectory + [IO.Path]::DirectorySeparatorChar
+    if (-not $fullPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'QA transaction path escaped its trusted directory.'
+    }
+    return $fullPath
+}
+
+function Assert-QaPathHasNoReparsePoint {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$TrustedDirectory
+    )
+
+    $fullDirectory = [IO.Path]::GetFullPath($TrustedDirectory).TrimEnd('\', '/')
+    $fullPath = Resolve-QaPathWithinDirectory -Path $Path -Directory $fullDirectory -AllowDirectory
+    $relative = $fullPath.Substring($fullDirectory.Length).TrimStart('\', '/')
+    $current = $fullDirectory
+    foreach ($segment in @($relative -split '[\\/]' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        $current = Join-Path $current $segment
+        if (Test-Path -LiteralPath $current) {
+            $item = Get-Item -LiteralPath $current -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'QA transaction refused a reparse-point path.'
+            }
+        }
+    }
+    return $fullPath
+}
+
+function Get-QaSafeFilesUnderDirectory {
+    param(
+        [Parameter(Mandatory)] [string]$Directory,
+        [Parameter(Mandatory)] [string]$TrustedDirectory,
+        [ValidateRange(1, 10000)] [int]$MaximumFiles = 5000
+    )
+
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        return @()
+    }
+    $root = Assert-QaPathHasNoReparsePoint -Path $Directory -TrustedDirectory $TrustedDirectory
+    $pending = [Collections.Generic.Stack[string]]::new()
+    $pending.Push($root)
+    $files = [Collections.Generic.List[string]]::new()
+    while ($pending.Count -gt 0) {
+        $current = $pending.Pop()
+        foreach ($item in @(Get-ChildItem -LiteralPath $current -Force)) {
+            [void](Assert-QaPathHasNoReparsePoint -Path $item.FullName -TrustedDirectory $TrustedDirectory)
+            if ($item.PSIsContainer) {
+                $pending.Push($item.FullName)
+            }
+            else {
+                $files.Add($item.FullName)
+                if ($files.Count -gt $MaximumFiles) {
+                    throw 'QA transaction file inventory exceeded its bound.'
+                }
+            }
+        }
+    }
+    [string[]]$ordered = @($files)
+    [Array]::Sort($ordered, [StringComparer]::OrdinalIgnoreCase)
+    return $ordered
+}
+
+function Set-QaFileBytesAtomically {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [byte[]]$Bytes
+    )
+
+    $fullPath = Assert-QaPathHasNoReparsePoint -Path $Path -TrustedDirectory $script:RunRoot
+    $temporaryPath = Join-Path (Split-Path -Parent $fullPath) ('.qa-atomic-{0}.tmp' -f [Guid]::NewGuid().ToString('N'))
+    $backupPath = Join-Path (Split-Path -Parent $fullPath) ('.qa-atomic-{0}.bak' -f [Guid]::NewGuid().ToString('N'))
+    try {
+        [IO.File]::WriteAllBytes($temporaryPath, $Bytes)
+        if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
+            [IO.File]::Replace($temporaryPath, $fullPath, $backupPath, $true)
+            [IO.File]::Delete($backupPath)
+        }
+        else {
+            [IO.File]::Move($temporaryPath, $fullPath)
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) {
+            [IO.File]::Delete($temporaryPath)
+        }
+        if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
+            [IO.File]::Delete($backupPath)
+        }
+    }
+}
+
+function Get-QaRejectedClosureArtifacts {
+    param([Parameter(Mandatory)] [object]$Contract)
+
+    $kinds = @('automation-tree', 'rendered-ui-screenshot', 'qa-ui-matrix', 'qa-feature-surface-matrix')
+    return @($Contract.artifacts | Where-Object { [string]$_.kind -cin $kinds })
+}
+
+function Get-QaBlockedFallbackAffectedReferenceIds {
+    param([Parameter(Mandatory)] [object]$Contract)
+
+    $gateIds = @(
+        'inspection.user-acceptance',
+        'ui.feature-surface-matrix',
+        'ui.keyboard-automation-matrix',
+        'ui.reduced-motion-matrix',
+        'ui.theme-contrast-matrix',
+        'ui.viewport-dpi-matrix'
+    )
+    $gates = @($Contract.gates | Where-Object {
+        [string]$_.id -cin $gateIds -or [string]$_.id -cmatch '^pass-[0-9]{2}\.rendered-ui$'
+    })
+    $references = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($gate in $gates) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$gate.evidence.referenceId)) {
+            [void]$references.Add([string]$gate.evidence.referenceId)
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Contract.inspection.evidence.referenceId)) {
+        [void]$references.Add([string]$Contract.inspection.evidence.referenceId)
+    }
+    $qaSchema = @($Contract.schemaChecks | Where-Object { [string]$_.schema -ceq $script:Schema })
+    if ($qaSchema.Count -ne 1) { throw 'Blocked fallback QA schema check is missing or ambiguous.' }
+    if (-not [string]::IsNullOrWhiteSpace([string]$qaSchema[0].evidence.referenceId)) {
+        [void]$references.Add([string]$qaSchema[0].evidence.referenceId)
+    }
+    return @(Get-OrdinalStringArray -Values @($references))
+}
+
+function Test-QaBlockedFallbackIssueScope {
+    param([AllowEmptyCollection()] [string[]]$IssueCodes = @())
+
+    if ($IssueCodes.Count -eq 0) { return $false }
+    $allowed = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    [void]$allowed.Add('bundle.feature_matrix_feature_render')
+    [void]$allowed.Add('bundle.feature_matrix_theme_render')
+    foreach ($code in $IssueCodes) {
+        if (-not $allowed.Contains($code)) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Start-QaRejectedArtifactQuarantine {
+    param(
+        [Parameter(Mandatory)] [object]$Contract,
+        [AllowEmptyCollection()] [object[]]$AdditionalArtifacts = @()
+    )
+
+    $quarantineArtifacts = @(
+        @(Get-QaRejectedClosureArtifacts -Contract $Contract) + @($AdditionalArtifacts) |
+            Group-Object id | ForEach-Object {
+                if ($_.Count -ne 1) { throw 'Rejected UI closure contains duplicate artifact identities.' }
+                $_.Group[0]
+            }
+    )
+    if ($quarantineArtifacts.Count -eq 0) {
+        throw 'Rejected UI closure has no declared candidate artifacts.'
+    }
+    if ($quarantineArtifacts.Count -gt 2048) {
+        throw 'Rejected UI closure exceeded its artifact bound.'
+    }
+    $declaredPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($artifact in $quarantineArtifacts) {
+        $relativePath = [string]$artifact.relativePath
+        if ([string]::IsNullOrWhiteSpace($relativePath) -or
+            [IO.Path]::IsPathRooted($relativePath) -or
+            $relativePath.Replace('\', '/').Split('/') -contains '..') {
+            throw 'Rejected UI closure contains an unsafe declared path.'
+        }
+        $declaredPath = Join-Path $script:RunRoot $relativePath.Replace('/', '\')
+        [void](Resolve-QaPathWithinDirectory -Path $declaredPath -Directory $script:RunRoot)
+        if (-not $declaredPaths.Add($relativePath.Replace('\', '/'))) {
+            throw 'Rejected UI closure contains duplicate physical paths.'
+        }
+    }
+
+    # Inventory the physical closure before creating the quarantine root or
+    # moving anything. The validator only reviewed declared contract artifacts;
+    # therefore an undeclared visual/matrix file must never be swept into the
+    # fallback merely because it happens to sit in a broad evidence directory.
+    $physicalPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($directoryName in @('screenshots', 'automation')) {
+        $directory = Join-Path $script:RunRoot $directoryName
+        foreach ($file in @(Get-QaSafeFilesUnderDirectory -Directory $directory -TrustedDirectory $script:RunRoot -MaximumFiles 2048)) {
+            [void]$physicalPaths.Add((ConvertTo-SafeRelativePath -Path $file))
+        }
+    }
+    $metadataDirectory = Join-Path $script:RunRoot 'metadata'
+    if (Test-Path -LiteralPath $metadataDirectory -PathType Container) {
+        [void](Assert-QaPathHasNoReparsePoint -Path $metadataDirectory -TrustedDirectory $script:RunRoot)
+        foreach ($file in @(Get-ChildItem -LiteralPath $metadataDirectory -File -Force | Where-Object {
+            $_.Name -match '^pass-[0-9]{2}\.(?:ui-matrix|feature-surface-matrix)\.json$'
+        })) {
+            [void](Assert-QaPathHasNoReparsePoint -Path $file.FullName -TrustedDirectory $script:RunRoot)
+            [void]$physicalPaths.Add((ConvertTo-SafeRelativePath -Path $file.FullName))
+        }
+    }
+    foreach ($relativePath in $declaredPaths) {
+        $declaredPath = Join-Path $script:RunRoot $relativePath.Replace('/', '\')
+        [void](Assert-QaPathHasNoReparsePoint -Path $declaredPath -TrustedDirectory $script:RunRoot)
+        if (Test-Path -LiteralPath $declaredPath -PathType Leaf) {
+            [void]$physicalPaths.Add($relativePath)
+        }
+    }
+    if ($physicalPaths.Count -gt 2048) {
+        throw 'Rejected UI closure exceeded its physical-file bound.'
+    }
+    if ($physicalPaths.Count -ne $declaredPaths.Count -or
+        @($physicalPaths | Where-Object { -not $declaredPaths.Contains($_) }).Count -ne 0 -or
+        @($declaredPaths | Where-Object { -not $physicalPaths.Contains($_) }).Count -ne 0) {
+        throw 'Rejected UI physical closure does not exactly match its declared candidate artifacts.'
+    }
+    foreach ($artifact in $quarantineArtifacts) {
+        $declaredPath = Join-Path $script:RunRoot ([string]$artifact.relativePath).Replace('/', '\')
+        if ((Get-Sha256File -Path $declaredPath) -cne [string]$artifact.sha256) {
+            throw 'Rejected UI closure manifest/hash binding is invalid.'
+        }
+    }
+
+    $artifactBase = [IO.Path]::GetFullPath((Join-Path $script:RepositoryRoot 'artifacts'))
+    [void](Assert-QaPathHasNoReparsePoint -Path $artifactBase -TrustedDirectory $script:RepositoryRoot)
+    [void](Resolve-QaPathWithinDirectory -Path $script:RejectedArtifactRoot -Directory $artifactBase)
+    if (-not (Test-Path -LiteralPath $script:RejectedArtifactRoot -PathType Container)) {
+        New-Item -ItemType Directory -Path $script:RejectedArtifactRoot | Out-Null
+    }
+    [void](Assert-QaPathHasNoReparsePoint -Path $script:RejectedArtifactRoot -TrustedDirectory $artifactBase)
+
+    $ownerId = [Guid]::NewGuid().ToString('N')
+    $stagingRoot = Join-Path $script:RejectedArtifactRoot ('.$ownerId.staging')
+    $finalRoot = Join-Path $script:RejectedArtifactRoot $ownerId
+    if ((Test-Path -LiteralPath $stagingRoot) -or (Test-Path -LiteralPath $finalRoot)) {
+        throw 'Fresh rejected-artifact quarantine identity unexpectedly exists.'
+    }
+    New-Item -ItemType Directory -Path $stagingRoot | Out-Null
+    $entries = [Collections.Generic.List[object]]::new()
+    $moved = [Collections.Generic.List[object]]::new()
+    try {
+        [string[]]$orderedPaths = @($declaredPaths)
+        [Array]::Sort($orderedPaths, [StringComparer]::Ordinal)
+        foreach ($relativePath in $orderedPaths) {
+            $sourcePath = Join-Path $script:RunRoot $relativePath.Replace('/', '\')
+            [void](Assert-QaPathHasNoReparsePoint -Path $sourcePath -TrustedDirectory $script:RunRoot)
+            if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+                throw 'Rejected UI closure file is missing.'
+            }
+            $sha256 = Get-Sha256File -Path $sourcePath
+            $manifestArtifacts = @($quarantineArtifacts | Where-Object {
+                [string]::Equals([string]$_.relativePath, $relativePath, [StringComparison]::OrdinalIgnoreCase)
+            })
+            if ($manifestArtifacts.Count -ne 1 -or
+                -not [string]::Equals([string]$manifestArtifacts[0].sha256, $sha256, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Rejected UI closure manifest/hash binding is invalid.'
+            }
+            $destinationPath = Join-Path (Join-Path $stagingRoot 'closure') $relativePath.Replace('/', '\')
+            [void](Resolve-QaPathWithinDirectory -Path $destinationPath -Directory $stagingRoot)
+            New-Item -ItemType Directory -Path (Split-Path -Parent $destinationPath) -Force | Out-Null
+            Move-Item -LiteralPath $sourcePath -Destination $destinationPath
+            $moved.Add([pscustomobject]@{ Source = $sourcePath; Destination = $destinationPath })
+            $entries.Add([pscustomobject][ordered]@{
+                sourceRelativePath = $relativePath
+                quarantineRelativePath = ('closure/' + $relativePath)
+                sha256 = $sha256
+                manifestArtifactIds = @(Get-OrdinalStringArray -Values @($manifestArtifacts | ForEach-Object { [string]$_.id }))
+            })
+        }
+
+        $inventoryText = @($entries | ForEach-Object { "{0}`t{1}" -f $_.sourceRelativePath, $_.sha256 }) -join "`n"
+        $ownerDocument = [ordered]@{
+            schema = 'ai_arena.qa_rejected_artifacts.v1'
+            ownerId = $ownerId
+            createdAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+            contentPolicy = 'relative paths, artifact identifiers, counts, and SHA-256 only; no source, prompt, response, transcript, credential, private path, or raw validator output'
+            inventorySha256 = Get-Sha256Text -Text $inventoryText
+            artifactCount = $entries.Count
+            artifacts = @($entries)
+        }
+        $ownerText = Protect-QaText (($ownerDocument | ConvertTo-Json -Depth 8) + "`n")
+        if ($ownerText.Length -gt 1MB -or -not (Test-QaTextPrivacy -Text $ownerText)) {
+            throw 'Rejected-artifact owner record failed its bounded privacy policy.'
+        }
+        $markerPath = Join-Path $stagingRoot '.ai-arena-qa-rejected-owner.json'
+        Write-Utf8NoBom -Path $markerPath -Text $ownerText
+        Move-Item -LiteralPath $stagingRoot -Destination $finalRoot
+        return [pscustomobject]@{
+            OwnerId = $ownerId
+            FinalRoot = $finalRoot
+            RunRoot = $script:RunRoot
+            Entries = @($entries)
+            InventorySha256 = $ownerDocument.inventorySha256
+        }
+    }
+    catch {
+        $rollbackFailed = $false
+        for ($index = $moved.Count - 1; $index -ge 0; $index--) {
+            $entry = $moved[$index]
+            try {
+                if (Test-Path -LiteralPath $entry.Destination -PathType Leaf) {
+                    New-Item -ItemType Directory -Path (Split-Path -Parent $entry.Source) -Force | Out-Null
+                    Move-Item -LiteralPath $entry.Destination -Destination $entry.Source
+                }
+            }
+            catch { $rollbackFailed = $true }
+        }
+        if (Test-Path -LiteralPath $stagingRoot -PathType Container) {
+            $resolvedStage = Resolve-QaPathWithinDirectory -Path $stagingRoot -Directory $script:RejectedArtifactRoot
+            if ((Split-Path -Leaf $resolvedStage) -ceq ".$ownerId.staging") {
+                [IO.Directory]::Delete($resolvedStage, $true)
+            }
+        }
+        if ($rollbackFailed) {
+            throw 'Rejected-artifact quarantine failed and could not restore every source file.'
+        }
+        throw
+    }
+}
+
+function Undo-QaRejectedArtifactQuarantine {
+    param([Parameter(Mandatory)] [object]$Quarantine)
+
+    $runRoot = if ($null -ne $Quarantine.PSObject.Properties['RunRoot']) { [string]$Quarantine.RunRoot } else { $script:RunRoot }
+    $finalRoot = Resolve-QaPathWithinDirectory -Path ([string]$Quarantine.FinalRoot) -Directory $script:RejectedArtifactRoot
+    [void](Assert-QaPathHasNoReparsePoint -Path $finalRoot -TrustedDirectory $script:RejectedArtifactRoot)
+    if ((Split-Path -Leaf $finalRoot) -cne [string]$Quarantine.OwnerId) {
+        throw 'Rejected-artifact rollback identity is invalid.'
+    }
+    $markerPath = Join-Path $finalRoot '.ai-arena-qa-rejected-owner.json'
+    $marker = (Get-Content -LiteralPath $markerPath -Raw) | ConvertFrom-Json
+    if ([string]$marker.schema -cne 'ai_arena.qa_rejected_artifacts.v1' -or
+        [string]$marker.ownerId -cne [string]$Quarantine.OwnerId) {
+        throw 'Rejected-artifact rollback owner record is invalid.'
+    }
+    $entries = @($marker.artifacts | Sort-Object sourceRelativePath)
+    $allFiles = @(Get-QaSafeFilesUnderDirectory -Directory $finalRoot -TrustedDirectory $script:RejectedArtifactRoot -MaximumFiles 2049)
+    if ($allFiles.Count -ne ($entries.Count + 1)) {
+        throw 'Rejected-artifact rollback inventory contains unexpected files.'
+    }
+    foreach ($entry in $entries) {
+        $sourcePath = Join-Path $runRoot ([string]$entry.sourceRelativePath).Replace('/', '\')
+        $quarantinedPath = Join-Path $finalRoot ([string]$entry.quarantineRelativePath).Replace('/', '\')
+        [void](Resolve-QaPathWithinDirectory -Path $sourcePath -Directory $runRoot)
+        [void](Assert-QaPathHasNoReparsePoint -Path $quarantinedPath -TrustedDirectory $finalRoot)
+        if ((Test-Path -LiteralPath $sourcePath) -or
+            -not (Test-Path -LiteralPath $quarantinedPath -PathType Leaf) -or
+            (Get-Sha256File -Path $quarantinedPath) -cne [string]$entry.sha256) {
+            throw 'Rejected-artifact rollback precondition failed.'
+        }
+    }
+    foreach ($entry in $entries) {
+        $sourcePath = Join-Path $runRoot ([string]$entry.sourceRelativePath).Replace('/', '\')
+        $quarantinedPath = Join-Path $finalRoot ([string]$entry.quarantineRelativePath).Replace('/', '\')
+        New-Item -ItemType Directory -Path (Split-Path -Parent $sourcePath) -Force | Out-Null
+        Move-Item -LiteralPath $quarantinedPath -Destination $sourcePath
+    }
+    [IO.File]::Delete($markerPath)
+    [IO.Directory]::Delete($finalRoot, $true)
+}
+
+function New-QaGeneratedSanitizedArtifact {
+    param(
+        [Parameter(Mandatory)] [string]$Id,
+        [Parameter(Mandatory)] [string]$RelativePath,
+        [Parameter(Mandatory)] [string[]]$Lines
+    )
+
+    $path = Join-Path $script:RunRoot $RelativePath.Replace('/', '\')
+    [void](Resolve-QaPathWithinDirectory -Path $path -Directory $script:RunRoot)
+    if (Test-Path -LiteralPath $path) {
+        throw 'Fresh blocked-fallback artifact path unexpectedly exists.'
+    }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+    $text = Protect-QaText (($Lines -join "`n") + "`n")
+    if ($text.Length -gt 16384 -or -not (Test-QaTextPrivacy -Text $text)) {
+        throw 'Generated blocked-fallback artifact failed its bounded privacy policy.'
+    }
+    Write-Utf8NoBom -Path $path -Text $text
+    return [pscustomobject][ordered]@{
+        id = $Id
+        kind = 'sanitized-gate-log'
+        relativePath = $RelativePath
+        sha256 = Get-Sha256File -Path $path
+        provenance = $null
+    }
+}
+
+function New-QaBlockedBoundaryArtifacts {
+    param(
+        [Parameter(Mandatory)] [object]$Contract,
+        [Parameter(Mandatory)] [object[]]$AffectedArtifacts
+    )
+
+    $boundaryArtifactIds = @(
+        'artifact.ui.keyboard-automation-matrix.log',
+        'artifact.ui.reduced-motion-matrix.log',
+        'artifact.ui.viewport-dpi-matrix.log'
+    )
+    $result = [Collections.Generic.List[object]]::new()
+    foreach ($artifactId in $boundaryArtifactIds) {
+        $original = @($AffectedArtifacts | Where-Object { [string]$_.id -ceq $artifactId })
+        $limitation = @($Contract.acceptedLimitations | Where-Object {
+            [string]$_.evidence.referenceId -ceq $artifactId
+        })
+        if ($original.Count -ne 1 -or $limitation.Count -ne 1 -or
+            [string]$original[0].kind -cne 'sanitized-gate-log') {
+            throw 'Blocked fallback boundary artifact/limitation binding is missing or ambiguous.'
+        }
+        $result.Add((New-QaGeneratedSanitizedArtifact `
+            -Id $artifactId `
+            -RelativePath ([string]$original[0].relativePath) `
+            -Lines @(
+                'AI Arena QA unavailable-boundary evidence',
+                'schema=ai_arena.qa_blocked_boundary.v1',
+                "limitationId=$([string]$limitation[0].id)",
+                "evidenceId=$([string]$limitation[0].evidence.id)",
+                'state=unavailable',
+                "summary=$([string]$limitation[0].evidence.summary)",
+                "limitation=$([string]$limitation[0].evidence.limitation)",
+                'contentPolicy=frozen unavailable-boundary semantics only; no rendered UI pass claim or raw validator output'
+            )))
+    }
+    return @($result)
+}
+
+function New-QaRetainedReferenceArtifacts {
+    param(
+        [Parameter(Mandatory)] [object]$Contract,
+        [Parameter(Mandatory)] [string[]]$AffectedReferenceIds,
+        [Parameter(Mandatory)] [string[]]$BoundaryArtifactIds
+    )
+
+    $affected = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($id in $AffectedReferenceIds) { [void]$affected.Add($id) }
+    $boundary = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($id in $BoundaryArtifactIds) { [void]$boundary.Add($id) }
+    $rewrittenGateIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($id in @(
+        'inspection.user-acceptance',
+        'ui.feature-surface-matrix',
+        'ui.keyboard-automation-matrix',
+        'ui.reduced-motion-matrix',
+        'ui.theme-contrast-matrix',
+        'ui.viewport-dpi-matrix')) { [void]$rewrittenGateIds.Add($id) }
+    foreach ($gate in @($Contract.gates | Where-Object { [string]$_.id -cmatch '^pass-[0-9]{2}\.rendered-ui$' })) {
+        [void]$rewrittenGateIds.Add([string]$gate.id)
+    }
+
+    $targets = [Collections.Generic.List[object]]::new()
+    foreach ($gate in @($Contract.gates | Where-Object { -not $rewrittenGateIds.Contains([string]$_.id) })) {
+        $targets.Add([pscustomobject]@{ Kind = 'gate'; Id = [string]$gate.id; Item = $gate; Evidence = $gate.evidence })
+    }
+    foreach ($measurement in @($Contract.performance)) {
+        $targets.Add([pscustomobject]@{ Kind = 'performance'; Id = [string]$measurement.id; Item = $measurement; Evidence = $measurement.evidence })
+    }
+    foreach ($schema in @($Contract.schemaChecks | Where-Object { [string]$_.schema -cne $script:Schema })) {
+        $targets.Add([pscustomobject]@{ Kind = 'schema'; Id = [string]$schema.id; Item = $schema; Evidence = $schema.evidence })
+    }
+    foreach ($assertion in @($Contract.evidence)) {
+        $targets.Add([pscustomobject]@{ Kind = 'evidence'; Id = [string]$assertion.id; Item = $assertion; Evidence = $assertion })
+    }
+
+    $artifacts = [Collections.Generic.List[object]]::new()
+    foreach ($target in @($targets)) {
+        $referenceId = [string]$target.Evidence.referenceId
+        if ([string]::IsNullOrWhiteSpace($referenceId) -or
+            -not $affected.Contains($referenceId) -or
+            $boundary.Contains($referenceId)) {
+            continue
+        }
+        $safeEntityId = ([string]$target.Id).ToLowerInvariant()
+        if ($safeEntityId -cnotmatch '^[a-z0-9][a-z0-9._-]{0,95}$') {
+            throw 'Retained blocked-fallback evidence identity is not contract-safe.'
+        }
+        $artifactId = "artifact.blocked-retained.$([string]$target.Kind).$safeEntityId.log"
+        $relativePath = "logs/blocked-retained.$([string]$target.Kind).$safeEntityId.log"
+        $lines = [Collections.Generic.List[string]]::new()
+        $lines.Add('AI Arena QA retained assertion evidence')
+        $lines.Add('schema=ai_arena.qa_retained_evidence.v1')
+        $lines.Add("kind=$([string]$target.Kind)")
+        $lines.Add("id=$safeEntityId")
+        if ([string]$target.Kind -ceq 'performance') {
+            $lines.Add("metric=$([string]$target.Item.metric)")
+            $lines.Add("value=$([Convert]::ToString($target.Item.value, [Globalization.CultureInfo]::InvariantCulture))")
+            $lines.Add("unit=$([string]$target.Item.unit)")
+            $lines.Add("thresholdKind=$([string]$target.Item.thresholdKind)")
+            $lines.Add("threshold=$([Convert]::ToString($target.Item.threshold, [Globalization.CultureInfo]::InvariantCulture))")
+        }
+        elseif ([string]$target.Kind -ceq 'gate') {
+            $lines.Add("outcome=$([string]$target.Item.outcome)")
+            $lines.Add("required=$([bool]$target.Item.required)")
+            $lines.Add("durationMilliseconds=$([long]$target.Item.durationMilliseconds)")
+            $lines.Add("tests=$([int]$target.Item.tests.passed)/$([int]$target.Item.tests.failed)/$([int]$target.Item.tests.skipped)/$([int]$target.Item.tests.total)")
+        }
+        elseif ([string]$target.Kind -ceq 'schema') {
+            $lines.Add("contractSchema=$([string]$target.Item.schema)")
+            $lines.Add("outcome=$([string]$target.Item.outcome)")
+            $lines.Add("migratedFromSchema=$([string]$target.Item.migratedFromSchema)")
+        }
+        else {
+            $lines.Add("state=$([string]$target.Evidence.state)")
+        }
+        if ([string]$target.Kind -cne 'performance') {
+            $lines.Add("sourceReferenceId=$referenceId")
+        }
+        $lines.Add('contentPolicy=bounded contract fields only; no rendered UI pass claim, source, transcript, or raw validator output')
+        $artifact = New-QaGeneratedSanitizedArtifact -Id $artifactId -RelativePath $relativePath -Lines @($lines)
+        $artifacts.Add($artifact)
+        $target.Evidence.referenceId = $artifact.id
+    }
+    return @($artifacts)
+}
+
+function Remove-QaGeneratedBlockedFallbackArtifacts {
+    param([AllowEmptyCollection()] [object[]]$Artifacts = @())
+
+    foreach ($artifact in @($Artifacts)) {
+        $path = Join-Path $script:RunRoot ([string]$artifact.relativePath).Replace('/', '\')
+        [void](Resolve-QaPathWithinDirectory -Path $path -Directory $script:RunRoot)
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            if ((Get-Sha256File -Path $path) -cne [string]$artifact.sha256) {
+                throw 'Generated blocked-fallback artifact changed before rollback.'
+            }
+            [IO.File]::Delete($path)
+        }
+    }
+}
+
+function New-QaAuthoritativeRejectionArtifact {
+    param(
+        [Parameter(Mandatory)] [string[]]$IssueCodes,
+        [Parameter(Mandatory)] [object]$Quarantine
+    )
+
+    $safeCodes = @(Get-OrdinalStringArray -Values @($IssueCodes | Where-Object { $_ -cmatch '^[a-z0-9][a-z0-9._-]{0,95}$' } | Select-Object -Unique))
+    if ($safeCodes.Count -gt 64) {
+        $safeCodes = @(Get-OrdinalStringArray -Values @($safeCodes | Select-Object -First 63) + @('validator.issue_limit'))
+    }
+    if ($safeCodes.Count -eq 0) {
+        $safeCodes = @('validator.nonzero_without_issue')
+    }
+    $path = Join-Path $script:LogsRoot 'postflight.authoritative-rejection.log'
+    if (Test-Path -LiteralPath $path) {
+        throw 'Fresh authoritative-rejection log unexpectedly exists.'
+    }
+    $lines = @(
+        'AI Arena QA authoritative rejection evidence'
+        'schema=ai_arena.qa_rejected_artifacts.v1'
+        'outcome=blocked'
+        "ownerId=$($Quarantine.OwnerId)"
+        "quarantinedArtifactCount=$(@($Quarantine.Entries).Count)"
+        "quarantineInventorySha256=$($Quarantine.InventorySha256)"
+        "issueCount=$($safeCodes.Count)"
+        'contentPolicy=bounded sorted issue codes and quarantine identity only; raw validator output was discarded'
+        for ($index = 0; $index -lt $safeCodes.Count; $index++) {
+            'issue.{0:D2}={1}' -f $index, $safeCodes[$index]
+        }
+    )
+    $text = Protect-QaText (($lines -join "`n") + "`n")
+    if ($text.Length -gt 16384 -or -not (Test-QaTextPrivacy -Text $text)) {
+        throw 'Authoritative-rejection log failed its bounded privacy policy.'
+    }
+    Write-Utf8NoBom -Path $path -Text $text
+    return [pscustomobject][ordered]@{
+        id = 'artifact.postflight.authoritative-rejection.log'
+        kind = 'sanitized-gate-log'
+        relativePath = ConvertTo-SafeRelativePath -Path $path
+        sha256 = Get-Sha256File -Path $path
+        provenance = $null
+    }
+}
+
+function ConvertTo-QaBlockedFallbackContract {
+    param(
+        [Parameter(Mandatory)] [object]$Contract,
+        [Parameter(Mandatory)] [object]$RejectionArtifact,
+        [Parameter(Mandatory)] [string[]]$RemovedArtifactIds,
+        [AllowEmptyCollection()] [object[]]$ReplacementArtifacts = @()
+    )
+
+    $failureSummary = 'The authoritative Verification Lab rejected the rendered UI evidence closure; that closure was quarantined and is not evidence for this blocked run.'
+    $uiGateIds = @(
+        'ui.feature-surface-matrix',
+        'ui.keyboard-automation-matrix',
+        'ui.reduced-motion-matrix',
+        'ui.theme-contrast-matrix',
+        'ui.viewport-dpi-matrix'
+    )
+    $renderedGates = @($Contract.gates | Where-Object { [string]$_.id -cmatch '^pass-[0-9]{2}\.rendered-ui$' })
+    if ($renderedGates.Count -lt 1 -or $renderedGates.Count -gt 5) {
+        throw 'Blocked fallback has an invalid rendered-UI gate set.'
+    }
+    $failedGates = [Collections.Generic.List[object]]::new()
+    foreach ($gate in $renderedGates) { $failedGates.Add($gate) }
+    foreach ($id in $uiGateIds) {
+        $matches = @($Contract.gates | Where-Object { [string]$_.id -ceq $id })
+        if ($matches.Count -ne 1) { throw "Blocked fallback gate is missing or ambiguous: $id" }
+        $failedGates.Add($matches[0])
+    }
+    foreach ($gate in $failedGates) {
+        $gate.outcome = 'fail'
+        $gate.required = $true
+        $gate.tests = [ordered]@{ passed = 0; failed = 1; skipped = 0; total = 1 }
+        $gate.evidence = New-EvidenceAssertion -Id "evidence.$($gate.id)" -State 'observed' -Summary $failureSummary -ReferenceId $RejectionArtifact.id
+    }
+    $inspectionGate = @($Contract.gates | Where-Object { [string]$_.id -ceq 'inspection.user-acceptance' })
+    if ($inspectionGate.Count -ne 1) { throw 'Blocked fallback inspection gate is missing or ambiguous.' }
+    $inspectionSummary = 'User inspection is unavailable because the rejected rendered UI closure is not part of this blocked evidence bundle.'
+    $inspectionGate[0].outcome = 'blocked'
+    $inspectionGate[0].tests = [ordered]@{ passed = 0; failed = 0; skipped = 0; total = 0 }
+    $inspectionGate[0].evidence = New-EvidenceAssertion -Id 'evidence.inspection.user-acceptance' -State 'unavailable' -Summary $inspectionSummary -ReferenceId $RejectionArtifact.id -Limitation $inspectionSummary
+
+    $qaSchema = @($Contract.schemaChecks | Where-Object { [string]$_.schema -ceq $script:Schema })
+    if ($qaSchema.Count -ne 1) { throw 'Blocked fallback QA schema check is missing or ambiguous.' }
+    $qaSchema[0].outcome = 'fail'
+    $qaSchema[0].evidence = New-EvidenceAssertion -Id 'evidence.schema.qa-evidence.v1' -State 'observed' -Summary $failureSummary -ReferenceId $RejectionArtifact.id
+
+    $removed = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($id in $RemovedArtifactIds) { [void]$removed.Add($id) }
+    $retainedArtifacts = @($Contract.artifacts | Where-Object {
+        [string]$_.kind -cnotin @('automation-tree', 'rendered-ui-screenshot', 'qa-ui-matrix', 'qa-feature-surface-matrix') -and
+        -not $removed.Contains([string]$_.id)
+    })
+    $newArtifacts = @($ReplacementArtifacts) + @($RejectionArtifact)
+    $newIds = @($newArtifacts | ForEach-Object { [string]$_.id })
+    if (@($newIds | Sort-Object -Unique).Count -ne $newIds.Count -or
+        @($retainedArtifacts | Where-Object { [string]$_.id -cin $newIds }).Count -ne 0) {
+        throw 'Blocked fallback replacement artifact identity collides with retained evidence.'
+    }
+    $Contract.artifacts = @($retainedArtifacts + $newArtifacts)
+    $Contract.verdict = 'blocked'
+    $Contract.cleanFullPasses = 0
+    $Contract.inspection.userAccepted = $false
+    $Contract.inspection.acceptedAtUtc = $null
+    $Contract.inspection.treeFingerprint = $null
+    $Contract.inspection.screenshotArtifactIds = @()
+    $Contract.inspection.automationArtifactIds = @()
+    $Contract.inspection.evidence = New-EvidenceAssertion -Id 'evidence.inspection' -State 'unavailable' -Summary $inspectionSummary -ReferenceId $RejectionArtifact.id -Limitation $inspectionSummary
+    return $Contract
+}
+
+function Assert-QaBlockedBundleInventory {
+    param(
+        [Parameter(Mandatory)] [object]$Contract,
+        [Parameter(Mandatory)] [string]$EvidencePath
+    )
+
+    if (@(Get-QaRejectedClosureArtifacts -Contract $Contract).Count -ne 0 -or
+        @($Contract.inspection.screenshotArtifactIds).Count -ne 0 -or
+        @($Contract.inspection.automationArtifactIds).Count -ne 0) {
+        throw 'Blocked evidence still contains rejected visual, matrix, or inspection closure.'
+    }
+    $byPath = @{}
+    foreach ($artifact in @($Contract.artifacts)) {
+        $relativePath = [string]$artifact.relativePath
+        if ($byPath.ContainsKey($relativePath)) { throw 'Blocked evidence contains duplicate artifact paths.' }
+        $path = Join-Path $script:RunRoot $relativePath.Replace('/', '\')
+        [void](Assert-QaPathHasNoReparsePoint -Path $path -TrustedDirectory $script:RunRoot)
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
+            (Get-Sha256File -Path $path) -cne [string]$artifact.sha256) {
+            throw 'Blocked evidence artifact inventory/hash is invalid.'
+        }
+        $text = Get-Content -LiteralPath $path -Raw
+        if (-not (Test-QaTextPrivacy -Text $text)) { throw 'Blocked evidence artifact failed privacy validation.' }
+        $byPath[$relativePath] = $true
+    }
+    $artifactIds = @($Contract.artifacts | ForEach-Object { [string]$_.id })
+    $references = @(
+        @($Contract.gates | ForEach-Object { [string]$_.evidence.referenceId })
+        @($Contract.performance | ForEach-Object { [string]$_.evidence.referenceId })
+        @($Contract.schemaChecks | ForEach-Object { [string]$_.evidence.referenceId })
+        @($Contract.acceptedLimitations | ForEach-Object { [string]$_.evidence.referenceId })
+        [string]$Contract.inspection.evidence.referenceId
+        @($Contract.evidence | ForEach-Object { [string]$_.referenceId })
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if (@($references | Where-Object { $_ -cnotin $artifactIds }).Count -ne 0) {
+        throw 'Blocked evidence contains a dangling assertion reference.'
+    }
+    [void](Assert-QaPathHasNoReparsePoint -Path $EvidencePath -TrustedDirectory $script:RunRoot)
+    $physical = @(Get-QaSafeFilesUnderDirectory -Directory $script:RunRoot -TrustedDirectory $script:RunRoot -MaximumFiles 10000)
+    $unreferenced = @($physical | Where-Object {
+        $relative = ConvertTo-SafeRelativePath -Path $_
+        $relative -cne 'qa-evidence.json' -and -not $byPath.ContainsKey($relative)
+    })
+    if ($unreferenced.Count -ne 0 -or $physical.Count -ne ($byPath.Count + 1)) {
+        throw 'Blocked evidence physical inventory is not an exact contract closure.'
+    }
+}
+
+function Invoke-QaBlockedFallback {
+    param(
+        [Parameter(Mandatory)] [object]$Contract,
+        [Parameter(Mandatory)] [string]$EvidencePath,
+        [Parameter(Mandatory)] [string[]]$IssueCodes,
+        [Parameter(Mandatory)] [scriptblock]$ValidateBundle
+    )
+
+    # Establish the only trusted manifest identity before reading the candidate,
+    # inventorying files, creating quarantine state, or entering a rollback path.
+    # This applies equally to allowed and denied validator issue scopes.
+    $trustedEvidencePath = Assert-QaPathHasNoReparsePoint -Path $EvidencePath -TrustedDirectory $script:RunRoot
+    $expectedEvidencePath = [IO.Path]::GetFullPath((Join-Path $script:RunRoot 'qa-evidence.json'))
+    if (-not [string]::Equals($trustedEvidencePath, $expectedEvidencePath, [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $trustedEvidencePath -PathType Leaf)) {
+        throw 'Blocked fallback evidence path is not the exact trusted run manifest.'
+    }
+    $EvidencePath = $trustedEvidencePath
+
+    if (-not (Test-QaBlockedFallbackIssueScope -IssueCodes $IssueCodes)) {
+        if (Test-Path -LiteralPath $trustedEvidencePath -PathType Leaf) {
+            [IO.File]::Delete($trustedEvidencePath)
+        }
+        throw 'Blocked fallback is authorized only for a closed rendered-UI evidence issue scope.'
+    }
+    $originalBytes = [IO.File]::ReadAllBytes($EvidencePath)
+    $candidateJson = Protect-QaText ($Contract | ConvertTo-Json -Depth 30 -Compress)
+    if ($candidateJson.Length -gt 4MB -or -not (Test-QaTextPrivacy -Text $candidateJson)) {
+        throw 'Rejected QA candidate cannot be cloned within the bounded privacy policy.'
+    }
+    $blockedWorkingContract = $candidateJson | ConvertFrom-Json
+    $quarantine = $null
+    $rejectionArtifact = $null
+    $generatedArtifacts = [Collections.Generic.List[object]]::new()
+    try {
+        $affectedReferenceIds = @(Get-QaBlockedFallbackAffectedReferenceIds -Contract $Contract)
+        $affectedArtifacts = @(
+            foreach ($id in $affectedReferenceIds) {
+                $matches = @($Contract.artifacts | Where-Object { [string]$_.id -ceq $id })
+                if ($matches.Count -ne 1) { throw "Affected blocked-fallback artifact is missing or ambiguous: $id" }
+                $matches[0]
+            }
+        )
+        $quarantine = Start-QaRejectedArtifactQuarantine -Contract $Contract -AdditionalArtifacts $affectedArtifacts
+        $boundaryArtifacts = @(New-QaBlockedBoundaryArtifacts -Contract $blockedWorkingContract -AffectedArtifacts $affectedArtifacts)
+        foreach ($artifact in $boundaryArtifacts) { $generatedArtifacts.Add($artifact) }
+        $boundaryArtifactIds = @($boundaryArtifacts | ForEach-Object { [string]$_.id })
+        $retainedReferenceArtifacts = @(New-QaRetainedReferenceArtifacts `
+            -Contract $blockedWorkingContract `
+            -AffectedReferenceIds $affectedReferenceIds `
+            -BoundaryArtifactIds $boundaryArtifactIds)
+        foreach ($artifact in $retainedReferenceArtifacts) { $generatedArtifacts.Add($artifact) }
+        $rejectionArtifact = New-QaAuthoritativeRejectionArtifact -IssueCodes $IssueCodes -Quarantine $quarantine
+        $generatedArtifacts.Add($rejectionArtifact)
+        $blockedContract = ConvertTo-QaBlockedFallbackContract `
+            -Contract $blockedWorkingContract `
+            -RejectionArtifact $rejectionArtifact `
+            -RemovedArtifactIds $affectedReferenceIds `
+            -ReplacementArtifacts @($boundaryArtifacts + $retainedReferenceArtifacts)
+        $json = Protect-QaText (($blockedContract | ConvertTo-Json -Depth 30) + "`n")
+        if ($json.Length -gt 4MB -or -not (Test-QaTextPrivacy -Text $json)) {
+            throw 'Blocked QA evidence failed its bounded privacy policy.'
+        }
+        Set-QaFileBytesAtomically -Path $EvidencePath -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($json))
+        Assert-QaBlockedBundleInventory -Contract $blockedContract -EvidencePath $EvidencePath
+        if (-not [bool](& $ValidateBundle $EvidencePath)) {
+            throw 'The rebuilt blocked QA evidence form failed ordinary bundle validation.'
+        }
+        return [pscustomobject]@{
+            Contract = $blockedContract
+            Quarantine = $quarantine
+            GeneratedArtifacts = @($generatedArtifacts)
+        }
+    }
+    catch {
+        # A preflight rejection must be observationally read-only. Only replace
+        # the manifest when a later transaction step actually changed it.
+        $manifestNeedsRestore = -not (Test-Path -LiteralPath $EvidencePath -PathType Leaf)
+        if (-not $manifestNeedsRestore) {
+            $currentBytes = [IO.File]::ReadAllBytes($EvidencePath)
+            $manifestNeedsRestore = $currentBytes.Length -ne $originalBytes.Length
+            if (-not $manifestNeedsRestore) {
+                for ($byteIndex = 0; $byteIndex -lt $originalBytes.Length; $byteIndex++) {
+                    if ($currentBytes[$byteIndex] -ne $originalBytes[$byteIndex]) {
+                        $manifestNeedsRestore = $true
+                        break
+                    }
+                }
+            }
+        }
+        if ($manifestNeedsRestore) {
+            Set-QaFileBytesAtomically -Path $EvidencePath -Bytes $originalBytes
+        }
+        Remove-QaGeneratedBlockedFallbackArtifacts -Artifacts @($generatedArtifacts)
+        if ($null -ne $quarantine) {
+            Undo-QaRejectedArtifactQuarantine -Quarantine $quarantine
+        }
+        throw
     }
 }
 
@@ -1423,14 +2548,73 @@ for ($pass = 1; $pass -le $Passes; $pass++) {
     Assert-SourceFingerprintUnchanged -Expected $passSourceFingerprintBefore -Boundary "$prefix.after-pass"
 }
 
+if ($PlanOnly) {
+    Add-QaGate -Id 'schema.explicit-v0-pack-migration' -DisplayName 'Explicit v0 pack migration fixture' -Required $true -Mode 'partial' -Reason 'Plan-only mode did not invoke the explicit scenario and benchmark v0-to-v1 migrators.'
+}
+else {
+    Add-QaGate -Id 'schema.explicit-v0-pack-migration' -DisplayName 'Explicit v0 pack migration fixture' -Required $true -Mode 'run' -PassSummary 'The bounded Core fixture invoked both named v0-to-v1 pack migrators and verified exact source-byte provenance, canonical v1 decoding, privacy rejection, deterministic identity, and duplicate handling.' -Action {
+        $previousFilter = $env:AIARENA_TEST_FILTER
+        try {
+            $env:AIARENA_TEST_FILTER = 'experiment pack store is strict versioned and diagnostic'
+            Invoke-CapturedCommand `
+                -FilePath 'dotnet' `
+                -Arguments @('run', '--project', $projects.core, '--no-build', '--no-restore', '-c', 'Release') `
+                -DisplayCommand 'dotnet run --project tests/AIArena.Tests/AIArena.Tests.csproj --no-build --no-restore -c Release [explicit v0 pack migration fixture]'
+        }
+        finally {
+            if ($null -eq $previousFilter) {
+                Remove-Item Env:AIARENA_TEST_FILTER -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:AIARENA_TEST_FILTER = $previousFilter
+            }
+        }
+    }
+}
+
 if ($PlanOnly -or $SkipRenderedUi) {
     $matrixReason = 'Development switches prevented this required matrix from executing.'
+    Add-QaGate -Id 'ui.feature-surface-matrix' -DisplayName 'Experiment Lab feature-surface render matrix' -Required $true -Mode 'partial' -Reason $matrixReason
     Add-QaGate -Id 'ui.theme-contrast-matrix' -DisplayName 'Dark Blue, Light, and High Contrast render matrix' -Required $true -Mode 'partial' -Reason $matrixReason
     Add-QaGate -Id 'ui.viewport-dpi-matrix' -DisplayName '960/1500 DIP and raster-density render matrix' -Required $true -Mode 'partial' -Reason $matrixReason
     Add-QaGate -Id 'ui.keyboard-automation-matrix' -DisplayName 'Programmatic WPF focus and visual-tree matrix' -Required $true -Mode 'partial' -Reason $matrixReason
     Add-QaGate -Id 'ui.reduced-motion-matrix' -DisplayName 'Motion-preference plumbing and render matrix' -Required $true -Mode 'partial' -Reason $matrixReason
 }
 else {
+    Add-QaGate -Id 'ui.feature-surface-matrix' -DisplayName 'Experiment Lab feature-surface render matrix' -Required $true -Mode 'run' -PassSummary 'Every registered Experiment Lab feature was selected through the real local control plane and refreshed before linked behavior-state, WPF structure, focus, and rendered screenshot evidence was captured at each required theme and width.' -Action {
+        $requiredFeatureKeys = @(Get-AIArenaQaFeatureSurfaceKeys)
+        foreach ($pass in 1..$Passes) {
+            $passCells = @(Get-AIArenaQaFeatureSurfacePassCells -Cells @($script:FeatureSurfaceMatrixCells) -PassNumber $pass)
+            if ($passCells.Count -ne 60) {
+                throw 'A required Experiment Lab feature-surface matrix cell is missing.'
+            }
+            foreach ($featureKey in $requiredFeatureKeys) {
+                foreach ($theme in @('dark-blue', 'light', 'high-contrast')) {
+                    foreach ($width in @(960, 1500)) {
+                        $cell = @($passCells | Where-Object {
+                            [string]$_.featureKey -ceq $featureKey -and
+                            [string]$_.theme -ceq $theme -and
+                            [int]$_.viewportWidthDip -eq $width
+                        })
+                        if ($cell.Count -ne 1 -or
+                            [string]$cell[0].selectedFeatureStatus -cne 'ready' -or
+                            [bool]$cell[0].controlPlaneBusy -or
+                            [string]$cell[0].visibleRootIdentity -cne 'ExperimentLabPanel' -or
+                            [string]$cell[0].requiredContentIdentity -cne (Get-AIArenaQaFeatureSurfaceIdentity -FeatureKey $featureKey) -or
+                            [string]::IsNullOrWhiteSpace([string]$cell[0].automationSha256) -or
+                            [string]::IsNullOrWhiteSpace([string]$cell[0].screenshotSha256) -or
+                            -not (Test-AIArenaQaFocusCycle `
+                                -Next $cell[0].focusNext `
+                                -Previous $cell[0].focusPrevious `
+                                -Capture $cell[0].focusCapture)) {
+                            throw 'A feature-surface matrix cell lacks verified refresh, visible-root, artifact, or focus evidence.'
+                        }
+                    }
+                }
+                Add-GateTrace ("pass={0}; feature={1}; cells=6" -f $pass, $featureKey)
+            }
+        }
+    }
     Add-QaGate -Id 'ui.theme-contrast-matrix' -DisplayName 'Dark Blue, Light, and High Contrast render matrix' -Required $true -Mode 'run' -PassSummary 'The three configured theme palettes produced distinct decoded PNG artifacts at every matching matrix coordinate; this does not independently certify colour contrast.' -Action {
         foreach ($pass in 1..$Passes) {
             $passCells = @(Get-AIArenaQaUiMatrixPassCells -Cells @($script:UiMatrixCells) -PassNumber $pass)
@@ -1729,8 +2913,10 @@ elseif (@($coreSchemaGates | Where-Object { $_.outcome -in @('fail', 'blocked') 
 else {
     'partial'
 }
+$explicitMigrationGate = @($script:GateResults | Where-Object { $_.id -ceq 'schema.explicit-v0-pack-migration' }) | Select-Object -First 1
+$explicitMigrationOutcome = if ($null -eq $explicitMigrationGate) { 'partial' } else { [string]$explicitMigrationGate.outcome }
 $contractSchemaSummary = switch ($contractSchemaOutcome) {
-    'pass' { 'The complete Core contract harness validated every registered v1 contract, canonical codec, privacy rule, and migration invariant.' }
+    'pass' { 'The complete Core contract harness validated every registered v1 contract, canonical codec, and privacy rule. The separate bounded migration gate invoked the named scenario and benchmark v0-to-v1 migrators directly.' }
     'fail' { 'The Core contract harness did not complete successfully, so registered schema evidence cannot be accepted.' }
     default { 'The Core contract harness was not executed in this development configuration.' }
 }
@@ -1760,7 +2946,7 @@ $contract = [ordered]@{
     createdAtUtc = $completedAtUtc.ToString('o')
     sourceRevision = $sourceRevision
     treeFingerprint = $sourceFingerprintStart
-    sealManifestId = 'ai_arena.qa_seal_manifest.v1'
+    sealManifestId = 'ai_arena.qa_seal_manifest.v2'
     isWorkingTreeClean = $isWorkingTreeClean
     nestedRepositories = @(
         [ordered]@{
@@ -1793,12 +2979,35 @@ $contract = [ordered]@{
     performance = $performance
     schemaChecks = @(
         foreach ($contractSchema in $requiredContractSchemas) {
+            $isMigratedPackSchema = $contractSchema -in @('ai_arena.scenario_pack.v1', 'ai_arena.benchmark_pack.v1')
+            $schemaCheckOutcome = if ($isMigratedPackSchema -and $explicitMigrationOutcome -ne 'pass') {
+                if ($explicitMigrationOutcome -in @('fail', 'blocked', 'unavailable')) { 'fail' } else { 'partial' }
+            }
+            else {
+                $contractSchemaOutcome
+            }
+            $migratedFromSchema = if ($isMigratedPackSchema -and $schemaCheckOutcome -eq 'pass') {
+                if ($contractSchema -ceq 'ai_arena.scenario_pack.v1') { 'ai_arena.scenario_pack.v0' } else { 'ai_arena.benchmark_pack.v0' }
+            }
+            else {
+                $null
+            }
+            $schemaCheckEvidence = if ($isMigratedPackSchema -and $schemaCheckOutcome -eq 'pass') {
+                New-EvidenceAssertion `
+                    -Id (Get-AIArenaQaMigrationEvidenceId -Schema $contractSchema) `
+                    -State 'observed' `
+                    -Summary 'The bounded Core fixture directly invoked the named v0-to-v1 migrator and validated the canonical v1 result.' `
+                    -ReferenceId 'artifact.schema.explicit-v0-pack-migration.log'
+            }
+            else {
+                $contractSchemaEvidence
+            }
             [ordered]@{
                 id = ('schema.' + $contractSchema.Replace('_', '-').Replace('.', '-'))
                 schema = $contractSchema
-                migratedFromSchema = $null
-                outcome = $contractSchemaOutcome
-                evidence = $contractSchemaEvidence
+                migratedFromSchema = $migratedFromSchema
+                outcome = $schemaCheckOutcome
+                evidence = $schemaCheckEvidence
             }
         }
         [ordered]@{
@@ -1889,28 +3098,24 @@ if ($verificationLabPresent -and -not $PlanOnly) {
     if (-not (Invoke-AuthoritativeEvidenceValidation -ProjectPath $projects.verificationLab -EvidencePath $evidencePath)) {
         $authoritativeValidationFailed = $true
         $script:ExecutionFailure = $true
-        $contract.verdict = 'blocked'
-        $qaSchemaChecks = @($contract.schemaChecks | Where-Object { $_.schema -eq $script:Schema })
-        if ($qaSchemaChecks.Count -ne 1) {
-            throw 'QA evidence schema check is missing or ambiguous.'
-        }
-        $qaSchemaChecks[0].outcome = 'fail'
-        $qaSchemaChecks[0].evidence = New-EvidenceAssertion `
-            -Id 'evidence.schema.qa-evidence.v1' `
-            -State 'observed' `
-            -Summary 'The authoritative Verification Lab validator rejected the QA evidence bundle.' `
-            -ReferenceId 'artifact.postflight.evidence-privacy.log'
-        $json = Protect-QaText ($contract | ConvertTo-Json -Depth 30)
-        if (-not (Test-QaTextPrivacy $json)) {
-            throw 'Blocked QA evidence failed privacy validation and was not retained.'
-        }
-        $blockedTemporaryPath = Join-Path $script:RunRoot ('.qa-evidence.{0}.tmp' -f [Guid]::NewGuid().ToString('N'))
-        Write-Utf8NoBom -Path $blockedTemporaryPath -Text ($json + "`n")
-        Move-Item -LiteralPath $blockedTemporaryPath -Destination $evidencePath -Force
-        if (-not (Invoke-AuthoritativeEvidenceValidation -ProjectPath $projects.verificationLab -EvidencePath $evidencePath -BundleOnly)) {
-            Remove-Item -LiteralPath $evidencePath -Force -ErrorAction SilentlyContinue
-            throw 'The blocked QA evidence form is not structurally valid and was not accepted.'
-        }
+        $rejectionIssueCodes = @($script:LastAuthoritativeValidationIssues)
+        $blockedFallback = Invoke-QaBlockedFallback `
+            -Contract $contract `
+            -EvidencePath $evidencePath `
+            -IssueCodes $rejectionIssueCodes `
+            -ValidateBundle {
+                param([string]$candidateEvidencePath)
+                return Invoke-AuthoritativeEvidenceValidation `
+                    -ProjectPath $projects.verificationLab `
+                    -EvidencePath $candidateEvidencePath `
+                    -BundleOnly
+            }
+        $contract = $blockedFallback.Contract
+        $script:Artifacts.Clear()
+        foreach ($artifact in @($contract.artifacts)) { $script:Artifacts.Add($artifact) }
+        $script:GateResults.Clear()
+        foreach ($gate in @($contract.gates)) { $script:GateResults.Add($gate) }
+        $cleanFullPasses = 0
         $verdict = 'blocked'
     }
 }

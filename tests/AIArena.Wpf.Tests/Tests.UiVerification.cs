@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -188,7 +189,13 @@ internal static partial class Program
                     Require(primaryNode.GetProperty("ControlType").GetString() == "Button"
                         && primaryNode.GetProperty("IsEnabled").GetBoolean()
                         && primaryNode.GetProperty("IsFocusable").GetBoolean()
-                        && primaryNode.GetProperty("HasKeyboardFocus").GetBoolean(), "focused button evidence should expose control type and keyboard state");
+                        && primaryNode.GetProperty("HasKeyboardFocus").GetBoolean()
+                        && primaryNode.GetProperty("BoundsWidth").GetDouble() > 0
+                        && primaryNode.GetProperty("BoundsHeight").GetDouble() > 0
+                        && primaryNode.GetProperty("EffectiveOpacity").GetDouble() > 0
+                        && primaryNode.GetProperty("IntersectsViewport").GetBoolean()
+                        && primaryNode.GetProperty("IsRendered").GetBoolean(),
+                        "focused button evidence should expose control type, keyboard state, and fail-closed renderability geometry");
                     var disabledNode = nodes.Single(node => node.GetProperty("AutomationId").GetString() == "QaDisabledButton");
                     Require(!disabledNode.GetProperty("IsEnabled").GetBoolean(), "disabled state should be explicit and non-colour evidence");
                     var redactedNode = nodes.Single(node => node.GetProperty("Identity").GetString() == "PrivateInputStaticName");
@@ -357,6 +364,7 @@ internal static partial class Program
                     Require(handler.CanHandle(AIArenaControlCommands.AppQaWindowSize)
                         && handler.CanHandle(AIArenaControlCommands.AppQaStructureCapture)
                         && handler.CanHandle(AIArenaControlCommands.AppQaFocusAdvance)
+                        && handler.CanHandle(AIArenaControlCommands.AppQaFocusFeature)
                         && handler.CanHandle(AIArenaControlCommands.AppQaMotionSet)
                         && !handler.CanHandle(AIArenaControlCommands.ProviderState), "app handler should own only app screenshot and QA verification commands");
 
@@ -412,6 +420,289 @@ internal static partial class Program
         }
         finally
         {
+            if (Directory.Exists(dataRoot))
+            {
+                Directory.Delete(dataRoot, recursive: true);
+            }
+        }
+    }
+
+    static void UiVerificationBindsExperimentEvidenceToObservedFeature()
+    {
+        var dataRoot = Path.Combine(Path.GetTempPath(), $"ai-arena-ui-feature-state-{Guid.NewGuid():N}");
+        var previousDataRoot = Environment.GetEnvironmentVariable("AI_ARENA_DATA_DIR");
+        Environment.SetEnvironmentVariable("AI_ARENA_DATA_DIR", dataRoot);
+        try
+        {
+            RunStaTest(() =>
+            {
+                var firstFeatureButton = new Button
+                {
+                    Name = "FeatureMatrixFocusFirst",
+                    Content = "Static QA control",
+                    Focusable = true,
+                    IsTabStop = true
+                };
+                var secondFeatureButton = new Button
+                {
+                    Name = "FeatureMatrixFocusSecond",
+                    Content = "Static QA control",
+                    Focusable = true,
+                    IsTabStop = true
+                };
+                var featureFocusPanel = new StackPanel
+                {
+                    Children = { firstFeatureButton, secondFeatureButton }
+                };
+                var featureContent = new Border
+                {
+                    Name = "MatrixPanel",
+                    Child = featureFocusPanel
+                };
+                var experimentLab = new Grid { Name = "ExperimentLabPanel" };
+                experimentLab.Children.Add(featureContent);
+                var shellRoot = new Grid();
+                shellRoot.Children.Add(experimentLab);
+                var window = new Window
+                {
+                    Width = 960,
+                    Height = 640,
+                    WindowStyle = WindowStyle.None,
+                    ShowInTaskbar = false,
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = SystemParameters.VirtualScreenLeft - 1200,
+                    Top = SystemParameters.VirtualScreenTop - 1200,
+                    Content = shellRoot
+                };
+                NameScope.SetNameScope(window, new NameScope());
+                window.RegisterName(experimentLab.Name, experimentLab);
+
+                try
+                {
+                    window.Show();
+                    window.UpdateLayout();
+                    var selectedFeature = "matrix";
+                    var verification = new AIArenaUiVerificationControlService(
+                        window,
+                        dataRoot,
+                        () => "light",
+                        selectedExperimentFeatureKey: () => selectedFeature);
+                    var observedState = verification.DebugObservedExpectedState(renderDpiScale: 1.0);
+                    Require(observedState.StartsWith(
+                            "experiment-lab.feature-matrix.closed.light.w960.d1-0.",
+                            StringComparison.Ordinal),
+                        $"Experiment Lab evidence should bind its canonical state to the independently observed feature: {observedState}");
+
+                    var events = new AIArenaControlPlaneEventHub();
+                    var published = new List<AIArenaControlEvent>();
+                    using var subscription = events.Subscribe(published.Add);
+                    var handler = new AIArenaAppControlHandler(
+                        new AIArenaScreenshotControlService(window, dataRoot),
+                        events,
+                        verification: verification);
+                    Require(AIArenaControlPlaneProtocol.TryParseRequest(
+                            """{"id":"feature-focus","command":"app.qa.focus.feature","args":{}}""",
+                            out var featureFocusRequest,
+                            out _),
+                        "selected-feature focus command should parse at the authenticated protocol boundary");
+                    var featureFocusResponse = handler.ExecuteAsync(featureFocusRequest).GetAwaiter().GetResult();
+                    Require(featureFocusResponse.Ok
+                        && featureFocusResponse.Data is AIArenaQaFocusTraversalResult featureBoundary
+                        && featureBoundary.Direction == "feature-content"
+                        && featureBoundary.AfterIdentity == "FeatureMatrixFocusFirst"
+                        && firstFeatureButton.IsKeyboardFocused
+                        && published.Any(item => item.Type == "app.qa.focus.feature"),
+                        "selected-feature focus command did not enter the first tracked MatrixPanel tab stop");
+                    var next = verification.AdvanceKeyboardFocusAsync("next").GetAwaiter().GetResult();
+                    var previous = verification.AdvanceKeyboardFocusAsync("previous").GetAwaiter().GetResult();
+                    var captureFocus = verification.AdvanceKeyboardFocusAsync("next").GetAwaiter().GetResult();
+                    Require(next.Ok && previous.Ok && captureFocus.Ok
+                        && next.BeforeIdentity == "FeatureMatrixFocusFirst"
+                        && next.AfterIdentity == "FeatureMatrixFocusSecond"
+                        && previous.BeforeIdentity == "FeatureMatrixFocusSecond"
+                        && previous.AfterIdentity == "FeatureMatrixFocusFirst"
+                        && captureFocus.BeforeIdentity == "FeatureMatrixFocusFirst"
+                        && captureFocus.AfterIdentity == "FeatureMatrixFocusSecond",
+                        "feature-local N/P/N traversal did not stay within the selected MatrixPanel content");
+
+                    var captured = verification.CaptureStructureAsync(
+                        "feature/matrix.json",
+                        UiEvidenceTreeFingerprint,
+                        observedState,
+                        renderDpiScale: 1.0).GetAwaiter().GetResult();
+                    Require(captured.Ok
+                        && captured.SelectedView == "experiment-lab"
+                        && captured.ObservedSurfaceState == "experiment-lab"
+                        && captured.VisibleRootIdentities.SequenceEqual(["ExperimentLabPanel"]),
+                        $"known Experiment Lab selection should produce feature-bound evidence: {captured.Message}");
+                    var evidencePath = Path.Combine(
+                        dataRoot,
+                        captured.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+                    using (var document = JsonDocument.Parse(File.ReadAllBytes(evidencePath)))
+                    {
+                        var nodes = document.RootElement.GetProperty("Nodes").EnumerateArray().ToArray();
+                        var visibleIdentities = nodes
+                            .Where(node => node.GetProperty("IsVisible").GetBoolean())
+                            .Select(node => node.GetProperty("Identity").GetString())
+                            .ToArray();
+                        Require(visibleIdentities.Count(identity => identity == "MatrixPanel") == 1,
+                            "feature evidence should contain the closed feature-specific visible content identity exactly once");
+                        var byIdentity = nodes.ToDictionary(
+                            node => node.GetProperty("Identity").GetString() ?? "",
+                            node => node,
+                            StringComparer.Ordinal);
+                        var focusedNode = byIdentity["FeatureMatrixFocusSecond"];
+                        var parentSequence = focusedNode.GetProperty("ParentSequence").GetInt32();
+                        var ancestors = new HashSet<string>(StringComparer.Ordinal);
+                        while (parentSequence >= 0)
+                        {
+                            var parent = nodes.Single(node => node.GetProperty("Sequence").GetInt32() == parentSequence);
+                            ancestors.Add(parent.GetProperty("Identity").GetString() ?? "");
+                            var parentValue = parent.GetProperty("ParentSequence");
+                            if (parentValue.ValueKind == JsonValueKind.Null) break;
+                            parentSequence = parentValue.GetInt32();
+                        }
+                        Require(focusedNode.GetProperty("HasKeyboardFocus").GetBoolean()
+                            && focusedNode.GetProperty("IsRendered").GetBoolean()
+                            && ancestors.Contains("MatrixPanel"),
+                            "captured feature focus was not a rendered descendant of MatrixPanel");
+                    }
+
+                    var focusBeforeNonIsolatedDenial = Keyboard.FocusedElement;
+                    var nonIsolatedFeatureVerification = new AIArenaUiVerificationControlService(
+                        window,
+                        Path.Combine(dataRoot, "different-process-root"),
+                        () => "light",
+                        selectedExperimentFeatureKey: () => selectedFeature);
+                    var nonIsolatedFeatureFocus = nonIsolatedFeatureVerification
+                        .FocusSelectedFeatureContentAsync()
+                        .GetAwaiter()
+                        .GetResult();
+                    Require(!nonIsolatedFeatureFocus.Ok
+                        && nonIsolatedFeatureFocus.ErrorCode == "not_available"
+                        && ReferenceEquals(Keyboard.FocusedElement, focusBeforeNonIsolatedDenial),
+                        "a non-isolated feature-focus request must fail before mutating keyboard focus");
+
+                    FocusManager.SetFocusedElement(window, secondFeatureButton);
+                    _ = Keyboard.Focus(secondFeatureButton);
+                    window.UpdateLayout();
+                    KeyboardFocusChangedEventHandler? reparentOnFocus = null;
+                    reparentOnFocus = (_, _) =>
+                    {
+                        firstFeatureButton.GotKeyboardFocus -= reparentOnFocus;
+                        featureFocusPanel.Children.Remove(firstFeatureButton);
+                        experimentLab.Children.Add(firstFeatureButton);
+                    };
+                    firstFeatureButton.GotKeyboardFocus += reparentOnFocus;
+                    var reparentedTarget = verification.FocusSelectedFeatureContentAsync().GetAwaiter().GetResult();
+                    Require(!reparentedTarget.Ok
+                        && reparentedTarget.ErrorCode == "not_available"
+                        && experimentLab.Children.Contains(firstFeatureButton),
+                        "feature focus trusted a target reparented outside the selected feature during GotKeyboardFocus");
+                    experimentLab.Children.Remove(firstFeatureButton);
+                    featureFocusPanel.Children.Insert(0, firstFeatureButton);
+                    window.UpdateLayout();
+
+                    experimentLab.Children.Remove(featureContent);
+                    shellRoot.Children.Add(featureContent);
+                    window.UpdateLayout();
+                    var relocatedRoot = verification.FocusSelectedFeatureContentAsync().GetAwaiter().GetResult();
+                    Require(!relocatedRoot.Ok && relocatedRoot.ErrorCode == "not_available",
+                        "feature focus accepted a rendered feature root outside ExperimentLabPanel");
+                    shellRoot.Children.Remove(featureContent);
+                    experimentLab.Children.Add(featureContent);
+                    window.UpdateLayout();
+
+                    featureContent.Opacity = 0;
+                    window.UpdateLayout();
+                    var transparentRoot = verification.FocusSelectedFeatureContentAsync().GetAwaiter().GetResult();
+                    Require(!transparentRoot.Ok && transparentRoot.ErrorCode == "not_available",
+                        "selected-feature focus entered a non-rendered transparent feature root");
+                    featureContent.Opacity = 1;
+                    featureContent.Child = new TextBlock { Text = "Static QA surface" };
+                    window.UpdateLayout();
+                    var noTabStop = verification.FocusSelectedFeatureContentAsync().GetAwaiter().GetResult();
+                    Require(!noTabStop.Ok && noTabStop.ErrorCode == "not_available",
+                        "selected-feature focus claimed success without a tracked tab stop");
+                    featureContent.Child = featureFocusPanel;
+                    var duplicateFeatureRoot = new Border
+                    {
+                        Name = "MatrixPanel",
+                        Child = new Button { Name = "DuplicateFeatureFocus", Focusable = true, IsTabStop = true }
+                    };
+                    experimentLab.Children.Add(duplicateFeatureRoot);
+                    window.UpdateLayout();
+                    var duplicateRoot = verification.FocusSelectedFeatureContentAsync().GetAwaiter().GetResult();
+                    Require(!duplicateRoot.Ok && duplicateRoot.ErrorCode == "not_available",
+                        "selected-feature focus chose one of two duplicate feature roots");
+                    experimentLab.Children.Remove(duplicateFeatureRoot);
+
+                    FrameworkElement deepFocusTree = new Button
+                    {
+                        Name = "TooDeepFeatureFocus",
+                        Focusable = true,
+                        IsTabStop = true
+                    };
+                    for (var depth = 0; depth <= 128; depth++)
+                    {
+                        deepFocusTree = new Border { Child = deepFocusTree };
+                    }
+                    featureContent.Child = deepFocusTree;
+                    window.UpdateLayout();
+                    var depthBounded = verification.FocusSelectedFeatureContentAsync().GetAwaiter().GetResult();
+                    Require(!depthBounded.Ok && depthBounded.ErrorCode == "not_available",
+                        "selected-feature focus traversed beyond the shared 128-depth evidence boundary");
+
+                    var overNodeLimit = new Grid();
+                    overNodeLimit.Children.Add(new Button
+                    {
+                        Name = "EarlyButUntrustedFeatureFocus",
+                        Focusable = true,
+                        IsTabStop = true
+                    });
+                    for (var index = 0; index <= 5000; index++)
+                    {
+                        overNodeLimit.Children.Add(new Border());
+                    }
+                    featureContent.Child = overNodeLimit;
+                    window.UpdateLayout();
+                    var nodeBounded = verification.FocusSelectedFeatureContentAsync().GetAwaiter().GetResult();
+                    Require(!nodeBounded.Ok && nodeBounded.ErrorCode == "not_available",
+                        "selected-feature focus trusted an early target in a tree beyond the 5,000-node evidence boundary");
+
+                    selectedFeature = "not-registered";
+                    var unknownFocus = verification.FocusSelectedFeatureContentAsync().GetAwaiter().GetResult();
+                    Require(!unknownFocus.Ok && unknownFocus.ErrorCode == "not_available",
+                        "selected-feature focus accepted an unknown registry key");
+                    var unknownState = verification.DebugObservedExpectedState(renderDpiScale: 1.0);
+                    Require(unknownState.StartsWith(
+                            "experiment-lab.feature-unavailable.closed.light.w960.d1-0.",
+                            StringComparison.Ordinal),
+                        "unregistered feature keys must fail closed in observed state");
+
+                    var defaultDeny = new AIArenaUiVerificationControlService(window, dataRoot, () => "light");
+                    var unavailableState = defaultDeny.DebugObservedExpectedState(renderDpiScale: 1.0);
+                    Require(unavailableState.Contains(".feature-unavailable.", StringComparison.Ordinal),
+                        "startup or omitted feature observation must default deny rather than infer a feature");
+                    var callerClaim = defaultDeny.CaptureStructureAsync(
+                        "feature/caller-claim.json",
+                        UiEvidenceTreeFingerprint,
+                        observedState,
+                        renderDpiScale: 1.0).GetAwaiter().GetResult();
+                    Require(!callerClaim.Ok
+                        && callerClaim.ErrorCode == "state_mismatch"
+                        && !File.Exists(Path.Combine(dataRoot, "exports", "qa", "ui-structure", "feature", "caller-claim.json")),
+                        "caller-supplied expected state must not substitute for missing observed feature state");
+                }
+                finally
+                {
+                    window.Close();
+                }
+            });
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("AI_ARENA_DATA_DIR", previousDataRoot);
             if (Directory.Exists(dataRoot))
             {
                 Directory.Delete(dataRoot, recursive: true);
@@ -863,11 +1154,35 @@ internal static partial class Program
                     var automationPath = Path.Combine(
                         dataRoot,
                         automation.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-                    var automationRelativePath = Path.GetRelativePath(exportsRoot, automationPath).Replace('\\', '/');
+                    var currentAutomationRoot = JsonNode.Parse(File.ReadAllBytes(automationPath))?.AsObject()
+                        ?? throw new InvalidOperationException("Current real WPF automation evidence was unavailable.");
+                    Require((string?)currentAutomationRoot["Schema"] == "ai_arena.ui_structure_evidence.v2"
+                        && currentAutomationRoot["Nodes"]!.AsArray().All(node =>
+                            node?["IsRendered"] is not null
+                            && node["EffectiveOpacity"] is not null
+                            && node["IntersectsViewport"] is not null),
+                        "the real WPF producer should continue emitting the enhanced v2 renderability schema");
+
+                    currentAutomationRoot["Schema"] = "ai_arena.ui_structure_evidence.v1";
+                    foreach (var node in currentAutomationRoot["Nodes"]!.AsArray().Select(item => item!.AsObject()))
+                    {
+                        _ = node.Remove("BoundsX");
+                        _ = node.Remove("BoundsY");
+                        _ = node.Remove("BoundsWidth");
+                        _ = node.Remove("BoundsHeight");
+                        _ = node.Remove("EffectiveOpacity");
+                        _ = node.Remove("IntersectsViewport");
+                        _ = node.Remove("IsRendered");
+                    }
+                    var legacyAutomationBytes = JsonSerializer.SerializeToUtf8Bytes(currentAutomationRoot);
+                    var legacyAutomationPath = Path.Combine(Path.GetDirectoryName(automationPath)!, "tree-v1.json");
+                    File.WriteAllBytes(legacyAutomationPath, legacyAutomationBytes);
+                    var automationRelativePath = Path.GetRelativePath(exportsRoot, legacyAutomationPath).Replace('\\', '/');
+                    var legacyAutomationSha256 = QaSha256(legacyAutomationBytes);
                     var screenshotRelativePath = Path.GetRelativePath(exportsRoot, screenshot.Path).Replace('\\', '/');
                     Require(!Path.IsPathRooted(automationRelativePath)
                         && !Path.IsPathRooted(screenshotRelativePath)
-                        && File.Exists(automationPath)
+                        && File.Exists(legacyAutomationPath)
                         && File.Exists(screenshot.Path), "real WPF evidence should resolve only through bundle-relative artifact identifiers");
 
                     const string automationId = "artifact:real-automation";
@@ -921,7 +1236,7 @@ internal static partial class Program
                         new("Windows", "x64", Environment.Version.ToString(), "10.0.100", "Release", true),
                         [new("dotnet", Environment.Version.ToString()), new("powershell", "7.5.2")],
                         [new("gate:real-wpf", ArenaQaGateOutcome.Pass, true, 1, new(1, 0, 0, 1), observed)],
-                        [new(automationId, "automation-tree", automationRelativePath, automation.Sha256, automationProvenance),
+                        [new(automationId, "automation-tree", automationRelativePath, legacyAutomationSha256, automationProvenance),
                             new(screenshotId, "rendered-ui-screenshot", screenshotRelativePath, QaSha256(File.ReadAllBytes(screenshot.Path)), screenshotProvenance)],
                         [new("performance:real-wpf", "validator-duration", 1m, "milliseconds", ArenaQaThresholdKind.Maximum, 10_000m, observed)],
                         [new("schema:qa", ArenaContractSchemas.QaEvidence, null, ArenaQaGateOutcome.Pass, observed)],

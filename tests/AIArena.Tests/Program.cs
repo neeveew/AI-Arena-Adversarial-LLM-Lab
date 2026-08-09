@@ -20,6 +20,12 @@ if (args.Length > 0 && args[0].Equals("--event-log-writer", StringComparison.Ord
     return Environment.ExitCode;
 }
 
+if (args.Length > 0 && args[0].Equals("--abandon-experiment-definition", StringComparison.Ordinal))
+{
+    Environment.ExitCode = ExperimentExecutionTests.RunAbandonedDefinitionProcess(args);
+    return Environment.ExitCode;
+}
+
 var tests = new List<(string Name, Action Test)>
 {
     ("experimentation contracts declare every v1 schema exactly once", ExperimentationContractTests.DeclaresEveryV1SchemaExactlyOnce),
@@ -34,6 +40,8 @@ var tests = new List<(string Name, Action Test)>
     ("experimentation contracts require scenario route and approval provenance", ExperimentationContractTests.RequiresScenarioRouteAndApprovalProvenance),
     ("experiment matrix expansion has deterministic order and identities", ExperimentExecutionTests.ExpandsCartesianMatrixDeterministically),
     ("experiment pack store is strict versioned and diagnostic", ExperimentExecutionTests.StoresStrictVersionedPacksAndReportsFallbacks),
+    ("experiment definition store is atomic restartable and approval gated", ExperimentExecutionTests.PersistsDefinitionsAndRequiresApprovedRestart),
+    ("experiment definition store recovers an actual exited owner process", ExperimentExecutionTests.RecoversDefinitionAfterActualProcessExit),
     ("experiment run store is atomic resumable and trial preserving", ExperimentExecutionTests.PersistsRunsAtomicallyAndNormalizesRestart),
     ("experiment run store isolates corrupt oversize and private artifacts", ExperimentExecutionTests.RunStoreIsolatesCorruptOversizeAndPrivateArtifacts),
     ("experiment runner bounds concurrency and resumes approved cells", ExperimentExecutionTests.RunnerBoundsConcurrencyAndResumesApprovedCells),
@@ -55,8 +63,11 @@ var tests = new List<(string Name, Action Test)>
     ("fault decorator distinguishes caller cancellation from injected timeout", FaultRoutingTests.DistinguishesCallerCancellationFromInjectedTimeout),
     ("fault decorator schedules seeded occurrences deterministically and privately", FaultRoutingTests.SchedulesSeededOccurrencesDeterministicallyAndPrivately),
     ("fault decorator bounds concurrent provider work", FaultRoutingTests.BoundsConcurrentProviderWork),
+    ("fault decorator enforces the three by seven operation compatibility matrix", FaultRoutingTests.HonorsThreeBySevenOperationCompatibilityMatrix),
+    ("fault decorator serializes schedules and retains newest observations", FaultRoutingTests.SerializesParallelScheduleAndRetainsNewestSequences),
     ("routing optimizer proposes only from comparable observed evidence", FaultRoutingTests.ProposesOnlyFromComparableObservedEvidence),
     ("routing optimizer refuses insufficient or mismatched evidence", FaultRoutingTests.RefusesOptimizationWithInsufficientOrMismatchedEvidence),
+    ("routing optimizer rejects duplicated or non-canonical sample identities", FaultRoutingTests.RejectsDuplicatedOrNonCanonicalRouteSampleIdentities),
     ("routing optimizer rejects private and unavailable claims", FaultRoutingTests.RejectsPrivateProposalInputsAndUnavailableClaims),
     ("route application rechecks persisted setup and current model", RouteApplicationTests.AppliesOnlyAfterRecheckingPersistedSetupAndCurrentModel),
     ("route application rejects duplicate and non-roster targets", RouteApplicationTests.RejectsDuplicateAndNonRosterTargetsBeforeMutation),

@@ -25,6 +25,7 @@ internal sealed class AIArenaAppControlHandler
             || command.Equals(AIArenaControlCommands.AppQaWindowSize, StringComparison.OrdinalIgnoreCase)
             || command.Equals(AIArenaControlCommands.AppQaStructureCapture, StringComparison.OrdinalIgnoreCase)
             || command.Equals(AIArenaControlCommands.AppQaFocusAdvance, StringComparison.OrdinalIgnoreCase)
+            || command.Equals(AIArenaControlCommands.AppQaFocusFeature, StringComparison.OrdinalIgnoreCase)
             || command.Equals(AIArenaControlCommands.AppQaMotionSet, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -45,6 +46,11 @@ internal sealed class AIArenaAppControlHandler
         if (request.Command.Equals(AIArenaControlCommands.AppQaFocusAdvance, StringComparison.OrdinalIgnoreCase))
         {
             return await AdvanceQaFocusAsync(request, cancellationToken);
+        }
+
+        if (request.Command.Equals(AIArenaControlCommands.AppQaFocusFeature, StringComparison.OrdinalIgnoreCase))
+        {
+            return await FocusQaFeatureAsync(request, cancellationToken);
         }
 
         if (request.Command.Equals(AIArenaControlCommands.AppQaMotionSet, StringComparison.OrdinalIgnoreCase))
@@ -202,6 +208,25 @@ internal sealed class AIArenaAppControlHandler
         }
 
         events.Publish("app.qa.motion.changed", result.Message, result);
+        return AIArenaControlResponse.Success(request, result.Message, result);
+    }
+
+    private async Task<AIArenaControlResponse> FocusQaFeatureAsync(
+        AIArenaControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (verification is null)
+        {
+            return AIArenaControlResponse.Error(request, "not_available", "UI verification controls are not available.");
+        }
+
+        var result = await verification.FocusSelectedFeatureContentAsync(cancellationToken);
+        if (!result.Ok)
+        {
+            return AIArenaControlResponse.Error(request, result.ErrorCode, result.Message, result);
+        }
+
+        events.Publish("app.qa.focus.feature", result.Message, result);
         return AIArenaControlResponse.Success(request, result.Message, result);
     }
 }

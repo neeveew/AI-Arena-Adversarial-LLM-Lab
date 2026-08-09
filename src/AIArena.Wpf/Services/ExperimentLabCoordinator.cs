@@ -138,6 +138,7 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
     private readonly Func<string, CancellationToken, Task> loadSession;
     private readonly ArenaExperimentPackStore packStore;
     private readonly ExperimentRunStore runStore;
+    private readonly ExperimentDefinitionStore definitionStore;
     private readonly ArenaRubricStore rubricStore;
     private readonly ArenaClaimLedgerStore claimStore;
     private readonly ProviderRequestTraceStore? providerRequestTraces;
@@ -147,6 +148,7 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
     private readonly IExperimentLabFileDialogService dialogs;
     private readonly Func<string, CancellationToken, Task>? featureRefreshOverride;
     private readonly Func<CancellationToken, Task>? providerJudgePreCommitOverride;
+    private readonly Func<string, CancellationToken, Task<ImmutableArray<ExperimentForkCursorItem>>>? forkCursorLoadOverride;
     private readonly Dictionary<string, Func<CancellationToken, Task>> registeredFeatureRefreshes = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim actionGate = new(1, 1);
     private CancellationTokenSource? featureSelectionRefreshCancellation;
@@ -158,6 +160,11 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
     private ArenaBlindPairwiseSession? pendingBlindSession;
     private ArenaBlindPairwiseFinalization? pendingBlindFinalization;
     private ArenaRubricContract? pendingBlindRubric;
+    private ArenaExperimentContract? restoredMatrixDefinition;
+    private bool matrixDefinitionRestoreAttempted;
+    private string? matrixDefinitionRestoreReceipt;
+    private string claimSessionId = "";
+    private long claimSessionGeneration;
     private bool disposed;
 
     public ExperimentLabCoordinator(
@@ -171,7 +178,8 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         IExperimentLabFileDialogService? dialogs = null,
         Func<string, CancellationToken, Task>? featureRefreshOverride = null,
         ProviderRequestTraceStore? providerRequestTraces = null,
-        Func<CancellationToken, Task>? providerJudgePreCommitOverride = null)
+        Func<CancellationToken, Task>? providerJudgePreCommitOverride = null,
+        Func<string, CancellationToken, Task<ImmutableArray<ExperimentForkCursorItem>>>? forkCursorLoadOverride = null)
     {
         this.control = control ?? throw new ArgumentNullException(nameof(control));
         this.sessionStore = sessionStore ?? throw new ArgumentNullException(nameof(sessionStore));
@@ -182,6 +190,7 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         var root = Path.Combine(Path.GetFullPath(dataRoot), "experimentation");
         packStore = new(root);
         runStore = new(root);
+        definitionStore = new(root);
         rubricStore = new(root);
         claimStore = new(root);
         this.timeProvider = timeProvider ?? TimeProvider.System;
@@ -189,6 +198,25 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         this.featureRefreshOverride = featureRefreshOverride;
         this.providerRequestTraces = providerRequestTraces;
         this.providerJudgePreCommitOverride = providerJudgePreCommitOverride;
+        this.forkCursorLoadOverride = forkCursorLoadOverride;
+    }
+
+    internal void NotifyActiveSessionChanged(string? sessionId)
+    {
+        var normalized = sessionId?.Trim() ?? "";
+        if (normalized.Equals(claimSessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        claimSessionId = normalized;
+        Interlocked.Increment(ref claimSessionGeneration);
+        control.SetClaimMessages([]);
+        control.SetClaimLedgers([]);
+        control.SetClaims([]);
+        control.SetClaimStatus(string.IsNullOrEmpty(normalized)
+            ? "Claim provenance is unavailable until a session is loaded."
+            : "Session changed; refresh Claims before selecting message provenance.");
     }
 
     internal async Task RefreshAllAsync(CancellationToken cancellationToken = default)
@@ -327,6 +355,7 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         return new(
             binding.Plan.Experiment,
             binding.Plan.SourceSetupFingerprint,
+            binding.Plan.PlanFingerprint,
             binding.Plan.ScenarioId,
             route.Agent.Id,
             route.Config.Model,
@@ -399,6 +428,18 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
             throw new ExperimentLabInputException(DiagnosticSummary(validation.Issues.Select(item => item.Code), "Matrix contract is invalid"));
         }
 
+        return BuildMatrixPreview(contract);
+    }
+
+    internal static ExperimentMatrixPreviewResult BuildMatrixPreview(ArenaExperimentContract contract)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        var validation = ArenaContractCodec.Validate(contract);
+        if (!validation.IsValid)
+        {
+            throw new ExperimentLabInputException(DiagnosticSummary(validation.Issues.Select(item => item.Code), "Matrix contract is invalid"));
+        }
+
         var expansion = ExperimentExpander.Expand(contract);
         var rows = expansion.Cells.Take(MaximumPreviewRows).Select(cell =>
         {
@@ -415,6 +456,9 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
 
     internal Task<ArenaExperimentRunLoadResult> ListRunHistoryAsync(CancellationToken cancellationToken = default) =>
         runStore.LoadAllAsync(cancellationToken);
+
+    internal Task<ArenaExperimentDefinitionLoadResult> ListExperimentDefinitionsAsync(CancellationToken cancellationToken = default) =>
+        definitionStore.LoadAllAsync(cancellationToken);
 
     internal static ArenaExperimentProviderProfileRegistry BuildProviderProfileRegistry(ArenaSnapshot snapshot)
     {
@@ -477,27 +521,34 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
 
     internal async Task ReconcileMatrixSourcesAsync(CancellationToken cancellationToken = default)
     {
+        // Once a durable definition has been restored, its exact references are
+        // authoritative. Refreshing source registries may make execution
+        // unavailable, but must never rewrite the matrix into a different
+        // experiment before its lifecycle/retry decision is made.
+        var preserveDurableInput = restoredMatrixDefinition is not null;
         var sessionId = activeSessionId();
         if (string.IsNullOrWhiteSpace(sessionId))
         {
-            control.ReconcileMatrixProviderProfiles([]);
+            control.ReconcileMatrixProviderProfiles([], preserveDurableInput);
         }
         else
         {
             var snapshot = await sessionStore.LoadSnapshotAsync(sessionId, cancellationToken).ConfigureAwait(true);
             if (snapshot is null)
             {
-                control.ReconcileMatrixProviderProfiles([]);
+                control.ReconcileMatrixProviderProfiles([], preserveDurableInput);
             }
             else
             {
                 try
                 {
-                    control.ReconcileMatrixProviderProfiles(BuildProviderProfileRegistry(snapshot).ProfileIds);
+                    control.ReconcileMatrixProviderProfiles(
+                        BuildProviderProfileRegistry(snapshot).ProfileIds,
+                        preserveDurableInput);
                 }
                 catch (Exception exception) when (exception is ExperimentLabInputException or ArgumentException)
                 {
-                    control.ReconcileMatrixProviderProfiles([]);
+                    control.ReconcileMatrixProviderProfiles([], preserveDurableInput);
                 }
             }
         }
@@ -505,16 +556,30 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         var scenarios = await ListScenarioPacksAsync(cancellationToken).ConfigureAwait(true);
         var benchmarks = await ListBenchmarkPacksAsync(cancellationToken).ConfigureAwait(true);
         var rubrics = await ListRubricsAsync(cancellationToken).ConfigureAwait(true);
-        ReconcileMatrixPacks(scenarios.Artifacts, benchmarks.Artifacts);
-        control.ReconcileMatrixRubricIds([.. rubrics.Artifacts.Select(item => item.Id)]);
+        ReconcileMatrixPacks(scenarios.Artifacts, benchmarks.Artifacts, preserveDurableInput);
+        control.ReconcileMatrixRubricIds(
+            [.. rubrics.Artifacts.Select(item => item.Id)],
+            preserveDurableInput);
     }
 
     internal async Task<ImmutableArray<ExperimentForkCursorItem>> ListForkCursorsAsync(CancellationToken cancellationToken = default)
     {
-        var sessionId = activeSessionId();
+        var sessionId = activeSessionId()?.Trim();
         if (string.IsNullOrWhiteSpace(sessionId))
         {
             return [];
+        }
+
+        return await LoadForkCursorsAsync(sessionId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ImmutableArray<ExperimentForkCursorItem>> LoadForkCursorsAsync(
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        if (forkCursorLoadOverride is not null)
+        {
+            return await forkCursorLoadOverride(sessionId, cancellationToken).ConfigureAwait(false);
         }
 
         var snapshot = await sessionStore.LoadSnapshotAsync(sessionId, cancellationToken).ConfigureAwait(false);
@@ -1038,18 +1103,217 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
             new($"review:{suffix}", ArenaEvidenceState.Observed, "Operator linked contradictory claim references.", firstClaimId));
     }
 
+    private ExperimentMatrixPreviewResult BuildCurrentMatrixPreview()
+    {
+        var generated = BuildMatrixPreview(control.ReadMatrixInput(), UtcNow());
+        if (restoredMatrixDefinition is not null
+            && string.Equals(restoredMatrixDefinition.Id, generated.Contract.Id, StringComparison.Ordinal)
+            && string.Equals(
+                ArenaExperimentFingerprints.Experiment(restoredMatrixDefinition),
+                generated.Expansion.ExperimentFingerprint,
+                StringComparison.Ordinal))
+        {
+            return BuildMatrixPreview(restoredMatrixDefinition);
+        }
+        return generated;
+    }
+
+    private async Task EnsureMatrixDefinitionRestoredAsync(CancellationToken cancellationToken)
+    {
+        if (matrixDefinitionRestoreAttempted)
+        {
+            return;
+        }
+
+        ArenaExperimentDefinitionLoadResult loaded;
+        var ownerActive = false;
+        try
+        {
+            await using var executionLease = await definitionStore.AcquireExecutionLeaseAsync(cancellationToken).ConfigureAwait(true);
+            loaded = await definitionStore.RecoverInterruptedAfterRestartAsync(
+                executionLease,
+                UtcNow(),
+                cancellationToken).ConfigureAwait(true);
+        }
+        catch (InvalidOperationException)
+        {
+            loaded = await definitionStore.LoadAllAsync(cancellationToken).ConfigureAwait(true);
+            ownerActive = true;
+        }
+
+        // An active owner is only a passive observation. It must not suppress a
+        // later owner-held recovery after that process exits.
+        matrixDefinitionRestoreAttempted = !ownerActive;
+        ApplyLoadedMatrixDefinition(
+            loaded,
+            selectDefinition: restoredMatrixDefinition is null || MatrixInputMatches(restoredMatrixDefinition),
+            ownerActive);
+    }
+
+    private void ApplyLoadedMatrixDefinition(
+        ArenaExperimentDefinitionLoadResult loaded,
+        bool selectDefinition,
+        bool ownerActive)
+    {
+        var representable = loaded.Definitions
+            .Where(CanRepresentInMatrixUi)
+            .OrderByDescending(item => item.CreatedAtUtc)
+            .ThenBy(DefinitionRestorePriority)
+            .ThenBy(item => item.Id, StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (representable is not null)
+        {
+            restoredMatrixDefinition = representable;
+            if (selectDefinition)
+            {
+                control.SetMatrixDefinition(representable);
+                control.SetMatrixPreview(BuildMatrixPreview(representable).PreviewRows);
+            }
+            var normalized = loaded.Diagnostics.Any(item =>
+                item.Code == "experiment_definition.restart_normalized"
+                && item.RelativePath.Equals(DefinitionRelativePath(representable.Id), StringComparison.Ordinal));
+            matrixDefinitionRestoreReceipt = ownerActive
+                ? $"A Matrix Runner owner is active; observed durable matrix {representable.Id} without restart normalization. Recovery remains pending."
+                : normalized
+                ? $"Recovered abandoned Running matrix state; restored newest matrix {representable.Id}, which requires explicit retry approval when interrupted."
+                : $"Restored durable matrix {representable.Id} · {representable.Status.ToString().ToLowerInvariant()}.";
+        }
+        else if (loaded.Definitions.Length > 0)
+        {
+            matrixDefinitionRestoreReceipt = "Stored matrix definitions use dimensions this v1 Matrix Runner cannot represent; they remain untouched.";
+        }
+
+        if (loaded.Diagnostics.Length > 0
+            && !loaded.Diagnostics.Any(item => item.Code == "experiment_definition.restart_normalized"))
+        {
+            matrixDefinitionRestoreReceipt = DiagnosticSummary(
+                loaded.Diagnostics.Select(item => item.Code),
+                matrixDefinitionRestoreReceipt ?? "Definition store loaded with diagnostics");
+        }
+    }
+
+    private bool MatrixInputMatches(ArenaExperimentContract definition)
+    {
+        try
+        {
+            var generated = BuildMatrixPreview(control.ReadMatrixInput(), definition.CreatedAtUtc);
+            return string.Equals(generated.Contract.Id, definition.Id, StringComparison.Ordinal)
+                && string.Equals(
+                    generated.Expansion.ExperimentFingerprint,
+                    ArenaExperimentFingerprints.Experiment(definition),
+                    StringComparison.Ordinal);
+        }
+        catch (Exception exception) when (exception is ExperimentLabInputException or ArgumentException or InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    private static bool CanRepresentInMatrixUi(ArenaExperimentContract definition)
+    {
+        if (definition.Dimensions.Length > 1
+            || !definition.FaultProfileIds.IsEmpty
+            || !definition.BranchIds.IsEmpty
+            || definition.Dimensions.Any(item => item.Parameter is not
+                ("temperature" or "max_output_tokens" or "context_length" or "reasoning" or "timeout_seconds")))
+        {
+            return false;
+        }
+
+        try
+        {
+            var dimension = definition.Dimensions.SingleOrDefault();
+            var input = new ExperimentMatrixInput(
+                definition.Title,
+                definition.ScenarioPackId,
+                string.Join(", ", definition.ProviderProfileIds),
+                dimension?.Parameter ?? "",
+                dimension is null ? "" : string.Join(", ", dimension.Values),
+                definition.Repetitions.ToString(CultureInfo.InvariantCulture),
+                definition.TurnBudget.ToString(CultureInfo.InvariantCulture),
+                definition.MaxParallelism.ToString(CultureInfo.InvariantCulture),
+                definition.BenchmarkPackId ?? "",
+                string.Join(", ", definition.RubricIds));
+            var rebuilt = BuildMatrixPreview(input, definition.CreatedAtUtc);
+            return string.Equals(rebuilt.Contract.Id, definition.Id, StringComparison.Ordinal)
+                && string.Equals(
+                    rebuilt.Expansion.ExperimentFingerprint,
+                    ArenaExperimentFingerprints.Experiment(definition),
+                    StringComparison.Ordinal);
+        }
+        catch (Exception exception) when (exception is ExperimentLabInputException or ArgumentException or InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    private static int DefinitionRestorePriority(ArenaExperimentContract definition) => definition.Status switch
+    {
+        ArenaExperimentStatus.Interrupted => 0,
+        ArenaExperimentStatus.Running => 1,
+        ArenaExperimentStatus.Draft => 2,
+        _ => 3
+    };
+
+    private static string DefinitionRelativePath(string experimentId)
+    {
+        var digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(experimentId)));
+        return $"experiment-definitions/{digest}.json";
+    }
+
+    private static ArenaExperimentStatus ResolveExperimentLifecycle(
+        ArenaExperimentExpansion expansion,
+        ArenaExperimentRunnerResult result,
+        string planFingerprint)
+    {
+        if (result.WasCancelled)
+        {
+            return ArenaExperimentStatus.Cancelled;
+        }
+
+        var planned = expansion.Cells.Select(item => item.CellKey).ToHashSet(StringComparer.Ordinal);
+        var relevant = result.Runs.Where(item => planned.Contains(item.CellKey)).ToArray();
+        return relevant.Length == planned.Count
+               && relevant.All(item =>
+                   ArenaExperimentRunPolicy.IsTerminal(item.State)
+                   && ArenaExperimentRunPolicy.LatestAttemptMatchesPlan(item, planFingerprint))
+            ? ArenaExperimentStatus.Completed
+            : ArenaExperimentStatus.Running;
+    }
+
+    internal static bool ShouldRetryTerminalCell(
+        ArenaExperimentStatus definitionStatus,
+        ArenaExperimentRunState runState) =>
+        definitionStatus == ArenaExperimentStatus.Completed
+        || runState != ArenaExperimentRunState.Completed;
+
     internal async Task ValidateMatrixAsync() => await ExecuteUiAsync(async cancellationToken =>
     {
         await ReconcileMatrixSourcesAsync(cancellationToken).ConfigureAwait(true);
-        var preview = BuildMatrixPreview(control.ReadMatrixInput(), UtcNow());
+        await EnsureMatrixDefinitionRestoredAsync(cancellationToken).ConfigureAwait(true);
+        var preview = BuildCurrentMatrixPreview();
+        var definitionWrite = await definitionStore.SaveAsync(
+            preview.Contract with { Status = ArenaExperimentStatus.Draft },
+            cancellationToken: cancellationToken).ConfigureAwait(true);
+        if (!definitionWrite.Succeeded || definitionWrite.Artifact is null)
+        {
+            throw new ExperimentLabInputException(DiagnosticSummary(
+                definitionWrite.Diagnostics.Select(item => item.Code),
+                "Matrix draft could not be persisted"));
+        }
+        restoredMatrixDefinition = definitionWrite.Artifact;
+        matrixDefinitionRestoreReceipt = null;
+        preview = BuildMatrixPreview(definitionWrite.Artifact);
         control.SetMatrixPreview(preview.PreviewRows);
         var execution = await ResolveMatrixExecutionAsync(preview.Contract, cancellationToken).ConfigureAwait(true);
-        control.ReconcileMatrixProviderProfiles(execution.ProviderProfileIds);
+        control.ReconcileMatrixProviderProfiles(
+            execution.ProviderProfileIds,
+            restoredMatrixDefinition is not null);
         var diagnosticText = DiagnosticSummary(execution.Diagnostics.Select(item => item.Code),
             execution.IsAvailable ? "Execution resolved" : "Execution unavailable");
         control.SetMatrixExecutionAvailability(execution.IsAvailable, diagnosticText);
         control.SetMatrixStatus(
-            $"Valid draft · {preview.Expansion.Variants.Length} variant(s) · {preview.Expansion.Cells.Length} cell(s) · fingerprint {preview.Expansion.ExperimentFingerprint[..12]}. {diagnosticText}");
+            $"Valid {definitionWrite.Artifact.Status.ToString().ToLowerInvariant()} definition · {preview.Expansion.Variants.Length} variant(s) · {preview.Expansion.Cells.Length} cell(s) · fingerprint {preview.Expansion.ExperimentFingerprint[..12]}. {diagnosticText}");
         await RefreshMatrixCoreAsync(cancellationToken).ConfigureAwait(true);
     }, control.SetMatrixStatus);
 
@@ -1057,15 +1321,32 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
     {
         await actionGate.WaitAsync().ConfigureAwait(true);
         var cancellation = new CancellationTokenSource();
+        ArenaExperimentContract? activeDefinition = null;
         matrixRunCancellation = cancellation;
         control.SetMatrixRunning(true);
         try
         {
             await ReconcileMatrixSourcesAsync(cancellation.Token).ConfigureAwait(true);
-            var preview = BuildMatrixPreview(control.ReadMatrixInput(), UtcNow());
+            await using var definitionExecutionLease = await definitionStore
+                .AcquireExecutionLeaseAsync(cancellation.Token)
+                .ConfigureAwait(true);
+            var preserveExplicitEdits = restoredMatrixDefinition is not null
+                && !MatrixInputMatches(restoredMatrixDefinition);
+            var recoveredDefinitions = await definitionStore.RecoverInterruptedAfterRestartAsync(
+                definitionExecutionLease,
+                UtcNow(),
+                cancellation.Token).ConfigureAwait(true);
+            matrixDefinitionRestoreAttempted = true;
+            ApplyLoadedMatrixDefinition(
+                recoveredDefinitions,
+                selectDefinition: !preserveExplicitEdits,
+                ownerActive: false);
+            var preview = BuildCurrentMatrixPreview();
             control.SetMatrixPreview(preview.PreviewRows);
             var execution = await ResolveMatrixExecutionAsync(preview.Contract, cancellation.Token).ConfigureAwait(true);
-            control.ReconcileMatrixProviderProfiles(execution.ProviderProfileIds);
+            control.ReconcileMatrixProviderProfiles(
+                execution.ProviderProfileIds,
+                restoredMatrixDefinition is not null);
             if (execution.Binding is null)
             {
                 var unavailable = DiagnosticSummary(
@@ -1087,6 +1368,33 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
                 providerClient);
             var runner = new ExperimentRunnerService(executor, timeProvider);
             var retryApproved = control.ConsumeMatrixRetryApproval();
+            var retryScopeStatus = preview.Contract.Status;
+            var definitionWrite = await definitionStore.SaveForExecutionAsync(
+                definitionExecutionLease,
+                preview.Contract with { Status = ArenaExperimentStatus.Running },
+                retryApproved,
+                cancellation.Token).ConfigureAwait(true);
+            if (definitionWrite.Succeeded && definitionWrite.Artifact is not null)
+            {
+                activeDefinition = definitionWrite.Artifact;
+                restoredMatrixDefinition = activeDefinition;
+            }
+            else if (!retryApproved
+                     && definitionWrite.Diagnostics.Any(item =>
+                         item.Code == "experiment_definition.retry_approval_required"))
+            {
+                matrixDefinitionRestoreReceipt = null;
+                control.SetMatrixStatus(
+                    $"Retry approval required · durable definition {preview.Contract.Status.ToString().ToLowerInvariant()} was unchanged · zero cells started.");
+                return;
+            }
+            else
+            {
+                throw new ExperimentLabInputException(DiagnosticSummary(
+                    definitionWrite.Diagnostics.Select(item => item.Code),
+                    "Matrix definition could not enter Running"));
+            }
+            matrixDefinitionRestoreReceipt = null;
             control.SetMatrixStatus(
                 $"Running {binding.Plan.Expansion.Cells.Length} resolved cell(s) in isolated child sessions"
                 + (retryApproved ? " with one explicitly approved retry for every terminal cell" : "")
@@ -1097,9 +1405,35 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
                 runStore,
                 new ArenaExperimentRunnerOptions(
                     MaximumParallelism: binding.Plan.Experiment.MaxParallelism,
-                    RetryApproved: retryApproved ? static _ => true : null),
+                    RetryApproved: retryApproved
+                        ? run => ShouldRetryTerminalCell(retryScopeStatus, run.State)
+                            || !ArenaExperimentRunPolicy.LatestAttemptMatchesPlan(run, binding.Plan.PlanFingerprint)
+                        : null),
                 cancellation.Token).ConfigureAwait(true);
+            var lifecycle = ResolveExperimentLifecycle(
+                preview.Expansion,
+                result,
+                binding.Plan.PlanFingerprint);
+            var lifecycleWrite = await definitionStore.SaveForExecutionAsync(
+                definitionExecutionLease,
+                activeDefinition with { Status = lifecycle },
+                cancellationToken: CancellationToken.None).ConfigureAwait(true);
+            if (lifecycleWrite.Succeeded && lifecycleWrite.Artifact is not null)
+            {
+                restoredMatrixDefinition = lifecycleWrite.Artifact;
+                activeDefinition = lifecycleWrite.Artifact;
+            }
+            else
+            {
+                throw new ExperimentLabInputException(DiagnosticSummary(
+                    lifecycleWrite.Diagnostics.Select(item => item.Code),
+                    "Matrix lifecycle receipt could not be persisted"));
+            }
+            var plannedCellKeys = preview.Expansion.Cells
+                .Select(item => item.CellKey)
+                .ToHashSet(StringComparer.Ordinal);
             var terminal = result.Runs
+                .Where(item => plannedCellKeys.Contains(item.CellKey))
                 .GroupBy(item => item.State)
                 .OrderBy(item => item.Key)
                 .Select(item => $"{item.Key.ToString().ToLowerInvariant()} {item.Count()}")
@@ -1112,6 +1446,7 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
             var receipt = $"Run receipt · planned {result.PlannedCells} · eligible {result.EligibleCells} · started {result.StartedCells}"
                 + (terminal.Length == 0 ? "" : $" · {string.Join(" · ", terminal)}")
                 + (result.WasCancelled ? " · cancelled" : "")
+                + $" · durable definition {activeDefinition.Status.ToString().ToLowerInvariant()}"
                 + (diagnosticCodes.Length == 0 ? "." : $" · diagnostic code(s): {string.Join(", ", diagnosticCodes)}.");
             control.SetMatrixStatus(receipt);
             await RefreshMatrixCoreAsync(CancellationToken.None).ConfigureAwait(true);
@@ -1122,6 +1457,29 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         }
         catch (OperationCanceledException)
         {
+            if (activeDefinition?.Status == ArenaExperimentStatus.Running)
+            {
+                try
+                {
+                    await using var cancellationOwner = await definitionStore
+                        .AcquireExecutionLeaseAsync(CancellationToken.None)
+                        .ConfigureAwait(true);
+                    var cancelled = await definitionStore.SaveForExecutionAsync(
+                        cancellationOwner,
+                        activeDefinition with { Status = ArenaExperimentStatus.Cancelled },
+                        cancellationToken: CancellationToken.None).ConfigureAwait(true);
+                    if (cancelled.Succeeded && cancelled.Artifact is not null)
+                    {
+                        restoredMatrixDefinition = cancelled.Artifact;
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // Another owner became active after this operation unwound.
+                    // Leave Running untouched; that owner or restart recovery is
+                    // now responsible for the durable lifecycle.
+                }
+            }
             control.SetMatrixStatus("Matrix cancellation was requested; durable run history records every observed terminal state.");
             await RefreshMatrixCoreAsync(CancellationToken.None).ConfigureAwait(true);
         }
@@ -1221,11 +1579,12 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         var bytes = await ReadBoundedFileAsync(path, MaximumImportedBytes, cancellationToken).ConfigureAwait(true);
         string? importedScenarioId = null;
         string? importedBenchmarkId = null;
+        string? importReceipt = null;
         var scenario = ArenaExperimentPackCodec.DecodeScenarioPack(bytes, "imports/selected.json");
         if (scenario.Succeeded && scenario.Pack is not null)
         {
             var write = await SaveScenarioPackAsync(scenario.Pack, cancellationToken).ConfigureAwait(true);
-            control.SetPackStatus(WriteReceipt("scenario pack import", write.Disposition, write.Diagnostics));
+            importReceipt = PackImportReceipt("scenario pack import", write, migration: null);
             if (write.Succeeded)
             {
                 importedScenarioId = scenario.Pack.Id;
@@ -1234,16 +1593,60 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         else
         {
             var benchmark = ArenaExperimentPackCodec.DecodeBenchmarkPack(bytes, "imports/selected.json");
-            if (!benchmark.Succeeded || benchmark.Pack is null)
+            if (benchmark.Succeeded && benchmark.Pack is not null)
             {
-                var codes = scenario.Diagnostics.Concat(benchmark.Diagnostics).Select(item => item.Code);
-                throw new ExperimentLabInputException(DiagnosticSummary(codes, "Pack import was rejected"));
+                var write = await SaveBenchmarkPackAsync(benchmark.Pack, cancellationToken).ConfigureAwait(true);
+                importReceipt = PackImportReceipt("benchmark pack import", write, migration: null);
+                if (write.Succeeded)
+                {
+                    importedBenchmarkId = benchmark.Pack.Id;
+                }
             }
-            var write = await SaveBenchmarkPackAsync(benchmark.Pack, cancellationToken).ConfigureAwait(true);
-            control.SetPackStatus(WriteReceipt("benchmark pack import", write.Disposition, write.Diagnostics));
-            if (write.Succeeded)
+            else
             {
-                importedBenchmarkId = benchmark.Pack.Id;
+                var migratedAtUtc = UtcNow();
+                var migratedScenario = ArenaExperimentPackCodec.MigrateScenarioPackV0(
+                    bytes,
+                    "imports/selected.json",
+                    migratedAtUtc);
+                if (migratedScenario.Succeeded && migratedScenario.Pack is not null)
+                {
+                    var write = await SaveScenarioPackAsync(migratedScenario.Pack, cancellationToken).ConfigureAwait(true);
+                    importReceipt = PackImportReceipt(
+                        "scenario pack import",
+                        write,
+                        migratedScenario.Pack.Migration);
+                    if (write.Succeeded)
+                    {
+                        importedScenarioId = migratedScenario.Pack.Id;
+                    }
+                }
+                else
+                {
+                    var migratedBenchmark = ArenaExperimentPackCodec.MigrateBenchmarkPackV0(
+                        bytes,
+                        "imports/selected.json",
+                        migratedAtUtc);
+                    if (!migratedBenchmark.Succeeded || migratedBenchmark.Pack is null)
+                    {
+                        var codes = scenario.Diagnostics
+                            .Concat(benchmark.Diagnostics)
+                            .Concat(migratedScenario.Diagnostics)
+                            .Concat(migratedBenchmark.Diagnostics)
+                            .Select(item => item.Code);
+                        throw new ExperimentLabInputException(DiagnosticSummary(codes, "Pack import was rejected"));
+                    }
+
+                    var write = await SaveBenchmarkPackAsync(migratedBenchmark.Pack, cancellationToken).ConfigureAwait(true);
+                    importReceipt = PackImportReceipt(
+                        "benchmark pack import",
+                        write,
+                        migratedBenchmark.Pack.Migration);
+                    if (write.Succeeded)
+                    {
+                        importedBenchmarkId = migratedBenchmark.Pack.Id;
+                    }
+                }
             }
         }
 
@@ -1255,6 +1658,10 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         if (importedBenchmarkId is not null)
         {
             control.SelectMatrixBenchmark(importedBenchmarkId);
+        }
+        if (!string.IsNullOrWhiteSpace(importReceipt))
+        {
+            control.SetPackStatus(importReceipt);
         }
     }, control.SetPackStatus);
 
@@ -1460,12 +1867,51 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
 
     internal async Task AddClaimAsync() => await ExecuteUiAsync(async cancellationToken =>
     {
+        var sessionId = activeSessionId()?.Trim();
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            throw new ExperimentLabInputException("Claim provenance is unavailable because no session is loaded.");
+        }
+        NotifyActiveSessionChanged(sessionId);
+        var sessionGeneration = Volatile.Read(ref claimSessionGeneration);
         var ledger = await LoadSelectedLedgerAsync(cancellationToken).ConfigureAwait(true);
         if (control.SelectedClaimMessage is not ExperimentForkCursorItem message)
         {
             throw new ExperimentLabInputException("Select a stable transcript message before adding a claim.");
         }
-        var advanced = AddClaim(ledger, message, control.ClaimSummary);
+
+        var snapshot = await sessionStore.LoadSnapshotAsync(sessionId, cancellationToken).ConfigureAwait(true);
+        if (snapshot is null
+            || sessionGeneration != Volatile.Read(ref claimSessionGeneration)
+            || !sessionId.Equals(activeSessionId()?.Trim(), StringComparison.Ordinal))
+        {
+            throw new ExperimentLabInputException("Claim provenance is unavailable because the active session changed.");
+        }
+        if (snapshot.BranchReceipt is not { } branch
+            || !LedgerMatchesBranch(ledger, branch, sessionId))
+        {
+            throw new ExperimentLabInputException("Claim provenance is unavailable because the selected ledger does not belong to the active session branch.");
+        }
+
+        var resolved = snapshot.Engine.Messages
+            .Select((candidate, index) => new ExperimentForkCursorItem(
+                DialogueMessageIdentity.Resolve(candidate, index),
+                index,
+                Math.Max(0, candidate.Turn),
+                SafeSpeakerId(candidate),
+                candidate))
+            .SingleOrDefault(candidate => candidate.MessageId.Equals(message.MessageId, StringComparison.Ordinal));
+        if (resolved is null)
+        {
+            throw new ExperimentLabInputException("Claim provenance is unavailable because the selected message is not in the active session.");
+        }
+
+        var advanced = AddClaim(ledger, resolved, control.ClaimSummary);
+        if (sessionGeneration != Volatile.Read(ref claimSessionGeneration)
+            || !sessionId.Equals(activeSessionId()?.Trim(), StringComparison.Ordinal))
+        {
+            throw new ExperimentLabInputException("Claim provenance is unavailable because the active session changed before append.");
+        }
         var write = await SaveClaimLedgerAsync(advanced, cancellationToken).ConfigureAwait(true);
         control.SetClaimStatus(WriteReceipt("claim append", write.Disposition, write.Diagnostics));
         await RefreshClaimsCoreAsync(cancellationToken).ConfigureAwait(true);
@@ -1504,6 +1950,7 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
     private async Task RefreshMatrixCoreAsync(CancellationToken cancellationToken)
     {
         await ReconcileMatrixSourcesAsync(cancellationToken).ConfigureAwait(true);
+        await EnsureMatrixDefinitionRestoredAsync(cancellationToken).ConfigureAwait(true);
         var history = await ListRunHistoryAsync(cancellationToken).ConfigureAwait(true);
         var rows = history.Runs
             .OrderByDescending(item => item.UpdatedAtUtc)
@@ -1515,13 +1962,26 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         {
             control.SetMatrixStatus(DiagnosticSummary(history.Diagnostics.Select(item => item.Code), "Run history loaded with diagnostics"));
         }
+        else if (!string.IsNullOrWhiteSpace(matrixDefinitionRestoreReceipt))
+        {
+            control.SetMatrixStatus(matrixDefinitionRestoreReceipt);
+        }
     }
 
     private async Task RefreshForkCursorsCoreAsync(CancellationToken cancellationToken)
     {
-        var sessionId = activeSessionId();
-        var cursors = await ListForkCursorsAsync(cancellationToken).ConfigureAwait(true);
-        control.SetForkSession(string.IsNullOrWhiteSpace(sessionId) ? "No session loaded." : sessionId);
+        NotifyActiveSessionChanged(activeSessionId());
+        var sessionId = claimSessionId;
+        var sessionGeneration = Volatile.Read(ref claimSessionGeneration);
+        var cursors = string.IsNullOrEmpty(sessionId)
+            ? ImmutableArray<ExperimentForkCursorItem>.Empty
+            : await LoadForkCursorsAsync(sessionId, cancellationToken).ConfigureAwait(true);
+        if (sessionGeneration != Volatile.Read(ref claimSessionGeneration)
+            || !sessionId.Equals(activeSessionId()?.Trim() ?? "", StringComparison.Ordinal))
+        {
+            return;
+        }
+        control.SetForkSession(string.IsNullOrEmpty(sessionId) ? "No session loaded." : sessionId);
         control.SetForkCursors(cursors.Cast<object>());
         control.SetClaimMessages(cursors.Cast<object>());
         control.SetForkStatus(cursors.Length == 0
@@ -1533,7 +1993,10 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
     {
         var scenarios = await ListScenarioPacksAsync(cancellationToken).ConfigureAwait(true);
         var benchmarks = await ListBenchmarkPacksAsync(cancellationToken).ConfigureAwait(true);
-        ReconcileMatrixPacks(scenarios.Artifacts, benchmarks.Artifacts);
+        ReconcileMatrixPacks(
+            scenarios.Artifacts,
+            benchmarks.Artifacts,
+            restoredMatrixDefinition is not null);
         var items = scenarios.Artifacts.Select(item => new ExperimentPackItem("scenario", item.Id, item.Version, item))
             .Concat(benchmarks.Artifacts.Select(item => new ExperimentPackItem("benchmark", item.Id, item.Version, item)))
             .OrderBy(item => item.Kind, StringComparer.Ordinal)
@@ -1549,8 +2012,10 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
 
     private void ReconcileMatrixPacks(
         ImmutableArray<ArenaScenarioPackContract> scenarios,
-        ImmutableArray<ArenaBenchmarkPackContract> benchmarks)
+        ImmutableArray<ArenaBenchmarkPackContract> benchmarks,
+        bool preserveCurrentInput = false)
     {
+        var currentInput = control.ReadMatrixInput();
         var benchmarkItems = new List<object>
         {
             new ExperimentBenchmarkSelection("Scenario only (no benchmark)", null, null, [])
@@ -1563,9 +2028,18 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
                 item.ScenarioPackId,
                 [.. item.Cases.SelectMany(value => value.RubricIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)])));
         control.SetMatrixBenchmarks(benchmarkItems);
+        if (preserveCurrentInput)
+        {
+            control.SelectMatrixBenchmark(currentInput.BenchmarkPackId);
+            // Replacing the ComboBox item source raises SelectionChanged. Put
+            // the durable references back after that presentation-only event.
+            control.SetMatrixScenarioPackId(currentInput.ScenarioPackId);
+            control.SetMatrixRubricIds(currentInput.RubricIds);
+        }
 
-        var currentScenarioId = control.ReadMatrixInput().ScenarioPackId;
-        if (!scenarios.Any(item => item.Id.Equals(currentScenarioId, StringComparison.Ordinal))
+        var currentScenarioId = currentInput.ScenarioPackId;
+        if (!preserveCurrentInput
+            && !scenarios.Any(item => item.Id.Equals(currentScenarioId, StringComparison.Ordinal))
             && scenarios.OrderBy(item => item.Id, StringComparer.Ordinal).FirstOrDefault() is { } first)
         {
             control.SetMatrixScenarioPackId(first.Id);
@@ -1589,10 +2063,24 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
 
     private async Task RefreshClaimsCoreAsync(CancellationToken cancellationToken)
     {
+        NotifyActiveSessionChanged(activeSessionId());
+        var sessionId = claimSessionId;
+        var sessionGeneration = Volatile.Read(ref claimSessionGeneration);
         var ledgers = await ListClaimLedgersAsync(cancellationToken).ConfigureAwait(true);
-        control.SetClaimLedgers(ledgers.Artifacts.Select(item => (object)new ExperimentLedgerItem(item)));
-        await RefreshSelectedClaimsAsync().ConfigureAwait(true);
         var cursors = await ListForkCursorsAsync(cancellationToken).ConfigureAwait(true);
+        var snapshot = string.IsNullOrEmpty(sessionId)
+            ? null
+            : await sessionStore.LoadSnapshotAsync(sessionId, cancellationToken).ConfigureAwait(true);
+        if (sessionGeneration != Volatile.Read(ref claimSessionGeneration)
+            || !sessionId.Equals(activeSessionId()?.Trim() ?? "", StringComparison.Ordinal))
+        {
+            return;
+        }
+        var compatibleLedgers = snapshot?.BranchReceipt is { } branch
+            ? ledgers.Artifacts.Where(item => LedgerMatchesBranch(item, branch, sessionId)).ToArray()
+            : Array.Empty<ArenaClaimLedgerContract>();
+        control.SetClaimLedgers(compatibleLedgers.Select(item => (object)new ExperimentLedgerItem(item)));
+        await RefreshSelectedClaimsAsync().ConfigureAwait(true);
         control.SetClaimMessages(cursors.Cast<object>());
         control.SetClaimStatus(ledgers.Diagnostics.Length == 0
             ? $"Loaded {ledgers.Artifacts.Length} monotonic claim ledger(s)."
@@ -1601,14 +2089,38 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
 
     private async Task<ArenaClaimLedgerContract> LoadSelectedLedgerAsync(CancellationToken cancellationToken)
     {
+        var sessionId = activeSessionId()?.Trim();
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            throw new ExperimentLabInputException("Claim provenance is unavailable because no session is loaded.");
+        }
+        NotifyActiveSessionChanged(sessionId);
         if (control.SelectedLedger is not ExperimentLedgerItem selected)
         {
             throw new ExperimentLabInputException("Create or select a claim ledger first.");
         }
         var loaded = await ListClaimLedgersAsync(cancellationToken).ConfigureAwait(false);
-        return loaded.Artifacts.FirstOrDefault(item => item.Id == selected.Contract.Id)
+        var ledger = loaded.Artifacts.FirstOrDefault(item => item.Id == selected.Contract.Id)
             ?? throw new ExperimentLabInputException("The selected ledger changed on disk; refresh and select it again.");
+        var snapshot = await sessionStore.LoadSnapshotAsync(sessionId, cancellationToken).ConfigureAwait(false);
+        if (snapshot?.BranchReceipt is not { } branch
+            || !LedgerMatchesBranch(ledger, branch, sessionId)
+            || !sessionId.Equals(activeSessionId()?.Trim(), StringComparison.Ordinal))
+        {
+            throw new ExperimentLabInputException("Claim provenance is unavailable because the selected ledger does not belong to the active session branch.");
+        }
+        return ledger;
     }
+
+    private static bool LedgerMatchesBranch(
+        ArenaClaimLedgerContract ledger,
+        ArenaBranchContract branch,
+        string sessionId) =>
+        !string.IsNullOrWhiteSpace(ledger.ExperimentId)
+        && branch.ChildSessionId.Equals(sessionId, StringComparison.Ordinal)
+        && ledger.BranchId.Equals(branch.Id, StringComparison.Ordinal)
+        && (string.IsNullOrWhiteSpace(branch.ExperimentId)
+            || ledger.ExperimentId.Equals(branch.ExperimentId, StringComparison.Ordinal));
 
     private async Task ExecuteUiAsync(Func<CancellationToken, Task> action, Action<string> setStatus)
     {
@@ -2044,6 +2556,29 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         return codes.Length == 0
             ? $"{action} 1 {kind}; receipt contains a relative artifact reference only."
             : $"{action} 1 {kind}; diagnostic code(s): {string.Join(", ", codes)}.";
+    }
+
+    private static string PackImportReceipt<T>(
+        string kind,
+        ArenaArtifactWriteResult<T> write,
+        ArenaPackMigrationProvenance? migration)
+        where T : class, IArenaVersionedContract
+    {
+        var receipt = WriteReceipt(kind, write.Disposition, write.Diagnostics);
+        var durableMigration = write.Artifact switch
+        {
+            ArenaScenarioPackContract scenario => scenario.Migration,
+            ArenaBenchmarkPackContract benchmark => benchmark.Migration,
+            _ => migration
+        };
+        if (durableMigration is null)
+        {
+            return receipt;
+        }
+
+        return $"{receipt} Explicit migration receipt · {durableMigration.SourceSchema} {durableMigration.SourceVersion}"
+            + $" · source SHA-256 {durableMigration.SourceContentFingerprint[..12]}…"
+            + $" · {durableMigration.MigratorVersion} · {durableMigration.MigratedAtUtc:O}.";
     }
 
     private static string DiagnosticSummary(IEnumerable<string> codes, string prefix)

@@ -162,6 +162,113 @@ public static class ArenaQaSealManifestV1
     }
 }
 
+/// <summary>
+/// Authoritative v2 requirements. V1 remains frozen for historical evidence;
+/// v2 adds executable pack-migration authority and every Experiment Lab feature
+/// surface without silently changing what an existing v1 seal meant.
+/// </summary>
+public static class ArenaQaSealManifestV2
+{
+    public const string Id = "ai_arena.qa_seal_manifest.v2";
+    public const int RequiredCleanPasses = ArenaQaSealManifestV1.RequiredCleanPasses;
+    public const string FeatureSurfaceMatrixSchema = "ai_arena.qa_feature_surface_matrix.v1";
+    public const string FeatureSurfaceMatrixArtifactKind = "qa-feature-surface-matrix";
+    public const string FeatureSurfaceMatrixGateId = "ui.feature-surface-matrix";
+    public const string ExplicitMigrationGateId = "schema.explicit-v0-pack-migration";
+    public const string ExplicitMigrationArtifactId = "artifact.schema.explicit-v0-pack-migration.log";
+    public const string ExplicitMigrationArtifactKind = "sanitized-gate-log";
+    public const string ExplicitMigrationArtifactPath = "logs/schema.explicit-v0-pack-migration.log";
+    public const string ScenarioPackV0Schema = "ai_arena.scenario_pack.v0";
+    public const string BenchmarkPackV0Schema = "ai_arena.benchmark_pack.v0";
+    public const string ScenarioMigrationEvidenceId = "evidence.schema.migration.ai-arena.scenario-pack.v1";
+    public const string BenchmarkMigrationEvidenceId = "evidence.schema.migration.ai-arena.benchmark-pack.v1";
+
+    public static ImmutableArray<string> RequiredGlobalGateIds { get; } =
+    [
+        "inspection.user-acceptance",
+        "postflight.evidence-privacy",
+        "postflight.map-source-stability",
+        "postflight.source-stability",
+        "preflight.artifact-root-ignored",
+        "preflight.map-source-clean",
+        "preflight.seal-configuration",
+        "preflight.source-clean",
+        "preflight.toolchain",
+        ExplicitMigrationGateId,
+        FeatureSurfaceMatrixGateId,
+        "ui.keyboard-automation-matrix",
+        "ui.reduced-motion-matrix",
+        "ui.theme-contrast-matrix",
+        "ui.viewport-dpi-matrix",
+        "verification.restart-soak-resource"
+    ];
+
+    public static ImmutableArray<string> RequiredPerPassGateSuffixes =>
+        ArenaQaSealManifestV1.RequiredPerPassGateSuffixes;
+
+    public static ImmutableArray<string> RequiredSchemaIds => ArenaQaSealManifestV1.RequiredSchemaIds;
+
+    public static ImmutableArray<string> RequiredNestedRepositoryIds =>
+        ArenaQaSealManifestV1.RequiredNestedRepositoryIds;
+
+    public static ImmutableArray<string> RequiredExperimentFeatureKeys { get; } =
+    [
+        "matrix",
+        "fork",
+        "packs",
+        "rubrics",
+        "claims",
+        "context-prompt-inspector",
+        "agent-memory-debugger",
+        "fault-injection",
+        "routing-optimizer",
+        "in-app-qa-inspector"
+    ];
+
+    public static ImmutableDictionary<string, string> RequiredExperimentFeatureAutomationIdentities { get; } =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["matrix"] = "MatrixPanel",
+            ["fork"] = "ForkPanel",
+            ["packs"] = "PacksPanel",
+            ["rubrics"] = "RubricPanel",
+            ["claims"] = "ClaimPanel",
+            ["context-prompt-inspector"] = "PromptFeatureRoot",
+            ["agent-memory-debugger"] = "MemoryFeatureRoot",
+            ["fault-injection"] = "FaultLabRoot",
+            ["routing-optimizer"] = "RoutingOptimizerRoot",
+            ["in-app-qa-inspector"] = "QaInspectorRoot"
+        }.ToImmutableDictionary(StringComparer.Ordinal);
+
+    public static ImmutableArray<string> RequiredPerformanceMetrics =>
+        ArenaQaSealManifestV1.RequiredPerformanceMetrics;
+
+    public static ImmutableArray<string> RequiredArtifactKinds { get; } =
+    [
+        "automation-tree",
+        FeatureSurfaceMatrixArtifactKind,
+        "rendered-ui-screenshot"
+    ];
+
+    public static ImmutableArray<ArenaQaSealManifestV1.LimitationRequirement> RequiredLimitations =>
+        ArenaQaSealManifestV1.RequiredLimitations;
+
+    public static ImmutableArray<string> RequiredGateIds(int passCount)
+    {
+        if (passCount < RequiredCleanPasses)
+        {
+            throw new ArgumentOutOfRangeException(nameof(passCount));
+        }
+
+        return
+        [
+            .. RequiredGlobalGateIds,
+            .. Enumerable.Range(1, passCount).SelectMany(pass =>
+                RequiredPerPassGateSuffixes.Select(suffix => $"pass-{pass:D2}.{suffix}"))
+        ];
+    }
+}
+
 public enum ArenaEvidenceState
 {
     Observed,
@@ -174,7 +281,8 @@ public enum ArenaExperimentStatus
     Draft,
     Running,
     Completed,
-    Cancelled
+    Cancelled,
+    Interrupted
 }
 
 public enum ArenaExperimentRunState

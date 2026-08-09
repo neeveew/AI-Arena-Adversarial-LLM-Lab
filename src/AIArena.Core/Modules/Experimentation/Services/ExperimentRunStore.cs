@@ -494,8 +494,6 @@ public sealed class ExperimentRunStore
         ArenaExperimentRunContract existing,
         ArenaExperimentRunContract incoming)
     {
-        if (incoming.UpdatedAtUtc > existing.UpdatedAtUtc) return incoming;
-        if (incoming.UpdatedAtUtc < existing.UpdatedAtUtc) return existing;
         if (incoming.Attempts > existing.Attempts) return incoming;
         if (incoming.Attempts < existing.Attempts) return existing;
 
@@ -503,6 +501,8 @@ public sealed class ExperimentRunStore
         var incomingTerminal = IsTerminal(incoming.State);
         if (existingTerminal && !incomingTerminal) return existing;
         if (!existingTerminal && incomingTerminal) return incoming;
+        if (incoming.UpdatedAtUtc > existing.UpdatedAtUtc) return incoming;
+        if (incoming.UpdatedAtUtc < existing.UpdatedAtUtc) return existing;
         return existing;
     }
 

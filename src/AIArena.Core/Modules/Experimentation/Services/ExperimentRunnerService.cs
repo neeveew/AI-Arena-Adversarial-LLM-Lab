@@ -132,25 +132,50 @@ public sealed class ExperimentRunnerService
         var existingByCell = initial.Runs.ToDictionary(item => item.CellKey, StringComparer.Ordinal);
         var planFingerprint = (_executor as IArenaExperimentExecutionPlanIdentity)?.PlanFingerprint;
         var planReference = string.IsNullOrWhiteSpace(planFingerprint) ? null : $"plan:{planFingerprint}";
-        var eligible = expansion.Cells
-            .Where(cell => !existingByCell.TryGetValue(cell.CellKey, out var run)
-                || run.State == ArenaExperimentRunState.Queued
-                || (options.RetryApproved?.Invoke(run) ?? false))
-            .ToImmutableArray();
         var diagnostics = new ConcurrentBag<ArenaArtifactDiagnostic>(initial.Diagnostics);
-        if (planReference is not null)
+        var retryApprovalByCell = expansion.Cells
+            .Where(cell => existingByCell.ContainsKey(cell.CellKey))
+            .ToDictionary(
+                cell => cell.CellKey,
+                cell => options.RetryApproved?.Invoke(existingByCell[cell.CellKey]) ?? false,
+                StringComparer.Ordinal);
+        var mismatchedTerminalRuns = planReference is null
+            ? ImmutableArray<ArenaExperimentRunContract>.Empty
+            : initial.Runs.Where(run =>
+                    expansion.Cells.Any(cell => cell.CellKey.Equals(run.CellKey, StringComparison.Ordinal))
+                    && ArenaExperimentRunPolicy.IsTerminal(run.State)
+                    && !ArenaExperimentRunPolicy.LatestAttemptMatchesPlan(run, planReference))
+                .OrderBy(run => run.CellKey, StringComparer.Ordinal)
+                .ToImmutableArray();
+        foreach (var run in mismatchedTerminalRuns)
         {
-            foreach (var run in initial.Runs.Where(run =>
-                expansion.Cells.Any(cell => cell.CellKey.Equals(run.CellKey, StringComparison.Ordinal))
-                && ArenaExperimentRunPolicy.IsTerminal(run.State)
-                && !LatestAttemptMatchesPlan(run, planReference)))
-            {
-                diagnostics.Add(new ArenaArtifactDiagnostic(
-                    "experiment_run.execution_plan_mismatch",
-                    ArenaArtifactDiagnosticSeverity.Error,
-                    "experiment-runs/store.json",
-                    "A terminal cell belongs to a different or unrecorded resolved execution plan; explicit retry approval is required."));
-            }
+            diagnostics.Add(new ArenaArtifactDiagnostic(
+                "experiment_run.execution_plan_mismatch",
+                ArenaArtifactDiagnosticSeverity.Error,
+                "experiment-runs/store.json",
+                $"Cell '{run.CellKey}' has terminal evidence from a different or unrecorded resolved execution plan; explicit retry approval is required."));
+        }
+
+        var hasUnapprovedPlanMismatch = mismatchedTerminalRuns.Any(run =>
+            !retryApprovalByCell[run.CellKey]);
+        var eligible = expansion.Cells
+            .Where(cell => !hasUnapprovedPlanMismatch
+                && (!existingByCell.TryGetValue(cell.CellKey, out var run)
+                    || run.State == ArenaExperimentRunState.Queued
+                    || retryApprovalByCell[cell.CellKey]))
+            .ToImmutableArray();
+        if (hasUnapprovedPlanMismatch)
+        {
+            return new(
+                expansion.Cells.Length,
+                0,
+                0,
+                false,
+                initial.Runs,
+                [.. diagnostics
+                    .Distinct()
+                    .OrderBy(item => item.RelativePath, StringComparer.Ordinal)
+                    .ThenBy(item => item.Code, StringComparer.Ordinal)]);
         }
 
         var capacity = await store.ReserveCapacityAsync(
@@ -196,7 +221,7 @@ public sealed class ExperimentRunnerService
                     {
                         existingByCell.TryGetValue(cell.CellKey, out var existing);
                         var attempt = (existing?.Attempts ?? 0) + 1;
-                        var trialId = CreateTrialId(cell.CellKey, attempt);
+                        var trialId = ArenaExperimentRunPolicy.CreateTrialId(cell.CellKey, attempt);
                         var startedAt = UtcNow();
                         var running = CreateRun(
                             cell,
@@ -210,6 +235,17 @@ public sealed class ExperimentRunnerService
                         var runningWrite = await store.SaveReservedAsync(executionLease, running, token).ConfigureAwait(false);
                         AddDiagnostics(diagnostics, runningWrite.Diagnostics);
                         if (!runningWrite.Succeeded || runningWrite.Artifact is null) return;
+                        if (runningWrite.Artifact.State != ArenaExperimentRunState.Running
+                            || runningWrite.Artifact.Attempts != attempt
+                            || !runningWrite.Artifact.TrialIds.Contains(trialId, StringComparer.Ordinal))
+                        {
+                            diagnostics.Add(new ArenaArtifactDiagnostic(
+                                "experiment_run.running_state_uncommitted",
+                                ArenaArtifactDiagnosticSeverity.Error,
+                                "experiment-runs/store.json",
+                                "The exact Running attempt was not durably committed; the cell executor was not called."));
+                            return;
+                        }
 
                         Interlocked.Increment(ref started);
                         ArenaExperimentCellExecutionResult outcome;
@@ -431,22 +467,6 @@ public sealed class ExperimentRunnerService
         {
             throw new InvalidOperationException("Interrupted executor results require a bounded reason.");
         }
-    }
-
-    private static string CreateTrialId(string cellKey, int attempt) =>
-        $"trial:{ExperimentExpander.Hash($"{cellKey}\n{attempt}")}";
-
-    private static bool LatestAttemptMatchesPlan(ArenaExperimentRunContract run, string planReference)
-    {
-        if (run.Attempts < 1)
-        {
-            return false;
-        }
-        var latestTrialId = CreateTrialId(run.CellKey, run.Attempts);
-        var latestPlanEvidenceId = $"evidence:{ExperimentExpander.Hash($"{latestTrialId}\nexecution_plan")}";
-        return run.Evidence.Any(evidence =>
-            evidence.Id.Equals(latestPlanEvidenceId, StringComparison.Ordinal)
-            && evidence.ReferenceId?.Equals(planReference, StringComparison.Ordinal) == true);
     }
 
     private static ArenaEvidenceAssertion Evidence(string state, string trialId, string summary) =>

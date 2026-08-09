@@ -22,11 +22,12 @@ internal sealed record FaultKindChoice(ArenaFaultKind Kind, string Label)
 
 internal sealed record FaultObservationItem(
     string Heading,
+    string EffectText,
     string CauseText,
     string RecoveryText)
 {
     public string AutomationName => Heading;
-    public string AutomationHelp => $"{CauseText} {RecoveryText}";
+    public string AutomationHelp => $"{EffectText} {CauseText} {RecoveryText}";
 }
 
 public partial class FaultInjectionLabControl : UserControl
@@ -69,6 +70,8 @@ public partial class FaultInjectionLabControl : UserControl
 
     internal string Status => FaultStatusText.Text;
     internal int ObservationCount => FaultObservationList.Items.Count;
+    internal IReadOnlyList<FaultObservationItem> ObservationItems =>
+        FaultObservationList.Items.Cast<FaultObservationItem>().ToArray();
     internal bool CanRunProbe => RunFaultProbeButton.IsEnabled;
 
     internal void SetInput(FaultLabInput input)

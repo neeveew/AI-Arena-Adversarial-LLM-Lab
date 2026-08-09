@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -347,8 +348,15 @@ public partial class ExperimentLabControl : UserControl
         FeatureContentGrid.IsEnabled = !busy;
     }
 
-    internal void ReconcileMatrixProviderProfiles(IReadOnlyCollection<string> availableProfileIds)
+    internal void ReconcileMatrixProviderProfiles(
+        IReadOnlyCollection<string> availableProfileIds,
+        bool preserveCurrentInput = false)
     {
+        if (preserveCurrentInput)
+        {
+            return;
+        }
+
         var available = availableProfileIds.ToHashSet(StringComparer.Ordinal);
         var current = MatrixProvidersText.Text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(available.Contains)
@@ -360,8 +368,45 @@ public partial class ExperimentLabControl : UserControl
 
     internal void SetMatrixScenarioPackId(string packId) => MatrixScenarioPackText.Text = packId;
 
-    internal void ReconcileMatrixRubricIds(IReadOnlyCollection<string> availableRubricIds)
+    internal void SetMatrixRubricIds(string rubricIds) => MatrixRubricsText.Text = rubricIds;
+
+    internal void SetMatrixDefinition(ArenaExperimentContract definition)
     {
+        ArgumentNullException.ThrowIfNull(definition);
+        if (definition.Dimensions.Length > 1
+            || !definition.FaultProfileIds.IsEmpty
+            || !definition.BranchIds.IsEmpty)
+        {
+            throw new InvalidDataException("The v1 Matrix Runner UI cannot restore this definition without dropping execution inputs.");
+        }
+
+        MatrixTitleText.Text = definition.Title;
+        MatrixProvidersText.Text = string.Join(", ", definition.ProviderProfileIds);
+        MatrixRepetitionsText.Text = definition.Repetitions.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        MatrixTurnBudgetText.Text = definition.TurnBudget.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        MatrixParallelismText.Text = definition.MaxParallelism.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var dimension = definition.Dimensions.SingleOrDefault();
+        var parameter = dimension?.Parameter ?? "";
+        MatrixDimensionParameterPicker.SelectedItem = MatrixDimensionParameterPicker.Items
+            .OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), parameter, StringComparison.Ordinal));
+        MatrixDimensionValuesText.Text = dimension is null ? "" : string.Join(", ", dimension.Values);
+        SelectMatrixBenchmark(definition.BenchmarkPackId);
+        // Benchmark selection intentionally runs first; these persisted values
+        // then remain the authority even if a referenced pack has changed.
+        MatrixScenarioPackText.Text = definition.ScenarioPackId;
+        MatrixRubricsText.Text = string.Join(", ", definition.RubricIds);
+    }
+
+    internal void ReconcileMatrixRubricIds(
+        IReadOnlyCollection<string> availableRubricIds,
+        bool preserveCurrentInput = false)
+    {
+        if (preserveCurrentInput)
+        {
+            return;
+        }
+
         if (MatrixBenchmarkPicker.SelectedItem is ExperimentBenchmarkSelection { RubricIds.IsEmpty: false } benchmark)
         {
             MatrixRubricsText.Text = string.Join(", ", benchmark.RubricIds);
@@ -379,9 +424,25 @@ public partial class ExperimentLabControl : UserControl
 
     internal void SelectMatrixBenchmark(string? benchmarkPackId)
     {
-        MatrixBenchmarkPicker.SelectedItem = MatrixBenchmarkPicker.Items
+        var selected = MatrixBenchmarkPicker.Items
             .OfType<ExperimentBenchmarkSelection>()
             .FirstOrDefault(item => string.Equals(item.BenchmarkPackId, benchmarkPackId, StringComparison.Ordinal));
+        if (selected is null && benchmarkPackId is not null)
+        {
+            var items = MatrixBenchmarkPicker.Items.Cast<object>()
+                .Append(new ExperimentBenchmarkSelection(
+                    $"Unavailable durable benchmark · {benchmarkPackId}",
+                    benchmarkPackId,
+                    null,
+                    []))
+                .ToArray();
+            SetItems(MatrixBenchmarkPicker, items);
+            selected = MatrixBenchmarkPicker.Items
+                .OfType<ExperimentBenchmarkSelection>()
+                .Single(item => string.Equals(item.BenchmarkPackId, benchmarkPackId, StringComparison.Ordinal));
+        }
+
+        MatrixBenchmarkPicker.SelectedItem = selected;
     }
 
     internal void SetMatrixExecutionAvailability(bool available, string helpText)

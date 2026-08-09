@@ -1430,6 +1430,7 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
     private readonly IQaInspectionAcceptanceRunner acceptanceRunner;
     private readonly IQaInspectorClipboard clipboard;
     private readonly Func<bool> isApplicationRunning;
+    private readonly bool readOnlyPreserveReviews;
     private readonly CancellationTokenSource lifetime = new();
     private readonly SemaphoreSlim operationGate = new(1, 1);
     private readonly SemaphoreSlim reviewGate = new(1, 1);
@@ -1440,6 +1441,21 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
     private QaInspectionReviewHandle? reviewHandle;
     private bool disposed;
 
+    internal static bool ShouldPreserveReviewsForIsolatedCapture(string dataRoot)
+    {
+        if (!AIArenaUiVerificationControlService.IsIsolatedQaDataRoot(dataRoot)) return false;
+        try
+        {
+            var marker = Path.Combine(Path.GetFullPath(dataRoot), ".ai-arena-qa-owner");
+            return File.Exists(marker)
+                && (File.GetAttributes(marker) & FileAttributes.ReparsePoint) == 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
     internal InAppQaInspectorCoordinator(
         InAppQaInspectorControl view,
         string repositoryRoot,
@@ -1447,7 +1463,8 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
         IQaSuiteProcessRunner? suiteRunner = null,
         IQaInspectionAcceptanceRunner? acceptanceRunner = null,
         IQaInspectorClipboard? clipboard = null,
-        Func<bool>? isApplicationRunning = null)
+        Func<bool>? isApplicationRunning = null,
+        bool readOnlyPreserveReviews = false)
     {
         this.view = view ?? throw new ArgumentNullException(nameof(view));
         repository = new QaEvidenceRepository(repositoryRoot, currentnessValidator ?? new ReleaseQaEvidenceCurrentnessValidator());
@@ -1455,7 +1472,9 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
         this.acceptanceRunner = acceptanceRunner ?? new PowerShellQaInspectionAcceptanceRunner();
         this.clipboard = clipboard ?? new WpfQaInspectorClipboard();
         this.isApplicationRunning = isApplicationRunning ?? (() => true);
+        this.readOnlyPreserveReviews = readOnlyPreserveReviews;
         view.Initialize(this);
+        view.SetReadOnlyMode(readOnlyPreserveReviews);
         view.SetSuiteChoices(QaLocalSuiteCatalog.All);
         view.SetPostCloseCommand(QaLocalSuiteCatalog.PostCloseSealCommand);
     }
@@ -1482,7 +1501,7 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
             await reviewGate.WaitAsync(linked.Token).ConfigureAwait(false);
             try
             {
-                ResetReviewState(current, deleteManifest: true);
+                ResetReviewState(current, deleteManifest: !readOnlyPreserveReviews);
                 current = null;
             }
             finally
@@ -1509,7 +1528,7 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
             try
             {
                 current = result.Snapshot;
-                ResetReviewState(current, deleteManifest: true);
+                ResetReviewState(current, deleteManifest: !readOnlyPreserveReviews);
             }
             finally
             {
@@ -1541,6 +1560,17 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
     internal async Task<QaSuiteRunResult> RunSuiteAsync(QaLocalSuite suite, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        if (readOnlyPreserveReviews)
+        {
+            return SetSuiteResult(new(
+                QaInspectorState.Unavailable,
+                "qa.capture_read_only",
+                "Focused-suite execution is disabled in the isolated read-only QA capture process.",
+                0,
+                0,
+                0,
+                0));
+        }
         if (!QaLocalSuiteCatalog.TryGet(suite, out var definition))
         {
             return SetSuiteResult(new(QaInspectorState.Blocked, "qa.suite_not_allowlisted", "The requested suite is not allowlisted.", 0, 0, 0, 0));
@@ -1616,6 +1646,16 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
             var preview = await repository.LoadPreviewAsync(snapshot, artifactId, linked.Token).ConfigureAwait(false);
             var displayed = await view.Dispatcher.InvokeAsync(() => view.SetPreview(preview));
             if (preview is null || !displayed || !ReferenceEquals(snapshot, current)) return preview;
+            if (readOnlyPreserveReviews)
+            {
+                await view.Dispatcher.InvokeAsync(() =>
+                {
+                    view.SetReviewProgress(0, CountScreenshots(snapshot), CountUnacceptedLimitations(snapshot));
+                    view.SetAcceptanceAvailable(false);
+                    view.SetStatus("Read-only QA capture previewed this artifact without changing its inspection review manifest.");
+                });
+                return preview;
+            }
             if (!await repository.ReviewBindingIsCurrentAsync(snapshot, verifyArtifactHashes: false, linked.Token).ConfigureAwait(false))
             {
                 ResetReviewState(snapshot, deleteManifest: true);
@@ -1721,6 +1761,19 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
     internal async Task<QaAcceptanceResult> AcceptInspectionAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        if (readOnlyPreserveReviews)
+        {
+            var readOnly = new QaAcceptanceResult(
+                QaInspectorState.Unavailable,
+                "qa.capture_read_only",
+                "Inspection acceptance is disabled in the isolated read-only QA capture process.");
+            await view.Dispatcher.InvokeAsync(() =>
+            {
+                view.SetAcceptanceAvailable(false);
+                view.SetStatus(readOnly.Summary);
+            });
+            return readOnly;
+        }
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
         await reviewGate.WaitAsync(linked.Token).ConfigureAwait(false);
         QaEvidenceSnapshot? snapshot;
@@ -1785,7 +1838,8 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
             || !snapshot.BundleIsValid
             || snapshot.Currentness.State != QaInspectorState.Pass
             || !snapshot.Contract.IsWorkingTreeClean
-            || snapshot.Contract.CleanFullPasses < ArenaQaSealManifestV1.RequiredCleanPasses
+            || !snapshot.Contract.SealManifestId.Equals(ArenaQaSealManifestV2.Id, StringComparison.Ordinal)
+            || snapshot.Contract.CleanFullPasses < ArenaQaSealManifestV2.RequiredCleanPasses
             || snapshot.Contract.Inspection.UserAccepted
             || !snapshot.Contract.Environment.IsReleaseBuild
             || !snapshot.Contract.Environment.Configuration.Equals("Release", StringComparison.Ordinal)
@@ -1797,7 +1851,7 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
         }
 
         var gates = snapshot.Contract.Gates.ToDictionary(item => item.Id, StringComparer.Ordinal);
-        var requiredGateIds = ArenaQaSealManifestV1.RequiredGateIds(snapshot.Contract.CleanFullPasses)
+        var requiredGateIds = ArenaQaSealManifestV2.RequiredGateIds(snapshot.Contract.CleanFullPasses)
             .Where(id => !id.Equals("inspection.user-acceptance", StringComparison.Ordinal));
         if (requiredGateIds.Any(id => !gates.TryGetValue(id, out var gate)
             || !gate.Required
@@ -1805,13 +1859,15 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
             || gate.Evidence.State != ArenaEvidenceState.Observed)) return false;
 
         var schemas = snapshot.Contract.SchemaChecks.ToDictionary(item => item.Schema, StringComparer.Ordinal);
-        if (ArenaQaSealManifestV1.RequiredSchemaIds.Any(id => !schemas.TryGetValue(id, out var schema)
+        if (ArenaQaSealManifestV2.RequiredSchemaIds.Any(id => !schemas.TryGetValue(id, out var schema)
             || schema.Outcome != ArenaQaGateOutcome.Pass
             || schema.Evidence.State != ArenaEvidenceState.Observed)) return false;
+        if (!HasV2MigrationAuthority(snapshot, gates, schemas)
+            || !HasV2FeatureMatrixArtifacts(snapshot)) return false;
 
         var performance = snapshot.Contract.Performance.GroupBy(item => item.Metric, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
-        if (ArenaQaSealManifestV1.RequiredPerformanceMetrics.Any(id => !performance.TryGetValue(id, out var metric) || !MeetsThreshold(metric))) return false;
+        if (ArenaQaSealManifestV2.RequiredPerformanceMetrics.Any(id => !performance.TryGetValue(id, out var metric) || !MeetsThreshold(metric))) return false;
 
         var screenshots = snapshot.Artifacts.Where(item => item.Artifact.Kind == "rendered-ui-screenshot").ToDictionary(item => item.Artifact.Id, StringComparer.Ordinal);
         var automations = snapshot.Artifacts.Where(item => item.Artifact.Kind == "automation-tree").ToDictionary(item => item.Artifact.Id, StringComparer.Ordinal);
@@ -1888,9 +1944,77 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
             && matches[0].Evidence.Limitation?.Equals(requirement.EvidenceLimitation, StringComparison.Ordinal) == true);
     }
 
+    private static bool HasV2MigrationAuthority(
+        QaEvidenceSnapshot snapshot,
+        IReadOnlyDictionary<string, ArenaQaGateEvidence> gates,
+        IReadOnlyDictionary<string, ArenaQaSchemaCheck> schemas)
+    {
+        if (!gates.TryGetValue(ArenaQaSealManifestV2.ExplicitMigrationGateId, out var gate)
+            || !gate.Required
+            || gate.Outcome != ArenaQaGateOutcome.Pass
+            || gate.Evidence.State != ArenaEvidenceState.Observed
+            || gate.Evidence.ReferenceId != ArenaQaSealManifestV2.ExplicitMigrationArtifactId)
+        {
+            return false;
+        }
+
+        var artifacts = snapshot.Artifacts
+            .Where(item => item.Artifact.Id == ArenaQaSealManifestV2.ExplicitMigrationArtifactId)
+            .ToArray();
+        if (artifacts.Length != 1
+            || !artifacts[0].IsVerified
+            || artifacts[0].Artifact.Kind != ArenaQaSealManifestV2.ExplicitMigrationArtifactKind
+            || artifacts[0].Artifact.RelativePath != ArenaQaSealManifestV2.ExplicitMigrationArtifactPath)
+        {
+            return false;
+        }
+
+        return HasV2MigrationSchema(
+                schemas,
+                ArenaContractSchemas.ScenarioPack,
+                ArenaQaSealManifestV2.ScenarioPackV0Schema,
+                ArenaQaSealManifestV2.ScenarioMigrationEvidenceId)
+            && HasV2MigrationSchema(
+                schemas,
+                ArenaContractSchemas.BenchmarkPack,
+                ArenaQaSealManifestV2.BenchmarkPackV0Schema,
+                ArenaQaSealManifestV2.BenchmarkMigrationEvidenceId);
+    }
+
+    private static bool HasV2MigrationSchema(
+        IReadOnlyDictionary<string, ArenaQaSchemaCheck> schemas,
+        string schema,
+        string migratedFromSchema,
+        string evidenceId) =>
+        schemas.TryGetValue(schema, out var check)
+        && check.Outcome == ArenaQaGateOutcome.Pass
+        && check.MigratedFromSchema == migratedFromSchema
+        && check.Evidence.State == ArenaEvidenceState.Observed
+        && check.Evidence.Id == evidenceId
+        && check.Evidence.ReferenceId == ArenaQaSealManifestV2.ExplicitMigrationArtifactId;
+
+    private static bool HasV2FeatureMatrixArtifacts(QaEvidenceSnapshot snapshot)
+    {
+        var artifacts = snapshot.Artifacts
+            .Where(item => item.Artifact.Kind == ArenaQaSealManifestV2.FeatureSurfaceMatrixArtifactKind)
+            .ToDictionary(item => item.Artifact.Id, StringComparer.Ordinal);
+        for (var pass = 1; pass <= snapshot.Contract.CleanFullPasses; pass++)
+        {
+            var id = $"artifact.pass-{pass:D2}.feature-surface-matrix";
+            var path = $"metadata/pass-{pass:D2}.feature-surface-matrix.json";
+            if (!artifacts.TryGetValue(id, out var artifact)
+                || !artifact.IsVerified
+                || artifact.Artifact.RelativePath != path)
+            {
+                return false;
+            }
+        }
+        return artifacts.Count == snapshot.Contract.CleanFullPasses;
+    }
+
     private void ResetReviewState(QaEvidenceSnapshot? snapshot, bool deleteManifest)
     {
-        if (deleteManifest && snapshot is not null) repository.ClearReviewManifest(snapshot);
+        if (deleteManifest && !readOnlyPreserveReviews && snapshot is not null) repository.ClearReviewManifest(snapshot);
         reviewedScreenshotIds = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
         reviewHandle = null;
     }

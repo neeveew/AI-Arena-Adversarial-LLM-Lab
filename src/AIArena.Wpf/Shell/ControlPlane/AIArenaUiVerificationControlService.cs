@@ -10,6 +10,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using AIArena.Core.Models;
 using AIArena.Core.Persistence;
 using AIArena.Wpf.Services;
 
@@ -61,7 +62,14 @@ internal sealed record AIArenaUiStructureNodeEvidence(
     bool IsVisible,
     bool IsEnabled,
     bool IsFocusable,
-    bool HasKeyboardFocus);
+    bool HasKeyboardFocus,
+    double BoundsX,
+    double BoundsY,
+    double BoundsWidth,
+    double BoundsHeight,
+    double EffectiveOpacity,
+    bool IntersectsViewport,
+    bool IsRendered);
 
 internal sealed record AIArenaUiStructureEvidence(
     string Schema,
@@ -148,7 +156,8 @@ internal sealed class AIArenaUiVerificationControlService
     internal const int MaximumNodes = 5_000;
     internal const int MaximumVisualDepth = 128;
     internal const int MaximumArtifactBytes = 4 * 1024 * 1024;
-    internal const string EvidenceSchema = "ai_arena.ui_structure_evidence.v1";
+    internal const string LegacyEvidenceSchema = "ai_arena.ui_structure_evidence.v1";
+    internal const string EvidenceSchema = "ai_arena.ui_structure_evidence.v2";
     internal const string EvidenceArtifactKind = "automation-tree";
     internal const string EvidencePathBase = "data-root";
     internal const string CaptureMode = "wpf-visual-tree-accessibility";
@@ -184,13 +193,15 @@ internal sealed class AIArenaUiVerificationControlService
     private readonly string evidenceRoot;
     private readonly Func<string> themeId;
     private readonly Func<int?>? transcriptMessageCount;
+    private readonly Func<string?>? selectedExperimentFeatureKey;
     private readonly bool isIsolatedQaProcess;
 
     public AIArenaUiVerificationControlService(
         Window window,
         string dataRoot,
         Func<string> themeId,
-        Func<int?>? transcriptMessageCount = null)
+        Func<int?>? transcriptMessageCount = null,
+        Func<string?>? selectedExperimentFeatureKey = null)
     {
         ArgumentNullException.ThrowIfNull(window);
         ArgumentException.ThrowIfNullOrWhiteSpace(dataRoot);
@@ -200,6 +211,7 @@ internal sealed class AIArenaUiVerificationControlService
         evidenceRoot = Path.Combine(NativeDataPaths.ExportsRoot(this.dataRoot), "qa", "ui-structure");
         this.themeId = themeId;
         this.transcriptMessageCount = transcriptMessageCount;
+        this.selectedExperimentFeatureKey = selectedExperimentFeatureKey;
         isIsolatedQaProcess = IsIsolatedQaDataRoot(this.dataRoot);
     }
 
@@ -285,6 +297,43 @@ internal sealed class AIArenaUiVerificationControlService
                 "not_available",
                 "Keyboard focus traversal is not available for the current WPF visual tree.",
                 normalizedDirection);
+        }
+    }
+
+    public async Task<AIArenaQaFocusTraversalResult> FocusSelectedFeatureContentAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!isIsolatedQaProcess)
+        {
+            return FocusFailure(
+                "not_available",
+                "Feature-content focus requires an isolated AI_ARENA_DATA_DIR process.",
+                "feature-content");
+        }
+
+        try
+        {
+            if (!window.Dispatcher.CheckAccess())
+            {
+                return await window.Dispatcher.InvokeAsync(
+                    () => FocusSelectedFeatureContentOnUiThread(cancellationToken),
+                    DispatcherPriority.Input,
+                    cancellationToken);
+            }
+
+            return FocusSelectedFeatureContentOnUiThread(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            return FocusFailure(
+                "not_available",
+                "The selected Experiment Lab feature did not expose a tracked focus boundary.",
+                "feature-content");
         }
     }
 
@@ -589,6 +638,218 @@ internal sealed class AIArenaUiVerificationControlService
             changed);
     }
 
+    private AIArenaQaFocusTraversalResult FocusSelectedFeatureContentOnUiThread(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        window.UpdateLayout();
+        var featureKey = selectedExperimentFeatureKey?.Invoke()?.Trim() ?? "";
+        if (!ArenaQaSealManifestV2.RequiredExperimentFeatureAutomationIdentities.TryGetValue(
+                featureKey,
+                out var contentIdentity))
+        {
+            return FocusFailure(
+                "not_available",
+                "The selected Experiment Lab feature is unavailable.",
+                "feature-content");
+        }
+
+        if (!TryBuildVisibleIdentityTable(out var entries))
+        {
+            return FocusFailure(
+                "not_available",
+                "The bounded visible-tree focus table was truncated.",
+                "feature-content");
+        }
+        if (!TryResolveRenderedFeatureRoot(entries, contentIdentity, out var contentRoot))
+        {
+            return FocusFailure(
+                "not_available",
+                "The selected Experiment Lab feature root was not uniquely rendered inside Experiment Lab.",
+                "feature-content");
+        }
+        var targetEntry = entries.FirstOrDefault(entry =>
+            entry.IsRendered
+            && IsStrictDescendant(entries, entry.Sequence, contentRoot.Sequence)
+            && entry.Element is not null
+            && entry.Element.IsEnabled
+            && entry.Element.Focusable
+            && KeyboardNavigation.GetIsTabStop(entry.Element));
+        if (targetEntry.Element is null)
+        {
+            return FocusFailure(
+                "not_available",
+                "The selected Experiment Lab feature has no visible tracked tab stop.",
+                "feature-content");
+        }
+
+        var target = targetEntry.Element;
+        var before = DescribeFocusFromTable(entries, Keyboard.FocusedElement as DependencyObject);
+        FocusManager.SetFocusedElement(FocusManager.GetFocusScope(target), target);
+        var moved = target.Focus();
+        if (!target.IsKeyboardFocused)
+        {
+            _ = Keyboard.Focus(target);
+        }
+        window.UpdateLayout();
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!TryBuildVisibleIdentityTable(out var afterEntries))
+        {
+            return FocusFailure(
+                "not_available",
+                "The bounded visible-tree focus table changed or was truncated after focus.",
+                "feature-content");
+        }
+        if (!TryResolveRenderedFeatureRoot(afterEntries, contentIdentity, out var afterContentRoot))
+        {
+            return FocusFailure(
+                "not_available",
+                "The selected Experiment Lab feature root changed after focus.",
+                "feature-content");
+        }
+        var focusedElement = Keyboard.FocusedElement as DependencyObject;
+        var trackedTarget = afterEntries.SingleOrDefault(entry => ReferenceEquals(entry.Element, target));
+        var trackedFocus = afterEntries.SingleOrDefault(entry => ReferenceEquals(entry.Element, focusedElement));
+        var after = DescribeFocusFromTable(afterEntries, focusedElement);
+        var changed = !string.Equals(before.Identity, after.Identity, StringComparison.Ordinal)
+            || !string.Equals(before.ControlType, after.ControlType, StringComparison.Ordinal);
+        var focused = target.IsKeyboardFocused
+            && trackedTarget.Element is not null
+            && trackedTarget.IsRendered
+            && IsStrictDescendant(afterEntries, trackedTarget.Sequence, afterContentRoot.Sequence)
+            && trackedFocus.Element is not null
+            && trackedFocus.IsRendered
+            && IsStrictDescendant(afterEntries, trackedFocus.Sequence, afterContentRoot.Sequence)
+            && !after.Identity.StartsWith("untracked-", StringComparison.Ordinal)
+            && string.Equals(after.Identity, trackedTarget.Identity, StringComparison.Ordinal);
+        return new AIArenaQaFocusTraversalResult(
+            focused,
+            focused ? "" : "not_available",
+            focused
+                ? "Keyboard focus entered the selected Experiment Lab feature content."
+                : "Keyboard focus could not enter the selected Experiment Lab feature content.",
+            "feature-content",
+            before.Identity,
+            before.ControlType,
+            after.Identity,
+            after.ControlType,
+            moved || focused,
+            changed);
+    }
+
+    private bool TryBuildVisibleIdentityTable(out IReadOnlyList<VisualIdentityEntry> entries)
+    {
+        var result = new List<UIElement>(Math.Min(MaximumNodes, 256));
+        var tracked = new List<VisualIdentityEntry>(Math.Min(MaximumNodes, 1024));
+        var pending = new Stack<(DependencyObject Element, int Depth, int? ParentSequence, double ParentEffectiveOpacity)>();
+        pending.Push((window, 0, null, 1.0));
+
+        while (pending.Count > 0)
+        {
+            var (current, depth, parentSequence, parentEffectiveOpacity) = pending.Pop();
+            if (depth > MaximumVisualDepth)
+            {
+                entries = [];
+                return false;
+            }
+            var childParentSequence = parentSequence;
+            var childEffectiveOpacity = parentEffectiveOpacity;
+            if (current is UIElement element)
+            {
+                if (!ReferenceEquals(element, window) && !element.IsVisible) continue;
+                if (result.Count >= MaximumNodes)
+                {
+                    entries = [];
+                    return false;
+                }
+                result.Add(element);
+                var sequence = tracked.Count;
+                var descriptor = DescribeElementIdentity(element, sequence);
+                var bounds = ElementBoundsInWindow(element);
+                var effectiveOpacity = Math.Clamp(parentEffectiveOpacity * element.Opacity, 0, 1);
+                var intersectsViewport = HasMaterialViewportIntersection(
+                    bounds,
+                    Math.Max(0, window.ActualWidth),
+                    Math.Max(0, window.ActualHeight));
+                tracked.Add(new VisualIdentityEntry(
+                    element,
+                    sequence,
+                    parentSequence,
+                    descriptor.BaseIdentity,
+                    descriptor.BaseIdentity,
+                    element.IsVisible
+                        && bounds.Width > 0.5
+                        && bounds.Height > 0.5
+                        && effectiveOpacity > 0.001
+                        && intersectsViewport));
+                childParentSequence = sequence;
+                childEffectiveOpacity = effectiveOpacity;
+            }
+            for (var index = VisualTreeHelper.GetChildrenCount(current) - 1; index >= 0; index--)
+            {
+                pending.Push((
+                    VisualTreeHelper.GetChild(current, index),
+                    depth + 1,
+                    childParentSequence,
+                    childEffectiveOpacity));
+            }
+        }
+
+        var identityCounts = tracked
+            .GroupBy(entry => entry.BaseIdentity, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        for (var index = 0; index < tracked.Count; index++)
+        {
+            var entry = tracked[index];
+            if (identityCounts[entry.BaseIdentity] > 1)
+            {
+                tracked[index] = entry with { Identity = DisambiguateIdentity(entry.BaseIdentity, entry.Sequence) };
+            }
+        }
+        entries = tracked;
+        return true;
+    }
+
+    private static bool IsStrictDescendant(
+        IReadOnlyList<VisualIdentityEntry> entries,
+        int sequence,
+        int ancestorSequence)
+    {
+        int? parent = entries[sequence].ParentSequence;
+        while (parent is { } parentSequence)
+        {
+            if (parentSequence == ancestorSequence) return true;
+            if (parentSequence < 0 || parentSequence >= entries.Count) return false;
+            parent = entries[parentSequence].ParentSequence;
+        }
+        return false;
+    }
+
+    private static bool TryResolveRenderedFeatureRoot(
+        IReadOnlyList<VisualIdentityEntry> entries,
+        string contentIdentity,
+        out VisualIdentityEntry contentRoot)
+    {
+        var experimentRoots = entries
+            .Where(entry => string.Equals(entry.BaseIdentity, "ExperimentLabPanel", StringComparison.Ordinal))
+            .ToArray();
+        var contentRoots = entries
+            .Where(entry => string.Equals(entry.BaseIdentity, contentIdentity, StringComparison.Ordinal))
+            .ToArray();
+        if (experimentRoots.Length != 1
+            || !experimentRoots[0].IsRendered
+            || contentRoots.Length != 1
+            || !contentRoots[0].IsRendered
+            || !IsStrictDescendant(entries, contentRoots[0].Sequence, experimentRoots[0].Sequence))
+        {
+            contentRoot = default;
+            return false;
+        }
+
+        contentRoot = contentRoots[0];
+        return true;
+    }
+
     private AIArenaQaMotionPreferenceResult SetMotionPreferenceOnUiThread(
         string mode,
         CancellationToken cancellationToken)
@@ -618,6 +879,19 @@ internal sealed class AIArenaUiVerificationControlService
 
     private FocusDescriptor DescribeFocus(DependencyObject? focusedElement)
     {
+        if (!TryBuildVisibleIdentityTable(out var entries))
+        {
+            return focusedElement is null
+                ? new FocusDescriptor("none", "none")
+                : new FocusDescriptor($"untracked-{SafeTypeName(focusedElement.GetType().Name)}", "Custom");
+        }
+        return DescribeFocusFromTable(entries, focusedElement);
+    }
+
+    private static FocusDescriptor DescribeFocusFromTable(
+        IReadOnlyList<VisualIdentityEntry> entries,
+        DependencyObject? focusedElement)
+    {
         if (focusedElement is null)
         {
             return new FocusDescriptor("none", "none");
@@ -628,63 +902,23 @@ internal sealed class AIArenaUiVerificationControlService
             return new FocusDescriptor($"nonvisual-{SafeTypeName(focusedElement.GetType().Name)}", "Custom");
         }
 
-        var identity = FindVisualIdentity(uiElement);
+        var entry = entries.SingleOrDefault(item => ReferenceEquals(item.Element, uiElement));
+        var identity = entry.Element is null
+            ? $"untracked-{SafeTypeName(uiElement.GetType().Name)}"
+            : entry.Identity;
         return new FocusDescriptor(identity, AutomationControlType(uiElement));
     }
 
     private string FindVisualIdentity(UIElement target)
     {
-        var sequence = 0;
-        var entries = new List<VisualIdentityEntry>(Math.Min(MaximumNodes, 1024));
-        var pending = new Stack<(DependencyObject Element, int Depth)>();
-        pending.Push((window, 0));
-        while (pending.Count > 0)
-        {
-            var (current, depth) = pending.Pop();
-            if (depth > MaximumVisualDepth)
-            {
-                continue;
-            }
-
-            if (current is UIElement element)
-            {
-                if (!ReferenceEquals(element, window) && !element.IsVisible)
-                {
-                    continue;
-                }
-
-                if (sequence >= MaximumNodes)
-                {
-                    break;
-                }
-
-                entries.Add(new VisualIdentityEntry(
-                    element,
-                    sequence,
-                    DescribeElementIdentity(element, sequence).BaseIdentity));
-                sequence++;
-            }
-
-            var childCount = VisualTreeHelper.GetChildrenCount(current);
-            for (var index = childCount - 1; index >= 0; index--)
-            {
-                pending.Push((VisualTreeHelper.GetChild(current, index), depth + 1));
-            }
-        }
-
-        var targetEntry = entries.FirstOrDefault(entry => ReferenceEquals(entry.Element, target));
-        if (targetEntry.Element is null)
+        if (!TryBuildVisibleIdentityTable(out var entries))
         {
             return $"untracked-{SafeTypeName(target.GetType().Name)}";
         }
-
-        var duplicateCount = entries.Count(entry => string.Equals(
-            entry.BaseIdentity,
-            targetEntry.BaseIdentity,
-            StringComparison.Ordinal));
-        return duplicateCount > 1
-            ? DisambiguateIdentity(targetEntry.BaseIdentity, targetEntry.Sequence)
-            : targetEntry.BaseIdentity;
+        var targetEntry = entries.SingleOrDefault(entry => ReferenceEquals(entry.Element, target));
+        return targetEntry.Element is null
+            ? $"untracked-{SafeTypeName(target.GetType().Name)}"
+            : targetEntry.Identity;
     }
 
     private AIArenaUiStructureEvidence CaptureStructureOnUiThread(
@@ -696,8 +930,8 @@ internal sealed class AIArenaUiVerificationControlService
         window.UpdateLayout();
         var focusedElement = Keyboard.FocusedElement as DependencyObject;
         var nodes = new List<AIArenaUiStructureNodeEvidence>(Math.Min(MaximumNodes, 1024));
-        var pending = new Stack<(DependencyObject Element, int Depth, int? ParentSequence)>();
-        pending.Push((window, 0, null));
+        var pending = new Stack<(DependencyObject Element, int Depth, int? ParentSequence, double ParentEffectiveOpacity)>();
+        pending.Push((window, 0, null, 1.0));
         var truncated = false;
         var focusIdentity = "none";
         int? focusedSequence = null;
@@ -705,7 +939,7 @@ internal sealed class AIArenaUiVerificationControlService
         while (pending.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var (current, depth, parentSequence) = pending.Pop();
+            var (current, depth, parentSequence, parentEffectiveOpacity) = pending.Pop();
             if (depth > MaximumVisualDepth)
             {
                 truncated = true;
@@ -713,6 +947,7 @@ internal sealed class AIArenaUiVerificationControlService
             }
 
             int? childParentSequence = parentSequence;
+            var childEffectiveOpacity = parentEffectiveOpacity;
             if (current is UIElement element)
             {
                 if (!ReferenceEquals(element, window) && !element.IsVisible)
@@ -729,6 +964,17 @@ internal sealed class AIArenaUiVerificationControlService
                 var sequence = nodes.Count;
                 var describedIdentity = DescribeElementIdentity(element, sequence);
                 var hasKeyboardFocus = ReferenceEquals(current, focusedElement) || element.IsKeyboardFocused;
+                var bounds = ElementBoundsInWindow(element);
+                var effectiveOpacity = Math.Clamp(parentEffectiveOpacity * element.Opacity, 0, 1);
+                var intersectsViewport = HasMaterialViewportIntersection(
+                    bounds,
+                    Math.Max(0, window.ActualWidth),
+                    Math.Max(0, window.ActualHeight));
+                var isRendered = element.IsVisible
+                    && bounds.Width > 0.5
+                    && bounds.Height > 0.5
+                    && effectiveOpacity > 0.001
+                    && intersectsViewport;
                 if (hasKeyboardFocus)
                 {
                     focusedSequence = sequence;
@@ -746,14 +992,22 @@ internal sealed class AIArenaUiVerificationControlService
                     element.IsVisible,
                     element.IsEnabled,
                     element.Focusable,
-                    hasKeyboardFocus));
+                    hasKeyboardFocus,
+                    RoundSigned(bounds.X),
+                    RoundSigned(bounds.Y),
+                    Round(bounds.Width),
+                    Round(bounds.Height),
+                    Round(effectiveOpacity, 4),
+                    intersectsViewport,
+                    isRendered));
                 childParentSequence = sequence;
+                childEffectiveOpacity = effectiveOpacity;
             }
 
             var childCount = VisualTreeHelper.GetChildrenCount(current);
             for (var index = childCount - 1; index >= 0; index--)
             {
-                pending.Push((VisualTreeHelper.GetChild(current, index), depth + 1, childParentSequence));
+                pending.Push((VisualTreeHelper.GetChild(current, index), depth + 1, childParentSequence, childEffectiveOpacity));
             }
         }
 
@@ -797,6 +1051,7 @@ internal sealed class AIArenaUiVerificationControlService
             ? nodes.Where(node => node.IsVisible).Select(node => node.Identity).Take(1).ToArray()
             : visibleSurfaceRoots;
         var selectedView = SelectedView(observedSurface);
+        var selectedFeature = ObserveExperimentFeatureKey(observedSurface);
         var dialogState = ObserveDialogState();
         var motionMode = SystemMotionPreferences.PreferenceSource switch
         {
@@ -806,6 +1061,7 @@ internal sealed class AIArenaUiVerificationControlService
         };
         var observedState = BuildCanonicalState(
             observedSurface,
+            selectedFeature,
             dialogState,
             safeTheme,
             Math.Max(1, (int)Math.Round(actualWidth, MidpointRounding.AwayFromZero)),
@@ -1087,8 +1343,10 @@ internal sealed class AIArenaUiVerificationControlService
         var source = SystemMotionPreferences.PreferenceSource;
         var motionMode = source == "qa-normal" ? "normal" : source == "qa-reduced" ? "reduced" : "system";
         var scale = renderDpiScale ?? VisualTreeHelper.GetDpi(window).DpiScaleX;
+        var observedSurface = ObserveSurfaceState(visibleRoots);
         return BuildCanonicalState(
-            ObserveSurfaceState(visibleRoots),
+            observedSurface,
+            ObserveExperimentFeatureKey(observedSurface),
             ObserveDialogState(),
             safeTheme,
             Math.Max(1, (int)Math.Round(window.ActualWidth, MidpointRounding.AwayFromZero)),
@@ -1128,6 +1386,26 @@ internal sealed class AIArenaUiVerificationControlService
             : "arena-populated";
     }
 
+    private string ObserveExperimentFeatureKey(string surface)
+    {
+        if (!string.Equals(surface, "experiment-lab", StringComparison.Ordinal))
+        {
+            return "";
+        }
+
+        try
+        {
+            var key = selectedExperimentFeatureKey?.Invoke()?.Trim() ?? "";
+            return ArenaQaSealManifestV2.RequiredExperimentFeatureKeys.Contains(key, StringComparer.Ordinal)
+                ? key
+                : "unavailable";
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            return "unavailable";
+        }
+    }
+
     private string ObserveDialogState()
     {
         if (window.FindName("AppSettingsPanel") is UIElement { IsVisible: true })
@@ -1155,6 +1433,7 @@ internal sealed class AIArenaUiVerificationControlService
 
     private static string BuildCanonicalState(
         string surface,
+        string selectedFeature,
         string dialogState,
         string theme,
         int viewportWidthDip,
@@ -1168,7 +1447,10 @@ internal sealed class AIArenaUiVerificationControlService
                 : Math.Abs(rasterDensityScale - 2.0) < 0.001
                     ? "2-0"
                     : rasterDensityScale.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture).Replace('.', '-');
-        return $"{surface}.{dialogState}.{theme}.w{viewportWidthDip}.d{density}.{motionMode}";
+        var featureSegment = surface == "experiment-lab"
+            ? $".feature-{selectedFeature}"
+            : "";
+        return $"{surface}{featureSegment}.{dialogState}.{theme}.w{viewportWidthDip}.d{density}.{motionMode}";
     }
 
     private static bool TryNormalizeFocusDirection(string? value, out string direction)
@@ -1190,6 +1472,55 @@ internal sealed class AIArenaUiVerificationControlService
         return double.IsFinite(value)
             ? Math.Round(Math.Max(0, value), digits, MidpointRounding.AwayFromZero)
             : 0;
+    }
+
+    private static double RoundSigned(double value, int digits = 2) =>
+        double.IsFinite(value)
+            ? Math.Round(value, digits, MidpointRounding.AwayFromZero)
+            : 0;
+
+    private Rect ElementBoundsInWindow(UIElement element)
+    {
+        try
+        {
+            if (ReferenceEquals(element, window))
+            {
+                return new Rect(0, 0, Math.Max(0, window.ActualWidth), Math.Max(0, window.ActualHeight));
+            }
+
+            var size = element.RenderSize;
+            if (!double.IsFinite(size.Width)
+                || !double.IsFinite(size.Height)
+                || size.Width <= 0
+                || size.Height <= 0)
+            {
+                return Rect.Empty;
+            }
+
+            return element.TransformToAncestor(window).TransformBounds(new Rect(new Point(), size));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            return Rect.Empty;
+        }
+    }
+
+    private static bool HasMaterialViewportIntersection(Rect bounds, double viewportWidth, double viewportHeight)
+    {
+        if (bounds.IsEmpty
+            || !double.IsFinite(bounds.X)
+            || !double.IsFinite(bounds.Y)
+            || !double.IsFinite(bounds.Width)
+            || !double.IsFinite(bounds.Height)
+            || viewportWidth <= 0
+            || viewportHeight <= 0)
+        {
+            return false;
+        }
+
+        var intersectionWidth = Math.Min(bounds.Right, viewportWidth) - Math.Max(bounds.Left, 0);
+        var intersectionHeight = Math.Min(bounds.Bottom, viewportHeight) - Math.Max(bounds.Top, 0);
+        return intersectionWidth > 0.5 && intersectionHeight > 0.5;
     }
 
     private static AIArenaQaWindowSizeResult WindowSizeFailure(
@@ -1289,5 +1620,8 @@ internal sealed class AIArenaUiVerificationControlService
     private readonly record struct VisualIdentityEntry(
         UIElement? Element,
         int Sequence,
-        string BaseIdentity);
+        int? ParentSequence,
+        string BaseIdentity,
+        string Identity,
+        bool IsRendered);
 }

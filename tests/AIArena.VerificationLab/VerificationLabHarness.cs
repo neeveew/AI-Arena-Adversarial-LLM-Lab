@@ -42,6 +42,8 @@ internal static class VerificationLabHarness
             ("malformed stream is rejected", () => VerifyMalformedStreamAsync(client, provider, cancellationToken)),
             ("saturation is surfaced", () => VerifySaturationAsync(client, provider, cancellationToken)),
             ("empty completion is rejected", () => VerifyEmptyCompletionAsync(client, provider, cancellationToken)),
+            ("interrupted stream retains only observed partial progress", () => VerifyInterruptedStreamAsync(client, provider, cancellationToken)),
+            ("context pressure is classified", () => VerifyContextPressureAsync(client, provider, cancellationToken)),
             ("HTTP error is surfaced", () => VerifyHttpErrorAsync(client, provider, cancellationToken)),
             ("request capture is deterministic and content-free", () => VerifyCaptureSafetyAsync(client, provider, cancellationToken)),
             ("experiment matrix forks real loopback trials and resumes privately", () => ExperimentExecutionVerification.RunAsync(provider, client, cancellationToken)),
@@ -179,10 +181,14 @@ internal static class VerificationLabHarness
         ScriptedProviderHost provider,
         CancellationToken cancellationToken)
     {
+        var captureStart = provider.Captures.Count;
         provider.QueueFault(ScriptedProviderFault.MalformedStream);
-        var result = await client.CompleteChatStreamingAsync(Config(provider), Messages(), progress: null, cancellationToken);
+        var progress = new ProgressCapture();
+        var result = await client.CompleteChatStreamingAsync(Config(provider), Messages(), progress, cancellationToken);
         Require(!result.Ok, "Malformed stream was reported as successful.");
         Require(result.Text.Length == 0, "Malformed stream retained unverified content.");
+        Require(progress.Text.Length == 0, "Malformed bytes were exposed as assistant progress.");
+        RequireFaultCapture(provider, captureStart, ScriptedProviderFault.MalformedStream, streaming: true);
     }
 
     private static async Task VerifySaturationAsync(
@@ -204,10 +210,65 @@ internal static class VerificationLabHarness
         ScriptedProviderHost provider,
         CancellationToken cancellationToken)
     {
+        var captureStart = provider.Captures.Count;
         provider.QueueFault(ScriptedProviderFault.Empty);
         var result = await client.CompleteChatAsync(Config(provider), Messages(), cancellationToken);
         Require(!result.Ok, "Empty completion was reported as successful.");
-        Require(result.Error.Contains("without assistant content", StringComparison.OrdinalIgnoreCase), "Empty completion was not classified.");
+        Require(result.Error == "Provider returned a successful response without assistant content.",
+            "Empty completion did not preserve the production adapter classification.");
+        RequireFaultCapture(provider, captureStart, ScriptedProviderFault.Empty, streaming: false);
+    }
+
+    private static async Task VerifyInterruptedStreamAsync(
+        ModelProviderClient client,
+        ScriptedProviderHost provider,
+        CancellationToken cancellationToken)
+    {
+        var captureStart = provider.Captures.Count;
+        provider.QueueFault(ScriptedProviderFault.Interruption);
+        var progress = new ProgressCapture();
+        var result = await client.CompleteChatStreamingAsync(Config(provider), Messages(), progress, cancellationToken);
+        Require(!result.Ok, "Interrupted stream was reported as a completed response.");
+        Require(progress.Text == ScriptedProviderHost.InterruptedPartialText,
+            "Interrupted stream did not expose exactly the partial content observed before transport termination.");
+        Require(result.Text.Length == 0 && result.Reasoning.Length == 0,
+            "Interrupted transport promoted unverified partial progress into accepted completion content.");
+        RequireFaultCapture(provider, captureStart, ScriptedProviderFault.Interruption, streaming: true);
+    }
+
+    private static async Task VerifyContextPressureAsync(
+        ModelProviderClient client,
+        ScriptedProviderHost provider,
+        CancellationToken cancellationToken)
+    {
+        var captureStart = provider.Captures.Count;
+        provider.QueueFault(ScriptedProviderFault.ContextPressure);
+        var result = await client.CompleteChatAsync(
+            Config(provider, ModelProviderApiModes.OpenAiCompatible),
+            Messages(),
+            cancellationToken);
+        Require(!result.Ok && result.Text.Length == 0, "Context-pressure rejection was reported as successful content.");
+        Require(result.Error.Contains("context length exceeded", StringComparison.OrdinalIgnoreCase),
+            "Context-pressure classification was lost at the provider boundary.");
+        RequireFaultCapture(provider, captureStart, ScriptedProviderFault.ContextPressure, streaming: false);
+    }
+
+    private static void RequireFaultCapture(
+        ScriptedProviderHost provider,
+        int captureStart,
+        ScriptedProviderFault expectedFault,
+        bool streaming)
+    {
+        var capture = provider.Captures.Skip(captureStart).Single();
+        Require(capture.Method == "POST"
+                && capture.Path == "/v1/chat/completions"
+                && capture.Fault == expectedFault
+                && capture.Streaming == streaming
+                && capture.MessageCount == Messages().Count
+                && capture.AuthorizationSupplied
+                && capture.BodyLength > 0
+                && capture.BodySha256.Length == 64,
+            $"{expectedFault} loopback request capture lost its bounded operation evidence.");
     }
 
     private static async Task VerifyHttpErrorAsync(

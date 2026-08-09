@@ -21,6 +21,8 @@ internal enum ScriptedProviderFault
     MalformedStream,
     Saturation,
     Empty,
+    Interruption,
+    ContextPressure,
     HttpError
 }
 
@@ -48,6 +50,7 @@ internal sealed class ScriptedProviderHost : IAsyncDisposable
     internal const string PrimaryModel = "scripted-model-q4_k_m.gguf";
     internal const string SecondaryModel = "scripted-model-small.gguf";
     internal const string CompletionText = "Deterministic verification response.";
+    internal const string InterruptedPartialText = "Partial before interruption.";
     internal const string ReasoningText = "Deterministic verification reasoning.";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -306,6 +309,28 @@ internal sealed class ScriptedProviderHost : IAsyncDisposable
                 }
 
                 return;
+            case ScriptedProviderFault.Interruption:
+                if (request.Streaming)
+                {
+                    await WriteInterruptedStreamAsync(context, request);
+                }
+                else
+                {
+                    context.Response.StatusCode = StatusCodes.Status200OK;
+                    context.Response.ContentType = "application/json";
+                    await context.Response.StartAsync(CancellationToken.None);
+                    await context.Response.WriteAsync("{\"choices\":[{\"message\":{\"content\":\"partial", CancellationToken.None);
+                    await context.Response.Body.FlushAsync(CancellationToken.None);
+                    context.Abort();
+                }
+
+                return;
+            case ScriptedProviderFault.ContextPressure:
+                await WriteJsonAsync(
+                    context,
+                    new { error = new { message = "scripted context length exceeded", code = "context_length_exceeded" } },
+                    StatusCodes.Status400BadRequest);
+                return;
             case ScriptedProviderFault.HttpError:
                 await WriteJsonAsync(
                     context,
@@ -500,6 +525,24 @@ internal sealed class ScriptedProviderHost : IAsyncDisposable
             usage = new { prompt_tokens = 7, completion_tokens = 0, total_tokens = 7 }
         });
         await context.Response.WriteAsync("data: [DONE]\n\n", context.RequestAborted);
+    }
+
+    private static async Task WriteInterruptedStreamAsync(HttpContext context, ScriptedRequestCapture request)
+    {
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "text/event-stream";
+        context.Response.Headers.CacheControl = "no-cache";
+        await WriteSseAsync(context, new
+        {
+            id = "chatcmpl-scripted-interrupted",
+            model = string.IsNullOrWhiteSpace(request.ModelEvidence) ? PrimaryModel : request.ModelEvidence,
+            choices = new object[]
+            {
+                new { index = 0, delta = new { content = InterruptedPartialText }, finish_reason = (string?)null }
+            }
+        });
+        await Task.Delay(25, CancellationToken.None);
+        context.Abort();
     }
 
     private static async Task WriteSseAsync(HttpContext context, object payload)

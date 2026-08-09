@@ -12,13 +12,27 @@ public enum ArenaProviderFaultOperation
 public enum ArenaFaultObservedOutcome
 {
     InjectedFailure,
-    CallerCancelled
+    InjectedEmptyResponse,
+    CallerCancelled,
+    CallerCancelledBeforeEffect
+}
+
+public enum ArenaFaultInjectedEffect
+{
+    CallerCancelledBeforeEffect,
+    TimeoutElapsed,
+    ConnectionDropped,
+    MalformedStreamRejected,
+    CapacityRejected,
+    EmptyCompletion,
+    StreamInterrupted,
+    ContextLimitRejected
 }
 
 /// <summary>
 /// Content-free observation produced by the fault decorator. The cause of the
-/// injected failure is deliberately separate from recovery evidence because a
-/// provider boundary cannot prove whether a higher-level retry recovered.
+/// injected provider condition is deliberately separate from recovery evidence
+/// because a provider boundary cannot prove whether a higher-level retry recovered.
 /// </summary>
 public sealed record ArenaFaultObservation(
     string ProfileId,
@@ -26,6 +40,7 @@ public sealed record ArenaFaultObservation(
     long Sequence,
     int Occurrence,
     ArenaFaultKind InjectedCause,
+    ArenaFaultInjectedEffect InjectedEffect,
     ArenaProviderFaultOperation Operation,
     ArenaFaultObservedOutcome ObservedOutcome,
     ArenaEvidenceAssertion CauseEvidence,

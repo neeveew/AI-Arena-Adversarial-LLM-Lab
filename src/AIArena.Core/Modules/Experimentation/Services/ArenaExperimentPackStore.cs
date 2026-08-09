@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AIArena.Core.Models;
 
 namespace AIArena.Core.Services;
@@ -53,13 +54,55 @@ public sealed record ArenaArtifactLoadResult<T>(
     where T : class, IArenaVersionedContract;
 
 /// <summary>
-/// Strict bounded decoder for portable scenario and benchmark packs. V1 has no
-/// implicit migrations: older recognized schemas are reported as requiring an
-/// explicit migration so callers never silently reinterpret benchmark meaning.
+/// Strict bounded decoder for portable scenario and benchmark packs. Ordinary
+/// decoding never migrates. The two named v0-to-v1 entry points below accept a
+/// deliberately small closed legacy wire shape and make migration an explicit
+/// caller action.
 /// </summary>
 public static class ArenaExperimentPackCodec
 {
     public const int DefaultMaximumPackBytes = 2 * 1024 * 1024;
+    public const string ScenarioPackV0Schema = "ai_arena.scenario_pack.v0";
+    public const string BenchmarkPackV0Schema = "ai_arena.benchmark_pack.v0";
+    public const string ScenarioPackV0MigratorVersion = "ai_arena.scenario_pack.v0_to_v1.migrator.1";
+    public const string BenchmarkPackV0MigratorVersion = "ai_arena.benchmark_pack.v0_to_v1.migrator.1";
+
+    private static readonly JsonSerializerOptions MigrationJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = false,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        RespectNullableAnnotations = true,
+        RespectRequiredConstructorParameters = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false) }
+    };
+
+    // V0 intentionally has no createdAtUtc, contentFingerprint, or migration
+    // fields. Those are v1 authority and cannot be asserted by legacy input.
+    private sealed record ScenarioPackV0(
+        string Schema,
+        string Id,
+        string Name,
+        string Version,
+        ImmutableArray<ArenaScenarioInvariant> Invariants,
+        ImmutableArray<ArenaScenarioDefinition> Scenarios,
+        ImmutableArray<ArenaEvidenceAssertion> Evidence);
+
+    private sealed record BenchmarkPackV0(
+        string Schema,
+        string Id,
+        string Name,
+        string Version,
+        string ScenarioPackId,
+        ImmutableArray<ArenaBenchmarkCase> Cases,
+        ImmutableArray<ArenaEvidenceAssertion> Evidence);
+
+    private sealed record MigrationSourceResult<T>(
+        T? Source,
+        string? SourceSha256,
+        ImmutableArray<ArenaArtifactDiagnostic> Diagnostics)
+        where T : class;
 
     public static ArenaPackDecodeResult<ArenaScenarioPackContract> DecodeScenarioPack(
         ReadOnlyMemory<byte> utf8,
@@ -72,6 +115,277 @@ public static class ArenaExperimentPackCodec
         string relativePath,
         int maximumBytes = DefaultMaximumPackBytes) =>
         Decode<ArenaBenchmarkPackContract>(utf8, relativePath, ArenaContractSchemas.BenchmarkPack, maximumBytes);
+
+    public static ArenaPackDecodeResult<ArenaScenarioPackContract> MigrateScenarioPackV0(
+        ReadOnlyMemory<byte> utf8,
+        string relativePath,
+        DateTimeOffset migratedAtUtc,
+        int maximumBytes = DefaultMaximumPackBytes)
+    {
+        var source = DecodeMigrationSource<ScenarioPackV0>(
+            utf8,
+            relativePath,
+            ScenarioPackV0Schema,
+            migratedAtUtc,
+            maximumBytes);
+        if (source.Source is null || source.SourceSha256 is null)
+        {
+            return new(null, source.Diagnostics);
+        }
+
+        var legacy = source.Source;
+        var provenance = new ArenaPackMigrationProvenance(
+            ScenarioPackV0Schema,
+            legacy.Version,
+            source.SourceSha256,
+            ScenarioPackV0MigratorVersion,
+            migratedAtUtc);
+        var candidate = new ArenaScenarioPackContract(
+            ArenaContractSchemas.ScenarioPack,
+            legacy.Id,
+            migratedAtUtc,
+            legacy.Name,
+            legacy.Version,
+            new string('0', 64),
+            provenance,
+            legacy.Invariants,
+            legacy.Scenarios,
+            legacy.Evidence);
+        var issues = ArenaContractCodec.Validate(candidate).Issues
+            .Where(issue => !string.Equals(issue.Code, "scenario.content_fingerprint", StringComparison.Ordinal))
+            .ToImmutableArray();
+        if (!issues.IsEmpty)
+        {
+            return MigrationContractFailure<ArenaScenarioPackContract>(relativePath, issues);
+        }
+
+        var migrated = candidate with
+        {
+            ContentFingerprint = ArenaExperimentFingerprints.ScenarioPackContent(
+                candidate.Invariants,
+                candidate.Scenarios)
+        };
+        return CompleteMigration(migrated, relativePath, ScenarioPackV0Schema);
+    }
+
+    public static ArenaPackDecodeResult<ArenaBenchmarkPackContract> MigrateBenchmarkPackV0(
+        ReadOnlyMemory<byte> utf8,
+        string relativePath,
+        DateTimeOffset migratedAtUtc,
+        int maximumBytes = DefaultMaximumPackBytes)
+    {
+        var source = DecodeMigrationSource<BenchmarkPackV0>(
+            utf8,
+            relativePath,
+            BenchmarkPackV0Schema,
+            migratedAtUtc,
+            maximumBytes);
+        if (source.Source is null || source.SourceSha256 is null)
+        {
+            return new(null, source.Diagnostics);
+        }
+
+        var legacy = source.Source;
+        var provenance = new ArenaPackMigrationProvenance(
+            BenchmarkPackV0Schema,
+            legacy.Version,
+            source.SourceSha256,
+            BenchmarkPackV0MigratorVersion,
+            migratedAtUtc);
+        var candidate = new ArenaBenchmarkPackContract(
+            ArenaContractSchemas.BenchmarkPack,
+            legacy.Id,
+            migratedAtUtc,
+            legacy.Name,
+            legacy.Version,
+            new string('0', 64),
+            provenance,
+            legacy.ScenarioPackId,
+            legacy.Cases,
+            legacy.Evidence);
+        var issues = ArenaContractCodec.Validate(candidate).Issues
+            .Where(issue => !string.Equals(issue.Code, "benchmark.content_fingerprint", StringComparison.Ordinal))
+            .ToImmutableArray();
+        if (!issues.IsEmpty)
+        {
+            return MigrationContractFailure<ArenaBenchmarkPackContract>(relativePath, issues);
+        }
+
+        var migrated = candidate with
+        {
+            ContentFingerprint = ArenaExperimentFingerprints.BenchmarkPackContent(
+                candidate.ScenarioPackId,
+                candidate.Cases)
+        };
+        return CompleteMigration(migrated, relativePath, BenchmarkPackV0Schema);
+    }
+
+    private static MigrationSourceResult<T> DecodeMigrationSource<T>(
+        ReadOnlyMemory<byte> utf8,
+        string relativePath,
+        string expectedSchema,
+        DateTimeOffset migratedAtUtc,
+        int maximumBytes)
+        where T : class
+    {
+        var diagnostics = ImmutableArray.CreateBuilder<ArenaArtifactDiagnostic>();
+        if (!ArenaContractPrivacyRules.IsSafeRelativePath(relativePath))
+        {
+            diagnostics.Add(Error("artifact.relative_path", "artifact.json", "Artifact path is not a safe relative path."));
+            return new(null, null, Sort(diagnostics));
+        }
+        if (maximumBytes < 1 || utf8.Length > maximumBytes)
+        {
+            diagnostics.Add(Error("artifact.oversize", relativePath, "Artifact exceeds its bounded byte limit."));
+            return new(null, null, Sort(diagnostics));
+        }
+        if (migratedAtUtc == default || migratedAtUtc.Offset != TimeSpan.Zero)
+        {
+            diagnostics.Add(Error("artifact.migration_time", relativePath, "Migration requires a non-default UTC timestamp."));
+            return new(null, null, Sort(diagnostics));
+        }
+
+        string json;
+        JsonDocument document;
+        try
+        {
+            json = new UTF8Encoding(false, true).GetString(utf8.Span);
+            document = JsonDocument.Parse(json, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = 64
+            });
+        }
+        catch (Exception exception) when (exception is JsonException or DecoderFallbackException)
+        {
+            diagnostics.Add(Error("artifact.corrupt", relativePath, "Migration source is not strict UTF-8 JSON."));
+            return new(null, null, Sort(diagnostics));
+        }
+
+        using (document)
+        {
+            if (HasDuplicatePropertyNames(document.RootElement))
+            {
+                diagnostics.Add(Error(
+                    "artifact.migration_duplicate_member",
+                    relativePath,
+                    "Migration source contains a duplicate JSON member and is ambiguous."));
+                return new(null, null, Sort(diagnostics));
+            }
+
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("schema", out var schema)
+                || schema.ValueKind != JsonValueKind.String)
+            {
+                diagnostics.Add(Error("artifact.schema_missing", relativePath, "Migration source has no supported schema.", expectedSchema: expectedSchema));
+                return new(null, null, Sort(diagnostics));
+            }
+
+            var detected = schema.GetString() ?? "";
+            if (!string.Equals(detected, expectedSchema, StringComparison.Ordinal))
+            {
+                diagnostics.Add(Error(
+                    "artifact.migration_source_unsupported",
+                    relativePath,
+                    "Only the named v0 wire contract can enter this explicit migrator.",
+                    detected,
+                    expectedSchema));
+                return new(null, null, Sort(diagnostics));
+            }
+
+            var privacyIssues = ArenaContractPrivacyRules.Inspect(document.RootElement);
+            if (!privacyIssues.IsEmpty)
+            {
+                diagnostics.AddRange(privacyIssues.Select(issue => Error(
+                    $"artifact.migration_source.{issue.Code}",
+                    relativePath,
+                    $"Migration source failed privacy validation at {issue.Path}.")));
+                return new(null, null, Sort(diagnostics));
+            }
+        }
+
+        try
+        {
+            var source = JsonSerializer.Deserialize<T>(json, MigrationJsonOptions);
+            if (source is null)
+            {
+                diagnostics.Add(Error("artifact.corrupt", relativePath, "Migration source could not be decoded."));
+                return new(null, null, Sort(diagnostics));
+            }
+
+            var sourceSha256 = Convert.ToHexStringLower(SHA256.HashData(utf8.Span));
+            return new(source, sourceSha256, Sort(diagnostics));
+        }
+        catch (Exception exception) when (exception is JsonException or NotSupportedException)
+        {
+            diagnostics.Add(Error("artifact.migration_wire_invalid", relativePath, "Migration source does not match the closed v0 wire contract."));
+            return new(null, null, Sort(diagnostics));
+        }
+    }
+
+    private static bool HasDuplicatePropertyNames(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in element.EnumerateObject())
+            {
+                if (!names.Add(property.Name) || HasDuplicatePropertyNames(property.Value))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                if (HasDuplicatePropertyNames(item))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static ArenaPackDecodeResult<T> CompleteMigration<T>(
+        T migrated,
+        string relativePath,
+        string sourceSchema)
+        where T : class, IArenaVersionedContract
+    {
+        var validation = ArenaContractCodec.Validate(migrated);
+        if (!validation.IsValid)
+        {
+            return MigrationContractFailure<T>(relativePath, validation.Issues);
+        }
+
+        return new(
+            migrated,
+            [new(
+                "artifact.migrated",
+                ArenaArtifactDiagnosticSeverity.Information,
+                relativePath,
+                "Explicit migration produced a validated canonical v1 artifact.",
+                sourceSchema,
+                migrated.Schema)]);
+    }
+
+    private static ArenaPackDecodeResult<T> MigrationContractFailure<T>(
+        string relativePath,
+        IEnumerable<ArenaContractValidationIssue> issues)
+        where T : class, IArenaVersionedContract =>
+        new(
+            null,
+            [.. issues.Select(issue => Error(
+                    $"artifact.migration_contract.{issue.Code}",
+                    relativePath,
+                    $"Migrated contract validation failed at {issue.Path}."))
+                .Distinct()
+                .OrderBy(item => item.Code, StringComparer.Ordinal)]);
 
     private static ArenaPackDecodeResult<T> Decode<T>(
         ReadOnlyMemory<byte> utf8,
@@ -277,6 +591,18 @@ public sealed class ArenaExperimentPackStore
                 {
                     return new(ArenaArtifactWriteDisposition.Duplicate, relativePath, sameIdentity, existing.Diagnostics);
                 }
+                if (IsRepeatMigration(sameIdentity, pack))
+                {
+                    return new(
+                        ArenaArtifactWriteDisposition.Duplicate,
+                        relativePath,
+                        sameIdentity,
+                        [new(
+                            "artifact.duplicate_migration_source",
+                            ArenaArtifactDiagnosticSeverity.Information,
+                            relativePath,
+                            "The exact legacy source and canonical content were already migrated; the original migration receipt was retained.")]);
+                }
 
                 return Rejected(pack, relativePath, "artifact.duplicate_id", "A different artifact already uses this ID.");
             }
@@ -466,6 +792,33 @@ public sealed class ArenaExperimentPackStore
                 string.Equals(a.ContentFingerprint, b.ContentFingerprint, StringComparison.OrdinalIgnoreCase),
             _ => false
         };
+
+    private static bool IsRepeatMigration<T>(T left, T right)
+        where T : IArenaVersionedContract =>
+        (left, right) switch
+        {
+            (ArenaScenarioPackContract a, ArenaScenarioPackContract b) =>
+                SameMigrationIdentity(a.Migration, b.Migration)
+                && string.Equals(a.Name, b.Name, StringComparison.Ordinal)
+                && string.Equals(a.Version, b.Version, StringComparison.Ordinal)
+                && string.Equals(a.ContentFingerprint, b.ContentFingerprint, StringComparison.OrdinalIgnoreCase),
+            (ArenaBenchmarkPackContract a, ArenaBenchmarkPackContract b) =>
+                SameMigrationIdentity(a.Migration, b.Migration)
+                && string.Equals(a.Name, b.Name, StringComparison.Ordinal)
+                && string.Equals(a.Version, b.Version, StringComparison.Ordinal)
+                && string.Equals(a.ContentFingerprint, b.ContentFingerprint, StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+
+    private static bool SameMigrationIdentity(
+        ArenaPackMigrationProvenance? left,
+        ArenaPackMigrationProvenance? right) =>
+        left is not null
+        && right is not null
+        && string.Equals(left.SourceSchema, right.SourceSchema, StringComparison.Ordinal)
+        && string.Equals(left.SourceVersion, right.SourceVersion, StringComparison.Ordinal)
+        && string.Equals(left.SourceContentFingerprint, right.SourceContentFingerprint, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(left.MigratorVersion, right.MigratorVersion, StringComparison.Ordinal);
 
     private static string RelativePath(string directoryName, string id)
     {

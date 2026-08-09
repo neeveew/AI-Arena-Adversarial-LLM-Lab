@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AIArena.Core.Models;
 using AIArena.Core.Services;
 
@@ -42,6 +43,12 @@ internal static class VerificationEvidenceValidatorChecks
 
             var capturedAt = new DateTimeOffset(2026, 8, 9, 12, 0, 0, TimeSpan.Zero);
             var automationBytes = BuildAutomationArtifact(combined, capturedAt);
+            var legacyAutomationJson = Encoding.UTF8.GetString(automationBytes);
+            Require(legacyAutomationJson.Contains("\"Schema\":\"ai_arena.ui_structure_evidence.v1\"", StringComparison.Ordinal)
+                    && !legacyAutomationJson.Contains("\"BoundsX\"", StringComparison.Ordinal)
+                    && !legacyAutomationJson.Contains("\"EffectiveOpacity\"", StringComparison.Ordinal)
+                    && !legacyAutomationJson.Contains("\"IsRendered\"", StringComparison.Ordinal),
+                "Historical V1 automation fixture no longer preserves the genuine pre-renderability node shape.");
             var screenshotBytes = BuildPngArtifact(960, 640, variant: 1);
             await File.WriteAllBytesAsync(automationPath, automationBytes, cancellationToken);
             await File.WriteAllBytesAsync(screenshotPath, screenshotBytes, cancellationToken);
@@ -400,6 +407,13 @@ internal static class VerificationEvidenceValidatorChecks
                 combined,
                 capturedAt,
                 cancellationToken);
+            await RunFeatureSurfaceMatrixValidationChecksAsync(
+                evidenceRoot,
+                outer,
+                map,
+                combined,
+                capturedAt,
+                cancellationToken);
 
             await File.WriteAllTextAsync(Path.Combine(root, "root.txt"), "outer-v2\n", new UTF8Encoding(false), cancellationToken);
             var staleOuterOutput = new StringWriter();
@@ -476,7 +490,8 @@ internal static class VerificationEvidenceValidatorChecks
             map,
             combinedFingerprint,
             capturedAt,
-            cancellationToken);
+            enhancedAutomation: false,
+            cancellationToken: cancellationToken);
         var validPath = Path.Combine(evidenceRoot, "valid-ui-matrix.json");
         await WriteContractAsync(validPath, fixture.Contract, cancellationToken);
         Require(await VerificationEvidenceValidator.ValidateFileAsync(validPath, new StringWriter(), cancellationToken) == 0,
@@ -689,12 +704,657 @@ internal static class VerificationEvidenceValidatorChecks
         await File.WriteAllBytesAsync(fixture.MatrixPath, fixture.MatrixBytes, cancellationToken);
     }
 
+    private static async Task RunFeatureSurfaceMatrixValidationChecksAsync(
+        string evidenceRoot,
+        VerificationRepositorySnapshot outer,
+        VerificationRepositorySnapshot map,
+        string combinedFingerprint,
+        DateTimeOffset capturedAt,
+        CancellationToken cancellationToken)
+    {
+        var fixture = await BuildFeatureSurfaceMatrixFixtureAsync(
+            evidenceRoot,
+            outer,
+            map,
+            combinedFingerprint,
+            capturedAt,
+            enhancedAutomation: true,
+            cancellationToken: cancellationToken);
+        var validPath = Path.Combine(evidenceRoot, "valid-feature-surface-matrix.json");
+        await WriteContractAsync(validPath, fixture.Contract, cancellationToken);
+        var validOutput = new StringWriter();
+        Require(await VerificationEvidenceValidator.ValidateFileAsync(validPath, validOutput, cancellationToken) == 0,
+            $"A complete 60-cell feature-surface matrix was rejected: {validOutput.ToString().Trim()}");
+
+        var missingContract = fixture.Contract with
+        {
+            Artifacts = [.. fixture.Contract.Artifacts.Where(artifact =>
+                artifact.Kind != ArenaQaSealManifestV2.FeatureSurfaceMatrixArtifactKind)]
+        };
+        var missingPath = Path.Combine(evidenceRoot, "missing-feature-surface-matrix.json");
+        await WriteContractAsync(missingPath, missingContract, cancellationToken);
+        var missingOutput = new StringWriter();
+        Require(await VerificationEvidenceValidator.ValidateFileAsync(missingPath, missingOutput, cancellationToken) != 0
+                && missingOutput.ToString().Contains("bundle.feature_matrix_missing", StringComparison.Ordinal),
+            "A passing feature-surface gate without its matrix document was not rejected.");
+
+        async Task RequireContractMutationAsync(
+            string name,
+            ArenaQaEvidenceContract contract,
+            string issueCode,
+            string message)
+        {
+            var path = Path.Combine(evidenceRoot, $"{name}-feature-surface-matrix.json");
+            await WriteContractAsync(path, contract, cancellationToken);
+            var output = new StringWriter();
+            Require(await VerificationEvidenceValidator.ValidateFileAsync(path, output, cancellationToken) != 0
+                    && output.ToString().Contains(issueCode, StringComparison.Ordinal),
+                $"{message}: {output.ToString().Trim()}");
+        }
+
+        var migrationGateIndex = fixture.Contract.Gates.IndexOf(fixture.Contract.Gates.Single(gate =>
+            gate.Id == ArenaQaSealManifestV2.ExplicitMigrationGateId));
+        var migrationSchemaIndex = fixture.Contract.SchemaChecks.IndexOf(fixture.Contract.SchemaChecks.Single(check =>
+            check.Schema == ArenaContractSchemas.ScenarioPack));
+        var migrationArtifactIndex = fixture.Contract.Artifacts.IndexOf(fixture.Contract.Artifacts.Single(artifact =>
+            artifact.Id == ArenaQaSealManifestV2.ExplicitMigrationArtifactId));
+        await RequireContractMutationAsync(
+            "migration-gate-deleted",
+            fixture.Contract with
+            {
+                Gates = fixture.Contract.Gates.RemoveAt(migrationGateIndex)
+            },
+            "bundle.v2_migration_gate",
+            "A V2 feature matrix without the explicit v0 migration gate was accepted");
+        await RequireContractMutationAsync(
+            "migration-gate-not-required",
+            fixture.Contract with
+            {
+                Gates = fixture.Contract.Gates.SetItem(
+                    migrationGateIndex,
+                    fixture.Contract.Gates[migrationGateIndex] with { Required = false })
+            },
+            "bundle.v2_migration_gate",
+            "A V2 feature matrix whose migration gate was not required was accepted");
+        await RequireContractMutationAsync(
+            "migration-gate-outcome",
+            fixture.Contract with
+            {
+                Gates = fixture.Contract.Gates.SetItem(
+                    migrationGateIndex,
+                    fixture.Contract.Gates[migrationGateIndex] with { Outcome = ArenaQaGateOutcome.Partial })
+            },
+            "bundle.v2_migration_gate",
+            "A V2 feature matrix whose migration gate did not pass was accepted");
+        await RequireContractMutationAsync(
+            "migration-schema-source",
+            fixture.Contract with
+            {
+                SchemaChecks = fixture.Contract.SchemaChecks.SetItem(
+                    migrationSchemaIndex,
+                    fixture.Contract.SchemaChecks[migrationSchemaIndex] with
+                    {
+                        MigratedFromSchema = ArenaContractSchemas.BenchmarkPack
+                    })
+            },
+            "bundle.v2_migration_schema",
+            "A V2 feature matrix with a substituted migration source schema was accepted");
+        await RequireContractMutationAsync(
+            "migration-artifact-kind",
+            fixture.Contract with
+            {
+                Artifacts = fixture.Contract.Artifacts.SetItem(
+                    migrationArtifactIndex,
+                    fixture.Contract.Artifacts[migrationArtifactIndex] with { Kind = "generic-log" })
+            },
+            "bundle.v2_migration_artifact",
+            "A V2 feature matrix with a substituted migration artifact kind was accepted");
+
+        async Task RequireMutationAsync(string name, string json, string issueCode, string message)
+        {
+            var bytes = Encoding.UTF8.GetBytes(json);
+            await File.WriteAllBytesAsync(fixture.MatrixPath, bytes, cancellationToken);
+            var contract = ReplaceFeatureMatrixArtifact(
+                fixture.Contract,
+                fixture.MatrixArtifact with { Sha256 = Sha256(bytes) });
+            var path = Path.Combine(evidenceRoot, $"{name}-feature-surface-matrix.json");
+            await WriteContractAsync(path, contract, cancellationToken);
+            var output = new StringWriter();
+            Require(await VerificationEvidenceValidator.ValidateFileAsync(path, output, cancellationToken) != 0
+                    && output.ToString().Contains(issueCode, StringComparison.Ordinal),
+                $"{message}: {output.ToString().Trim()}");
+        }
+
+        var featureAutomation = fixture.Contract.Artifacts.First(artifact =>
+            artifact.Kind == "automation-tree"
+            && artifact.Id.StartsWith("artifact.p01.feature.matrix.", StringComparison.Ordinal));
+        var featureAutomationPath = Path.Combine(
+            evidenceRoot,
+            featureAutomation.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var originalAutomationBytes = await File.ReadAllBytesAsync(featureAutomationPath, cancellationToken);
+        async Task RequireAutomationMutationAsync(
+            string name,
+            Action<JsonObject> mutation,
+            string issueCode,
+            string message)
+        {
+            var root = JsonNode.Parse(originalAutomationBytes)?.AsObject()
+                ?? throw new InvalidOperationException("Feature automation fixture was unavailable.");
+            mutation(root);
+            var mutatedAutomationBytes = JsonSerializer.SerializeToUtf8Bytes(root);
+            var mutatedAutomationHash = Sha256(mutatedAutomationBytes);
+            var mutatedMatrixJson = ReplaceFirst(
+                Encoding.UTF8.GetString(fixture.MatrixBytes),
+                $"\"automationSha256\":\"{featureAutomation.Sha256}\"",
+                $"\"automationSha256\":\"{mutatedAutomationHash}\"");
+            var mutatedMatrixBytes = Encoding.UTF8.GetBytes(mutatedMatrixJson);
+            await File.WriteAllBytesAsync(featureAutomationPath, mutatedAutomationBytes, cancellationToken);
+            await File.WriteAllBytesAsync(fixture.MatrixPath, mutatedMatrixBytes, cancellationToken);
+            var contract = fixture.Contract with
+            {
+                Artifacts = [.. fixture.Contract.Artifacts.Select(artifact =>
+                    artifact.Id == featureAutomation.Id
+                        ? artifact with { Sha256 = mutatedAutomationHash }
+                        : artifact.Kind == ArenaQaSealManifestV2.FeatureSurfaceMatrixArtifactKind
+                            ? artifact with { Sha256 = Sha256(mutatedMatrixBytes) }
+                            : artifact)]
+            };
+            var path = Path.Combine(evidenceRoot, $"{name}-feature-surface-matrix.json");
+            await WriteContractAsync(path, contract, cancellationToken);
+            var output = new StringWriter();
+            Require(await VerificationEvidenceValidator.ValidateFileAsync(path, output, cancellationToken) != 0
+                    && output.ToString().Contains(issueCode, StringComparison.Ordinal),
+                $"{message}: {output.ToString().Trim()}");
+            await File.WriteAllBytesAsync(featureAutomationPath, originalAutomationBytes, cancellationToken);
+            await File.WriteAllBytesAsync(fixture.MatrixPath, fixture.MatrixBytes, cancellationToken);
+        }
+
+        var matrixJson = Encoding.UTF8.GetString(fixture.MatrixBytes);
+        await RequireMutationAsync(
+            "refresh-failed",
+            ReplaceFirst(matrixJson, "\"selectedFeatureStatus\":\"ready\"", "\"selectedFeatureStatus\":\"refresh-failed\""),
+            "bundle.feature_matrix_cross_product",
+            "A feature refresh failure was accepted as ready evidence");
+        await RequireMutationAsync(
+            "registry-tamper",
+            ReplaceFirst(matrixJson, "\"registeredFeatureKeys\":[\"matrix\"", "\"registeredFeatureKeys\":[\"not-registered\""),
+            "bundle.feature_matrix_schema",
+            "A matrix with a substituted registered feature key was accepted");
+        await RequireMutationAsync(
+            "visible-root-tamper",
+            ReplaceFirst(matrixJson, "\"visibleRootIdentity\":\"ExperimentLabPanel\"", "\"visibleRootIdentity\":\"TranscriptPanel\""),
+            "bundle.feature_matrix_cross_product",
+            "A matrix cell bound to the wrong visible root was accepted");
+        await RequireMutationAsync(
+            "content-identity-tamper",
+            ReplaceFirst(matrixJson, "\"requiredContentIdentity\":\"MemoryFeatureRoot\"", "\"requiredContentIdentity\":\"MatrixPanel\""),
+            "bundle.feature_matrix_cross_product",
+            "A matrix cell bound to another feature's content identity was accepted");
+        await RequireMutationAsync(
+            "focus-tamper",
+            ReplaceFirst(matrixJson, "\"afterIdentity\":\"QaFocusSecond\"", "\"afterIdentity\":\"QaFocusThird\""),
+            "bundle.feature_matrix_focus",
+            "A feature-surface focus cycle that did not round-trip was accepted");
+        await RequireMutationAsync(
+            "hash-tamper",
+            ReplaceFirst(
+                matrixJson,
+                $"\"automationSha256\":\"{fixture.FirstAutomationHash}\"",
+                $"\"automationSha256\":\"{new string('f', 64)}\""),
+            "bundle.feature_matrix_provenance",
+            "A matrix cell carrying a false automation hash was accepted");
+        await RequireMutationAsync(
+            "state-tamper",
+            ReplaceFirst(
+                matrixJson,
+                "experiment-lab.feature-agent-memory-debugger.closed.",
+                "experiment-lab.feature-matrix.closed."),
+            "bundle.feature_matrix_cross_product",
+            "A matrix cell whose canonical state named another feature was accepted");
+        await RequireMutationAsync(
+            "corrupt",
+            "{",
+            "bundle.feature_matrix_schema",
+            "Corrupt feature-surface matrix JSON was accepted");
+        await RequireAutomationMutationAsync(
+            "missing-content",
+            root => FeatureNode(root, "MatrixPanel")["Identity"] = "MissingPanel",
+            "bundle.feature_matrix_observed_state",
+            "A selected feature whose required content identity was absent from the rendered tree was accepted");
+        await RequireAutomationMutationAsync(
+            "extra-feature-root",
+            root =>
+            {
+                var nodes = root["Nodes"]!.AsArray();
+                nodes.Add(new JsonObject
+                {
+                    ["Sequence"] = nodes.Count,
+                    ["ParentSequence"] = 1,
+                    ["VisualDepth"] = 2,
+                    ["Identity"] = "ForkPanel",
+                    ["AutomationId"] = "ForkPanel",
+                    ["AutomationIdRedacted"] = false,
+                    ["FrameworkType"] = "Grid",
+                    ["ControlType"] = "Custom",
+                    ["IsVisible"] = true,
+                    ["IsEnabled"] = true,
+                    ["IsFocusable"] = false,
+                    ["HasKeyboardFocus"] = false,
+                    ["BoundsX"] = 300,
+                    ["BoundsY"] = 120,
+                    ["BoundsWidth"] = 180,
+                    ["BoundsHeight"] = 120,
+                    ["EffectiveOpacity"] = 1,
+                    ["IntersectsViewport"] = true,
+                    ["IsRendered"] = true
+                });
+                root["NodeCount"] = nodes.Count;
+            },
+            "bundle.feature_matrix_observed_state",
+            "A tree rendering two registered feature roots was accepted");
+        await RequireAutomationMutationAsync(
+            "zero-size-feature-root",
+            root =>
+            {
+                var node = FeatureNode(root, "MatrixPanel");
+                node["BoundsWidth"] = 0;
+                node["IntersectsViewport"] = false;
+                node["IsRendered"] = false;
+            },
+            "bundle.feature_matrix_observed_state",
+            "A zero-size feature root was accepted as rendered");
+        await RequireAutomationMutationAsync(
+            "insufficient-feature-comparison-region",
+            root =>
+            {
+                var node = FeatureNode(root, "MatrixPanel");
+                node["BoundsWidth"] = 100;
+                node["BoundsHeight"] = 100;
+            },
+            "bundle.feature_matrix_feature_render",
+            "A feature root covering less than the bounded comparison area was accepted");
+        await RequireAutomationMutationAsync(
+            "transparent-feature-root",
+            root =>
+            {
+                var node = FeatureNode(root, "MatrixPanel");
+                node["EffectiveOpacity"] = 0;
+                node["IsRendered"] = false;
+            },
+            "bundle.feature_matrix_observed_state",
+            "A fully transparent feature root was accepted as rendered");
+        await RequireAutomationMutationAsync(
+            "relocated-feature-root",
+            root =>
+            {
+                var node = FeatureNode(root, "MatrixPanel");
+                node["ParentSequence"] = null;
+                node["VisualDepth"] = 0;
+            },
+            "bundle.feature_matrix_observed_state",
+            "A rendered feature root outside ExperimentLabPanel was accepted");
+        await RequireAutomationMutationAsync(
+            "outside-feature-focus",
+            root =>
+            {
+                FeatureNode(root, "QaFocusFirst")["ParentSequence"] = 0;
+                FeatureNode(root, "QaFocusSecond")["ParentSequence"] = 0;
+            },
+            "bundle.feature_matrix_focus",
+            "A shell-level focus cycle outside the selected feature was accepted");
+
+        var firstFeatureScreenshot = fixture.Contract.Artifacts.First(artifact =>
+            artifact.Id == "artifact.p01.feature.matrix.dark-blue.w960.screenshot");
+        var secondFeatureScreenshot = fixture.Contract.Artifacts.First(artifact =>
+            artifact.Id == "artifact.p01.feature.fork.dark-blue.w960.screenshot");
+        var firstFeatureScreenshotPath = Path.Combine(evidenceRoot, firstFeatureScreenshot.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var secondFeatureScreenshotPath = Path.Combine(evidenceRoot, secondFeatureScreenshot.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var originalSecondScreenshotBytes = await File.ReadAllBytesAsync(secondFeatureScreenshotPath, cancellationToken);
+        var identicalScreenshotBytes = await File.ReadAllBytesAsync(firstFeatureScreenshotPath, cancellationToken);
+        var matrixFeatureIndex = ArenaQaSealManifestV2.RequiredExperimentFeatureKeys.IndexOf("matrix");
+        var matrixDarkBlueVariant = checked(matrixFeatureIndex * 3 + 1);
+        Require(Sha256(identicalScreenshotBytes).Equals(firstFeatureScreenshot.Sha256, StringComparison.OrdinalIgnoreCase),
+            "The base feature screenshot fixture did not match its contract hash.");
+
+        async Task RequireFeatureScreenshotMutationAsync(
+            string name,
+            byte[] replacementBytes,
+            bool expectedValid,
+            string message)
+        {
+            var replacementHash = Sha256(replacementBytes);
+            var replacementMatrixJson = ReplaceFirst(
+                matrixJson,
+                $"\"screenshotSha256\":\"{secondFeatureScreenshot.Sha256}\"",
+                $"\"screenshotSha256\":\"{replacementHash}\"");
+            var replacementMatrixBytes = Encoding.UTF8.GetBytes(replacementMatrixJson);
+            await File.WriteAllBytesAsync(secondFeatureScreenshotPath, replacementBytes, cancellationToken);
+            await File.WriteAllBytesAsync(fixture.MatrixPath, replacementMatrixBytes, cancellationToken);
+            var replacementContract = fixture.Contract with
+            {
+                Artifacts = [.. fixture.Contract.Artifacts.Select(artifact =>
+                artifact.Id == secondFeatureScreenshot.Id
+                    ? artifact with { Sha256 = replacementHash }
+                    : artifact.Kind == ArenaQaSealManifestV2.FeatureSurfaceMatrixArtifactKind
+                        ? artifact with { Sha256 = Sha256(replacementMatrixBytes) }
+                        : artifact)]
+            };
+            var path = Path.Combine(evidenceRoot, $"{name}-feature-surface-matrix.json");
+            await WriteContractAsync(path, replacementContract, cancellationToken);
+            var output = new StringWriter();
+            var exitCode = await VerificationEvidenceValidator.ValidateFileAsync(path, output, cancellationToken);
+            Require(expectedValid
+                    ? exitCode == 0
+                    : exitCode != 0
+                      && output.ToString().Contains("bundle.feature_matrix_feature_render", StringComparison.Ordinal),
+                $"{message}: {output.ToString().Trim()}");
+            await File.WriteAllBytesAsync(secondFeatureScreenshotPath, originalSecondScreenshotBytes, cancellationToken);
+            await File.WriteAllBytesAsync(fixture.MatrixPath, fixture.MatrixBytes, cancellationToken);
+        }
+
+        await RequireFeatureScreenshotMutationAsync(
+            "same-pixels",
+            identicalScreenshotBytes,
+            expectedValid: false,
+            "Two features with identical PNG bytes at the same theme and width were accepted");
+        await RequireFeatureScreenshotMutationAsync(
+            "same-decoded-pixels",
+            BuildPngArtifact(960, 640, variant: matrixDarkBlueVariant, splitImageData: true),
+            expectedValid: false,
+            "Two features with identical decoded pixels in different PNG containers were accepted");
+        await RequireFeatureScreenshotMutationAsync(
+            "one-pixel-feature-delta",
+            BuildPngArtifact(960, 640, variant: matrixDarkBlueVariant, singlePixelThemeDelta: true),
+            expectedValid: false,
+            "A one-pixel feature delta was accepted as a materially different feature surface");
+        await RequireFeatureScreenshotMutationAsync(
+            "targeted-grid-feature-delta",
+            BuildPngArtifact(960, 640, variant: matrixDarkBlueVariant, targetedSamplePointThemeDelta: true),
+            expectedValid: false,
+            "Sparse changes aimed at the pooled grid were accepted as a materially different feature surface");
+        await RequireFeatureScreenshotMutationAsync(
+            "shell-only-feature-delta",
+            BuildPngArtifact(960, 640, variant: matrixDarkBlueVariant, shellOnlyFeatureDelta: true),
+            expectedValid: false,
+            "A shell/status-only change outside identical feature roots was accepted as feature evidence");
+        await RequireFeatureScreenshotMutationAsync(
+            "outside-root-boundary-strip",
+            BuildPngArtifact(960, 640, variant: matrixDarkBlueVariant, outsideFeatureBoundaryDelta: true),
+            expectedValid: false,
+            "A high-contrast strip immediately outside the feature root bled into pooled feature evidence");
+        await RequireFeatureScreenshotMutationAsync(
+            "subthreshold-feature-delta",
+            BuildPngArtifact(960, 640, variant: matrixDarkBlueVariant, featureRootSubthresholdDelta: true),
+            expectedValid: false,
+            "A root-wide RGB delta below the per-cell material threshold was accepted");
+        await RequireFeatureScreenshotMutationAsync(
+            "material-root-feature-delta",
+            BuildPngArtifact(960, 640, variant: matrixDarkBlueVariant, featureRootMaterialDelta: true),
+            expectedValid: true,
+            "A material feature-root change with identical shell pixels was rejected");
+
+        var matrixLightScreenshot = fixture.Contract.Artifacts.First(artifact =>
+            artifact.Id == "artifact.p01.feature.matrix.light.w960.screenshot");
+        var matrixLightScreenshotPath = Path.Combine(
+            evidenceRoot,
+            matrixLightScreenshot.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var originalMatrixLightBytes = await File.ReadAllBytesAsync(matrixLightScreenshotPath, cancellationToken);
+        var shellOnlyThemeBytes = BuildPngArtifact(
+            960,
+            640,
+            variant: matrixDarkBlueVariant,
+            shellOnlyFeatureDelta: true);
+        var shellOnlyThemeHash = Sha256(shellOnlyThemeBytes);
+        var shellOnlyThemeMatrixJson = ReplaceFirst(
+            matrixJson,
+            $"\"screenshotSha256\":\"{matrixLightScreenshot.Sha256}\"",
+            $"\"screenshotSha256\":\"{shellOnlyThemeHash}\"");
+        var shellOnlyThemeMatrixBytes = Encoding.UTF8.GetBytes(shellOnlyThemeMatrixJson);
+        await File.WriteAllBytesAsync(matrixLightScreenshotPath, shellOnlyThemeBytes, cancellationToken);
+        await File.WriteAllBytesAsync(fixture.MatrixPath, shellOnlyThemeMatrixBytes, cancellationToken);
+        var shellOnlyThemeContract = fixture.Contract with
+        {
+            Artifacts = [.. fixture.Contract.Artifacts.Select(artifact =>
+                artifact.Id == matrixLightScreenshot.Id
+                    ? artifact with { Sha256 = shellOnlyThemeHash }
+                    : artifact.Kind == ArenaQaSealManifestV2.FeatureSurfaceMatrixArtifactKind
+                        ? artifact with { Sha256 = Sha256(shellOnlyThemeMatrixBytes) }
+                        : artifact)]
+        };
+        var shellOnlyThemePath = Path.Combine(evidenceRoot, "shell-only-feature-theme-render.json");
+        await WriteContractAsync(shellOnlyThemePath, shellOnlyThemeContract, cancellationToken);
+        var shellOnlyThemeOutput = new StringWriter();
+        Require(await VerificationEvidenceValidator.ValidateFileAsync(
+                    shellOnlyThemePath,
+                    shellOnlyThemeOutput,
+                    cancellationToken) != 0
+                && shellOnlyThemeOutput.ToString().Contains("bundle.feature_matrix_theme_render", StringComparison.Ordinal),
+            $"Shell/status colour changes outside identical feature-root pixels were accepted as cross-theme feature evidence: {shellOnlyThemeOutput.ToString().Trim()}");
+        await File.WriteAllBytesAsync(matrixLightScreenshotPath, originalMatrixLightBytes, cancellationToken);
+        await File.WriteAllBytesAsync(secondFeatureScreenshotPath, originalSecondScreenshotBytes, cancellationToken);
+        await File.WriteAllBytesAsync(fixture.MatrixPath, fixture.MatrixBytes, cancellationToken);
+    }
+
+    private static JsonObject FeatureNode(JsonObject root, string identity) =>
+        root["Nodes"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Single(node => string.Equals((string?)node["Identity"], identity, StringComparison.Ordinal));
+
+    private static async Task<FeatureSurfaceMatrixFixture> BuildFeatureSurfaceMatrixFixtureAsync(
+        string evidenceRoot,
+        VerificationRepositorySnapshot outer,
+        VerificationRepositorySnapshot map,
+        string combinedFingerprint,
+        DateTimeOffset capturedAt,
+        bool enhancedAutomation,
+        CancellationToken cancellationToken)
+    {
+        var uiMatrix = await BuildUiMatrixFixtureAsync(
+            evidenceRoot,
+            outer,
+            map,
+            combinedFingerprint,
+            capturedAt,
+            enhancedAutomation,
+            cancellationToken);
+        var artifacts = uiMatrix.Contract.Artifacts.ToList();
+        var cells = new List<object>();
+        var firstFeatureAutomationHash = "";
+        foreach (var featureKey in ArenaQaSealManifestV2.RequiredExperimentFeatureKeys)
+        foreach (var theme in new[] { "dark-blue", "light", "high-contrast" })
+        foreach (var viewport in new[] { (Width: 960, Height: 640), (Width: 1500, Height: 960) })
+        {
+            var key = $"p01.feature.{featureKey}.{theme}.w{viewport.Width}";
+            var expectedState = $"experiment-lab.feature-{featureKey}.closed.{theme}.w{viewport.Width}.d1-0.normal";
+            var automationId = $"artifact.{key}.automation";
+            var screenshotId = $"artifact.{key}.screenshot";
+            var automationRelativePath = $"automation/{key}.automation-tree.json";
+            var screenshotRelativePath = $"screenshots/{key}.rendered-ui.png";
+            var automationPath = Path.Combine(evidenceRoot, automationRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            var screenshotPath = Path.Combine(evidenceRoot, screenshotRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(automationPath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(screenshotPath)!);
+
+            var automationBytes = BuildAutomationArtifact(
+                combinedFingerprint,
+                capturedAt,
+                expectedState,
+                theme,
+                viewport.Width,
+                viewport.Height,
+                1m,
+                "qa-normal",
+                true,
+                "QaFocusSecond",
+                enhancedAutomation: true);
+            await File.WriteAllBytesAsync(automationPath, automationBytes, cancellationToken);
+            var featureIndex = ArenaQaSealManifestV2.RequiredExperimentFeatureKeys.IndexOf(featureKey);
+            var themeIndex = theme == "dark-blue" ? 1 : theme == "light" ? 2 : 3;
+            var screenshotBytes = BuildPngArtifact(
+                viewport.Width,
+                viewport.Height,
+                variant: checked(featureIndex * 3 + themeIndex));
+            await File.WriteAllBytesAsync(screenshotPath, screenshotBytes, cancellationToken);
+
+            var automationHash = Sha256(automationBytes);
+            if (firstFeatureAutomationHash.Length == 0) firstFeatureAutomationHash = automationHash;
+            var screenshotHash = Sha256(screenshotBytes);
+            var provenance = new ArenaQaArtifactProvenance(
+                combinedFingerprint,
+                capturedAt,
+                theme,
+                viewport.Width,
+                viewport.Height,
+                1m,
+                expectedState,
+                null,
+                null);
+            artifacts.Add(new(automationId, "automation-tree", automationRelativePath, automationHash, provenance));
+            artifacts.Add(new(screenshotId, "rendered-ui-screenshot", screenshotRelativePath, screenshotHash,
+                provenance with { LinkedAutomationArtifactId = automationId }));
+            cells.Add(new
+            {
+                key,
+                featureKey,
+                selectedFeatureStatus = "ready",
+                controlPlaneBusy = false,
+                theme,
+                viewportWidthDip = viewport.Width,
+                viewportHeightDip = viewport.Height,
+                renderDpiScale = 1m,
+                motionMode = "normal",
+                motionPreferenceSource = "qa-normal",
+                animationsEnabled = true,
+                expectedState,
+                visibleRootIdentity = "ExperimentLabPanel",
+                requiredContentIdentity = ArenaQaSealManifestV2.RequiredExperimentFeatureAutomationIdentities[featureKey],
+                focusNext = MatrixFocus("next", "QaFocusFirst", "QaFocusSecond"),
+                focusPrevious = MatrixFocus("previous", "QaFocusSecond", "QaFocusFirst"),
+                focusCapture = MatrixFocus("next", "QaFocusFirst", "QaFocusSecond"),
+                automationArtifactId = automationId,
+                automationSha256 = automationHash,
+                screenshotArtifactId = screenshotId,
+                screenshotSha256 = screenshotHash
+            });
+        }
+
+        var orderedCells = cells
+            .OrderBy(cell => (string)cell.GetType().GetProperty("key")!.GetValue(cell)!, StringComparer.Ordinal)
+            .ToArray();
+        var matrixBytes = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            schema = ArenaQaSealManifestV2.FeatureSurfaceMatrixSchema,
+            passNumber = 1,
+            treeFingerprint = combinedFingerprint,
+            registeredFeatureKeys = ArenaQaSealManifestV2.RequiredExperimentFeatureKeys,
+            cellCount = orderedCells.Length,
+            cells = orderedCells
+        });
+        var matrixRelativePath = "metadata/pass-01.feature-surface-matrix.json";
+        var matrixPath = Path.Combine(evidenceRoot, matrixRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        await File.WriteAllBytesAsync(matrixPath, matrixBytes, cancellationToken);
+        var matrixArtifact = new ArenaQaArtifact(
+            "artifact.pass-01.feature-surface-matrix",
+            ArenaQaSealManifestV2.FeatureSurfaceMatrixArtifactKind,
+            matrixRelativePath,
+            Sha256(matrixBytes),
+            null);
+        artifacts.Add(matrixArtifact);
+
+        var migrationRelativePath = ArenaQaSealManifestV2.ExplicitMigrationArtifactPath;
+        var migrationPath = Path.Combine(evidenceRoot, migrationRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(migrationPath)!);
+        var migrationBytes = Encoding.UTF8.GetBytes("AI Arena QA gate evidence\ngate=schema.explicit-v0-pack-migration\noutcome=pass\n");
+        await File.WriteAllBytesAsync(migrationPath, migrationBytes, cancellationToken);
+        artifacts.Add(new ArenaQaArtifact(
+            ArenaQaSealManifestV2.ExplicitMigrationArtifactId,
+            ArenaQaSealManifestV2.ExplicitMigrationArtifactKind,
+            migrationRelativePath,
+            Sha256(migrationBytes),
+            null));
+
+        var firstScreenshot = artifacts.First(artifact => artifact.Kind == "rendered-ui-screenshot");
+        var observed = new ArenaEvidenceAssertion(
+            "evidence:feature-surface-matrix",
+            ArenaEvidenceState.Observed,
+            "Recorded by deterministic local feature-surface QA.",
+            firstScreenshot.Id);
+        var unavailable = new ArenaEvidenceAssertion(
+            "evidence:feature-surface-unavailable",
+            ArenaEvidenceState.Unavailable,
+            "External provider evidence is not required for this fixture.",
+            Limitation: "No external provider is required.");
+        var gates = uiMatrix.Contract.Gates
+            .Append(new ArenaQaGateEvidence(
+                "ui.feature-surface-matrix",
+                ArenaQaGateOutcome.Pass,
+                true,
+                1,
+                new(1, 0, 0, 1),
+                observed))
+            .Append(new ArenaQaGateEvidence(
+                ArenaQaSealManifestV2.ExplicitMigrationGateId,
+                ArenaQaGateOutcome.Pass,
+                true,
+                1,
+                new(1, 0, 0, 1),
+                observed with { ReferenceId = ArenaQaSealManifestV2.ExplicitMigrationArtifactId }))
+            .ToImmutableArray();
+        var contract = new ArenaQaEvidenceContract(
+            ArenaContractSchemas.QaEvidence,
+            "qa:feature-surface-validator",
+            capturedAt,
+            outer.SourceRevision,
+            combinedFingerprint,
+            ArenaQaSealManifestV2.Id,
+            true,
+            [new("map", map.SourceRevision, map.TreeFingerprint, true)],
+            capturedAt.AddMinutes(-1),
+            capturedAt.AddMinutes(1),
+            ArenaQaVerdict.Partial,
+            1,
+            new("Windows", "x64", "10.0.0", "10.0.100", "Release", true),
+            [new("dotnet", "10.0.100"), new("powershell", "7.5.2")],
+            gates,
+            [.. artifacts],
+            [new("performance:feature-surface", "validator-duration", 1m, "milliseconds", ArenaQaThresholdKind.Maximum, 10m, observed)],
+            [
+                new("schema:feature-surface", ArenaContractSchemas.QaEvidence, null, ArenaQaGateOutcome.Pass, observed),
+                new(
+                    "schema:scenario-migration",
+                    ArenaContractSchemas.ScenarioPack,
+                    ArenaQaSealManifestV2.ScenarioPackV0Schema,
+                    ArenaQaGateOutcome.Pass,
+                    observed with
+                    {
+                        Id = ArenaQaSealManifestV2.ScenarioMigrationEvidenceId,
+                        ReferenceId = ArenaQaSealManifestV2.ExplicitMigrationArtifactId
+                    }),
+                new(
+                    "schema:benchmark-migration",
+                    ArenaContractSchemas.BenchmarkPack,
+                    ArenaQaSealManifestV2.BenchmarkPackV0Schema,
+                    ArenaQaGateOutcome.Pass,
+                    observed with
+                    {
+                        Id = ArenaQaSealManifestV2.BenchmarkMigrationEvidenceId,
+                        ReferenceId = ArenaQaSealManifestV2.ExplicitMigrationArtifactId
+                    })
+            ],
+            new(false, ArenaEvidenceState.Unavailable, [], [], "No live provider is required."),
+            RequiredQaLimitations(),
+            new(false, null, null, [], [], unavailable),
+            [observed]);
+        return new(contract, matrixArtifact, matrixPath, matrixBytes, firstFeatureAutomationHash);
+    }
+
     private static async Task<UiMatrixFixture> BuildUiMatrixFixtureAsync(
         string evidenceRoot,
         VerificationRepositorySnapshot outer,
         VerificationRepositorySnapshot map,
         string combinedFingerprint,
         DateTimeOffset capturedAt,
+        bool enhancedAutomation,
         CancellationToken cancellationToken)
     {
         var artifacts = new List<ArenaQaArtifact>();
@@ -728,7 +1388,8 @@ internal static class VerificationEvidenceValidatorChecks
                 renderDpi.Value,
                 motionSource,
                 animationsEnabled,
-                "QaFocusSecond");
+                "QaFocusSecond",
+                enhancedAutomation);
             await File.WriteAllBytesAsync(automationPath, automationBytes, cancellationToken);
             var physicalSize = (
                 Width: (int)Math.Ceiling(viewport.Width * renderDpi.Value),
@@ -867,6 +1528,15 @@ internal static class VerificationEvidenceValidatorChecks
             Artifacts = [.. contract.Artifacts.Select(artifact => artifact.Kind == "qa-ui-matrix" ? replacement : artifact)]
         };
 
+    private static ArenaQaEvidenceContract ReplaceFeatureMatrixArtifact(
+        ArenaQaEvidenceContract contract,
+        ArenaQaArtifact replacement) =>
+        contract with
+        {
+            Artifacts = [.. contract.Artifacts.Select(artifact =>
+                artifact.Kind == ArenaQaSealManifestV2.FeatureSurfaceMatrixArtifactKind ? replacement : artifact)]
+        };
+
     private static Task WriteContractAsync(
         string path,
         ArenaQaEvidenceContract contract,
@@ -962,7 +1632,8 @@ internal static class VerificationEvidenceValidatorChecks
             false,
             "system",
             true,
-            "QaPrimaryButton");
+            "QaPrimaryButton",
+            enhancedAutomation: false);
 
     private static byte[] BuildAutomationArtifact(
         string treeFingerprint,
@@ -974,7 +1645,8 @@ internal static class VerificationEvidenceValidatorChecks
         decimal renderDpiScale,
         string motionPreferenceSource,
         bool animationsEnabled,
-        string focusIdentity) =>
+        string focusIdentity,
+        bool enhancedAutomation) =>
         BuildAutomationArtifactCore(
             treeFingerprint,
             capturedAt,
@@ -986,7 +1658,8 @@ internal static class VerificationEvidenceValidatorChecks
             true,
             motionPreferenceSource,
             animationsEnabled,
-            focusIdentity);
+            focusIdentity,
+            enhancedAutomation);
 
     private static byte[] BuildAutomationArtifactCore(
         string treeFingerprint,
@@ -999,24 +1672,41 @@ internal static class VerificationEvidenceValidatorChecks
         bool renderDpiOverride,
         string motionPreferenceSource,
         bool animationsEnabled,
-        string focusIdentity) =>
-        JsonSerializer.SerializeToUtf8Bytes(new
+        string focusIdentity,
+        bool enhancedAutomation)
+    {
+        var isArena = expectedState.StartsWith("arena-empty.", StringComparison.Ordinal);
+        var isFeatureSurface = expectedState.StartsWith("experiment-lab.feature-", StringComparison.Ordinal);
+        var featureKey = isFeatureSurface
+            ? ArenaQaSealManifestV2.RequiredExperimentFeatureKeys.First(key =>
+                expectedState.StartsWith($"experiment-lab.feature-{key}.", StringComparison.Ordinal))
+            : "";
+        var featureContentIdentity = isFeatureSurface
+            ? ArenaQaSealManifestV2.RequiredExperimentFeatureAutomationIdentities[featureKey]
+            : "";
+        return JsonSerializer.SerializeToUtf8Bytes(new
         {
-            Schema = "ai_arena.ui_structure_evidence.v1",
+            Schema = enhancedAutomation
+                ? "ai_arena.ui_structure_evidence.v2"
+                : "ai_arena.ui_structure_evidence.v1",
             CapturedAtUtc = capturedAt,
             CaptureMode = "wpf-visual-tree-accessibility",
             Limitation = "OS UI Automation and OS input are not queried; focus traversal and the privacy-safe visual-tree snapshot are programmatic and in-process. RenderDpiScale is off-screen raster density, not physical or per-monitor display DPI. Motion fields prove preference plumbing, not rendered animation playback. Accessible names, help text, and all dynamic control content are omitted.",
             TreeFingerprint = treeFingerprint,
             ExpectedState = expectedState,
             ExpectedStateSource = "observed-visible-roots",
-            SelectedView = expectedState.StartsWith("arena-empty.", StringComparison.Ordinal) ? "arena" : "verification-window",
-            ObservedSurfaceState = expectedState.StartsWith("arena-empty.", StringComparison.Ordinal) ? "arena-empty" : "verification-window",
+            SelectedView = isArena ? "arena" : isFeatureSurface ? "experiment-lab" : "verification-window",
+            ObservedSurfaceState = isArena ? "arena-empty" : isFeatureSurface ? "experiment-lab" : "verification-window",
             DialogState = "closed",
-            VisibleRootIdentities = expectedState.StartsWith("arena-empty.", StringComparison.Ordinal)
+            VisibleRootIdentities = isArena
                 ? new[] { "TranscriptPanel" }
+                : isFeatureSurface
+                    ? new[] { "ExperimentLabPanel" }
                 : new[] { "QaRoot" },
-            RequiredControlIdentities = expectedState.StartsWith("arena-empty.", StringComparison.Ordinal)
+            RequiredControlIdentities = isArena
                 ? new[] { "RootLayout", "ShellNavigationRail", "ShellTopBar", "TranscriptItems", "TranscriptPanel" }
+                : isFeatureSurface
+                    ? new[] { "ExperimentLabPanel" }
                 : new[] { "QaRoot" },
             Theme = theme,
             ViewportWidthDip = viewportWidthDip,
@@ -1031,14 +1721,33 @@ internal static class VerificationEvidenceValidatorChecks
             MotionPreferenceSource = motionPreferenceSource,
             AnimationsEnabled = animationsEnabled,
             FocusIdentity = focusIdentity,
-            NodeCount = expectedState.StartsWith("arena-empty.", StringComparison.Ordinal) ? 6 : 2,
+            NodeCount = isArena ? 6 : isFeatureSurface ? 4 : 2,
             Truncated = false,
-            Nodes = BuildAutomationNodes(expectedState, focusIdentity)
+            Nodes = enhancedAutomation
+                ? BuildAutomationNodes(
+                    expectedState,
+                    focusIdentity,
+                    featureContentIdentity,
+                    viewportWidthDip,
+                    viewportHeightDip)
+                : BuildLegacyAutomationNodes(expectedState, focusIdentity, featureContentIdentity)
         });
+    }
 
-    private static object[] BuildAutomationNodes(string expectedState, string focusIdentity)
+    private static object[] BuildLegacyAutomationNodes(
+        string expectedState,
+        string focusIdentity,
+        string featureContentIdentity)
     {
-        static object Node(int sequence, int? parent, int depth, string identity, string frameworkType, string controlType, bool focused = false) => new
+        static object Node(
+            int sequence,
+            int? parent,
+            int depth,
+            string identity,
+            string frameworkType,
+            string controlType,
+            bool focusable = false,
+            bool focused = false) => new
         {
             Sequence = sequence,
             ParentSequence = parent,
@@ -1050,7 +1759,7 @@ internal static class VerificationEvidenceValidatorChecks
             ControlType = controlType,
             IsVisible = true,
             IsEnabled = true,
-            IsFocusable = focused,
+            IsFocusable = focusable,
             HasKeyboardFocus = focused
         };
 
@@ -1062,12 +1771,90 @@ internal static class VerificationEvidenceValidatorChecks
                 Node(2, 0, 1, "ShellTopBar", "ShellTopBarControl", "Custom"),
                 Node(3, 0, 1, "TranscriptPanel", "Grid", "Custom"),
                 Node(4, 3, 2, "TranscriptItems", "TranscriptListBox", "List"),
-                Node(5, 3, 2, focusIdentity, "Button", "Button", true)
+                Node(5, 3, 2, focusIdentity, "Button", "Button", true, true)
             ]
-            :
+            : expectedState.StartsWith("experiment-lab.feature-", StringComparison.Ordinal)
+                ?
+                [
+                    Node(0, null, 0, "ExperimentLabPanel", "ExperimentLabControl", "Custom"),
+                    Node(1, 0, 1, featureContentIdentity, "Grid", "Custom"),
+                    Node(2, 1, 2, "QaFocusFirst", "Button", "Button", true, focusIdentity == "QaFocusFirst"),
+                    Node(3, 1, 2, "QaFocusSecond", "Button", "Button", true, focusIdentity == "QaFocusSecond")
+                ]
+                :
+                [
+                    Node(0, null, 0, "QaRoot", "Grid", "Custom"),
+                    Node(1, 0, 1, focusIdentity, "Button", "Button", true, true)
+                ];
+    }
+
+    private static object[] BuildAutomationNodes(
+        string expectedState,
+        string focusIdentity,
+        string featureContentIdentity,
+        int viewportWidthDip,
+        int viewportHeightDip)
+    {
+        static object Node(
+            int sequence,
+            int? parent,
+            int depth,
+            string identity,
+            string frameworkType,
+            string controlType,
+            double x,
+            double y,
+            double width,
+            double height,
+            bool focusable = false,
+            bool focused = false) => new
+        {
+            Sequence = sequence,
+            ParentSequence = parent,
+            VisualDepth = depth,
+            Identity = identity,
+            AutomationId = identity,
+            AutomationIdRedacted = false,
+            FrameworkType = frameworkType,
+            ControlType = controlType,
+            IsVisible = true,
+            IsEnabled = true,
+            IsFocusable = focusable,
+            HasKeyboardFocus = focused,
+            BoundsX = x,
+            BoundsY = y,
+            BoundsWidth = width,
+            BoundsHeight = height,
+            EffectiveOpacity = 1d,
+            IntersectsViewport = true,
+            IsRendered = true
+        };
+
+        var contentWidth = Math.Max(100, viewportWidthDip - 240);
+        var contentHeight = Math.Max(100, viewportHeightDip - 180);
+
+        return expectedState.StartsWith("arena-empty.", StringComparison.Ordinal)
+            ?
             [
-                Node(0, null, 0, "QaRoot", "Grid", "Custom"),
-                Node(1, 0, 1, focusIdentity, "Button", "Button", true)
+                Node(0, null, 0, "RootLayout", "Grid", "Custom", 0, 0, viewportWidthDip, viewportHeightDip),
+                Node(1, 0, 1, "ShellNavigationRail", "ShellNavigationRailControl", "Custom", 0, 0, 220, viewportHeightDip),
+                Node(2, 0, 1, "ShellTopBar", "ShellTopBarControl", "Custom", 220, 0, viewportWidthDip - 220, 80),
+                Node(3, 0, 1, "TranscriptPanel", "Grid", "Custom", 220, 80, viewportWidthDip - 220, viewportHeightDip - 80),
+                Node(4, 3, 2, "TranscriptItems", "TranscriptListBox", "List", 240, 100, contentWidth, contentHeight),
+                Node(5, 3, 2, focusIdentity, "Button", "Button", 260, 120, 120, 36, true, true)
+            ]
+            : expectedState.StartsWith("experiment-lab.feature-", StringComparison.Ordinal)
+                ?
+                [
+                    Node(0, null, 0, "ExperimentLabPanel", "ExperimentLabControl", "Custom", 0, 0, viewportWidthDip, viewportHeightDip),
+                    Node(1, 0, 1, featureContentIdentity, "Grid", "Custom", 80, 80, contentWidth, contentHeight),
+                    Node(2, 1, 2, "QaFocusFirst", "Button", "Button", 120, 120, 120, 36, true, focusIdentity == "QaFocusFirst"),
+                    Node(3, 1, 2, "QaFocusSecond", "Button", "Button", 120, 168, 120, 36, true, focusIdentity == "QaFocusSecond")
+                ]
+                :
+            [
+                Node(0, null, 0, "QaRoot", "Grid", "Custom", 0, 0, viewportWidthDip, viewportHeightDip),
+                Node(1, 0, 1, focusIdentity, "Button", "Button", 40, 40, 120, 36, true, true)
             ];
     }
 
@@ -1087,7 +1874,11 @@ internal static class VerificationEvidenceValidatorChecks
         bool trailingIdatMetadata = false,
         bool splitImageData = false,
         bool singlePixelThemeDelta = false,
-        bool targetedSamplePointThemeDelta = false)
+        bool targetedSamplePointThemeDelta = false,
+        bool shellOnlyFeatureDelta = false,
+        bool outsideFeatureBoundaryDelta = false,
+        bool featureRootMaterialDelta = false,
+        bool featureRootSubthresholdDelta = false)
     {
         var header = new byte[13];
         System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(0, 4), width);
@@ -1166,6 +1957,33 @@ internal static class VerificationEvidenceValidatorChecks
                         row[offset] = row[offset] < 128 ? (byte)255 : (byte)0;
                         row[offset + 1] = row[offset + 1] < 128 ? (byte)255 : (byte)0;
                         row[offset + 2] = row[offset + 2] < 128 ? (byte)255 : (byte)0;
+                    }
+
+                    // Feature-matrix automation roots use this deterministic
+                    // rectangle. These variants let the validator checks prove
+                    // that shell-only pixels do not stand in for feature content.
+                    var featureRight = width - 160;
+                    var featureBottom = height - 100;
+                    var insideFeatureRoot = x >= 80 && x < featureRight
+                        && rowIndex >= 80 && rowIndex < featureBottom;
+                    var immediatelyOutsideFeatureBoundary =
+                        (x >= featureRight && x < Math.Min(width, featureRight + 8)
+                         && rowIndex >= 80 && rowIndex < featureBottom)
+                        || (rowIndex >= featureBottom && rowIndex < Math.Min(height, featureBottom + 8)
+                            && x >= 80 && x < featureRight);
+                    if ((shellOnlyFeatureDelta && !insideFeatureRoot)
+                        || (outsideFeatureBoundaryDelta && immediatelyOutsideFeatureBoundary)
+                        || (featureRootMaterialDelta && insideFeatureRoot))
+                    {
+                        row[offset] = (byte)(255 - row[offset]);
+                        row[offset + 1] = (byte)(255 - row[offset + 1]);
+                        row[offset + 2] = (byte)(255 - row[offset + 2]);
+                    }
+                    if (featureRootSubthresholdDelta && insideFeatureRoot)
+                    {
+                        row[offset] = row[offset] <= 247 ? (byte)(row[offset] + 7) : (byte)(row[offset] - 7);
+                        row[offset + 1] = row[offset + 1] <= 247 ? (byte)(row[offset + 1] + 7) : (byte)(row[offset + 1] - 7);
+                        row[offset + 2] = row[offset + 2] <= 247 ? (byte)(row[offset + 2] + 7) : (byte)(row[offset + 2] - 7);
                     }
                 }
                 encoder.Write(row);
@@ -1307,4 +2125,11 @@ internal static class VerificationEvidenceValidatorChecks
         ArenaQaArtifact MatrixArtifact,
         string MatrixPath,
         byte[] MatrixBytes);
+
+    private sealed record FeatureSurfaceMatrixFixture(
+        ArenaQaEvidenceContract Contract,
+        ArenaQaArtifact MatrixArtifact,
+        string MatrixPath,
+        byte[] MatrixBytes,
+        string FirstAutomationHash);
 }

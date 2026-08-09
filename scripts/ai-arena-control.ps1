@@ -1183,6 +1183,25 @@ function Move-AIArenaQAFocus {
     } -TimeoutMs $TimeoutMs -Token $Token
 }
 
+function Set-AIArenaQAFeatureFocus {
+    <#
+        .SYNOPSIS
+        Moves WPF keyboard focus into the selected Experiment Lab feature content.
+
+        This bounded QA command is available only in an isolated data-root process.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [int]$TimeoutMs = 10000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    Invoke-AIArena -Command 'app.qa.focus.feature' -TimeoutMs $TimeoutMs -Token $Token
+}
+
 function Set-AIArenaQAMotion {
     <#
         .SYNOPSIS

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text;
 using System.Text.Json.Nodes;
 using AIArena.Core.Models;
 using AIArena.Core.Services;
@@ -39,11 +40,42 @@ internal static class ExperimentationContractTests
         Require(copy is not null && ArenaContractCodec.Serialize(copy) == json, "canonical round trip changed payload");
         var unknown = json[..^1] + ",\"sourceContent\":\"private\"}";
         Require(!ArenaContractCodec.TryDeserialize<ArenaExperimentContract>(unknown, out _, out _), "unknown member was accepted");
+        var duplicateContract = json.Replace(
+            "\"title\":\"Local matrix\"",
+            "\"title\":\"api_key=discarded-secret\",\"title\":\"Local matrix\"",
+            StringComparison.Ordinal);
+        Require(!ArenaContractCodec.TryDeserialize<ArenaExperimentContract>(duplicateContract, out _, out var duplicateIssues)
+                && duplicateIssues.Any(issue => issue.Code == "json.duplicate_member")
+                && duplicateIssues.Any(issue => issue.Code == "privacy.secret"),
+            "duplicate contract member hid discarded private content");
         var nullItem = json.Replace("\"dimensions\":[{", "\"dimensions\":[null,{", StringComparison.Ordinal);
         Require(!ArenaContractCodec.TryDeserialize<ArenaExperimentContract>(nullItem, out _, out var nullIssues),
             "null contract collection item was accepted");
         Require(nullIssues.Any(issue => issue.Code == "collection.null_item"),
             "null contract collection item did not produce a bounded validation issue");
+
+        var scenarioPack = (ArenaScenarioPackContract)ValidContracts()
+            .Single(item => item.Schema == ArenaContractSchemas.ScenarioPack);
+        var legacyScenario = JsonNode.Parse(ArenaContractCodec.Serialize(scenarioPack))!.AsObject();
+        legacyScenario["schema"] = ArenaExperimentPackCodec.ScenarioPackV0Schema;
+        legacyScenario.Remove("createdAtUtc");
+        legacyScenario.Remove("contentFingerprint");
+        legacyScenario.Remove("migration");
+        var legacyJson = legacyScenario.ToJsonString();
+        var duplicateRoot = legacyJson.Replace(
+            $"\"schema\":\"{ArenaExperimentPackCodec.ScenarioPackV0Schema}\"",
+            $"\"schema\":\"{ArenaExperimentPackCodec.ScenarioPackV0Schema}\",\"schema\":\"{ArenaExperimentPackCodec.ScenarioPackV0Schema}\"",
+            StringComparison.Ordinal);
+        var duplicateNested = legacyJson.Replace(
+            "\"title\":\"Smoke\"",
+            "\"title\":\"Ambiguous\",\"title\":\"Smoke\"",
+            StringComparison.Ordinal);
+        Require(ArenaExperimentPackCodec.MigrateScenarioPackV0(Encoding.UTF8.GetBytes(duplicateRoot), "imports/duplicate-root.json", At)
+                .Diagnostics.Any(item => item.Code == "artifact.migration_duplicate_member"),
+            "v0 migration accepted a duplicate root JSON member");
+        Require(ArenaExperimentPackCodec.MigrateScenarioPackV0(Encoding.UTF8.GetBytes(duplicateNested), "imports/duplicate-nested.json", At)
+                .Diagnostics.Any(item => item.Code == "artifact.migration_duplicate_member"),
+            "v0 migration accepted a duplicate nested JSON member");
     }
 
     internal static void EnforcesObservedInferredAndUnavailableEvidence()
@@ -138,7 +170,40 @@ internal static class ExperimentationContractTests
         var debug = SealedQa() with { Environment = new("Windows", "x64", "10.0.0", "10.0.100", "Debug", false) };
         Require(ArenaContractCodec.Validate(debug).Issues.Any(issue => issue.Code == "qa.release"), "Debug environment sealed");
 
-        var unknownManifest = SealedQa() with { SealManifestId = "ai_arena.qa_seal_manifest.v2" };
+        Require(!ArenaQaSealManifestV1.RequiredGlobalGateIds.Contains(ArenaQaSealManifestV2.FeatureSurfaceMatrixGateId, StringComparer.Ordinal)
+            && !ArenaQaSealManifestV1.RequiredGlobalGateIds.Contains(ArenaQaSealManifestV2.ExplicitMigrationGateId, StringComparer.Ordinal)
+            && ArenaContractCodec.Validate(SealedQa()).IsValid,
+            "historical v1 seal authority was silently changed by v2 requirements");
+
+        var completeV2 = SealedQaV2();
+        Require(ArenaContractCodec.Validate(completeV2).IsValid, Format(ArenaContractCodec.Validate(completeV2).Issues));
+        var migrationGateIndex = completeV2.Gates.IndexOf(completeV2.Gates.Single(item => item.Id == ArenaQaSealManifestV2.ExplicitMigrationGateId));
+        Require(ArenaContractCodec.Validate(completeV2 with { Gates = completeV2.Gates.RemoveAt(migrationGateIndex) })
+            .Issues.Any(issue => issue.Code == "qa.gate_manifest" || issue.Code == "qa.v2_migration_gate"), "v2 seal accepted a deleted migration gate");
+        Require(ArenaContractCodec.Validate(completeV2 with
+            {
+                Gates = completeV2.Gates.SetItem(migrationGateIndex, completeV2.Gates[migrationGateIndex] with { Required = false })
+            }).Issues.Any(issue => issue.Code == "qa.v2_migration_gate"), "v2 seal accepted a non-required migration gate");
+        Require(ArenaContractCodec.Validate(completeV2 with
+            {
+                Gates = completeV2.Gates.SetItem(migrationGateIndex, completeV2.Gates[migrationGateIndex] with { Outcome = ArenaQaGateOutcome.Partial })
+            }).Issues.Any(issue => issue.Code == "qa.v2_migration_gate"), "v2 seal accepted a non-passing migration gate");
+        var scenarioSchemaIndex = completeV2.SchemaChecks.IndexOf(completeV2.SchemaChecks.Single(item => item.Schema == ArenaContractSchemas.ScenarioPack));
+        Require(ArenaContractCodec.Validate(completeV2 with
+            {
+                SchemaChecks = completeV2.SchemaChecks.SetItem(
+                    scenarioSchemaIndex,
+                    completeV2.SchemaChecks[scenarioSchemaIndex] with { MigratedFromSchema = "ai_arena.scenario_pack.v0-renamed" })
+            }).Issues.Any(issue => issue.Code == "qa.v2_migration_schema"), "v2 seal accepted altered migratedFromSchema authority");
+        var migrationArtifactIndex = completeV2.Artifacts.IndexOf(completeV2.Artifacts.Single(item => item.Id == ArenaQaSealManifestV2.ExplicitMigrationArtifactId));
+        Require(ArenaContractCodec.Validate(completeV2 with
+            {
+                Artifacts = completeV2.Artifacts.SetItem(
+                    migrationArtifactIndex,
+                    completeV2.Artifacts[migrationArtifactIndex] with { RelativePath = "logs/renamed-migration.log" })
+            }).Issues.Any(issue => issue.Code == "qa.v2_migration_artifact"), "v2 seal accepted altered migration artifact authority");
+
+        var unknownManifest = SealedQa() with { SealManifestId = "ai_arena.qa_seal_manifest.v3" };
         Require(ArenaContractCodec.Validate(unknownManifest).Issues.Any(issue => issue.Code == "qa.manifest"), "unknown seal manifest passed");
 
         var limitation = complete.AcceptedLimitations[0];
@@ -376,6 +441,58 @@ internal static class ExperimentationContractTests
             Gates = gates,
             SchemaChecks = schemas,
             Performance = performance,
+            AcceptedLimitations = QaLimitations(userAccepted: true),
+            Inspection = new(true, At.AddSeconds(9), HashA, ["artifact:screenshot"], ["artifact:automation"], Observed("ev:inspection"))
+        };
+    }
+
+    private static ArenaQaEvidenceContract SealedQaV2()
+    {
+        var qa = Qa();
+        var gates = ArenaQaSealManifestV2.RequiredGateIds(ArenaQaSealManifestV2.RequiredCleanPasses)
+            .Select((id, index) => new ArenaQaGateEvidence(
+                id,
+                ArenaQaGateOutcome.Pass,
+                true,
+                100 + index,
+                new(1, 0, 0, 1),
+                id == ArenaQaSealManifestV2.ExplicitMigrationGateId
+                    ? Observed($"ev:gate:{index}") with { ReferenceId = ArenaQaSealManifestV2.ExplicitMigrationArtifactId }
+                    : Observed($"ev:gate:{index}")))
+            .ToImmutableArray();
+        var schemas = ArenaQaSealManifestV2.RequiredSchemaIds
+            .Select((schema, index) => schema switch
+            {
+                ArenaContractSchemas.ScenarioPack => new ArenaQaSchemaCheck(
+                    $"schema:check:{index}",
+                    schema,
+                    ArenaQaSealManifestV2.ScenarioPackV0Schema,
+                    ArenaQaGateOutcome.Pass,
+                    Observed(ArenaQaSealManifestV2.ScenarioMigrationEvidenceId) with { ReferenceId = ArenaQaSealManifestV2.ExplicitMigrationArtifactId }),
+                ArenaContractSchemas.BenchmarkPack => new ArenaQaSchemaCheck(
+                    $"schema:check:{index}",
+                    schema,
+                    ArenaQaSealManifestV2.BenchmarkPackV0Schema,
+                    ArenaQaGateOutcome.Pass,
+                    Observed(ArenaQaSealManifestV2.BenchmarkMigrationEvidenceId) with { ReferenceId = ArenaQaSealManifestV2.ExplicitMigrationArtifactId }),
+                _ => new ArenaQaSchemaCheck(
+                    $"schema:check:{index}", schema, null, ArenaQaGateOutcome.Pass, Observed($"ev:schema:{index}"))
+            })
+            .ToImmutableArray();
+        return qa with
+        {
+            SealManifestId = ArenaQaSealManifestV2.Id,
+            Verdict = ArenaQaVerdict.Sealed,
+            CleanFullPasses = ArenaQaSealManifestV2.RequiredCleanPasses,
+            Gates = gates,
+            Artifacts =
+            [
+                .. qa.Artifacts,
+                new("artifact:feature-matrix", ArenaQaSealManifestV2.FeatureSurfaceMatrixArtifactKind, "metadata/feature-matrix.json", new string('c', 64), null),
+                new(ArenaQaSealManifestV2.ExplicitMigrationArtifactId, ArenaQaSealManifestV2.ExplicitMigrationArtifactKind, ArenaQaSealManifestV2.ExplicitMigrationArtifactPath, new string('d', 64), null)
+            ],
+            SchemaChecks = schemas,
+            Performance = ArenaQaSealManifestV2.RequiredPerformanceMetrics.Select(Performance).ToImmutableArray(),
             AcceptedLimitations = QaLimitations(userAccepted: true),
             Inspection = new(true, At.AddSeconds(9), HashA, ["artifact:screenshot"], ["artifact:automation"], Observed("ev:inspection"))
         };

@@ -67,25 +67,68 @@ internal static partial class Program
 
         RunStaTest(() =>
         {
-            var control = new FaultInjectionLabControl();
-            control.SetInput(new(ArenaFaultKind.Timeout, "probe-seed", "0", "0", "100", "1", "2"));
-            var provider = new ResilienceRecordingProviderClient();
-            using var coordinator = new FaultInjectionLabCoordinator(
-                control,
-                provider,
-                () => ResilienceConfig("model-current"),
-                new ResilienceFixedTimeProvider(at));
-            coordinator.ArmAsync().GetAwaiter().GetResult();
-            Require(coordinator.IsArmed && control.CanRunProbe, "fault profile did not enter the armed lifecycle");
-            coordinator.RunProbeAsync().GetAwaiter().GetResult();
-            Require(control.ObservationCount == 1
-                    && provider.ChatCalls == 0
-                    && !control.Status.Contains("recovered", StringComparison.OrdinalIgnoreCase),
-                "fault probe did not retain content-free cause evidence or fabricated recovery");
-            coordinator.DisarmAsync().GetAwaiter().GetResult();
-            Require(!coordinator.IsArmed && !control.CanRunProbe, "fault profile did not disarm safely");
+            foreach (var kind in Enum.GetValues<ArenaFaultKind>())
+            {
+                var control = new FaultInjectionLabControl();
+                control.SetInput(new(kind, "probe-seed", "0", "0", "100", "1", "2"));
+                var provider = new ResilienceRecordingProviderClient();
+                using var coordinator = new FaultInjectionLabCoordinator(
+                    control,
+                    provider,
+                    () => ResilienceConfig("model-current"),
+                    new ResilienceFixedTimeProvider(at));
+                coordinator.ArmAsync().GetAwaiter().GetResult();
+                Require(coordinator.IsArmed && control.CanRunProbe, $"{kind} profile did not enter the armed lifecycle");
+                coordinator.RunProbeAsync().GetAwaiter().GetResult();
+                var observation = control.ObservationItems.Single();
+                Require(control.ObservationCount == 1
+                        && observation.EffectText == $"Effect: {ExpectedFaultEffect(kind)}."
+                        && observation.CauseText.Contains("Observed", StringComparison.Ordinal)
+                        && observation.RecoveryText.Contains("Unavailable", StringComparison.Ordinal)
+                        && provider.ChatCalls == 0
+                        && !control.Status.Contains("recovered", StringComparison.OrdinalIgnoreCase),
+                    $"{kind} probe did not expose its distinct content-free effect or preserved cause/recovery honesty");
+                coordinator.DisarmAsync().GetAwaiter().GetResult();
+                Require(!coordinator.IsArmed && !control.CanRunProbe, $"{kind} profile did not disarm safely");
+            }
         });
+
+        var preEmpted = FaultInjectionLabCoordinator.ObservationItem(new ArenaFaultObservation(
+            "fault-profile:cancelled",
+            "fault:cancelled",
+            0,
+            1,
+            ArenaFaultKind.Timeout,
+            ArenaFaultInjectedEffect.CallerCancelledBeforeEffect,
+            ArenaProviderFaultOperation.ChatCompletion,
+            ArenaFaultObservedOutcome.CallerCancelledBeforeEffect,
+            new(
+                "evidence:cancelled-cause",
+                ArenaEvidenceState.Unavailable,
+                "The scheduled fault was pre-empted.",
+                Limitation: "No injected effect occurred."),
+            new(
+                "evidence:cancelled-recovery",
+                ArenaEvidenceState.Unavailable,
+                "Recovery was not measured.",
+                Limitation: "No injected effect occurred.")));
+        Require(preEmpted.EffectText.StartsWith("Effect not observed", StringComparison.Ordinal)
+                && preEmpted.CauseText.Contains("Unavailable", StringComparison.Ordinal)
+                && preEmpted.AutomationHelp.Contains("pre-empted", StringComparison.OrdinalIgnoreCase),
+            "WPF rendered a caller-pre-empted schedule as an observed injected effect");
     }
+
+    private static string ExpectedFaultEffect(ArenaFaultKind kind) => kind switch
+    {
+        ArenaFaultKind.Timeout => "bounded timeout elapsed",
+        ArenaFaultKind.Disconnect => "connection dropped",
+        ArenaFaultKind.MalformedStream => "malformed stream rejected before assistant progress",
+        ArenaFaultKind.Saturation => "provider capacity rejected the request",
+        ArenaFaultKind.EmptyResponse => "empty completion rejected",
+        ArenaFaultKind.Interruption => "partial stream interrupted",
+        ArenaFaultKind.ContextPressure => "context limit rejected the request",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind))
+    };
 
     static void RoutingOptimizerConsumesPersistedObservedEvidenceAndRequiresApproval()
     {
@@ -96,6 +139,7 @@ internal static partial class Program
             try
             {
                 var at = new DateTimeOffset(2037, 2, 3, 4, 5, 6, TimeSpan.Zero);
+                var planFingerprint = new string('b', 64);
                 var experiment = new ArenaExperimentContract(
                     ArenaContractSchemas.Experiment,
                     "experiment:routing-ui",
@@ -161,6 +205,7 @@ internal static partial class Program
                 {
                     var isCandidate = cell.ProviderProfileId == "provider:candidate";
                     var score = isCandidate ? 8.5m + (cell.Repetition * 0.5m) : 3.5m + (cell.Repetition * 0.5m);
+                    var trialId = ArenaExperimentRunPolicy.CreateTrialId(cell.CellKey, 1);
                     var run = new ArenaExperimentRunContract(
                         ArenaContractSchemas.ExperimentRun,
                         cell.RunId,
@@ -173,14 +218,21 @@ internal static partial class Program
                         ArenaExperimentRunState.Completed,
                         1,
                         at.AddSeconds(1),
-                        [$"trial:{cell.RunId[4..]}"],
+                        [trialId],
                         null,
-                        [ResilienceObserved($"evidence:{cell.RunId[4..]}")]);
+                        [
+                            ResilienceObserved($"evidence:{cell.RunId[4..]}"),
+                            new(
+                                ArenaExperimentRunPolicy.CreateExecutionPlanEvidenceId(trialId),
+                                ArenaEvidenceState.Observed,
+                                "The latest attempt used the exact resolved execution plan.",
+                                $"plan:{planFingerprint}")
+                        ]);
                     Require(runStore.SaveAsync(run).GetAwaiter().GetResult().Succeeded, "routing run fixture did not persist");
                     var result = rubricService.CreateSingleSubjectResult(
                         rubric,
                         $"evaluation:{cell.RunId[4..]}",
-                        run.Id,
+                        trialId,
                         [new(
                             $"result:{cell.RunId[4..]}",
                             "evaluator:observed",
@@ -195,6 +247,25 @@ internal static partial class Program
                     Require(rubricStore.SaveResultAsync(result).GetAwaiter().GetResult().Succeeded, "routing result fixture did not persist");
                 }
 
+                var attemptAgnosticCell = expansion.Cells[0];
+                var attemptAgnosticResult = rubricService.CreateSingleSubjectResult(
+                    rubric,
+                    "evaluation:attempt-agnostic-run-id",
+                    attemptAgnosticCell.RunId,
+                    [new(
+                        "result:attempt-agnostic-run-id",
+                        "evaluator:observed",
+                        ArenaRubricJudgmentSource.Human,
+                        "reviewer:local",
+                        null,
+                        [new("quality", 10m, null, ResilienceObserved("score:attempt-agnostic-run-id"))],
+                        ResilienceObserved("provenance:attempt-agnostic-run-id"))],
+                    at,
+                    at.AddSeconds(3),
+                    [ResilienceObserved("evaluation-evidence:attempt-agnostic-run-id")]);
+                Require(rubricStore.SaveResultAsync(attemptAgnosticResult).GetAwaiter().GetResult().Succeeded,
+                    "attempt-agnostic routing judgment fixture did not persist");
+
                 var constraints = new Dictionary<string, IReadOnlyList<ArenaRouteConstraintEvidence>>(StringComparer.Ordinal);
                 var source = new PersistedRoutingEvidenceSource(
                     runStore,
@@ -203,6 +274,7 @@ internal static partial class Program
                     _ => Task.FromResult<PersistedRoutingEvidenceContext?>(new(
                         experiment,
                         new string('a', 64),
+                        planFingerprint,
                         "scenario:routing-ui",
                         "alpha",
                         "model-current",
@@ -216,14 +288,95 @@ internal static partial class Program
                 var loaded = source.LoadAsync().GetAwaiter().GetResult();
                 Require(loaded.IsAvailable && loaded.CompatibleRuns == 4 && loaded.CompatibleEvaluations == 4,
                     "persisted routing source did not load exact compatible observed evidence");
+                var stalePlanSource = new PersistedRoutingEvidenceSource(
+                    runStore,
+                    rubricStore,
+                    packStore,
+                    _ => Task.FromResult<PersistedRoutingEvidenceContext?>(new(
+                        experiment,
+                        new string('a', 64),
+                        new string('c', 64),
+                        "scenario:routing-ui",
+                        "alpha",
+                        "model-current",
+                        new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["provider:current"] = "model-current",
+                            ["provider:candidate"] = "model-candidate"
+                        },
+                        constraints)),
+                    new ResilienceFixedTimeProvider(at.AddMinutes(1)));
+                var stalePlanEvidence = stalePlanSource.LoadAsync().GetAwaiter().GetResult();
+                Require(stalePlanEvidence.CompatibleRuns == 0
+                        && stalePlanEvidence.Diagnostics.Any(item => item.Contains("latest attempt does not match", StringComparison.OrdinalIgnoreCase))
+                        && ArenaModelRoutingOptimizer.Propose(stalePlanEvidence.Request!).Status != ArenaRouteProposalStatus.Proposed,
+                    "historical runs from a different execution plan were treated as current comparable evidence");
+                var persistedSampleRunIds = loaded.Request!.Targets.Single().Candidates
+                    .SelectMany(item => item.Samples)
+                    .Select(item => item.RunId)
+                    .ToArray();
+                Require(persistedSampleRunIds.Length == persistedSampleRunIds.Distinct(StringComparer.Ordinal).Count()
+                        && persistedSampleRunIds.All(item => item.Length is >= 1 and <= 160
+                            && item[0] is >= 'a' and <= 'z' or >= '0' and <= '9'
+                            && item.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9'
+                                or '.' or '_' or ':' or '-')),
+                    "persisted routing source emitted duplicated or non-canonical run identities");
                 var trialCandidate = loaded.Request!.Targets.Single().Candidates.Single(item => item.ModelId == "model-candidate");
-                Require(trialCandidate.Constraints.Any(item => item.Kind == ArenaRouteConstraintKind.Hardware
-                            && item.Evidence.State == ArenaEvidenceState.Observed
-                            && expansion.Cells.Any(cell => cell.RunId == item.Evidence.ReferenceId))
+                Require(!trialCandidate.Constraints.Any(item => item.Kind == ArenaRouteConstraintKind.Hardware)
                         && trialCandidate.Constraints.Any(item => item.Kind == ArenaRouteConstraintKind.Capability
                             && item.Evidence.State == ArenaEvidenceState.Observed
                             && expansion.Cells.Any(cell => cell.RunId == item.Evidence.ReferenceId)),
-                    "compatible completed trials did not derive narrow run-referenced execution constraints");
+                    "historical completed trials invented current hardware evidence or failed to retain run-referenced capability evidence");
+                var trialOnlyProposal = ArenaModelRoutingOptimizer.Propose(loaded.Request!);
+                var trialOnlyChange = trialOnlyProposal.Changes.Single();
+                Require(trialOnlyProposal.Status != ArenaRouteProposalStatus.Proposed
+                        && trialOnlyChange.EvidenceSufficiency != ArenaEvidenceSufficiency.Sufficient
+                        && trialOnlyChange.Evidence.State == ArenaEvidenceState.Inferred
+                        && trialOnlyChange.Evidence.Basis?.Contains("hardware evidence is absent", StringComparison.OrdinalIgnoreCase) == true
+                        && loaded.Diagnostics.Any(item => item.Contains("current observed hardware evidence is unavailable", StringComparison.OrdinalIgnoreCase)),
+                    "historical trial evidence incorrectly established current hardware fitness");
+
+                var observedCurrentConstraints = new Dictionary<string, IReadOnlyList<ArenaRouteConstraintEvidence>>(StringComparer.Ordinal)
+                {
+                    ["model-current"] =
+                    [
+                        new(
+                            "constraint:current:hardware",
+                            ArenaRouteConstraintKind.Hardware,
+                            "A current privacy-safe hardware observation satisfies this model's declared requirement.",
+                            true,
+                            ResilienceObserved("evidence:current:hardware"))
+                    ],
+                    ["model-candidate"] =
+                    [
+                        new(
+                            "constraint:candidate:hardware",
+                            ArenaRouteConstraintKind.Hardware,
+                            "A current privacy-safe hardware observation satisfies this model's declared requirement.",
+                            true,
+                            ResilienceObserved("evidence:candidate:hardware"))
+                    ]
+                };
+                var routableSource = new PersistedRoutingEvidenceSource(
+                    runStore,
+                    rubricStore,
+                    packStore,
+                    _ => Task.FromResult<PersistedRoutingEvidenceContext?>(new(
+                        experiment,
+                        new string('a', 64),
+                        planFingerprint,
+                        "scenario:routing-ui",
+                        "alpha",
+                        "model-current",
+                        new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["provider:current"] = "model-current",
+                            ["provider:candidate"] = "model-candidate"
+                        },
+                        observedCurrentConstraints)),
+                    new ResilienceFixedTimeProvider(at.AddMinutes(1)));
+                Require(ArenaModelRoutingOptimizer.Propose(routableSource.LoadAsync().GetAwaiter().GetResult().Request!).Status == ArenaRouteProposalStatus.Proposed,
+                    "current observed hardware plus persisted capability evidence did not enable a proposal");
 
                 var strictSource = new PersistedRoutingEvidenceSource(
                     runStore,
@@ -232,6 +385,7 @@ internal static partial class Program
                     _ => Task.FromResult<PersistedRoutingEvidenceContext?>(new(
                         experiment,
                         new string('a', 64),
+                        planFingerprint,
                         "scenario:routing-ui",
                         "alpha",
                         "model-current",
@@ -242,8 +396,10 @@ internal static partial class Program
                         },
                         new Dictionary<string, IReadOnlyList<ArenaRouteConstraintEvidence>>(StringComparer.Ordinal)
                         {
+                            ["model-current"] = observedCurrentConstraints["model-current"],
                             ["model-candidate"] =
                             [
+                                observedCurrentConstraints["model-candidate"][0],
                                 new(
                                     "constraint:candidate:policy",
                                     ArenaRouteConstraintKind.Policy,
@@ -262,7 +418,7 @@ internal static partial class Program
                 var control = new ModelRoutingOptimizerControl();
                 using var coordinator = new ModelRoutingOptimizerCoordinator(
                     control,
-                    source,
+                    routableSource,
                     (proposal, approver, approvedAt, _) =>
                     {
                         appliedProposal = proposal;
@@ -305,6 +461,33 @@ internal static partial class Program
                             && !control.Status.Contains(root, StringComparison.OrdinalIgnoreCase),
                         "approved application did not return a clearly process-only receipt boundary");
                 });
+
+                var beforeRetryRuns = runStore.LoadAllAsync().GetAwaiter().GetResult();
+                var beforeRetry = beforeRetryRuns.Runs.Single(item => item.CellKey == attemptAgnosticCell.CellKey);
+                var secondTrialId = ArenaExperimentRunPolicy.CreateTrialId(beforeRetry.CellKey, 2);
+                var secondPlanEvidence = new ArenaEvidenceAssertion(
+                    ArenaExperimentRunPolicy.CreateExecutionPlanEvidenceId(secondTrialId),
+                    ArenaEvidenceState.Observed,
+                    "The latest retry used the exact resolved execution plan.",
+                    $"plan:{planFingerprint}");
+                var retried = beforeRetry with
+                {
+                    Attempts = 2,
+                    UpdatedAtUtc = beforeRetry.UpdatedAtUtc.AddSeconds(1),
+                    TrialIds = [.. beforeRetry.TrialIds.Append(secondTrialId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
+                    Evidence = [.. beforeRetry.Evidence.Append(secondPlanEvidence).OrderBy(item => item.Id, StringComparer.Ordinal)]
+                };
+                Require(runStore.SaveAsync(retried).GetAwaiter().GetResult().Succeeded,
+                    "latest-attempt routing fixture did not persist");
+                var afterRetryEvidence = routableSource.LoadAsync().GetAwaiter().GetResult();
+                var afterRetrySamples = afterRetryEvidence.Request!.Targets.Single().Candidates
+                    .SelectMany(item => item.Samples)
+                    .ToArray();
+                Require(afterRetryEvidence.CompatibleRuns == 4
+                        && afterRetryEvidence.CompatibleEvaluations == 3
+                        && !afterRetrySamples.Any(item => item.RunId == beforeRetry.Id)
+                        && ArenaModelRoutingOptimizer.Propose(afterRetryEvidence.Request!).Status != ArenaRouteProposalStatus.Proposed,
+                    "an old-trial or attempt-agnostic judgment was reused for the latest retry plan");
             }
             finally
             {

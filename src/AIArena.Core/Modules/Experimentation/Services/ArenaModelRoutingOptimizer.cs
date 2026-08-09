@@ -124,7 +124,11 @@ public static class ArenaModelRoutingOptimizer
     {
         var sameSetup = current.Samples.Concat(candidate.Samples).All(item =>
             string.Equals(item.SetupFingerprint, request.SetupFingerprint, StringComparison.Ordinal));
-        var comparableSampleCount = sameSetup ? Math.Min(current.Samples.Length, candidate.Samples.Length) : 0;
+        var comparableSampleCount = sameSetup
+            ? Math.Min(
+                current.Samples.Select(item => item.RunId).Distinct(StringComparer.Ordinal).Count(),
+                candidate.Samples.Select(item => item.RunId).Distinct(StringComparer.Ordinal).Count())
+            : 0;
         var runIds = sameSetup
             ? current.Samples.Concat(candidate.Samples).Select(item => item.RunId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray()
             : ImmutableArray<string>.Empty;
@@ -310,6 +314,7 @@ public static class ArenaModelRoutingOptimizer
                 || Math.Abs(target.Objectives.Sum(item => item.Weight) - 1m) > 0.000001m)
                 throw new ArgumentException("Objective weights must be positive and total one.", nameof(request));
 
+            var targetRunIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var candidate in target.Candidates)
             {
                 if (candidate.Samples.IsDefault || candidate.Samples.Length > 10_000)
@@ -318,6 +323,10 @@ public static class ArenaModelRoutingOptimizer
                     throw new ArgumentException("Candidate constraints must be initialized and bounded.", nameof(request));
                 foreach (var sample in candidate.Samples)
                 {
+                    if (!IsCanonicalRunId(sample.RunId))
+                        throw new ArgumentException("Sample run IDs must be canonical bounded lowercase identifiers.", nameof(request));
+                    if (!targetRunIds.Add(sample.RunId))
+                        throw new ArgumentException("Sample run IDs must be unique within and across compared candidates.", nameof(request));
                     if (sample.Metrics.IsDefault || sample.Metrics.Length > 128)
                         throw new ArgumentException("Sample metrics must be initialized and bounded.", nameof(request));
                     foreach (var metric in sample.Metrics)
@@ -334,6 +343,17 @@ public static class ArenaModelRoutingOptimizer
             }
         }
     }
+
+    private static bool IsCanonicalRunId(string? value)
+    {
+        if (value is not { Length: >= 1 and <= 160 }) return false;
+        if (!IsLowercaseLetterOrDigit(value[0])) return false;
+        return value.All(character => IsLowercaseLetterOrDigit(character)
+            || character is '.' or '_' or ':' or '-');
+    }
+
+    private static bool IsLowercaseLetterOrDigit(char value) =>
+        value is >= 'a' and <= 'z' or >= '0' and <= '9';
 
     private static void ValidateEvidenceValue<T>(T? value, ArenaEvidenceAssertion evidence, string label)
         where T : struct

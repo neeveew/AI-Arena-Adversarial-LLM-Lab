@@ -1,6 +1,10 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Diagnostics;
+using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Nodes;
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
 using AIArena.Core.Providers;
@@ -123,11 +127,17 @@ internal static class ExperimentExecutionTests
             Require(ArenaExperimentPackCodec.DecodeScenarioPack(
                 Encoding.UTF8.GetBytes("{}"), "imports/missing.json").Diagnostics.Any(item => item.Code == "artifact.schema_missing"),
                 "missing schema lacked an explicit diagnostic");
-            var oldSchema = Encoding.UTF8.GetBytes(ArenaContractCodec.Serialize(pack)
-                .Replace(ArenaContractSchemas.ScenarioPack, "ai_arena.scenario_pack.v0", StringComparison.Ordinal));
+            var legacyPack = WithScenarioContentFingerprint(ScenarioPack() with
+            {
+                Id = "scenario-pack:migrated",
+                Name = "Migrated",
+                Version = "0.9.0",
+                Scenarios = [ScenarioPack().Scenarios[0] with { ScenarioSeed = "Migrated bounded seed." }]
+            });
+            var oldSchema = LegacyScenarioPackV0Bytes(legacyPack);
             var migration = ArenaExperimentPackCodec.DecodeScenarioPack(oldSchema, "imports/old.json");
             Require(migration.Diagnostics.Any(item => item.Code == "artifact.migration_required"
-                && item.DetectedSchema == "ai_arena.scenario_pack.v0"
+                && item.DetectedSchema == ArenaExperimentPackCodec.ScenarioPackV0Schema
                 && item.ExpectedSchema == ArenaContractSchemas.ScenarioPack),
                 "recognized older schema did not require an explicit migration");
             Require(ArenaExperimentPackCodec.DecodeScenarioPack(
@@ -137,17 +147,87 @@ internal static class ExperimentExecutionTests
                 new byte[32], "imports/large.json", maximumBytes: 16).Diagnostics.Any(item => item.Code == "artifact.oversize"),
                 "oversize pack lacked fallback diagnostics");
 
-            var migratedBase = ScenarioPack() with
-            {
-                Id = "scenario-pack:migrated",
-                Name = "Migrated",
-                Version = "2.0.0",
-                Scenarios = [ScenarioPack().Scenarios[0] with { ScenarioSeed = "Migrated bounded seed." }],
-                Migration = new("ai_arena.scenario_pack.v0", "0.9.0", HashA, "migrator:1", At)
-            };
-            var migrated = WithScenarioContentFingerprint(migratedBase);
+            var migratedResult = ArenaExperimentPackCodec.MigrateScenarioPackV0(oldSchema, "imports/old.json", At);
+            Require(migratedResult.Succeeded && migratedResult.Pack is not null, Format(migratedResult.Diagnostics));
+            var migrated = migratedResult.Pack ?? throw new InvalidOperationException("migrated scenario missing");
+            var expectedSourceSha = Convert.ToHexStringLower(SHA256.HashData(oldSchema));
+            Require(migrated.Migration is
+                    {
+                        SourceSchema: ArenaExperimentPackCodec.ScenarioPackV0Schema,
+                        SourceVersion: "0.9.0",
+                        MigratorVersion: ArenaExperimentPackCodec.ScenarioPackV0MigratorVersion,
+                        MigratedAtUtc: var migratedAt
+                    }
+                    && migratedAt == At
+                    && migrated.Migration.SourceContentFingerprint == expectedSourceSha,
+                "scenario migration did not bind exact source bytes, schema, version, migrator, and injected UTC time");
+            Require(migrated.CreatedAtUtc == At
+                    && migrated.ContentFingerprint == ArenaExperimentFingerprints.ScenarioPackContent(migrated.Invariants, migrated.Scenarios),
+                "scenario migration trusted legacy identity instead of recomputing canonical v1 identity");
+            var repeatMigration = ArenaExperimentPackCodec.MigrateScenarioPackV0(oldSchema, "imports/old.json", At);
+            Require(repeatMigration.Succeeded
+                    && ArenaContractCodec.Serialize(repeatMigration.Pack!) == ArenaContractCodec.Serialize(migrated),
+                "scenario migration was not deterministic for identical bytes and injected time");
+            var canonicalMigratedBytes = Encoding.UTF8.GetBytes(ArenaContractCodec.Serialize(migrated));
+            Require(ArenaExperimentPackCodec.DecodeScenarioPack(canonicalMigratedBytes, "imports/migrated.json").Succeeded,
+                "migrated scenario did not satisfy the strict canonical v1 decoder");
+            Require(ArenaExperimentPackCodec.MigrateScenarioPackV0(canonicalMigratedBytes, "imports/remigrate.json", At)
+                    .Diagnostics.Any(item => item.Code == "artifact.migration_source_unsupported"),
+                "canonical v1 scenario was implicitly remigrated");
+            var tamperedMigration = ArenaContractCodec.Serialize(migrated)
+                .Replace("Migrated bounded seed.", "Tampered bounded seed.", StringComparison.Ordinal);
+            Require(ArenaExperimentPackCodec.DecodeScenarioPack(
+                    Encoding.UTF8.GetBytes(tamperedMigration),
+                    "imports/tampered-migrated.json")
+                .Diagnostics.Any(item => item.Code == "artifact.contract.scenario.content_fingerprint"),
+                "tampered migrated scenario retained trusted v1 identity");
+            var hostileLegacy = JsonNode.Parse(Encoding.UTF8.GetString(oldSchema))!.AsObject();
+            hostileLegacy["sourceContent"] = "private payload";
+            Require(ArenaExperimentPackCodec.MigrateScenarioPackV0(
+                    Encoding.UTF8.GetBytes(hostileLegacy.ToJsonString()),
+                    "imports/hostile-v0.json",
+                    At)
+                .Diagnostics.Any(item => item.Code == "artifact.migration_source.privacy.source_content"),
+                "hostile v0 source content crossed the migration privacy boundary");
+            var unknownLegacy = JsonNode.Parse(Encoding.UTF8.GetString(oldSchema))!.AsObject();
+            unknownLegacy["unexpected"] = "bounded";
+            Require(ArenaExperimentPackCodec.MigrateScenarioPackV0(
+                    Encoding.UTF8.GetBytes(unknownLegacy.ToJsonString()),
+                    "imports/unknown-v0.json",
+                    At)
+                .Diagnostics.Any(item => item.Code == "artifact.migration_wire_invalid"),
+                "unknown v0 wire member was accepted by the closed migrator");
+            var secretLegacy = JsonNode.Parse(Encoding.UTF8.GetString(oldSchema))!.AsObject();
+            secretLegacy["name"] = "api_key=supersecretvalue";
+            Require(ArenaExperimentPackCodec.MigrateScenarioPackV0(
+                    Encoding.UTF8.GetBytes(secretLegacy.ToJsonString()),
+                    "imports/secret-v0.json",
+                    At)
+                .Diagnostics.Any(item => item.Code == "artifact.migration_source.privacy.secret"),
+                "secret-shaped v0 value crossed the migration privacy boundary");
+            Require(ArenaExperimentPackCodec.MigrateScenarioPackV0(
+                    oldSchema,
+                    "imports/oversize-v0.json",
+                    At,
+                    maximumBytes: oldSchema.Length - 1)
+                .Diagnostics.Any(item => item.Code == "artifact.oversize"),
+                "oversize v0 migration source crossed its byte bound");
+            Require(ArenaExperimentPackCodec.MigrateScenarioPackV0(oldSchema, "imports/time.json", At.ToOffset(TimeSpan.FromHours(1)))
+                    .Diagnostics.Any(item => item.Code == "artifact.migration_time"),
+                "non-UTC injected migration time was accepted");
             var migratedWrite = store.SaveScenarioPackAsync(migrated).GetAwaiter().GetResult();
             Require(migratedWrite.Succeeded, Format(migratedWrite.Diagnostics));
+            Require(store.SaveScenarioPackAsync(migrated).GetAwaiter().GetResult().Disposition == ArenaArtifactWriteDisposition.Duplicate,
+                "migrated scenario was persisted twice");
+            var laterMigration = ArenaExperimentPackCodec.MigrateScenarioPackV0(
+                oldSchema,
+                "imports/old.json",
+                At.AddMinutes(5));
+            var laterDuplicate = store.SaveScenarioPackAsync(laterMigration.Pack!).GetAwaiter().GetResult();
+            Require(laterDuplicate.Disposition == ArenaArtifactWriteDisposition.Duplicate
+                    && laterDuplicate.Diagnostics.Any(item => item.Code == "artifact.duplicate_migration_source")
+                    && laterDuplicate.Artifact?.Migration?.MigratedAtUtc == At,
+                "repeat migration of the exact source replaced its original durable receipt");
             var loaded = store.LoadScenarioPacksAsync().GetAwaiter().GetResult();
             Require(loaded.Artifacts.Length == 2, "valid packs were not isolated from duplicate inputs");
             Require(loaded.Diagnostics.Any(item => item.Code == "artifact.migration_provenance"),
@@ -176,11 +256,87 @@ internal static class ExperimentExecutionTests
                 "caller-supplied benchmark content fingerprint was trusted after content changed");
             var benchmarkLoad = store.LoadBenchmarkPacksAsync().GetAwaiter().GetResult();
             Require(benchmarkLoad.Artifacts.Single().Id == benchmark.Id, "benchmark pack did not round trip through its strict store");
-            var oldBenchmark = Encoding.UTF8.GetBytes(ArenaContractCodec.Serialize(benchmark)
-                .Replace(ArenaContractSchemas.BenchmarkPack, "ai_arena.benchmark_pack.v0", StringComparison.Ordinal));
+            var legacyBenchmark = benchmark with
+            {
+                Id = "benchmark-pack:migrated",
+                Name = "Migrated benchmark",
+                Version = "0.8.0",
+                Cases = [benchmark.Cases[0] with { Repetitions = 2 }]
+            };
+            legacyBenchmark = legacyBenchmark with
+            {
+                ContentFingerprint = ArenaExperimentFingerprints.BenchmarkPackContent(
+                    legacyBenchmark.ScenarioPackId,
+                    legacyBenchmark.Cases)
+            };
+            var oldBenchmark = LegacyBenchmarkPackV0Bytes(legacyBenchmark);
             Require(ArenaExperimentPackCodec.DecodeBenchmarkPack(oldBenchmark, "imports/benchmark-old.json")
                 .Diagnostics.Any(item => item.Code == "artifact.migration_required"),
                 "older benchmark schema lacked explicit migration diagnostics");
+            var migratedBenchmarkResult = ArenaExperimentPackCodec.MigrateBenchmarkPackV0(
+                oldBenchmark,
+                "imports/benchmark-old.json",
+                At);
+            Require(migratedBenchmarkResult.Succeeded && migratedBenchmarkResult.Pack is not null,
+                Format(migratedBenchmarkResult.Diagnostics));
+            var migratedBenchmark = migratedBenchmarkResult.Pack ?? throw new InvalidOperationException("migrated benchmark missing");
+            Require(migratedBenchmark.Migration is
+                    {
+                        SourceSchema: ArenaExperimentPackCodec.BenchmarkPackV0Schema,
+                        SourceVersion: "0.8.0",
+                        MigratorVersion: ArenaExperimentPackCodec.BenchmarkPackV0MigratorVersion
+                    }
+                    && migratedBenchmark.Migration.SourceContentFingerprint
+                        == Convert.ToHexStringLower(SHA256.HashData(oldBenchmark))
+                    && migratedBenchmark.ContentFingerprint == ArenaExperimentFingerprints.BenchmarkPackContent(
+                        migratedBenchmark.ScenarioPackId,
+                        migratedBenchmark.Cases),
+                "benchmark migration lacked exact provenance or recomputed identity");
+            var repeatedBenchmarkMigration = ArenaExperimentPackCodec.MigrateBenchmarkPackV0(
+                oldBenchmark,
+                "imports/benchmark-old.json",
+                At);
+            Require(repeatedBenchmarkMigration.Succeeded
+                    && ArenaContractCodec.Serialize(repeatedBenchmarkMigration.Pack!)
+                        == ArenaContractCodec.Serialize(migratedBenchmark),
+                "benchmark migration was not deterministic for identical bytes and injected time");
+            var canonicalMigratedBenchmarkBytes = Encoding.UTF8.GetBytes(ArenaContractCodec.Serialize(migratedBenchmark));
+            Require(ArenaExperimentPackCodec.DecodeBenchmarkPack(
+                    canonicalMigratedBenchmarkBytes,
+                    "imports/benchmark-migrated.json").Succeeded
+                    && ArenaExperimentPackCodec.MigrateBenchmarkPackV0(
+                        canonicalMigratedBenchmarkBytes,
+                        "imports/benchmark-remigrate.json",
+                        At).Diagnostics.Any(item => item.Code == "artifact.migration_source_unsupported"),
+                "migrated benchmark was not canonical v1 or was implicitly remigrated");
+            var tamperedMigratedBenchmark = ArenaContractCodec.Serialize(migratedBenchmark)
+                .Replace("\"repetitions\":2", "\"repetitions\":3", StringComparison.Ordinal);
+            Require(ArenaExperimentPackCodec.DecodeBenchmarkPack(
+                    Encoding.UTF8.GetBytes(tamperedMigratedBenchmark),
+                    "imports/benchmark-tampered.json")
+                .Diagnostics.Any(item => item.Code == "artifact.contract.benchmark.content_fingerprint"),
+                "tampered migrated benchmark retained trusted v1 identity");
+            var unknownLegacyBenchmark = JsonNode.Parse(Encoding.UTF8.GetString(oldBenchmark))!.AsObject();
+            unknownLegacyBenchmark["unexpected"] = "bounded";
+            Require(ArenaExperimentPackCodec.MigrateBenchmarkPackV0(
+                    Encoding.UTF8.GetBytes(unknownLegacyBenchmark.ToJsonString()),
+                    "imports/benchmark-unknown-v0.json",
+                    At).Diagnostics.Any(item => item.Code == "artifact.migration_wire_invalid"),
+                "unknown benchmark v0 wire member was accepted by the closed migrator");
+            var benchmarkMigrationWrite = store.SaveBenchmarkPackAsync(migratedBenchmark).GetAwaiter().GetResult();
+            Require(benchmarkMigrationWrite.Disposition == ArenaArtifactWriteDisposition.Written
+                    && store.SaveBenchmarkPackAsync(migratedBenchmark).GetAwaiter().GetResult().Disposition
+                        == ArenaArtifactWriteDisposition.Duplicate,
+                "migrated benchmark duplicate prevention failed");
+            var laterBenchmarkMigration = ArenaExperimentPackCodec.MigrateBenchmarkPackV0(
+                oldBenchmark,
+                "imports/benchmark-old.json",
+                At.AddMinutes(6));
+            var laterBenchmarkDuplicate = store.SaveBenchmarkPackAsync(laterBenchmarkMigration.Pack!).GetAwaiter().GetResult();
+            Require(laterBenchmarkDuplicate.Disposition == ArenaArtifactWriteDisposition.Duplicate
+                    && laterBenchmarkDuplicate.Diagnostics.Any(item => item.Code == "artifact.duplicate_migration_source")
+                    && laterBenchmarkDuplicate.Artifact?.Migration?.MigratedAtUtc == At,
+                "repeat benchmark migration replaced its original durable receipt");
 
             var secretBase = ScenarioPack() with
             {
@@ -258,6 +414,35 @@ internal static class ExperimentExecutionTests
             var json = File.ReadAllText(Path.Combine(root, merged.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
             Require(!json.Contains(root, StringComparison.OrdinalIgnoreCase), "absolute data root leaked into a run artifact");
             Require(!Directory.EnumerateFiles(root, "*.tmp", SearchOption.AllDirectories).Any(), "atomic write left a temporary artifact");
+
+            var rollbackCell = ExperimentExpander.Expand(
+                CapacityExperiment("experiment:clock-rollback", "rollback")).Cells.Single();
+            var rollbackStore = new ExperimentRunStore(Path.Combine(root, "clock-rollback"));
+            var futureAttempt = Run(
+                rollbackCell,
+                ArenaExperimentRunState.Completed,
+                1,
+                [ArenaExperimentRunPolicy.CreateTrialId(rollbackCell.CellKey, 1)],
+                At.AddHours(6));
+            Require(rollbackStore.SaveAsync(futureAttempt).GetAwaiter().GetResult().Succeeded,
+                "clock-rollback prior attempt was not persisted");
+            var rolledBackRunning = Run(
+                rollbackCell,
+                ArenaExperimentRunState.Running,
+                2,
+                [ArenaExperimentRunPolicy.CreateTrialId(rollbackCell.CellKey, 2)],
+                At.AddHours(1));
+            var rollbackRunningWrite = rollbackStore.SaveAsync(rolledBackRunning).GetAwaiter().GetResult();
+            Require(rollbackRunningWrite.Artifact is { Attempts: 2, State: ArenaExperimentRunState.Running },
+                $"wall-clock rollback hid the newer logical Running attempt ({rollbackRunningWrite.Disposition}; attempts {rollbackRunningWrite.Artifact?.Attempts}; state {rollbackRunningWrite.Artifact?.State}; {Format(rollbackRunningWrite.Diagnostics)})");
+            var rolledBackTerminal = rolledBackRunning with
+            {
+                State = ArenaExperimentRunState.Completed,
+                UpdatedAtUtc = At.AddMinutes(30)
+            };
+            var rollbackTerminalWrite = rollbackStore.SaveAsync(rolledBackTerminal).GetAwaiter().GetResult();
+            Require(rollbackTerminalWrite.Artifact is { Attempts: 2, State: ArenaExperimentRunState.Completed },
+                "wall-clock rollback regressed the terminal transition of the current logical attempt");
 
             var concurrencyRoot = TemporaryRoot();
             try
@@ -342,6 +527,271 @@ internal static class ExperimentExecutionTests
         finally
         {
             Directory.Delete(root, recursive: true);
+        }
+    }
+
+    internal static void PersistsDefinitionsAndRequiresApprovedRestart()
+    {
+        var root = TemporaryRoot();
+        try
+        {
+            var store = new ExperimentDefinitionStore(root);
+            var draft = Experiment(repetitions: 1, maximumParallelism: 2);
+            var first = store.SaveAsync(draft).GetAwaiter().GetResult();
+            Require(first.Disposition == ArenaArtifactWriteDisposition.Written, Format(first.Diagnostics));
+            Require(store.SaveAsync(draft).GetAwaiter().GetResult().Disposition == ArenaArtifactWriteDisposition.Duplicate,
+                "byte-identical experiment draft was persisted twice");
+            foreach (var fabricatedStatus in new[]
+                     {
+                         ArenaExperimentStatus.Completed,
+                         ArenaExperimentStatus.Cancelled,
+                         ArenaExperimentStatus.Interrupted
+                     })
+            {
+                var fabricated = store.SaveAsync(draft with { Status = fabricatedStatus }).GetAwaiter().GetResult();
+                Require(fabricated.Disposition == ArenaArtifactWriteDisposition.Rejected
+                        && fabricated.Diagnostics.Any(item => item.Code == "experiment_definition.lifecycle_transition")
+                        && store.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single().Status
+                            == ArenaExperimentStatus.Draft,
+                    $"Draft definition fabricated a {fabricatedStatus} lifecycle without an owner-held run");
+            }
+            Require(store.SaveAsync(draft with { Status = ArenaExperimentStatus.Running }).GetAwaiter().GetResult()
+                    .Diagnostics.Any(item => item.Code == "experiment_definition.execution_lease_required"),
+                "Running experiment definition was persisted without an owner lease");
+
+            var owner = store.AcquireExecutionLeaseAsync().AsTask().GetAwaiter().GetResult();
+            try
+            {
+                var ownerFabricated = store.SaveForExecutionAsync(
+                    owner,
+                    draft with { Status = ArenaExperimentStatus.Completed }).GetAwaiter().GetResult();
+                Require(ownerFabricated.Disposition == ArenaArtifactWriteDisposition.Rejected
+                        && ownerFabricated.Diagnostics.Any(item => item.Code == "experiment_definition.lifecycle_transition"),
+                    "an owner lease skipped Draft-to-Running before terminalizing a definition");
+                var running = store.SaveForExecutionAsync(
+                    owner,
+                    draft with { Status = ArenaExperimentStatus.Running }).GetAwaiter().GetResult();
+                Require(running.Succeeded && running.Artifact?.Status == ArenaExperimentStatus.Running,
+                    Format(running.Diagnostics));
+                var ownerInterrupted = store.SaveForExecutionAsync(
+                    owner,
+                    draft with { Status = ArenaExperimentStatus.Interrupted }).GetAwaiter().GetResult();
+                Require(ownerInterrupted.Disposition == ArenaArtifactWriteDisposition.Rejected
+                        && ownerInterrupted.Diagnostics.Any(item => item.Code == "experiment_definition.lifecycle_transition")
+                        && store.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single().Status
+                            == ArenaExperimentStatus.Running,
+                    "a regular owner write invented Interrupted instead of using restart recovery");
+                var competingStore = new ExperimentDefinitionStore(root);
+                RequireThrows<InvalidOperationException>(
+                    () => competingStore.AcquireExecutionLeaseAsync().AsTask().GetAwaiter().GetResult(),
+                    "a second coordinator acquired the active definition owner lease");
+                var hostileTerminal = competingStore.SaveAsync(
+                    draft with { Status = ArenaExperimentStatus.Completed }).GetAwaiter().GetResult();
+                Require(hostileTerminal.Disposition == ArenaArtifactWriteDisposition.Rejected
+                        && hostileTerminal.Diagnostics.Any(item => item.Code == "experiment_definition.execution_lease_required")
+                        && store.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single().Status
+                            == ArenaExperimentStatus.Running,
+                    "a non-owner store terminalized the active coordinator's Running definition");
+            }
+            finally
+            {
+                owner.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+
+            var restartedStore = new ExperimentDefinitionStore(root);
+            var restartOwner = restartedStore.AcquireExecutionLeaseAsync().AsTask().GetAwaiter().GetResult();
+            try
+            {
+                var recovered = restartedStore.RecoverInterruptedAfterRestartAsync(
+                    restartOwner,
+                    At.AddMinutes(1)).GetAwaiter().GetResult();
+                Require(recovered.Definitions.Single().Status == ArenaExperimentStatus.Interrupted
+                        && recovered.Diagnostics.Any(item => item.Code == "experiment_definition.restart_normalized"),
+                    "abandoned Running definition was not durably normalized to Interrupted");
+                var unapproved = restartedStore.SaveForExecutionAsync(
+                    restartOwner,
+                    draft with { Status = ArenaExperimentStatus.Running }).GetAwaiter().GetResult();
+                Require(unapproved.Disposition == ArenaArtifactWriteDisposition.Rejected
+                        && unapproved.Diagnostics.Any(item => item.Code == "experiment_definition.retry_approval_required"),
+                    "Interrupted definition resumed without explicit retry approval");
+                var approved = restartedStore.SaveForExecutionAsync(
+                    restartOwner,
+                    draft with { Status = ArenaExperimentStatus.Running },
+                    retryApproved: true).GetAwaiter().GetResult();
+                Require(approved.Succeeded && approved.Artifact?.Status == ArenaExperimentStatus.Running,
+                    "approved Interrupted definition did not re-enter Running");
+                var completed = restartedStore.SaveForExecutionAsync(
+                    restartOwner,
+                    draft with { Status = ArenaExperimentStatus.Completed }).GetAwaiter().GetResult();
+                Require(completed.Succeeded && completed.Artifact?.Status == ArenaExperimentStatus.Completed,
+                    "completed definition lifecycle was not persisted");
+            }
+            finally
+            {
+                restartOwner.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+
+            var passive = restartedStore.LoadAllAsync().GetAwaiter().GetResult();
+            Require(passive.Definitions is [{ Status: ArenaExperimentStatus.Completed }]
+                    && passive.Definitions[0].CreatedAtUtc == draft.CreatedAtUtc
+                    && ArenaExperimentFingerprints.Experiment(passive.Definitions[0])
+                        == ArenaExperimentFingerprints.Experiment(draft),
+                "restart persistence changed definition creation time or execution identity");
+            Require(!Directory.EnumerateFiles(root, "*.tmp", SearchOption.AllDirectories).Any(),
+                "definition atomic write left a temporary file");
+
+            var boundedRoot = Path.Combine(root, "bounded");
+            var bounded = new ExperimentDefinitionStore(
+                boundedRoot,
+                new(MaximumDefinitions: 1, MaximumDefinitionBytes: 64));
+            var oversize = bounded.SaveAsync(draft).GetAwaiter().GetResult();
+            Require(oversize.Diagnostics.Any(item => item.Code == "artifact.oversize"),
+                "bounded definition store accepted an oversize artifact");
+            var privateDefinition = draft with
+            {
+                Id = "experiment:private",
+                Title = "api_key=supersecretvalue"
+            };
+            var privateWrite = restartedStore.SaveAsync(privateDefinition).GetAwaiter().GetResult();
+            Require(privateWrite.Disposition == ArenaArtifactWriteDisposition.Rejected
+                    && !Directory.EnumerateFiles(root, "*.json", SearchOption.AllDirectories)
+                        .Select(File.ReadAllText)
+                        .Any(text => text.Contains("supersecretvalue", StringComparison.Ordinal)),
+                "secret-shaped experiment definition reached durable storage");
+            foreach (var initialTerminalStatus in new[]
+                     {
+                         ArenaExperimentStatus.Completed,
+                         ArenaExperimentStatus.Cancelled,
+                         ArenaExperimentStatus.Interrupted
+                     })
+            {
+                var inventedTerminal = restartedStore.SaveAsync(draft with
+                {
+                    Id = $"experiment:invented-{initialTerminalStatus.ToString().ToLowerInvariant()}",
+                    Status = initialTerminalStatus
+                }).GetAwaiter().GetResult();
+                Require(inventedTerminal.Disposition == ArenaArtifactWriteDisposition.Rejected
+                        && inventedTerminal.Diagnostics.Any(item => item.Code == "experiment_definition.initial_status"),
+                    $"definition store accepted a new {initialTerminalStatus} lifecycle with no prior draft or Running owner");
+            }
+
+            var raceRoot = Path.Combine(root, "race");
+            var firstStore = new ExperimentDefinitionStore(raceRoot);
+            var secondStore = new ExperimentDefinitionStore(raceRoot);
+            var conflict = draft with { Title = "Conflicting title" };
+            var writes = Task.WhenAll(
+                firstStore.SaveAsync(draft),
+                secondStore.SaveAsync(conflict)).GetAwaiter().GetResult();
+            Require(writes.Count(item => item.Disposition == ArenaArtifactWriteDisposition.Written) == 1
+                    && writes.Count(item => item.Disposition == ArenaArtifactWriteDisposition.Rejected) == 1
+                    && writes.Single(item => item.Disposition == ArenaArtifactWriteDisposition.Rejected)
+                        .Diagnostics.Any(item => item.Code == "experiment_definition.identity_conflict"),
+                "cross-instance definition writers did not serialize a conflicting ID atomically");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    internal static void RecoversDefinitionAfterActualProcessExit()
+    {
+        var root = TemporaryRoot();
+        var resultPath = Path.Combine(root, "child-result.txt");
+        Process? process = null;
+        try
+        {
+            var definition = Experiment(repetitions: 1, maximumParallelism: 1) with
+            {
+                Id = "experiment:process-exit"
+            };
+            var store = new ExperimentDefinitionStore(root);
+            Require(store.SaveAsync(definition).GetAwaiter().GetResult().Succeeded,
+                "process-exit definition draft could not be persisted");
+
+            var executable = Environment.ProcessPath
+                ?? throw new InvalidOperationException("The Core test executable path is unavailable.");
+            var startInfo = new ProcessStartInfo(executable)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            {
+                startInfo.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
+            }
+            startInfo.ArgumentList.Add("--abandon-experiment-definition");
+            startInfo.ArgumentList.Add(root);
+            startInfo.ArgumentList.Add(resultPath);
+            process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Could not start the experiment-definition owner process.");
+            Require(process.WaitForExit(20_000), "experiment-definition owner process did not exit");
+            Require(process.ExitCode == 0
+                    && File.Exists(resultPath)
+                    && File.ReadAllText(resultPath).Equals("running", StringComparison.Ordinal),
+                $"experiment-definition owner process did not persist Running before exit (exit {process.ExitCode})");
+            Require(store.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single().Status
+                    == ArenaExperimentStatus.Running,
+                "actual child process did not leave the definition in Running state");
+
+            var restarted = new ExperimentDefinitionStore(root);
+            var owner = restarted.AcquireExecutionLeaseAsync().AsTask().GetAwaiter().GetResult();
+            try
+            {
+                var recovered = restarted.RecoverInterruptedAfterRestartAsync(
+                    owner,
+                    At.AddMinutes(1)).GetAwaiter().GetResult();
+                Require(recovered.Definitions.Single().Status == ArenaExperimentStatus.Interrupted
+                        && recovered.Diagnostics.Any(item => item.Code == "experiment_definition.restart_normalized"),
+                    "a new process owner did not normalize the exited process's Running definition");
+            }
+            finally
+            {
+                owner.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+        }
+        finally
+        {
+            if (process is { HasExited: false })
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(5_000);
+            }
+            process?.Dispose();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    internal static int RunAbandonedDefinitionProcess(string[] processArgs)
+    {
+        if (processArgs.Length != 3)
+        {
+            return 64;
+        }
+
+        try
+        {
+            var store = new ExperimentDefinitionStore(processArgs[1]);
+            var definition = store.LoadAllAsync().GetAwaiter().GetResult().Definitions.Single();
+            var owner = store.AcquireExecutionLeaseAsync().AsTask().GetAwaiter().GetResult();
+            var write = store.SaveForExecutionAsync(
+                owner,
+                definition with { Status = ArenaExperimentStatus.Running }).GetAwaiter().GetResult();
+            if (!write.Succeeded || write.Artifact?.Status != ArenaExperimentStatus.Running)
+            {
+                return 1;
+            }
+
+            File.WriteAllText(processArgs[2], "running");
+            // Deliberately terminate without disposing the owner lease. The OS
+            // closes the file handle, exactly modelling a process exit between
+            // the Running receipt and terminal definition receipt.
+            Environment.Exit(0);
+            return 0;
+        }
+        catch
+        {
+            return 1;
         }
     }
 
@@ -436,6 +886,165 @@ internal static class ExperimentExecutionTests
             {
                 lease.DisposeAsync().AsTask().GetAwaiter().GetResult();
             }
+
+            var mixedRoot = Path.Combine(root, "mixed-plan-attempts");
+            var mixedStore = new ExperimentRunStore(mixedRoot);
+            var mixedExperiment = CapacityExperiment("experiment:mixed-plan-attempts", "p1") with
+            {
+                Dimensions = [new("dimension:mixed-plan", "capacity_axis", ["left", "right"])]
+            };
+            var mixedExpansion = ExperimentExpander.Expand(mixedExperiment);
+            var planOneExecutor = new PlanEvidenceExecutor(HashA);
+            var planOne = new ExperimentRunnerService(planOneExecutor)
+                .RunAsync(mixedExperiment, mixedExpansion, mixedStore)
+                .GetAwaiter().GetResult();
+            Require(planOne.StartedCells == 2
+                    && planOne.Runs.All(run => ArenaExperimentRunPolicy.LatestAttemptMatchesPlan(run, HashA)),
+                "P1 fixture did not retain current-plan evidence for every cell");
+            var observedPlanRun = planOne.Runs[0];
+            var observedPlanEvidence = observedPlanRun.Evidence.Single(item =>
+                item.ReferenceId == $"plan:{HashA}");
+            var inferredPlanRun = observedPlanRun with
+            {
+                Evidence = observedPlanRun.Evidence.Replace(
+                    observedPlanEvidence,
+                    observedPlanEvidence with
+                    {
+                        State = ArenaEvidenceState.Inferred,
+                        Basis = "A plan identity was inferred rather than observed."
+                    })
+            };
+            var unavailablePlanRun = observedPlanRun with
+            {
+                Evidence = observedPlanRun.Evidence.Replace(
+                    observedPlanEvidence,
+                    observedPlanEvidence with
+                    {
+                        State = ArenaEvidenceState.Unavailable,
+                        Limitation = "The plan identity was unavailable."
+                    })
+            };
+            Require(ArenaContractCodec.Validate(inferredPlanRun).IsValid
+                    && ArenaContractCodec.Validate(unavailablePlanRun).IsValid
+                    && !ArenaExperimentRunPolicy.LatestAttemptMatchesPlan(inferredPlanRun, HashA)
+                    && !ArenaExperimentRunPolicy.LatestAttemptMatchesPlan(unavailablePlanRun, HashA),
+                "inferred or unavailable execution-plan evidence authorized latest-attempt reuse");
+            var missingLatestTrialId = ArenaExperimentRunPolicy.CreateTrialId(observedPlanRun.CellKey, 2);
+            var missingLatestTrialRun = observedPlanRun with
+            {
+                Attempts = 2,
+                TrialIds = [ArenaExperimentRunPolicy.CreateTrialId(observedPlanRun.CellKey, 1)],
+                Evidence = observedPlanRun.Evidence.Add(new(
+                    ArenaExperimentRunPolicy.CreateExecutionPlanEvidenceId(missingLatestTrialId),
+                    ArenaEvidenceState.Observed,
+                    "Synthetic latest plan evidence must not replace trial membership.",
+                    $"plan:{HashA}"))
+            };
+            Require(ArenaContractCodec.Validate(missingLatestTrialRun).IsValid
+                    && !ArenaExperimentRunPolicy.LatestAttemptMatchesPlan(missingLatestTrialRun, HashA),
+                "synthetic latest-attempt plan evidence authorized reuse without its canonical trial membership");
+            var alreadyPlanTwo = planOne.Runs.OrderBy(run => run.CellKey, StringComparer.Ordinal).First();
+            var planTwoTrial = ArenaExperimentRunPolicy.CreateTrialId(alreadyPlanTwo.CellKey, 2);
+            var planTwoEvidence = new ArenaEvidenceAssertion(
+                ArenaExperimentRunPolicy.CreateExecutionPlanEvidenceId(planTwoTrial),
+                ArenaEvidenceState.Observed,
+                "The trial used the resolved execution-plan identity.",
+                $"plan:{HashB}");
+            var mixedWrite = mixedStore.SaveAsync(alreadyPlanTwo with
+            {
+                Attempts = 2,
+                UpdatedAtUtc = alreadyPlanTwo.UpdatedAtUtc.AddSeconds(1),
+                TrialIds = alreadyPlanTwo.TrialIds.Add(planTwoTrial).Order(StringComparer.Ordinal).ToImmutableArray(),
+                Evidence = alreadyPlanTwo.Evidence.Add(planTwoEvidence).OrderBy(item => item.Id, StringComparer.Ordinal).ToImmutableArray()
+            }).GetAwaiter().GetResult();
+            Require(mixedWrite.Succeeded, Format(mixedWrite.Diagnostics));
+
+            var planTwoExecutor = new PlanEvidenceExecutor(HashB);
+            var blockedMixed = new ExperimentRunnerService(planTwoExecutor)
+                .RunAsync(mixedExperiment, mixedExpansion, mixedStore)
+                .GetAwaiter().GetResult();
+            Require(blockedMixed.StartedCells == 0
+                    && planTwoExecutor.Executions == 0
+                    && blockedMixed.Diagnostics.Any(item => item.Code == "experiment_run.execution_plan_mismatch"),
+                "an unapproved P1/P2 mixed matrix started an otherwise eligible cell");
+            var approvedMixed = new ExperimentRunnerService(planTwoExecutor)
+                .RunAsync(
+                    mixedExperiment,
+                    mixedExpansion,
+                    mixedStore,
+                    new ArenaExperimentRunnerOptions(
+                        RetryApproved: run => !ArenaExperimentRunPolicy.LatestAttemptMatchesPlan(run, HashB)))
+                .GetAwaiter().GetResult();
+            Require(approvedMixed.StartedCells == 1
+                    && planTwoExecutor.Executions == 1
+                    && approvedMixed.Runs
+                        .Where(run => mixedExpansion.Cells.Any(cell => cell.CellKey == run.CellKey))
+                        .All(run => ArenaExperimentRunPolicy.IsTerminal(run.State)
+                            && ArenaExperimentRunPolicy.LatestAttemptMatchesPlan(run, HashB)),
+                "approved P1/P2 recovery did not retry every and only mismatched terminal cell");
+
+            var oneShotRoot = Path.Combine(root, "one-shot-plan-approval");
+            var oneShotStore = new ExperimentRunStore(oneShotRoot);
+            var oneShotPlanOne = new PlanEvidenceExecutor(HashA);
+            var oneShotInitial = new ExperimentRunnerService(oneShotPlanOne)
+                .RunAsync(mixedExperiment, mixedExpansion, oneShotStore)
+                .GetAwaiter().GetResult();
+            Require(oneShotInitial.StartedCells == mixedExpansion.Cells.Length,
+                "one-shot approval fixture did not persist every P1 cell");
+            var approvalCalls = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+            bool ApproveOnce(ArenaExperimentRunContract run) =>
+                approvalCalls.AddOrUpdate(run.CellKey, 1, static (_, count) => count + 1) == 1;
+            var oneShotPlanTwo = new PlanEvidenceExecutor(HashB);
+            var oneShotResult = new ExperimentRunnerService(oneShotPlanTwo)
+                .RunAsync(
+                    mixedExperiment,
+                    mixedExpansion,
+                    oneShotStore,
+                    new ArenaExperimentRunnerOptions(RetryApproved: ApproveOnce))
+                .GetAwaiter().GetResult();
+            var mismatchDiagnostics = oneShotResult.Diagnostics
+                .Where(item => item.Code == "experiment_run.execution_plan_mismatch")
+                .ToArray();
+            Require(oneShotResult.StartedCells == mixedExpansion.Cells.Length
+                    && oneShotPlanTwo.Executions == mixedExpansion.Cells.Length
+                    && mixedExpansion.Cells.All(cell => approvalCalls.TryGetValue(cell.CellKey, out var count) && count == 1),
+                "stateful retry approval was evaluated more than once for an existing cell");
+            Require(mismatchDiagnostics.Length == mixedExpansion.Cells.Length
+                    && mixedExpansion.Cells.All(cell => mismatchDiagnostics.Any(item =>
+                        item.Message.Contains(cell.CellKey, StringComparison.Ordinal))),
+                "multi-cell plan mismatch diagnostics collapsed or lost cell-scoped provenance");
+
+            var rollbackRoot = Path.Combine(root, "runner-clock-rollback");
+            var rollbackStore = new ExperimentRunStore(rollbackRoot);
+            var rollbackExperiment = CapacityExperiment("experiment:runner-clock-rollback", "rollback");
+            var rollbackExpansion = ExperimentExpander.Expand(rollbackExperiment);
+            var rollbackCell = rollbackExpansion.Cells.Single();
+            Require(rollbackStore.SaveAsync(Run(
+                    rollbackCell,
+                    ArenaExperimentRunState.Completed,
+                    1,
+                    [ArenaExperimentRunPolicy.CreateTrialId(rollbackCell.CellKey, 1)],
+                    At.AddDays(2))).GetAwaiter().GetResult().Succeeded,
+                "runner rollback fixture could not persist its first attempt");
+            var rollbackExecutor = new ObservingExecutor(TimeSpan.Zero);
+            var rollbackRunner = new ExperimentRunnerService(
+                rollbackExecutor,
+                new SequenceExperimentTimeProvider(
+                    At,
+                    At.AddDays(1),
+                    At.AddHours(12),
+                    At.AddHours(12)));
+            var rollbackResult = rollbackRunner.RunAsync(
+                    rollbackExperiment,
+                    rollbackExpansion,
+                    rollbackStore,
+                    new ArenaExperimentRunnerOptions(MaximumParallelism: 1, RetryApproved: _ => true))
+                .GetAwaiter().GetResult();
+            Require(rollbackResult.StartedCells == 1
+                    && rollbackExecutor.Executions == 1
+                    && rollbackResult.Runs.Single(item => item.CellKey == rollbackCell.CellKey) is
+                        { Attempts: 2, State: ArenaExperimentRunState.Completed },
+                $"runner called the executor without committing the current Running attempt or lost its terminal state under clock rollback (started {rollbackResult.StartedCells}; executions {rollbackExecutor.Executions}; runs {string.Join(" | ", rollbackResult.Runs.Select(item => $"{item.Attempts}:{item.State}:{item.UpdatedAtUtc:O}"))}; diagnostics {Format(rollbackResult.Diagnostics)})");
         }
         finally
         {
@@ -679,6 +1288,37 @@ internal static class ExperimentExecutionTests
         var root = TemporaryRoot();
         try
         {
+            var atomicStore = new SessionStore(Path.Combine(root, "atomic-fork-data"));
+            var atomicSource = SessionStore.CreateDefaultSnapshot();
+            atomicSource.Configs[ModelProviderRouting.SharedConfigKey] = LiveProvider();
+            atomicStore.SaveSnapshotAsync(atomicSource, "atomic-source").GetAwaiter().GetResult();
+            var persistedAtomicSource = atomicStore.LoadSnapshotAsync("atomic-source").GetAwaiter().GetResult()!;
+            var atomicReplacement = ArenaExperimentProviderProfileRegistry.Copy(LiveProvider(), apiToken: "");
+            var atomicFork = atomicStore.ForkExperimentSessionAsync(
+                    "atomic-source",
+                    "atomic-child",
+                    persistedAtomicSource.PersistenceRevision,
+                    SessionStore.SetupFingerprint(persistedAtomicSource),
+                    "experiment:atomic-boundary",
+                    atomicReplacement)
+                .GetAwaiter().GetResult();
+            using (var cancelledAfterBoundary = new CancellationTokenSource())
+            {
+                cancelledAfterBoundary.Cancel();
+            }
+            var recoveredAtomicChild = new SessionStore(atomicStore.DataRoot)
+                .LoadSnapshotAsync(atomicFork.TargetSessionId).GetAwaiter().GetResult()!;
+            Require(recoveredAtomicChild.BranchReceipt?.ExperimentId == "experiment:atomic-boundary"
+                    && recoveredAtomicChild.Configs.Keys.SequenceEqual([ModelProviderRouting.SharedConfigKey])
+                    && recoveredAtomicChild.Configs[ModelProviderRouting.SharedConfigKey].ApiToken.Length == 0
+                    && recoveredAtomicChild.PersistenceRevision == atomicFork.TargetPersistenceRevision,
+                "cancellation or process loss immediately after the experiment fork boundary exposed an unsanitized durable child");
+            var atomicChildJson = File.ReadAllText(NativeDataPaths.SessionSnapshotPath(atomicStore.DataRoot, atomicFork.TargetSessionId));
+            Require(!atomicChildJson.Contains(LiveCredential, StringComparison.Ordinal),
+                "atomic experiment fork persisted its process-memory provider credential");
+
+            VerifyExperimentProviderCallMutationLeases(Path.Combine(root, "provider-call-leases"));
+
             var fixture = CreateLiveFixture(root);
             var resolver = new ArenaExperimentExecutionResolver(fixture.PackStore, fixture.SessionStore, fixture.Profiles, rubricStore: fixture.RubricStore);
             var experiment = LiveExperiment("experiment:live-run", repetitions: 2, turnBudget: 2);
@@ -820,6 +1460,43 @@ internal static class ExperimentExecutionTests
                     && switchBack.Diagnostics.Any(item => item.Code == "experiment_run.execution_plan_mismatch"),
                 "an older retained plan reference authorized reuse after a newer plan attempt");
 
+            var childDriftExperiment = LiveExperiment("experiment:two-turn-child-drift", 1, 2);
+            var childDriftPlan = resolver.ResolveAsync(childDriftExperiment).GetAwaiter().GetResult();
+            Require(childDriftPlan.IsAvailable && childDriftPlan.Plan is not null,
+                ExecutionFormat(childDriftPlan.Diagnostics));
+            var childDriftProvider = new RecordingExperimentProviderClient();
+            var childDriftExecutor = new ArenaExperimentCellExecutor(
+                childDriftPlan.Plan!,
+                fixture.Profiles,
+                fixture.SessionStore,
+                childDriftProvider,
+                async (completedTurns, childSessionId, token) =>
+                {
+                    if (completedTurns != 1)
+                    {
+                        return;
+                    }
+                    var externallyChanged = await fixture.SessionStore
+                        .LoadSnapshotAsync(childSessionId, token).ConfigureAwait(false)
+                        ?? throw new InvalidOperationException("experiment child disappeared before drift injection");
+                    externallyChanged.Engine.Steering.Topic = "external mutation between experiment turns";
+                    await fixture.SessionStore.SaveSnapshotAsync(
+                        externallyChanged,
+                        childSessionId,
+                        token).ConfigureAwait(false);
+                });
+            var childDriftResult = new ExperimentRunnerService(childDriftExecutor)
+                .RunAsync(
+                    childDriftExperiment,
+                    childDriftPlan.Plan!.Expansion,
+                    new ExperimentRunStore(Path.Combine(root, "child-drift-runs")))
+                .GetAwaiter().GetResult();
+            var childDriftRun = childDriftResult.Runs.Single();
+            Require(childDriftProvider.Configs.Count == 1
+                    && childDriftRun.State == ArenaExperimentRunState.Interrupted
+                    && childDriftRun.InterruptionReason == "child_state_changed",
+                "external mutation after turn one reached the turn-two provider or was not recorded as child drift");
+
             var fault = LiveFaultProfile();
             var faultResolver = new ArenaExperimentExecutionResolver(
                 fixture.PackStore,
@@ -846,6 +1523,45 @@ internal static class ExperimentExecutionTests
                     && !string.IsNullOrWhiteSpace(item.Limitation)),
                 "an injected fault silently implied recovery instead of retaining distinct unavailable recovery evidence");
 
+            foreach (var streamOnlyKind in new[] { ArenaFaultKind.MalformedStream, ArenaFaultKind.Interruption })
+            {
+                var streamFault = LiveFaultProfile(streamOnlyKind);
+                var streamFaultResolver = new ArenaExperimentExecutionResolver(
+                    fixture.PackStore,
+                    fixture.SessionStore,
+                    fixture.Profiles,
+                    new Dictionary<string, ArenaFaultProfileContract>(StringComparer.Ordinal) { [streamFault.Id] = streamFault },
+                    fixture.RubricStore);
+                var slug = FaultSlug(streamOnlyKind);
+                var streamFaultExperiment = LiveExperiment($"experiment:{slug}-unexercised", 1, 1) with
+                {
+                    FaultProfileIds = [streamFault.Id]
+                };
+                var streamFaultPlan = streamFaultResolver.ResolveAsync(streamFaultExperiment).GetAwaiter().GetResult();
+                Require(streamFaultPlan.IsAvailable && streamFaultPlan.Plan is not null,
+                    ExecutionFormat(streamFaultPlan.Diagnostics));
+                var callsBeforeStreamFault = provider.Configs.Count;
+                var streamFaultResult = new ExperimentRunnerService(new ArenaExperimentCellExecutor(
+                        streamFaultPlan.Plan!, fixture.Profiles, fixture.SessionStore, provider))
+                    .RunAsync(
+                        streamFaultExperiment,
+                        streamFaultPlan.Plan!.Expansion,
+                        new ExperimentRunStore(Path.Combine(root, $"{slug}-runs")))
+                    .GetAwaiter().GetResult();
+                var streamFaultRun = streamFaultResult.Runs.Single();
+                Require(streamFaultRun.State == ArenaExperimentRunState.Completed
+                        && provider.Configs.Count == callsBeforeStreamFault + 1,
+                    $"non-streaming experiment cell incorrectly exercised {streamOnlyKind}");
+                Require(streamFaultRun.Evidence.Any(item =>
+                            item.State == ArenaEvidenceState.Unavailable
+                            && item.Summary.Contains("was not exercised", StringComparison.Ordinal)
+                            && item.Limitation?.Contains("requires a streaming completion boundary", StringComparison.Ordinal) == true)
+                        && !streamFaultRun.Evidence.Any(item =>
+                            item.State == ArenaEvidenceState.Observed
+                            && item.Summary.Contains($"injected a {slug}", StringComparison.OrdinalIgnoreCase)),
+                    $"non-streaming experiment cell claimed unobserved {streamOnlyKind} injection");
+            }
+
             var driftExperiment = LiveExperiment("experiment:source-drift", 1, 1);
             var driftPlan = resolver.ResolveAsync(driftExperiment).GetAwaiter().GetResult();
             Require(driftPlan.IsAvailable && driftPlan.Plan is not null, ExecutionFormat(driftPlan.Diagnostics));
@@ -853,6 +1569,7 @@ internal static class ExperimentExecutionTests
             changedSource.Engine.Steering.Topic = "A changed source setup.";
             fixture.SessionStore.SaveSnapshotAsync(changedSource, "source").GetAwaiter().GetResult();
             var callsBeforeDrift = provider.Configs.Count;
+            var sessionsBeforeDrift = fixture.SessionStore.ListSessionsAsync(SessionListingDetail.Identity).GetAwaiter().GetResult().Count;
             var driftResult = new ExperimentRunnerService(new ArenaExperimentCellExecutor(
                     driftPlan.Plan!, fixture.Profiles, fixture.SessionStore, provider))
                 .RunAsync(driftExperiment, driftPlan.Plan!.Expansion, new ExperimentRunStore(Path.Combine(root, "drift-runs")))
@@ -860,14 +1577,133 @@ internal static class ExperimentExecutionTests
             var driftRun = driftResult.Runs.Single();
             Require(driftRun.State == ArenaExperimentRunState.Interrupted
                     && driftRun.InterruptionReason == "source_changed"
-                    && driftRun.Evidence.Any(item => item.ReferenceId?.StartsWith("session:experiment-trial-", StringComparison.Ordinal) == true),
-                "source drift left an unreferenced child or proceeded to provider execution");
-            Require(provider.Configs.Count == callsBeforeDrift, "source drift reached the provider runtime");
+                    && !driftRun.Evidence.Any(item => item.ReferenceId?.StartsWith("session:experiment-trial-", StringComparison.Ordinal) == true),
+                "source drift created or referenced a child before the atomic parent revision/setup check");
+            Require(provider.Configs.Count == callsBeforeDrift
+                    && fixture.SessionStore.ListSessionsAsync(SessionListingDetail.Identity).GetAwaiter().GetResult().Count == sessionsBeforeDrift,
+                "source drift reached the provider runtime or durably created an experiment child");
         }
         finally
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    private static void VerifyExperimentProviderCallMutationLeases(string root)
+    {
+        var fixture = CreateLiveFixture(root);
+        var resolver = new ArenaExperimentExecutionResolver(
+            fixture.PackStore,
+            fixture.SessionStore,
+            fixture.Profiles,
+            rubricStore: fixture.RubricStore);
+
+        var restoreExperiment = LiveExperiment("experiment:restore-during-provider-call", 1, 1);
+        var restorePlan = resolver.ResolveAsync(restoreExperiment).GetAwaiter().GetResult();
+        Require(restorePlan.IsAvailable && restorePlan.Plan is not null, ExecutionFormat(restorePlan.Diagnostics));
+        var restoreProvider = new BlockingExperimentProviderClient();
+        var beforeRestoreSessions = fixture.SessionStore
+            .ListSessionsAsync(SessionListingDetail.Identity).GetAwaiter().GetResult()
+            .Select(item => item.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var restoreExecution = new ExperimentRunnerService(new ArenaExperimentCellExecutor(
+                restorePlan.Plan!,
+                fixture.Profiles,
+                fixture.SessionStore,
+                restoreProvider))
+            .RunAsync(
+                restoreExperiment,
+                restorePlan.Plan!.Expansion,
+                new ExperimentRunStore(Path.Combine(root, "restore-runs")));
+        Task<CheckpointSummary?>? restoreTask = null;
+        bool restoreWasBlocked;
+        bool restoreSnapshotStayedStable;
+        try
+        {
+            Require(restoreProvider.Started.Task.Wait(TimeSpan.FromSeconds(5)),
+                "restore lease regression did not reach the provider boundary");
+            var childSessionId = fixture.SessionStore
+                .ListSessionsAsync(SessionListingDetail.Identity).GetAwaiter().GetResult()
+                .Select(item => item.Id)
+                .Single(id => !beforeRestoreSessions.Contains(id));
+            var checkpoint = fixture.SessionStore
+                .SaveCheckpointAsync(childSessionId, "provider-call restore boundary")
+                .GetAwaiter().GetResult();
+            var snapshotPath = fixture.SessionStore.SnapshotPath(childSessionId);
+            var beforeRestoreBytes = File.ReadAllBytes(snapshotPath);
+            restoreTask = fixture.SessionStore.RestoreCheckpointAsync(childSessionId, checkpoint.Id);
+            restoreWasBlocked = !restoreTask.Wait(TimeSpan.FromMilliseconds(350));
+            restoreSnapshotStayedStable = File.Exists(snapshotPath)
+                && File.ReadAllBytes(snapshotPath).SequenceEqual(beforeRestoreBytes);
+        }
+        finally
+        {
+            restoreProvider.Release.TrySetResult(true);
+        }
+
+        var restored = restoreTask?.GetAwaiter().GetResult();
+        var restoreResult = restoreExecution.GetAwaiter().GetResult();
+        Require(restoreWasBlocked && restoreSnapshotStayedStable && restored is not null,
+            "checkpoint restore mutated an experiment child while its provider call was in flight");
+        Require(restoreProvider.Calls == 1
+                && restoreResult.Runs.Single() is
+                    { State: ArenaExperimentRunState.Interrupted, InterruptionReason: "child_state_changed" },
+            "post-provider restore was not contained as deterministic child-state drift");
+
+        var deleteExperiment = LiveExperiment("experiment:delete-during-provider-call", 1, 1);
+        var deletePlan = resolver.ResolveAsync(deleteExperiment).GetAwaiter().GetResult();
+        Require(deletePlan.IsAvailable && deletePlan.Plan is not null, ExecutionFormat(deletePlan.Diagnostics));
+        var deleteProvider = new BlockingExperimentProviderClient();
+        var beforeDeleteSessions = fixture.SessionStore
+            .ListSessionsAsync(SessionListingDetail.Identity).GetAwaiter().GetResult()
+            .Select(item => item.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var deleteExecution = new ExperimentRunnerService(new ArenaExperimentCellExecutor(
+                deletePlan.Plan!,
+                fixture.Profiles,
+                fixture.SessionStore,
+                deleteProvider))
+            .RunAsync(
+                deleteExperiment,
+                deletePlan.Plan!.Expansion,
+                new ExperimentRunStore(Path.Combine(root, "delete-runs")));
+        Task<bool>? deleteTask = null;
+        string? deletedChildSessionId = null;
+        bool deleteWasBlocked;
+        bool deleteSnapshotStayedStable;
+        try
+        {
+            Require(deleteProvider.Started.Task.Wait(TimeSpan.FromSeconds(5)),
+                "delete lease regression did not reach the provider boundary");
+            deletedChildSessionId = fixture.SessionStore
+                .ListSessionsAsync(SessionListingDetail.Identity).GetAwaiter().GetResult()
+                .Select(item => item.Id)
+                .Single(id => !beforeDeleteSessions.Contains(id));
+            var snapshotPath = fixture.SessionStore.SnapshotPath(deletedChildSessionId);
+            var beforeDeleteBytes = File.ReadAllBytes(snapshotPath);
+            deleteTask = fixture.SessionStore.DeleteSessionAsync(deletedChildSessionId);
+            deleteWasBlocked = !deleteTask.Wait(TimeSpan.FromMilliseconds(350));
+            deleteSnapshotStayedStable = File.Exists(snapshotPath)
+                && File.ReadAllBytes(snapshotPath).SequenceEqual(beforeDeleteBytes);
+        }
+        finally
+        {
+            deleteProvider.Release.TrySetResult(true);
+        }
+
+        var deleted = deleteTask?.GetAwaiter().GetResult() == true;
+        var deleteResult = deleteExecution.GetAwaiter().GetResult();
+        Require(deleteWasBlocked && deleteSnapshotStayedStable && deleted,
+            "session delete removed an experiment child while its provider call was in flight");
+        Require(deleteProvider.Calls == 1
+                && deleteResult.Runs.Single() is
+                    { State: ArenaExperimentRunState.Interrupted, InterruptionReason: "child_state_changed" }
+                && deletedChildSessionId is not null
+                && !Directory.Exists(Path.GetDirectoryName(fixture.SessionStore.SnapshotPath(deletedChildSessionId))),
+            $"post-provider delete was not durable or was not contained as deterministic child-state drift "
+            + $"(calls {deleteProvider.Calls}; run {deleteResult.Runs.Single().State}; "
+            + $"reason {deleteResult.Runs.Single().InterruptionReason ?? "<none>"}; "
+            + $"directory exists {Directory.Exists(Path.GetDirectoryName(fixture.SessionStore.SnapshotPath(deletedChildSessionId ?? "missing")))})");
     }
 
     private const string LiveCredential = "unit-registry-credential-7f4e2d";
@@ -1001,14 +1837,30 @@ internal static class ExperimentExecutionTests
             [new("evidence:live-benchmark", ArenaEvidenceState.Observed, "Local benchmark identity was recorded.", "artifact:live-benchmark")]);
     }
 
-    private static ArenaFaultProfileContract LiveFaultProfile() => new(
-        ArenaContractSchemas.FaultProfile,
-        "fault:empty",
-        At,
-        "Empty provider response",
-        "deterministic-live-seed",
-        [new("fault:empty:one", ArenaFaultTarget.Provider, ArenaFaultKind.EmptyResponse, 0, 0, 100, 1, "The cell fails without raw provider content.")],
-        [new("evidence:live-fault", ArenaEvidenceState.Observed, "Local fault profile identity was recorded.", "artifact:live-fault")]);
+    private static ArenaFaultProfileContract LiveFaultProfile(ArenaFaultKind kind = ArenaFaultKind.EmptyResponse)
+    {
+        var slug = FaultSlug(kind);
+        return new(
+            ArenaContractSchemas.FaultProfile,
+            $"fault:{slug}",
+            At,
+            $"{kind} provider condition",
+            "deterministic-live-seed",
+            [new($"fault:{slug}:one", ArenaFaultTarget.Provider, kind, 0, 0, 100, 1, "Exercise only at a compatible provider boundary.")],
+            [new($"evidence:live-fault:{slug}", ArenaEvidenceState.Observed, "Local fault profile identity was recorded.", "artifact:live-fault")]);
+    }
+
+    private static string FaultSlug(ArenaFaultKind kind) => kind switch
+    {
+        ArenaFaultKind.Timeout => "timeout",
+        ArenaFaultKind.Disconnect => "disconnect",
+        ArenaFaultKind.MalformedStream => "malformed-stream",
+        ArenaFaultKind.Saturation => "saturation",
+        ArenaFaultKind.EmptyResponse => "empty",
+        ArenaFaultKind.Interruption => "interruption",
+        ArenaFaultKind.ContextPressure => "context-pressure",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind))
+    };
 
     private static ModelProviderConfig LiveProvider(
         string apiMode = ModelProviderApiModes.OpenAiCompatible,
@@ -1065,6 +1917,26 @@ internal static class ExperimentExecutionTests
         1,
         [],
         [Observed($"evidence:{value}")]);
+
+    private static byte[] LegacyScenarioPackV0Bytes(ArenaScenarioPackContract pack)
+    {
+        var root = JsonNode.Parse(ArenaContractCodec.Serialize(pack))!.AsObject();
+        root["schema"] = ArenaExperimentPackCodec.ScenarioPackV0Schema;
+        root.Remove("createdAtUtc");
+        root.Remove("contentFingerprint");
+        root.Remove("migration");
+        return Encoding.UTF8.GetBytes(root.ToJsonString());
+    }
+
+    private static byte[] LegacyBenchmarkPackV0Bytes(ArenaBenchmarkPackContract pack)
+    {
+        var root = JsonNode.Parse(ArenaContractCodec.Serialize(pack))!.AsObject();
+        root["schema"] = ArenaExperimentPackCodec.BenchmarkPackV0Schema;
+        root.Remove("createdAtUtc");
+        root.Remove("contentFingerprint");
+        root.Remove("migration");
+        return Encoding.UTF8.GetBytes(root.ToJsonString());
+    }
 
     private static ArenaScenarioPackContract ScenarioPack()
     {
@@ -1188,20 +2060,37 @@ internal static class ExperimentExecutionTests
         if (!condition) throw new InvalidOperationException(message);
     }
 
+    private static void RequireThrows<T>(Action action, string message)
+        where T : Exception
+    {
+        try
+        {
+            action();
+        }
+        catch (T)
+        {
+            return;
+        }
+        throw new InvalidOperationException(message);
+    }
+
     private sealed class ObservingExecutor(TimeSpan delay) : IArenaExperimentCellExecutor
     {
         private int _active;
         private int _maximumActive;
+        private int _executions;
         private readonly ConcurrentDictionary<string, int> _activeByProvider = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, int> _maximumByProvider = new(StringComparer.Ordinal);
 
         public int MaximumActive => _maximumActive;
+        public int Executions => Volatile.Read(ref _executions);
         public IReadOnlyDictionary<string, int> MaximumByProvider => _maximumByProvider;
 
         public async Task<ArenaExperimentCellExecutionResult> ExecuteAsync(
             ArenaExperimentCellExecutionContext context,
             CancellationToken cancellationToken)
         {
+            Interlocked.Increment(ref _executions);
             var global = Interlocked.Increment(ref _active);
             UpdateMaximum(ref _maximumActive, global);
             var provider = _activeByProvider.AddOrUpdate(context.Cell.ProviderProfileId, 1, (_, value) => value + 1);
@@ -1225,6 +2114,45 @@ internal static class ExperimentExecutionTests
                 var current = Volatile.Read(ref target);
                 if (value <= current || Interlocked.CompareExchange(ref target, value, current) == current) return;
             }
+        }
+    }
+
+    private sealed class SequenceExperimentTimeProvider(params DateTimeOffset[] values) : TimeProvider
+    {
+        private readonly DateTimeOffset[] _values = values.Length == 0
+            ? throw new ArgumentException("At least one UTC time is required.", nameof(values))
+            : values;
+        private int _index;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            var index = Interlocked.Increment(ref _index) - 1;
+            return _values[Math.Min(index, _values.Length - 1)];
+        }
+    }
+
+    private sealed class PlanEvidenceExecutor(string planFingerprint) :
+        IArenaExperimentCellExecutor,
+        IArenaExperimentExecutionPlanIdentity
+    {
+        private int _executions;
+
+        public string PlanFingerprint { get; } = planFingerprint;
+        public int Executions => Volatile.Read(ref _executions);
+
+        public Task<ArenaExperimentCellExecutionResult> ExecuteAsync(
+            ArenaExperimentCellExecutionContext context,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref _executions);
+            var evidenceId = ArenaExperimentRunPolicy.CreateExecutionPlanEvidenceId(context.TrialId);
+            return Task.FromResult(ArenaExperimentCellExecutionResult.Completed(
+                [new(
+                    evidenceId,
+                    ArenaEvidenceState.Observed,
+                    "The trial used the resolved execution-plan identity.",
+                    $"plan:{PlanFingerprint}")]));
         }
     }
 
@@ -1278,6 +2206,46 @@ internal static class ExperimentExecutionTests
                 4,
                 "response:private-live",
                 2));
+        }
+    }
+
+    private sealed class BlockingExperimentProviderClient : IModelProviderClient
+    {
+        private int _calls;
+
+        internal TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<bool> Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal int Calls => Volatile.Read(ref _calls);
+
+        public Task<ModelProviderModels> ListModelsAsync(
+            ModelProviderConfig config,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ModelProviderModels(true, config.BaseUrl, [config.Model], "", At));
+
+        public async Task<ModelCompletionResult> CompleteChatAsync(
+            ModelProviderConfig config,
+            IReadOnlyList<ModelChatMessage> messages,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _calls);
+            Started.TrySetResult(true);
+            await Release.Task.WaitAsync(cancellationToken);
+            return new ModelCompletionResult(
+                true,
+                config.BaseUrl,
+                config.Model,
+                RecordingExperimentProviderClient.ResponseText,
+                RecordingExperimentProviderClient.ReasoningText,
+                12,
+                7,
+                3,
+                10,
+                "",
+                At,
+                25,
+                4,
+                "response:blocked-live",
+                2);
         }
     }
 }

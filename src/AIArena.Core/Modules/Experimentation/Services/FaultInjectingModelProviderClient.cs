@@ -13,8 +13,8 @@ namespace AIArena.Core.Services;
 /// </summary>
 public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IStreamingModelProviderClient, IDisposable
 {
-    private const string SyntheticPartial = "[injected-partial]";
-    private const string SyntheticMalformedChunk = "\uFFFD{";
+    private const string EmptyCompletionError = "Provider returned a successful response without assistant content.";
+    private const string SyntheticPartial = "Partial response before interruption.";
 
     private readonly IModelProviderClient _inner;
     private readonly IStreamingModelProviderClient? _streamingInner;
@@ -62,7 +62,16 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
         _concurrencyGate = new SemaphoreSlim(_options.MaximumConcurrentRequests, _options.MaximumConcurrentRequests);
     }
 
-    public long ScheduledInvocationCount => Interlocked.Read(ref _nextSequence) + 1;
+    public long ScheduledInvocationCount
+    {
+        get
+        {
+            lock (_scheduleSync)
+            {
+                return _nextSequence + 1;
+            }
+        }
+    }
 
     public int MaximumObservedConcurrency => Volatile.Read(ref _maximumObservedConcurrency);
 
@@ -105,7 +114,7 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
             config,
             cancellationToken,
             () => _inner.CompleteChatAsync(config, messages, cancellationToken),
-            InjectedCompletion);
+            (fault, sequence) => InjectedCompletion(fault, sequence, config));
 
     public Task<ModelCompletionResult> CompleteChatStreamingAsync(
         ModelProviderConfig config,
@@ -141,8 +150,9 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
         ArgumentNullException.ThrowIfNull(config);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var sequence = Interlocked.Increment(ref _nextSequence);
-        var scheduled = SelectFault(sequence);
+        var reservation = ReserveInvocation(operation);
+        var sequence = reservation.Sequence;
+        var scheduled = reservation.Fault;
         if (scheduled is not null)
         {
             try
@@ -156,15 +166,16 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
-                var result = injectedResult(scheduled, sequence);
-                RecordObservation(scheduled, sequence, operation, ArenaFaultObservedOutcome.InjectedFailure);
-                return result;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                RecordObservation(scheduled, sequence, operation, ArenaFaultObservedOutcome.CallerCancelled);
+                RecordObservation(scheduled, sequence, operation, ArenaFaultObservedOutcome.CallerCancelledBeforeEffect);
                 throw;
             }
+
+            var result = injectedResult(scheduled, sequence);
+            RecordObservation(scheduled, sequence, operation, InjectedOutcome(scheduled.Injection.Kind));
+            return result;
         }
 
         await _concurrencyGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -181,14 +192,16 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
         }
     }
 
-    private ScheduledFault? SelectFault(long sequence)
+    private ReservedInvocation ReserveInvocation(ArenaProviderFaultOperation operation)
     {
         lock (_scheduleSync)
         {
+            var sequence = ++_nextSequence;
             foreach (var scheduled in _schedule)
             {
                 var injection = scheduled.Injection;
                 if (sequence < injection.AtSequence) continue;
+                if (!SupportsOperation(operation, injection.Kind)) continue;
 
                 var occurrence = _occurrences.GetValueOrDefault(injection.Id);
                 if (occurrence >= injection.MaxOccurrences) continue;
@@ -196,15 +209,31 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
 
                 occurrence++;
                 _occurrences[injection.Id] = occurrence;
-                return new ScheduledFault(
-                    injection,
-                    occurrence,
-                    Math.Min(injection.DurationMilliseconds, _options.MaximumInjectedDelayMilliseconds));
+                return new(
+                    sequence,
+                    new ScheduledFault(
+                        injection,
+                        occurrence,
+                        Math.Min(injection.DurationMilliseconds, _options.MaximumInjectedDelayMilliseconds)));
             }
-        }
 
-        return null;
+            return new(sequence, null);
+        }
     }
+
+    internal static bool SupportsOperation(ArenaProviderFaultOperation operation, ArenaFaultKind kind) => operation switch
+    {
+        ArenaProviderFaultOperation.ModelDiscovery => kind is
+            ArenaFaultKind.Timeout or ArenaFaultKind.Disconnect or ArenaFaultKind.Saturation,
+        ArenaProviderFaultOperation.ChatCompletion => kind is
+            ArenaFaultKind.Timeout or ArenaFaultKind.Disconnect or ArenaFaultKind.Saturation
+                or ArenaFaultKind.EmptyResponse or ArenaFaultKind.ContextPressure,
+        ArenaProviderFaultOperation.StreamingChatCompletion => kind is
+            ArenaFaultKind.Timeout or ArenaFaultKind.Disconnect or ArenaFaultKind.MalformedStream
+                or ArenaFaultKind.Saturation or ArenaFaultKind.EmptyResponse
+                or ArenaFaultKind.Interruption or ArenaFaultKind.ContextPressure,
+        _ => false
+    };
 
     private static bool ShouldTrigger(string seed, string injectionId, long sequence, int intensity)
     {
@@ -227,11 +256,15 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
             | bytes[7];
     }
 
-    private static ModelCompletionResult InjectedCompletion(ScheduledFault fault, long sequence) =>
-        new(
+    private static ModelCompletionResult InjectedCompletion(
+        ScheduledFault fault,
+        long sequence,
+        ModelProviderConfig? config = null)
+    {
+        return new(
             false,
             "",
-            "",
+            config?.Model ?? "",
             "",
             "",
             fault.Injection.Kind == ArenaFaultKind.Timeout ? fault.EffectiveDurationMilliseconds : 0,
@@ -240,6 +273,7 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
             0,
             ErrorCode(fault.Injection.Kind, sequence),
             DateTimeOffset.UtcNow);
+    }
 
     private static ModelProviderModels InjectedModels(ScheduledFault fault, long sequence) =>
         new(false, "", [], ErrorCode(fault.Injection.Kind, sequence), DateTimeOffset.UtcNow);
@@ -250,16 +284,12 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
         ModelProviderConfig config,
         IProgress<string>? progress)
     {
-        if (fault.Injection.Kind == ArenaFaultKind.MalformedStream)
-        {
-            progress?.Report(SyntheticMalformedChunk);
-        }
-        else if (fault.Injection.Kind == ArenaFaultKind.Interruption)
+        if (fault.Injection.Kind == ArenaFaultKind.Interruption)
         {
             progress?.Report(SyntheticPartial);
         }
 
-        return InjectedCompletion(fault, sequence) with { Model = config.Model };
+        return InjectedCompletion(fault, sequence, config);
     }
 
     private async Task<ModelCompletionResult> CompleteWithNonStreamingFallbackAsync(
@@ -273,8 +303,17 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
         return result;
     }
 
-    private static string ErrorCode(ArenaFaultKind kind, long sequence) =>
-        $"Injected {FaultLabel(kind)} fault at provider sequence {sequence}.";
+    private static string ErrorCode(ArenaFaultKind kind, long sequence) => kind switch
+    {
+        ArenaFaultKind.Timeout => $"[fault:timeout] code=request_timeout Provider timeout elapsed at injected sequence {sequence}.",
+        ArenaFaultKind.Disconnect => $"[fault:disconnect] transport=connection_reset Provider connection was dropped at injected sequence {sequence}.",
+        ArenaFaultKind.MalformedStream => $"[fault:malformed-stream] Provider stream contained malformed data at injected sequence {sequence}.",
+        ArenaFaultKind.Saturation => $"[fault:saturation] status=503 code=queue_full Provider capacity rejected the request at injected sequence {sequence}.",
+        ArenaFaultKind.EmptyResponse => EmptyCompletionError,
+        ArenaFaultKind.Interruption => $"[fault:interruption] Provider stream ended after partial content at injected sequence {sequence}.",
+        ArenaFaultKind.ContextPressure => $"[fault:context-pressure] status=400 code=context_length_exceeded Provider rejected the request at injected sequence {sequence}.",
+        _ => $"[fault:provider] Provider fault was injected at sequence {sequence}."
+    };
 
     private static string FaultLabel(ArenaFaultKind kind) => kind switch
     {
@@ -294,17 +333,25 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
         ArenaProviderFaultOperation operation,
         ArenaFaultObservedOutcome outcome)
     {
-        var cause = new ArenaEvidenceAssertion(
-            $"fault-cause:{StableSuffix(_profile.Id, scheduled.Injection.Id, sequence)}",
-            ArenaEvidenceState.Observed,
-            $"The {FaultLabel(scheduled.Injection.Kind)} fault was injected by the selected profile.",
-            ReferenceId: _profile.Id);
+        var preEmpted = outcome == ArenaFaultObservedOutcome.CallerCancelledBeforeEffect;
+        var cause = preEmpted
+            ? new ArenaEvidenceAssertion(
+                $"fault-cause:{StableSuffix(_profile.Id, scheduled.Injection.Id, sequence)}",
+                ArenaEvidenceState.Unavailable,
+                $"The selected fault profile scheduled a {FaultLabel(scheduled.Injection.Kind)} condition, but caller cancellation pre-empted it before any injected effect was observed.",
+                ReferenceId: _profile.Id,
+                Limitation: "The scheduled injected effect did not occur, so no injected cause is claimed.")
+            : new ArenaEvidenceAssertion(
+                $"fault-cause:{StableSuffix(_profile.Id, scheduled.Injection.Id, sequence)}",
+                ArenaEvidenceState.Observed,
+                $"The selected fault profile injected a {FaultLabel(scheduled.Injection.Kind)} condition at the provider boundary.",
+                ReferenceId: _profile.Id);
         var recovery = new ArenaEvidenceAssertion(
             $"fault-recovery:{StableSuffix(_profile.Id, scheduled.Injection.Id, sequence)}",
             ArenaEvidenceState.Unavailable,
             "Recovery is not measured at the provider decorator boundary.",
-            Limitation: outcome == ArenaFaultObservedOutcome.CallerCancelled
-                ? "Caller cancellation pre-empted recovery observation."
+            Limitation: preEmpted
+                ? "Caller cancellation pre-empted the scheduled effect, so there was no injected recovery to observe."
                 : "A higher-level retry or recovery runner must provide separate observed evidence.");
         var observation = new ArenaFaultObservation(
             _profile.Id,
@@ -312,6 +359,7 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
             sequence,
             scheduled.Occurrence,
             scheduled.Injection.Kind,
+            ObservedEffect(scheduled.Injection.Kind, outcome),
             operation,
             outcome,
             cause,
@@ -319,13 +367,35 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
 
         lock (_observationSync)
         {
-            while (_observations.Count >= _options.MaximumRetainedObservations)
+            _observations[sequence] = observation;
+            while (_observations.Count > _options.MaximumRetainedObservations)
             {
                 _observations.Remove(_observations.Keys.First());
             }
-            _observations[sequence] = observation;
         }
     }
+
+    private static ArenaFaultInjectedEffect ObservedEffect(
+        ArenaFaultKind kind,
+        ArenaFaultObservedOutcome outcome) =>
+        outcome == ArenaFaultObservedOutcome.CallerCancelledBeforeEffect
+            ? ArenaFaultInjectedEffect.CallerCancelledBeforeEffect
+            : kind switch
+            {
+                ArenaFaultKind.Timeout => ArenaFaultInjectedEffect.TimeoutElapsed,
+                ArenaFaultKind.Disconnect => ArenaFaultInjectedEffect.ConnectionDropped,
+                ArenaFaultKind.MalformedStream => ArenaFaultInjectedEffect.MalformedStreamRejected,
+                ArenaFaultKind.Saturation => ArenaFaultInjectedEffect.CapacityRejected,
+                ArenaFaultKind.EmptyResponse => ArenaFaultInjectedEffect.EmptyCompletion,
+                ArenaFaultKind.Interruption => ArenaFaultInjectedEffect.StreamInterrupted,
+                ArenaFaultKind.ContextPressure => ArenaFaultInjectedEffect.ContextLimitRejected,
+                _ => throw new ArgumentOutOfRangeException(nameof(kind))
+            };
+
+    private static ArenaFaultObservedOutcome InjectedOutcome(ArenaFaultKind kind) =>
+        kind == ArenaFaultKind.EmptyResponse
+            ? ArenaFaultObservedOutcome.InjectedEmptyResponse
+            : ArenaFaultObservedOutcome.InjectedFailure;
 
     private static string StableSuffix(string profileId, string injectionId, long sequence)
     {
@@ -353,6 +423,8 @@ public sealed class FaultInjectingModelProviderClient : IModelProviderClient, IS
     }
 
     private sealed record ScheduledInjection(ArenaFaultInjection Injection, ulong SeededRank);
+
+    private sealed record ReservedInvocation(long Sequence, ScheduledFault? Fault);
 
     private sealed record ScheduledFault(
         ArenaFaultInjection Injection,

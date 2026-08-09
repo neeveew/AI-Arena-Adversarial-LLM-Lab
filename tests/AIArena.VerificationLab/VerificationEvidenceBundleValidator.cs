@@ -22,16 +22,21 @@ internal static partial class VerificationEvidenceBundleValidator
     private const long MaximumArtifactBytes = 64L * 1024 * 1024;
     private const long MaximumAutomationArtifactBytes = 4L * 1024 * 1024;
     private const long MaximumUiMatrixArtifactBytes = 1L * 1024 * 1024;
+    private const long MaximumFeatureSurfaceMatrixArtifactBytes = 1L * 1024 * 1024;
     private const long MaximumBundleBytes = 256L * 1024 * 1024;
     private const int MaximumAutomationNodes = 5_000;
     private const long MaximumPngPixels = 100_000_000;
     private const long MaximumDecodedPngBytes = 128L * 1024 * 1024;
-    private const string AutomationSchema = "ai_arena.ui_structure_evidence.v1";
+    private const string LegacyAutomationSchema = "ai_arena.ui_structure_evidence.v1";
+    private const string AutomationSchema = "ai_arena.ui_structure_evidence.v2";
     private const string UiMatrixSchema = "ai_arena.qa_ui_matrix.v1";
     private const string UiMatrixArtifactKind = "qa-ui-matrix";
+    private const string FeatureSurfaceMatrixSchema = ArenaQaSealManifestV2.FeatureSurfaceMatrixSchema;
+    private const string FeatureSurfaceMatrixArtifactKind = ArenaQaSealManifestV2.FeatureSurfaceMatrixArtifactKind;
     private const string AutomationCaptureMode = "wpf-visual-tree-accessibility";
     private const string AutomationLimitation = "OS UI Automation and OS input are not queried; focus traversal and the privacy-safe visual-tree snapshot are programmatic and in-process. RenderDpiScale is off-screen raster density, not physical or per-monitor display DPI. Motion fields prove preference plumbing, not rendered animation playback. Accessible names, help text, and all dynamic control content are omitted.";
     private const string ExpectedStateSource = "observed-visible-roots";
+    private const double MinimumFeatureComparisonViewportAreaRatio = 0.10;
 
     private static readonly string[] RequiredArenaControls =
     [
@@ -52,10 +57,17 @@ internal static partial class VerificationEvidenceBundleValidator
         "DpiScaleX", "DpiScaleY", "MotionPreferenceSource", "AnimationsEnabled", "FocusIdentity", "NodeCount", "Truncated", "Nodes"
     };
 
-    private static readonly IReadOnlySet<string> AutomationNodeProperties = new HashSet<string>(StringComparer.Ordinal)
+    private static readonly IReadOnlySet<string> LegacyAutomationNodeProperties = new HashSet<string>(StringComparer.Ordinal)
     {
         "Sequence", "ParentSequence", "VisualDepth", "Identity", "AutomationId", "AutomationIdRedacted",
         "FrameworkType", "ControlType", "IsVisible", "IsEnabled", "IsFocusable", "HasKeyboardFocus"
+    };
+
+    private static readonly IReadOnlySet<string> AutomationNodeProperties = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "Sequence", "ParentSequence", "VisualDepth", "Identity", "AutomationId", "AutomationIdRedacted",
+        "FrameworkType", "ControlType", "IsVisible", "IsEnabled", "IsFocusable", "HasKeyboardFocus",
+        "BoundsX", "BoundsY", "BoundsWidth", "BoundsHeight", "EffectiveOpacity", "IntersectsViewport", "IsRendered"
     };
 
     private static readonly IReadOnlySet<string> UiMatrixRootProperties = new HashSet<string>(StringComparer.Ordinal)
@@ -73,6 +85,21 @@ internal static partial class VerificationEvidenceBundleValidator
     private static readonly IReadOnlySet<string> UiMatrixFocusProperties = new HashSet<string>(StringComparer.Ordinal)
     {
         "direction", "beforeIdentity", "beforeControlType", "afterIdentity", "afterControlType", "moved", "focusChanged"
+    };
+
+    private static readonly IReadOnlySet<string> FeatureSurfaceMatrixRootProperties = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "schema", "passNumber", "treeFingerprint", "registeredFeatureKeys", "cellCount", "cells"
+    };
+
+    private static readonly IReadOnlySet<string> FeatureSurfaceMatrixCellProperties = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "key", "featureKey", "selectedFeatureStatus", "controlPlaneBusy", "theme",
+        "viewportWidthDip", "viewportHeightDip", "renderDpiScale", "motionMode",
+        "motionPreferenceSource", "animationsEnabled", "expectedState", "visibleRootIdentity",
+        "requiredContentIdentity",
+        "focusNext", "focusPrevious", "focusCapture", "automationArtifactId", "automationSha256",
+        "screenshotArtifactId", "screenshotSha256"
     };
 
     private static readonly IReadOnlySet<string> UiMatrixGateIds = new HashSet<string>(StringComparer.Ordinal)
@@ -129,6 +156,7 @@ internal static partial class VerificationEvidenceBundleValidator
             {
                 "automation-tree" => MaximumAutomationArtifactBytes,
                 UiMatrixArtifactKind => MaximumUiMatrixArtifactBytes,
+                FeatureSurfaceMatrixArtifactKind => MaximumFeatureSurfaceMatrixArtifactBytes,
                 _ => MaximumArtifactBytes
             };
             ArtifactReadResult read;
@@ -137,7 +165,8 @@ internal static partial class VerificationEvidenceBundleValidator
                 read = await ReadAndHashAsync(
                     artifactPath,
                     maximumBytes,
-                    captureBytes: artifact.Kind is "automation-tree" or "rendered-ui-screenshot" or UiMatrixArtifactKind,
+                    captureBytes: artifact.Kind is "automation-tree" or "rendered-ui-screenshot" or UiMatrixArtifactKind or FeatureSurfaceMatrixArtifactKind
+                        || artifact.Kind == ArenaQaSealManifestV2.ExplicitMigrationArtifactKind,
                     cancellationToken);
             }
             catch (InvalidDataException)
@@ -193,7 +222,7 @@ internal static partial class VerificationEvidenceBundleValidator
 
             if (artifact.Kind == "automation-tree")
             {
-                ValidateAutomationArtifact(bytes, artifact, index, issues);
+                ValidateAutomationArtifact(bytes, artifact, index, contract.SealManifestId, issues);
             }
             else if (artifact.Kind == "rendered-ui-screenshot")
             {
@@ -203,8 +232,81 @@ internal static partial class VerificationEvidenceBundleValidator
         }
 
         ValidateUiMatrices(contract, artifactBytes, byId, decodedPngEvidence, issues);
+        if (string.Equals(contract.SealManifestId, ArenaQaSealManifestV2.Id, StringComparison.Ordinal))
+        {
+            ValidateFeatureSurfaceMatrices(contract, artifactBytes, byId, decodedPngEvidence, issues);
+            ValidateV2MigrationAuthority(contract, artifactBytes, byId, issues);
+        }
 
         return Sort(issues);
+    }
+
+    private static void ValidateV2MigrationAuthority(
+        ArenaQaEvidenceContract contract,
+        IReadOnlyDictionary<string, byte[]> artifactBytes,
+        IReadOnlyDictionary<string, (ArenaQaArtifact artifact, int index)> byId,
+        ImmutableArray<VerificationEvidenceIssue>.Builder issues)
+    {
+        var gates = contract.Gates
+            .Where(gate => gate.Id == ArenaQaSealManifestV2.ExplicitMigrationGateId)
+            .ToArray();
+        var authorityClaimed = gates.Any(gate => gate.Outcome == ArenaQaGateOutcome.Pass)
+            || contract.Gates.Any(gate => gate.Id == ArenaQaSealManifestV2.FeatureSurfaceMatrixGateId
+                && gate.Outcome == ArenaQaGateOutcome.Pass)
+            || contract.Verdict == ArenaQaVerdict.Sealed;
+        if (!authorityClaimed)
+        {
+            return;
+        }
+
+        if (gates.Length != 1
+            || !gates[0].Required
+            || gates[0].Outcome != ArenaQaGateOutcome.Pass
+            || gates[0].Evidence.State != ArenaEvidenceState.Observed
+            || gates[0].Evidence.ReferenceId != ArenaQaSealManifestV2.ExplicitMigrationArtifactId)
+        {
+            issues.Add(new("bundle.v2_migration_gate"));
+        }
+
+        if (!byId.TryGetValue(ArenaQaSealManifestV2.ExplicitMigrationArtifactId, out var artifactEntry)
+            || artifactEntry.artifact.Kind != ArenaQaSealManifestV2.ExplicitMigrationArtifactKind
+            || artifactEntry.artifact.RelativePath != ArenaQaSealManifestV2.ExplicitMigrationArtifactPath
+            || !artifactBytes.ContainsKey(ArenaQaSealManifestV2.ExplicitMigrationArtifactId))
+        {
+            issues.Add(new("bundle.v2_migration_artifact"));
+        }
+
+        ValidateV2MigrationSchema(
+            contract,
+            ArenaContractSchemas.ScenarioPack,
+            ArenaQaSealManifestV2.ScenarioPackV0Schema,
+            ArenaQaSealManifestV2.ScenarioMigrationEvidenceId,
+            issues);
+        ValidateV2MigrationSchema(
+            contract,
+            ArenaContractSchemas.BenchmarkPack,
+            ArenaQaSealManifestV2.BenchmarkPackV0Schema,
+            ArenaQaSealManifestV2.BenchmarkMigrationEvidenceId,
+            issues);
+    }
+
+    private static void ValidateV2MigrationSchema(
+        ArenaQaEvidenceContract contract,
+        string schema,
+        string migratedFromSchema,
+        string evidenceId,
+        ImmutableArray<VerificationEvidenceIssue>.Builder issues)
+    {
+        var checks = contract.SchemaChecks.Where(check => check.Schema == schema).ToArray();
+        if (checks.Length != 1
+            || checks[0].Outcome != ArenaQaGateOutcome.Pass
+            || checks[0].MigratedFromSchema != migratedFromSchema
+            || checks[0].Evidence.State != ArenaEvidenceState.Observed
+            || checks[0].Evidence.Id != evidenceId
+            || checks[0].Evidence.ReferenceId != ArenaQaSealManifestV2.ExplicitMigrationArtifactId)
+        {
+            issues.Add(new("bundle.v2_migration_schema"));
+        }
     }
 
     private static async Task ValidateTextPrivacyAsync(
@@ -246,6 +348,7 @@ internal static partial class VerificationEvidenceBundleValidator
         byte[] bytes,
         ArenaQaArtifact artifact,
         int artifactIndex,
+        string sealManifestId,
         ImmutableArray<VerificationEvidenceIssue>.Builder issues)
     {
         if (artifact.Provenance is null)
@@ -280,9 +383,14 @@ internal static partial class VerificationEvidenceBundleValidator
                 MaxDepth = 160
             });
             var root = document.RootElement;
+            var automationSchema = RequiredString(root, "Schema");
+            var enhancedAutomation = string.Equals(automationSchema, AutomationSchema, StringComparison.Ordinal);
+            var requiredAutomationSchema = string.Equals(sealManifestId, ArenaQaSealManifestV2.Id, StringComparison.Ordinal)
+                ? AutomationSchema
+                : LegacyAutomationSchema;
             if (root.ValueKind != JsonValueKind.Object
                 || !HasOnlyProperties(root, AutomationRootProperties)
-                || RequiredString(root, "Schema") != AutomationSchema
+                || automationSchema != requiredAutomationSchema
                 || RequiredString(root, "CaptureMode") != AutomationCaptureMode
                 || RequiredString(root, "Limitation") != AutomationLimitation)
             {
@@ -384,7 +492,7 @@ internal static partial class VerificationEvidenceBundleValidator
                     ? (int?)null
                     : parent.GetInt32();
                 if (node.ValueKind != JsonValueKind.Object
-                    || !HasOnlyProperties(node, AutomationNodeProperties)
+                    || !HasOnlyProperties(node, enhancedAutomation ? AutomationNodeProperties : LegacyAutomationNodeProperties)
                     || node.GetProperty("Sequence").GetInt32() != sequence
                     || node.GetProperty("VisualDepth").GetInt32() is < 0 or > 128
                     || (sequence == 0 ? parentSequence is not null : parentSequence is null || parentSequence >= sequence)
@@ -408,6 +516,42 @@ internal static partial class VerificationEvidenceBundleValidator
                 var isVisible = node.GetProperty("IsVisible").GetBoolean();
                 _ = node.GetProperty("IsEnabled").GetBoolean();
                 _ = node.GetProperty("IsFocusable").GetBoolean();
+                if (enhancedAutomation)
+                {
+                    var boundsX = node.GetProperty("BoundsX").GetDouble();
+                    var boundsY = node.GetProperty("BoundsY").GetDouble();
+                    var boundsWidth = node.GetProperty("BoundsWidth").GetDouble();
+                    var boundsHeight = node.GetProperty("BoundsHeight").GetDouble();
+                    var effectiveOpacity = node.GetProperty("EffectiveOpacity").GetDouble();
+                    var intersectsViewport = node.GetProperty("IntersectsViewport").GetBoolean();
+                    var isRendered = node.GetProperty("IsRendered").GetBoolean();
+                    var expectedIntersection = HasMaterialViewportIntersection(
+                        boundsX,
+                        boundsY,
+                        boundsWidth,
+                        boundsHeight,
+                        viewportWidth,
+                        viewportHeight);
+                    var expectedRendered = isVisible
+                        && boundsWidth > 0.5
+                        && boundsHeight > 0.5
+                        && effectiveOpacity > 0.001
+                        && expectedIntersection;
+                    if (!double.IsFinite(boundsX)
+                        || !double.IsFinite(boundsY)
+                        || !double.IsFinite(boundsWidth)
+                        || !double.IsFinite(boundsHeight)
+                        || !double.IsFinite(effectiveOpacity)
+                        || boundsWidth < 0
+                        || boundsHeight < 0
+                        || effectiveOpacity is < 0 or > 1
+                        || intersectsViewport != expectedIntersection
+                        || isRendered != expectedRendered)
+                    {
+                        issues.Add(new("bundle.automation_renderability", artifactIndex));
+                        return;
+                    }
+                }
                 if (isVisible)
                 {
                     visibleNodeIdentities.Add(nodeIdentity);
@@ -435,14 +579,23 @@ internal static partial class VerificationEvidenceBundleValidator
                 issues.Add(new("bundle.automation_observed_state", artifactIndex));
             }
 
-            var reconstructedState = BuildCanonicalState(
-                observedSurfaceState,
-                dialogState,
-                theme,
-                viewportWidth,
-                (decimal)renderDpiScale,
-                motionPreferenceSource);
-            if (expectedState != reconstructedState)
+            var stateMatches = enhancedAutomation && observedSurfaceState == "experiment-lab"
+                ? ArenaQaSealManifestV2.RequiredExperimentFeatureKeys.Any(featureKey =>
+                    expectedState == BuildFeatureSurfaceCanonicalState(
+                        featureKey,
+                        dialogState,
+                        theme,
+                        viewportWidth,
+                        (decimal)renderDpiScale,
+                        motionPreferenceSource))
+                : expectedState == BuildCanonicalState(
+                    observedSurfaceState,
+                    dialogState,
+                    theme,
+                    viewportWidth,
+                    (decimal)renderDpiScale,
+                    motionPreferenceSource);
+            if (!stateMatches)
             {
                 issues.Add(new("bundle.automation_observed_state", artifactIndex));
             }
@@ -820,7 +973,10 @@ internal static partial class VerificationEvidenceBundleValidator
 
         if (!artifactBytes.TryGetValue(cell.AutomationArtifactId, out var automationBytes)
             || !TryReadAutomationMatrixState(automationBytes, out var automationState)
-            || automationState!.TreeFingerprint != contract.TreeFingerprint
+            || automationState!.Schema != (contract.SealManifestId == ArenaQaSealManifestV2.Id
+                ? AutomationSchema
+                : LegacyAutomationSchema)
+            || automationState.TreeFingerprint != contract.TreeFingerprint
             || automationState.ExpectedState != expectedState
             || automationState.Theme != cell.Theme
             || automationState.ViewportWidthDip != cell.ViewportWidthDip
@@ -889,6 +1045,31 @@ internal static partial class VerificationEvidenceBundleValidator
     private static bool SameFocus(string leftIdentity, string leftType, string rightIdentity, string rightType) =>
         leftIdentity == rightIdentity && leftType == rightType;
 
+    private static bool HasMaterialViewportIntersection(
+        double x,
+        double y,
+        double width,
+        double height,
+        int viewportWidth,
+        int viewportHeight)
+    {
+        if (!double.IsFinite(x)
+            || !double.IsFinite(y)
+            || !double.IsFinite(width)
+            || !double.IsFinite(height)
+            || width <= 0
+            || height <= 0
+            || viewportWidth <= 0
+            || viewportHeight <= 0)
+        {
+            return false;
+        }
+
+        var intersectionWidth = Math.Min(x + width, viewportWidth) - Math.Max(x, 0);
+        var intersectionHeight = Math.Min(y + height, viewportHeight) - Math.Max(y, 0);
+        return intersectionWidth > 0.5 && intersectionHeight > 0.5;
+    }
+
     private static bool TryReadAutomationMatrixState(byte[] bytes, out AutomationMatrixState? value)
     {
         value = null;
@@ -901,13 +1082,43 @@ internal static partial class VerificationEvidenceBundleValidator
                 MaxDepth = 160
             });
             var root = document.RootElement;
+            var schema = RequiredString(root, "Schema");
+            if (schema is not (LegacyAutomationSchema or AutomationSchema))
+            {
+                return false;
+            }
+            var enhancedAutomation = schema == AutomationSchema;
             var focusIdentity = RequiredString(root, "FocusIdentity");
-            var visibleFocusedNodes = root.GetProperty("Nodes").EnumerateArray().Count(node =>
+            var nodes = root.GetProperty("Nodes").EnumerateArray().ToArray();
+            var visibleFocusedNodes = nodes.Count(node =>
                 node.GetProperty("HasKeyboardFocus").GetBoolean()
                 && node.GetProperty("IsVisible").GetBoolean()
                 && node.GetProperty("IsFocusable").GetBoolean()
                 && RequiredString(node, "Identity") == focusIdentity);
+            var visibleNodeIdentities = nodes
+                .Where(node => node.GetProperty("IsVisible").GetBoolean())
+                .Select(node => RequiredString(node, "Identity"))
+                .ToImmutableArray();
+            var matrixNodes = nodes
+                .Select(node => new AutomationMatrixNode(
+                    node.GetProperty("Sequence").GetInt32(),
+                    node.GetProperty("ParentSequence").ValueKind == JsonValueKind.Null
+                        ? null
+                        : node.GetProperty("ParentSequence").GetInt32(),
+                    RequiredString(node, "Identity"),
+                    node.GetProperty("IsVisible").GetBoolean(),
+                    node.GetProperty("IsFocusable").GetBoolean(),
+                    node.GetProperty("HasKeyboardFocus").GetBoolean(),
+                    enhancedAutomation
+                        ? node.GetProperty("IsRendered").GetBoolean()
+                        : node.GetProperty("IsVisible").GetBoolean(),
+                    enhancedAutomation ? node.GetProperty("BoundsX").GetDouble() : 0,
+                    enhancedAutomation ? node.GetProperty("BoundsY").GetDouble() : 0,
+                    enhancedAutomation ? node.GetProperty("BoundsWidth").GetDouble() : 0,
+                    enhancedAutomation ? node.GetProperty("BoundsHeight").GetDouble() : 0))
+                .ToImmutableArray();
             value = new(
+                schema,
                 RequiredString(root, "TreeFingerprint"),
                 RequiredString(root, "ExpectedState"),
                 RequiredString(root, "ExpectedStateSource"),
@@ -916,6 +1127,8 @@ internal static partial class VerificationEvidenceBundleValidator
                 RequiredString(root, "DialogState"),
                 ReadSafeStringArray(root, "VisibleRootIdentities", 16),
                 ReadSafeStringArray(root, "RequiredControlIdentities", 64),
+                visibleNodeIdentities,
+                matrixNodes,
                 RequiredString(root, "Theme"),
                 root.GetProperty("ViewportWidthDip").GetInt32(),
                 root.GetProperty("ViewportHeightDip").GetInt32(),
@@ -946,6 +1159,569 @@ internal static partial class VerificationEvidenceBundleValidator
         }
         return result;
     }
+
+    private static void ValidateFeatureSurfaceMatrices(
+        ArenaQaEvidenceContract contract,
+        IReadOnlyDictionary<string, byte[]> artifactBytes,
+        IReadOnlyDictionary<string, (ArenaQaArtifact artifact, int index)> byId,
+        IReadOnlyDictionary<string, DecodedPngEvidence> decodedPngEvidence,
+        ImmutableArray<VerificationEvidenceIssue>.Builder issues)
+    {
+        var passingRenderedPasses = contract.Gates
+            .Where(gate => gate.Outcome == ArenaQaGateOutcome.Pass)
+            .Select(gate => TryParseRenderedUiPass(gate.Id, out var passNumber) ? passNumber : 0)
+            .Where(passNumber => passNumber > 0)
+            .ToHashSet();
+        var featureGate = contract.Gates
+            .Where(gate => gate.Id == "ui.feature-surface-matrix")
+            .ToArray();
+        var featureGatePassed = featureGate.Length == 1 && featureGate[0].Outcome == ArenaQaGateOutcome.Pass;
+
+        var documents = new List<(FeatureSurfaceMatrixDocument document, int index)>();
+        foreach (var entry in byId.Values
+                     .Where(entry => entry.artifact.Kind == FeatureSurfaceMatrixArtifactKind)
+                     .OrderBy(entry => entry.index))
+        {
+            if (entry.artifact.Provenance is not null)
+            {
+                issues.Add(new("bundle.feature_matrix_schema", entry.index));
+            }
+            if (artifactBytes.TryGetValue(entry.artifact.Id, out var bytes)
+                && TryReadFeatureSurfaceMatrixDocument(bytes, entry.artifact, entry.index, issues, out var document))
+            {
+                documents.Add((document!, entry.index));
+            }
+        }
+
+        if ((featureGatePassed && passingRenderedPasses.Count == 0)
+            || (!featureGatePassed && documents.Count > 0))
+        {
+            issues.Add(new("bundle.feature_matrix_gates"));
+        }
+        if (featureGatePassed)
+        {
+            foreach (var passNumber in passingRenderedPasses.Order())
+            {
+                var matches = documents.Where(item => item.document.PassNumber == passNumber).ToArray();
+                if (matches.Length == 0) issues.Add(new("bundle.feature_matrix_missing"));
+                else if (matches.Length != 1) issues.Add(new("bundle.feature_matrix_duplicate"));
+            }
+        }
+
+        foreach (var item in documents)
+        {
+            if (!passingRenderedPasses.Contains(item.document.PassNumber))
+            {
+                issues.Add(new("bundle.feature_matrix_orphan", item.index));
+                continue;
+            }
+            ValidateFeatureSurfaceMatrixDocument(
+                contract,
+                item.document,
+                item.index,
+                artifactBytes,
+                byId,
+                decodedPngEvidence,
+                issues);
+        }
+    }
+
+    private static bool TryReadFeatureSurfaceMatrixDocument(
+        byte[] bytes,
+        ArenaQaArtifact artifact,
+        int artifactIndex,
+        ImmutableArray<VerificationEvidenceIssue>.Builder issues,
+        out FeatureSurfaceMatrixDocument? value)
+    {
+        value = null;
+        try
+        {
+            var json = new UTF8Encoding(false, true).GetString(bytes);
+            using var document = JsonDocument.Parse(json, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = 16
+            });
+            if (!ArenaContractPrivacyRules.InspectJson(json).IsEmpty)
+            {
+                issues.Add(new("bundle.feature_matrix_privacy", artifactIndex));
+                return false;
+            }
+
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !HasOnlyProperties(root, FeatureSurfaceMatrixRootProperties)
+                || RequiredString(root, "schema") != FeatureSurfaceMatrixSchema)
+            {
+                issues.Add(new("bundle.feature_matrix_schema", artifactIndex));
+                return false;
+            }
+
+            var passNumber = root.GetProperty("passNumber").GetInt32();
+            var treeFingerprint = RequiredString(root, "treeFingerprint");
+            var registeredFeatureKeys = ReadFeatureKeyArray(root.GetProperty("registeredFeatureKeys"));
+            var cellCount = root.GetProperty("cellCount").GetInt32();
+            var cellsElement = root.GetProperty("cells");
+            if (passNumber is < 1 or > 5
+                || !IsSha256(treeFingerprint)
+                || cellCount != 60
+                || cellsElement.ValueKind != JsonValueKind.Array
+                || cellsElement.GetArrayLength() != cellCount)
+            {
+                issues.Add(new("bundle.feature_matrix_schema", artifactIndex));
+                return false;
+            }
+
+            var cells = ImmutableArray.CreateBuilder<FeatureSurfaceMatrixCell>(cellCount);
+            foreach (var element in cellsElement.EnumerateArray())
+            {
+                if (!TryReadFeatureSurfaceMatrixCell(element, out var cell))
+                {
+                    issues.Add(new("bundle.feature_matrix_schema", artifactIndex));
+                    return false;
+                }
+                cells.Add(cell!);
+            }
+
+            value = new(passNumber, treeFingerprint, registeredFeatureKeys, [.. cells]);
+            if (artifact.Id != $"artifact.pass-{passNumber:D2}.feature-surface-matrix"
+                || artifact.RelativePath != $"metadata/pass-{passNumber:D2}.feature-surface-matrix.json")
+            {
+                issues.Add(new("bundle.feature_matrix_schema", artifactIndex));
+            }
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or DecoderFallbackException or InvalidOperationException
+                                   or FormatException or OverflowException or KeyNotFoundException)
+        {
+            issues.Add(new("bundle.feature_matrix_schema", artifactIndex));
+            return false;
+        }
+    }
+
+    private static ImmutableArray<string> ReadFeatureKeyArray(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Array
+            || element.GetArrayLength() != ArenaQaSealManifestV2.RequiredExperimentFeatureKeys.Length)
+        {
+            throw new InvalidOperationException();
+        }
+        var keys = element.EnumerateArray()
+            .Select(item => item.GetString() ?? throw new InvalidOperationException())
+            .ToImmutableArray();
+        if (!keys.SequenceEqual(ArenaQaSealManifestV2.RequiredExperimentFeatureKeys, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException();
+        }
+        return keys;
+    }
+
+    private static bool TryReadFeatureSurfaceMatrixCell(JsonElement element, out FeatureSurfaceMatrixCell? value)
+    {
+        value = null;
+        if (element.ValueKind != JsonValueKind.Object
+            || !HasOnlyProperties(element, FeatureSurfaceMatrixCellProperties)
+            || !TryReadUiMatrixFocus(element.GetProperty("focusNext"), out var focusNext)
+            || !TryReadUiMatrixFocus(element.GetProperty("focusPrevious"), out var focusPrevious)
+            || !TryReadUiMatrixFocus(element.GetProperty("focusCapture"), out var focusCapture))
+        {
+            return false;
+        }
+
+        value = new(
+            RequiredString(element, "key"),
+            RequiredString(element, "featureKey"),
+            RequiredString(element, "selectedFeatureStatus"),
+            element.GetProperty("controlPlaneBusy").GetBoolean(),
+            RequiredString(element, "theme"),
+            element.GetProperty("viewportWidthDip").GetInt32(),
+            element.GetProperty("viewportHeightDip").GetInt32(),
+            element.GetProperty("renderDpiScale").GetDecimal(),
+            RequiredString(element, "motionMode"),
+            RequiredString(element, "motionPreferenceSource"),
+            element.GetProperty("animationsEnabled").GetBoolean(),
+            RequiredString(element, "expectedState"),
+            RequiredString(element, "visibleRootIdentity"),
+            RequiredString(element, "requiredContentIdentity"),
+            focusNext!,
+            focusPrevious!,
+            focusCapture!,
+            RequiredString(element, "automationArtifactId"),
+            RequiredString(element, "automationSha256"),
+            RequiredString(element, "screenshotArtifactId"),
+            RequiredString(element, "screenshotSha256"));
+        return true;
+    }
+
+    private static void ValidateFeatureSurfaceMatrixDocument(
+        ArenaQaEvidenceContract contract,
+        FeatureSurfaceMatrixDocument document,
+        int matrixArtifactIndex,
+        IReadOnlyDictionary<string, byte[]> artifactBytes,
+        IReadOnlyDictionary<string, (ArenaQaArtifact artifact, int index)> byId,
+        IReadOnlyDictionary<string, DecodedPngEvidence> decodedPngEvidence,
+        ImmutableArray<VerificationEvidenceIssue>.Builder issues)
+    {
+        if (!string.Equals(document.TreeFingerprint, contract.TreeFingerprint, StringComparison.OrdinalIgnoreCase)
+            || !document.RegisteredFeatureKeys.SequenceEqual(
+                ArenaQaSealManifestV2.RequiredExperimentFeatureKeys,
+                StringComparer.Ordinal))
+        {
+            issues.Add(new("bundle.feature_matrix_provenance", matrixArtifactIndex));
+        }
+
+        var expectedKeys = ExpectedFeatureSurfaceMatrixKeys(document.PassNumber);
+        var actualKeys = document.Cells.Select(cell => cell.Key).ToArray();
+        if (actualKeys.Distinct(StringComparer.Ordinal).Count() != 60
+            || !actualKeys.SequenceEqual(actualKeys.OrderBy(key => key, StringComparer.Ordinal), StringComparer.Ordinal)
+            || !actualKeys.ToHashSet(StringComparer.Ordinal).SetEquals(expectedKeys))
+        {
+            issues.Add(new("bundle.feature_matrix_cross_product", matrixArtifactIndex));
+        }
+
+        var automationIds = new HashSet<string>(StringComparer.Ordinal);
+        var screenshotIds = new HashSet<string>(StringComparer.Ordinal);
+        var artifactPaths = new HashSet<string>(StringComparer.Ordinal);
+        var featureRenderRegions = new Dictionary<string, FeatureRenderRegion>(StringComparer.Ordinal);
+        foreach (var cell in document.Cells)
+        {
+            ValidateFeatureSurfaceMatrixCell(
+                contract,
+                document.PassNumber,
+                cell,
+                matrixArtifactIndex,
+                artifactBytes,
+                byId,
+                automationIds,
+                screenshotIds,
+                artifactPaths,
+                featureRenderRegions,
+                issues);
+        }
+        if (automationIds.Count != 60 || screenshotIds.Count != 60 || artifactPaths.Count != 120
+            || automationIds.Overlaps(screenshotIds))
+        {
+            issues.Add(new("bundle.feature_matrix_artifacts", matrixArtifactIndex));
+        }
+
+        foreach (var group in document.Cells.GroupBy(cell => (cell.FeatureKey, cell.ViewportWidthDip)))
+        {
+            var rendered = group
+                .Select(cell => new
+                {
+                    Decoded = decodedPngEvidence.GetValueOrDefault(cell.ScreenshotArtifactId),
+                    Region = featureRenderRegions.GetValueOrDefault(cell.Key)
+                })
+                .Where(value => value.Decoded is not null && value.Region is not null)
+                .ToArray();
+            var hashes = group
+                .Select(cell => cell.ScreenshotSha256)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            var materialPairCount = 0;
+            for (var left = 0; left < rendered.Length; left++)
+            for (var right = left + 1; right < rendered.Length; right++)
+            {
+                if (HasMaterialFeatureDifference(
+                        rendered[left].Decoded!,
+                        rendered[left].Region!,
+                        rendered[right].Decoded!,
+                        rendered[right].Region!))
+                {
+                    materialPairCount++;
+                }
+            }
+            if (group.Count() != 3 || hashes != 3 || rendered.Length != 3
+                || rendered.Select(item => item.Decoded!.PixelSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 3
+                || materialPairCount != 3)
+            {
+                issues.Add(new("bundle.feature_matrix_theme_render", matrixArtifactIndex));
+            }
+        }
+
+        foreach (var group in document.Cells.GroupBy(cell => (cell.Theme, cell.ViewportWidthDip)))
+        {
+            var rendered = group
+                .Select(cell => new
+                {
+                    Decoded = decodedPngEvidence.GetValueOrDefault(cell.ScreenshotArtifactId),
+                    Region = featureRenderRegions.GetValueOrDefault(cell.Key)
+                })
+                .Where(value => value.Decoded is not null && value.Region is not null)
+                .ToArray();
+            var materialPairCount = 0;
+            for (var left = 0; left < rendered.Length; left++)
+            for (var right = left + 1; right < rendered.Length; right++)
+            {
+                if (HasMaterialFeatureDifference(
+                        rendered[left].Decoded!,
+                        rendered[left].Region!,
+                        rendered[right].Decoded!,
+                        rendered[right].Region!))
+                {
+                    materialPairCount++;
+                }
+            }
+            const int expectedFeaturePairs = 45;
+            if (group.Count() != 10
+                || rendered.Length != 10
+                || rendered.Select(item => item.Decoded!.PixelSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 10
+                || materialPairCount != expectedFeaturePairs)
+            {
+                issues.Add(new("bundle.feature_matrix_feature_render", matrixArtifactIndex));
+            }
+        }
+    }
+
+    private static void ValidateFeatureSurfaceMatrixCell(
+        ArenaQaEvidenceContract contract,
+        int passNumber,
+        FeatureSurfaceMatrixCell cell,
+        int matrixArtifactIndex,
+        IReadOnlyDictionary<string, byte[]> artifactBytes,
+        IReadOnlyDictionary<string, (ArenaQaArtifact artifact, int index)> byId,
+        HashSet<string> automationIds,
+        HashSet<string> screenshotIds,
+        HashSet<string> artifactPaths,
+        Dictionary<string, FeatureRenderRegion> featureRenderRegions,
+        ImmutableArray<VerificationEvidenceIssue>.Builder issues)
+    {
+        var expectedHeight = cell.ViewportWidthDip switch { 960 => 640, 1500 => 960, _ => 0 };
+        var expectedKey = $"p{passNumber:D2}.feature.{cell.FeatureKey}.{cell.Theme}.w{cell.ViewportWidthDip}";
+        var expectedState = BuildFeatureSurfaceCanonicalState(
+            cell.FeatureKey,
+            "closed",
+            cell.Theme,
+            cell.ViewportWidthDip,
+            1.0m,
+            "qa-normal");
+        var expectedContentIdentity = ArenaQaSealManifestV2.RequiredExperimentFeatureAutomationIdentities
+            .GetValueOrDefault(cell.FeatureKey, "unavailable");
+        if (!ArenaQaSealManifestV2.RequiredExperimentFeatureKeys.Contains(cell.FeatureKey, StringComparer.Ordinal)
+            || cell.Theme is not ("dark-blue" or "light" or "high-contrast")
+            || expectedHeight == 0
+            || cell.ViewportHeightDip != expectedHeight
+            || cell.RenderDpiScale != 1.0m
+            || cell.MotionMode != "normal"
+            || cell.MotionPreferenceSource != "qa-normal"
+            || !cell.AnimationsEnabled
+            || cell.SelectedFeatureStatus != "ready"
+            || cell.ControlPlaneBusy
+            || cell.VisibleRootIdentity != "ExperimentLabPanel"
+            || cell.RequiredContentIdentity != expectedContentIdentity
+            || cell.Key != expectedKey
+            || cell.ExpectedState != expectedState)
+        {
+            issues.Add(new("bundle.feature_matrix_cross_product", matrixArtifactIndex));
+        }
+        if (!IsValidFocusSequence(cell.FocusNext, cell.FocusPrevious, cell.FocusCapture))
+        {
+            issues.Add(new("bundle.feature_matrix_focus", matrixArtifactIndex));
+        }
+
+        var expectedAutomationId = $"artifact.{cell.Key}.automation";
+        var expectedScreenshotId = $"artifact.{cell.Key}.screenshot";
+        if (cell.AutomationArtifactId != expectedAutomationId
+            || cell.ScreenshotArtifactId != expectedScreenshotId
+            || !IsSha256(cell.AutomationSha256)
+            || !IsSha256(cell.ScreenshotSha256)
+            || !automationIds.Add(cell.AutomationArtifactId)
+            || !screenshotIds.Add(cell.ScreenshotArtifactId)
+            || !byId.TryGetValue(cell.AutomationArtifactId, out var automationEntry)
+            || !byId.TryGetValue(cell.ScreenshotArtifactId, out var screenshotEntry)
+            || automationEntry.artifact.Kind != "automation-tree"
+            || screenshotEntry.artifact.Kind != "rendered-ui-screenshot")
+        {
+            issues.Add(new("bundle.feature_matrix_artifacts", matrixArtifactIndex));
+            return;
+        }
+
+        _ = artifactPaths.Add(automationEntry.artifact.RelativePath);
+        _ = artifactPaths.Add(screenshotEntry.artifact.RelativePath);
+        var expectedAutomationPath = $"automation/{cell.Key}.automation-tree.json";
+        var expectedScreenshotPath = $"screenshots/{cell.Key}.rendered-ui.png";
+        if (!string.Equals(cell.AutomationSha256, automationEntry.artifact.Sha256, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(cell.ScreenshotSha256, screenshotEntry.artifact.Sha256, StringComparison.OrdinalIgnoreCase)
+            || automationEntry.artifact.RelativePath != expectedAutomationPath
+            || screenshotEntry.artifact.RelativePath != expectedScreenshotPath
+            || !FeatureMatrixProvenanceMatches(automationEntry.artifact.Provenance, contract.TreeFingerprint, cell, expectedState)
+            || !FeatureMatrixProvenanceMatches(screenshotEntry.artifact.Provenance, contract.TreeFingerprint, cell, expectedState)
+            || screenshotEntry.artifact.Provenance?.LinkedAutomationArtifactId != cell.AutomationArtifactId)
+        {
+            issues.Add(new("bundle.feature_matrix_provenance", matrixArtifactIndex));
+        }
+
+        if (!artifactBytes.TryGetValue(cell.AutomationArtifactId, out var automationBytes)
+            || !TryReadAutomationMatrixState(automationBytes, out var automationState)
+            || automationState!.Schema != AutomationSchema
+            || automationState.TreeFingerprint != contract.TreeFingerprint
+            || automationState.ExpectedState != expectedState
+            || automationState.ExpectedStateSource != ExpectedStateSource
+            || automationState.SelectedView != "experiment-lab"
+            || automationState.ObservedSurfaceState != "experiment-lab"
+            || automationState.DialogState != "closed"
+            || !automationState.VisibleRootIdentities.SequenceEqual(["ExperimentLabPanel"], StringComparer.Ordinal)
+            || !HasExclusiveRenderedFeatureRoot(automationState, expectedContentIdentity)
+            || automationState.Theme != cell.Theme
+            || automationState.ViewportWidthDip != cell.ViewportWidthDip
+            || automationState.ViewportHeightDip != cell.ViewportHeightDip
+            || automationState.RenderDpiScale != 1.0m
+            || !automationState.RenderDpiOverride
+            || automationState.MotionPreferenceSource != "qa-normal"
+            || !automationState.AnimationsEnabled)
+        {
+            issues.Add(new("bundle.feature_matrix_observed_state", matrixArtifactIndex));
+        }
+        else
+        {
+            if (!TryCreateFeatureRenderRegion(automationState, expectedContentIdentity, out var renderRegion)
+                || !featureRenderRegions.TryAdd(cell.Key, renderRegion!))
+            {
+                issues.Add(new("bundle.feature_matrix_observed_state", matrixArtifactIndex));
+            }
+            if (automationState.FocusIdentity != cell.FocusCapture.AfterIdentity
+                || !automationState.HasVisibleKeyboardFocus
+                || !FocusCycleDescendsFromFeature(automationState, expectedContentIdentity, cell))
+            {
+                issues.Add(new("bundle.feature_matrix_focus", matrixArtifactIndex));
+            }
+        }
+    }
+
+    private static bool TryCreateFeatureRenderRegion(
+        AutomationMatrixState state,
+        string expectedContentIdentity,
+        out FeatureRenderRegion? value)
+    {
+        value = null;
+        var featureRoots = state.Nodes
+            .Where(node => node.Identity == expectedContentIdentity && node.IsRendered)
+            .ToArray();
+        var experimentRoots = state.Nodes
+            .Where(node => node.Identity == "ExperimentLabPanel" && node.IsRendered)
+            .ToArray();
+        if (featureRoots.Length != 1 || experimentRoots.Length != 1)
+        {
+            return false;
+        }
+
+        value = new(
+            state.ViewportWidthDip,
+            state.ViewportHeightDip,
+            new(
+                featureRoots[0].BoundsX,
+                featureRoots[0].BoundsY,
+                featureRoots[0].BoundsWidth,
+                featureRoots[0].BoundsHeight),
+            new(
+                experimentRoots[0].BoundsX,
+                experimentRoots[0].BoundsY,
+                experimentRoots[0].BoundsWidth,
+                experimentRoots[0].BoundsHeight));
+        return true;
+    }
+
+    private static bool HasExclusiveRenderedFeatureRoot(
+        AutomationMatrixState state,
+        string expectedContentIdentity)
+    {
+        if (state.Nodes.Count(node => node.Identity == "ExperimentLabPanel" && node.IsRendered) != 1
+            || state.Nodes.Count(node => node.Identity == expectedContentIdentity && node.IsRendered) != 1)
+        {
+            return false;
+        }
+
+        if (!IsRenderedStrictDescendant(
+                state.Nodes,
+                expectedContentIdentity,
+                "ExperimentLabPanel",
+                requireFocusable: false))
+        {
+            return false;
+        }
+
+        var otherFeatureRoots = ArenaQaSealManifestV2.RequiredExperimentFeatureAutomationIdentities.Values
+            .Where(identity => !string.Equals(identity, expectedContentIdentity, StringComparison.Ordinal))
+            .ToHashSet(StringComparer.Ordinal);
+        return !state.Nodes.Any(node => node.IsRendered && otherFeatureRoots.Contains(node.Identity));
+    }
+
+    private static bool FocusCycleDescendsFromFeature(
+        AutomationMatrixState state,
+        string featureRootIdentity,
+        FeatureSurfaceMatrixCell cell)
+    {
+        var identities = new[]
+        {
+            cell.FocusNext.BeforeIdentity,
+            cell.FocusNext.AfterIdentity,
+            cell.FocusPrevious.BeforeIdentity,
+            cell.FocusPrevious.AfterIdentity,
+            cell.FocusCapture.BeforeIdentity,
+            cell.FocusCapture.AfterIdentity
+        };
+        return identities.Distinct(StringComparer.Ordinal).All(identity =>
+            IsRenderedStrictDescendant(
+                state.Nodes,
+                identity,
+                featureRootIdentity,
+                requireFocusable: true));
+    }
+
+    private static bool IsRenderedStrictDescendant(
+        ImmutableArray<AutomationMatrixNode> nodes,
+        string identity,
+        string ancestorIdentity,
+        bool requireFocusable)
+    {
+        var matches = nodes.Where(node => node.Identity == identity).ToArray();
+        if (matches.Length != 1
+            || !matches[0].IsVisible
+            || !matches[0].IsRendered
+            || (requireFocusable && !matches[0].IsFocusable))
+        {
+            return false;
+        }
+
+        var bySequence = nodes.ToDictionary(node => node.Sequence);
+        var parentSequence = matches[0].ParentSequence;
+        for (var remaining = nodes.Length; remaining > 0 && parentSequence is { } sequence; remaining--)
+        {
+            if (!bySequence.TryGetValue(sequence, out var parent)) return false;
+            if (parent.Identity == ancestorIdentity) return parent.IsRendered;
+            parentSequence = parent.ParentSequence;
+        }
+        return false;
+    }
+
+    private static bool FeatureMatrixProvenanceMatches(
+        ArenaQaArtifactProvenance? provenance,
+        string treeFingerprint,
+        FeatureSurfaceMatrixCell cell,
+        string expectedState) =>
+        provenance is not null
+        && string.Equals(provenance.TreeFingerprint, treeFingerprint, StringComparison.OrdinalIgnoreCase)
+        && provenance.Theme == cell.Theme
+        && provenance.ViewportWidthDip == cell.ViewportWidthDip
+        && provenance.ViewportHeightDip == cell.ViewportHeightDip
+        && Math.Abs(provenance.DpiScale - 1.0m) <= 0.001m
+        && provenance.ExpectedState == expectedState;
+
+    private static HashSet<string> ExpectedFeatureSurfaceMatrixKeys(int passNumber)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var featureKey in ArenaQaSealManifestV2.RequiredExperimentFeatureKeys)
+        foreach (var theme in new[] { "dark-blue", "light", "high-contrast" })
+        foreach (var width in new[] { 960, 1500 })
+        {
+            result.Add($"p{passNumber:D2}.feature.{featureKey}.{theme}.w{width}");
+        }
+        return result;
+    }
+
+    private static bool IsSha256(string value) =>
+        value.Length == 64 && value.All(char.IsAsciiHexDigit);
 
     private static bool TryParseRenderedUiPass(string gateId, out int passNumber)
     {
@@ -1331,6 +2107,8 @@ internal static partial class VerificationEvidenceBundleValidator
 
             decodedEvidence = new DecodedPngEvidence(
                 Convert.ToHexString(pixelHasher.GetHashAndReset()).ToLowerInvariant(),
+                width,
+                height,
                 sampleWidth,
                 sampleHeight,
                 visualSamples);
@@ -1450,6 +2228,103 @@ internal static partial class VerificationEvidenceBundleValidator
         return changedPixels >= Math.Max(1, (int)Math.Ceiling(pixelCount * 0.02))
             && (double)totalChannelDelta / (pixelCount * 3) >= 2;
     }
+
+    private static bool HasMaterialFeatureDifference(
+        DecodedPngEvidence left,
+        FeatureRenderRegion leftRegion,
+        DecodedPngEvidence right,
+        FeatureRenderRegion rightRegion)
+    {
+        if (left.PixelWidth != right.PixelWidth
+            || left.PixelHeight != right.PixelHeight
+            || left.SampleWidth != right.SampleWidth
+            || left.SampleHeight != right.SampleHeight
+            || left.VisualRgbSamples.Length != right.VisualRgbSamples.Length
+            || left.VisualRgbSamples.Length == 0
+            || leftRegion.ViewportWidthDip != rightRegion.ViewportWidthDip
+            || leftRegion.ViewportHeightDip != rightRegion.ViewportHeightDip
+            || leftRegion.ViewportWidthDip <= 0
+            || leftRegion.ViewportHeightDip <= 0)
+        {
+            return false;
+        }
+
+        var intersection = IntersectFeatureRenderBounds(
+            leftRegion.FeatureBounds,
+            leftRegion.ExperimentLabBounds,
+            rightRegion.FeatureBounds,
+            rightRegion.ExperimentLabBounds,
+            new(0, 0, leftRegion.ViewportWidthDip, leftRegion.ViewportHeightDip));
+        var viewportArea = checked((double)leftRegion.ViewportWidthDip * leftRegion.ViewportHeightDip);
+        if (intersection is null
+            || intersection.Width * intersection.Height < viewportArea * MinimumFeatureComparisonViewportAreaRatio)
+        {
+            return false;
+        }
+
+        var eligibleCells = 0;
+        var changedCells = 0;
+        long totalChannelDelta = 0;
+        for (var sampleY = 0; sampleY < left.SampleHeight; sampleY++)
+        {
+            var pixelTop = DivideCeiling(checked(sampleY * left.PixelHeight), left.SampleHeight);
+            var pixelBottom = DivideCeiling(checked((sampleY + 1) * left.PixelHeight), left.SampleHeight);
+            var topDip = (double)pixelTop * leftRegion.ViewportHeightDip / left.PixelHeight;
+            var bottomDip = (double)pixelBottom * leftRegion.ViewportHeightDip / left.PixelHeight;
+            for (var sampleX = 0; sampleX < left.SampleWidth; sampleX++)
+            {
+                var pixelLeft = DivideCeiling(checked(sampleX * left.PixelWidth), left.SampleWidth);
+                var pixelRight = DivideCeiling(checked((sampleX + 1) * left.PixelWidth), left.SampleWidth);
+                var leftDip = (double)pixelLeft * leftRegion.ViewportWidthDip / left.PixelWidth;
+                var rightDip = (double)pixelRight * leftRegion.ViewportWidthDip / left.PixelWidth;
+                // A pooled sample can contain pixels on both sides of a feature
+                // boundary. Count it only when its complete physical bin is within
+                // both validated feature roots, so shell/status pixels cannot bleed
+                // into the feature comparison through boundary averaging.
+                if (leftDip < intersection.X
+                    || rightDip > intersection.Right
+                    || topDip < intersection.Y
+                    || bottomDip > intersection.Bottom)
+                {
+                    continue;
+                }
+
+                eligibleCells++;
+                var offset = (sampleY * left.SampleWidth + sampleX) * 3;
+                var redDelta = Math.Abs(left.VisualRgbSamples[offset] - right.VisualRgbSamples[offset]);
+                var greenDelta = Math.Abs(left.VisualRgbSamples[offset + 1] - right.VisualRgbSamples[offset + 1]);
+                var blueDelta = Math.Abs(left.VisualRgbSamples[offset + 2] - right.VisualRgbSamples[offset + 2]);
+                if (Math.Max(redDelta, Math.Max(greenDelta, blueDelta)) >= 8)
+                {
+                    changedCells++;
+                }
+                totalChannelDelta += redDelta + greenDelta + blueDelta;
+            }
+        }
+
+        return eligibleCells > 0
+            && changedCells >= Math.Max(1, (int)Math.Ceiling(eligibleCells * 0.02))
+            && (double)totalChannelDelta / (eligibleCells * 3) >= 2;
+    }
+
+    private static RenderBounds? IntersectFeatureRenderBounds(params RenderBounds[] values)
+    {
+        var x = values.Max(value => value.X);
+        var y = values.Max(value => value.Y);
+        var right = values.Min(value => value.Right);
+        var bottom = values.Min(value => value.Bottom);
+        return double.IsFinite(x)
+               && double.IsFinite(y)
+               && double.IsFinite(right)
+               && double.IsFinite(bottom)
+               && right > x
+               && bottom > y
+            ? new(x, y, right - x, bottom - y)
+            : null;
+    }
+
+    private static int DivideCeiling(int value, int divisor) =>
+        checked((value + divisor - 1) / divisor);
 
     private static void UnfilterPngRow(
         byte filter,
@@ -1662,6 +2537,21 @@ internal static partial class VerificationEvidenceBundleValidator
         return $"{surface}.{dialogState}.{theme}.w{viewportWidthDip}.d{density}.{motion}";
     }
 
+    private static string BuildFeatureSurfaceCanonicalState(
+        string featureKey,
+        string dialogState,
+        string theme,
+        int viewportWidthDip,
+        decimal rasterDensityScale,
+        string motionPreferenceSource) =>
+        BuildCanonicalState(
+            $"experiment-lab.feature-{featureKey}",
+            dialogState,
+            theme,
+            viewportWidthDip,
+            rasterDensityScale,
+            motionPreferenceSource);
+
     private static string RequiredString(JsonElement element, string property) =>
         element.GetProperty(property).GetString() ?? throw new InvalidOperationException();
 
@@ -1729,7 +2619,49 @@ internal static partial class VerificationEvidenceBundleValidator
         bool Moved,
         bool FocusChanged);
 
+    private sealed record FeatureSurfaceMatrixDocument(
+        int PassNumber,
+        string TreeFingerprint,
+        ImmutableArray<string> RegisteredFeatureKeys,
+        ImmutableArray<FeatureSurfaceMatrixCell> Cells);
+
+    private sealed record FeatureSurfaceMatrixCell(
+        string Key,
+        string FeatureKey,
+        string SelectedFeatureStatus,
+        bool ControlPlaneBusy,
+        string Theme,
+        int ViewportWidthDip,
+        int ViewportHeightDip,
+        decimal RenderDpiScale,
+        string MotionMode,
+        string MotionPreferenceSource,
+        bool AnimationsEnabled,
+        string ExpectedState,
+        string VisibleRootIdentity,
+        string RequiredContentIdentity,
+        UiMatrixFocus FocusNext,
+        UiMatrixFocus FocusPrevious,
+        UiMatrixFocus FocusCapture,
+        string AutomationArtifactId,
+        string AutomationSha256,
+        string ScreenshotArtifactId,
+        string ScreenshotSha256);
+
+    private sealed record FeatureRenderRegion(
+        int ViewportWidthDip,
+        int ViewportHeightDip,
+        RenderBounds FeatureBounds,
+        RenderBounds ExperimentLabBounds);
+
+    private sealed record RenderBounds(double X, double Y, double Width, double Height)
+    {
+        public double Right => X + Width;
+        public double Bottom => Y + Height;
+    }
+
     private sealed record AutomationMatrixState(
+        string Schema,
         string TreeFingerprint,
         string ExpectedState,
         string ExpectedStateSource,
@@ -1738,6 +2670,8 @@ internal static partial class VerificationEvidenceBundleValidator
         string DialogState,
         ImmutableArray<string> VisibleRootIdentities,
         ImmutableArray<string> RequiredControlIdentities,
+        ImmutableArray<string> VisibleNodeIdentities,
+        ImmutableArray<AutomationMatrixNode> Nodes,
         string Theme,
         int ViewportWidthDip,
         int ViewportHeightDip,
@@ -1748,8 +2682,23 @@ internal static partial class VerificationEvidenceBundleValidator
         string FocusIdentity,
         bool HasVisibleKeyboardFocus);
 
+    private sealed record AutomationMatrixNode(
+        int Sequence,
+        int? ParentSequence,
+        string Identity,
+        bool IsVisible,
+        bool IsFocusable,
+        bool HasKeyboardFocus,
+        bool IsRendered,
+        double BoundsX,
+        double BoundsY,
+        double BoundsWidth,
+        double BoundsHeight);
+
     private sealed record DecodedPngEvidence(
         string PixelSha256,
+        int PixelWidth,
+        int PixelHeight,
         int SampleWidth,
         int SampleHeight,
         byte[] VisualRgbSamples);

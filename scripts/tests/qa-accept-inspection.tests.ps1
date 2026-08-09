@@ -23,6 +23,8 @@ $requiredGlobalGateIds = @(
     'preflight.seal-configuration',
     'preflight.source-clean',
     'preflight.toolchain',
+    'schema.explicit-v0-pack-migration',
+    'ui.feature-surface-matrix',
     'ui.keyboard-automation-matrix',
     'ui.reduced-motion-matrix',
     'ui.theme-contrast-matrix',
@@ -261,11 +263,13 @@ function New-CompletePartialBundle {
     $bundleRoot = Join-Path $artifactRoot $Name
     $screenshotPath = Join-Path $bundleRoot 'screenshots/view.png'
     $automationPath = Join-Path $bundleRoot 'metadata/automation.json'
+    $migrationLogPath = Join-Path $bundleRoot 'logs/schema.explicit-v0-pack-migration.log'
     [void](New-Item -ItemType Directory -Path (Split-Path -Parent $screenshotPath) -Force)
     [void](New-Item -ItemType Directory -Path (Split-Path -Parent $automationPath) -Force)
     $png = [byte[]](137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4)
     [IO.File]::WriteAllBytes($screenshotPath, $png)
     Write-FixtureText -Path $automationPath -Text "{`"schema`":`"ai_arena.automation_tree.v1`",`"nodes`":[]}`n"
+    Write-FixtureText -Path $migrationLogPath -Text "AI Arena QA gate evidence`ngate=schema.explicit-v0-pack-migration`noutcome=pass`n"
 
     $outerRevision = ([string](@(Invoke-FixtureGit -Root $fixtureRoot -Arguments @('rev-parse', 'HEAD'))[0])).Trim().ToLowerInvariant()
     $mapRevision = ([string](@(Invoke-FixtureGit -Root $mapRoot -Arguments @('rev-parse', 'HEAD'))[0])).Trim().ToLowerInvariant()
@@ -311,11 +315,19 @@ function New-CompletePartialBundle {
             baselineArtifactId = $null
         }
     }
+    $migrationArtifact = [pscustomobject][ordered]@{
+        id = 'artifact.schema.explicit-v0-pack-migration.log'
+        kind = 'sanitized-gate-log'
+        relativePath = 'logs/schema.explicit-v0-pack-migration.log'
+        sha256 = Get-Sha256File $migrationLogPath
+        provenance = $null
+    }
 
     $gates = [Collections.Generic.List[object]]::new()
     foreach ($id in $requiredGlobalGateIds) {
         $gates.Add((New-PassingGate $id))
     }
+    @($gates | Where-Object { $_.id -eq 'schema.explicit-v0-pack-migration' })[0].evidence.referenceId = 'artifact.schema.explicit-v0-pack-migration.log'
     for ($pass = 1; $pass -le 2; $pass++) {
         foreach ($suffix in $requiredPerPassGateSuffixes) {
             $gates.Add((New-PassingGate ('pass-{0:D2}.{1}' -f $pass, $suffix)))
@@ -343,7 +355,7 @@ function New-CompletePartialBundle {
         createdAtUtc = $completedAt
         sourceRevision = $outerRevision
         treeFingerprint = $treeFingerprint
-        sealManifestId = 'ai_arena.qa_seal_manifest.v1'
+        sealManifestId = 'ai_arena.qa_seal_manifest.v2'
         isWorkingTreeClean = $true
         nestedRepositories = @(
             [pscustomobject][ordered]@{
@@ -367,7 +379,7 @@ function New-CompletePartialBundle {
         }
         toolchain = @([pscustomobject][ordered]@{ name = 'fixture'; version = '1.0' })
         gates = @($gates)
-        artifacts = @($automationArtifact, $screenshotArtifact)
+        artifacts = @($automationArtifact, $migrationArtifact, $screenshotArtifact)
         performance = @(
             foreach ($metric in $requiredPerformanceMetrics) {
                 [pscustomobject][ordered]@{
@@ -383,12 +395,22 @@ function New-CompletePartialBundle {
         )
         schemaChecks = @(
             foreach ($schema in $requiredSchemas) {
+                $isScenarioMigration = $schema -eq 'ai_arena.scenario_pack.v1'
+                $isBenchmarkMigration = $schema -eq 'ai_arena.benchmark_pack.v1'
                 [pscustomobject][ordered]@{
                     id = ('schema.' + $schema)
                     schema = $schema
-                    migratedFromSchema = $null
+                    migratedFromSchema = if ($isScenarioMigration) { 'ai_arena.scenario_pack.v0' } elseif ($isBenchmarkMigration) { 'ai_arena.benchmark_pack.v0' } else { $null }
                     outcome = 'pass'
-                    evidence = New-ObservedEvidence -Id ('evidence.schema.' + $schema)
+                    evidence = if ($isScenarioMigration) {
+                        New-ObservedEvidence -Id 'evidence.schema.migration.ai-arena.scenario-pack.v1' -ReferenceId 'artifact.schema.explicit-v0-pack-migration.log'
+                    }
+                    elseif ($isBenchmarkMigration) {
+                        New-ObservedEvidence -Id 'evidence.schema.migration.ai-arena.benchmark-pack.v1' -ReferenceId 'artifact.schema.explicit-v0-pack-migration.log'
+                    }
+                    else {
+                        New-ObservedEvidence -Id ('evidence.schema.' + $schema)
+                    }
                 }
             }
         )
@@ -443,6 +465,21 @@ function New-CompletePartialBundle {
             $gate.evidence.state = 'unavailable'
             $gate.evidence.referenceId = $null
             $gate.evidence.limitation = 'Fixture intentionally incomplete.'
+        }
+        'migration-gate-deleted' {
+            $contract.gates = @($contract.gates | Where-Object { $_.id -ne 'schema.explicit-v0-pack-migration' })
+        }
+        'migration-gate-not-required' {
+            @($contract.gates | Where-Object { $_.id -eq 'schema.explicit-v0-pack-migration' })[0].required = $false
+        }
+        'migration-gate-outcome' {
+            @($contract.gates | Where-Object { $_.id -eq 'schema.explicit-v0-pack-migration' })[0].outcome = 'partial'
+        }
+        'migration-schema-source' {
+            @($contract.schemaChecks | Where-Object { $_.schema -eq 'ai_arena.scenario_pack.v1' })[0].migratedFromSchema = 'ai_arena.scenario_pack.v0-renamed'
+        }
+        'migration-artifact-kind' {
+            @($contract.artifacts | Where-Object { $_.id -eq 'artifact.schema.explicit-v0-pack-migration.log' })[0].kind = 'qa-metadata'
         }
         'missing-limitation' {
             $contract.acceptedLimitations = @($contract.acceptedLimitations | Where-Object { $_.id -ne 'limitation.ui-physical-dpi' })
@@ -666,6 +703,11 @@ exit 0
         [pscustomobject]@{ Name = 'no-automation'; Mutation = 'no-automation'; Code = 'qa_accept.visual_manifest' },
         [pscustomobject]@{ Name = 'privacy'; Mutation = 'bad-privacy'; Code = 'qa_accept.privacy' },
         [pscustomobject]@{ Name = 'incomplete'; Mutation = 'incomplete-gate'; Code = 'qa_accept.incomplete_gates' },
+        [pscustomobject]@{ Name = 'migration-gate-deleted'; Mutation = 'migration-gate-deleted'; Code = 'qa_accept.incomplete_gates' },
+        [pscustomobject]@{ Name = 'migration-gate-not-required'; Mutation = 'migration-gate-not-required'; Code = 'qa_accept.incomplete_gates' },
+        [pscustomobject]@{ Name = 'migration-gate-outcome'; Mutation = 'migration-gate-outcome'; Code = 'qa_accept.incomplete_gates' },
+        [pscustomobject]@{ Name = 'migration-schema-source'; Mutation = 'migration-schema-source'; Code = 'qa_accept.migration_schema' },
+        [pscustomobject]@{ Name = 'migration-artifact-kind'; Mutation = 'migration-artifact-kind'; Code = 'qa_accept.migration_artifact' },
         [pscustomobject]@{ Name = 'missing-limitation'; Mutation = 'missing-limitation'; Code = 'qa_accept.limitations' },
         [pscustomobject]@{ Name = 'renamed-limitation'; Mutation = 'renamed-limitation'; Code = 'qa_accept.limitations' },
         [pscustomobject]@{ Name = 'limitation-state'; Mutation = 'limitation-state'; Code = 'qa_accept.limitations' },

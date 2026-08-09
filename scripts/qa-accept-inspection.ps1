@@ -50,7 +50,7 @@ $env:NUGET_XMLDOC_MODE = 'skip'
 $script:MaximumEvidenceBytes = 4MB
 $script:MaximumArtifactBytes = 64MB
 $script:QaSchema = 'ai_arena.qa_evidence.v1'
-$script:SealManifest = 'ai_arena.qa_seal_manifest.v1'
+$script:SealManifest = 'ai_arena.qa_seal_manifest.v2'
 $script:ReceiptArtifactId = 'artifact.inspection.user-acceptance.receipt'
 $script:ReceiptRelativePath = 'metadata/inspection-receipt.json'
 $script:ReviewManifestSchema = 'ai_arena.qa_inspection_review.v1'
@@ -72,6 +72,8 @@ $script:RequiredGlobalGateIds = @(
     'preflight.seal-configuration',
     'preflight.source-clean',
     'preflight.toolchain',
+    'schema.explicit-v0-pack-migration',
+    'ui.feature-surface-matrix',
     'ui.keyboard-automation-matrix',
     'ui.reduced-motion-matrix',
     'ui.theme-contrast-matrix',
@@ -557,6 +559,10 @@ function Assert-ContractCompleteness {
         }
         Assert-ObservedEvidence (Get-RequiredProperty $gateById[$id] 'evidence')
     }
+    $migrationGateEvidence = Get-RequiredProperty $gateById['schema.explicit-v0-pack-migration'] 'evidence'
+    if ([string](Get-RequiredProperty $migrationGateEvidence 'referenceId') -cne 'artifact.schema.explicit-v0-pack-migration.log') {
+        Stop-QaAcceptance 'qa_accept.migration_gate'
+    }
     for ($pass = 1; $pass -le $cleanPasses; $pass++) {
         foreach ($suffix in $script:RequiredPerPassGateSuffixes) {
             $id = 'pass-{0:D2}.{1}' -f $pass, $suffix
@@ -638,6 +644,17 @@ function Assert-ContractCompleteness {
             Stop-QaAcceptance 'qa_accept.incomplete_schemas'
         }
         Assert-ObservedEvidence (Get-RequiredProperty $schemaByName[$schemaName] 'evidence')
+    }
+    foreach ($migrationRequirement in @(
+        [pscustomobject]@{ Schema = 'ai_arena.scenario_pack.v1'; Source = 'ai_arena.scenario_pack.v0'; EvidenceId = 'evidence.schema.migration.ai-arena.scenario-pack.v1' },
+        [pscustomobject]@{ Schema = 'ai_arena.benchmark_pack.v1'; Source = 'ai_arena.benchmark_pack.v0'; EvidenceId = 'evidence.schema.migration.ai-arena.benchmark-pack.v1' })) {
+        $check = $schemaByName[$migrationRequirement.Schema]
+        $evidence = Get-RequiredProperty $check 'evidence'
+        if ([string](Get-RequiredProperty $check 'migratedFromSchema') -cne $migrationRequirement.Source -or
+            [string](Get-RequiredProperty $evidence 'id') -cne $migrationRequirement.EvidenceId -or
+            [string](Get-RequiredProperty $evidence 'referenceId') -cne 'artifact.schema.explicit-v0-pack-migration.log') {
+            Stop-QaAcceptance 'qa_accept.migration_schema'
+        }
     }
 
     $metricByName = @{}
@@ -737,6 +754,14 @@ function Assert-ArtifactManifest {
     }
     if ($screenshots.Count -eq 0 -or $automation.Count -eq 0) {
         Stop-QaAcceptance 'qa_accept.visual_manifest'
+    }
+    if (-not $ids.ContainsKey('artifact.schema.explicit-v0-pack-migration.log')) {
+        Stop-QaAcceptance 'qa_accept.migration_artifact'
+    }
+    $migrationArtifact = $ids['artifact.schema.explicit-v0-pack-migration.log']
+    if ([string](Get-RequiredProperty $migrationArtifact 'kind') -cne 'sanitized-gate-log' -or
+        [string](Get-RequiredProperty $migrationArtifact 'relativePath') -cne 'logs/schema.explicit-v0-pack-migration.log') {
+        Stop-QaAcceptance 'qa_accept.migration_artifact'
     }
     foreach ($screenshot in $screenshots) {
         $linkedId = [string](Get-RequiredProperty (Get-RequiredProperty $screenshot 'provenance') 'linkedAutomationArtifactId')

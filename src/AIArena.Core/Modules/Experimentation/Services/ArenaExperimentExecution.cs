@@ -839,6 +839,7 @@ public sealed class ArenaExperimentCellExecutor : IArenaExperimentCellExecutor, 
     private readonly ArenaExperimentProviderProfileRegistry _profiles;
     private readonly SessionStore _sessionStore;
     private readonly IModelProviderClient _providerClient;
+    private readonly Func<int, string, CancellationToken, Task>? _turnCommittedObserver;
 
     public ArenaExperimentCellExecutor(
         ArenaExperimentExecutionPlan plan,
@@ -850,6 +851,18 @@ public sealed class ArenaExperimentCellExecutor : IArenaExperimentCellExecutor, 
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _sessionStore = sessionStore ?? throw new ArgumentNullException(nameof(sessionStore));
         _providerClient = providerClient ?? throw new ArgumentNullException(nameof(providerClient));
+    }
+
+    internal ArenaExperimentCellExecutor(
+        ArenaExperimentExecutionPlan plan,
+        ArenaExperimentProviderProfileRegistry profiles,
+        SessionStore sessionStore,
+        IModelProviderClient providerClient,
+        Func<int, string, CancellationToken, Task> turnCommittedObserver)
+        : this(plan, profiles, sessionStore, providerClient)
+    {
+        _turnCommittedObserver = turnCommittedObserver
+            ?? throw new ArgumentNullException(nameof(turnCommittedObserver));
     }
 
     public string PlanFingerprint => _plan.PlanFingerprint;
@@ -881,23 +894,27 @@ public sealed class ArenaExperimentCellExecutor : IArenaExperimentCellExecutor, 
         }
 
         var evidence = ImmutableArray.CreateBuilder<ArenaEvidenceAssertion>();
-        evidence.Add(Observed(
-            context.TrialId,
-            "execution_plan",
+        evidence.Add(new ArenaEvidenceAssertion(
+            ArenaExperimentRunPolicy.CreateExecutionPlanEvidenceId(context.TrialId),
+            ArenaEvidenceState.Observed,
             "The trial used the resolved execution-plan identity.",
             $"plan:{_plan.PlanFingerprint}"));
         try
         {
             var targetId = ChildSessionId(context.TrialId);
-            var fork = await _sessionStore.ForkSessionAsync(
+            var tokenEmptyConfig = ArenaExperimentProviderProfileRegistry.Copy(selectedConfig, apiToken: "");
+            var fork = await _sessionStore.ForkExperimentSessionAsync(
                 _plan.SourceSessionId,
                 targetId,
+                _plan.SourcePersistenceRevision,
+                _plan.SourceSetupFingerprint,
+                _plan.Experiment.Id,
+                tokenEmptyConfig,
                 cancellationToken).ConfigureAwait(false);
 
-            // ForkSessionAsync has already durably created the child when it
-            // returns. Record that ownership synchronously before the next
-            // cancellation point so a cancelled run can never leave an
-            // unreferenced child session.
+            // The atomic experiment fork already contains its experiment identity
+            // and token-empty provider setup when it becomes durable. Record that
+            // ownership synchronously before the next cancellation point.
             evidence.Add(Observed(
                 context.TrialId,
                 "child_session",
@@ -912,39 +929,14 @@ public sealed class ArenaExperimentCellExecutor : IArenaExperimentCellExecutor, 
                     fork.BranchReceiptId));
             }
 
-            var child = await _sessionStore.LoadSnapshotAsync(fork.TargetSessionId, cancellationToken).ConfigureAwait(false);
-            if (child?.BranchReceipt is null)
-            {
-                evidence.Add(Observed(
-                    context.TrialId,
-                    "child_session",
-                    "An isolated child session was created but its branch receipt was unavailable.",
-                    $"session:{fork.TargetSessionId}"));
-                evidence.Add(FailureEvidence(context.TrialId, "branch_receipt_unavailable"));
-                return ArenaExperimentCellExecutionResult.Interrupted("branch_receipt_unavailable", evidence.ToImmutable());
-            }
-
-            if (string.IsNullOrWhiteSpace(fork.BranchReceiptId))
-            {
-                evidence.Add(Observed(
-                    context.TrialId,
-                    "branch",
-                    "The trial retained a branch receipt linked to its source revision.",
-                    child.BranchReceipt.Id));
-            }
-
-            if (child.BranchReceipt.ParentRevision != _plan.SourcePersistenceRevision
-                || !child.BranchReceipt.SetupFingerprint.Equals(_plan.SourceSetupFingerprint, StringComparison.OrdinalIgnoreCase))
-            {
-                evidence.Add(FailureEvidence(context.TrialId, "source_changed"));
-                return ArenaExperimentCellExecutionResult.Interrupted("source_changed", evidence.ToImmutable());
-            }
-
-            child.BranchReceipt = child.BranchReceipt with { ExperimentId = _plan.Experiment.Id };
-            child.Configs.Clear();
-            child.Configs[ModelProviderRouting.SharedConfigKey] =
-                ArenaExperimentProviderProfileRegistry.Copy(selectedConfig, apiToken: "");
-            await _sessionStore.SaveSnapshotAsync(child, fork.TargetSessionId, cancellationToken).ConfigureAwait(false);
+            var childGuard = new ArenaExperimentChildGuard(
+                fork.TargetSessionId,
+                _plan.Experiment.Id,
+                _plan.SourceSessionId,
+                _plan.SourcePersistenceRevision,
+                _plan.SourceSetupFingerprint,
+                fork.ChildSetupFingerprint);
+            var committedRevision = fork.TargetPersistenceRevision;
 
             var credentialClient = new ExperimentCredentialProviderClient(_providerClient, selectedConfig.ApiToken);
             IModelProviderClient runtimeClient = credentialClient;
@@ -955,6 +947,8 @@ public sealed class ArenaExperimentCellExecutor : IArenaExperimentCellExecutor, 
                 faultClients.Add(faultClient);
                 runtimeClient = faultClient;
             }
+            var guardedClient = new ExperimentGuardedProviderClient(runtimeClient, _sessionStore, childGuard);
+            runtimeClient = guardedClient;
             var eventLog = new EventLogStore(_sessionStore.DataRoot);
             using var internetTool = new InternetToolService(eventLogStore: eventLog);
             var turnRunner = new TurnRunnerService(
@@ -973,10 +967,15 @@ public sealed class ArenaExperimentCellExecutor : IArenaExperimentCellExecutor, 
                 for (var turn = 0; turn < _plan.TurnBudget; turn++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    guardedClient.ExpectProviderRevision(checked(committedRevision + 1));
                     var result = await turnRunner.RunOneTurnAsync(fork.TargetSessionId, cancellationToken).ConfigureAwait(false);
+                    committedRevision = await _sessionStore.ValidateExperimentChildAsync(
+                        childGuard,
+                        checked(committedRevision + 2),
+                        cancellationToken).ConfigureAwait(false);
                     if (!result.Ok || !result.Executed || result.Completion is null || !result.Completion.Ok)
                     {
-                        AppendFaultEvidence(evidence, context.TrialId, faultClients);
+                        AppendFaultEvidence(evidence, context.TrialId, faultClients, _plan.FaultProfiles);
                         evidence.Add(FailureEvidence(
                             context.TrialId,
                             ClassifyProviderFailure(result.Completion?.Error ?? result.Error)));
@@ -989,13 +988,20 @@ public sealed class ArenaExperimentCellExecutor : IArenaExperimentCellExecutor, 
                     }
 
                     completedTurns++;
+                    if (_turnCommittedObserver is not null)
+                    {
+                        await _turnCommittedObserver(
+                            completedTurns,
+                            fork.TargetSessionId,
+                            cancellationToken).ConfigureAwait(false);
+                    }
                     promptTokens += Math.Max(0, result.Completion.PromptTokens);
                     completionTokens += Math.Max(0, result.Completion.CompletionTokens);
                     totalTokens += Math.Max(0, result.Completion.TotalTokens);
                     latencyMilliseconds += Math.Max(0, result.Completion.LatencyMs);
                 }
 
-                AppendFaultEvidence(evidence, context.TrialId, faultClients);
+                AppendFaultEvidence(evidence, context.TrialId, faultClients, _plan.FaultProfiles);
                 evidence.Add(Observed(
                     context.TrialId,
                     "turn_progress",
@@ -1031,6 +1037,16 @@ public sealed class ArenaExperimentCellExecutor : IArenaExperimentCellExecutor, 
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw new ArenaExperimentCellExecutionCancelledException(evidence.ToImmutable(), cancellationToken);
+        }
+        catch (ArenaExperimentSourceChangedException)
+        {
+            evidence.Add(FailureEvidence(context.TrialId, "source_changed"));
+            return ArenaExperimentCellExecutionResult.Interrupted("source_changed", evidence.ToImmutable());
+        }
+        catch (Exception exception) when (exception is ArenaExperimentChildDriftException or SnapshotConcurrencyException)
+        {
+            evidence.Add(FailureEvidence(context.TrialId, "child_state_changed"));
+            return ArenaExperimentCellExecutionResult.Interrupted("child_state_changed", evidence.ToImmutable());
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
         {
@@ -1073,19 +1089,26 @@ public sealed class ArenaExperimentCellExecutor : IArenaExperimentCellExecutor, 
     private static void AppendFaultEvidence(
         ImmutableArray<ArenaEvidenceAssertion>.Builder evidence,
         string trialId,
-        IEnumerable<FaultInjectingModelProviderClient> clients)
+        IEnumerable<FaultInjectingModelProviderClient> clients,
+        IEnumerable<ArenaFaultProfileContract> profiles)
     {
-        foreach (var observation in clients
+        var observations = clients
             .SelectMany(client => client.SnapshotObservations())
             .OrderBy(item => item.ProfileId, StringComparer.Ordinal)
-            .ThenBy(item => item.Sequence))
+            .ThenBy(item => item.Sequence)
+            .ToArray();
+        foreach (var observation in observations)
         {
-            var kind = observation.InjectedCause.ToString().ToLowerInvariant();
-            evidence.Add(Observed(
-                trialId,
-                $"fault_{observation.ProfileId}_{observation.InjectionId}_{observation.Sequence}",
-                $"The selected fault profile injected a {kind} condition at the provider boundary.",
-                observation.ProfileId));
+            var cause = observation.CauseEvidence;
+            evidence.Add(new ArenaEvidenceAssertion(
+                EvidenceId(
+                    trialId,
+                    $"fault_{observation.ProfileId}_{observation.InjectionId}_{observation.Sequence}"),
+                cause.State,
+                cause.Summary,
+                cause.ReferenceId,
+                cause.Basis,
+                cause.Limitation));
             var recovery = observation.RecoveryEvidence;
             evidence.Add(new ArenaEvidenceAssertion(
                 EvidenceId(
@@ -1097,7 +1120,41 @@ public sealed class ArenaExperimentCellExecutor : IArenaExperimentCellExecutor, 
                 recovery.Basis,
                 recovery.Limitation));
         }
+
+        var observedInjections = observations
+            .Select(item => (item.ProfileId, item.InjectionId))
+            .ToHashSet();
+        foreach (var profile in profiles.OrderBy(item => item.Id, StringComparer.Ordinal))
+        {
+            foreach (var injection in profile.Injections.OrderBy(item => item.Id, StringComparer.Ordinal))
+            {
+                if (observedInjections.Contains((profile.Id, injection.Id))) continue;
+                var requiresStreaming = !FaultInjectingModelProviderClient.SupportsOperation(
+                    ArenaProviderFaultOperation.ChatCompletion,
+                    injection.Kind);
+                evidence.Add(new ArenaEvidenceAssertion(
+                    EvidenceId(trialId, $"fault_unexercised_{profile.Id}_{injection.Id}"),
+                    ArenaEvidenceState.Unavailable,
+                    $"The selected {FaultKindLabel(injection.Kind)} fault was not exercised by this experiment cell.",
+                    ReferenceId: profile.Id,
+                    Limitation: requiresStreaming
+                        ? "Experiment cells use non-streaming provider completion; this fault requires a streaming completion boundary."
+                        : "No compatible scheduled occurrence was observed during this experiment cell."));
+            }
+        }
     }
+
+    private static string FaultKindLabel(ArenaFaultKind kind) => kind switch
+    {
+        ArenaFaultKind.Timeout => "timeout",
+        ArenaFaultKind.Disconnect => "disconnect",
+        ArenaFaultKind.MalformedStream => "malformed-stream",
+        ArenaFaultKind.Saturation => "saturation",
+        ArenaFaultKind.EmptyResponse => "empty-response",
+        ArenaFaultKind.Interruption => "interruption",
+        ArenaFaultKind.ContextPressure => "context-pressure",
+        _ => "provider"
+    };
 
     private static string EvidenceId(string trialId, string kind) =>
         $"evidence:{ExperimentExpander.Hash($"{trialId}\n{kind}")}";
@@ -1133,6 +1190,62 @@ public sealed class ArenaExperimentCellExecutor : IArenaExperimentCellExecutor, 
             return "provider_rejected";
         }
         return "provider_failure";
+    }
+
+    private sealed class ExperimentGuardedProviderClient(
+        IModelProviderClient inner,
+        SessionStore sessionStore,
+        ArenaExperimentChildGuard guard) : IModelProviderClient, IStreamingModelProviderClient
+    {
+        private long _expectedProviderRevision;
+
+        internal void ExpectProviderRevision(long revision)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(revision, 1);
+            Volatile.Write(ref _expectedProviderRevision, revision);
+        }
+
+        public Task<ModelProviderModels> ListModelsAsync(
+            ModelProviderConfig config,
+            CancellationToken cancellationToken = default) =>
+            inner.ListModelsAsync(config, cancellationToken);
+
+        public async Task<ModelCompletionResult> CompleteChatAsync(
+            ModelProviderConfig config,
+            IReadOnlyList<ModelChatMessage> messages,
+            CancellationToken cancellationToken = default)
+        {
+            var expectedRevision = Volatile.Read(ref _expectedProviderRevision);
+            if (expectedRevision < 1)
+            {
+                throw new ArenaExperimentChildDriftException();
+            }
+            using var providerLease = await sessionStore.AcquireExperimentProviderCallLeaseAsync(
+                guard,
+                expectedRevision,
+                cancellationToken).ConfigureAwait(false);
+            return await inner.CompleteChatAsync(config, messages, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<ModelCompletionResult> CompleteChatStreamingAsync(
+            ModelProviderConfig config,
+            IReadOnlyList<ModelChatMessage> messages,
+            IProgress<string>? progress,
+            CancellationToken cancellationToken = default)
+        {
+            var expectedRevision = Volatile.Read(ref _expectedProviderRevision);
+            if (expectedRevision < 1)
+            {
+                throw new ArenaExperimentChildDriftException();
+            }
+            using var providerLease = await sessionStore.AcquireExperimentProviderCallLeaseAsync(
+                guard,
+                expectedRevision,
+                cancellationToken).ConfigureAwait(false);
+            return inner is IStreamingModelProviderClient streaming
+                ? await streaming.CompleteChatStreamingAsync(config, messages, progress, cancellationToken).ConfigureAwait(false)
+                : await inner.CompleteChatAsync(config, messages, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private sealed class ExperimentCredentialProviderClient(

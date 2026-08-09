@@ -313,7 +313,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 this,
                 _coreSessionStore.DataRoot,
                 () => _wpfSettings.ThemeId,
-                () => _lastRenderedSnapshot?.Messages.Count));
+                () => _lastRenderedSnapshot?.Messages.Count,
+                () => ExperimentLabPanel.SelectedFeatureKey));
         _providerRequestTraceStore = new ProviderRequestTraceStore();
         _modelClient = CreateObservedModelProviderClient(_providerRequestTraceStore);
         _internetToolService = new InternetToolService(
@@ -609,10 +610,13 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 action => ArenaOperations.TrackAsync(action),
                 (sessionId, cancellationToken) => LoadSessionsAsync(sessionId, cancellationToken)));
         _inAppQaInspectorControl = new InAppQaInspectorControl();
+        var isolatedQaInspectorCapture = InAppQaInspectorCoordinator.ShouldPreserveReviewsForIsolatedCapture(
+            _coreSessionStore.DataRoot);
         _inAppQaInspectorCoordinator = new InAppQaInspectorCoordinator(
             _inAppQaInspectorControl,
             ResolveQaRepositoryRoot(AppContext.BaseDirectory),
-            isApplicationRunning: static () => true);
+            isApplicationRunning: static () => true,
+            readOnlyPreserveReviews: isolatedQaInspectorCapture);
         RegisterProductionExperimentFeatures(
             ExperimentLabPanel,
             _agentInspectionLabControl,
@@ -3308,6 +3312,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 ? SnapshotViewMapper.Empty(currentSession, "No snapshot file.")
                 : SnapshotViewMapper.FromCore(currentSession, coreSnapshot);
             _activeSession = currentSession;
+            _experimentLabCoordinator?.NotifyActiveSessionChanged(currentSession.Id);
             _activeSnapshotWriteUtc = currentSession.LastModified;
             SavedStateCoordinator.ApplyForkLineage(coreSnapshot?.ForkLineage);
             RenderSnapshot(snapshot);
@@ -3321,6 +3326,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         catch (Exception ex)
         {
             _activeSession = session;
+            _experimentLabCoordinator?.NotifyActiveSessionChanged(session.Id);
             _activeSnapshotWriteUtc = session.LastModified;
             SavedStateCoordinator.ApplyForkLineage(null);
             PopulateFallbackState($"Could not load snapshot: {ex.Message}");
@@ -4641,8 +4647,15 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void ApplyProviderStatusProjection(CoreSessionSummary session, ArenaViewSnapshot snapshot)
     {
+        if (_activeSession is null
+            || !_activeSession.Id.Equals(session.Id, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         PublishProviderTransition(snapshot);
         _activeSession = session;
+        _experimentLabCoordinator?.NotifyActiveSessionChanged(session.Id);
         _activeSnapshotWriteUtc = session.LastModified;
         _lastRenderedSnapshot = snapshot;
         var arenaReadiness = ArenaOperationCoordinator.EvaluateReadiness(snapshot);
