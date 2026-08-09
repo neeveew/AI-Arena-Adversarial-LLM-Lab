@@ -776,6 +776,70 @@ function Copy-QaArtifactAtomic {
     }
 }
 
+function Test-AIArenaQaSafeAutomationValue {
+    param([AllowNull()] [object]$Value)
+
+    $text = [string]$Value
+    return $text.Length -gt 0 -and
+        $text.Length -le 128 -and
+        $text -cmatch '^[A-Za-z0-9_.:#-]+$'
+}
+
+function Test-AIArenaQaSameFocus {
+    param(
+        [AllowNull()] [object]$FirstIdentity,
+        [AllowNull()] [object]$FirstControlType,
+        [AllowNull()] [object]$SecondIdentity,
+        [AllowNull()] [object]$SecondControlType)
+
+    return [string]$FirstIdentity -ceq [string]$SecondIdentity -and
+        [string]$FirstControlType -ceq [string]$SecondControlType
+}
+
+function Test-AIArenaQaFocusStep {
+    param(
+        [AllowNull()] [object]$Step,
+        [Parameter(Mandatory)] [ValidateSet('next', 'previous')] [string]$Direction)
+
+    if ($null -eq $Step) {
+        return $false
+    }
+
+    try {
+        return [string]$Step.direction -ceq $Direction -and
+            [bool]$Step.moved -and
+            [bool]$Step.focusChanged -and
+            (Test-AIArenaQaSafeAutomationValue $Step.beforeIdentity) -and
+            (Test-AIArenaQaSafeAutomationValue $Step.beforeControlType) -and
+            (Test-AIArenaQaSafeAutomationValue $Step.afterIdentity) -and
+            (Test-AIArenaQaSafeAutomationValue $Step.afterControlType) -and
+            [string]$Step.afterIdentity -cne 'none' -and
+            -not (Test-AIArenaQaSameFocus `
+                $Step.beforeIdentity `
+                $Step.beforeControlType `
+                $Step.afterIdentity `
+                $Step.afterControlType)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-AIArenaQaFocusCycle {
+    param(
+        [AllowNull()] [object]$Next,
+        [AllowNull()] [object]$Previous,
+        [AllowNull()] [object]$Capture)
+
+    return (Test-AIArenaQaFocusStep -Step $Next -Direction next) -and
+        (Test-AIArenaQaFocusStep -Step $Previous -Direction previous) -and
+        (Test-AIArenaQaFocusStep -Step $Capture -Direction next) -and
+        (Test-AIArenaQaSameFocus $Next.afterIdentity $Next.afterControlType $Previous.beforeIdentity $Previous.beforeControlType) -and
+        (Test-AIArenaQaSameFocus $Previous.afterIdentity $Previous.afterControlType $Capture.beforeIdentity $Capture.beforeControlType) -and
+        (Test-AIArenaQaSameFocus $Next.beforeIdentity $Next.beforeControlType $Previous.afterIdentity $Previous.afterControlType) -and
+        (Test-AIArenaQaSameFocus $Next.afterIdentity $Next.afterControlType $Capture.afterIdentity $Capture.afterControlType)
+}
+
 function Invoke-RenderedUiSmoke {
     param([Parameter(Mandatory)] [int]$PassNumber)
 
@@ -866,14 +930,23 @@ function Invoke-RenderedUiSmoke {
 
                     foreach ($renderScale in $renderScales) {
                         Start-Sleep -Milliseconds 100
+                        $seedFocus = Move-AIArenaQAFocus -Direction next -TimeoutMs 10000
                         $nextFocus = Move-AIArenaQAFocus -Direction next -TimeoutMs 10000
                         $previousFocus = Move-AIArenaQAFocus -Direction previous -TimeoutMs 10000
                         $captureFocus = Move-AIArenaQAFocus -Direction next -TimeoutMs 10000
-                        if (-not $nextFocus.ok -or -not $previousFocus.ok -or
+                        if (-not $seedFocus.ok -or
+                            -not $nextFocus.ok -or -not $previousFocus.ok -or
                             -not $captureFocus.ok -or
-                            -not [bool]$nextFocus.data.moved -or -not [bool]$nextFocus.data.focusChanged -or
-                            -not [bool]$previousFocus.data.moved -or -not [bool]$previousFocus.data.focusChanged -or
-                            -not [bool]$captureFocus.data.moved -or -not [bool]$captureFocus.data.focusChanged) {
+                            -not (Test-AIArenaQaFocusStep -Step $seedFocus.data -Direction next) -or
+                            -not (Test-AIArenaQaSameFocus `
+                                $seedFocus.data.afterIdentity `
+                                $seedFocus.data.afterControlType `
+                                $nextFocus.data.beforeIdentity `
+                                $nextFocus.data.beforeControlType) -or
+                            -not (Test-AIArenaQaFocusCycle `
+                                -Next $nextFocus.data `
+                                -Previous $previousFocus.data `
+                                -Capture $captureFocus.data)) {
                             throw 'Programmatic WPF focus traversal did not move in both directions and restore a visible capture focus.'
                         }
 
@@ -1389,13 +1462,10 @@ else {
     Add-QaGate -Id 'ui.keyboard-automation-matrix' -DisplayName 'Programmatic WPF focus and visual-tree matrix' -Required $true -Mode 'run' -PassSummary 'Programmatic in-process WPF focus traversal and privacy-safe visual-tree snapshots completed. No OS SendInput or external UI Automation interaction was exercised.' -Action {
         $expected = $Passes * 36
         $verified = @($script:UiMatrixCells | Where-Object {
-            [bool]$_.focusNext.moved -and [bool]$_.focusNext.focusChanged -and
-            [bool]$_.focusPrevious.moved -and [bool]$_.focusPrevious.focusChanged -and
-            [bool]$_.focusCapture.moved -and [bool]$_.focusCapture.focusChanged -and
-            [string]$_.focusNext.afterIdentity -eq [string]$_.focusPrevious.beforeIdentity -and
-            [string]$_.focusPrevious.afterIdentity -eq [string]$_.focusCapture.beforeIdentity -and
-            [string]$_.focusNext.afterIdentity -eq [string]$_.focusCapture.afterIdentity -and
-            [string]$_.focusCapture.afterIdentity -ne 'none' -and
+            (Test-AIArenaQaFocusCycle `
+                -Next $_.focusNext `
+                -Previous $_.focusPrevious `
+                -Capture $_.focusCapture) -and
             -not [string]::IsNullOrWhiteSpace([string]$_.automationArtifactId)
         }).Count
         if ($verified -ne $expected) {

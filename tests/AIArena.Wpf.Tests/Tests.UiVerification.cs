@@ -454,6 +454,18 @@ internal static partial class Program
                     Focusable = true,
                     IsTabStop = true
                 };
+                var duplicateNameFirst = new Button
+                {
+                    Name = "HeaderSite",
+                    Focusable = true,
+                    IsTabStop = true
+                };
+                var duplicateNameSecond = new Button
+                {
+                    Name = "HeaderSite",
+                    Focusable = true,
+                    IsTabStop = true
+                };
                 var lastButton = new Button
                 {
                     Name = "QaFocusLast",
@@ -470,6 +482,8 @@ internal static partial class Program
                         privateButton,
                         hiddenButton,
                         unnamedButton,
+                        duplicateNameFirst,
+                        duplicateNameSecond,
                         lastButton
                     }
                 };
@@ -531,6 +545,45 @@ internal static partial class Program
                         && unnamedEvidence.Ok
                         && unnamedEvidence.FocusIdentity == unnamed.AfterIdentity,
                         "unnamed focus identities should use the same visible-tree ordinal as structure evidence");
+
+                    FocusManager.SetFocusedElement(window, duplicateNameFirst);
+                    _ = Keyboard.Focus(duplicateNameFirst);
+                    window.UpdateLayout();
+                    var duplicateNamed = service.AdvanceKeyboardFocusAsync("next").GetAwaiter().GetResult();
+                    var duplicateEvidence = service.CaptureStructureAsync(
+                        "focus/duplicate-name.json",
+                        UiEvidenceTreeFingerprint,
+                        service.DebugObservedExpectedState()).GetAwaiter().GetResult();
+                    Require(duplicateNamed.Ok
+                        && duplicateNamed.Moved
+                        && duplicateNamed.FocusChanged
+                        && duplicateNamed.BeforeIdentity.StartsWith("HeaderSite#", StringComparison.Ordinal)
+                        && duplicateNamed.AfterIdentity.StartsWith("HeaderSite#", StringComparison.Ordinal)
+                        && duplicateNamed.BeforeIdentity != duplicateNamed.AfterIdentity
+                        && duplicateEvidence.Ok
+                        && duplicateEvidence.FocusIdentity == duplicateNamed.AfterIdentity,
+                        "duplicate template names should receive distinct privacy-safe visible-tree identities shared by focus and structure evidence");
+                    var duplicateEvidencePath = Path.Combine(
+                        dataRoot,
+                        duplicateEvidence.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+                    using (var duplicateDocument = JsonDocument.Parse(File.ReadAllText(duplicateEvidencePath)))
+                    {
+                        var duplicateRoot = duplicateDocument.RootElement;
+                        var duplicateNodes = duplicateRoot.GetProperty("Nodes").EnumerateArray().ToArray();
+                        var identities = duplicateNodes
+                            .Select(node => node.GetProperty("Identity").GetString() ?? "")
+                            .ToArray();
+                        var headerSiteIdentities = identities
+                            .Where(identity => identity.StartsWith("HeaderSite#", StringComparison.Ordinal))
+                            .ToArray();
+                        Require(identities.Distinct(StringComparer.Ordinal).Count() == identities.Length
+                            && headerSiteIdentities.Length == 2
+                            && headerSiteIdentities.Distinct(StringComparer.Ordinal).Count() == 2
+                            && identities.Count(identity => identity == duplicateEvidence.FocusIdentity) == 1
+                            && duplicateNodes.Count(node => node.GetProperty("HasKeyboardFocus").GetBoolean()) == 1
+                            && identities.Contains("QaFocusFirst", StringComparer.Ordinal),
+                            "structure evidence should preserve unique static identities while ordinal-disambiguating every repeated template identity");
+                    }
 
                     var motionChanges = 0;
                     PropertyChangedEventHandler motionHandler = (_, args) =>

@@ -136,6 +136,31 @@ internal static class VerificationEvidenceValidatorChecks
                 "Truncated automation evidence was not rejected.");
             await File.WriteAllBytesAsync(automationPath, automationBytes, cancellationToken);
 
+            var duplicateIdentityAutomationBytes = Encoding.UTF8.GetBytes(
+                Encoding.UTF8.GetString(automationBytes).Replace(
+                    "QaPrimaryButton",
+                    "QaRoot",
+                    StringComparison.Ordinal));
+            await File.WriteAllBytesAsync(automationPath, duplicateIdentityAutomationBytes, cancellationToken);
+            var duplicateIdentityContract = BuildContract(
+                outer,
+                map,
+                combined,
+                capturedAt,
+                duplicateIdentityAutomationBytes,
+                screenshotBytes);
+            var duplicateIdentityPath = Path.Combine(evidenceRoot, "duplicate-automation-identity.json");
+            await File.WriteAllTextAsync(
+                duplicateIdentityPath,
+                ArenaContractCodec.Serialize(duplicateIdentityContract),
+                new UTF8Encoding(false),
+                cancellationToken);
+            var duplicateIdentityOutput = new StringWriter();
+            Require(await VerificationEvidenceValidator.ValidateFileAsync(duplicateIdentityPath, duplicateIdentityOutput, cancellationToken) != 0
+                && duplicateIdentityOutput.ToString().Contains("bundle.automation_nodes", StringComparison.Ordinal),
+                "Duplicate privacy-safe automation node identities were not rejected.");
+            await File.WriteAllBytesAsync(automationPath, automationBytes, cancellationToken);
+
             var corruptPngBytes = screenshotBytes.ToArray();
             var idatTypeOffset = FindSequence(corruptPngBytes, "IDAT"u8);
             Require(idatTypeOffset >= 0 && idatTypeOffset + 4 < corruptPngBytes.Length, "Valid PNG fixture did not contain image data.");
@@ -396,6 +421,7 @@ internal static class VerificationEvidenceValidatorChecks
                 invalidMotionOutput,
                 callerEchoOutput,
                 truncatedAutomationOutput,
+                duplicateIdentityOutput,
                 corruptPngOutput,
                 uniformPngOutput,
                 nearUniformPngOutput,
@@ -608,6 +634,38 @@ internal static class VerificationEvidenceValidatorChecks
         Require(await VerificationEvidenceValidator.ValidateFileAsync(focusEvidencePath, focusOutput, cancellationToken) != 0
                 && focusOutput.ToString().Contains("bundle.ui_matrix_focus", StringComparison.Ordinal),
             "Matrix focus metadata that did not round-trip or match capture focus was not rejected.");
+
+        var aliasedFocusJson = Encoding.UTF8.GetString(fixture.MatrixBytes).Replace(
+            "QaFocusFirst",
+            "QaFocusSecond",
+            StringComparison.Ordinal);
+        var aliasedFocusBytes = Encoding.UTF8.GetBytes(aliasedFocusJson);
+        await File.WriteAllBytesAsync(fixture.MatrixPath, aliasedFocusBytes, cancellationToken);
+        var aliasedFocusContract = ReplaceMatrixArtifact(
+            fixture.Contract,
+            fixture.MatrixArtifact with { Sha256 = Sha256(aliasedFocusBytes) });
+        var aliasedFocusPath = Path.Combine(evidenceRoot, "aliased-focus-ui-matrix.json");
+        await WriteContractAsync(aliasedFocusPath, aliasedFocusContract, cancellationToken);
+        var aliasedFocusOutput = new StringWriter();
+        Require(await VerificationEvidenceValidator.ValidateFileAsync(aliasedFocusPath, aliasedFocusOutput, cancellationToken) != 0
+                && aliasedFocusOutput.ToString().Contains("bundle.ui_matrix_focus", StringComparison.Ordinal),
+            "Matrix focus steps that claimed a change while retaining one aliased identity were not rejected.");
+
+        var lostFocusJson = Encoding.UTF8.GetString(fixture.MatrixBytes).Replace(
+            "QaFocusFirst",
+            "none",
+            StringComparison.Ordinal);
+        var lostFocusBytes = Encoding.UTF8.GetBytes(lostFocusJson);
+        await File.WriteAllBytesAsync(fixture.MatrixPath, lostFocusBytes, cancellationToken);
+        var lostFocusContract = ReplaceMatrixArtifact(
+            fixture.Contract,
+            fixture.MatrixArtifact with { Sha256 = Sha256(lostFocusBytes) });
+        var lostFocusPath = Path.Combine(evidenceRoot, "lost-focus-ui-matrix.json");
+        await WriteContractAsync(lostFocusPath, lostFocusContract, cancellationToken);
+        var lostFocusOutput = new StringWriter();
+        Require(await VerificationEvidenceValidator.ValidateFileAsync(lostFocusPath, lostFocusOutput, cancellationToken) != 0
+                && lostFocusOutput.ToString().Contains("bundle.ui_matrix_focus", StringComparison.Ordinal),
+            "A closed matrix cycle that lost focus to none on an intermediate step was not rejected.");
 
         var staleFingerprint = new string('a', 64);
         if (string.Equals(staleFingerprint, combinedFingerprint, StringComparison.OrdinalIgnoreCase))

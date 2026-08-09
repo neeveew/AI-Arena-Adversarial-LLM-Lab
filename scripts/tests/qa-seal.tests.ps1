@@ -84,6 +84,47 @@ try {
         'artifact.p01.dark-blue.w1500.d1-0.normal.screenshot,' +
         'artifact.p01.dark-blue.w960.d1-0.normal.screenshot,' +
         'artifact.p01.dark-blue.w960.d1-0.reduced.screenshot')) 'qa-seal did not order inspection artifact IDs with the schema-required ordinal comparer.'
+
+    foreach ($focusHelperName in @(
+        'Test-AIArenaQaSafeAutomationValue',
+        'Test-AIArenaQaSameFocus',
+        'Test-AIArenaQaFocusStep',
+        'Test-AIArenaQaFocusCycle')) {
+        $focusHelperAst = @($ast.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $focusHelperName
+        }, $true))
+        Require ($focusHelperAst.Count -eq 1) "qa-seal is missing focus helper $focusHelperName."
+        . ([scriptblock]::Create($focusHelperAst[0].Extent.Text))
+    }
+    function New-FocusStep {
+        param(
+            [string]$Direction,
+            [string]$Before,
+            [string]$After,
+            [string]$BeforeType = 'Button',
+            [string]$AfterType = 'Button')
+        return [pscustomobject]@{
+            direction = $Direction
+            beforeIdentity = $Before
+            beforeControlType = $BeforeType
+            afterIdentity = $After
+            afterControlType = $AfterType
+            moved = $true
+            focusChanged = $true
+        }
+    }
+    $validNext = New-FocusStep next 'HeaderSite#0037' 'HeaderSite#0329'
+    $validPrevious = New-FocusStep previous 'HeaderSite#0329' 'HeaderSite#0037'
+    $validCapture = New-FocusStep next 'HeaderSite#0037' 'HeaderSite#0329'
+    Require (Test-AIArenaQaFocusCycle $validNext $validPrevious $validCapture) 'qa-seal rejected a valid identity-and-control-type focus round trip.'
+    $aliasedNext = New-FocusStep next 'HeaderSite' 'HeaderSite'
+    Require (-not (Test-AIArenaQaFocusCycle $aliasedNext $aliasedNext $aliasedNext)) 'qa-seal accepted moved steps that aliased distinct controls to one identity.'
+    $wrongDirection = New-FocusStep previous 'HeaderSite#0037' 'HeaderSite#0329'
+    Require (-not (Test-AIArenaQaFocusCycle $wrongDirection $validPrevious $validCapture)) 'qa-seal accepted the wrong measured focus direction.'
+    $brokenType = New-FocusStep previous 'HeaderSite#0329' 'HeaderSite#0037' 'CheckBox' 'Button'
+    Require (-not (Test-AIArenaQaFocusCycle $validNext $brokenType $validCapture)) 'qa-seal accepted a focus edge whose control type did not close.'
     $parameterNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
     Require ('UserInspectionAccepted' -notin $parameterNames) 'qa-seal still permits pre-render inspection acceptance.'
     $sealSource = Get-Content -LiteralPath $sealScript -Raw
@@ -101,11 +142,14 @@ try {
         "Label = '1-5'",
         "Label = '2-0'",
         "@('normal', 'reduced')",
+        '$seedFocus = Move-AIArenaQAFocus -Direction next',
         'Move-AIArenaQAFocus -Direction next',
         'Move-AIArenaQAFocus -Direction previous',
         '$captureFocus = Move-AIArenaQAFocus -Direction next',
-        '[bool]$_.focusCapture.moved',
-        '[string]$_.focusCapture.afterIdentity -ne ''none''',
+        'Test-AIArenaQaFocusCycle',
+        'Test-AIArenaQaFocusStep -Step $seedFocus.data -Direction next',
+        '$seedFocus.data.afterIdentity',
+        '$nextFocus.data.beforeIdentity',
         'Save-AIArenaUIStructure',
         'Save-AIArenaScreenshot',
         "expectedStateSource -ne 'observed-visible-roots'",

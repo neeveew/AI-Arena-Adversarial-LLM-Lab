@@ -628,26 +628,14 @@ internal sealed class AIArenaUiVerificationControlService
             return new FocusDescriptor($"nonvisual-{SafeTypeName(focusedElement.GetType().Name)}", "Custom");
         }
 
-        var sequence = FindVisualSequence(uiElement);
-        var elementName = uiElement is FrameworkElement frameworkElement
-            ? frameworkElement.Name
-            : "";
-        var staticName = PrivacySafeStaticIdentifier(elementName);
-        var rawAutomationId = AutomationProperties.GetAutomationId(uiElement);
-        var automationIdMatchesStaticName = staticName.Length > 0
-            && string.Equals(rawAutomationId, elementName, StringComparison.Ordinal);
-        var (automationId, _) = PrivacySafeAutomationId(rawAutomationId, automationIdMatchesStaticName);
-        var identity = staticName.Length > 0
-            ? staticName
-            : string.IsNullOrWhiteSpace(automationId)
-                ? $"{SafeTypeName(uiElement.GetType().Name)}#{sequence:D4}"
-                : automationId;
+        var identity = FindVisualIdentity(uiElement);
         return new FocusDescriptor(identity, AutomationControlType(uiElement));
     }
 
-    private int FindVisualSequence(DependencyObject target)
+    private string FindVisualIdentity(UIElement target)
     {
         var sequence = 0;
+        var entries = new List<VisualIdentityEntry>(Math.Min(MaximumNodes, 1024));
         var pending = new Stack<(DependencyObject Element, int Depth)>();
         pending.Push((window, 0));
         while (pending.Count > 0)
@@ -670,11 +658,10 @@ internal sealed class AIArenaUiVerificationControlService
                     break;
                 }
 
-                if (ReferenceEquals(current, target))
-                {
-                    return sequence;
-                }
-
+                entries.Add(new VisualIdentityEntry(
+                    element,
+                    sequence,
+                    DescribeElementIdentity(element, sequence).BaseIdentity));
                 sequence++;
             }
 
@@ -685,7 +672,19 @@ internal sealed class AIArenaUiVerificationControlService
             }
         }
 
-        return 0;
+        var targetEntry = entries.FirstOrDefault(entry => ReferenceEquals(entry.Element, target));
+        if (targetEntry.Element is null)
+        {
+            return $"untracked-{SafeTypeName(target.GetType().Name)}";
+        }
+
+        var duplicateCount = entries.Count(entry => string.Equals(
+            entry.BaseIdentity,
+            targetEntry.BaseIdentity,
+            StringComparison.Ordinal));
+        return duplicateCount > 1
+            ? DisambiguateIdentity(targetEntry.BaseIdentity, targetEntry.Sequence)
+            : targetEntry.BaseIdentity;
     }
 
     private AIArenaUiStructureEvidence CaptureStructureOnUiThread(
@@ -701,6 +700,7 @@ internal sealed class AIArenaUiVerificationControlService
         pending.Push((window, 0, null));
         var truncated = false;
         var focusIdentity = "none";
+        int? focusedSequence = null;
 
         while (pending.Count > 0)
         {
@@ -727,34 +727,20 @@ internal sealed class AIArenaUiVerificationControlService
                 }
 
                 var sequence = nodes.Count;
-                var rawAutomationId = AutomationProperties.GetAutomationId(element);
-                var elementName = element is FrameworkElement frameworkElement
-                    ? frameworkElement.Name
-                    : "";
-                var staticName = PrivacySafeStaticIdentifier(elementName);
-                var automationIdMatchesStaticName = staticName.Length > 0
-                    && string.Equals(rawAutomationId, elementName, StringComparison.Ordinal);
-                var (automationId, automationIdRedacted) = PrivacySafeAutomationId(
-                    rawAutomationId,
-                    automationIdMatchesStaticName);
-                var identity = staticName.Length > 0
-                    ? staticName
-                    : string.IsNullOrWhiteSpace(automationId)
-                        ? $"{SafeTypeName(element.GetType().Name)}#{sequence:D4}"
-                        : automationId;
+                var describedIdentity = DescribeElementIdentity(element, sequence);
                 var hasKeyboardFocus = ReferenceEquals(current, focusedElement) || element.IsKeyboardFocused;
                 if (hasKeyboardFocus)
                 {
-                    focusIdentity = identity;
+                    focusedSequence = sequence;
                 }
 
                 nodes.Add(new AIArenaUiStructureNodeEvidence(
                     sequence,
                     parentSequence,
                     depth,
-                    identity,
-                    automationId,
-                    automationIdRedacted,
+                    describedIdentity.BaseIdentity,
+                    describedIdentity.AutomationId,
+                    describedIdentity.AutomationIdRedacted,
                     SafeTypeName(element.GetType().Name),
                     AutomationControlType(element),
                     element.IsVisible,
@@ -769,6 +755,27 @@ internal sealed class AIArenaUiVerificationControlService
             {
                 pending.Push((VisualTreeHelper.GetChild(current, index), depth + 1, childParentSequence));
             }
+        }
+
+        var identityCounts = nodes
+            .GroupBy(node => node.Identity, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        for (var index = 0; index < nodes.Count; index++)
+        {
+            var node = nodes[index];
+            if (identityCounts[node.Identity] > 1)
+            {
+                nodes[index] = node with
+                {
+                    Identity = DisambiguateIdentity(node.Identity, node.Sequence)
+                };
+            }
+        }
+        if (focusedSequence is { } focusSequence
+            && focusSequence >= 0
+            && focusSequence < nodes.Count)
+        {
+            focusIdentity = nodes[focusSequence].Identity;
         }
 
         var dpi = VisualTreeHelper.GetDpi(window);
@@ -866,6 +873,29 @@ internal sealed class AIArenaUiVerificationControlService
             .ToLowerInvariant()[..16];
         return ($"redacted-{hash}", true);
     }
+
+    private static ElementIdentityDescriptor DescribeElementIdentity(UIElement element, int sequence)
+    {
+        var elementName = element is FrameworkElement frameworkElement
+            ? frameworkElement.Name
+            : "";
+        var staticName = PrivacySafeStaticIdentifier(elementName);
+        var rawAutomationId = AutomationProperties.GetAutomationId(element);
+        var automationIdMatchesStaticName = staticName.Length > 0
+            && string.Equals(rawAutomationId, elementName, StringComparison.Ordinal);
+        var (automationId, automationIdRedacted) = PrivacySafeAutomationId(
+            rawAutomationId,
+            automationIdMatchesStaticName);
+        var baseIdentity = staticName.Length > 0
+            ? staticName
+            : string.IsNullOrWhiteSpace(automationId)
+                ? $"{SafeTypeName(element.GetType().Name)}#{sequence:D4}"
+                : automationId;
+        return new ElementIdentityDescriptor(baseIdentity, automationId, automationIdRedacted);
+    }
+
+    private static string DisambiguateIdentity(string baseIdentity, int sequence)
+        => $"{baseIdentity}#{sequence:D4}";
 
     private static string PrivacySafeStaticIdentifier(string? value)
     {
@@ -1250,4 +1280,14 @@ internal sealed class AIArenaUiVerificationControlService
     }
 
     private readonly record struct FocusDescriptor(string Identity, string ControlType);
+
+    private readonly record struct ElementIdentityDescriptor(
+        string BaseIdentity,
+        string AutomationId,
+        bool AutomationIdRedacted);
+
+    private readonly record struct VisualIdentityEntry(
+        UIElement? Element,
+        int Sequence,
+        string BaseIdentity);
 }

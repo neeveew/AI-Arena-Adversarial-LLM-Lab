@@ -376,6 +376,7 @@ internal static partial class VerificationEvidenceBundleValidator
             var focusIdentity = RequiredString(root, "FocusIdentity");
             var sequence = 0;
             var visibleNodeIdentities = new HashSet<string>(StringComparer.Ordinal);
+            var nodeIdentities = new HashSet<string>(StringComparer.Ordinal);
             foreach (var node in nodes.EnumerateArray())
             {
                 var parent = node.GetProperty("ParentSequence");
@@ -396,19 +397,26 @@ internal static partial class VerificationEvidenceBundleValidator
                     return;
                 }
 
+                var nodeIdentity = RequiredString(node, "Identity");
+                if (!nodeIdentities.Add(nodeIdentity))
+                {
+                    issues.Add(new("bundle.automation_nodes", artifactIndex));
+                    return;
+                }
+
                 _ = node.GetProperty("AutomationIdRedacted").GetBoolean();
                 var isVisible = node.GetProperty("IsVisible").GetBoolean();
                 _ = node.GetProperty("IsEnabled").GetBoolean();
                 _ = node.GetProperty("IsFocusable").GetBoolean();
                 if (isVisible)
                 {
-                    visibleNodeIdentities.Add(RequiredString(node, "Identity"));
+                    visibleNodeIdentities.Add(nodeIdentity);
                 }
 
                 if (node.GetProperty("HasKeyboardFocus").GetBoolean())
                 {
                     focused++;
-                    if (!string.Equals(RequiredString(node, "Identity"), focusIdentity, StringComparison.Ordinal))
+                    if (!string.Equals(nodeIdentity, focusIdentity, StringComparison.Ordinal))
                     {
                         issues.Add(new("bundle.automation_focus", artifactIndex));
                     }
@@ -859,8 +867,7 @@ internal static partial class VerificationEvidenceBundleValidator
             || !next.Moved || !next.FocusChanged
             || !previous.Moved || !previous.FocusChanged
             || !capture.Moved || !capture.FocusChanged
-            || !IsSafeFocus(next) || !IsSafeFocus(previous) || !IsSafeFocus(capture)
-            || capture.AfterIdentity == "none")
+            || !IsSafeFocus(next) || !IsSafeFocus(previous) || !IsSafeFocus(capture))
         {
             return false;
         }
@@ -876,6 +883,7 @@ internal static partial class VerificationEvidenceBundleValidator
         && IsSafeAutomationValue(value.BeforeControlType)
         && IsSafeAutomationValue(value.AfterIdentity)
         && IsSafeAutomationValue(value.AfterControlType)
+        && value.AfterIdentity != "none"
         && !SameFocus(value.BeforeIdentity, value.BeforeControlType, value.AfterIdentity, value.AfterControlType);
 
     private static bool SameFocus(string leftIdentity, string leftType, string rightIdentity, string rightType) =>
