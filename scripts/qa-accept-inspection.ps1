@@ -286,10 +286,23 @@ function ConvertFrom-BoundedJson {
         if (-not (Test-QaTextPrivacy $text)) {
             Stop-QaAcceptance 'qa_accept.privacy'
         }
+        $convertFromJson = Get-Command Microsoft.PowerShell.Utility\ConvertFrom-Json -CommandType Cmdlet -ErrorAction Stop
+        $value = if ($convertFromJson.Parameters.ContainsKey('DateKind')) {
+            # PowerShell 7.5+ otherwise parses ISO timestamps as DateTime and
+            # ConvertTo-Json can rewrite UTC evidence using the local offset.
+            # Preserve the exact contract lexemes; explicit validation casts
+            # timestamps only where their values must be interpreted.
+            $text | Microsoft.PowerShell.Utility\ConvertFrom-Json -DateKind String
+        }
+        else {
+            # Windows PowerShell 5.1 and earlier pwsh releases retain JSON date
+            # strings by default and do not expose the DateKind parameter.
+            $text | Microsoft.PowerShell.Utility\ConvertFrom-Json
+        }
         return [pscustomobject]@{
             Bytes = $bytes
             Text = $text
-            Value = ($text | ConvertFrom-Json)
+            Value = $value
         }
     }
     catch [InvalidOperationException] {

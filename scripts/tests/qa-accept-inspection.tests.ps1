@@ -294,7 +294,9 @@ function New-CompletePartialBundle {
     $outerFingerprint = Get-FixtureFingerprint -Root $fixtureRoot -ExcludedPrefixes @('artifacts/')
     $mapFingerprint = Get-FixtureFingerprint -Root $mapRoot
     $treeFingerprint = Get-Sha256Text ("outer={0}`nmap={1}`n" -f $outerFingerprint, $mapFingerprint)
-    $fixtureNow = (Get-Date).ToUniversalTime()
+    # Use the same explicit +00:00 DateTimeOffset form emitted by qa-seal so
+    # pwsh date coercion cannot hide producer/consumer timestamp drift.
+    $fixtureNow = [DateTimeOffset]::UtcNow
     $startedAt = $fixtureNow.AddHours(-2).ToString('o')
     $capturedAt = $fixtureNow.AddMinutes(-90).ToString('o')
     $completedAt = $fixtureNow.AddHours(-1).ToString('o')
@@ -542,6 +544,9 @@ function New-CompletePartialBundle {
         OriginalEvidenceBytes = [IO.File]::ReadAllBytes($evidencePath)
         ReceiptPath = Join-Path $bundleRoot 'metadata/inspection-receipt.json'
         TreeFingerprint = $treeFingerprint
+        CreatedAtUtc = $completedAt
+        StartedAtUtc = $startedAt
+        CapturedAtUtc = $capturedAt
     }
 }
 
@@ -777,6 +782,9 @@ exit 0
     Require ($sealed.verdict -eq 'sealed') 'Valid acceptance should seal the contract.'
     Require ($sealed.inspection.userAccepted -eq $true) 'Valid acceptance should record explicit inspection.'
     Require ($sealed.inspection.treeFingerprint -eq $validBundle.TreeFingerprint) 'Inspection should bind the exact composite tree fingerprint.'
+    Require ($sealedText.Contains($validBundle.CreatedAtUtc)) 'Acceptance must preserve the exact UTC creation timestamp lexeme.'
+    Require ($sealedText.Contains($validBundle.StartedAtUtc)) 'Acceptance must preserve the exact UTC start timestamp lexeme.'
+    Require ([regex]::Matches($sealedText, [regex]::Escape($validBundle.CapturedAtUtc)).Count -eq 2) 'Acceptance must preserve both exact UTC visual-capture timestamp lexemes.'
     Require ([DateTimeOffset]$sealed.completedAtUtc -gt [DateTimeOffset]$validBeforeCompletedAt) 'Acceptance should recompute completedAtUtc.'
     $inspectionGate = @($sealed.gates | Where-Object { $_.id -eq 'inspection.user-acceptance' })[0]
     Require ($inspectionGate.outcome -eq 'pass' -and $inspectionGate.evidence.state -eq 'observed') 'Acceptance should change only the inspection gate to observed pass evidence.'
