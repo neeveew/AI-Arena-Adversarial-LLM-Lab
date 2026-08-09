@@ -214,18 +214,23 @@ internal sealed class ArenaEvaluationService
             .ThenBy(message => message.CreatedAt)
             .ThenBy(message => message.SpeakerId, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var modelMessages = messages.Where(HasModelEvidence).ToArray();
+        var providerBackedSpeakerIds = snapshot.Engine.Agents
+            .Select(agent => agent.Id)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        providerBackedSpeakerIds.Add("narrator");
+        var modelMessages = messages
+            .Where(message => HasModelEvidence(message, providerBackedSpeakerIds))
+            .ToArray();
         var successfulModelMessages = modelMessages.Where(IsSuccessful).ToArray();
         var failedModelMessages = modelMessages.Where(IsError).ToArray();
         var transcriptErrors = messages.Count(IsError);
-        var providerStateErrors = snapshot.Configs.Values.Count(config =>
-            !config.LastTestOk && !string.IsNullOrWhiteSpace(config.LastError));
-        if (!string.IsNullOrWhiteSpace(snapshot.Engine.LastError))
-        {
-            providerStateErrors++;
-        }
-
-        var providerErrors = providerStateErrors + failedModelMessages.Length;
+        // Provider reachability metadata and Engine.LastError are mutable snapshot
+        // state, not evidence that a provider failed during this captured run. A
+        // persisted offline probe (or an unrelated engine error) must therefore
+        // not be promoted into run-specific failure evidence. Failed model turns
+        // are the durable, attributable provider-failure signal available here.
+        var providerErrors = failedModelMessages.Length;
         var latencySamples = successfulModelMessages.Where(message => message.LatencyMs > 0).ToArray();
         var usageSamples = successfulModelMessages
             .Select(GeneratedTokens)
@@ -459,23 +464,39 @@ internal sealed class ArenaEvaluationService
                 : "The replay package is unavailable, invalid, or does not match the exact setup fingerprint.",
             packageMatches ? $"{Encoding.UTF8.GetByteCount(candidate.PortableSetupJson):N0} UTF-8 bytes" : "no valid replay evidence"));
 
+        var minimumTurnStatus = candidate.Evidence.ModelTurns == 0
+            ? ArenaQaGateStatuses.Unavailable
+            : candidate.Evidence.ModelTurns >= minimumTurns
+                ? ArenaQaGateStatuses.Pass
+                : ArenaQaGateStatuses.Fail;
         gates.Add(Gate(
             "run.minimum-turn-sample",
-            candidate.Evidence.ModelTurns >= minimumTurns ? ArenaQaGateStatuses.Pass : ArenaQaGateStatuses.Fail,
+            minimumTurnStatus,
             required: true,
-            candidate.Evidence.ModelTurns >= minimumTurns
-                ? "The run contains the configured minimum model-turn sample."
-                : "The run is too small for the configured runtime QA sample.",
+            minimumTurnStatus switch
+            {
+                ArenaQaGateStatuses.Pass => "The run contains the configured minimum model-turn sample.",
+                ArenaQaGateStatuses.Fail => "The attempted run is too small for the configured runtime QA sample.",
+                _ => "No model-turn evidence is available; sample sufficiency was not evaluated."
+            },
             $"{candidate.Evidence.ModelTurns}/{minimumTurns} model turn(s)"));
 
+        var providerErrorStatus = candidate.Evidence.ModelTurns == 0
+            ? ArenaQaGateStatuses.Unavailable
+            : candidate.Evidence.ProviderErrors == 0
+                ? ArenaQaGateStatuses.Pass
+                : ArenaQaGateStatuses.Fail;
         gates.Add(Gate(
             "runtime.provider-errors",
-            candidate.Evidence.ProviderErrors == 0 ? ArenaQaGateStatuses.Pass : ArenaQaGateStatuses.Fail,
+            providerErrorStatus,
             required: true,
-            candidate.Evidence.ProviderErrors == 0
-                ? "No provider error state was captured."
-                : "Provider failures were captured; error bodies are intentionally not retained.",
-            $"{candidate.Evidence.ProviderErrors} provider error signal(s)"));
+            providerErrorStatus switch
+            {
+                ArenaQaGateStatuses.Pass => "No failed provider-backed model turn was captured.",
+                ArenaQaGateStatuses.Fail => "Provider-backed model turns failed; error bodies are intentionally not retained.",
+                _ => "No model-turn evidence is available; provider failure state was not evaluated."
+            },
+            $"{candidate.Evidence.ProviderErrors}/{candidate.Evidence.ModelTurns} failed provider-backed model turn(s)"));
 
         gates.Add(Gate(
             "runtime.transcript-errors",
@@ -1165,9 +1186,15 @@ internal sealed class ArenaEvaluationService
         return $"eval-{fingerprint[..12]}-{captureFingerprint[..12]}";
     }
 
-    private static bool HasModelEvidence(TranscriptMessage message)
+    private static bool HasModelEvidence(
+        TranscriptMessage message,
+        IReadOnlySet<string> providerBackedSpeakerIds)
     {
-        return !string.IsNullOrWhiteSpace(message.Model) && message.Model != "-";
+        return providerBackedSpeakerIds.Contains(message.SpeakerId)
+            && (string.IsNullOrWhiteSpace(message.Kind)
+                || message.Kind.Equals("message", StringComparison.OrdinalIgnoreCase))
+            && !string.IsNullOrWhiteSpace(message.Model)
+            && message.Model != "-";
     }
 
     private static int? GeneratedTokens(TranscriptMessage message)

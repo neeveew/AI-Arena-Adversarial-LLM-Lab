@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
+using AIArena.Core.Services;
 using AIArena.Wpf;
 
 internal static partial class Program
@@ -281,7 +282,7 @@ internal static partial class Program
         var service = new ArenaEvaluationService();
         var sparseSnapshot = EvaluationSnapshot(
             "model-sparse",
-            [EvaluationMessage(1, "alpha", "Only one turn.", 0, 0, 0)]);
+            [EvaluationMessage(1, "alpha", "Only one turn.", 0, 0, 0, status: "error")]);
         sparseSnapshot.Engine.Internet.UseInternet = true;
         sparseSnapshot.Engine.Agents[0].Status = "thinking";
         sparseSnapshot.Engine.LastError = "Bearer secret-provider-error-that-must-not-persist";
@@ -295,6 +296,9 @@ internal static partial class Program
             "runtime QA gates should expose stable unique IDs");
         Require(qa.Gates.Single(gate => gate.Id == "run.minimum-turn-sample").Status == ArenaQaGateStatuses.Fail,
             "minimum turn sample should fail with one model turn");
+        Require(sparse.Evidence.ProviderErrors == 1
+            && qa.Gates.Single(gate => gate.Id == "runtime.provider-errors").Status == ArenaQaGateStatuses.Fail,
+            "an observed failed model turn should remain attributable provider-failure evidence");
         Require(qa.Gates.Single(gate => gate.Id == "runtime.stuck-thinking").Status == ArenaQaGateStatuses.Fail,
             "stuck thinking state should fail explicitly");
         Require(qa.Gates.Single(gate => gate.Id == "runtime.interruption-recovery").Status == ArenaQaGateStatuses.Unavailable,
@@ -317,6 +321,53 @@ internal static partial class Program
         var exported = service.ExportJson(sparse, qa: qa);
         Require(!exported.Contains("secret-provider-error", StringComparison.Ordinal),
             "runtime QA export must count provider errors without retaining their bodies");
+
+        var noTurnSnapshot = EvaluationSnapshot("model-not-run", []);
+        noTurnSnapshot.Configs["shared"] = EvaluationProviderWith(
+            noTurnSnapshot.Configs["shared"],
+            lastError: "Persisted offline probe must not become run evidence.",
+            lastTestOk: false);
+        noTurnSnapshot.Engine.LastError = "Unattributed prior engine state.";
+        var noTurn = service.Capture("not-run", noTurnSnapshot, DateTimeOffset.UnixEpoch);
+        var noTurnQa = service.EvaluateQa(noTurn);
+        Require(noTurn.Evidence.ModelTurns == 0 && noTurn.Evidence.ProviderErrors == 0,
+            "stale provider-health and unattributed engine errors must not become run-specific provider failures");
+        Require(noTurnQa.OverallReadiness == "partial"
+            && noTurnQa.Failed == 0
+            && noTurnQa.Gates.Single(gate => gate.Id == "run.minimum-turn-sample").Status == ArenaQaGateStatuses.Unavailable
+            && noTurnQa.Gates.Single(gate => gate.Id == "runtime.provider-errors").Status == ArenaQaGateStatuses.Unavailable,
+            "a capture with no model-turn evidence should remain incomplete rather than report failed runtime QA");
+
+        var nonModelSnapshot = EvaluationSnapshot("model-not-used", []);
+        var transcriptService = new TranscriptService();
+        nonModelSnapshot.Engine.Messages.Add(transcriptService.CreateOperatorMessage("Operator direction.", 1));
+        nonModelSnapshot.Engine.Messages.Add(transcriptService.CreateInternetToolMessage(
+            new InternetToolRequest
+            {
+                Tool = "search",
+                Query = "bounded test query",
+                RequesterId = "alpha"
+            },
+            new InternetToolResult
+            {
+                Ok = false,
+                Tool = "search",
+                Error = "Synthetic tool failure.",
+                CheckedAt = DateTimeOffset.UnixEpoch
+            },
+            2));
+        nonModelSnapshot.Engine.TurnCount = 2;
+        var nonModel = service.Capture("non-model-records", nonModelSnapshot, DateTimeOffset.UnixEpoch);
+        var nonModelQa = service.EvaluateQa(nonModel);
+        Require(nonModel.Evidence.TranscriptMessages == 2
+            && nonModel.Evidence.TranscriptErrors == 1
+            && nonModel.Evidence.ModelTurns == 0
+            && nonModel.Evidence.ProviderErrors == 0,
+            "operator and failed Internet-tool records must not become provider-backed model-turn evidence");
+        Require(nonModelQa.Gates.Single(gate => gate.Id == "run.minimum-turn-sample").Status == ArenaQaGateStatuses.Unavailable
+            && nonModelQa.Gates.Single(gate => gate.Id == "runtime.provider-errors").Status == ArenaQaGateStatuses.Unavailable
+            && nonModelQa.Gates.Single(gate => gate.Id == "runtime.transcript-errors").Status == ArenaQaGateStatuses.Fail,
+            "non-model records should leave model gates unavailable while retaining an observed transcript error");
 
         var healthy = service.Capture(
             "healthy",
@@ -467,6 +518,13 @@ internal static partial class Program
             Delta = null,
             Explanation = "No telemetry samples."
         };
+        var unavailableZeroCount = unavailable with
+        {
+            Label = "Failed model turns",
+            BaselineValue = 0,
+            CandidateValue = 0,
+            Explanation = "At least two model turns are required in each run."
+        };
         var models = new[]
         {
             new ArenaEvaluationModelAggregate("model-a", 3, 3, 0, 900, 1000, 120, 31.25)
@@ -489,6 +547,9 @@ internal static partial class Program
         Require(ArenaEvaluationPresentation.FormatMetric(unavailable).StartsWith("—", StringComparison.Ordinal)
             && ArenaEvaluationPresentation.FormatMetric(unavailable).Contains("unavailable", StringComparison.OrdinalIgnoreCase),
             "missing model evidence should stay visibly unavailable without a zero placeholder");
+        Require(ArenaEvaluationPresentation.FormatMetric(unavailableZeroCount).Contains("unavailable", StringComparison.OrdinalIgnoreCase)
+            && !ArenaEvaluationPresentation.FormatMetric(unavailableZeroCount).Contains("0 → 0", StringComparison.Ordinal),
+            "numeric placeholders on an unavailable metric must not look like an observed comparison");
         Require(ArenaEvaluationPresentation.FormatModels(models).Contains("model-a", StringComparison.Ordinal)
             && ArenaEvaluationPresentation.FormatModels(models).Contains("31", StringComparison.Ordinal)
             && ArenaEvaluationPresentation.FormatModels(models).Contains("tok/s", StringComparison.Ordinal),
@@ -586,7 +647,9 @@ internal static partial class Program
         int? contextLength = null,
         string? reasoning = null,
         bool? nativeStatefulChat = null,
-        int? nativeIdleTtlSeconds = null)
+        int? nativeIdleTtlSeconds = null,
+        string? lastError = null,
+        bool? lastTestOk = null)
     {
         return new ModelProviderConfig
         {
@@ -602,9 +665,9 @@ internal static partial class Program
             NativeStatefulChat = nativeStatefulChat ?? source.NativeStatefulChat,
             NativeIdleTtlSeconds = nativeIdleTtlSeconds ?? source.NativeIdleTtlSeconds,
             PreviousResponseId = source.PreviousResponseId,
-            LastError = source.LastError,
+            LastError = lastError ?? source.LastError,
             LastLatencyMs = source.LastLatencyMs,
-            LastTestOk = source.LastTestOk,
+            LastTestOk = lastTestOk ?? source.LastTestOk,
             Extra = source.Extra
         };
     }

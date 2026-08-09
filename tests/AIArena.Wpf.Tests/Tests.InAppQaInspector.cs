@@ -311,6 +311,9 @@ internal static partial class Program
 
     static void QaInspectorAcceptanceRequiresCurrentVerifiedVisualEvidence()
     {
+        VerifyQaInspectorDefaultsToNewestCurrentEvidence();
+        VerifyQaInspectorSerializesAcceptanceAndPickerRefresh();
+
         RunStaTest(() =>
         {
             WithQaRoot(root =>
@@ -543,6 +546,149 @@ internal static partial class Program
                     Require(!InAppQaInspectorCoordinator.IsInspectionAcceptanceReady(tamperedSnapshot, completedReview),
                         "required limitation semantic tamper enabled acceptance");
                 }
+            });
+        });
+    }
+
+    private static void VerifyQaInspectorSerializesAcceptanceAndPickerRefresh()
+    {
+        RunStaTest(() =>
+        {
+            WithQaRoot(root =>
+            {
+                var acceptedBundle = CreateAcceptanceReadyBundle(root, "acceptance-race-a");
+                var requestedBundle = CreateAcceptanceReadyBundle(root, "acceptance-race-b");
+                File.SetLastWriteTimeUtc(acceptedBundle.EvidencePath, new DateTime(2026, 8, 9, 15, 30, 0, DateTimeKind.Utc));
+                File.SetLastWriteTimeUtc(requestedBundle.EvidencePath, new DateTime(2026, 8, 9, 15, 29, 0, DateTimeKind.Utc));
+                var runner = new BlockingQaAcceptanceRunner();
+                var control = new InAppQaInspectorControl();
+                using var coordinator = new InAppQaInspectorCoordinator(
+                    control,
+                    root,
+                    new FakeQaCurrentnessValidator(QaCurrentnessResult.Current()),
+                    new FakeQaSuiteRunner(),
+                    runner,
+                    new FakeQaClipboard(),
+                    () => true);
+
+                QaEvidenceLoadResult? loaded = null;
+                RunExperimentDispatcherTask(async () => loaded = await coordinator.RefreshAsync(acceptedBundle.RelativeEvidencePath));
+                var screenshots = loaded?.Snapshot?.Artifacts
+                    .Where(item => item.Artifact.Kind == "rendered-ui-screenshot")
+                    .OrderBy(item => item.Artifact.Id, StringComparer.Ordinal)
+                    .ToArray()
+                    ?? throw new InvalidOperationException("Acceptance race fixture did not load its screenshots.");
+                foreach (var screenshot in screenshots)
+                {
+                    RunExperimentDispatcherTask(() => coordinator.SelectScreenshotAsync(screenshot.Artifact.Id));
+                }
+                Require(control.AcceptInspectionButton.IsEnabled,
+                    "acceptance race fixture did not reach an acceptance-ready state");
+
+                var acceptanceTask = coordinator.AcceptInspectionAsync();
+                RunExperimentDispatcherTask(() => runner.Started.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+                Require(!acceptanceTask.IsCompleted
+                    && !control.RefreshEvidenceButton.IsEnabled
+                    && !control.EvidenceRunPicker.IsEnabled
+                    && !control.AcceptInspectionButton.IsEnabled,
+                    "acceptance did not disable every evidence-selection action before invoking the authoritative runner");
+
+                var requestedChoice = control.EvidenceRunPicker.Items
+                    .Cast<QaEvidenceChoice>()
+                    .Single(choice => choice.RelativePath == requestedBundle.RelativeEvidencePath);
+                control.EvidenceRunPicker.SelectedItem = requestedChoice;
+                var selectionTask = control.EvidenceSelectionRefreshTask
+                    ?? throw new InvalidOperationException("The explicit picker event did not route a refresh request.");
+                Require(!selectionTask.IsCompleted,
+                    "an explicit picker refresh interleaved with the in-flight acceptance boundary");
+
+                runner.Release();
+                QaAcceptanceResult? accepted = null;
+                QaEvidenceLoadResult? selected = null;
+                RunExperimentDispatcherTask(async () =>
+                {
+                    accepted = await acceptanceTask.WaitAsync(TimeSpan.FromSeconds(2));
+                    selected = await selectionTask.WaitAsync(TimeSpan.FromSeconds(2));
+                });
+                Require(accepted?.State == QaInspectorState.Pass
+                    && runner.CallCount == 1
+                    && selected?.Snapshot?.RelativeEvidencePath == requestedBundle.RelativeEvidencePath
+                    && control.SelectedEvidencePath == requestedBundle.RelativeEvidencePath
+                    && control.InspectionText.Text.StartsWith("Not accepted", StringComparison.Ordinal)
+                    && control.RefreshEvidenceButton.IsEnabled
+                    && control.EvidenceRunPicker.IsEnabled,
+                    "acceptance reloaded its completed bundle over a queued explicit picker request");
+            });
+        });
+    }
+
+    private static void VerifyQaInspectorDefaultsToNewestCurrentEvidence()
+    {
+        RunStaTest(() =>
+        {
+            WithQaRoot(root =>
+            {
+                var stale = CreateAcceptanceReadyBundle(root, "20260809t074706z-934b048b");
+                var current = CreateAcceptanceReadyBundle(root, "experimentation-platform-final-20260809-02");
+                File.SetLastWriteTimeUtc(stale.EvidencePath, new DateTime(2026, 8, 9, 8, 6, 47, DateTimeKind.Utc));
+                File.SetLastWriteTimeUtc(current.EvidencePath, new DateTime(2026, 8, 9, 15, 27, 22, DateTimeKind.Utc));
+
+                var currentness = new FakeQaCurrentnessValidator(path =>
+                    path.Equals(current.EvidencePath, StringComparison.OrdinalIgnoreCase)
+                        ? QaCurrentnessResult.Current()
+                        : QaCurrentnessResult.Stale());
+                var repository = new QaEvidenceRepository(root, currentness);
+                var choices = repository.ListAsync().GetAwaiter().GetResult();
+                Require(choices.Select(choice => choice.RelativePath).SequenceEqual(
+                        [current.RelativeEvidencePath, stale.RelativeEvidencePath],
+                        StringComparer.Ordinal),
+                    "QA evidence discovery did not order the newest completed local bundle first");
+
+                var control = new InAppQaInspectorControl();
+                using var coordinator = new InAppQaInspectorCoordinator(
+                    control,
+                    root,
+                    currentness,
+                    new FakeQaSuiteRunner(),
+                    new FakeQaAcceptanceRunner(),
+                    new FakeQaClipboard(),
+                    () => true);
+                control.SetEvidenceChoices(choices, stale.RelativeEvidencePath);
+                Require(control.SelectedEvidencePath == stale.RelativeEvidencePath,
+                    "QA latest-selection fixture did not begin on the historical bundle");
+
+                QaEvidenceLoadResult? loaded = null;
+                RunExperimentDispatcherTask(async () => loaded = await coordinator.InitializeAsync());
+                Require(loaded?.Snapshot?.RelativeEvidencePath == current.RelativeEvidencePath
+                    && loaded.Snapshot.Currentness.State == QaInspectorState.Pass
+                    && loaded.Snapshot.Artifacts.Count(item => item.Artifact.Kind == "rendered-ui-screenshot") == 2
+                    && control.SelectedEvidencePath == current.RelativeEvidencePath,
+                    "QA Inspector initialization retained a stale picker selection instead of loading and selecting the newest current visual bundle");
+
+                RunExperimentDispatcherTask(async () => loaded = await coordinator.RefreshAsync(stale.RelativeEvidencePath));
+                Require(loaded?.State == QaInspectorState.Blocked
+                    && loaded.Code == "stale"
+                    && loaded.Snapshot?.Currentness.State == QaInspectorState.Blocked
+                    && control.SelectedEvidencePath == stale.RelativeEvidencePath,
+                    "an explicitly selected historical QA bundle bypassed current-tree validation");
+
+                RunExperimentDispatcherTask(async () => loaded = await coordinator.RefreshAsync());
+                Require(loaded?.Snapshot?.RelativeEvidencePath == current.RelativeEvidencePath
+                    && loaded.Snapshot.Currentness.State == QaInspectorState.Pass
+                    && control.SelectedEvidencePath == current.RelativeEvidencePath,
+                    "QA Inspector latest refresh did not recover from an explicitly selected stale bundle");
+
+                RunExperimentDispatcherTask(async () => loaded = await coordinator.RefreshAsync("artifacts/qa/not-indexed/qa-evidence.json"));
+                Require(loaded?.State == QaInspectorState.Blocked
+                    && loaded.Code == "qa.evidence_not_indexed"
+                    && loaded.Snapshot is null
+                    && control.SelectedEvidencePath is null,
+                    "QA Inspector loaded or visually substituted an evidence path absent from its bounded index");
+
+                var controlSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/InAppQaInspectorControl.xaml.cs"));
+                Require(controlSource.Contains("coordinator.RefreshAsync();", StringComparison.Ordinal)
+                    && controlSource.Contains("EvidenceRunPicker_SelectionChanged", StringComparison.Ordinal),
+                    "QA Inspector refresh no longer targets latest evidence or explicit picker selection is not wired");
             });
         });
     }
@@ -1029,14 +1175,26 @@ internal static partial class Program
 
     private sealed record QaBundleFixture(string RelativeEvidencePath, string EvidencePath);
 
-    private sealed class FakeQaCurrentnessValidator(QaCurrentnessResult result) : IQaEvidenceCurrentnessValidator
+    private sealed class FakeQaCurrentnessValidator : IQaEvidenceCurrentnessValidator
     {
+        private readonly Func<string, QaCurrentnessResult> resultForPath;
+
+        internal FakeQaCurrentnessValidator(QaCurrentnessResult result)
+            : this(_ => result)
+        {
+        }
+
+        internal FakeQaCurrentnessValidator(Func<string, QaCurrentnessResult> resultForPath)
+        {
+            this.resultForPath = resultForPath ?? throw new ArgumentNullException(nameof(resultForPath));
+        }
+
         public int CallCount { get; private set; }
 
         public Task<QaCurrentnessResult> ValidateAsync(string evidencePath, string repositoryRoot, CancellationToken cancellationToken)
         {
             CallCount++;
-            return Task.FromResult(result);
+            return Task.FromResult(resultForPath(evidencePath));
         }
     }
 
@@ -1080,6 +1238,30 @@ internal static partial class Program
             ReviewedManifestSha256 = reviewedManifestSha256;
             onAccept?.Invoke(evidencePath);
             return Task.FromResult(new QaAcceptanceResult(QaInspectorState.Pass, "qa.acceptance_recorded", "Accepted."));
+        }
+    }
+
+    private sealed class BlockingQaAcceptanceRunner : IQaInspectionAcceptanceRunner
+    {
+        private readonly TaskCompletionSource<bool> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal int CallCount { get; private set; }
+
+        internal void Release() => release.TrySetResult(true);
+
+        public async Task<QaAcceptanceResult> AcceptAsync(
+            string evidencePath,
+            string repositoryRoot,
+            string reviewedManifestPath,
+            string reviewedManifestSha256,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            Started.TrySetResult(true);
+            await release.Task.WaitAsync(cancellationToken);
+            SealQaEvidenceFile(evidencePath);
+            return new(QaInspectorState.Pass, "qa.acceptance_recorded", "Accepted.");
         }
     }
 

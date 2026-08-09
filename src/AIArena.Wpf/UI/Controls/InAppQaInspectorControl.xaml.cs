@@ -11,12 +11,15 @@ public partial class InAppQaInspectorControl : UserControl
 {
     internal const double CompactLayoutThreshold = 760;
     private InAppQaInspectorCoordinator? coordinator;
+    private bool suppressEvidenceSelection;
     private bool suppressArtifactSelection;
     private bool readOnlyMode;
+    private Task<QaEvidenceLoadResult>? evidenceSelectionRefreshTask;
 
     public InAppQaInspectorControl()
     {
         InitializeComponent();
+        EvidenceRunPicker.SelectionChanged += EvidenceRunPicker_SelectionChanged;
     }
 
     public ExperimentLabFeatureRegistration FeatureRegistration => new(
@@ -49,13 +52,23 @@ public partial class InAppQaInspectorControl : UserControl
 
     internal void SetEvidenceChoices(IReadOnlyList<QaEvidenceChoice> choices, string? selectedRelativePath)
     {
-        var prior = selectedRelativePath ?? (EvidenceRunPicker.SelectedItem as QaEvidenceChoice)?.RelativePath;
-        EvidenceRunPicker.ItemsSource = choices;
-        EvidenceRunPicker.SelectedItem = choices.FirstOrDefault(item => item.RelativePath.Equals(prior, StringComparison.Ordinal))
-            ?? choices.FirstOrDefault();
+        suppressEvidenceSelection = true;
+        try
+        {
+            EvidenceRunPicker.ItemsSource = choices;
+            EvidenceRunPicker.SelectedItem = selectedRelativePath is null
+                ? choices.FirstOrDefault()
+                : choices.FirstOrDefault(item => item.RelativePath.Equals(selectedRelativePath, StringComparison.Ordinal));
+        }
+        finally
+        {
+            suppressEvidenceSelection = false;
+        }
     }
 
     internal string? SelectedEvidencePath => (EvidenceRunPicker.SelectedItem as QaEvidenceChoice)?.RelativePath;
+
+    internal Task<QaEvidenceLoadResult>? EvidenceSelectionRefreshTask => evidenceSelectionRefreshTask;
 
     internal QaLocalSuite? SelectedSuite => (SuitePicker.SelectedItem as QaSuiteDefinition)?.Id;
 
@@ -271,7 +284,18 @@ public partial class InAppQaInspectorControl : UserControl
 
     private async void RefreshEvidenceButton_Click(object sender, RoutedEventArgs e)
     {
-        if (coordinator is not null) await coordinator.RefreshAsync(SelectedEvidencePath);
+        if (coordinator is not null) await coordinator.RefreshAsync();
+    }
+
+    private async void EvidenceRunPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!suppressEvidenceSelection
+            && coordinator is not null
+            && SelectedEvidencePath is { } selectedEvidencePath)
+        {
+            evidenceSelectionRefreshTask = coordinator.RefreshAsync(selectedEvidencePath);
+            await evidenceSelectionRefreshTask;
+        }
     }
 
     private async void RunSuiteButton_Click(object sender, RoutedEventArgs e)

@@ -1491,58 +1491,8 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
         await operationGate.WaitAsync(linked.Token).ConfigureAwait(false);
         try
         {
-            await view.Dispatcher.InvokeAsync(() =>
-            {
-                view.SetAcceptanceAvailable(false);
-                view.SetEvidenceBusy(true);
-                view.SetPreview(null);
-                view.SetReviewProgress(0, 0, 0);
-            });
-            await reviewGate.WaitAsync(linked.Token).ConfigureAwait(false);
-            try
-            {
-                ResetReviewState(current, deleteManifest: !readOnlyPreserveReviews);
-                current = null;
-            }
-            finally
-            {
-                reviewGate.Release();
-            }
-            IReadOnlyList<QaEvidenceChoice> choices;
-            try
-            {
-                choices = await repository.ListAsync(linked.Token).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-            {
-                choices = [];
-            }
-            await view.Dispatcher.InvokeAsync(() => view.SetEvidenceChoices(choices, relativeEvidencePath));
-            var requested = string.IsNullOrWhiteSpace(relativeEvidencePath)
-                ? choices.FirstOrDefault()?.RelativePath
-                : relativeEvidencePath;
-            var result = requested is null
-                ? QaEvidenceLoadResult.Unavailable("qa.evidence_absent", "No local QA evidence bundle is available.")
-                : await repository.LoadAsync(requested, linked.Token).ConfigureAwait(false);
-            await reviewGate.WaitAsync(linked.Token).ConfigureAwait(false);
-            try
-            {
-                current = result.Snapshot;
-                ResetReviewState(current, deleteManifest: !readOnlyPreserveReviews);
-            }
-            finally
-            {
-                reviewGate.Release();
-            }
-            var presentation = QaInspectorPresentation.Create(result);
-            await view.Dispatcher.InvokeAsync(() =>
-            {
-                view.ApplyPresentation(presentation);
-                view.SetPreview(null);
-                view.SetReviewProgress(0, CountScreenshots(result.Snapshot), CountUnacceptedLimitations(result.Snapshot));
-                view.SetAcceptanceAvailable(false);
-            });
-            return result;
+            await view.Dispatcher.InvokeAsync(() => view.SetEvidenceBusy(true));
+            return await RefreshCoreAsync(relativeEvidencePath, linked.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (linked.IsCancellationRequested)
         {
@@ -1555,6 +1505,67 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
             await view.Dispatcher.InvokeAsync(() => view.SetEvidenceBusy(false));
             operationGate.Release();
         }
+    }
+
+    private async Task<QaEvidenceLoadResult> RefreshCoreAsync(
+        string? relativeEvidencePath,
+        CancellationToken cancellationToken)
+    {
+        await view.Dispatcher.InvokeAsync(() =>
+        {
+            view.SetAcceptanceAvailable(false);
+            view.SetPreview(null);
+            view.SetReviewProgress(0, 0, 0);
+        });
+        await reviewGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ResetReviewState(current, deleteManifest: !readOnlyPreserveReviews);
+            current = null;
+        }
+        finally
+        {
+            reviewGate.Release();
+        }
+        IReadOnlyList<QaEvidenceChoice> choices;
+        try
+        {
+            choices = await repository.ListAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            choices = [];
+        }
+        var explicitlyRequested = !string.IsNullOrWhiteSpace(relativeEvidencePath);
+        var requested = explicitlyRequested
+            ? choices.FirstOrDefault(choice => choice.RelativePath.Equals(relativeEvidencePath, StringComparison.Ordinal))?.RelativePath
+            : choices.FirstOrDefault()?.RelativePath;
+        var pickerSelection = explicitlyRequested ? relativeEvidencePath : requested;
+        await view.Dispatcher.InvokeAsync(() => view.SetEvidenceChoices(choices, pickerSelection));
+        var result = requested is null
+            ? explicitlyRequested
+                ? QaEvidenceLoadResult.Blocked("qa.evidence_not_indexed", "The selected QA evidence bundle is not present in the bounded local index.")
+                : QaEvidenceLoadResult.Unavailable("qa.evidence_absent", "No local QA evidence bundle is available.")
+            : await repository.LoadAsync(requested, cancellationToken).ConfigureAwait(false);
+        await reviewGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            current = result.Snapshot;
+            ResetReviewState(current, deleteManifest: !readOnlyPreserveReviews);
+        }
+        finally
+        {
+            reviewGate.Release();
+        }
+        var presentation = QaInspectorPresentation.Create(result);
+        await view.Dispatcher.InvokeAsync(() =>
+        {
+            view.ApplyPresentation(presentation);
+            view.SetPreview(null);
+            view.SetReviewProgress(0, CountScreenshots(result.Snapshot), CountUnacceptedLimitations(result.Snapshot));
+            view.SetAcceptanceAvailable(false);
+        });
+        return result;
     }
 
     internal async Task<QaSuiteRunResult> RunSuiteAsync(QaLocalSuite suite, CancellationToken cancellationToken = default)
@@ -1775,42 +1786,42 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
             return readOnly;
         }
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
-        await reviewGate.WaitAsync(linked.Token).ConfigureAwait(false);
-        QaEvidenceSnapshot? snapshot;
-        QaInspectionReviewHandle? reviewed;
+        await operationGate.WaitAsync(linked.Token).ConfigureAwait(false);
         try
         {
-            snapshot = current;
-            reviewed = reviewHandle;
-            if (snapshot is null
-                || reviewed is null
-                || !IsInspectionAcceptanceReady(snapshot, reviewed.Manifest)
-                || !await repository.ReviewBindingIsCurrentAsync(snapshot, verifyArtifactHashes: true, linked.Token).ConfigureAwait(false))
+            await view.Dispatcher.InvokeAsync(() => view.SetEvidenceBusy(true));
+            await reviewGate.WaitAsync(linked.Token).ConfigureAwait(false);
+            QaEvidenceSnapshot? snapshot;
+            QaInspectionReviewHandle? reviewed;
+            try
             {
-                ResetReviewState(snapshot, deleteManifest: true);
-                var rejected = new QaAcceptanceResult(QaInspectorState.Blocked, "qa.acceptance_preconditions", "Inspection acceptance is unavailable until every current screenshot has been explicitly previewed and the exact hash-bound review manifest is complete.");
-                await view.Dispatcher.InvokeAsync(() =>
+                snapshot = current;
+                reviewed = reviewHandle;
+                if (snapshot is null
+                    || reviewed is null
+                    || !IsInspectionAcceptanceReady(snapshot, reviewed.Manifest)
+                    || !await repository.ReviewBindingIsCurrentAsync(snapshot, verifyArtifactHashes: true, linked.Token).ConfigureAwait(false))
                 {
-                    view.SetReviewProgress(0, CountScreenshots(snapshot), CountUnacceptedLimitations(snapshot));
-                    view.SetAcceptanceAvailable(false);
-                    view.SetStatus(rejected.Summary);
-                });
-                return rejected;
+                    ResetReviewState(snapshot, deleteManifest: true);
+                    var rejected = new QaAcceptanceResult(QaInspectorState.Blocked, "qa.acceptance_preconditions", "Inspection acceptance is unavailable until every current screenshot has been explicitly previewed and the exact hash-bound review manifest is complete.");
+                    await view.Dispatcher.InvokeAsync(() =>
+                    {
+                        view.SetReviewProgress(0, CountScreenshots(snapshot), CountUnacceptedLimitations(snapshot));
+                        view.SetAcceptanceAvailable(false);
+                        view.SetStatus(rejected.Summary);
+                    });
+                    return rejected;
+                }
             }
-        }
-        finally
-        {
-            reviewGate.Release();
-        }
+            finally
+            {
+                reviewGate.Release();
+            }
 
-        if (snapshot is null || reviewed is null)
-        {
-            throw new InvalidOperationException("qa.acceptance_state");
-        }
-
-        await view.Dispatcher.InvokeAsync(() => view.SetEvidenceBusy(true));
-        try
-        {
+            if (snapshot is null || reviewed is null)
+            {
+                throw new InvalidOperationException("qa.acceptance_state");
+            }
             var result = await acceptanceRunner.AcceptAsync(
                 snapshot.EvidencePath,
                 repository.RepositoryRoot,
@@ -1820,13 +1831,14 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
             await view.Dispatcher.InvokeAsync(() => view.SetStatus(result.Summary));
             if (result.State == QaInspectorState.Pass)
             {
-                await RefreshAsync(snapshot.RelativeEvidencePath, linked.Token).ConfigureAwait(false);
+                await RefreshCoreAsync(snapshot.RelativeEvidencePath, linked.Token).ConfigureAwait(false);
             }
             return result;
         }
         finally
         {
             await view.Dispatcher.InvokeAsync(() => view.SetEvidenceBusy(false));
+            operationGate.Release();
         }
     }
 

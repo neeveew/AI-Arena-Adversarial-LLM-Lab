@@ -6,6 +6,9 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Media;
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
 using AIArena.Core.Providers;
@@ -94,6 +97,8 @@ internal static partial class Program
         RunStaTest(() =>
         {
             var control = new ExperimentLabControl();
+            AttachArenaPresentationResources(control);
+            ApplyExperimentSurfaceTheme(control, ThemePalette.Resolve("dark-blue"));
             var keys = control.RegisteredFeatures.Select(item => item.Key).ToArray();
             Require(keys.SequenceEqual(["matrix", "fork", "packs", "rubrics", "claims"]), "Experiment Lab exposed missing or unavailable feature placeholders");
             Require(control.RegisteredFeatures.All(item => item.Content is not null && !string.IsNullOrWhiteSpace(item.HelpText)), "registered feature lacks content or accessible help");
@@ -107,22 +112,391 @@ internal static partial class Program
                 Height = 640,
                 ShowInTaskbar = false,
                 WindowStyle = WindowStyle.None,
-                Opacity = 0
+                Opacity = 0,
+                Left = -10000,
+                Top = -10000
             };
             host.Show();
             try
             {
                 host.Activate();
+                host.UpdateLayout();
+                foreach (var themeId in new[] { "dark-blue", "light", "high-contrast" })
+                {
+                    var theme = ThemePalette.Resolve(themeId);
+                    ApplyExperimentSurfaceTheme(control, theme);
+                    AssertExperimentSurfaceThemeChrome(control, host, theme);
+                }
                 Require(control.FocusFeatureSelector(), "feature selector was not keyboard focusable when hosted");
             }
             finally
             {
+                control.MatrixDimensionParameterPicker.IsDropDownOpen = false;
                 host.Close();
             }
+            AssertQaArtifactThemeChrome();
+            AssertPaletteAwareFocusVisualContract();
             RequireExperimentThrows<InvalidOperationException>(
                 () => control.RegisterFeature(control.RegisteredFeatures[0]),
                 "duplicate feature key was accepted");
         });
+    }
+
+    static void AssertExperimentSurfaceThemeChrome(
+        ExperimentLabControl control,
+        Window host,
+        ThemePalette theme)
+    {
+        control.MatrixBenchmarkPicker.IsEnabled = false;
+        control.ExecuteMatrixButton.IsEnabled = false;
+        control.MatrixRetryApprovedCheckBox.IsEnabled = false;
+        control.MatrixDimensionParameterPicker.IsDropDownOpen = true;
+        host.UpdateLayout();
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+            System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+            new Action(() => { }));
+
+        var picker = control.MatrixDimensionParameterPicker;
+        var popup = RequireExperimentTemplatePart<Popup>(picker, "PART_Popup");
+        Require(popup.IsOpen
+                && popup.Child is Border dropDown
+                && ExperimentBrushMatches(dropDown.Background, theme.Input)
+                && ExperimentBrushMatches(dropDown.BorderBrush, theme.Border),
+            $"Experiment dimension popup did not consume the {theme.Id} input palette");
+
+        var selectedComboItem = picker.Items[1] as ComboBoxItem
+            ?? throw new InvalidOperationException("Experiment dimension selection was not a ComboBoxItem.");
+        var selectedComboChrome = RequireExperimentTemplatePart<Border>(selectedComboItem, "ItemChrome");
+        Require(ExperimentBrushMatches(selectedComboChrome.Background, theme.Primary),
+            $"Experiment dimension item did not consume the {theme.Id} selected palette");
+
+        var benchmarkToggle = RequireExperimentTemplatePart<ToggleButton>(control.MatrixBenchmarkPicker, "DropDownToggle");
+        var benchmarkChrome = RequireExperimentTemplatePart<Border>(benchmarkToggle, "ToggleChrome");
+        Require(ExperimentBrushMatches(benchmarkChrome.Background, theme.Disabled)
+                && ExperimentBrushMatches(benchmarkChrome.BorderBrush, theme.DisabledBorder)
+                && ExperimentBrushMatches(control.MatrixBenchmarkPicker.Foreground, theme.DisabledText),
+            $"Disabled benchmark picker did not consume the {theme.Id} disabled palette");
+
+        var runButtonChrome = RequireExperimentTemplatePart<Border>(control.ExecuteMatrixButton, "Chrome");
+        Require(ExperimentBrushMatches(runButtonChrome.Background, theme.Disabled)
+                && ExperimentBrushMatches(runButtonChrome.BorderBrush, theme.DisabledBorder)
+                && ExperimentBrushMatches(control.ExecuteMatrixButton.Foreground, theme.DisabledText),
+            $"Disabled matrix action did not consume the {theme.Id} disabled palette");
+
+        var retryBox = RequireExperimentTemplatePart<Border>(control.MatrixRetryApprovedCheckBox, "Box");
+        Require(ExperimentBrushMatches(retryBox.Background, theme.Disabled)
+                && ExperimentBrushMatches(retryBox.BorderBrush, theme.DisabledBorder)
+                && ExperimentBrushMatches(control.MatrixRetryApprovedCheckBox.Foreground, theme.DisabledText),
+            $"Disabled retry approval did not consume the {theme.Id} disabled palette");
+
+        var featureViewport = RequireExperimentTemplatePart<Border>(control.FeatureSelector, "ListViewport");
+        var featureScrollHost = RequireExperimentTemplatePart<ScrollViewer>(control.FeatureSelector, "ScrollHost");
+        var selectedFeature = control.FeatureSelector.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem
+            ?? throw new InvalidOperationException("Experiment feature selector did not realize its selected item.");
+        var selectedFeatureChrome = RequireExperimentTemplatePart<Border>(selectedFeature, "ItemChrome");
+        Require(ExperimentBrushMatches(featureViewport.Background, Colors.Transparent)
+                && ExperimentBrushMatches(featureScrollHost.Background, Colors.Transparent)
+                && ExperimentBrushMatches(control.FeatureSelectorFrame.Background, theme.Panel)
+                && ExperimentBrushMatches(selectedFeatureChrome.Background, theme.NavActive)
+                && ExperimentBrushMatches(selectedFeatureChrome.BorderBrush, theme.PrimaryBorder),
+            $"Experiment feature selector fell through to native list chrome under {theme.Id}");
+
+        picker.IsDropDownOpen = false;
+        control.MatrixBenchmarkPicker.IsEnabled = true;
+        FocusExperimentControl(control.MatrixBenchmarkPicker, host, theme.Id);
+        AssertExperimentFocusChrome(
+            RequireExperimentTemplatePart<Border>(benchmarkToggle, "ToggleChrome"),
+            theme,
+            "matrix benchmark picker");
+
+        FocusExperimentControl(control.ValidateMatrixButton, host, theme.Id);
+        AssertExperimentFocusChrome(
+            RequireExperimentTemplatePart<Border>(control.ValidateMatrixButton, "Chrome"),
+            theme,
+            "primary matrix action");
+
+        control.MatrixRetryApprovedCheckBox.IsEnabled = true;
+        FocusExperimentControl(control.MatrixRetryApprovedCheckBox, host, theme.Id);
+        AssertExperimentFocusChrome(
+            RequireExperimentTemplatePart<Border>(control.MatrixRetryApprovedCheckBox, "Box"),
+            theme,
+            "matrix retry approval");
+
+        FocusExperimentControl(control.FeatureSelector, host, theme.Id);
+        AssertExperimentFocusChrome(featureViewport, theme, "feature list", theme.Panel);
+        FocusExperimentControl(selectedFeature, host, theme.Id);
+        AssertExperimentFocusChrome(selectedFeatureChrome, theme, "feature list item");
+    }
+
+    static void AssertQaArtifactThemeChrome()
+    {
+        var control = new InAppQaInspectorControl();
+        AttachArenaPresentationResources(control);
+        ApplyExperimentSurfaceTheme(control, ThemePalette.Resolve("dark-blue"));
+        foreach (var index in Enumerable.Range(0, 600))
+        {
+            control.GateList.Items.Add($"gate:theme-regression:{index}");
+            control.ArtifactList.Items.Add($"artifact:theme-regression:{index}");
+        }
+        control.GateList.MaxHeight = 180;
+        control.ArtifactList.MaxHeight = 180;
+        control.ArtifactList.SelectedIndex = 0;
+        var host = new Window
+        {
+            Content = control,
+            Width = 960,
+            Height = 700,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+            Opacity = 0,
+            Left = -10000,
+            Top = -10000
+        };
+        host.Show();
+        try
+        {
+            host.Activate();
+            control.EvidenceTabs.SelectedIndex = 1;
+            host.UpdateLayout();
+            AssertExperimentListVirtualization(control.GateList, host, "QA gate inventory");
+            control.EvidenceTabs.SelectedIndex = 3;
+            host.UpdateLayout();
+            AssertExperimentListVirtualization(control.ArtifactList, host, "QA artifact inventory");
+            foreach (var themeId in new[] { "dark-blue", "light", "high-contrast" })
+            {
+                var theme = ThemePalette.Resolve(themeId);
+                ApplyExperimentSurfaceTheme(control, theme);
+                host.UpdateLayout();
+                var viewport = RequireExperimentTemplatePart<Border>(control.ArtifactList, "ListViewport");
+                var scrollHost = RequireExperimentTemplatePart<ScrollViewer>(control.ArtifactList, "ScrollHost");
+                var selectedArtifact = control.ArtifactList.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem
+                    ?? throw new InvalidOperationException("QA artifact inventory did not realize its selected item.");
+                var selectedArtifactChrome = RequireExperimentTemplatePart<Border>(selectedArtifact, "ItemChrome");
+                Require(ExperimentBrushMatches(viewport.Background, Colors.Transparent)
+                        && ExperimentBrushMatches(scrollHost.Background, Colors.Transparent)
+                        && ExperimentBrushMatches(control.ArtifactListPane.Background, theme.Card)
+                        && ExperimentBrushMatches(selectedArtifactChrome.Background, theme.NavActive)
+                        && ExperimentBrushMatches(selectedArtifactChrome.BorderBrush, theme.PrimaryBorder),
+                    $"QA artifact inventory fell through to native list chrome under {theme.Id}");
+
+                FocusExperimentControl(control.ArtifactList, host, theme.Id);
+                AssertExperimentFocusChrome(viewport, theme, "QA artifact list", theme.Card);
+                FocusExperimentControl(selectedArtifact, host, theme.Id);
+                AssertExperimentFocusChrome(selectedArtifactChrome, theme, "QA artifact list item");
+            }
+        }
+        finally
+        {
+            host.Close();
+        }
+    }
+
+    static void AssertExperimentListVirtualization(ListBox list, Window host, string label)
+    {
+        list.ApplyTemplate();
+        var declaredPanel = list.ItemsPanel.LoadContent();
+        var realizedPanel = FindExperimentVisualDescendant<VirtualizingStackPanel>(list);
+        var initialRealizedCount = Enumerable.Range(0, list.Items.Count)
+            .Count(index => list.ItemContainerGenerator.ContainerFromIndex(index) is ListBoxItem);
+        Require(declaredPanel is VirtualizingStackPanel
+                && realizedPanel is not null
+                && VirtualizingPanel.GetIsVirtualizing(list)
+                && VirtualizingPanel.GetVirtualizationMode(list) == VirtualizationMode.Recycling
+                && list.ItemContainerGenerator.ContainerFromIndex(0) is ListBoxItem
+                && initialRealizedCount > 0
+                && initialRealizedCount < list.Items.Count,
+            $"{label} did not retain a realized recycling VirtualizingStackPanel");
+
+        var lastIndex = list.Items.Count - 1;
+        list.SelectedIndex = lastIndex;
+        list.ScrollIntoView(list.Items[lastIndex]);
+        host.UpdateLayout();
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+            System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+            new Action(() => { }));
+        var lastContainer = list.ItemContainerGenerator.ContainerFromIndex(lastIndex) as ListBoxItem;
+        var scrolledRealizedCount = Enumerable.Range(0, list.Items.Count)
+            .Count(index => list.ItemContainerGenerator.ContainerFromIndex(index) is ListBoxItem);
+        Require(lastContainer is not null
+                && list.SelectedIndex == lastIndex
+                && ReferenceEquals(list.SelectedItem, list.Items[lastIndex])
+                && lastContainer.Focus()
+                && lastContainer.IsKeyboardFocusWithin
+                && list.IsKeyboardFocusWithin
+                && scrolledRealizedCount > 0
+                && scrolledRealizedCount < list.Items.Count,
+            $"{label} did not preserve bounded realization, selection, and item focus after scrolling to the final row");
+
+        list.SelectedIndex = 0;
+        list.ScrollIntoView(list.Items[0]);
+        host.UpdateLayout();
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+            System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+            new Action(() => { }));
+        Require(list.ItemContainerGenerator.ContainerFromIndex(0) is ListBoxItem
+                && list.SelectedIndex == 0,
+            $"{label} did not preserve selection while returning to the first virtualized row");
+    }
+
+    static void FocusExperimentControl(Control control, Window host, string themeId)
+    {
+        var label = string.IsNullOrWhiteSpace(control.Name)
+            ? control.GetType().Name
+            : control.Name;
+        Require(control.FocusVisualStyle is not null,
+            $"{label} lost its focus visual under {themeId}");
+        Require(control.Focus(),
+            $"{label} was not keyboard focusable under {themeId}");
+        host.UpdateLayout();
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+            System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+            new Action(() => { }));
+        Require(control.IsKeyboardFocusWithin,
+            $"{label} did not retain keyboard focus under {themeId}");
+    }
+
+    static void AssertExperimentFocusChrome(
+        Border chrome,
+        ThemePalette theme,
+        string label,
+        Color? effectiveBackground = null)
+    {
+        var focus = ExperimentBrushColor(chrome.BorderBrush, $"{label} focus border");
+        var background = effectiveBackground
+            ?? ExperimentBrushColor(chrome.Background, $"{label} background");
+        var contrast = ExperimentContrastRatio(focus, background);
+        Require(focus == theme.PrimaryBorder && contrast >= 3.0,
+            $"{label} focus under {theme.Id} was not palette-bound or 3:1 contrasting (actual {contrast:F2}:1)");
+    }
+
+    static void AssertPaletteAwareFocusVisualContract()
+    {
+        var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Theming/DesignTokens.xaml"));
+        var start = xaml.IndexOf("x:Key=\"Arena.FocusVisual\"", StringComparison.Ordinal);
+        var focusVisual = start >= 0 ? xaml[start..] : "";
+        Require(focusVisual.Contains("PrimaryBorderBrush", StringComparison.Ordinal)
+                && !focusVisual.Contains("BorderBrush=\"{DynamicResource Arena.Brush.FocusRing", StringComparison.Ordinal),
+            "shared Arena focus visual did not use the active palette border brush");
+    }
+
+    static void AttachArenaPresentationResources(FrameworkElement element)
+    {
+        var assemblyName = typeof(ExperimentLabControl).Assembly.GetName().Name
+            ?? throw new InvalidOperationException("WPF assembly name is unavailable.");
+        foreach (var relativePath in new[]
+                 {
+                     "UI/Theming/ThemeBrushes.xaml",
+                     "UI/Theming/DesignTokens.xaml",
+                     "UI/Theming/ControlStyles.xaml"
+                 })
+        {
+            element.Resources.MergedDictionaries.Add(new ResourceDictionary
+            {
+                Source = new Uri($"/{assemblyName};component/{relativePath}", UriKind.Relative)
+            });
+        }
+    }
+
+    static void ApplyExperimentSurfaceTheme(FrameworkElement element, ThemePalette theme)
+    {
+        static SolidColorBrush ThemeBrush(Color color)
+        {
+            var brush = new SolidColorBrush(color);
+            brush.Freeze();
+            return brush;
+        }
+
+        element.Resources["AppBackgroundBrush"] = ThemeBrush(theme.AppBackground);
+        element.Resources["TopBarBrush"] = ThemeBrush(theme.TopBar);
+        element.Resources["PanelBrush"] = ThemeBrush(theme.Panel);
+        element.Resources["CardBrush"] = ThemeBrush(theme.Card);
+        element.Resources["InputBrush"] = ThemeBrush(theme.Input);
+        element.Resources["ControlBorderBrush"] = ThemeBrush(theme.Border);
+        element.Resources["TextBrush"] = ThemeBrush(theme.Text);
+        element.Resources["MutedTextBrush"] = ThemeBrush(theme.MutedText);
+        element.Resources["SecondaryTextBrush"] = ThemeBrush(theme.MutedText);
+        element.Resources["PrimaryBrush"] = ThemeBrush(theme.Primary);
+        element.Resources["PrimaryBorderBrush"] = ThemeBrush(theme.PrimaryBorder);
+        element.Resources["AccentBrush"] = ThemeBrush(theme.PrimaryBorder);
+        element.Resources["AssistBrush"] = ThemeBrush(theme.Assist);
+        element.Resources["AssistBorderBrush"] = ThemeBrush(theme.AssistBorder);
+        element.Resources["DangerBrush"] = ThemeBrush(theme.Danger);
+        element.Resources["DangerBorderBrush"] = ThemeBrush(theme.DangerBorder);
+        element.Resources["DangerTextBrush"] = ThemeBrush(theme.DangerText);
+        element.Resources["DisabledBrush"] = ThemeBrush(theme.Disabled);
+        element.Resources["DisabledBorderBrush"] = ThemeBrush(theme.DisabledBorder);
+        element.Resources["DisabledTextBrush"] = ThemeBrush(theme.DisabledText);
+        element.Resources["HoverBorderBrush"] = ThemeBrush(theme.HoverBorder);
+        element.Resources["NavHoverBrush"] = ThemeBrush(theme.NavHover);
+        element.Resources["NavActiveBrush"] = ThemeBrush(theme.NavActive);
+        element.Resources["NavPressedBrush"] = ThemeBrush(theme.NavPressed);
+        element.Resources["PressedPrimaryBrush"] = ThemeBrush(theme.PressedPrimary);
+        element.Resources["OverlayBrush"] = ThemeBrush(theme.Overlay);
+    }
+
+    static T RequireExperimentTemplatePart<T>(Control control, string name)
+        where T : DependencyObject
+    {
+        control.ApplyTemplate();
+        return control.Template.FindName(name, control) as T
+            ?? throw new InvalidOperationException(
+                $"{control.GetType().Name} did not realize required template part '{name}'.");
+    }
+
+    static bool ExperimentBrushMatches(Brush? brush, Color expected) =>
+        brush is SolidColorBrush solid && solid.Color == expected;
+
+    static T? FindExperimentVisualDescendant<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        if (root is T match)
+        {
+            return match;
+        }
+
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var descendant = FindExperimentVisualDescendant<T>(VisualTreeHelper.GetChild(root, index));
+            if (descendant is not null)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
+    }
+
+    static Color ExperimentBrushColor(Brush? brush, string label)
+    {
+        if (brush is SolidColorBrush solid)
+        {
+            return solid.Color;
+        }
+
+        throw new InvalidOperationException($"{label} was not a solid theme brush.");
+    }
+
+    static double ExperimentContrastRatio(Color first, Color second)
+    {
+        var firstLuminance = ExperimentRelativeLuminance(first);
+        var secondLuminance = ExperimentRelativeLuminance(second);
+        return (Math.Max(firstLuminance, secondLuminance) + 0.05)
+            / (Math.Min(firstLuminance, secondLuminance) + 0.05);
+    }
+
+    static double ExperimentRelativeLuminance(Color color)
+    {
+        static double Channel(byte value)
+        {
+            var normalized = value / 255d;
+            return normalized <= 0.04045
+                ? normalized / 12.92
+                : Math.Pow((normalized + 0.055) / 1.055, 2.4);
+        }
+
+        return (0.2126 * Channel(color.R))
+            + (0.7152 * Channel(color.G))
+            + (0.0722 * Channel(color.B));
     }
 
     static void ExperimentLabControlPlaneExposesOnlySafeRegisteredFeatureState()

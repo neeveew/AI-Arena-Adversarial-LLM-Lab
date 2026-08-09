@@ -482,7 +482,9 @@ internal static class ArenaEvaluationPresentation
             ArenaEvaluationStatuses.Unchanged => "=",
             _ => "—"
         };
-        if (metric.BaselineValue is null || metric.CandidateValue is null)
+        if (metric.Status == ArenaEvaluationStatuses.Unavailable
+            || metric.BaselineValue is null
+            || metric.CandidateValue is null)
         {
             return $"{glyph} {metric.Label}: unavailable ({metric.Explanation})";
         }

@@ -162,12 +162,12 @@
                     <Grid Margin="-4"
                           IsHitTestVisible="False"
                           SnapsToDevicePixels="True">
-                        <Border BorderBrush="{DynamicResource Arena.Brush.FocusRingInner}"
+                        <Border BorderBrush="{DynamicResource PrimaryBorderBrush}"
                                 BorderThickness="4"
                                 CornerRadius="{DynamicResource Arena.Radius.Medium}"
                                 Opacity="0.22" />
                         <Border Margin="2"
-                                BorderBrush="{DynamicResource Arena.Brush.FocusRing}"
+                                BorderBrush="{DynamicResource PrimaryBorderBrush}"
                                 BorderThickness="2"
                                 CornerRadius="{DynamicResource Arena.Radius.Small}" />
                     </Grid>

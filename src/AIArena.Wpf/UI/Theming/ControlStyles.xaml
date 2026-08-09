@@ -19,7 +19,7 @@
         <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Control}" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
-        <Setter Property="FocusVisualStyle" Value="{StaticResource Arena.FocusVisual}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="Template">
@@ -43,7 +43,7 @@
                             <Setter TargetName="Chrome" Property="Opacity" Value="0.94" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                            <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource Arena.Brush.FocusRing}" />
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
                         </Trigger>
                         <Trigger Property="IsDefaulted" Value="True">
                             <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
@@ -253,7 +253,7 @@
         <Setter Property="Padding" Value="10,6" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
-        <Setter Property="FocusVisualStyle" Value="{StaticResource Arena.FocusVisual}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="Template">
             <Setter.Value>
@@ -319,7 +319,7 @@
         <Setter Property="Padding" Value="10,6" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
-        <Setter Property="FocusVisualStyle" Value="{StaticResource Arena.FocusVisual}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="Template">
             <Setter.Value>
@@ -363,7 +363,7 @@
         <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
         <Setter Property="FontSize" Value="{DynamicResource Arena.Type.BodySize}" />
         <Setter Property="MinHeight" Value="{DynamicResource Arena.Target.Minimum}" />
-        <Setter Property="FocusVisualStyle" Value="{StaticResource Arena.FocusVisual}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Template">
             <Setter.Value>
@@ -412,7 +412,7 @@
                             <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource HoverBorderBrush}" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                            <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource Arena.Brush.FocusRing}" />
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="Box" Property="Background" Value="{DynamicResource DisabledBrush}" />
@@ -431,7 +431,7 @@
         <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
         <Setter Property="FontSize" Value="{DynamicResource Arena.Type.BodySize}" />
         <Setter Property="MinHeight" Value="{DynamicResource Arena.Target.Minimum}" />
-        <Setter Property="FocusVisualStyle" Value="{StaticResource Arena.FocusVisual}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Template">
             <Setter.Value>
@@ -505,7 +505,7 @@
         <Setter Property="Padding" Value="10,6" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
-        <Setter Property="FocusVisualStyle" Value="{StaticResource Arena.FocusVisual}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="{x:Type ComboBoxItem}">
@@ -545,7 +545,7 @@
         <Setter Property="Padding" Value="10,6" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
-        <Setter Property="FocusVisualStyle" Value="{StaticResource Arena.FocusVisual}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
         <Setter Property="ItemContainerStyle" Value="{StaticResource Arena.ComboBoxItem}" />
         <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
         <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
@@ -643,7 +643,7 @@
                             <Setter TargetName="DropDownToggle" Property="BorderBrush" Value="{DynamicResource HoverBorderBrush}" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                            <Setter TargetName="DropDownToggle" Property="BorderBrush" Value="{DynamicResource Arena.Brush.FocusRing}" />
+                            <Setter TargetName="DropDownToggle" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
                         </Trigger>
                         <Trigger Property="IsDropDownOpen" Value="True">
                             <Setter TargetName="DropDownToggle" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
@@ -661,6 +661,110 @@
                             <Setter TargetName="DropDownToggle" Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
                             <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
                             <Setter TargetName="Chevron" Property="Stroke" Value="{DynamicResource DisabledTextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="Arena.ListBoxItem" TargetType="{x:Type ListBoxItem}">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
+        <Setter Property="FontSize" Value="{DynamicResource Arena.Type.BodySize}" />
+        <Setter Property="MinHeight" Value="{DynamicResource Arena.Target.Minimum}" />
+        <Setter Property="Padding" Value="{DynamicResource Arena.Inset.ListItem}" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type ListBoxItem}">
+                    <Border x:Name="ItemChrome"
+                            Padding="{TemplateBinding Padding}"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{DynamicResource Arena.Radius.Small}">
+                        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                          RecognizesAccessKey="True" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource NavHoverBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource NavActiveBrush}" />
+                            <Setter TargetName="ItemChrome" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="ItemChrome" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="Arena.ListBox" TargetType="{x:Type ListBox}">
+        <Setter Property="Background" Value="{DynamicResource InputBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
+        <Setter Property="FontSize" Value="{DynamicResource Arena.Type.BodySize}" />
+        <Setter Property="Padding" Value="{DynamicResource Arena.Inset.None}" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
+        <Setter Property="ItemContainerStyle" Value="{StaticResource Arena.ListBoxItem}" />
+        <Setter Property="ItemsPanel">
+            <Setter.Value>
+                <ItemsPanelTemplate>
+                    <VirtualizingStackPanel />
+                </ItemsPanelTemplate>
+            </Setter.Value>
+        </Setter>
+        <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+        <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+        <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type ListBox}">
+                    <Border x:Name="ListViewport"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            SnapsToDevicePixels="True">
+                        <ScrollViewer x:Name="ScrollHost"
+                                      Padding="{TemplateBinding Padding}"
+                                      Background="{TemplateBinding Background}"
+                                      CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}"
+                                      Focusable="False"
+                                      HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                      VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}">
+                            <ItemsPresenter SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+                        </ScrollViewer>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="ListViewport" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="ListViewport" Property="Background" Value="{DynamicResource DisabledBrush}" />
+                            <Setter TargetName="ScrollHost" Property="Background" Value="{DynamicResource DisabledBrush}" />
+                            <Setter TargetName="ListViewport" Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

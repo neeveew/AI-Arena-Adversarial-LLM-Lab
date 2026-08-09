@@ -191,6 +191,7 @@
                                 AutomationProperties.Name="Refresh QA evidence" />
                         <ComboBox x:Name="EvidenceRunPicker"
                                   MinHeight="34"
+                                  Style="{DynamicResource Arena.ComboBox}"
                                   ItemTemplate="{StaticResource QaPickerLabelTemplate}"
                                   FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
                                   AutomationProperties.Name="QA evidence bundle"
@@ -247,6 +248,7 @@
                                 AutomationProperties.Name="Run selected focused QA suite" />
                         <ComboBox x:Name="SuitePicker"
                                   MinHeight="34"
+                                  Style="{DynamicResource Arena.ComboBox}"
                                   ItemTemplate="{StaticResource QaPickerLabelTemplate}"
                                   FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
                                   AutomationProperties.Name="Focused QA suite"
@@ -296,6 +298,7 @@
                             <StackPanel>
                                 <TextBlock Style="{StaticResource QaSectionTitle}" Text="Accepted limitations" />
                                 <ListBox x:Name="LimitationsList"
+                                         Style="{DynamicResource Arena.ListBox}"
                                          Background="Transparent"
                                          BorderThickness="0"
                                          Foreground="{DynamicResource TextBrush}"
@@ -319,6 +322,7 @@
 
             <TabItem Header="Gates" AutomationProperties.Name="QA gates">
                 <ListBox x:Name="GateList"
+                         Style="{DynamicResource Arena.ListBox}"
                          Margin="{DynamicResource Arena.Inset.Card}"
                          Background="Transparent"
                          BorderThickness="0"
@@ -424,6 +428,7 @@
                             <TextBlock Style="{StaticResource QaSectionTitle}" Text="Hash-checked artifacts" />
                             <ListBox Grid.Row="1"
                                      x:Name="ArtifactList"
+                                     Style="{DynamicResource Arena.ListBox}"
                                      Background="Transparent"
                                      BorderThickness="0"
                                      Foreground="{DynamicResource TextBrush}"
