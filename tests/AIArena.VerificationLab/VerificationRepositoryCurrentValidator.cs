@@ -123,11 +123,7 @@ internal static class VerificationRepositoryCurrentValidator
             root,
             ["-c", "core.quotepath=false", "ls-files", "--cached", "--others", "--exclude-standard"],
             cancellationToken);
-        var paths = SplitLines(pathsOutput)
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Distinct(StringComparer.CurrentCultureIgnoreCase)
-            .OrderBy(path => path, StringComparer.CurrentCultureIgnoreCase)
-            .ToArray();
+        var paths = OrderRepositoryPaths(SplitLines(pathsOutput));
         var manifest = new StringBuilder();
         foreach (var relativePath in paths)
         {
@@ -160,6 +156,12 @@ internal static class VerificationRepositoryCurrentValidator
 
         return new(revision, Sha256Text(manifest.ToString()), clean);
     }
+
+    internal static string[] OrderRepositoryPaths(IEnumerable<string> paths) =>
+        [.. paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)];
 
     private static async Task<string> RunGitAsync(
         string repositoryRoot,

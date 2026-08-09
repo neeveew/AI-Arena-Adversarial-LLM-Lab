@@ -212,12 +212,29 @@ function Get-Sha256File {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-FixtureOrdinalUniqueStrings {
+    param([string[]]$Values)
+
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $unique = [Collections.Generic.List[string]]::new()
+    foreach ($value in $Values) {
+        if ($seen.Add($value)) {
+            $unique.Add($value)
+        }
+    }
+    [string[]]$ordered = @($unique)
+    [Array]::Sort($ordered, [StringComparer]::OrdinalIgnoreCase)
+    return $ordered
+}
+
 function Get-FixtureFingerprint {
     param([string]$Root, [string[]]$ExcludedPrefixes = @())
 
-    $paths = @(Invoke-FixtureGit -Root $Root -Arguments @('ls-files', '--cached', '--others', '--exclude-standard')) |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        Sort-Object -Unique
+    $paths = @(Get-FixtureOrdinalUniqueStrings -Values @(
+        @(Invoke-FixtureGit -Root $Root -Arguments @('-c', 'core.quotepath=false', 'ls-files', '--cached', '--others', '--exclude-standard')) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { [string]$_ }
+    ))
     $manifest = [Text.StringBuilder]::new()
     foreach ($path in $paths) {
         $normalized = ([string]$path).Replace('\', '/')
@@ -621,6 +638,25 @@ function Assert-BlockedUnchanged {
 
 try {
     $acceptanceSource = [IO.File]::ReadAllText($acceptanceScript, $utf8)
+    Require (((Get-FixtureOrdinalUniqueStrings -Values @(
+        'package.json',
+        'app/map-model.ts',
+        'APP/MAP-MODEL.TS',
+        'app/map_model.ts',
+        'indexer/Program.cs',
+        'app/MapDashboard.tsx',
+        'indexer-tests/Program.cs',
+        'package-lock.json',
+        'package.json')) -join ',') -ceq (
+        'app/map-model.ts,' +
+        'app/MapDashboard.tsx,' +
+        'app/map_model.ts,' +
+        'indexer-tests/Program.cs,' +
+        'indexer/Program.cs,' +
+        'package-lock.json,' +
+        'package.json')) 'Acceptance fixture fingerprints depend on PowerShell engine or culture sorting.'
+    Require ($acceptanceSource -match '\[Array\]::Sort\(\$paths, \[StringComparer\]::OrdinalIgnoreCase\)') 'Acceptance repository fingerprints are not explicitly ordinal across PowerShell engines.'
+    Require ($acceptanceSource.IndexOf("& git -c 'core.quotepath=false' -C `$Root @Arguments", [StringComparison]::Ordinal) -ge 0) 'Acceptance repository fingerprints do not disable Git path quoting consistently.'
     Require ($acceptanceSource -match 'dotnet restore \$projectPath --artifacts-path \$outputPath --packages \$packageRoot --configfile \$configPath') 'Acceptance must regenerate isolated restore inputs from its explicit local-only package source.'
     Require ($acceptanceSource -match '<clear />' -and $acceptanceSource -match 'dotnet build \$projectPath --configuration Release --no-restore --artifacts-path \$outputPath') 'Acceptance must clear configured feeds and build only from the isolated restored graph.'
     Require ($acceptanceSource -match "'-p:NuGetAudit=false'") 'Acceptance must disable network-backed NuGet audit during its local-only restore/build.'

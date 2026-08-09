@@ -430,9 +430,19 @@ function Get-SourceFingerprint {
         [string[]]$ExcludedPrefixes = @()
     )
 
-    $paths = @(Invoke-GitText -Root $Root -Arguments @('ls-files', '--cached', '--others', '--exclude-standard')) |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        Sort-Object -Unique
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $unique = [Collections.Generic.List[string]]::new()
+    foreach ($value in @(
+        @(Invoke-GitText -Root $Root -Arguments @('ls-files', '--cached', '--others', '--exclude-standard')) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )) {
+        $path = [string]$value
+        if ($seen.Add($path)) {
+            $unique.Add($path)
+        }
+    }
+    [string[]]$paths = @($unique)
+    [Array]::Sort($paths, [StringComparer]::OrdinalIgnoreCase)
     $manifest = [Text.StringBuilder]::new()
     foreach ($path in $paths) {
         $normalized = ([string]$path).Replace('\', '/')

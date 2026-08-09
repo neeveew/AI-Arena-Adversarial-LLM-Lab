@@ -16,6 +16,29 @@ internal static class VerificationEvidenceValidatorChecks
 
     public static async Task RunAsync(CancellationToken cancellationToken)
     {
+        Require(VerificationRepositoryCurrentValidator.OrderRepositoryPaths(
+                [
+                    "package.json",
+                    "app/map-model.ts",
+                    "APP/MAP-MODEL.TS",
+                    "app/map_model.ts",
+                    "indexer/Program.cs",
+                    "app/MapDashboard.tsx",
+                    "indexer-tests/Program.cs",
+                    "package-lock.json",
+                    "package.json"
+                ]).SequenceEqual(
+                [
+                    "app/map-model.ts",
+                    "app/MapDashboard.tsx",
+                    "app/map_model.ts",
+                    "indexer-tests/Program.cs",
+                    "indexer/Program.cs",
+                    "package-lock.json",
+                    "package.json"
+                ],
+                StringComparer.Ordinal),
+            "Repository source paths were not deduplicated and ordered with invariant ordinal case-insensitive semantics.");
         var root = Path.Combine(
             Path.GetTempPath(),
             $"ai-arena-evidence-validator-{Guid.NewGuid():N}");

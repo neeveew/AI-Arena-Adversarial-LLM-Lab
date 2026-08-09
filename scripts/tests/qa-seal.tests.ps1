@@ -160,6 +160,32 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
         'artifact.p01.dark-blue.w960.d1-0.normal.screenshot,' +
         'artifact.p01.dark-blue.w960.d1-0.reduced.screenshot')) 'qa-seal did not order inspection artifact IDs with the schema-required ordinal comparer.'
 
+    $ordinalUniqueAst = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Get-OrdinalIgnoreCaseUniqueStringArray'
+    }, $true))
+    Require ($ordinalUniqueAst.Count -eq 1) 'qa-seal is missing its invariant repository-path ordering helper.'
+    . ([scriptblock]::Create($ordinalUniqueAst[0].Extent.Text))
+    $orderedPaths = @(Get-OrdinalIgnoreCaseUniqueStringArray -Values @(
+        'package.json',
+        'app/map-model.ts',
+        'APP/MAP-MODEL.TS',
+        'app/map_model.ts',
+        'indexer/Program.cs',
+        'app/MapDashboard.tsx',
+        'indexer-tests/Program.cs',
+        'package-lock.json',
+        'package.json'))
+    Require (($orderedPaths -join ',') -ceq (
+        'app/map-model.ts,' +
+        'app/MapDashboard.tsx,' +
+        'app/map_model.ts,' +
+        'indexer-tests/Program.cs,' +
+        'indexer/Program.cs,' +
+        'package-lock.json,' +
+        'package.json')) 'qa-seal repository fingerprints depend on PowerShell engine or culture sorting.'
+
     $script:RepositoryRoot = $repositoryRoot
     $script:RunRoot = $blockedRunRoot
     $script:LogsRoot = Join-Path $blockedRunRoot 'logs'
@@ -653,6 +679,8 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
     $sealSource = Get-Content -LiteralPath $sealScript -Raw
     Require ($sealSource.IndexOf('$resolvedFilePath = Resolve-NativeCommandPath -Command $FilePath', [StringComparison]::Ordinal) -ge 0) 'qa-seal does not use the resolved native-command path.'
     Require ($sealSource.IndexOf('-CaptureResult', [StringComparison]::Ordinal) -ge 0) 'qa-seal does not capture authoritative validator results safely.'
+    Require ($sealSource.IndexOf('$paths = @(Get-OrdinalIgnoreCaseUniqueStringArray', [StringComparison]::Ordinal) -ge 0) 'qa-seal source fingerprints do not consume the invariant repository-path ordering helper.'
+    Require ($sealSource.IndexOf("'-c', 'core.quotepath=false', 'ls-files'", [StringComparison]::Ordinal) -ge 0) 'qa-seal source fingerprints do not disable Git path quoting consistently.'
     Require ($sealSource.IndexOf('$screenshotArtifactIds = @(Get-OrdinalStringArray', [StringComparison]::Ordinal) -ge 0) 'qa-seal does not ordinal-sort screenshot inspection IDs.'
     Require ($sealSource.IndexOf('$automationArtifactIds = @(Get-OrdinalStringArray', [StringComparison]::Ordinal) -ge 0) 'qa-seal does not ordinal-sort automation inspection IDs.'
     foreach ($requiredMatrixToken in @(

@@ -201,6 +201,21 @@ function Get-OrdinalStringArray {
     return $ordered
 }
 
+function Get-OrdinalIgnoreCaseUniqueStringArray {
+    param([AllowEmptyCollection()] [string[]]$Values = @())
+
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $unique = [Collections.Generic.List[string]]::new()
+    foreach ($value in $Values) {
+        if ($seen.Add($value)) {
+            $unique.Add($value)
+        }
+    }
+    [string[]]$ordered = @($unique)
+    [Array]::Sort($ordered, [StringComparer]::OrdinalIgnoreCase)
+    return $ordered
+}
+
 function Test-QaTextPrivacy {
     param([AllowEmptyString()] [string]$Text)
 
@@ -548,9 +563,11 @@ function Get-SourceFingerprint {
         [string[]]$ExcludedPrefixes = @('artifacts/')
     )
 
-    $paths = @(Get-GitOutput -Arguments @('-c', 'core.quotepath=false', 'ls-files', '--cached', '--others', '--exclude-standard') -RepositoryRoot $RepositoryRoot) |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        Sort-Object -Unique
+    $paths = @(Get-OrdinalIgnoreCaseUniqueStringArray -Values @(
+        @(Get-GitOutput -Arguments @('-c', 'core.quotepath=false', 'ls-files', '--cached', '--others', '--exclude-standard') -RepositoryRoot $RepositoryRoot) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { [string]$_ }
+    ))
     $manifest = [Text.StringBuilder]::new()
     foreach ($relativePath in $paths) {
         $normalized = ([string]$relativePath).Replace('\', '/')

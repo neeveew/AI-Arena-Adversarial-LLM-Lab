@@ -126,7 +126,7 @@ Historical `ai_arena.ui_structure_evidence.v1` remains bound to its original 12-
 
 ## Quality Seal
 
-`scripts/qa-seal.ps1` is the single orchestration entry point. Its ignored local bundle records source commit and tree fingerprint, toolchain, every gate, test counts and durations, sanitized log and render hashes, schema/migration results, performance measurements, optional live coverage, accepted limitations, and a verdict.
+`scripts/qa-seal.ps1` is the single orchestration entry point. Its ignored local bundle records source commit and tree fingerprint, toolchain, every gate, test counts and durations, sanitized log and render hashes, schema/migration results, performance measurements, optional live coverage, accepted limitations, and a verdict. Repository fingerprints use explicit ordinal case-insensitive path ordering and deduplication with Git path quoting disabled, so Windows PowerShell, PowerShell 7, and the compiled currentness validator produce the same value.
 
 Schema migration evidence is executable rather than declarative: a bounded required gate runs the Core pack-store fixture with the exact scenario/benchmark migration test selected. That fixture directly invokes both named v0-to-v1 migrators and verifies exact-source provenance, canonical v1 decoding, privacy rejection, deterministic identity, and duplicate behavior. Only a passing invocation may set `migratedFromSchema` for the two v1 pack schema checks.
 
