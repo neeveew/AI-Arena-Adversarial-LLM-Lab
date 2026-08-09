@@ -192,7 +192,8 @@ function Get-Sha256Text {
 function Get-LimitationSemanticSha256 {
     param([object]$Limitation)
 
-    $basis = $Limitation.evidence.basis
+    $basisProperty = $Limitation.evidence.PSObject.Properties['basis']
+    $basis = if ($null -eq $basisProperty) { $null } else { $basisProperty.Value }
     $fields = @(
         [string]$Limitation.id
         [string]$Limitation.summary
@@ -449,7 +450,6 @@ function New-CompletePartialBundle {
                         state = 'unavailable'
                         summary = $limitation.EvidenceSummary
                         referenceId = $limitation.ReferenceId
-                        basis = $null
                         limitation = $limitation.EvidenceLimitation
                     }
                 }
@@ -507,7 +507,7 @@ function New-CompletePartialBundle {
         }
         'limitation-state' {
             $contract.acceptedLimitations[0].evidence.state = 'inferred'
-            $contract.acceptedLimitations[0].evidence.basis = 'Fixture tamper must not be accepted.'
+            $contract.acceptedLimitations[0].evidence | Add-Member -NotePropertyName basis -NotePropertyValue 'Fixture tamper must not be accepted.'
             $contract.acceptedLimitations[0].evidence.limitation = $null
         }
         'limitation-summary' {
@@ -523,7 +523,7 @@ function New-CompletePartialBundle {
             $contract.acceptedLimitations[0].evidence.limitation = 'No limitation.'
         }
         'limitation-basis' {
-            $contract.acceptedLimitations[0].evidence.basis = 'This inferred basis must not be accepted.'
+            $contract.acceptedLimitations[0].evidence | Add-Member -NotePropertyName basis -NotePropertyValue 'This inferred basis must not be accepted.'
         }
     }
 

@@ -172,6 +172,16 @@ function Get-RequiredProperty {
     return $property.Value
 }
 
+function Get-OptionalNullProperty {
+    param(
+        [Parameter(Mandatory)] [object]$InputObject,
+        [Parameter(Mandatory)] [string]$Name
+    )
+
+    $property = $InputObject.PSObject.Properties[$Name]
+    return $(if ($null -eq $property) { $null } else { $property.Value })
+}
+
 function Assert-ExactPropertyNames {
     param(
         [Parameter(Mandatory)] [object]$InputObject,
@@ -321,7 +331,7 @@ function Get-LimitationSemanticSha256 {
     param([Parameter(Mandatory)] [object]$Limitation)
 
     $evidence = Get-RequiredProperty $Limitation 'evidence'
-    $basis = Get-RequiredProperty $evidence 'basis'
+    $basis = Get-OptionalNullProperty $evidence 'basis'
     $fields = @(
         [string](Get-RequiredProperty $Limitation 'id')
         [string](Get-RequiredProperty $Limitation 'summary')
@@ -626,11 +636,12 @@ function Assert-ContractCompleteness {
             Stop-QaAcceptance 'qa_accept.limitations'
         }
         $limitationEvidence = Get-RequiredProperty $limitation 'evidence'
+        $limitationBasis = Get-OptionalNullProperty $limitationEvidence 'basis'
         if ([string](Get-RequiredProperty $limitationEvidence 'id') -cne [string]$requirement.EvidenceId -or
             [string](Get-RequiredProperty $limitationEvidence 'state') -cne 'unavailable' -or
             [string](Get-RequiredProperty $limitationEvidence 'summary') -cne [string]$requirement.EvidenceSummary -or
             [string](Get-RequiredProperty $limitationEvidence 'referenceId') -cne [string]$requirement.ReferenceId -or
-            $null -ne (Get-RequiredProperty $limitationEvidence 'basis') -or
+            $null -ne $limitationBasis -or
             [string](Get-RequiredProperty $limitationEvidence 'limitation') -cne [string]$requirement.EvidenceLimitation) {
             Stop-QaAcceptance 'qa_accept.limitations'
         }
