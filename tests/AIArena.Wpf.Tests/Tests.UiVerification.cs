@@ -338,6 +338,14 @@ internal static partial class Program
                         && minimum.DpiScaleX > 0
                         && minimum.DpiScaleY > 0, "minimum QA client size should be applied and measured in DIP");
 
+                    window.MaxHeight = 650;
+                    var constrained = verification.SetWindowSizeAsync(1000, 700).GetAwaiter().GetResult();
+                    Require(!constrained.Ok
+                        && constrained.ErrorCode == "not_available"
+                        && constrained.ActualHeightDip <= 650,
+                        "desktop-constrained QA sizes should be reported unavailable instead of claiming the requested viewport");
+                    window.MaxHeight = double.PositiveInfinity;
+
                     var events = new AIArenaControlPlaneEventHub();
                     var published = new List<AIArenaControlEvent>();
                     using var subscription = events.Subscribe(published.Add);
@@ -392,7 +400,8 @@ internal static partial class Program
                         && !serialized.Contains(UiEvidencePrivateText, StringComparison.Ordinal), "control-plane UI evidence response must not leak data roots or dynamic content");
 
                     var source = ReadMainWindowSource();
-                    Require(source.Contains("new AIArenaUiVerificationControlService(this, _coreSessionStore.DataRoot", StringComparison.Ordinal)
+                    Require(source.Contains("new AIArenaUiVerificationControlService(", StringComparison.Ordinal)
+                        && source.Contains("_coreSessionStore.DataRoot", StringComparison.Ordinal)
                         && source.Contains("_appControlHandler.CanHandle(request.Command)", StringComparison.Ordinal), "MainWindow should wire QA controls through the existing authenticated app handler route");
                 }
                 finally
@@ -434,6 +443,17 @@ internal static partial class Program
                     IsTabStop = true
                 };
                 AutomationProperties.SetAutomationId(privateButton, UiEvidenceRuntimeAutomationSecret);
+                var hiddenButton = new Button
+                {
+                    Visibility = Visibility.Collapsed,
+                    Focusable = false,
+                    IsTabStop = false
+                };
+                var unnamedButton = new Button
+                {
+                    Focusable = true,
+                    IsTabStop = true
+                };
                 var lastButton = new Button
                 {
                     Name = "QaFocusLast",
@@ -448,6 +468,8 @@ internal static partial class Program
                     {
                         firstButton,
                         privateButton,
+                        hiddenButton,
+                        unnamedButton,
                         lastButton
                     }
                 };
@@ -495,6 +517,20 @@ internal static partial class Program
                     Require(previous.Ok
                         && previous.Moved
                         && previous.AfterIdentity == "QaFocusFirst", "reverse traversal should return to the preceding WPF tab stop deterministically");
+
+                    FocusManager.SetFocusedElement(window, privateButton);
+                    _ = Keyboard.Focus(privateButton);
+                    window.UpdateLayout();
+                    var unnamed = service.AdvanceKeyboardFocusAsync("next").GetAwaiter().GetResult();
+                    var unnamedEvidence = service.CaptureStructureAsync(
+                        "focus/unnamed.json",
+                        UiEvidenceTreeFingerprint,
+                        service.DebugObservedExpectedState()).GetAwaiter().GetResult();
+                    Require(unnamed.Ok
+                        && unnamed.AfterIdentity.StartsWith("Button#", StringComparison.Ordinal)
+                        && unnamedEvidence.Ok
+                        && unnamedEvidence.FocusIdentity == unnamed.AfterIdentity,
+                        "unnamed focus identities should use the same visible-tree ordinal as structure evidence");
 
                     var motionChanges = 0;
                     PropertyChangedEventHandler motionHandler = (_, args) =>

@@ -529,14 +529,20 @@ internal sealed class AIArenaUiVerificationControlService
         window.Height = heightDip;
         window.UpdateLayout();
         var dpi = VisualTreeHelper.GetDpi(window);
+        var actualWidth = Round(window.ActualWidth);
+        var actualHeight = Round(window.ActualHeight);
+        var applied = Math.Abs(actualWidth - widthDip) <= 1
+            && Math.Abs(actualHeight - heightDip) <= 1;
         return new AIArenaQaWindowSizeResult(
-            true,
-            "",
-            $"QA window set to {widthDip}x{heightDip} DIP.",
+            applied,
+            applied ? "" : "not_available",
+            applied
+                ? $"QA window set to {widthDip}x{heightDip} DIP."
+                : "The desktop constrained the requested QA viewport; exact layout evidence is unavailable.",
             widthDip,
             heightDip,
-            Round(window.ActualWidth),
-            Round(window.ActualHeight),
+            actualWidth,
+            actualHeight,
             Round(dpi.DpiScaleX, 3),
             Round(dpi.DpiScaleY, 3));
     }
@@ -642,13 +648,28 @@ internal sealed class AIArenaUiVerificationControlService
     private int FindVisualSequence(DependencyObject target)
     {
         var sequence = 0;
-        var pending = new Stack<DependencyObject>();
-        pending.Push(window);
-        while (pending.Count > 0 && sequence < MaximumNodes)
+        var pending = new Stack<(DependencyObject Element, int Depth)>();
+        pending.Push((window, 0));
+        while (pending.Count > 0)
         {
-            var current = pending.Pop();
+            var (current, depth) = pending.Pop();
+            if (depth > MaximumVisualDepth)
+            {
+                continue;
+            }
+
             if (current is UIElement element)
             {
+                if (!ReferenceEquals(element, window) && !element.IsVisible)
+                {
+                    continue;
+                }
+
+                if (sequence >= MaximumNodes)
+                {
+                    break;
+                }
+
                 if (ReferenceEquals(current, target))
                 {
                     return sequence;
@@ -660,7 +681,7 @@ internal sealed class AIArenaUiVerificationControlService
             var childCount = VisualTreeHelper.GetChildrenCount(current);
             for (var index = childCount - 1; index >= 0; index--)
             {
-                pending.Push(VisualTreeHelper.GetChild(current, index));
+                pending.Push((VisualTreeHelper.GetChild(current, index), depth + 1));
             }
         }
 

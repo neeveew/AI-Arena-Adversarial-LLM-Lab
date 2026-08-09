@@ -749,7 +749,7 @@ internal static partial class VerificationEvidenceBundleValidator
         var expectedHeight = cell.ViewportWidthDip switch
         {
             960 => 640,
-            1500 => 1000,
+            1500 => 960,
             _ => 0
         };
         var expectedKey = $"p{passNumber:D2}.{cell.Theme}.w{cell.ViewportWidthDip}.d{dpiLabel}.{cell.MotionMode}";

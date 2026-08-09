@@ -104,7 +104,7 @@ Applicable matrices cover:
 
 - Dark Blue, Light, and High Contrast;
 - narrow and standard widths;
-- supported off-screen raster-density scales at fixed DIP viewports;
+- supported off-screen raster-density scales at the fixed `960×640` and `1500×960` DIP viewports;
 - programmatic in-process WPF focus traversal and privacy-safe visual-tree identities;
 - normal/reduced motion-preference plumbing;
 - cancellation, restart, interruption, transport failure, and recovery;

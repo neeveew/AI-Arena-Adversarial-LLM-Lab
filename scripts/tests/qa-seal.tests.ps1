@@ -94,7 +94,9 @@ try {
     foreach ($requiredMatrixToken in @(
         "@('dark-blue', 'light', 'high-contrast')",
         'Width = 960',
+        'Height = 640',
         'Width = 1500',
+        'Height = 960',
         "Label = '1-0'",
         "Label = '1-5'",
         "Label = '2-0'",

@@ -835,7 +835,7 @@ function Invoke-RenderedUiSmoke {
         $themes = @('dark-blue', 'light', 'high-contrast')
         $viewports = @(
             [pscustomobject]@{ Width = 960; Height = 640 },
-            [pscustomobject]@{ Width = 1500; Height = 1000 }
+            [pscustomobject]@{ Width = 1500; Height = 960 }
         )
         $renderScales = @(
             [pscustomobject]@{ Value = [double]1.0; Label = '1-0' },

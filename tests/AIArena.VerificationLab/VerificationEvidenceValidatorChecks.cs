@@ -643,7 +643,7 @@ internal static class VerificationEvidenceValidatorChecks
         var cells = new List<object>();
         var pngCache = new Dictionary<(int Width, int Height, string Theme), byte[]>();
         foreach (var theme in new[] { "dark-blue", "light", "high-contrast" })
-        foreach (var viewport in new[] { (Width: 960, Height: 640), (Width: 1500, Height: 1000) })
+        foreach (var viewport in new[] { (Width: 960, Height: 640), (Width: 1500, Height: 960) })
         foreach (var renderDpi in new[] { (Value: 1m, Label: "1-0"), (Value: 1.5m, Label: "1-5"), (Value: 2m, Label: "2-0") })
         foreach (var motion in new[] { "normal", "reduced" })
         {
