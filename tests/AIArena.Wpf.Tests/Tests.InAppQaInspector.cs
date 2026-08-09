@@ -108,9 +108,37 @@ internal static partial class Program
         Require(presentation.TestTotals.Contains("total", StringComparison.Ordinal), "QA aggregate test counts were omitted");
         Require(presentation.LiveProvider.Contains("Limitation:", StringComparison.Ordinal), "live-provider limitation was omitted");
 
+        static SolidColorBrush ThemeBrush(Color color)
+        {
+            var brush = new SolidColorBrush(color);
+            brush.Freeze();
+            return brush;
+        }
+
+        static void ApplyInspectorTheme(FrameworkElement element, ThemePalette theme)
+        {
+            element.Resources["PanelBrush"] = ThemeBrush(theme.Panel);
+            element.Resources["ControlBorderBrush"] = ThemeBrush(theme.Border);
+            element.Resources["TextBrush"] = ThemeBrush(theme.Text);
+            element.Resources["MutedTextBrush"] = ThemeBrush(theme.MutedText);
+            element.Resources["PrimaryBorderBrush"] = ThemeBrush(theme.PrimaryBorder);
+            element.Resources["HoverBorderBrush"] = ThemeBrush(theme.HoverBorder);
+            element.Resources["NavHoverBrush"] = ThemeBrush(theme.NavHover);
+            element.Resources["NavActiveBrush"] = ThemeBrush(theme.NavActive);
+            element.Resources["DisabledBorderBrush"] = ThemeBrush(theme.DisabledBorder);
+            element.Resources["DisabledTextBrush"] = ThemeBrush(theme.DisabledText);
+        }
+
         RunStaTest(() =>
         {
             var control = new InAppQaInspectorControl();
+            const string evidenceLabel = "20260809t042925z-ea67c771";
+            const string evidencePath = "artifacts/qa/20260809t042925z-ea67c771/qa-evidence.json";
+            var suite = QaLocalSuiteCatalog.All.Single(item => item.Id == QaLocalSuite.Wpf);
+            control.SetEvidenceChoices(
+                [new QaEvidenceChoice(evidencePath, evidenceLabel, DateTimeOffset.UtcNow)],
+                evidencePath);
+            control.SetSuiteChoices([suite]);
             Require(control.FeatureRegistration.Key == "in-app-qa-inspector", "QA Inspector feature key changed");
             Require(!string.IsNullOrWhiteSpace(control.FeatureRegistration.HelpText), "QA Inspector feature help is missing");
             Require(AutomationProperties.GetName(control) == "In-App QA Inspector", "QA Inspector root automation name is missing");
@@ -138,6 +166,46 @@ internal static partial class Program
             {
                 host.Activate();
                 host.UpdateLayout();
+                var evidenceLabelText = DescendantTextBlocks(control.EvidenceRunPicker)
+                    .SingleOrDefault(item => item.Text == evidenceLabel);
+                var suiteLabelText = DescendantTextBlocks(control.SuitePicker)
+                    .SingleOrDefault(item => item.Text == suite.Label);
+                Require(evidenceLabelText is { TextTrimming: TextTrimming.CharacterEllipsis }
+                    && suiteLabelText is { TextTrimming: TextTrimming.CharacterEllipsis }
+                    && control.SelectedEvidencePath == evidencePath
+                    && control.SelectedSuite == QaLocalSuite.Wpf
+                    && !DescendantTextBlocks(control.EvidenceRunPicker).Any(item => item.Text.Contains(nameof(QaEvidenceChoice), StringComparison.Ordinal))
+                    && !DescendantTextBlocks(control.SuitePicker).Any(item => item.Text.Contains(nameof(QaSuiteDefinition), StringComparison.Ordinal)),
+                    "QA Inspector pickers exposed record ToString values instead of bounded user labels");
+
+                control.EvidenceTabs.ApplyTemplate();
+                var tabs = control.EvidenceTabs.Items.Cast<TabItem>().ToArray();
+                Require(tabs.Length == 5, "QA Inspector evidence tabs changed unexpectedly");
+                foreach (var tab in tabs) tab.ApplyTemplate();
+                var selectedTabChrome = tabs[0].Template.FindName("TabChrome", tabs[0]) as Border
+                    ?? throw new InvalidOperationException("QA Inspector did not instantiate selected tab chrome.");
+                var unselectedTabChrome = tabs[1].Template.FindName("TabChrome", tabs[1]) as Border
+                    ?? throw new InvalidOperationException("QA Inspector did not instantiate unselected tab chrome.");
+                var contentChrome = control.EvidenceTabs.Template.FindName("ContentChrome", control.EvidenceTabs) as Border
+                    ?? throw new InvalidOperationException("QA Inspector did not instantiate content tab chrome.");
+                foreach (var themeId in new[] { "dark-blue", "light", "high-contrast" })
+                {
+                    var theme = ThemePalette.Resolve(themeId);
+                    ApplyInspectorTheme(control, theme);
+                    host.UpdateLayout();
+                    Require(selectedTabChrome.Background is SolidColorBrush selectedBackground
+                            && selectedBackground.Color == theme.NavActive
+                            && selectedTabChrome.BorderBrush is SolidColorBrush selectedBorder
+                            && selectedBorder.Color == theme.PrimaryBorder
+                            && contentChrome.Background is SolidColorBrush contentBackground
+                            && contentBackground.Color == theme.Panel
+                            && contentChrome.BorderBrush is SolidColorBrush contentBorder
+                            && contentBorder.Color == theme.Border
+                            && unselectedTabChrome.Background == Brushes.Transparent
+                            && unselectedTabChrome.BorderBrush is SolidColorBrush unselectedBorder
+                            && unselectedBorder.Color == theme.Border,
+                        $"QA Inspector tab chrome did not resolve the {themeId} palette");
+                }
                 Require(control.RefreshEvidenceButton.Focus(), "QA Inspector refresh action was not keyboard focusable at 960 DIP");
                 Require(control.RefreshEvidenceButton.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.Next)),
                     "QA Inspector keyboard traversal did not reach the next action");
@@ -156,6 +224,9 @@ internal static partial class Program
             }
             var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/InAppQaInspectorControl.xaml"));
             Require(xaml.Contains("DynamicResource", StringComparison.Ordinal)
+                && xaml.Contains("QaPickerLabelTemplate", StringComparison.Ordinal)
+                && xaml.Contains("QaEvidenceTabControl", StringComparison.Ordinal)
+                && !xaml.Contains("DisplayMemberPath=\"Label\"", StringComparison.Ordinal)
                 && !xaml.Contains("Storyboard", StringComparison.Ordinal)
                 && !xaml.Contains("DoubleAnimation", StringComparison.Ordinal),
                 "QA Inspector is not static reduced-motion/theme-resource safe");

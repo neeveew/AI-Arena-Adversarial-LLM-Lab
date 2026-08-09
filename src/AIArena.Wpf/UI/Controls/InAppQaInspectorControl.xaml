@@ -28,6 +28,103 @@
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Compact}" />
         </Style>
+        <DataTemplate x:Key="QaPickerLabelTemplate">
+            <TextBlock Text="{Binding Label}"
+                       TextTrimming="CharacterEllipsis"
+                       ToolTip="{Binding Label}"
+                       AutomationProperties.Name="{Binding Label}" />
+        </DataTemplate>
+        <Style x:Key="QaEvidenceTabItem" TargetType="{x:Type TabItem}">
+            <Setter Property="MinHeight" Value="{DynamicResource Arena.Target.Minimum}" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Inline.After.Compact}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Tab}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.LabelSize}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type TabItem}">
+                        <Border x:Name="TabChrome"
+                                Padding="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{DynamicResource Arena.Radius.Small}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter ContentSource="Header"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              RecognizesAccessKey="True" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="{DynamicResource NavHoverBrush}" />
+                                <Setter Property="BorderBrush" Value="{DynamicResource HoverBorderBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="Background" Value="{DynamicResource NavActiveBrush}" />
+                                <Setter Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                                <Setter Property="Panel.ZIndex" Value="1" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter Property="BorderBrush" Value="{DynamicResource Arena.Brush.FocusRing}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="QaEvidenceTabControl" TargetType="{x:Type TabControl}">
+            <Setter Property="Background" Value="{DynamicResource PanelBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
+            <Setter Property="ItemContainerStyle" Value="{StaticResource QaEvidenceTabItem}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type TabControl}">
+                        <Grid KeyboardNavigation.TabNavigation="Local">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <TabPanel x:Name="HeaderPanel"
+                                      Margin="{DynamicResource Arena.Gap.Stack.After.Compact}"
+                                      IsItemsHost="True"
+                                      KeyboardNavigation.TabIndex="1"
+                                      Panel.ZIndex="1" />
+                            <Border x:Name="ContentChrome"
+                                    Grid.Row="1"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="{DynamicResource Arena.Radius.Medium}"
+                                    SnapsToDevicePixels="True">
+                                <ContentPresenter x:Name="PART_SelectedContentHost"
+                                                  ContentSource="SelectedContent"
+                                                  HorizontalAlignment="Stretch"
+                                                  VerticalAlignment="Stretch" />
+                            </Border>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
 
     <Grid Background="{DynamicResource AppBackgroundBrush}" Margin="{DynamicResource Arena.Layout.WorkspaceRootMargin}">
@@ -94,7 +191,7 @@
                                 AutomationProperties.Name="Refresh QA evidence" />
                         <ComboBox x:Name="EvidenceRunPicker"
                                   MinHeight="34"
-                                  DisplayMemberPath="Label"
+                                  ItemTemplate="{StaticResource QaPickerLabelTemplate}"
                                   FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
                                   AutomationProperties.Name="QA evidence bundle"
                                   AutomationProperties.HelpText="Selects one bounded local QA evidence bundle." />
@@ -150,7 +247,7 @@
                                 AutomationProperties.Name="Run selected focused QA suite" />
                         <ComboBox x:Name="SuitePicker"
                                   MinHeight="34"
-                                  DisplayMemberPath="Label"
+                                  ItemTemplate="{StaticResource QaPickerLabelTemplate}"
                                   FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
                                   AutomationProperties.Name="Focused QA suite"
                                   AutomationProperties.HelpText="Only fixed checked-in Release harnesses and scripts are available." />
@@ -169,10 +266,7 @@
 
         <TabControl Grid.Row="3"
                     x:Name="EvidenceTabs"
-                    Background="{DynamicResource PanelBrush}"
-                    BorderBrush="{DynamicResource ControlBorderBrush}"
-                    Foreground="{DynamicResource TextBrush}"
-                    FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                    Style="{StaticResource QaEvidenceTabControl}"
                     AutomationProperties.Name="QA evidence sections">
             <TabItem Header="Overview" AutomationProperties.Name="QA overview">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
