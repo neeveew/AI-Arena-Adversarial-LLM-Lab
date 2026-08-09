@@ -775,6 +775,19 @@ internal static class VerificationEvidenceValidatorChecks
                 $"{message}: {output.ToString().Trim()}");
         }
 
+        var featureGateIndex = fixture.Contract.Gates.IndexOf(fixture.Contract.Gates.Single(gate =>
+            gate.Id == "ui.feature-surface-matrix"));
+        await RequireContractMutationAsync(
+            "failed-gate-retained-document",
+            fixture.Contract with
+            {
+                Gates = fixture.Contract.Gates.SetItem(
+                    featureGateIndex,
+                    fixture.Contract.Gates[featureGateIndex] with { Outcome = ArenaQaGateOutcome.Fail })
+            },
+            "bundle.feature_matrix_gates",
+            "A retained feature matrix document under a failed aggregate feature gate did not report the bounded gate/document mismatch");
+
         var migrationGateIndex = fixture.Contract.Gates.IndexOf(fixture.Contract.Gates.Single(gate =>
             gate.Id == ArenaQaSealManifestV2.ExplicitMigrationGateId));
         var migrationSchemaIndex = fixture.Contract.SchemaChecks.IndexOf(fixture.Contract.SchemaChecks.Single(check =>

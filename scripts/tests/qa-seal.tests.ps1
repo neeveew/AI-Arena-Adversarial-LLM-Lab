@@ -152,6 +152,7 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
         'Assert-QaPathHasNoReparsePoint',
         'Get-QaSafeFilesUnderDirectory',
         'Set-QaFileBytesAtomically',
+        'ConvertFrom-QaJsonPreservingDateStrings',
         'Get-QaRejectedClosureArtifacts',
         'Get-QaBlockedFallbackAffectedReferenceIds',
         'Test-QaBlockedFallbackIssueScope',
@@ -167,6 +168,89 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
         'Invoke-QaBlockedFallback')) {
         Import-SealFunction -Name $helper
     }
+
+    function New-PartialRenderFallbackScopeFixture {
+        param(
+            [string]$Verdict = 'blocked',
+            [string]$AggregateOutcome = 'fail',
+            [bool]$AggregateRequired = $true,
+            [int[]]$PassNumbers = @(1, 2),
+            [string[]]$PassOutcomes = @('pass', 'blocked'),
+            [AllowEmptyCollection()] [int[]]$DocumentPassNumbers = @(1)
+        )
+
+        if ($PassNumbers.Count -ne $PassOutcomes.Count) {
+            throw 'Partial-render fallback scope fixture pass arrays are inconsistent.'
+        }
+        $gates = [Collections.Generic.List[object]]::new()
+        $gates.Add([pscustomobject]@{
+            id = 'ui.feature-surface-matrix'
+            outcome = $AggregateOutcome
+            required = $AggregateRequired
+        })
+        for ($index = 0; $index -lt $PassNumbers.Count; $index++) {
+            $gates.Add([pscustomobject]@{
+                id = 'pass-{0:D2}.rendered-ui' -f $PassNumbers[$index]
+                outcome = $PassOutcomes[$index]
+                required = $true
+            })
+        }
+        $artifacts = @(
+            foreach ($passNumber in $DocumentPassNumbers) {
+                [pscustomobject]@{
+                    id = 'artifact.pass-{0:D2}.feature-surface-matrix' -f $passNumber
+                    kind = 'qa-feature-surface-matrix'
+                    relativePath = 'metadata/pass-{0:D2}.feature-surface-matrix.json' -f $passNumber
+                }
+            }
+        )
+        return [pscustomobject]@{
+            verdict = $Verdict
+            gates = @($gates)
+            artifacts = $artifacts
+        }
+    }
+
+    $partialRenderIssue = @('bundle.feature_matrix_gates')
+    $partialRenderPositive = New-PartialRenderFallbackScopeFixture
+    Require (Test-QaBlockedFallbackIssueScope -IssueCodes $partialRenderIssue -Contract $partialRenderPositive) 'Blocked fallback rejected the exact partial multi-pass feature-matrix scope.'
+    Require (Test-QaBlockedFallbackIssueScope -IssueCodes @('bundle.feature_matrix_feature_render')) 'Blocked fallback changed the existing closed rendered-feature issue scope.'
+
+    $aggregatePassScope = New-PartialRenderFallbackScopeFixture -AggregateOutcome 'pass'
+    Require (-not (Test-QaBlockedFallbackIssueScope -IssueCodes $partialRenderIssue -Contract $aggregatePassScope)) 'Blocked fallback accepted feature-matrix gates with a passing aggregate gate.'
+
+    $noPassingRenderScope = New-PartialRenderFallbackScopeFixture -PassOutcomes @('fail', 'blocked') -DocumentPassNumbers @()
+    Require (-not (Test-QaBlockedFallbackIssueScope -IssueCodes $partialRenderIssue -Contract $noPassingRenderScope)) 'Blocked fallback accepted feature-matrix gates without a passing rendered pass.'
+
+    $allPassingRenderScope = New-PartialRenderFallbackScopeFixture -PassOutcomes @('pass', 'pass') -DocumentPassNumbers @(1, 2)
+    Require (-not (Test-QaBlockedFallbackIssueScope -IssueCodes $partialRenderIssue -Contract $allPassingRenderScope)) 'Blocked fallback accepted feature-matrix gates without a failed or blocked rendered pass.'
+
+    $documentOnFailedPassScope = New-PartialRenderFallbackScopeFixture -DocumentPassNumbers @(1, 2)
+    Require (-not (Test-QaBlockedFallbackIssueScope -IssueCodes $partialRenderIssue -Contract $documentOnFailedPassScope)) 'Blocked fallback accepted a feature-matrix document for a failed or blocked pass.'
+
+    $missingDocumentScope = New-PartialRenderFallbackScopeFixture -DocumentPassNumbers @()
+    Require (-not (Test-QaBlockedFallbackIssueScope -IssueCodes $partialRenderIssue -Contract $missingDocumentScope)) 'Blocked fallback accepted a missing passing-pass feature-matrix document.'
+
+    $duplicateDocumentScope = New-PartialRenderFallbackScopeFixture -DocumentPassNumbers @(1, 1)
+    Require (-not (Test-QaBlockedFallbackIssueScope -IssueCodes $partialRenderIssue -Contract $duplicateDocumentScope)) 'Blocked fallback accepted a duplicate feature-matrix document.'
+
+    $noncontiguousPassScope = New-PartialRenderFallbackScopeFixture -PassNumbers @(1, 3)
+    Require (-not (Test-QaBlockedFallbackIssueScope -IssueCodes $partialRenderIssue -Contract $noncontiguousPassScope)) 'Blocked fallback accepted noncontiguous rendered pass identities.'
+
+    $partialOutcomeScope = New-PartialRenderFallbackScopeFixture -PassOutcomes @('pass', 'partial')
+    Require (-not (Test-QaBlockedFallbackIssueScope -IssueCodes $partialRenderIssue -Contract $partialOutcomeScope)) 'Blocked fallback accepted a partial rendered-pass outcome.'
+
+    $wrongDocumentKindScope = New-PartialRenderFallbackScopeFixture
+    $wrongDocumentKindScope.artifacts[0].kind = 'qa-ui-matrix'
+    Require (-not (Test-QaBlockedFallbackIssueScope -IssueCodes $partialRenderIssue -Contract $wrongDocumentKindScope)) 'Blocked fallback accepted a noncanonical feature-matrix artifact kind.'
+
+    $nonblockedVerdictScope = New-PartialRenderFallbackScopeFixture -Verdict 'partial'
+    Require (-not (Test-QaBlockedFallbackIssueScope -IssueCodes $partialRenderIssue -Contract $nonblockedVerdictScope)) 'Blocked fallback accepted feature-matrix gates outside a blocked contract.'
+    Require (-not (Test-QaBlockedFallbackIssueScope -IssueCodes @('bundle.feature_matrix_gates', 'current.tree_fingerprint') -Contract $partialRenderPositive)) 'Blocked fallback accepted mixed unsafe validator issues.'
+
+    $exactOffsetTimestamp = '2026-08-09T12:34:56.7890000+00:00'
+    $dateStringClone = ConvertFrom-QaJsonPreservingDateStrings -Json ("{`"generatedAtUtc`":`"$exactOffsetTimestamp`"}")
+    Require ($dateStringClone.generatedAtUtc -is [string] -and [string]$dateStringClone.generatedAtUtc -ceq $exactOffsetTimestamp) 'Blocked fallback JSON cloning rewrote an exact +00:00 timestamp lexeme.'
 
     $cleanupOwner = [Guid]::NewGuid().ToString('N')
     $savedOwnerForCleanup = $env:AI_ARENA_CONTROL_OWNER
@@ -318,6 +402,7 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
         return [pscustomobject][ordered]@{
             schema = 'ai_arena.qa_evidence.v1'
             id = 'qa.blocked-fixture'
+            generatedAtUtc = '2026-08-09T12:34:56.7890000+00:00'
             verdict = 'partial'
             cleanFullPasses = 1
             gates = @($gateIds | ForEach-Object { New-BlockedFixtureGate -Id $_ })
@@ -563,6 +648,7 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
     foreach ($deniedIssueSet in @(
         @('current.tree_fingerprint'),
         @('bundle.feature_matrix_feature_render', 'current.tree_fingerprint'),
+        @('bundle.feature_matrix_gates', 'current.tree_fingerprint'),
         @('bundle.feature_matrix_feature_render', 'bundle.privacy'),
         @('bundle.feature_matrix_schema'),
         @('bundle.feature_matrix_png'))) {
@@ -614,6 +700,85 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
         if (Test-Path -LiteralPath $reparseTarget) { [IO.Directory]::Delete($reparseTarget) }
     }
 
+    $partialRenderContract = ConvertFrom-QaJsonPreservingDateStrings -Json $originalContractJson
+    $partialRenderContract.verdict = 'blocked'
+    $partialFeatureGate = @($partialRenderContract.gates | Where-Object {
+        [string]$_.id -ceq 'ui.feature-surface-matrix'
+    })
+    Require ($partialFeatureGate.Count -eq 1) 'Partial-render fallback fixture has an ambiguous aggregate feature gate.'
+    $partialFeatureGate[0].outcome = 'fail'
+    $partialFeatureGate[0].tests = [ordered]@{ passed = 0; failed = 1; skipped = 0; total = 1 }
+    $partialFeatureGate[0].evidence = New-EvidenceAssertion `
+        -Id 'evidence.ui.feature-surface-matrix' `
+        -State observed `
+        -Summary 'The aggregate feature matrix failed after one complete rendered pass.' `
+        -ReferenceId 'artifact.ui.feature-surface-matrix.log'
+    $passTwoGate = New-BlockedFixtureGate -Id 'pass-02.rendered-ui'
+    $passTwoGate.outcome = 'blocked'
+    $passTwoGate.tests = [ordered]@{ passed = 0; failed = 0; skipped = 0; total = 0 }
+    $passTwoGate.evidence = New-EvidenceAssertion `
+        -Id 'evidence.pass-02.rendered-ui' `
+        -State unavailable `
+        -Summary 'The second rendered pass was blocked after the first pass completed.' `
+        -ReferenceId 'artifact.pass-02.rendered-ui.log' `
+        -Limitation 'No second-pass feature matrix document was produced.'
+    $passTwoArtifact = New-BlockedFixtureArtifact `
+        -Id 'artifact.pass-02.rendered-ui.log' `
+        -Kind 'sanitized-gate-log' `
+        -RelativePath 'logs/pass-02.rendered-ui.log' `
+        -Text "gate=pass-02.rendered-ui`noutcome=blocked`n"
+    $partialRenderContract.gates = @($partialRenderContract.gates) + @($passTwoGate)
+    $partialRenderContract.artifacts = @($partialRenderContract.artifacts) + @($passTwoArtifact)
+    $partialRenderContractJson = $partialRenderContract | ConvertTo-Json -Depth 20
+
+    $partialRenderResult = Invoke-QaBlockedFallback `
+        -Contract $partialRenderContract `
+        -EvidencePath $evidencePathFixture `
+        -IssueCodes @('bundle.feature_matrix_gates') `
+        -ValidateBundle {
+            param([string]$candidatePath)
+            $candidate = ConvertFrom-QaJsonPreservingDateStrings -Json (Get-Content -LiteralPath $candidatePath -Raw)
+            $candidateRenderedGates = @($candidate.gates | Where-Object {
+                [string]$_.id -cmatch '^pass-[0-9]{2}\.rendered-ui$'
+            })
+            $candidateRejection = @($candidate.artifacts | Where-Object {
+                [string]$_.id -ceq 'artifact.postflight.authoritative-rejection.log'
+            })
+            return [string]$candidate.verdict -ceq 'blocked' -and
+                [int]$candidate.cleanFullPasses -eq 0 -and
+                $candidateRenderedGates.Count -eq 2 -and
+                @($candidateRenderedGates | Where-Object { [string]$_.outcome -cne 'fail' }).Count -eq 0 -and
+                $candidateRejection.Count -eq 1 -and
+                @(Get-QaRejectedClosureArtifacts -Contract $candidate).Count -eq 0
+        }
+    $ownedFallbacks.Add($partialRenderResult)
+    Require (($partialRenderContract | ConvertTo-Json -Depth 20) -ceq $partialRenderContractJson) 'Partial-render fallback mutated its exact rejected input contract.'
+    $partialBlocked = $partialRenderResult.Contract
+    $partialRejectionArtifact = @($partialBlocked.artifacts | Where-Object {
+        [string]$_.id -ceq 'artifact.postflight.authoritative-rejection.log'
+    })
+    Require ($partialRejectionArtifact.Count -eq 1) 'Partial-render fallback did not emit exactly one rejection artifact.'
+    $partialRejectionText = Get-Content -LiteralPath (Join-Path $blockedRunRoot $partialRejectionArtifact[0].relativePath) -Raw
+    Require ($partialRejectionText -match 'issueCount=1' -and
+        $partialRejectionText -match 'issue\.00=bundle\.feature_matrix_gates') 'Partial-render fallback did not persist the bounded feature-matrix gate issue.'
+    foreach ($gateId in @('pass-01.rendered-ui', 'pass-02.rendered-ui', 'ui.feature-surface-matrix')) {
+        $failedGate = @($partialBlocked.gates | Where-Object { [string]$_.id -ceq $gateId })
+        Require ($failedGate.Count -eq 1 -and
+            [string]$failedGate[0].outcome -ceq 'fail' -and
+            [string]$failedGate[0].evidence.referenceId -ceq $partialRejectionArtifact[0].id) "Partial-render fallback did not fail and bind $gateId."
+    }
+    Require (Test-Path -LiteralPath (Join-Path $partialRenderResult.Quarantine.FinalRoot 'closure/logs/pass-02.rendered-ui.log') -PathType Leaf) 'Partial-render fallback did not quarantine the failed-pass log.'
+    Require (Test-Path -LiteralPath (Join-Path $partialRenderResult.Quarantine.FinalRoot 'closure/metadata/pass-01.feature-surface-matrix.json') -PathType Leaf) 'Partial-render fallback did not quarantine the passing-pass feature document.'
+    Assert-QaBlockedBundleInventory -Contract $partialBlocked -EvidencePath $evidencePathFixture
+    Remove-QaGeneratedBlockedFallbackArtifacts -Artifacts $partialRenderResult.GeneratedArtifacts
+    Undo-QaRejectedArtifactQuarantine -Quarantine $partialRenderResult.Quarantine
+    [void]$ownedFallbacks.Remove($partialRenderResult)
+    $passTwoArtifactPath = Join-Path $blockedRunRoot 'logs/pass-02.rendered-ui.log'
+    Require (Test-Path -LiteralPath $passTwoArtifactPath -PathType Leaf) 'Partial-render fallback rollback did not restore the failed-pass log.'
+    [IO.File]::Delete($passTwoArtifactPath)
+    Write-Utf8NoBom -Path $evidencePathFixture -Text $originalEvidenceText
+    Require ((Get-BlockedFixtureFileInventory -Root $blockedRunRoot) -ceq $trustedPathBaseline) 'Partial-render fallback fixture did not restore the exact baseline inventory.'
+
     $blockedResult = Invoke-QaBlockedFallback `
         -Contract $originalContract `
         -EvidencePath $evidencePathFixture `
@@ -629,6 +794,7 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
     Require (($originalContract | ConvertTo-Json -Depth 20) -ceq $originalContractJson) 'Blocked fallback mutated the rejected candidate object on its success path.'
     $blocked = $blockedResult.Contract
     Require ([string]$blocked.verdict -ceq 'blocked' -and [int]$blocked.cleanFullPasses -eq 0) 'Blocked fallback did not reset verdict and clean-pass authority.'
+    Require ($blocked.generatedAtUtc -is [string] -and [string]$blocked.generatedAtUtc -ceq '2026-08-09T12:34:56.7890000+00:00') 'Blocked fallback contract cloning rewrote an exact +00:00 timestamp lexeme.'
     $rejectionArtifact = @($blocked.artifacts | Where-Object id -eq 'artifact.postflight.authoritative-rejection.log')
     Require ($rejectionArtifact.Count -eq 1) 'Blocked fallback did not emit exactly one rejection log artifact.'
     $rejectionText = Get-Content -LiteralPath (Join-Path $blockedRunRoot $rejectionArtifact[0].relativePath) -Raw
@@ -717,7 +883,8 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
         'Test-AIArenaQaSafeAutomationValue',
         'Test-AIArenaQaSameFocus',
         'Test-AIArenaQaFocusStep',
-        'Test-AIArenaQaFocusCycle')) {
+        'Test-AIArenaQaFocusCycle',
+        'Test-AIArenaQaFocusCapture')) {
         $focusHelperAst = @($ast.FindAll({
             param($node)
             $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
@@ -734,6 +901,7 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
             [string]$BeforeType = 'Button',
             [string]$AfterType = 'Button')
         return [pscustomobject]@{
+            ok = $true
             direction = $Direction
             beforeIdentity = $Before
             beforeControlType = $BeforeType
@@ -753,6 +921,34 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
     Require (-not (Test-AIArenaQaFocusCycle $wrongDirection $validPrevious $validCapture)) 'qa-seal accepted the wrong measured focus direction.'
     $brokenType = New-FocusStep previous 'HeaderSite#0329' 'HeaderSite#0037' 'CheckBox' 'Button'
     Require (-not (Test-AIArenaQaFocusCycle $validNext $brokenType $validCapture)) 'qa-seal accepted a focus edge whose control type did not close.'
+    $atomicFocusCapture = [pscustomobject]@{
+        ok = $true
+        failureStage = 'none'
+        isolatedProcess = $true
+        ownerBound = $true
+        anchor = [pscustomobject]@{
+            ok = $true
+            direction = 'anchor'
+            beforeIdentity = 'QaFocusTrailing'
+            beforeControlType = 'Button'
+            afterIdentity = 'ArenaNavButtonElement'
+            afterControlType = 'Button'
+            moved = $true
+            focusChanged = $true
+        }
+        next = New-FocusStep next 'ArenaNavButtonElement' 'ExperimentLabNavButtonElement'
+        previous = New-FocusStep previous 'ExperimentLabNavButtonElement' 'ArenaNavButtonElement'
+        capture = New-FocusStep next 'ArenaNavButtonElement' 'ExperimentLabNavButtonElement'
+    }
+    Require (Test-AIArenaQaFocusCapture $atomicFocusCapture) 'qa-seal rejected a valid owner-bound anchored atomic focus capture.'
+    $atomicFocusCapture.ownerBound = $false
+    Require (-not (Test-AIArenaQaFocusCapture $atomicFocusCapture)) 'qa-seal accepted an atomic focus capture without exact owner binding.'
+    $atomicFocusCapture.ownerBound = $true
+    $atomicFocusCapture.failureStage = 'next'
+    Require (-not (Test-AIArenaQaFocusCapture $atomicFocusCapture)) 'qa-seal accepted an atomic focus capture carrying a bounded failure stage.'
+    $atomicFocusCapture.failureStage = 'none'
+    $atomicFocusCapture.next.afterIdentity = 'unexpected-shell-control'
+    Require (-not (Test-AIArenaQaFocusCapture $atomicFocusCapture)) 'qa-seal accepted an atomic focus capture that left the stable named shell peer.'
     $parameterNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
     Require ('UserInspectionAccepted' -notin $parameterNames) 'qa-seal still permits pre-render inspection acceptance.'
     $sealSource = Get-Content -LiteralPath $sealScript -Raw
@@ -772,14 +968,15 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
         "Label = '1-5'",
         "Label = '2-0'",
         "@('normal', 'reduced')",
-        '$seedFocus = Move-AIArenaQAFocus -Direction next',
-        'Move-AIArenaQAFocus -Direction next',
-        'Move-AIArenaQAFocus -Direction previous',
-        '$captureFocus = Move-AIArenaQAFocus -Direction next',
+        '$focusCycle = Get-AIArenaQAFocusCapture -TimeoutMs 10000',
+        'Test-AIArenaQaFocusCapture -FocusCapture $focusCycle.data',
+        '$focusCycle.data.next',
+        '$focusCycle.data.previous',
+        '$focusCycle.data.capture',
         'Test-AIArenaQaFocusCycle',
-        'Test-AIArenaQaFocusStep -Step $seedFocus.data -Direction next',
-        '$seedFocus.data.afterIdentity',
-        '$nextFocus.data.beforeIdentity',
+        "'owner-boundary'",
+        "'anchor-table'",
+        'focus={7}',
         '$env:AI_ARENA_CONTROL_OWNER = $ownerToken',
         'Remove-IsolatedQaControlToken',
         'renderFailureStage=',
@@ -811,6 +1008,15 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
     )) {
         Require ($sealSource.IndexOf($requiredMatrixToken, [StringComparison]::Ordinal) -ge 0) "qa-seal is missing matrix behavior: $requiredMatrixToken"
     }
+    $renderedUiSmokeAst = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Invoke-RenderedUiSmoke'
+    }, $true))
+    Require ($renderedUiSmokeAst.Count -eq 1) 'qa-seal is missing its one global rendered UI smoke function.'
+    $renderedUiSmokeSource = $renderedUiSmokeAst[0].Extent.Text
+    Require ([regex]::Matches($renderedUiSmokeSource, 'Get-AIArenaQAFocusCapture').Count -eq 1) 'global matrix should issue exactly one atomic focus-capture request per cell.'
+    Require ($renderedUiSmokeSource.IndexOf('Move-AIArenaQAFocus', [StringComparison]::Ordinal) -lt 0) 'global matrix still advances focus through separately interleavable control-plane requests.'
 
     $engine = (Get-Process -Id $PID).Path
     $arguments = @('-NoProfile', '-NonInteractive')

@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
@@ -14,6 +15,7 @@ using AIArena.Core.Models;
 using AIArena.Core.Services;
 using AIArena.VerificationLab;
 using AIArena.Wpf;
+using AIArena.Wpf.Controls;
 using AIArena.Wpf.Services;
 
 internal static partial class Program
@@ -364,6 +366,7 @@ internal static partial class Program
                     Require(handler.CanHandle(AIArenaControlCommands.AppQaWindowSize)
                         && handler.CanHandle(AIArenaControlCommands.AppQaStructureCapture)
                         && handler.CanHandle(AIArenaControlCommands.AppQaFocusAdvance)
+                        && handler.CanHandle(AIArenaControlCommands.AppQaFocusCapture)
                         && handler.CanHandle(AIArenaControlCommands.AppQaFocusFeature)
                         && handler.CanHandle(AIArenaControlCommands.AppQaMotionSet)
                         && !handler.CanHandle(AIArenaControlCommands.ProviderState), "app handler should own only app screenshot and QA verification commands");
@@ -988,6 +991,223 @@ internal static partial class Program
         {
             Environment.SetEnvironmentVariable("AI_ARENA_DATA_DIR", previousDataRoot);
             SystemMotionPreferences.ClearQaOverride();
+            if (Directory.Exists(dataRoot))
+            {
+                Directory.Delete(dataRoot, recursive: true);
+            }
+        }
+    }
+
+    static void UiVerificationCapturesOwnerBoundAtomicShellFocusCycle()
+    {
+        var owner = Guid.NewGuid().ToString("N");
+        var mismatchedOwner = Guid.NewGuid().ToString("N");
+        var dataRoot = Path.Combine(Path.GetTempPath(), $"ai-arena-ui-focus-capture-{owner}");
+        var ownerMarker = Path.Combine(dataRoot, ".ai-arena-qa-owner");
+        var previousDataRoot = Environment.GetEnvironmentVariable("AI_ARENA_DATA_DIR");
+        var previousOwner = Environment.GetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable);
+        try
+        {
+            Directory.CreateDirectory(dataRoot);
+            File.WriteAllText(ownerMarker, owner + "\n", new UTF8Encoding(false));
+            Environment.SetEnvironmentVariable("AI_ARENA_DATA_DIR", dataRoot);
+            Environment.SetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable, owner);
+            RunStaTest(() =>
+            {
+                var dispatcher = Dispatcher.CurrentDispatcher;
+                var previousContext = SynchronizationContext.Current;
+                SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
+                var navigationRail = new ShellNavigationRailControl();
+                var anchor = navigationRail.ArenaNavigationButton;
+                var peer = navigationRail.ExperimentLabNavigationButton;
+                var trailing = new Button
+                {
+                    Name = "QaFocusTrailing",
+                    Content = UiEvidencePrivatePath,
+                    ToolTip = UiEvidenceProviderText,
+                    Focusable = true,
+                    IsTabStop = true
+                };
+                AutomationProperties.SetHelpText(trailing, UiEvidencePrivateText);
+                var panel = new Grid();
+                panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                panel.Children.Add(navigationRail);
+                Grid.SetRow(trailing, 1);
+                panel.Children.Add(trailing);
+                KeyboardNavigation.SetTabNavigation(panel, KeyboardNavigationMode.Cycle);
+                var window = new Window
+                {
+                    Width = 1000,
+                    Height = 700,
+                    WindowStyle = WindowStyle.None,
+                    ShowInTaskbar = false,
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = SystemParameters.VirtualScreenLeft - 1200,
+                    Top = SystemParameters.VirtualScreenTop - 1200,
+                    Content = panel
+                };
+
+                try
+                {
+                    window.Show();
+                    window.UpdateLayout();
+                    FocusManager.SetFocusedElement(window, trailing);
+                    _ = Keyboard.Focus(trailing);
+                    window.UpdateLayout();
+
+                    var focusSequence = new List<string>();
+                    var interleaveQueued = false;
+                    anchor.GotKeyboardFocus += (_, _) =>
+                    {
+                        focusSequence.Add(anchor.Name);
+                        if (!interleaveQueued)
+                        {
+                            interleaveQueued = true;
+                            _ = dispatcher.BeginInvoke(
+                                () => focusSequence.Add("interleaved-dispatch"),
+                                DispatcherPriority.Input);
+                        }
+                    };
+                    peer.GotKeyboardFocus += (_, _) => focusSequence.Add(peer.Name);
+                    trailing.GotKeyboardFocus += (_, _) => focusSequence.Add(trailing.Name);
+
+                    var service = new AIArenaUiVerificationControlService(window, dataRoot, () => "dark-blue");
+                    using var leaseAcquired = new ManualResetEventSlim(false);
+                    service.DebugQaOwnerLeaseAcquired = leaseAcquired.Set;
+                    Require(AIArenaUiVerificationControlService.IsOwnerBoundIsolatedQaDataRoot(dataRoot),
+                        "atomic focus capture should require the exact isolated data root, owner namespace, and owner marker");
+                    var events = new AIArenaControlPlaneEventHub();
+                    var published = new List<AIArenaControlEvent>();
+                    using var subscription = events.Subscribe(published.Add);
+                    var handler = new AIArenaAppControlHandler(
+                        new AIArenaScreenshotControlService(window, dataRoot),
+                        events,
+                        verification: service);
+                    Require(AIArenaControlPlaneProtocol.TryParseRequest(
+                            """{"id":"focus-capture","command":"app.qa.focus.capture","args":{}}""",
+                            out var request,
+                            out _),
+                        "atomic focus capture should parse at the authenticated protocol boundary");
+                    var responseTask = Task.Run(() => handler.ExecuteAsync(request));
+                    Require(leaseAcquired.Wait(TimeSpan.FromSeconds(5)),
+                        "atomic focus capture did not acquire its owner authorization lease before UI dispatch");
+                    var markerWriteBlocked = false;
+                    try
+                    {
+                        using var writer = new FileStream(
+                            ownerMarker,
+                            FileMode.Open,
+                            FileAccess.Write,
+                            FileShare.ReadWrite | FileShare.Delete);
+                    }
+                    catch (IOException)
+                    {
+                        markerWriteBlocked = true;
+                    }
+                    Require(markerWriteBlocked,
+                        "owner marker could be replaced while its authorized focus capture was queued");
+                    var response = QaPumpDispatcherTask(responseTask);
+                    using (var writer = new FileStream(
+                        ownerMarker,
+                        FileMode.Open,
+                        FileAccess.Write,
+                        FileShare.ReadWrite | FileShare.Delete))
+                    {
+                        Require(writer.CanWrite, "owner authorization lease was not released after atomic focus capture");
+                    }
+                    var captured = response.Data as AIArenaQaFocusCaptureResult;
+                    Require(response.Ok
+                        && captured is { Ok: true, FailureStage: "none", IsolatedProcess: true, OwnerBound: true }
+                        && captured.Anchor.Direction == "anchor"
+                        && captured.Anchor.BeforeIdentity == "QaFocusTrailing"
+                        && captured.Anchor.AfterIdentity == AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity
+                        && captured.Next.BeforeIdentity == AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity
+                        && captured.Next.AfterIdentity == AIArenaUiVerificationControlService.FocusCapturePeerIdentity
+                        && captured.Previous.BeforeIdentity == AIArenaUiVerificationControlService.FocusCapturePeerIdentity
+                        && captured.Previous.AfterIdentity == AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity
+                        && captured.Capture.BeforeIdentity == AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity
+                        && captured.Capture.AfterIdentity == AIArenaUiVerificationControlService.FocusCapturePeerIdentity
+                        && focusSequence.Take(4).SequenceEqual([
+                            AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity,
+                            AIArenaUiVerificationControlService.FocusCapturePeerIdentity,
+                            AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity,
+                            AIArenaUiVerificationControlService.FocusCapturePeerIdentity])
+                        && published.Count(item => item.Type == "app.qa.focus.captured") == 1,
+                        "one control-plane request should anchor and complete the exact contiguous next/previous/next shell focus cycle");
+                    dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+                    Require(focusSequence.SequenceEqual([
+                            AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity,
+                            AIArenaUiVerificationControlService.FocusCapturePeerIdentity,
+                            AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity,
+                            AIArenaUiVerificationControlService.FocusCapturePeerIdentity,
+                            "interleaved-dispatch"]),
+                        "a queued same-priority dispatcher callback interleaved with the UI-thread-atomic focus cycle");
+
+                    var serialized = AIArenaControlPlaneProtocol.Serialize(response);
+                    Require(serialized.Length < 8 * 1024
+                        && !serialized.Contains(dataRoot, StringComparison.OrdinalIgnoreCase)
+                        && !serialized.Contains(owner, StringComparison.OrdinalIgnoreCase)
+                        && !serialized.Contains(UiEvidencePrivateText, StringComparison.Ordinal)
+                        && !serialized.Contains(UiEvidenceProviderText, StringComparison.Ordinal)
+                        && !serialized.Contains(UiEvidencePrivatePath, StringComparison.OrdinalIgnoreCase),
+                        "atomic focus evidence should be bounded and contain only privacy-safe static identities");
+
+                    FocusManager.SetFocusedElement(window, trailing);
+                    _ = Keyboard.Focus(trailing);
+                    window.UpdateLayout();
+                    File.WriteAllText(ownerMarker, mismatchedOwner + "\n", new UTF8Encoding(false));
+                    var denied = handler.ExecuteAsync(request).GetAwaiter().GetResult();
+                    Require(!denied.Ok
+                        && denied.ErrorCode == "not_available"
+                        && denied.Data is AIArenaQaFocusCaptureResult
+                        {
+                            Ok: false,
+                            FailureStage: "owner-boundary",
+                            IsolatedProcess: true,
+                            OwnerBound: false
+                        }
+                        && trailing.IsKeyboardFocused
+                        && published.Count(item => item.Type == "app.qa.focus.captured") == 1,
+                        "an owner-marker mismatch should fail closed before focus mutation or success publication");
+
+                    File.WriteAllText(ownerMarker, new string('a', 41), new UTF8Encoding(false));
+                    var oversizedMarker = handler.ExecuteAsync(request).GetAwaiter().GetResult();
+                    Require(!oversizedMarker.Ok
+                        && oversizedMarker.Data is AIArenaQaFocusCaptureResult
+                        {
+                            FailureStage: "owner-boundary",
+                            OwnerBound: false
+                        },
+                        "an oversized owner marker should fail before any unbounded content read");
+
+                    File.WriteAllText(ownerMarker, owner + "\n", new UTF8Encoding(false));
+                    anchor.Visibility = Visibility.Collapsed;
+                    window.UpdateLayout();
+                    var missingAnchor = handler.ExecuteAsync(request).GetAwaiter().GetResult();
+                    Require(!missingAnchor.Ok
+                        && missingAnchor.Data is AIArenaQaFocusCaptureResult
+                        {
+                            FailureStage: "anchor",
+                            OwnerBound: true
+                        } missingAnchorResult
+                        && !missingAnchorResult.Anchor.Ok
+                        && !missingAnchorResult.Next.Ok
+                        && !missingAnchorResult.Previous.Ok
+                        && !missingAnchorResult.Capture.Ok,
+                        "a missing rendered named shell anchor should return a fixed safe failure class and complete bounded step shapes");
+                }
+                finally
+                {
+                    window.Close();
+                    SynchronizationContext.SetSynchronizationContext(previousContext);
+                }
+            });
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("AI_ARENA_DATA_DIR", previousDataRoot);
+            Environment.SetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable, previousOwner);
             if (Directory.Exists(dataRoot))
             {
                 Directory.Delete(dataRoot, recursive: true);

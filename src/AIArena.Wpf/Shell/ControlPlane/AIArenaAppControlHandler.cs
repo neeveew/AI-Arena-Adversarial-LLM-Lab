@@ -25,6 +25,7 @@ internal sealed class AIArenaAppControlHandler
             || command.Equals(AIArenaControlCommands.AppQaWindowSize, StringComparison.OrdinalIgnoreCase)
             || command.Equals(AIArenaControlCommands.AppQaStructureCapture, StringComparison.OrdinalIgnoreCase)
             || command.Equals(AIArenaControlCommands.AppQaFocusAdvance, StringComparison.OrdinalIgnoreCase)
+            || command.Equals(AIArenaControlCommands.AppQaFocusCapture, StringComparison.OrdinalIgnoreCase)
             || command.Equals(AIArenaControlCommands.AppQaFocusFeature, StringComparison.OrdinalIgnoreCase)
             || command.Equals(AIArenaControlCommands.AppQaMotionSet, StringComparison.OrdinalIgnoreCase);
     }
@@ -46,6 +47,11 @@ internal sealed class AIArenaAppControlHandler
         if (request.Command.Equals(AIArenaControlCommands.AppQaFocusAdvance, StringComparison.OrdinalIgnoreCase))
         {
             return await AdvanceQaFocusAsync(request, cancellationToken);
+        }
+
+        if (request.Command.Equals(AIArenaControlCommands.AppQaFocusCapture, StringComparison.OrdinalIgnoreCase))
+        {
+            return await CaptureQaFocusAsync(request, cancellationToken);
         }
 
         if (request.Command.Equals(AIArenaControlCommands.AppQaFocusFeature, StringComparison.OrdinalIgnoreCase))
@@ -180,6 +186,25 @@ internal sealed class AIArenaAppControlHandler
         }
 
         events.Publish("app.qa.focus.advanced", result.Message, result);
+        return AIArenaControlResponse.Success(request, result.Message, result);
+    }
+
+    private async Task<AIArenaControlResponse> CaptureQaFocusAsync(
+        AIArenaControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (verification is null)
+        {
+            return AIArenaControlResponse.Error(request, "not_available", "UI verification controls are not available.");
+        }
+
+        var result = await verification.CaptureKeyboardFocusCycleAsync(cancellationToken);
+        if (!result.Ok)
+        {
+            return AIArenaControlResponse.Error(request, result.ErrorCode, result.Message, result);
+        }
+
+        events.Publish("app.qa.focus.captured", result.Message, result);
         return AIArenaControlResponse.Success(request, result.Message, result);
     }
 

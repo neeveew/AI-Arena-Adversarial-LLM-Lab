@@ -1211,6 +1211,26 @@ function Move-AIArenaQAFocus {
     } -TimeoutMs $TimeoutMs -Token $Token
 }
 
+function Get-AIArenaQAFocusCapture {
+    <#
+        .SYNOPSIS
+        Captures one anchored WPF focus cycle atomically for global QA evidence.
+
+        This owner-bound command is available only in an isolated QA process. It
+        does not send OS keyboard input or query external UI Automation.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [int]$TimeoutMs = 10000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    Invoke-AIArena -Command 'app.qa.focus.capture' -TimeoutMs $TimeoutMs -Token $Token
+}
+
 function Set-AIArenaQAFeatureFocus {
     <#
         .SYNOPSIS

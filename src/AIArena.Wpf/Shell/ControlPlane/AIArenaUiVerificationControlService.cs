@@ -1,7 +1,9 @@
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -38,6 +40,18 @@ internal sealed record AIArenaQaFocusTraversalResult(
     string AfterControlType,
     bool Moved,
     bool FocusChanged);
+
+internal sealed record AIArenaQaFocusCaptureResult(
+    bool Ok,
+    string ErrorCode,
+    string Message,
+    string FailureStage,
+    bool IsolatedProcess,
+    bool OwnerBound,
+    AIArenaQaFocusTraversalResult Anchor,
+    AIArenaQaFocusTraversalResult Next,
+    AIArenaQaFocusTraversalResult Previous,
+    AIArenaQaFocusTraversalResult Capture);
 
 internal sealed record AIArenaQaMotionPreferenceResult(
     bool Ok,
@@ -163,6 +177,12 @@ internal sealed class AIArenaUiVerificationControlService
     internal const string CaptureMode = "wpf-visual-tree-accessibility";
     internal const string CaptureLimitation = "OS UI Automation and OS input are not queried; focus traversal and the privacy-safe visual-tree snapshot are programmatic and in-process. RenderDpiScale is off-screen raster density, not physical or per-monitor display DPI. Motion fields prove preference plumbing, not rendered animation playback. Accessible names, help text, and all dynamic control content are omitted.";
     internal const string ExpectedStateSource = "observed-visible-roots";
+    internal const string FocusCaptureAnchorIdentity = "ArenaNavButtonElement";
+    internal const string FocusCapturePeerIdentity = "ExperimentLabNavButtonElement";
+    private const string QaOwnerMarkerFileName = ".ai-arena-qa-owner";
+    private const uint GenericReadAccess = 0x80000000;
+    private const uint OpenReparsePoint = 0x00200000;
+    private const uint BackupSemantics = 0x02000000;
 
     private static readonly string[] SurfaceRootNames =
     [
@@ -195,6 +215,8 @@ internal sealed class AIArenaUiVerificationControlService
     private readonly Func<int?>? transcriptMessageCount;
     private readonly Func<string?>? selectedExperimentFeatureKey;
     private readonly bool isIsolatedQaProcess;
+
+    internal Action? DebugQaOwnerLeaseAcquired { private get; set; }
 
     public AIArenaUiVerificationControlService(
         Window window,
@@ -297,6 +319,49 @@ internal sealed class AIArenaUiVerificationControlService
                 "not_available",
                 "Keyboard focus traversal is not available for the current WPF visual tree.",
                 normalizedDirection);
+        }
+    }
+
+    public async Task<AIArenaQaFocusCaptureResult> CaptureKeyboardFocusCycleAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var ownerLease = isIsolatedQaProcess
+            ? TryOpenQaOwnerLease(dataRoot)
+            : null;
+        if (ownerLease is null)
+        {
+            return FocusCaptureFailure(
+                "not_available",
+                "Atomic focus capture requires an owner-bound isolated QA process.",
+                "owner-boundary",
+                ownerBound: false);
+        }
+        DebugQaOwnerLeaseAcquired?.Invoke();
+
+        try
+        {
+            if (!window.Dispatcher.CheckAccess())
+            {
+                return await window.Dispatcher.InvokeAsync(
+                    () => CaptureKeyboardFocusCycleOnUiThread(cancellationToken),
+                    DispatcherPriority.Input,
+                    cancellationToken);
+            }
+
+            return CaptureKeyboardFocusCycleOnUiThread(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            return FocusCaptureFailure(
+                "not_available",
+                "The atomic WPF focus cycle is unavailable for the current rendered shell.",
+                "capture",
+                ownerBound: true);
         }
     }
 
@@ -410,6 +475,120 @@ internal sealed class AIArenaUiVerificationControlService
             return false;
         }
     }
+
+    internal static bool IsOwnerBoundIsolatedQaDataRoot(string dataRoot)
+    {
+        using var lease = TryOpenQaOwnerLease(dataRoot);
+        return lease is not null;
+    }
+
+    private static QaOwnerLease? TryOpenQaOwnerLease(string dataRoot)
+    {
+        if (!IsIsolatedQaDataRoot(dataRoot)) return null;
+        var owner = Environment.GetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable)?.Trim() ?? "";
+        if (owner.Length != 32 || owner.Any(character => !char.IsAsciiHexDigit(character)))
+        {
+            return null;
+        }
+
+        SafeFileHandle? rootHandle = null;
+        SafeFileHandle? markerHandle = null;
+        try
+        {
+            var rootPath = Path.GetFullPath(dataRoot);
+            rootHandle = OpenQaOwnerPath(rootPath, directory: true);
+            if (rootHandle.IsInvalid)
+            {
+                return null;
+            }
+            var rootAttributes = File.GetAttributes(rootHandle);
+            if ((rootAttributes & FileAttributes.Directory) == 0
+                || (rootAttributes & FileAttributes.ReparsePoint) != 0)
+            {
+                return null;
+            }
+
+            markerHandle = OpenQaOwnerPath(Path.Combine(rootPath, QaOwnerMarkerFileName), directory: false);
+            if (markerHandle.IsInvalid)
+            {
+                return null;
+            }
+            var markerAttributes = File.GetAttributes(markerHandle);
+            if ((markerAttributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+            {
+                return null;
+            }
+
+            var markerLength = RandomAccess.GetLength(markerHandle);
+            if (markerLength is < 32 or > 40)
+            {
+                return null;
+            }
+            var bytes = new byte[(int)markerLength];
+            var totalRead = 0;
+            while (totalRead < bytes.Length)
+            {
+                var read = RandomAccess.Read(markerHandle, bytes.AsSpan(totalRead), totalRead);
+                if (read == 0) return null;
+                totalRead += read;
+            }
+
+            var recordedOwner = new UTF8Encoding(false, true).GetString(bytes).Trim();
+            if (recordedOwner.Length != 32
+                || recordedOwner.Any(character => !char.IsAsciiHexDigit(character))
+                || !recordedOwner.Equals(owner, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var lease = new QaOwnerLease(rootHandle, markerHandle);
+            rootHandle = null;
+            markerHandle = null;
+            return lease;
+        }
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException
+            or PathTooLongException
+            or DecoderFallbackException)
+        {
+            return null;
+        }
+        finally
+        {
+            markerHandle?.Dispose();
+            rootHandle?.Dispose();
+        }
+    }
+
+    private static SafeFileHandle OpenQaOwnerPath(string path, bool directory)
+    {
+        return CreateFileForQaOwner(
+            path,
+            GenericReadAccess,
+            FileShare.Read,
+            IntPtr.Zero,
+            creationDisposition: 3,
+            OpenReparsePoint | (directory ? BackupSemantics : 0),
+            IntPtr.Zero);
+    }
+
+    [DllImport(
+        "kernel32.dll",
+        EntryPoint = "CreateFileW",
+        CharSet = CharSet.Unicode,
+        SetLastError = true,
+        BestFitMapping = false,
+        ThrowOnUnmappableChar = true)]
+    private static extern SafeFileHandle CreateFileForQaOwner(
+        string fileName,
+        uint desiredAccess,
+        FileShare shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
 
     public async Task<AIArenaUiStructureCaptureResult> CaptureStructureAsync(
         string? requestedPath,
@@ -636,6 +815,174 @@ internal sealed class AIArenaUiVerificationControlService
             after.ControlType,
             moved,
             changed);
+    }
+
+    private AIArenaQaFocusCaptureResult CaptureKeyboardFocusCycleOnUiThread(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        window.UpdateLayout();
+        if (!TryBuildVisibleIdentityTable(out var entries))
+        {
+            return FocusCaptureFailure(
+                "not_available",
+                "The bounded visible-tree focus table was truncated.",
+                "anchor-table",
+                ownerBound: true);
+        }
+
+        var anchors = entries
+            .Where(entry => string.Equals(
+                entry.BaseIdentity,
+                FocusCaptureAnchorIdentity,
+                StringComparison.Ordinal))
+            .ToArray();
+        if (anchors.Length != 1
+            || !anchors[0].IsRendered
+            || anchors[0].Element is not { IsEnabled: true, Focusable: true } anchorElement
+            || !KeyboardNavigation.GetIsTabStop(anchorElement))
+        {
+            return FocusCaptureFailure(
+                "not_available",
+                "The deterministic shell focus anchor was not uniquely rendered and focusable.",
+                "anchor",
+                ownerBound: true);
+        }
+
+        var anchor = FocusAnchorOnUiThread(entries, anchors[0], cancellationToken);
+        if (!anchor.Ok)
+        {
+            return FocusCaptureFailure(
+                anchor.ErrorCode,
+                anchor.Message,
+                "anchor",
+                ownerBound: true,
+                anchor: anchor);
+        }
+
+        var next = AdvanceKeyboardFocusOnUiThread("next", cancellationToken);
+        var previous = AdvanceKeyboardFocusOnUiThread("previous", cancellationToken);
+        var capture = AdvanceKeyboardFocusOnUiThread("next", cancellationToken);
+        var failureStage = FocusCaptureFailureStage(anchor, next, previous, capture);
+        if (failureStage.Length > 0)
+        {
+            return FocusCaptureFailure(
+                "not_available",
+                "The atomic WPF focus cycle did not close on the deterministic shell controls.",
+                failureStage,
+                ownerBound: true,
+                anchor,
+                next,
+                previous,
+                capture);
+        }
+
+        return new AIArenaQaFocusCaptureResult(
+            true,
+            "",
+            "Atomic WPF focus evidence captured from the deterministic shell anchor.",
+            "none",
+            true,
+            true,
+            anchor,
+            next,
+            previous,
+            capture);
+    }
+
+    private AIArenaQaFocusTraversalResult FocusAnchorOnUiThread(
+        IReadOnlyList<VisualIdentityEntry> entries,
+        VisualIdentityEntry anchorEntry,
+        CancellationToken cancellationToken)
+    {
+        var target = anchorEntry.Element!;
+        var before = DescribeFocusFromTable(entries, Keyboard.FocusedElement as DependencyObject);
+        FocusManager.SetFocusedElement(FocusManager.GetFocusScope(target), target);
+        var moved = target.Focus();
+        if (!target.IsKeyboardFocused)
+        {
+            _ = Keyboard.Focus(target);
+        }
+
+        window.UpdateLayout();
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!TryBuildVisibleIdentityTable(out var afterEntries))
+        {
+            return FocusFailure(
+                "not_available",
+                "The bounded visible-tree focus table changed or was truncated after anchoring.",
+                "anchor");
+        }
+
+        var focusedElement = Keyboard.FocusedElement as DependencyObject;
+        var trackedTarget = afterEntries.SingleOrDefault(entry => ReferenceEquals(entry.Element, target));
+        var after = DescribeFocusFromTable(afterEntries, focusedElement);
+        var focused = target.IsKeyboardFocused
+            && trackedTarget.Element is not null
+            && trackedTarget.IsRendered
+            && string.Equals(trackedTarget.Identity, FocusCaptureAnchorIdentity, StringComparison.Ordinal)
+            && string.Equals(after.Identity, FocusCaptureAnchorIdentity, StringComparison.Ordinal)
+            && string.Equals(after.ControlType, "Button", StringComparison.Ordinal);
+        var changed = !string.Equals(before.Identity, after.Identity, StringComparison.Ordinal)
+            || !string.Equals(before.ControlType, after.ControlType, StringComparison.Ordinal);
+        return new AIArenaQaFocusTraversalResult(
+            focused,
+            focused ? "" : "not_available",
+            focused
+                ? "Keyboard focus anchored on the deterministic shell control."
+                : "Keyboard focus could not anchor on the deterministic shell control.",
+            "anchor",
+            before.Identity,
+            before.ControlType,
+            after.Identity,
+            after.ControlType,
+            moved || focused,
+            changed);
+    }
+
+    private static string FocusCaptureFailureStage(
+        AIArenaQaFocusTraversalResult anchor,
+        AIArenaQaFocusTraversalResult next,
+        AIArenaQaFocusTraversalResult previous,
+        AIArenaQaFocusTraversalResult capture)
+    {
+        if (!IsClosedFocusStep(next, "next")) return "next";
+        if (!IsClosedFocusStep(previous, "previous")) return "previous";
+        if (!IsClosedFocusStep(capture, "next")) return "capture";
+        if (!SameFocus(anchor.AfterIdentity, anchor.AfterControlType, next.BeforeIdentity, next.BeforeControlType)
+            || !SameFocus(next.AfterIdentity, next.AfterControlType, previous.BeforeIdentity, previous.BeforeControlType)
+            || !SameFocus(previous.AfterIdentity, previous.AfterControlType, capture.BeforeIdentity, capture.BeforeControlType)
+            || !SameFocus(anchor.AfterIdentity, anchor.AfterControlType, previous.AfterIdentity, previous.AfterControlType)
+            || !SameFocus(next.AfterIdentity, next.AfterControlType, capture.AfterIdentity, capture.AfterControlType)
+            || !string.Equals(anchor.AfterIdentity, FocusCaptureAnchorIdentity, StringComparison.Ordinal)
+            || !string.Equals(anchor.AfterControlType, "Button", StringComparison.Ordinal)
+            || !string.Equals(next.AfterIdentity, FocusCapturePeerIdentity, StringComparison.Ordinal)
+            || !string.Equals(next.AfterControlType, "Button", StringComparison.Ordinal))
+        {
+            return "cycle";
+        }
+
+        return "";
+    }
+
+    private static bool IsClosedFocusStep(AIArenaQaFocusTraversalResult step, string direction)
+    {
+        return step.Ok
+            && step.Moved
+            && step.FocusChanged
+            && string.Equals(step.Direction, direction, StringComparison.Ordinal)
+            && !SameFocus(step.BeforeIdentity, step.BeforeControlType, step.AfterIdentity, step.AfterControlType)
+            && !string.Equals(step.AfterIdentity, "none", StringComparison.Ordinal);
+    }
+
+    private static bool SameFocus(
+        string firstIdentity,
+        string firstControlType,
+        string secondIdentity,
+        string secondControlType)
+    {
+        return string.Equals(firstIdentity, secondIdentity, StringComparison.Ordinal)
+            && string.Equals(firstControlType, secondControlType, StringComparison.Ordinal);
     }
 
     private AIArenaQaFocusTraversalResult FocusSelectedFeatureContentOnUiThread(
@@ -1532,6 +1879,29 @@ internal sealed class AIArenaUiVerificationControlService
         return new AIArenaQaWindowSizeResult(false, code, message, widthDip, heightDip, 0, 0, 0, 0);
     }
 
+    private AIArenaQaFocusCaptureResult FocusCaptureFailure(
+        string code,
+        string message,
+        string failureStage,
+        bool ownerBound,
+        AIArenaQaFocusTraversalResult? anchor = null,
+        AIArenaQaFocusTraversalResult? next = null,
+        AIArenaQaFocusTraversalResult? previous = null,
+        AIArenaQaFocusTraversalResult? capture = null)
+    {
+        return new AIArenaQaFocusCaptureResult(
+            false,
+            code,
+            message,
+            failureStage,
+            isIsolatedQaProcess,
+            ownerBound,
+            anchor ?? FocusFailure("not_available", "The anchor step was not reached.", "anchor"),
+            next ?? FocusFailure("not_available", "The next step was not reached.", "next"),
+            previous ?? FocusFailure("not_available", "The previous step was not reached.", "previous"),
+            capture ?? FocusFailure("not_available", "The capture step was not reached.", "next"));
+    }
+
     private static AIArenaQaFocusTraversalResult FocusFailure(
         string code,
         string message,
@@ -1611,6 +1981,15 @@ internal sealed class AIArenaUiVerificationControlService
     }
 
     private readonly record struct FocusDescriptor(string Identity, string ControlType);
+
+    private sealed class QaOwnerLease(SafeFileHandle rootHandle, SafeFileHandle markerHandle) : IDisposable
+    {
+        public void Dispose()
+        {
+            markerHandle.Dispose();
+            rootHandle.Dispose();
+        }
+    }
 
     private readonly record struct ElementIdentityDescriptor(
         string BaseIdentity,

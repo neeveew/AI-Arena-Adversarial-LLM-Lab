@@ -20,6 +20,7 @@ internal static class AIArenaControlCapabilityCatalog
         Capability(AIArenaControlCommands.AppQaWindowSize, "qa", "Set the current AI Arena window to a bounded verification size in DIP.", ["width", "height"]),
         Capability(AIArenaControlCommands.AppQaStructureCapture, "qa", "Save a privacy-safe deterministic in-process WPF visual-tree artifact; expectedState is verified against observed visible roots.", ["treeFingerprint", "expectedState"], ["path", "renderDpiScale"]),
         Capability(AIArenaControlCommands.AppQaFocusAdvance, "qa", "Advance WPF keyboard focus and report privacy-safe before/after identities.", optional: ["direction"]),
+        Capability(AIArenaControlCommands.AppQaFocusCapture, "qa", "Atomically anchor and capture a deterministic next/previous/next WPF focus cycle in an owner-bound isolated QA process."),
         Capability(AIArenaControlCommands.AppQaFocusFeature, "qa", "Move WPF keyboard focus to the selected Experiment Lab feature content boundary."),
         Capability(AIArenaControlCommands.AppQaMotionSet, "qa", "Set a non-persisted motion mode for an isolated QA process.", ["mode"]),
         Capability(AIArenaControlCommands.ExperimentState, "experiment", "Capture privacy-safe Experiment Lab registration and selection state."),

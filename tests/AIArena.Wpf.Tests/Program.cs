@@ -362,6 +362,7 @@ var tests = new List<(string Name, Action Test)>
     ("UI verification control handler bounds window and routes commands", UiVerificationControlHandlerBoundsWindowAndRoutesCommands),
     ("UI verification binds Experiment Lab evidence to the observed feature", UiVerificationBindsExperimentEvidenceToObservedFeature),
     ("UI verification advances privacy-safe focus and overrides motion only in isolation", UiVerificationAdvancesPrivacySafeFocusAndOverridesMotionOnlyInIsolation),
+    ("UI verification captures one owner-bound atomic shell focus cycle", UiVerificationCapturesOwnerBoundAtomicShellFocusCycle),
     ("QA screenshot render DPI preserves DIP viewport and bounds raster scale", QaScreenshotRenderDpiPreservesDipViewportAndBoundsRasterScale),
     ("real WPF automation artifact passes authoritative evidence CLI", RealWpfAutomationArtifactPassesAuthoritativeEvidenceCli),
     ("provider control handler routes commands and publishes events", ProviderControlHandlerRoutesCommandsAndPublishesEvents),

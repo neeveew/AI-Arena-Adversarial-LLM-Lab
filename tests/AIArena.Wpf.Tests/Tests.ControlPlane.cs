@@ -735,12 +735,13 @@ internal static partial class Program
         Require(AIArenaControlCommands.IsKnown("app.qa.window.size"), "control-plane registry should include bounded QA client sizing");
         Require(AIArenaControlCommands.IsKnown("app.qa.structure.capture"), "control-plane registry should include privacy-safe UI structure evidence");
         Require(AIArenaControlCommands.IsKnown("app.qa.focus.advance"), "control-plane registry should include privacy-safe keyboard traversal evidence");
+        Require(AIArenaControlCommands.IsKnown("app.qa.focus.capture"), "control-plane registry should include owner-bound atomic focus capture");
         Require(AIArenaControlCommands.IsKnown("app.qa.focus.feature"), "control-plane registry should include the selected-feature focus boundary");
         Require(AIArenaControlCommands.IsKnown("app.qa.motion.set"), "control-plane registry should include isolated process motion control");
         Require(AIArenaControlCommands.IsKnown("experiment.state"), "control-plane registry should include privacy-safe Experiment Lab state");
         Require(AIArenaControlCommands.IsKnown("experiment.feature.select"), "control-plane registry should include registered Experiment Lab feature selection");
         Require(!AIArenaControlCommands.IsKnown("not.real"), "control-plane registry should reject unknown commands");
-        Require(AIArenaControlCapabilityCatalog.All.Count == 87, "capability catalog should expose the complete 87-command surface");
+        Require(AIArenaControlCapabilityCatalog.All.Count == 88, "capability catalog should expose the complete 88-command surface");
         Require(AIArenaControlCapabilityCatalog.All.Select(item => item.Command).Distinct(StringComparer.OrdinalIgnoreCase).Count() == AIArenaControlCapabilityCatalog.All.Count, "capability catalog commands should be unique");
         var reset = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == "arena.reset");
         Require(reset.Destructive && reset.RequiredArguments.Contains("confirm", StringComparer.OrdinalIgnoreCase), "capability catalog should mark arena reset as destructive and confirmation-gated");
@@ -777,6 +778,12 @@ internal static partial class Program
         Require(qaFocus.Category == "qa"
             && !qaFocus.Destructive
             && qaFocus.OptionalArguments.SequenceEqual(["direction"]), "QA focus traversal should be optional-direction and non-destructive");
+        var qaFocusCapture = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.AppQaFocusCapture);
+        Require(qaFocusCapture.Category == "qa"
+            && !qaFocusCapture.Destructive
+            && qaFocusCapture.RequiredArguments.Length == 0
+            && qaFocusCapture.OptionalArguments.Length == 0,
+            "atomic QA focus capture should be argument-free, owner-bound by process state, and non-destructive");
         var qaFeatureFocus = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.AppQaFocusFeature);
         Require(qaFeatureFocus.Category == "qa"
             && !qaFeatureFocus.Destructive
@@ -817,7 +824,7 @@ internal static partial class Program
         var functionCount = script
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Count(line => line.TrimStart().StartsWith("function ", StringComparison.OrdinalIgnoreCase));
-        Require(functionCount == 62, "PowerShell client should expose the complete 62-function surface");
+        Require(functionCount == 63, "PowerShell client should expose the complete 63-function surface");
         Require(script.Contains("function Get-AIArenaControlEndpoint", StringComparison.Ordinal)
             && script.Contains("AI_ARENA_CONTROL_OWNER", StringComparison.Ordinal)
             && script.Contains("$endpoint.PipeName", StringComparison.Ordinal)
@@ -855,6 +862,9 @@ internal static partial class Program
         Require(script.Contains("function Move-AIArenaQAFocus", StringComparison.Ordinal)
             && script.Contains("[ValidateSet('next', 'previous')]", StringComparison.Ordinal)
             && script.Contains("-Command 'app.qa.focus.advance'", StringComparison.Ordinal), "PowerShell client should expose typed QA keyboard traversal");
+        Require(script.Contains("function Get-AIArenaQAFocusCapture", StringComparison.Ordinal)
+            && script.Contains("-Command 'app.qa.focus.capture'", StringComparison.Ordinal),
+            "PowerShell client should expose the argument-free owner-bound atomic QA focus capture");
         Require(script.Contains("function Set-AIArenaQAFeatureFocus", StringComparison.Ordinal)
             && script.Contains("-Command 'app.qa.focus.feature'", StringComparison.Ordinal),
             "PowerShell client should expose the isolated selected-feature focus boundary");

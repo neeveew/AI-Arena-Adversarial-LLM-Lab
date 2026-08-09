@@ -884,6 +884,46 @@ function Test-AIArenaQaFocusCycle {
         (Test-AIArenaQaSameFocus $Next.afterIdentity $Next.afterControlType $Capture.afterIdentity $Capture.afterControlType)
 }
 
+function Test-AIArenaQaFocusCapture {
+    param([AllowNull()] [object]$FocusCapture)
+
+    if ($null -eq $FocusCapture) {
+        return $false
+    }
+
+    try {
+        $anchor = $FocusCapture.anchor
+        $next = $FocusCapture.next
+        $previous = $FocusCapture.previous
+        $capture = $FocusCapture.capture
+        return [bool]$FocusCapture.ok -and
+            [bool]$FocusCapture.isolatedProcess -and
+            [bool]$FocusCapture.ownerBound -and
+            [string]$FocusCapture.failureStage -ceq 'none' -and
+            [bool]$anchor.ok -and
+            [string]$anchor.direction -ceq 'anchor' -and
+            [bool]$anchor.moved -and
+            (Test-AIArenaQaSafeAutomationValue $anchor.beforeIdentity) -and
+            (Test-AIArenaQaSafeAutomationValue $anchor.beforeControlType) -and
+            [string]$anchor.afterIdentity -ceq 'ArenaNavButtonElement' -and
+            [string]$anchor.afterControlType -ceq 'Button' -and
+            [bool]$next.ok -and
+            [bool]$previous.ok -and
+            [bool]$capture.ok -and
+            [string]$next.afterIdentity -ceq 'ExperimentLabNavButtonElement' -and
+            [string]$next.afterControlType -ceq 'Button' -and
+            (Test-AIArenaQaSameFocus `
+                $anchor.afterIdentity `
+                $anchor.afterControlType `
+                $next.beforeIdentity `
+                $next.beforeControlType) -and
+            (Test-AIArenaQaFocusCycle -Next $next -Previous $previous -Capture $capture)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Test-AIArenaQaRenderedDescendant {
     param(
         [Parameter(Mandatory)] [object[]]$Nodes,
@@ -1225,6 +1265,7 @@ function Invoke-RenderedUiSmoke {
     $renderFailureDpi = 'none'
     $renderFailureMotion = 'none'
     $renderFailureCell = 'none'
+    $renderFailureFocusStage = 'none'
     $process = $null
     $ownedControlTokenPath = $null
     try {
@@ -1296,6 +1337,7 @@ function Invoke-RenderedUiSmoke {
             $renderFailureDpi = 'none'
             $renderFailureMotion = 'none'
             $renderFailureCell = 'none'
+            $renderFailureFocusStage = 'none'
             $themeResult = Set-AIArenaTheme $theme
             if (-not $themeResult.ok) {
                 throw 'Control-plane QA theme selection failed.'
@@ -1306,6 +1348,7 @@ function Invoke-RenderedUiSmoke {
                 $renderFailureDpi = 'none'
                 $renderFailureMotion = 'none'
                 $renderFailureCell = 'none'
+                $renderFailureFocusStage = 'none'
                 $sized = Set-AIArenaQAWindowSize -Width $viewport.Width -Height $viewport.Height -TimeoutMs 10000
                 if (-not $sized.ok) {
                     throw 'Control-plane QA window sizing failed.'
@@ -1315,6 +1358,7 @@ function Invoke-RenderedUiSmoke {
                     $renderFailureMotion = $motionMode
                     $renderFailureDpi = 'none'
                     $renderFailureCell = 'none'
+                    $renderFailureFocusStage = 'none'
                     $motion = Set-AIArenaQAMotion -Mode $motionMode -TimeoutMs 10000
                     $expectedMotionSource = if ($motionMode -eq 'normal') { 'qa-normal' } else { 'qa-reduced' }
                     $expectedAnimations = $motionMode -eq 'normal'
@@ -1329,25 +1373,28 @@ function Invoke-RenderedUiSmoke {
                         $renderFailureCell = "p$($PassNumber.ToString('D2')).$theme.w$($viewport.Width).d$($renderScale.Label).$motionMode"
                         $renderFailureStage = 'focus'
                         Start-Sleep -Milliseconds 100
-                        $seedFocus = Move-AIArenaQAFocus -Direction next -TimeoutMs 10000
-                        $nextFocus = Move-AIArenaQAFocus -Direction next -TimeoutMs 10000
-                        $previousFocus = Move-AIArenaQAFocus -Direction previous -TimeoutMs 10000
-                        $captureFocus = Move-AIArenaQAFocus -Direction next -TimeoutMs 10000
-                        if (-not $seedFocus.ok -or
-                            -not $nextFocus.ok -or -not $previousFocus.ok -or
-                            -not $captureFocus.ok -or
-                            -not (Test-AIArenaQaFocusStep -Step $seedFocus.data -Direction next) -or
-                            -not (Test-AIArenaQaSameFocus `
-                                $seedFocus.data.afterIdentity `
-                                $seedFocus.data.afterControlType `
-                                $nextFocus.data.beforeIdentity `
-                                $nextFocus.data.beforeControlType) -or
-                            -not (Test-AIArenaQaFocusCycle `
-                                -Next $nextFocus.data `
-                                -Previous $previousFocus.data `
-                                -Capture $captureFocus.data)) {
-                            throw 'Programmatic WPF focus traversal did not move in both directions and restore a visible capture focus.'
+                        $focusCycle = Get-AIArenaQAFocusCapture -TimeoutMs 10000
+                        if (-not $focusCycle.ok -or
+                            -not (Test-AIArenaQaFocusCapture -FocusCapture $focusCycle.data)) {
+                            $reportedFocusStage = [string]$focusCycle.data.failureStage
+                            $renderFailureFocusStage = if ($reportedFocusStage -cin @(
+                                'owner-boundary',
+                                'anchor-table',
+                                'anchor',
+                                'next',
+                                'previous',
+                                'capture',
+                                'cycle')) {
+                                $reportedFocusStage
+                            }
+                            else {
+                                'invalid'
+                            }
+                            throw 'Atomic programmatic WPF focus capture did not close on the deterministic shell controls.'
                         }
+                        $nextFocus = [pscustomobject]@{ data = $focusCycle.data.next }
+                        $previousFocus = [pscustomobject]@{ data = $focusCycle.data.previous }
+                        $captureFocus = [pscustomobject]@{ data = $focusCycle.data.capture }
 
                         $cellKey = $renderFailureCell
                         $expectedState = "arena-empty.closed.$theme.w$($viewport.Width).d$($renderScale.Label).$motionMode"
@@ -1490,6 +1537,7 @@ function Invoke-RenderedUiSmoke {
         $renderFailureDpi = 'none'
         $renderFailureMotion = 'none'
         $renderFailureCell = 'none'
+        $renderFailureFocusStage = 'none'
         $matrixPath = Join-Path $script:MetadataRoot ("pass-{0:D2}.ui-matrix.json" -f $PassNumber)
         $matrixDocument = [ordered]@{
             schema = 'ai_arena.qa_ui_matrix.v1'
@@ -1510,8 +1558,8 @@ function Invoke-RenderedUiSmoke {
         Add-GateTrace 'motionBoundary=preference plumbing/state only; animation playback frames are not proven'
     }
     catch {
-        Add-GateTrace ("renderFailureStage={0}; pass={1}; theme={2}; width={3}; dpi={4}; motion={5}; cell={6}" -f `
-            $renderFailureStage, $PassNumber, $renderFailureTheme, $renderFailureWidth, $renderFailureDpi, $renderFailureMotion, $renderFailureCell)
+        Add-GateTrace ("renderFailureStage={0}; pass={1}; theme={2}; width={3}; dpi={4}; motion={5}; cell={6}; focus={7}" -f `
+            $renderFailureStage, $PassNumber, $renderFailureTheme, $renderFailureWidth, $renderFailureDpi, $renderFailureMotion, $renderFailureCell, $renderFailureFocusStage)
         throw 'Rendered UI smoke failed at a bounded QA stage.'
     }
     finally {
@@ -1726,6 +1774,21 @@ function Set-QaFileBytesAtomically {
     }
 }
 
+function ConvertFrom-QaJsonPreservingDateStrings {
+    param([Parameter(Mandatory)] [string]$Json)
+
+    $convertFromJson = Get-Command Microsoft.PowerShell.Utility\ConvertFrom-Json -CommandType Cmdlet -ErrorAction Stop
+    if ($convertFromJson.Parameters.ContainsKey('DateKind')) {
+        # PowerShell 7.5+ otherwise promotes ISO timestamps to DateTime and a
+        # later ConvertTo-Json can rewrite the contract's exact offset lexeme.
+        return ($Json | Microsoft.PowerShell.Utility\ConvertFrom-Json -DateKind String)
+    }
+
+    # Windows PowerShell 5.1 and earlier pwsh releases preserve JSON date
+    # strings by default and do not expose the DateKind parameter.
+    return ($Json | Microsoft.PowerShell.Utility\ConvertFrom-Json)
+}
+
 function Get-QaRejectedClosureArtifacts {
     param([Parameter(Mandatory)] [object]$Contract)
 
@@ -1765,18 +1828,95 @@ function Get-QaBlockedFallbackAffectedReferenceIds {
 }
 
 function Test-QaBlockedFallbackIssueScope {
-    param([AllowEmptyCollection()] [string[]]$IssueCodes = @())
+    param(
+        [AllowEmptyCollection()] [string[]]$IssueCodes = @(),
+        [AllowNull()] [object]$Contract = $null
+    )
 
     if ($IssueCodes.Count -eq 0) { return $false }
     $allowed = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     [void]$allowed.Add('bundle.feature_matrix_feature_render')
     [void]$allowed.Add('bundle.feature_matrix_theme_render')
+    [void]$allowed.Add('bundle.feature_matrix_gates')
+    $requiresPartialRenderContext = $false
     foreach ($code in $IssueCodes) {
         if (-not $allowed.Contains($code)) {
             return $false
         }
+        if ($code -ceq 'bundle.feature_matrix_gates') {
+            $requiresPartialRenderContext = $true
+        }
     }
-    return $true
+    if (-not $requiresPartialRenderContext) { return $true }
+    if ($null -eq $Contract -or [string]$Contract.verdict -cne 'blocked') { return $false }
+
+    $featureGates = @($Contract.gates | Where-Object {
+        [string]$_.id -ieq 'ui.feature-surface-matrix'
+    })
+    if ($featureGates.Count -ne 1 -or
+        [string]$featureGates[0].id -cne 'ui.feature-surface-matrix' -or
+        $featureGates[0].required -isnot [bool] -or
+        -not [bool]$featureGates[0].required -or
+        [string]$featureGates[0].outcome -cne 'fail') {
+        return $false
+    }
+
+    $renderedGates = @($Contract.gates | Where-Object {
+        [string]$_.id -imatch '^pass-[0-9]{2}\.rendered-ui$'
+    })
+    if ($renderedGates.Count -lt 2 -or $renderedGates.Count -gt 5) { return $false }
+
+    $renderedPassNumbers = [Collections.Generic.HashSet[int]]::new()
+    $passingPassNumbers = [Collections.Generic.HashSet[int]]::new()
+    $failedOrBlockedCount = 0
+    foreach ($gate in $renderedGates) {
+        $match = [regex]::Match([string]$gate.id, '^pass-([0-9]{2})\.rendered-ui$')
+        if (-not $match.Success -or
+            $gate.required -isnot [bool] -or
+            -not [bool]$gate.required) {
+            return $false
+        }
+        $passNumber = [int]::Parse($match.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+        if ($passNumber -lt 1 -or -not $renderedPassNumbers.Add($passNumber)) { return $false }
+        switch -CaseSensitive ([string]$gate.outcome) {
+            'pass' { [void]$passingPassNumbers.Add($passNumber) }
+            'fail' { $failedOrBlockedCount++ }
+            'blocked' { $failedOrBlockedCount++ }
+            default { return $false }
+        }
+    }
+    if ($passingPassNumbers.Count -lt 1 -or $failedOrBlockedCount -lt 1) { return $false }
+
+    $orderedPassNumbers = @($renderedPassNumbers | Sort-Object)
+    for ($index = 0; $index -lt $orderedPassNumbers.Count; $index++) {
+        if ($orderedPassNumbers[$index] -ne ($index + 1)) { return $false }
+    }
+
+    $featureArtifacts = @($Contract.artifacts | Where-Object {
+        [string]$_.kind -ieq 'qa-feature-surface-matrix' -or
+        [string]$_.id -imatch '^artifact\.pass-[0-9]{2}\.feature-surface-matrix$' -or
+        [string]$_.relativePath -imatch '^metadata/pass-[0-9]{2}\.feature-surface-matrix\.json$'
+    })
+    if ($featureArtifacts.Count -ne $passingPassNumbers.Count) { return $false }
+
+    $documentPassNumbers = [Collections.Generic.HashSet[int]]::new()
+    foreach ($artifact in $featureArtifacts) {
+        $idMatch = [regex]::Match([string]$artifact.id, '^artifact\.pass-([0-9]{2})\.feature-surface-matrix$')
+        $pathMatch = [regex]::Match([string]$artifact.relativePath, '^metadata/pass-([0-9]{2})\.feature-surface-matrix\.json$')
+        if (-not $idMatch.Success -or
+            -not $pathMatch.Success -or
+            [string]$artifact.kind -cne 'qa-feature-surface-matrix') {
+            return $false
+        }
+        $idPassNumber = [int]::Parse($idMatch.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+        $pathPassNumber = [int]::Parse($pathMatch.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+        if ($idPassNumber -ne $pathPassNumber -or
+            -not $passingPassNumbers.Contains($idPassNumber) -or
+            -not $documentPassNumbers.Add($idPassNumber)) {
+            return $false
+        }
+    }
+    return $documentPassNumbers.Count -eq $passingPassNumbers.Count
 }
 
 function Start-QaRejectedArtifactQuarantine {
@@ -2342,7 +2482,7 @@ function Invoke-QaBlockedFallback {
     }
     $EvidencePath = $trustedEvidencePath
 
-    if (-not (Test-QaBlockedFallbackIssueScope -IssueCodes $IssueCodes)) {
+    if (-not (Test-QaBlockedFallbackIssueScope -IssueCodes $IssueCodes -Contract $Contract)) {
         if (Test-Path -LiteralPath $trustedEvidencePath -PathType Leaf) {
             [IO.File]::Delete($trustedEvidencePath)
         }
@@ -2353,7 +2493,7 @@ function Invoke-QaBlockedFallback {
     if ($candidateJson.Length -gt 4MB -or -not (Test-QaTextPrivacy -Text $candidateJson)) {
         throw 'Rejected QA candidate cannot be cloned within the bounded privacy policy.'
     }
-    $blockedWorkingContract = $candidateJson | ConvertFrom-Json
+    $blockedWorkingContract = ConvertFrom-QaJsonPreservingDateStrings -Json $candidateJson
     $quarantine = $null
     $rejectionArtifact = $null
     $generatedArtifacts = [Collections.Generic.List[object]]::new()
