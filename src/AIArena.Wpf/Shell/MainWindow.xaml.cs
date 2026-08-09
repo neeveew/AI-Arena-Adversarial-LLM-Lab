@@ -309,7 +309,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             new AIArenaScreenshotControlService(this, _coreSessionStore.DataRoot),
             _controlPlaneEvents,
             ShowScreenshotReceipt,
-            new AIArenaUiVerificationControlService(this, _coreSessionStore.DataRoot, () => _wpfSettings.ThemeId));
+            new AIArenaUiVerificationControlService(
+                this,
+                _coreSessionStore.DataRoot,
+                () => _wpfSettings.ThemeId,
+                () => _lastRenderedSnapshot?.Messages.Count));
         _providerRequestTraceStore = new ProviderRequestTraceStore();
         _modelClient = CreateObservedModelProviderClient(_providerRequestTraceStore);
         _internetToolService = new InternetToolService(

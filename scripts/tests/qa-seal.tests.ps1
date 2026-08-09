@@ -46,9 +46,51 @@ try {
         $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'else'
     }, $true))
     Require ($bareElse.Count -eq 0) 'qa-seal contains an else token parsed as a runtime command.'
+
+    $nativeResolverAst = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Resolve-NativeCommandPath'
+    }, $true))
+    Require ($nativeResolverAst.Count -eq 1) 'qa-seal is missing its native-command path resolver.'
+    . ([scriptblock]::Create($nativeResolverAst[0].Extent.Text))
+    $resolvedNpm = Resolve-NativeCommandPath -Command 'npm.cmd'
+    Require ([IO.Path]::IsPathRooted($resolvedNpm)) 'qa-seal left npm.cmd unresolved for ProcessStartInfo.'
+    Require (Test-Path -LiteralPath $resolvedNpm -PathType Leaf) 'qa-seal resolved npm.cmd to a missing file.'
+
+    $validatorIssueParserAst = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Get-SafeValidatorIssueCodes'
+    }, $true))
+    Require ($validatorIssueParserAst.Count -eq 1) 'qa-seal is missing its safe validator issue-code parser.'
+    . ([scriptblock]::Create($validatorIssueParserAst[0].Extent.Text))
+    $safeIssueCodes = @(Get-SafeValidatorIssueCodes "FAIL bundle.ui_matrix_theme_render artifact=7`nPRIVATE_SENTINEL")
+    Require (($safeIssueCodes -join ',') -eq 'bundle.ui_matrix_theme_render,validator.unrecognized_output') 'qa-seal did not reduce validator output to bounded content-free issue codes.'
+    Require (($safeIssueCodes -join ',') -notmatch 'PRIVATE_SENTINEL') 'qa-seal leaked untrusted validator output through diagnostics.'
+
+    $ordinalArrayAst = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Get-OrdinalStringArray'
+    }, $true))
+    Require ($ordinalArrayAst.Count -eq 1) 'qa-seal is missing its ordinal evidence-ID ordering helper.'
+    . ([scriptblock]::Create($ordinalArrayAst[0].Extent.Text))
+    $orderedIds = @(Get-OrdinalStringArray -Values @(
+        'artifact.p01.dark-blue.w960.d1-0.normal.screenshot',
+        'artifact.p01.dark-blue.w1500.d1-0.normal.screenshot',
+        'artifact.p01.dark-blue.w960.d1-0.reduced.screenshot'))
+    Require (($orderedIds -join ',') -eq (
+        'artifact.p01.dark-blue.w1500.d1-0.normal.screenshot,' +
+        'artifact.p01.dark-blue.w960.d1-0.normal.screenshot,' +
+        'artifact.p01.dark-blue.w960.d1-0.reduced.screenshot')) 'qa-seal did not order inspection artifact IDs with the schema-required ordinal comparer.'
     $parameterNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
     Require ('UserInspectionAccepted' -notin $parameterNames) 'qa-seal still permits pre-render inspection acceptance.'
     $sealSource = Get-Content -LiteralPath $sealScript -Raw
+    Require ($sealSource.IndexOf('$resolvedFilePath = Resolve-NativeCommandPath -Command $FilePath', [StringComparison]::Ordinal) -ge 0) 'qa-seal does not use the resolved native-command path.'
+    Require ($sealSource.IndexOf('-CaptureResult', [StringComparison]::Ordinal) -ge 0) 'qa-seal does not capture authoritative validator results safely.'
+    Require ($sealSource.IndexOf('$screenshotArtifactIds = @(Get-OrdinalStringArray', [StringComparison]::Ordinal) -ge 0) 'qa-seal does not ordinal-sort screenshot inspection IDs.'
+    Require ($sealSource.IndexOf('$automationArtifactIds = @(Get-OrdinalStringArray', [StringComparison]::Ordinal) -ge 0) 'qa-seal does not ordinal-sort automation inspection IDs.'
     foreach ($requiredMatrixToken in @(
         "@('dark-blue', 'light', 'high-contrast')",
         'Width = 960',

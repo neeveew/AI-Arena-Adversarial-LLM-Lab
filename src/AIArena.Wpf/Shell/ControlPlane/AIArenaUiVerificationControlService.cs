@@ -183,9 +183,14 @@ internal sealed class AIArenaUiVerificationControlService
     private readonly string dataRoot;
     private readonly string evidenceRoot;
     private readonly Func<string> themeId;
+    private readonly Func<int?>? transcriptMessageCount;
     private readonly bool isIsolatedQaProcess;
 
-    public AIArenaUiVerificationControlService(Window window, string dataRoot, Func<string> themeId)
+    public AIArenaUiVerificationControlService(
+        Window window,
+        string dataRoot,
+        Func<string> themeId,
+        Func<int?>? transcriptMessageCount = null)
     {
         ArgumentNullException.ThrowIfNull(window);
         ArgumentException.ThrowIfNullOrWhiteSpace(dataRoot);
@@ -194,6 +199,7 @@ internal sealed class AIArenaUiVerificationControlService
         this.dataRoot = Path.GetFullPath(dataRoot);
         evidenceRoot = Path.Combine(NativeDataPaths.ExportsRoot(this.dataRoot), "qa", "ui-structure");
         this.themeId = themeId;
+        this.transcriptMessageCount = transcriptMessageCount;
         isIsolatedQaProcess = IsIsolatedQaDataRoot(this.dataRoot);
     }
 
@@ -1048,9 +1054,7 @@ internal sealed class AIArenaUiVerificationControlService
 
         return visibleRoots[0] switch
         {
-            "TranscriptPanel" => window.FindName("TranscriptItems") is ItemsControl transcript && transcript.Items.Count == 0
-                ? "arena-empty"
-                : "arena-populated",
+            "TranscriptPanel" => ObserveTranscriptState(),
             "CustomMatchPanel" => "match-setup",
             "ExperimentLabPanel" => "experiment-lab",
             "AgentWorldPanel" => "agent-world",
@@ -1058,6 +1062,19 @@ internal sealed class AIArenaUiVerificationControlService
             "CollaboratePanel" => "collaborate",
             _ => "ambiguous"
         };
+    }
+
+    private string ObserveTranscriptState()
+    {
+        var semanticCount = transcriptMessageCount?.Invoke();
+        if (semanticCount is >= 0)
+        {
+            return semanticCount.Value == 0 ? "arena-empty" : "arena-populated";
+        }
+
+        return window.FindName("TranscriptItems") is ItemsControl transcript && transcript.Items.Count == 0
+            ? "arena-empty"
+            : "arena-populated";
     }
 
     private string ObserveDialogState()

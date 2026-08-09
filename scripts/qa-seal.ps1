@@ -59,6 +59,7 @@ $script:ExecutionFailure = $false
 $script:UiStartupMeasurements = [System.Collections.Generic.List[object]]::new()
 $script:UiMatrixCells = [System.Collections.Generic.List[object]]::new()
 $script:VerificationMeasurements = @()
+$script:LastAuthoritativeValidationIssues = @()
 
 if ([string]::IsNullOrWhiteSpace($RunId)) {
     $RunId = '{0}-{1}' -f (Get-Date).ToUniversalTime().ToString("yyyyMMdd't'HHmmss'z'"), ([Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -134,6 +135,67 @@ function Protect-QaText {
     $safe = [regex]::Replace($safe, '(?i)(?:[a-z]:[\\/]|\\\\[^\\/\s]+[\\/])[^\r\n]*', '<redacted-path>')
     $safe = [regex]::Replace($safe, '(?i)/(?:users|home|root|opt|mnt|private|var|tmp|etc)(?:/[^\s"'']*)?', '<redacted-path>')
     return $safe
+}
+
+function Resolve-NativeCommandPath {
+    param([Parameter(Mandatory)] [string]$Command)
+
+    if ([IO.Path]::IsPathRooted($Command)) {
+        if (-not (Test-Path -LiteralPath $Command -PathType Leaf)) {
+            throw 'Native command path does not exist.'
+        }
+
+        return [IO.Path]::GetFullPath($Command)
+    }
+
+    $resolved = Get-Command -Name $Command -CommandType Application -ErrorAction Stop |
+        Select-Object -First 1
+    if ($null -eq $resolved -or
+        [string]::IsNullOrWhiteSpace([string]$resolved.Source) -or
+        -not (Test-Path -LiteralPath $resolved.Source -PathType Leaf)) {
+        throw 'Native command could not be resolved to an executable file.'
+    }
+
+    return [IO.Path]::GetFullPath([string]$resolved.Source)
+}
+
+function Get-SafeValidatorIssueCodes {
+    param([AllowEmptyString()] [string]$Text)
+
+    $codes = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $unrecognized = $false
+    foreach ($line in @($Text -split '\r?\n')) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+
+        if ($line -match '^FAIL\s+(?<code>[a-z0-9][a-z0-9._-]{0,95})(?:\s|$)') {
+            [void]$codes.Add($Matches['code'])
+            continue
+        }
+        if ($line -match '^PASS\s+[a-z0-9][a-z0-9._-]{0,95}(?:\s|$)') {
+            continue
+        }
+
+        $unrecognized = $true
+    }
+
+    if ($unrecognized) {
+        [void]$codes.Add('validator.unrecognized_output')
+    }
+    if ($codes.Count -eq 0) {
+        [void]$codes.Add('validator.nonzero_without_issue')
+    }
+
+    return @($codes | Sort-Object)
+}
+
+function Get-OrdinalStringArray {
+    param([AllowEmptyCollection()] [string[]]$Values = @())
+
+    [string[]]$ordered = @($Values)
+    [Array]::Sort($ordered, [StringComparer]::Ordinal)
+    return $ordered
 }
 
 function Test-QaTextPrivacy {
@@ -258,13 +320,19 @@ function Invoke-CapturedCommand {
         [Parameter(Mandatory)] [string]$FilePath,
         [Parameter(Mandatory)] [string[]]$Arguments,
         [Parameter(Mandatory)] [string]$DisplayCommand,
+        [switch]$CaptureResult,
         [ValidateRange(5, 7200)] [int]$TimeoutSeconds = 900
     )
 
+    # ProcessStartInfo with UseShellExecute=false must receive the resolved
+    # batch-file path on Windows. Passing only "npm.cmd" makes cmd.exe assign
+    # an incorrect %~dp0 and causes npm to search for its modules under the
+    # repository working directory.
+    $resolvedFilePath = Resolve-NativeCommandPath -Command $FilePath
     $commandStarted = [Diagnostics.Stopwatch]::StartNew()
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = [Diagnostics.ProcessStartInfo]::new()
-    $process.StartInfo.FileName = $FilePath
+    $process.StartInfo.FileName = $resolvedFilePath
     $process.StartInfo.Arguments = (($Arguments | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' ')
     $process.StartInfo.WorkingDirectory = $script:RepositoryRoot
     $process.StartInfo.UseShellExecute = $false
@@ -326,11 +394,19 @@ function Invoke-CapturedCommand {
         throw [TimeoutException]::new("Command exceeded its $TimeoutSeconds-second QA deadline.")
     }
 
-    if ($exitCode -ne 0) {
+    if ($exitCode -ne 0 -and -not $CaptureResult) {
         if ($failedMarkers -eq 0) {
             $script:CurrentGateFailed++
         }
         throw "Command failed with exit code $exitCode."
+    }
+
+    if ($CaptureResult) {
+        return [pscustomobject]@{
+            ExitCode = $exitCode
+            Stdout = $stdout
+            Stderr = $stderr
+        }
     }
 }
 
@@ -1069,7 +1145,19 @@ function Invoke-AuthoritativeEvidenceValidation {
         else {
             'dotnet run --project tests/AIArena.VerificationLab/AIArena.VerificationLab.csproj --no-build --no-restore -c Release -- --validate-evidence-current <qa-evidence.json> <repository-root>'
         }
-        Invoke-CapturedCommand -FilePath 'dotnet' -Arguments $validationArguments -DisplayCommand $displayCommand
+        $validationResult = Invoke-CapturedCommand `
+            -FilePath 'dotnet' `
+            -Arguments $validationArguments `
+            -DisplayCommand $displayCommand `
+            -CaptureResult
+        if ($validationResult.ExitCode -ne 0) {
+            $script:LastAuthoritativeValidationIssues = @(Get-SafeValidatorIssueCodes `
+                -Text ($validationResult.Stdout + "`n" + $validationResult.Stderr))
+            Write-Warning ("Authoritative evidence validation failed: {0}" -f `
+                ($script:LastAuthoritativeValidationIssues -join ', '))
+            return $false
+        }
+        $script:LastAuthoritativeValidationIssues = @()
         $validatorSourceFingerprintAfter = Get-CompositeSourceFingerprint
         if ($validatorSourceFingerprintAfter -ne $validatorSourceFingerprintBefore) {
             throw 'Source fingerprint drifted during authoritative validation.'
@@ -1583,8 +1671,16 @@ else {
     New-EvidenceAssertion -Id 'evidence.schema.contracts.v1' -State 'unavailable' -Summary $contractSchemaSummary -ReferenceId 'artifact.pass-01.tests-core.log' -Limitation $contractSchemaSummary
 }
 
-$screenshotArtifactIds = @($script:Artifacts | Where-Object { $_.kind -eq 'rendered-ui-screenshot' } | ForEach-Object { $_.id })
-$automationArtifactIds = @($script:Artifacts | Where-Object { $_.kind -eq 'automation-tree' } | ForEach-Object { $_.id })
+$screenshotArtifactIds = @(Get-OrdinalStringArray -Values @(
+    $script:Artifacts |
+        Where-Object { $_.kind -eq 'rendered-ui-screenshot' } |
+        ForEach-Object { [string]$_.id }
+))
+$automationArtifactIds = @(Get-OrdinalStringArray -Values @(
+    $script:Artifacts |
+        Where-Object { $_.kind -eq 'automation-tree' } |
+        ForEach-Object { [string]$_.id }
+))
 $inspectionEvidence = New-EvidenceAssertion -Id 'evidence.inspection' -State 'unavailable' -Summary $inspectionReason -ReferenceId 'artifact.inspection.user-acceptance.log' -Limitation $inspectionReason
 
 $completedAtUtc = (Get-Date).ToUniversalTime()

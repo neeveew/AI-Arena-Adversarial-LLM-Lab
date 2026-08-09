@@ -228,6 +228,76 @@ internal static partial class Program
         }
     }
 
+    static void UiVerificationUsesSemanticTranscriptCountInsteadOfPlaceholderRows()
+    {
+        var dataRoot = Path.Combine(Path.GetTempPath(), $"ai-arena-ui-transcript-state-{Guid.NewGuid():N}");
+        try
+        {
+            RunStaTest(() =>
+            {
+                var transcriptItems = new ItemsControl { Name = "TranscriptItems" };
+                transcriptItems.Items.Add(new Border());
+                var transcriptPanel = new Grid { Name = "TranscriptPanel" };
+                transcriptPanel.Children.Add(transcriptItems);
+                var window = new Window
+                {
+                    Width = 960,
+                    Height = 640,
+                    WindowStyle = WindowStyle.None,
+                    ShowInTaskbar = false,
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = SystemParameters.VirtualScreenLeft - 1200,
+                    Top = SystemParameters.VirtualScreenTop - 1200,
+                    Content = transcriptPanel
+                };
+                NameScope.SetNameScope(window, new NameScope());
+                window.RegisterName(transcriptPanel.Name, transcriptPanel);
+                window.RegisterName(transcriptItems.Name, transcriptItems);
+
+                int? semanticMessageCount = 0;
+                try
+                {
+                    window.Show();
+                    window.UpdateLayout();
+                    var service = new AIArenaUiVerificationControlService(
+                        window,
+                        dataRoot,
+                        () => "dark-blue",
+                        () => semanticMessageCount);
+
+                    var emptyState = service.DebugObservedExpectedState(1.0);
+                    Require(emptyState.StartsWith("arena-empty.closed.dark-blue.w960.d1-0.", StringComparison.Ordinal),
+                        "a setup placeholder row must not be reported as transcript content when the semantic snapshot has no messages");
+
+                    semanticMessageCount = 1;
+                    var populatedState = service.DebugObservedExpectedState(1.0);
+                    Require(populatedState.StartsWith("arena-populated.closed.dark-blue.w960.d1-0.", StringComparison.Ordinal),
+                        "an observed semantic transcript message must report the Arena as populated");
+
+                    semanticMessageCount = null;
+                    var fallbackState = service.DebugObservedExpectedState(1.0);
+                    Require(fallbackState.StartsWith("arena-populated.closed.dark-blue.w960.d1-0.", StringComparison.Ordinal),
+                        "an unavailable semantic snapshot must conservatively fall back to the visible item collection");
+
+                    var source = ReadMainWindowSource();
+                    Require(source.Contains("() => _lastRenderedSnapshot?.Messages.Count", StringComparison.Ordinal),
+                        "production QA observation must use semantic transcript messages rather than presentation placeholder rows");
+                }
+                finally
+                {
+                    window.Close();
+                }
+            });
+        }
+        finally
+        {
+            if (Directory.Exists(dataRoot))
+            {
+                Directory.Delete(dataRoot, recursive: true);
+            }
+        }
+    }
+
     static void UiVerificationControlHandlerBoundsWindowAndRoutesCommands()
     {
         var dataRoot = Path.Combine(Path.GetTempPath(), $"ai-arena-ui-control-{Guid.NewGuid():N}");

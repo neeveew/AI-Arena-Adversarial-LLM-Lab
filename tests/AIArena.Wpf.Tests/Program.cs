@@ -344,6 +344,7 @@ var tests = new List<(string Name, Action Test)>
     ("screenshot control service resolves safe paths and preserves existing files", ScreenshotControlServiceResolvesSafePathsAndPreservesExistingFiles),
     ("app screenshot handler captures a real PNG and publishes its event", AppScreenshotHandlerCapturesRealPngAndPublishesEvent),
     ("UI verification captures privacy-safe deterministic structure", UiVerificationCapturesPrivacySafeDeterministicStructure),
+    ("UI verification uses semantic transcript count instead of placeholder rows", UiVerificationUsesSemanticTranscriptCountInsteadOfPlaceholderRows),
     ("UI verification control handler bounds window and routes commands", UiVerificationControlHandlerBoundsWindowAndRoutesCommands),
     ("UI verification advances privacy-safe focus and overrides motion only in isolation", UiVerificationAdvancesPrivacySafeFocusAndOverridesMotionOnlyInIsolation),
     ("QA screenshot render DPI preserves DIP viewport and bounds raster scale", QaScreenshotRenderDpiPreservesDipViewportAndBoundsRasterScale),
