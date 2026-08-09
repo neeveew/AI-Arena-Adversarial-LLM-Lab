@@ -1496,8 +1496,24 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
         }
         catch (OperationCanceledException) when (linked.IsCancellationRequested)
         {
+            await reviewGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                ResetReviewState(current, deleteManifest: !readOnlyPreserveReviews);
+                current = null;
+            }
+            finally
+            {
+                reviewGate.Release();
+            }
             var result = QaEvidenceLoadResult.Unavailable("qa.refresh_cancelled", "QA evidence refresh was cancelled.");
-            await view.Dispatcher.InvokeAsync(() => view.ApplyPresentation(QaInspectorPresentation.Create(result)));
+            await view.Dispatcher.InvokeAsync(() =>
+            {
+                view.ApplyPresentation(QaInspectorPresentation.Create(result));
+                view.SetPreview(null);
+                view.SetReviewCancelled();
+                view.SetAcceptanceAvailable(false);
+            });
             return result;
         }
         finally
@@ -1511,11 +1527,16 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
         string? relativeEvidencePath,
         CancellationToken cancellationToken)
     {
+        var knownScreenshotCount = current is { } existing
+            && (string.IsNullOrWhiteSpace(relativeEvidencePath)
+                || existing.RelativeEvidencePath.Equals(relativeEvidencePath.Replace('\\', '/'), StringComparison.Ordinal))
+            ? CountScreenshots(existing)
+            : 0;
         await view.Dispatcher.InvokeAsync(() =>
         {
             view.SetAcceptanceAvailable(false);
             view.SetPreview(null);
-            view.SetReviewProgress(0, 0, 0);
+            view.SetReviewRevalidating(knownScreenshotCount);
         });
         await reviewGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try

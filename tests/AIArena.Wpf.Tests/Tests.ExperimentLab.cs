@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
@@ -543,6 +544,10 @@ internal static partial class Program
                     && changed
                     && control.SelectedFeatureKey == "in-app-qa-inspector",
                 "control-plane selection did not select an exact registered feature key");
+            Require(MainWindow.ResolveExperimentFeatureSelectionTarget(initial, "not-registered") is null,
+                "control-plane target resolution accepted an unregistered feature key");
+            Require(MainWindow.ResolveExperimentFeatureSelectionTarget(initial, " in-app-qa-inspector ") is { Selectable: true },
+                "control-plane target resolution did not preserve exact registered selection after boundary trimming");
 
             control.SetBusy(true);
             var busy = control.ReadControlPlaneState();
@@ -552,14 +557,24 @@ internal static partial class Program
                     && busy.Features.All(item => item.Registered && !item.Selectable)
                     && busy.Features.Single(item => item.Busy).Status == "busy",
                 "control-plane state did not distinguish registered surfaces from temporarily blocked selection");
+            Require(MainWindow.ResolveExperimentFeatureSelectionTarget(busy, "in-app-qa-inspector") is { Selectable: false },
+                "control-plane target resolution did not preserve an operation-blocked target");
             control.SetBusy(false);
+
+            control.SetMatrixRunning(true);
+            var matrixRunning = control.ReadControlPlaneState();
+            Require(MainWindow.ResolveExperimentFeatureSelectionTarget(matrixRunning, "in-app-qa-inspector") is { Selectable: false },
+                "control-plane target resolution did not preserve a matrix-blocked target");
+            control.SetMatrixRunning(false);
         });
 
         var adapter = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
         Require(adapter.Contains("case AIArenaControlCommands.ExperimentState:", StringComparison.Ordinal)
                 && adapter.Contains("case AIArenaControlCommands.ExperimentFeatureSelect:", StringComparison.Ordinal)
-                && adapter.Contains("TrySelectRegisteredFeature(key, out var changed)", StringComparison.Ordinal)
-                && adapter.Contains("ExperimentLab.RequestFeatureSelectionRefresh(key.Trim())", StringComparison.Ordinal)
+                && adapter.Contains("ResolveExperimentFeatureSelectionTarget(before, key)", StringComparison.Ordinal)
+                && adapter.Contains("if (!target.Selectable)", StringComparison.Ordinal)
+                && adapter.Contains("TrySelectRegisteredFeature(target.Key, out var changed)", StringComparison.Ordinal)
+                && adapter.Contains("ExperimentLab.RequestFeatureSelectionRefresh(target.Key)", StringComparison.Ordinal)
                 && adapter.Contains("OpenExperimentLabForControlPlaneSelection();", StringComparison.Ordinal)
                 && adapter.Contains("await refresh.WaitAsync(cancellationToken)", StringComparison.Ordinal),
             "Experiment Lab control-plane commands did not use the real allowlisted selection and contained refresh boundary");
@@ -568,7 +583,8 @@ internal static partial class Program
         var selectionCase = adapter[selectionCaseStart..navigationCaseStart];
         Require(!selectionCase.Contains("ExecuteMatrixAsync", StringComparison.Ordinal)
                 && !selectionCase.Contains("RunFaultProbe", StringComparison.Ordinal)
-                && !selectionCase.Contains("ApplyRoute", StringComparison.Ordinal),
+                && !selectionCase.Contains("ApplyRoute", StringComparison.Ordinal)
+                && !selectionCase.Contains("if (before.Busy)", StringComparison.Ordinal),
             "Experiment Lab feature selection gained an experiment mutation or execution path");
     }
 
@@ -653,6 +669,123 @@ internal static partial class Program
                 {
                     dispatcher.UnhandledException -= handler;
                     releaseStaleRefresh.TrySetResult(true);
+                }
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        });
+
+        RunStaTest(() =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ai-arena-experiment-pointer-navigation-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                var control = new ExperimentLabControl();
+                AttachArenaPresentationResources(control);
+                var packRefreshStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var rubricRefreshStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var coordinator = new ExperimentLabCoordinator(
+                    control,
+                    new SessionStore(root),
+                    new FixedCollaborateModelClient("unused"),
+                    () => null,
+                    (_, _) => Task.CompletedTask,
+                    root,
+                    featureRefreshOverride: async (key, cancellationToken) =>
+                    {
+                        if (key == "packs")
+                        {
+                            packRefreshStarted.TrySetResult(true);
+                            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                        }
+                        else if (key == "rubrics")
+                        {
+                            rubricRefreshStarted.TrySetResult(true);
+                            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                        }
+                    });
+                control.Initialize(coordinator);
+
+                var host = new Window
+                {
+                    Content = control,
+                    Width = 960,
+                    Height = 640,
+                    ShowInTaskbar = false,
+                    WindowStyle = WindowStyle.None,
+                    Opacity = 0,
+                    Left = -10000,
+                    Top = -10000
+                };
+                host.Show();
+                try
+                {
+                    control.UpdateLayout();
+                    var packs = (ListBoxItem)control.FeatureSelector.ItemContainerGenerator.ContainerFromItem(
+                        control.RegisteredFeatures.Single(item => item.Key == "packs"));
+                    packs.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                    {
+                        RoutedEvent = Mouse.MouseDownEvent,
+                        Source = packs
+                    });
+                    RunExperimentDispatcherTask(() => packRefreshStarted.Task);
+                    Require(control.SelectedFeatureKey == "packs", "routed pointer selection did not select the requested Experiment Lab feature");
+                    Require(control.FeatureSelector.IsEnabled,
+                        "a cancellable feature refresh disabled pointer and keyboard navigation");
+                    Require(!control.FeatureContentGrid.IsEnabled,
+                        "feature content remained interactive while its refresh was incomplete");
+
+                    var contentBecameInteractiveDuringHandoff = false;
+                    DependencyPropertyChangedEventHandler handoffStateChanged = (_, _) =>
+                    {
+                        if (control.FeatureContentGrid.IsEnabled && !rubricRefreshStarted.Task.IsCompleted)
+                        {
+                            contentBecameInteractiveDuringHandoff = true;
+                        }
+                    };
+                    control.FeatureContentGrid.IsEnabledChanged += handoffStateChanged;
+                    var rubrics = (ListBoxItem)control.FeatureSelector.ItemContainerGenerator.ContainerFromItem(
+                        control.RegisteredFeatures.Single(item => item.Key == "rubrics"));
+                    rubrics.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                    {
+                        RoutedEvent = Mouse.MouseDownEvent,
+                        Source = rubrics
+                    });
+                    RunExperimentDispatcherTask(() => rubricRefreshStarted.Task);
+                    control.FeatureContentGrid.IsEnabledChanged -= handoffStateChanged;
+                    Require(control.SelectedFeatureKey == "rubrics",
+                        "a routed pointer selection could not supersede an in-flight feature refresh");
+                    Require(!contentBecameInteractiveDuringHandoff,
+                        "superseded refresh briefly enabled stale feature content before its successor started");
+                    Require(control.ReadControlPlaneState().Features.All(item => item.Selectable),
+                        "refreshing state reported feature navigation as unavailable while it remained cancellable");
+                    var refreshingState = control.ReadControlPlaneState();
+                    Require(refreshingState.Busy
+                            && MainWindow.ResolveExperimentFeatureSelectionTarget(refreshingState, "claims") is { Selectable: true },
+                        "control-plane target resolution blocked superseding a cancellation-aware refresh");
+
+                    _ = rubrics.Focus();
+                    rubrics.RaiseEvent(new KeyEventArgs(
+                        Keyboard.PrimaryDevice,
+                        PresentationSource.FromVisual(rubrics),
+                        Environment.TickCount,
+                        Key.Down)
+                    {
+                        RoutedEvent = Keyboard.KeyDownEvent,
+                        Source = rubrics
+                    });
+                    Require(control.SelectedFeatureKey == "claims",
+                        "routed keyboard navigation could not supersede an in-flight feature refresh");
+                    RunExperimentDispatcherTask(() => coordinator.DebugFeatureSelectionRefreshTask);
+                    Require(control.FeatureContentGrid.IsEnabled,
+                        "feature content remained disabled after the latest refresh completed");
+                }
+                finally
+                {
+                    host.Close();
                 }
             }
             finally

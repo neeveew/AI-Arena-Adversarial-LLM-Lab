@@ -71,6 +71,7 @@ public partial class ExperimentLabControl : UserControl
     private ExperimentLabCoordinator? coordinator;
     private bool matrixRunning;
     private bool operationBusy;
+    private bool featureSelectionRefreshing;
 
     public ExperimentLabControl()
     {
@@ -91,7 +92,7 @@ public partial class ExperimentLabControl : UserControl
     internal ExperimentLabControlState ReadControlPlaneState()
     {
         var selectedKey = SelectedFeatureKey ?? "";
-        var busy = operationBusy || matrixRunning;
+        var busy = operationBusy || matrixRunning || featureSelectionRefreshing;
         var featureStates = features
             .Select(feature =>
             {
@@ -102,7 +103,7 @@ public partial class ExperimentLabControl : UserControl
                     feature.Key,
                     feature.Title,
                     Registered: true,
-                    Selectable: !busy,
+                    Selectable: !operationBusy && !matrixRunning,
                     Busy: featureBusy,
                     Status: featureBusy
                         ? "busy"
@@ -344,8 +345,17 @@ public partial class ExperimentLabControl : UserControl
     internal void SetBusy(bool busy)
     {
         operationBusy = busy;
-        FeatureSelector.IsEnabled = !busy;
-        FeatureContentGrid.IsEnabled = !busy;
+        FeatureSelector.IsEnabled = !busy && !matrixRunning;
+        FeatureContentGrid.IsEnabled = !busy && !featureSelectionRefreshing;
+    }
+
+    internal void SetFeatureSelectionRefreshing(bool refreshing)
+    {
+        featureSelectionRefreshing = refreshing;
+        // Selection refreshes are cancellable. Keep navigation enabled so a
+        // newer pointer or keyboard selection can supersede a slow refresh.
+        FeatureSelector.IsEnabled = !operationBusy && !matrixRunning;
+        FeatureContentGrid.IsEnabled = !operationBusy && !refreshing;
     }
 
     internal void ReconcileMatrixProviderProfiles(

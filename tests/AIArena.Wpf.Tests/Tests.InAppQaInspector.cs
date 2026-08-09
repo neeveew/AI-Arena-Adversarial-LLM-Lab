@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
@@ -312,6 +313,8 @@ internal static partial class Program
     static void QaInspectorAcceptanceRequiresCurrentVerifiedVisualEvidence()
     {
         VerifyQaInspectorDefaultsToNewestCurrentEvidence();
+        VerifyQaInspectorShowsRevalidationForReleaseScaleEvidence();
+        VerifyQaInspectorFinalizesCancelledRevalidation();
         VerifyQaInspectorSerializesAcceptanceAndPickerRefresh();
 
         RunStaTest(() =>
@@ -546,6 +549,159 @@ internal static partial class Program
                     Require(!InAppQaInspectorCoordinator.IsInspectionAcceptanceReady(tamperedSnapshot, completedReview),
                         "required limitation semantic tamper enabled acceptance");
                 }
+            });
+        });
+    }
+
+    private static void VerifyQaInspectorShowsRevalidationForReleaseScaleEvidence()
+    {
+        RunStaTest(() =>
+        {
+            WithQaRoot(root =>
+            {
+                var bundle = CreateReleaseScaleQaBundle(root, "release-scale-revalidation");
+                var newestBundle = CreateAcceptanceReadyBundle(root, "newer-two-screenshot-bundle");
+                File.SetLastWriteTimeUtc(bundle.EvidencePath, new DateTime(2026, 8, 9, 19, 0, 0, DateTimeKind.Utc));
+                File.SetLastWriteTimeUtc(newestBundle.EvidencePath, new DateTime(2026, 8, 9, 19, 1, 0, DateTimeKind.Utc));
+                var currentness = new GatedSecondQaCurrentnessValidator();
+                var control = new InAppQaInspectorControl();
+                using var coordinator = new InAppQaInspectorCoordinator(
+                    control,
+                    root,
+                    currentness,
+                    new FakeQaSuiteRunner(),
+                    new FakeQaAcceptanceRunner(),
+                    new FakeQaClipboard(),
+                    () => true);
+
+                QaEvidenceLoadResult? loaded = null;
+                RunExperimentDispatcherTask(async () => loaded = await coordinator.RefreshAsync(bundle.RelativeEvidencePath));
+                Require(loaded?.Snapshot is { } initial
+                    && initial.Artifacts.Length == 432
+                    && initial.Artifacts.Count(item => item.Artifact.Kind == "rendered-ui-screenshot") == 192
+                    && initial.Artifacts.Count(item => item.Artifact.Kind == "automation-tree") == 192
+                    && control.ArtifactList.Items.Count == 432
+                    && control.ReviewProgressText.Text.StartsWith("Reviewed 0/192 screenshot(s).", StringComparison.Ordinal),
+                    "release-scale QA evidence did not expose its exact screenshot and automation review shape");
+
+                var refreshTask = coordinator.RefreshAsync();
+                try
+                {
+                    RunExperimentDispatcherTask(() => currentness.SecondCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+                    Require(!refreshTask.IsCompleted
+                        && !control.AcceptInspectionButton.IsEnabled
+                        && control.ReviewProgressText.Text.StartsWith(
+                            "Revalidating evidence. The previously loaded bundle contained 192 rendered screenshot(s).",
+                            StringComparison.Ordinal)
+                        && !control.ReviewProgressText.Text.Contains("No rendered screenshots", StringComparison.Ordinal),
+                        "an in-flight latest-bundle revalidation presented the previous count as current, a false empty state, or enabled acceptance");
+                }
+                finally
+                {
+                    currentness.ReleaseSecondCall();
+                }
+
+                RunExperimentDispatcherTask(async () => loaded = await refreshTask.WaitAsync(TimeSpan.FromSeconds(5)));
+                Require(loaded?.Snapshot is { } refreshed
+                    && refreshed.RelativeEvidencePath == newestBundle.RelativeEvidencePath
+                    && refreshed.Artifacts.Count(item => item.Artifact.Kind == "rendered-ui-screenshot") == 2
+                    && control.ReviewProgressText.Text.StartsWith("Reviewed 0/2 screenshot(s).", StringComparison.Ordinal)
+                    && !control.AcceptInspectionButton.IsEnabled,
+                    "completed latest-bundle revalidation did not replace the historical count with the newest exact screenshot count");
+            });
+        });
+    }
+
+    private static void VerifyQaInspectorFinalizesCancelledRevalidation()
+    {
+        RunStaTest(() =>
+        {
+            WithQaRoot(root =>
+            {
+                var bundle = CreateAcceptanceReadyBundle(root, "cancelled-revalidation");
+                var acceptance = new FakeQaAcceptanceRunner();
+                var control = new InAppQaInspectorControl();
+                using var coordinator = new InAppQaInspectorCoordinator(
+                    control,
+                    root,
+                    new FakeQaCurrentnessValidator(QaCurrentnessResult.Current()),
+                    new FakeQaSuiteRunner(),
+                    acceptance,
+                    new FakeQaClipboard(),
+                    () => true);
+
+                QaEvidenceLoadResult? loaded = null;
+                RunExperimentDispatcherTask(async () => loaded = await coordinator.RefreshAsync(bundle.RelativeEvidencePath));
+                var snapshot = loaded?.Snapshot
+                    ?? throw new InvalidOperationException("Cancelled-revalidation fixture did not load its initial evidence.");
+                foreach (var screenshot in snapshot.Artifacts.Where(item => item.Artifact.Kind == "rendered-ui-screenshot"))
+                {
+                    RunExperimentDispatcherTask(() => coordinator.SelectScreenshotAsync(screenshot.Artifact.Id));
+                }
+                var reviewPath = Path.Combine(
+                    snapshot.BundlePath,
+                    QaEvidenceRepository.ReviewManifestRelativePath.Replace('/', Path.DirectorySeparatorChar));
+                Require(control.CurrentPreviewImage.Source is not null
+                    && control.ReviewProgressText.Text.StartsWith("Reviewed 2/2 screenshot(s).", StringComparison.Ordinal)
+                    && control.AcceptInspectionButton.IsEnabled
+                    && File.Exists(reviewPath),
+                    "gate-contention fixture did not begin with an acceptance-ready visible and persisted review");
+
+                var reviewGate = typeof(InAppQaInspectorCoordinator)
+                    .GetField("reviewGate", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?
+                    .GetValue(coordinator) as SemaphoreSlim
+                    ?? throw new InvalidOperationException("QA Inspector review gate is unavailable to its contention regression.");
+                Require(reviewGate.Wait(0), "gate-contention regression could not acquire the idle QA review gate");
+                using var cancellation = new CancellationTokenSource();
+                Task<QaEvidenceLoadResult>? refreshTask = null;
+                try
+                {
+                    refreshTask = coordinator.RefreshAsync(bundle.RelativeEvidencePath, cancellation.Token);
+                    RunExperimentDispatcherTask(async () =>
+                    {
+                        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+                        while (!control.ReviewProgressText.Text.StartsWith("Revalidating evidence.", StringComparison.Ordinal))
+                        {
+                            if (DateTimeOffset.UtcNow >= deadline)
+                            {
+                                throw new TimeoutException("QA revalidation did not reach its visible gate-contention state.");
+                            }
+                            await Task.Delay(10);
+                        }
+                    });
+                    Require(!refreshTask.IsCompleted
+                        && control.ReviewProgressText.Text.StartsWith(
+                            "Revalidating evidence. The previously loaded bundle contained 2 rendered screenshot(s).",
+                            StringComparison.Ordinal)
+                        && control.CurrentPreviewImage.Source is null
+                        && !control.AcceptInspectionButton.IsEnabled,
+                        "cancelled-revalidation fixture did not reach the bounded safe in-flight state");
+                    cancellation.Cancel();
+                    RunExperimentDispatcherTask(() => Task.Delay(50));
+                    Require(!refreshTask.IsCompleted,
+                        "cancelled refresh bypassed serialized review cleanup while the review gate was contended");
+                }
+                finally
+                {
+                    cancellation.Cancel();
+                    reviewGate.Release();
+                }
+
+                RunExperimentDispatcherTask(async () => loaded = await refreshTask!.WaitAsync(TimeSpan.FromSeconds(5)));
+                Require(loaded is { State: QaInspectorState.Unavailable, Code: "qa.refresh_cancelled" }
+                    && control.ReviewProgressText.Text.Contains("revalidation was cancelled", StringComparison.Ordinal)
+                    && !control.ReviewProgressText.Text.Contains("Revalidating", StringComparison.Ordinal)
+                    && control.CurrentPreviewImage.Source is null
+                    && control.BaselinePreviewImage.Source is null
+                    && !control.AcceptInspectionButton.IsEnabled
+                    && !File.Exists(reviewPath),
+                    "cancelled evidence revalidation left stale review progress, preview, persistence, or acceptance available");
+
+                QaAcceptanceResult? retriedAcceptance = null;
+                RunExperimentDispatcherTask(async () => retriedAcceptance = await coordinator.AcceptInspectionAsync());
+                Require(retriedAcceptance is { State: QaInspectorState.Blocked, Code: "qa.acceptance_preconditions" }
+                    && acceptance.CallCount == 0,
+                    "direct acceptance reused internal review state after gate-contended cancellation cleanup");
             });
         });
     }
@@ -1072,6 +1228,101 @@ internal static partial class Program
         return new($"artifacts/qa/{runId}/qa-evidence.json", evidencePath);
     }
 
+    private static QaBundleFixture CreateReleaseScaleQaBundle(string root, string runId)
+    {
+        var fixture = CreateAcceptanceReadyBundle(root, runId);
+        var json = File.ReadAllText(fixture.EvidencePath, Encoding.UTF8);
+        Require(ArenaContractCodec.TryDeserialize<ArenaQaEvidenceContract>(json, out var contract, out var issues),
+            $"release-scale QA fixture could not read its base evidence: {string.Join(", ", issues.Select(item => item.Code))}");
+
+        var bundlePath = Path.GetDirectoryName(fixture.EvidencePath)
+            ?? throw new InvalidOperationException("Release-scale QA fixture bundle path is unavailable.");
+        File.Delete(Path.Combine(bundlePath, "screenshots", "current.png"));
+        File.Delete(Path.Combine(bundlePath, "screenshots", "current-secondary.png"));
+        File.Delete(Path.Combine(bundlePath, "screenshots", "baseline.png"));
+        File.Delete(Path.Combine(bundlePath, "automation", "tree.json"));
+
+        var tree = contract!.TreeFingerprint;
+        var capturedAt = contract.StartedAtUtc.AddSeconds(10);
+        var screenshotBytes = CreatePngBytes(64, 48, 0x28, 0x74, 0xA1);
+        var automationBytes = Encoding.UTF8.GetBytes("{\"schema\":\"ai_arena.automation_tree.v1\",\"nodes\":[]}");
+        var metadataBytes = Encoding.UTF8.GetBytes("{\"schema\":\"ai_arena.qa_metadata.v1\",\"fixture\":true}");
+        var logBytes = Encoding.UTF8.GetBytes("AI Arena QA gate evidence\noutcome=pass\n");
+        var artifacts = ImmutableArray.CreateBuilder<ArenaQaArtifact>(432);
+        var screenshotIds = ImmutableArray.CreateBuilder<string>(192);
+        var automationIds = ImmutableArray.CreateBuilder<string>(192);
+
+        for (var index = 1; index <= 192; index++)
+        {
+            var suffix = index.ToString("D3", CultureInfo.InvariantCulture);
+            var automationId = $"artifact.scale.{suffix}.automation";
+            var screenshotId = $"artifact.scale.{suffix}.screenshot";
+            var automationPath = $"automation/scale-{suffix}.json";
+            var screenshotPath = $"screenshots/scale-{suffix}.png";
+            File.WriteAllBytes(Path.Combine(bundlePath, automationPath.Replace('/', Path.DirectorySeparatorChar)), automationBytes);
+            File.WriteAllBytes(Path.Combine(bundlePath, screenshotPath.Replace('/', Path.DirectorySeparatorChar)), screenshotBytes);
+            automationIds.Add(automationId);
+            screenshotIds.Add(screenshotId);
+            artifacts.Add(new(
+                automationId,
+                "automation-tree",
+                automationPath,
+                Hash(automationBytes),
+                new(tree, capturedAt, "dark-blue", 1500, 960, 1m, $"qa-scale-{suffix}", null, null)));
+            artifacts.Add(new(
+                screenshotId,
+                "rendered-ui-screenshot",
+                screenshotPath,
+                Hash(screenshotBytes),
+                new(tree, capturedAt, "dark-blue", 1500, 960, 1m, $"qa-scale-{suffix}", automationId, null)));
+        }
+
+        artifacts.Add(contract.Artifacts.Single(item => item.Id == ArenaQaSealManifestV2.ExplicitMigrationArtifactId));
+        for (var index = 1; index <= 39; index++)
+        {
+            var suffix = index.ToString("D2", CultureInfo.InvariantCulture);
+            var relativePath = $"logs/scale-gate-{suffix}.log";
+            File.WriteAllBytes(Path.Combine(bundlePath, relativePath.Replace('/', Path.DirectorySeparatorChar)), logBytes);
+            artifacts.Add(new($"artifact.scale.gate-log.{suffix}", "sanitized-gate-log", relativePath, Hash(logBytes), null));
+        }
+
+        for (var index = 1; index <= 3; index++)
+        {
+            var suffix = index.ToString("D2", CultureInfo.InvariantCulture);
+            var relativePath = $"metadata/scale-metadata-{suffix}.json";
+            File.WriteAllBytes(Path.Combine(bundlePath, relativePath.Replace('/', Path.DirectorySeparatorChar)), metadataBytes);
+            artifacts.Add(new($"artifact.scale.metadata.{suffix}", "qa-metadata", relativePath, Hash(metadataBytes), null));
+        }
+
+        artifacts.AddRange(contract.Artifacts
+            .Where(item => item.Kind == ArenaQaSealManifestV2.FeatureSurfaceMatrixArtifactKind)
+            .OrderBy(item => item.Id, StringComparer.Ordinal));
+        for (var index = 1; index <= 2; index++)
+        {
+            var suffix = index.ToString("D2", CultureInfo.InvariantCulture);
+            var relativePath = $"metadata/pass-{suffix}.ui-matrix.json";
+            File.WriteAllBytes(Path.Combine(bundlePath, relativePath.Replace('/', Path.DirectorySeparatorChar)), metadataBytes);
+            artifacts.Add(new($"artifact.pass-{suffix}.ui-matrix", "qa-ui-matrix", relativePath, Hash(metadataBytes), null));
+        }
+
+        var measurementsPath = "metadata/verification-measurements.json";
+        File.WriteAllBytes(Path.Combine(bundlePath, measurementsPath.Replace('/', Path.DirectorySeparatorChar)), metadataBytes);
+        artifacts.Add(new("artifact.verification-measurements", "verification-measurements", measurementsPath, Hash(metadataBytes), null));
+        Require(artifacts.Count == 432, "release-scale QA fixture did not reproduce the 432-artifact seal shape");
+
+        var releaseScale = contract with
+        {
+            Artifacts = artifacts.ToImmutable(),
+            Inspection = contract.Inspection with
+            {
+                ScreenshotArtifactIds = screenshotIds.ToImmutable(),
+                AutomationArtifactIds = automationIds.ToImmutable()
+            }
+        };
+        File.WriteAllText(fixture.EvidencePath, ArenaContractCodec.Serialize(releaseScale, indented: true), new UTF8Encoding(false));
+        return fixture;
+    }
+
     private static ImmutableArray<ArenaQaAcceptedLimitation> RequiredQaLimitations() =>
         ArenaQaSealManifestV1.RequiredLimitations
             .Select(requirement => new ArenaQaAcceptedLimitation(
@@ -1174,6 +1425,29 @@ internal static partial class Program
     }
 
     private sealed record QaBundleFixture(string RelativeEvidencePath, string EvidencePath);
+
+    private sealed class GatedSecondQaCurrentnessValidator : IQaEvidenceCurrentnessValidator
+    {
+        private readonly TaskCompletionSource<bool> releaseSecondCall = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource<bool> SecondCallStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal int CallCount { get; private set; }
+
+        internal void ReleaseSecondCall() => releaseSecondCall.TrySetResult(true);
+
+        public async Task<QaCurrentnessResult> ValidateAsync(
+            string evidencePath,
+            string repositoryRoot,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            if (CallCount == 1) return QaCurrentnessResult.Current();
+            SecondCallStarted.TrySetResult(true);
+            await releaseSecondCall.Task.WaitAsync(cancellationToken);
+            return QaCurrentnessResult.Current();
+        }
+    }
 
     private sealed class FakeQaCurrentnessValidator : IQaEvidenceCurrentnessValidator
     {

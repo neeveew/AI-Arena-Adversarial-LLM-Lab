@@ -144,6 +144,28 @@ public partial class InAppQaInspectorControl : UserControl
         AutomationProperties.SetItemStatus(ReviewProgressText, reviewed >= total && total > 0 ? "complete" : "incomplete");
     }
 
+    internal void SetReviewRevalidating(int knownScreenshotCount)
+    {
+        var text = knownScreenshotCount > 0
+            ? $"Revalidating evidence. The previously loaded bundle contained {knownScreenshotCount} rendered screenshot(s). Explicit review and acceptance remain unavailable until validation completes."
+            : "Loading and revalidating rendered screenshots. Explicit review and acceptance remain unavailable until validation completes.";
+        ReviewProgressText.Text = text;
+        ToolTipService.SetToolTip(ReviewProgressText, text);
+        AutomationProperties.SetHelpText(ReviewProgressText, text);
+        AutomationProperties.SetHelpText(AcceptInspectionButton, text);
+        AutomationProperties.SetItemStatus(ReviewProgressText, "revalidating");
+    }
+
+    internal void SetReviewCancelled()
+    {
+        const string text = "Screenshot review is unavailable because evidence revalidation was cancelled. Refresh to load current review evidence.";
+        ReviewProgressText.Text = text;
+        ToolTipService.SetToolTip(ReviewProgressText, text);
+        AutomationProperties.SetHelpText(ReviewProgressText, text);
+        AutomationProperties.SetHelpText(AcceptInspectionButton, text);
+        AutomationProperties.SetItemStatus(ReviewProgressText, "cancelled");
+    }
+
     internal void SetSuiteBusy(bool busy)
     {
         RunSuiteButton.IsEnabled = !readOnlyMode && !busy;

@@ -2166,7 +2166,7 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
 
             await OnControlDispatcherAsync(async () =>
             {
-                control.SetBusy(true);
+                control.SetFeatureSelectionRefreshing(true);
                 await RefreshFeatureAsync(key, cancellation.Token).ConfigureAwait(true);
             }, cancellation.Token).ConfigureAwait(false);
             if (IsCurrentFeatureSelectionRefresh(key, generation, cancellation))
@@ -2208,7 +2208,13 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         {
             if (enteredGate)
             {
-                await OnControlDispatcherAsync(() => control.SetBusy(false)).ConfigureAwait(false);
+                await OnControlDispatcherAsync(() =>
+                {
+                    if (IsCurrentFeatureSelectionRefresh(key, generation, cancellation))
+                    {
+                        control.SetFeatureSelectionRefreshing(false);
+                    }
+                }).ConfigureAwait(false);
                 actionGate.Release();
             }
 

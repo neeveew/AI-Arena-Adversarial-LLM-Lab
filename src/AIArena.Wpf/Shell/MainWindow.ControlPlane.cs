@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Threading;
 using AIArena.Core.Models;
 using AIArena.Core.Services;
+using AIArena.Wpf.Controls;
 using AIArena.Wpf.Services;
 
 namespace AIArena.Wpf;
@@ -118,16 +119,26 @@ public partial class MainWindow
                     }
 
                     var before = ExperimentLabPanel.ReadControlPlaneState();
-                    if (before.Busy)
+                    var target = ResolveExperimentFeatureSelectionTarget(before, key);
+                    if (target is null)
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "invalid_argument",
+                            "experiment.feature.select requires an exact registered feature key.",
+                            before);
+                    }
+
+                    if (!target.Selectable)
                     {
                         return AIArenaControlResponse.Error(
                             request,
                             "experiment_busy",
-                            "Experiment Lab is busy; wait for the current operation before changing features.",
+                            "The requested Experiment Lab feature is unavailable while the current operation completes.",
                             before);
                     }
 
-                    if (!ExperimentLabPanel.TrySelectRegisteredFeature(key, out var changed))
+                    if (!ExperimentLabPanel.TrySelectRegisteredFeature(target.Key, out var changed))
                     {
                         return AIArenaControlResponse.Error(
                             request,
@@ -142,7 +153,7 @@ public partial class MainWindow
                     // explicitly. No experiment action or provider call is run.
                     if (!changed)
                     {
-                        ExperimentLab.RequestFeatureSelectionRefresh(key.Trim());
+                        ExperimentLab.RequestFeatureSelectionRefresh(target.Key);
                     }
 
                     var refresh = ExperimentLab.DebugFeatureSelectionRefreshTask;
@@ -635,6 +646,16 @@ public partial class MainWindow
             IsControlPlaneEnabled,
             AgentWorkspace.ControlState,
             BuildProviderControlState());
+    }
+
+    internal static ExperimentLabFeatureControlState? ResolveExperimentFeatureSelectionTarget(
+        ExperimentLabControlState state,
+        string key)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var normalizedKey = key?.Trim() ?? "";
+        return state.Features.SingleOrDefault(feature =>
+            string.Equals(feature.Key, normalizedKey, StringComparison.Ordinal));
     }
 
     private void OpenExperimentLabForControlPlaneSelection()
