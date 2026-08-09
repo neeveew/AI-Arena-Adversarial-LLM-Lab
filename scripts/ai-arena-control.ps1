@@ -1,7 +1,33 @@
 param()
 
-$script:AIArenaPipeName = 'ai-arena-wpf-control'
-$script:AIArenaTokenPath = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-arena-wpf-control-{0}.token" -f [Environment]::UserName)
+$script:AIArenaPipeBaseName = 'ai-arena-wpf-control'
+
+function Get-AIArenaControlEndpoint {
+    [CmdletBinding()]
+    param()
+
+    $ownerSuffix = ''
+    if (-not [string]::IsNullOrWhiteSpace($env:AI_ARENA_CONTROL_OWNER)) {
+        $owner = $env:AI_ARENA_CONTROL_OWNER.Trim()
+        if ($owner -cnotmatch '^[0-9A-Fa-f]{32}$') {
+            throw 'AI_ARENA_CONTROL_OWNER must be a 32-character hexadecimal QA ownership identifier.'
+        }
+        $ownerSuffix = '-' + $owner.ToLowerInvariant()
+    }
+
+    $userParts = [Environment]::UserName.Split(
+        [System.IO.Path]::GetInvalidFileNameChars(),
+        [System.StringSplitOptions]::RemoveEmptyEntries)
+    $user = [string]::Join('_', [string[]]$userParts)
+    if ([string]::IsNullOrWhiteSpace($user)) {
+        $user = 'user'
+    }
+
+    return [pscustomobject]@{
+        PipeName = $script:AIArenaPipeBaseName + $ownerSuffix
+        TokenPath = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-arena-wpf-control-{0}{1}.token" -f $user, $ownerSuffix)
+    }
+}
 
 function Get-AIArenaControlToken {
     [CmdletBinding()]
@@ -18,8 +44,9 @@ function Get-AIArenaControlToken {
         return $env:AI_ARENA_CONTROL_TOKEN.Trim()
     }
 
-    if (Test-Path -LiteralPath $script:AIArenaTokenPath) {
-        return (Get-Content -LiteralPath $script:AIArenaTokenPath -Raw).Trim()
+    $endpoint = Get-AIArenaControlEndpoint
+    if (Test-Path -LiteralPath $endpoint.TokenPath) {
+        return (Get-Content -LiteralPath $endpoint.TokenPath -Raw).Trim()
     }
 
     throw "AI Arena control-plane token not found. Enable the control plane in AI Arena, pass -Token, or set AI_ARENA_CONTROL_TOKEN."
@@ -152,9 +179,10 @@ function Invoke-AIArena {
         token = Get-AIArenaControlToken -Token $Token
     } | ConvertTo-Json -Depth 12 -Compress
 
+    $endpoint = Get-AIArenaControlEndpoint
     $pipe = [System.IO.Pipes.NamedPipeClientStream]::new(
         '.',
-        $script:AIArenaPipeName,
+        $endpoint.PipeName,
         [System.IO.Pipes.PipeDirection]::InOut,
         [System.IO.Pipes.PipeOptions]::None)
     try {
@@ -1680,9 +1708,10 @@ function Watch-AIArenaEvents {
         token = Get-AIArenaControlToken -Token $Token
     } | ConvertTo-Json -Depth 8 -Compress
 
+    $endpoint = Get-AIArenaControlEndpoint
     $pipe = [System.IO.Pipes.NamedPipeClientStream]::new(
         '.',
-        $script:AIArenaPipeName,
+        $endpoint.PipeName,
         [System.IO.Pipes.PipeDirection]::InOut,
         [System.IO.Pipes.PipeOptions]::None)
     $pipe.Connect($TimeoutMs)

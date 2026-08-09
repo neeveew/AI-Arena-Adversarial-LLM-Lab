@@ -1,5 +1,7 @@
 using System.IO;
 using System.IO.Pipes;
+using System.Diagnostics;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
@@ -77,6 +79,272 @@ internal static partial class Program
             {
                 File.Delete(tokenPath);
             }
+        }
+    }
+
+    static void ControlPlaneIsolatesTwoConcurrentOwnerProcesses()
+    {
+        var fixtureOwner = Guid.NewGuid().ToString("N");
+        var fixtureRoot = Path.Combine(Path.GetTempPath(), $"ai-arena-control-owner-fixture-{fixtureOwner}");
+        var firstDataRoot = Path.Combine(fixtureRoot, "first");
+        var secondDataRoot = Path.Combine(fixtureRoot, "second");
+        var firstStopPath = Path.Combine(fixtureRoot, "first.stop");
+        var secondStopPath = Path.Combine(fixtureRoot, "second.stop");
+        var firstOwner = Guid.NewGuid().ToString("N");
+        var secondOwner = Guid.NewGuid().ToString("N");
+        var previousOwner = Environment.GetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable);
+        Process? firstProcess = null;
+        Process? secondProcess = null;
+        string? firstTokenPath = null;
+        string? secondTokenPath = null;
+        try
+        {
+            Directory.CreateDirectory(fixtureRoot);
+            File.WriteAllText(
+                Path.Combine(fixtureRoot, ".ai-arena-control-owner-fixture"),
+                fixtureOwner + "\n",
+                new UTF8Encoding(false));
+            Directory.CreateDirectory(firstDataRoot);
+            Directory.CreateDirectory(secondDataRoot);
+            File.WriteAllText(Path.Combine(firstDataRoot, ".ai-arena-qa-owner"), firstOwner + "\n", new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(secondDataRoot, ".ai-arena-qa-owner"), secondOwner + "\n", new UTF8Encoding(false));
+
+            var firstEndpoint = ResolveControlEndpointForOwner(firstOwner);
+            var secondEndpoint = ResolveControlEndpointForOwner(secondOwner);
+            firstTokenPath = firstEndpoint.TokenPath;
+            secondTokenPath = secondEndpoint.TokenPath;
+            Require(!firstEndpoint.PipeName.Equals(secondEndpoint.PipeName, StringComparison.Ordinal),
+                "distinct QA owners must not share a named-pipe endpoint");
+            Require(!firstTokenPath.Equals(secondTokenPath, StringComparison.OrdinalIgnoreCase),
+                "distinct QA owners must not share a token file");
+            Require(ControlPlaneRejectsInvalidOwnerNamespace(),
+                "the app accepted an unsafe control-plane owner namespace");
+
+            firstProcess = StartControlPlaneOwnerFixture(firstOwner, firstDataRoot, firstStopPath);
+            secondProcess = StartControlPlaneOwnerFixture(secondOwner, secondDataRoot, secondStopPath);
+            Require(SpinWait.SpinUntil(
+                    () => File.Exists(firstTokenPath) && File.Exists(secondTokenPath)
+                        && !firstProcess.HasExited && !secondProcess.HasExited,
+                    TimeSpan.FromSeconds(10)),
+                "both owner-isolated control-plane processes should become ready concurrently");
+
+            var firstToken = File.ReadAllText(firstTokenPath).Trim();
+            var secondToken = File.ReadAllText(secondTokenPath).Trim();
+            Require(firstToken.Length == 64 && secondToken.Length == 64
+                    && !firstToken.Equals(secondToken, StringComparison.Ordinal),
+                "concurrent owner processes should publish distinct per-run tokens");
+
+            var firstRequest = Task.Run(() => SendControlRequest(
+                firstEndpoint.PipeName,
+                $"{{\"id\":\"first-owner\",\"command\":\"status\",\"token\":\"{firstToken}\",\"args\":{{}}}}"));
+            var secondRequest = Task.Run(() => SendControlRequest(
+                secondEndpoint.PipeName,
+                $"{{\"id\":\"second-owner\",\"command\":\"status\",\"token\":\"{secondToken}\",\"args\":{{}}}}"));
+            Task.WhenAll(firstRequest, secondRequest).WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+            Require(firstRequest.Result.Contains("\"id\":\"first-owner\"", StringComparison.OrdinalIgnoreCase)
+                    && firstRequest.Result.Contains("\"ok\":true", StringComparison.OrdinalIgnoreCase),
+                "the first owner process did not answer its own endpoint");
+            Require(secondRequest.Result.Contains("\"id\":\"second-owner\"", StringComparison.OrdinalIgnoreCase)
+                    && secondRequest.Result.Contains("\"ok\":true", StringComparison.OrdinalIgnoreCase),
+                "the second owner process did not answer its own endpoint");
+
+            var crossedFirst = SendControlRequest(
+                firstEndpoint.PipeName,
+                $"{{\"id\":\"cross-first\",\"command\":\"status\",\"token\":\"{secondToken}\",\"args\":{{}}}}");
+            var crossedSecond = SendControlRequest(
+                secondEndpoint.PipeName,
+                $"{{\"id\":\"cross-second\",\"command\":\"status\",\"token\":\"{firstToken}\",\"args\":{{}}}}");
+            Require(crossedFirst.Contains("\"errorCode\":\"unauthorized\"", StringComparison.OrdinalIgnoreCase)
+                    && crossedSecond.Contains("\"errorCode\":\"unauthorized\"", StringComparison.OrdinalIgnoreCase),
+                "owner-isolated endpoints must reject the other process token");
+
+            File.WriteAllText(firstStopPath, "stop\n", new UTF8Encoding(false));
+            File.WriteAllText(secondStopPath, "stop\n", new UTF8Encoding(false));
+            Require(firstProcess.WaitForExit(10000) && secondProcess.WaitForExit(10000),
+                "owner-isolated fixture processes did not stop within their bound");
+            Require(firstProcess.ExitCode == 0 && secondProcess.ExitCode == 0,
+                "owner-isolated fixture processes did not shut down cleanly");
+            Require(!File.Exists(firstTokenPath) && !File.Exists(secondTokenPath),
+                "owner-isolated fixture shutdown should remove only its matching token files");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable, previousOwner);
+            StopControlPlaneOwnerFixture(firstProcess, firstStopPath);
+            StopControlPlaneOwnerFixture(secondProcess, secondStopPath);
+            DeleteOwnedControlToken(firstTokenPath, firstOwner);
+            DeleteOwnedControlToken(secondTokenPath, secondOwner);
+            DeleteControlOwnerFixtureRoot(fixtureRoot, fixtureOwner);
+        }
+    }
+
+    private static int RunControlPlaneOwnerFixture(string stopPath)
+    {
+        if (string.IsNullOrWhiteSpace(stopPath) || !Path.IsPathFullyQualified(stopPath))
+        {
+            return 2;
+        }
+
+        using var host = new AIArenaControlPlaneHost(new FakeControlTarget(), new AIArenaControlPlaneEventHub());
+        try
+        {
+            host.StartIfEnabledAsync().WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            if (!host.IsRunning || !File.Exists(host.TokenPath))
+            {
+                return 3;
+            }
+
+            if (!SpinWait.SpinUntil(() => File.Exists(stopPath), TimeSpan.FromSeconds(30)))
+            {
+                return 4;
+            }
+
+            host.StopAsync().WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            return !host.IsRunning && !File.Exists(host.TokenPath) ? 0 : 5;
+        }
+        catch
+        {
+            return 6;
+        }
+        finally
+        {
+            try
+            {
+                host.StopAsync().WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            }
+            catch
+            {
+                // The parent process owns the bounded fallback cleanup.
+            }
+        }
+    }
+
+    private static (string PipeName, string TokenPath) ResolveControlEndpointForOwner(string owner)
+    {
+        var previous = Environment.GetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable, owner);
+            return (AIArenaControlPlaneProtocol.CurrentPipeName(), AIArenaControlPlaneProtocol.DefaultTokenPath());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable, previous);
+        }
+    }
+
+    private static bool ControlPlaneRejectsInvalidOwnerNamespace()
+    {
+        var previous = Environment.GetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable, "invalid-owner");
+            _ = AIArenaControlPlaneProtocol.CurrentPipeName();
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable, previous);
+        }
+    }
+
+    private static Process StartControlPlaneOwnerFixture(string owner, string dataRoot, string stopPath)
+    {
+        var processPath = Environment.ProcessPath
+            ?? throw new InvalidOperationException("The test process executable path is unavailable.");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = processPath,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        if (Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            startInfo.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
+        }
+        startInfo.ArgumentList.Add("--control-plane-owner-fixture");
+        startInfo.ArgumentList.Add(stopPath);
+        startInfo.Environment[AIArenaControlPlaneProtocol.OwnerEnvironmentVariable] = owner;
+        startInfo.Environment["AI_ARENA_DATA_DIR"] = dataRoot;
+        return Process.Start(startInfo)
+            ?? throw new InvalidOperationException("The owner-isolated fixture process did not start.");
+    }
+
+    private static void StopControlPlaneOwnerFixture(Process? process, string stopPath)
+    {
+        if (process is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!process.HasExited)
+            {
+                File.WriteAllText(stopPath, "stop\n", new UTF8Encoding(false));
+                if (!process.WaitForExit(5000))
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // The exact child may already have exited between checks.
+        }
+        finally
+        {
+            process.Dispose();
+        }
+    }
+
+    private static void DeleteOwnedControlToken(string? tokenPath, string owner)
+    {
+        if (string.IsNullOrWhiteSpace(tokenPath) || !File.Exists(tokenPath))
+        {
+            return;
+        }
+
+        var fullPath = Path.GetFullPath(tokenPath);
+        var tempPrefix = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(tempPrefix, StringComparison.OrdinalIgnoreCase)
+            || !Path.GetFileName(fullPath).EndsWith($"-{owner}.token", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Refusing to remove an unowned control-plane token fixture.");
+        }
+
+        File.Delete(fullPath);
+    }
+
+    private static void DeleteControlOwnerFixtureRoot(string fixtureRoot, string fixtureOwner)
+    {
+        var fullPath = Path.GetFullPath(fixtureRoot);
+        var tempPrefix = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(tempPrefix, StringComparison.OrdinalIgnoreCase)
+            || !Path.GetFileName(fullPath).Equals(
+                $"ai-arena-control-owner-fixture-{fixtureOwner}",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Refusing to remove an unowned control-plane fixture root.");
+        }
+
+        if (Directory.Exists(fullPath))
+        {
+            var markerPath = Path.Combine(fullPath, ".ai-arena-control-owner-fixture");
+            if (!File.Exists(markerPath)
+                || !File.ReadAllText(markerPath).Trim().Equals(fixtureOwner, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Refusing to remove a control-plane fixture root without its matching marker.");
+            }
+
+            Directory.Delete(fullPath, recursive: true);
         }
     }
 
@@ -549,7 +817,12 @@ internal static partial class Program
         var functionCount = script
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Count(line => line.TrimStart().StartsWith("function ", StringComparison.OrdinalIgnoreCase));
-        Require(functionCount == 61, "PowerShell client should expose the complete 61-function surface");
+        Require(functionCount == 62, "PowerShell client should expose the complete 62-function surface");
+        Require(script.Contains("function Get-AIArenaControlEndpoint", StringComparison.Ordinal)
+            && script.Contains("AI_ARENA_CONTROL_OWNER", StringComparison.Ordinal)
+            && script.Contains("$endpoint.PipeName", StringComparison.Ordinal)
+            && script.Contains("$endpoint.TokenPath", StringComparison.Ordinal),
+            "PowerShell client should resolve owner-isolated pipe and token endpoints dynamically");
         Require(script.Contains("[string]$Token", StringComparison.Ordinal), "PowerShell client should expose -Token for authenticated control-plane calls");
         Require(script.Contains("AI_ARENA_CONTROL_TOKEN", StringComparison.Ordinal), "PowerShell client should support token injection through AI_ARENA_CONTROL_TOKEN");
         Require(script.Contains("Get-AIArenaControlToken", StringComparison.Ordinal), "PowerShell client should load the app-written token for debug calls");

@@ -21,8 +21,13 @@ using System.Windows.Media.Imaging;
 
 internal static partial class Program
 {
-    private static int Main()
+    private static int Main(string[] args)
     {
+if (args.Length == 2 && args[0].Equals("--control-plane-owner-fixture", StringComparison.Ordinal))
+{
+    return RunControlPlaneOwnerFixture(args[1]);
+}
+
 var tests = new List<(string Name, Action Test)>
 {
     ("saves and reloads visual generation settings", SaveReloadVisualGenerationSettings),
@@ -336,6 +341,7 @@ var tests = new List<(string Name, Action Test)>
     ("main window snapshot refresh skips unchanged session scans", MainWindowSnapshotRefreshSkipsUnchangedSessionScans),
     ("control plane parses commands and stable responses", ControlPlaneParsesCommandsAndStableResponses),
     ("control plane requires session token", ControlPlaneRequiresSessionToken),
+    ("control plane isolates two concurrent owner processes", ControlPlaneIsolatesTwoConcurrentOwnerProcesses),
     ("control plane rejects oversized requests", ControlPlaneRejectsOversizedRequests),
     ("control plane stop drains active clients", ControlPlaneStopDrainsActiveClients),
     ("control plane restarts after a drained stop", ControlPlaneRestartsAfterDrainedStop),

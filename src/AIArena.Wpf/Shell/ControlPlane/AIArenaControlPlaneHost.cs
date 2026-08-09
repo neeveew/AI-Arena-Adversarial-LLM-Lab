@@ -19,12 +19,12 @@ internal sealed class AIArenaControlPlaneHost : IDisposable
     public AIArenaControlPlaneHost(
         IAIArenaControlTarget target,
         IAIArenaControlEventSource eventSource,
-        string pipeName = AIArenaControlPlaneProtocol.PipeName,
+        string? pipeName = null,
         string? tokenPath = null)
     {
         this.target = target;
         this.eventSource = eventSource;
-        this.pipeName = string.IsNullOrWhiteSpace(pipeName) ? AIArenaControlPlaneProtocol.PipeName : pipeName;
+        this.pipeName = string.IsNullOrWhiteSpace(pipeName) ? AIArenaControlPlaneProtocol.CurrentPipeName() : pipeName;
         this.tokenPath = string.IsNullOrWhiteSpace(tokenPath) ? AIArenaControlPlaneProtocol.DefaultTokenPath() : tokenPath;
     }
 

@@ -734,6 +734,30 @@ function Remove-IsolatedQaData {
     }
 }
 
+function Remove-IsolatedQaControlToken {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [ValidatePattern('^[0-9a-f]{32}$')] [string]$OwnerToken
+    )
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    $leaf = Split-Path -Leaf $fullPath
+    if (-not $fullPath.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        -not $leaf.StartsWith('ai-arena-wpf-control-', [StringComparison]::Ordinal) -or
+        -not $leaf.EndsWith("-$OwnerToken.token", [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Refusing to remove an unverified QA control-plane token.'
+    }
+
+    if (Test-Path -LiteralPath $fullPath) {
+        $item = Get-Item -LiteralPath $fullPath -Force
+        if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'Refusing to remove a non-file QA control-plane token.'
+        }
+        Remove-Item -LiteralPath $fullPath -Force
+    }
+}
+
 function Resolve-IsolatedQaArtifact {
     param(
         [Parameter(Mandatory)] [string]$DataRoot,
@@ -1194,7 +1218,15 @@ function Invoke-RenderedUiSmoke {
     $ownerToken = [Guid]::NewGuid().ToString('N')
     $isolatedData = Join-Path ([IO.Path]::GetTempPath()) ("ai-arena-qa-{0}-pass-{1:D2}-{2}" -f $RunId, $PassNumber, $ownerToken)
     $previousDataRoot = $env:AI_ARENA_DATA_DIR
+    $previousControlOwner = $env:AI_ARENA_CONTROL_OWNER
+    $renderFailureStage = 'prepare'
+    $renderFailureTheme = 'none'
+    $renderFailureWidth = 0
+    $renderFailureDpi = 'none'
+    $renderFailureMotion = 'none'
+    $renderFailureCell = 'none'
     $process = $null
+    $ownedControlTokenPath = $null
     try {
         if (Test-Path -LiteralPath $isolatedData) {
             throw 'Fresh QA data directory unexpectedly already exists.'
@@ -1202,9 +1234,17 @@ function Invoke-RenderedUiSmoke {
         New-Item -ItemType Directory -Path $isolatedData | Out-Null
         Write-Utf8NoBom -Path (Join-Path $isolatedData '.ai-arena-qa-owner') -Text ($ownerToken + "`n")
         $env:AI_ARENA_DATA_DIR = $isolatedData
+        $env:AI_ARENA_CONTROL_OWNER = $ownerToken
         . (Join-Path $script:RepositoryRoot 'scripts\ai-arena-control.ps1')
+        $controlEndpoint = Get-AIArenaControlEndpoint
+        if ([string]$controlEndpoint.PipeName -cne "ai-arena-wpf-control-$ownerToken") {
+            throw 'QA control-plane owner namespace did not bind to the exact run owner.'
+        }
+        $ownedControlTokenPath = [string]$controlEndpoint.TokenPath
+        $renderFailureStage = 'launch'
         $startupWatch = [Diagnostics.Stopwatch]::StartNew()
         $process = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+        $renderFailureStage = 'startup'
         $deadline = (Get-Date).AddSeconds($UiStartupTimeoutSeconds)
         $ready = $false
         while ((Get-Date) -lt $deadline) {
@@ -1230,6 +1270,7 @@ function Invoke-RenderedUiSmoke {
             durationMilliseconds = [long]$startupWatch.ElapsedMilliseconds
         })
 
+        $renderFailureStage = 'navigation'
         $navigation = Select-AIArenaView 'arena'
         if (-not $navigation.ok -or
             [string]$navigation.state.view -ne 'arena' -or
@@ -1249,16 +1290,31 @@ function Invoke-RenderedUiSmoke {
         $motionModes = @('normal', 'reduced')
 
         foreach ($theme in $themes) {
+            $renderFailureStage = 'theme'
+            $renderFailureTheme = $theme
+            $renderFailureWidth = 0
+            $renderFailureDpi = 'none'
+            $renderFailureMotion = 'none'
+            $renderFailureCell = 'none'
             $themeResult = Set-AIArenaTheme $theme
             if (-not $themeResult.ok) {
                 throw 'Control-plane QA theme selection failed.'
             }
             foreach ($viewport in $viewports) {
+                $renderFailureStage = 'viewport'
+                $renderFailureWidth = $viewport.Width
+                $renderFailureDpi = 'none'
+                $renderFailureMotion = 'none'
+                $renderFailureCell = 'none'
                 $sized = Set-AIArenaQAWindowSize -Width $viewport.Width -Height $viewport.Height -TimeoutMs 10000
                 if (-not $sized.ok) {
                     throw 'Control-plane QA window sizing failed.'
                 }
                 foreach ($motionMode in $motionModes) {
+                    $renderFailureStage = 'motion'
+                    $renderFailureMotion = $motionMode
+                    $renderFailureDpi = 'none'
+                    $renderFailureCell = 'none'
                     $motion = Set-AIArenaQAMotion -Mode $motionMode -TimeoutMs 10000
                     $expectedMotionSource = if ($motionMode -eq 'normal') { 'qa-normal' } else { 'qa-reduced' }
                     $expectedAnimations = $motionMode -eq 'normal'
@@ -1269,6 +1325,9 @@ function Invoke-RenderedUiSmoke {
                     }
 
                     foreach ($renderScale in $renderScales) {
+                        $renderFailureDpi = $renderScale.Label
+                        $renderFailureCell = "p$($PassNumber.ToString('D2')).$theme.w$($viewport.Width).d$($renderScale.Label).$motionMode"
+                        $renderFailureStage = 'focus'
                         Start-Sleep -Milliseconds 100
                         $seedFocus = Move-AIArenaQAFocus -Direction next -TimeoutMs 10000
                         $nextFocus = Move-AIArenaQAFocus -Direction next -TimeoutMs 10000
@@ -1290,8 +1349,9 @@ function Invoke-RenderedUiSmoke {
                             throw 'Programmatic WPF focus traversal did not move in both directions and restore a visible capture focus.'
                         }
 
-                        $cellKey = "p$($PassNumber.ToString('D2')).$theme.w$($viewport.Width).d$($renderScale.Label).$motionMode"
+                        $cellKey = $renderFailureCell
                         $expectedState = "arena-empty.closed.$theme.w$($viewport.Width).d$($renderScale.Label).$motionMode"
+                        $renderFailureStage = 'structure'
                         $structure = Save-AIArenaUIStructure `
                             -TreeFingerprint $sourceFingerprintStart `
                             -ExpectedState $expectedState `
@@ -1321,6 +1381,7 @@ function Invoke-RenderedUiSmoke {
                             [string]$structure.data.focusIdentity -ne [string]$captureFocus.data.afterIdentity) {
                             throw 'Control-plane automation-tree capture did not match its requested matrix cell.'
                         }
+                        $renderFailureStage = 'structure-integrity'
                         $structureSource = Resolve-IsolatedQaArtifact `
                             -DataRoot $isolatedData `
                             -RelativePath ([string]$structure.data.relativePath)
@@ -1344,6 +1405,7 @@ function Invoke-RenderedUiSmoke {
                         }
                         Add-QaArtifact -Id $automationArtifactId -Kind 'automation-tree' -Path $automationPath -Provenance $automationProvenance
 
+                        $renderFailureStage = 'screenshot'
                         $screenshotPath = Join-Path $script:ScreenshotsRoot ("$cellKey.rendered-ui.png")
                         $capture = Save-AIArenaScreenshot $screenshotPath -RenderDpiScale $renderScale.Value -TimeoutMs 10000
                         if (-not $capture.ok -or
@@ -1355,6 +1417,7 @@ function Invoke-RenderedUiSmoke {
                             throw 'Control-plane screenshot capture did not match its requested matrix cell.'
                         }
 
+                        $renderFailureStage = 'screenshot-integrity'
                         $renderEvidence = Get-PngRenderEvidence -Path $screenshotPath
                         $screenshotArtifactId = "artifact.$cellKey.screenshot"
                         $screenshotProvenance = [ordered]@{
@@ -1370,6 +1433,7 @@ function Invoke-RenderedUiSmoke {
                         }
                         Add-QaArtifact -Id $screenshotArtifactId -Kind 'rendered-ui-screenshot' -Path $screenshotPath -Provenance $screenshotProvenance
 
+                        $renderFailureStage = 'record-cell'
                         $script:UiMatrixCells.Add([pscustomobject][ordered]@{
                             key = $cellKey
                             theme = $theme
@@ -1420,6 +1484,12 @@ function Invoke-RenderedUiSmoke {
         if ($passCells.Count -ne 36) {
             throw 'Rendered QA matrix did not produce every required cell.'
         }
+        $renderFailureStage = 'matrix-metadata'
+        $renderFailureTheme = 'none'
+        $renderFailureWidth = 0
+        $renderFailureDpi = 'none'
+        $renderFailureMotion = 'none'
+        $renderFailureCell = 'none'
         $matrixPath = Join-Path $script:MetadataRoot ("pass-{0:D2}.ui-matrix.json" -f $PassNumber)
         $matrixDocument = [ordered]@{
             schema = 'ai_arena.qa_ui_matrix.v1'
@@ -1430,11 +1500,19 @@ function Invoke-RenderedUiSmoke {
         }
         Write-Utf8NoBom -Path $matrixPath -Text (($matrixDocument | ConvertTo-Json -Depth 8) + "`n")
         Add-QaArtifact -Id "artifact.pass-$($PassNumber.ToString('D2')).ui-matrix" -Kind 'qa-ui-matrix' -Path $matrixPath
+        $renderFailureStage = 'feature-surface'
         Invoke-AIArenaFeatureSurfaceMatrixPass -PassNumber $PassNumber -IsolatedData $isolatedData
+        $renderFailureStage = 'complete'
         Add-GateTrace 'dataIsolation=temporary AI_ARENA_DATA_DIR; screenshot contains only the empty QA session'
+        Add-GateTrace 'controlIsolation=per-run AI_ARENA_CONTROL_OWNER pipe and token namespace'
         Add-GateTrace 'interactionBoundary=programmatic in-process WPF focus traversal and visual-tree snapshot; no OS SendInput or external UI Automation'
         Add-GateTrace 'densityBoundary=render scale is off-screen raster density, not physical or per-monitor display DPI'
         Add-GateTrace 'motionBoundary=preference plumbing/state only; animation playback frames are not proven'
+    }
+    catch {
+        Add-GateTrace ("renderFailureStage={0}; pass={1}; theme={2}; width={3}; dpi={4}; motion={5}; cell={6}" -f `
+            $renderFailureStage, $PassNumber, $renderFailureTheme, $renderFailureWidth, $renderFailureDpi, $renderFailureMotion, $renderFailureCell)
+        throw 'Rendered UI smoke failed at a bounded QA stage.'
     }
     finally {
         if ($null -ne $process -and -not $process.HasExited) {
@@ -1450,13 +1528,26 @@ function Invoke-RenderedUiSmoke {
                 try { $process.WaitForExit(5000) | Out-Null } catch { }
             }
         }
-        if ($null -eq $previousDataRoot) {
-            Remove-Item Env:AI_ARENA_DATA_DIR -ErrorAction SilentlyContinue
+        try {
+            if (-not [string]::IsNullOrWhiteSpace($ownedControlTokenPath)) {
+                Remove-IsolatedQaControlToken -Path $ownedControlTokenPath -OwnerToken $ownerToken
+            }
         }
-        else {
-            $env:AI_ARENA_DATA_DIR = $previousDataRoot
+        finally {
+            if ($null -eq $previousDataRoot) {
+                Remove-Item Env:AI_ARENA_DATA_DIR -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:AI_ARENA_DATA_DIR = $previousDataRoot
+            }
+            if ($null -eq $previousControlOwner) {
+                Remove-Item Env:AI_ARENA_CONTROL_OWNER -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:AI_ARENA_CONTROL_OWNER = $previousControlOwner
+            }
+            Remove-IsolatedQaData -Path $isolatedData -OwnerToken $ownerToken
         }
-        Remove-IsolatedQaData -Path $isolatedData -OwnerToken $ownerToken
     }
 }
 

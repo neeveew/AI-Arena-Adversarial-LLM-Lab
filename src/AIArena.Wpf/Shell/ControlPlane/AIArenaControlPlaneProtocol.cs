@@ -8,6 +8,7 @@ namespace AIArena.Wpf;
 internal static class AIArenaControlPlaneProtocol
 {
     public const string PipeName = "ai-arena-wpf-control";
+    public const string OwnerEnvironmentVariable = "AI_ARENA_CONTROL_OWNER";
     public const int MaxRequestBytes = 256 * 1024;
     public const int MaxConcurrentClients = 8;
     public const int MaxEventQueueItems = 256;
@@ -72,6 +73,11 @@ internal static class AIArenaControlPlaneProtocol
         return (command ?? "").Trim().Replace('_', '.').ToLowerInvariant();
     }
 
+    internal static string CurrentPipeName()
+    {
+        return PipeName + CurrentOwnerSuffix();
+    }
+
     internal static string DefaultTokenPath()
     {
         var user = string.Join(
@@ -82,7 +88,32 @@ internal static class AIArenaControlPlaneProtocol
             user = "user";
         }
 
-        return Path.Combine(Path.GetTempPath(), $"ai-arena-wpf-control-{user}.token");
+        return Path.Combine(Path.GetTempPath(), $"ai-arena-wpf-control-{user}{CurrentOwnerSuffix()}.token");
+    }
+
+    private static string CurrentOwnerSuffix()
+    {
+        var configured = Environment.GetEnvironmentVariable(OwnerEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(configured))
+        {
+            return "";
+        }
+
+        var owner = configured.Trim();
+        if (owner.Length != 32 || owner.Any(character => !IsAsciiHex(character)))
+        {
+            throw new InvalidOperationException(
+                $"{OwnerEnvironmentVariable} must be a 32-character hexadecimal QA ownership identifier.");
+        }
+
+        return $"-{owner.ToLowerInvariant()}";
+    }
+
+    private static bool IsAsciiHex(char character)
+    {
+        return character is >= '0' and <= '9'
+            or >= 'a' and <= 'f'
+            or >= 'A' and <= 'F';
     }
 }
 

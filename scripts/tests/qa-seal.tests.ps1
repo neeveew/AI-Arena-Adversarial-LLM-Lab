@@ -3,6 +3,7 @@ Set-StrictMode -Version Latest
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $sealScript = Join-Path $repositoryRoot 'scripts\qa-seal.ps1'
+$controlClient = Join-Path $repositoryRoot 'scripts\ai-arena-control.ps1'
 $matrixHelpers = Join-Path $repositoryRoot 'scripts\qa-ui-matrix.ps1'
 $featureMatrixHelpers = Join-Path $repositoryRoot 'scripts\qa-feature-surface-matrix.ps1'
 $verificationLab = Join-Path $repositoryRoot 'tests\AIArena.VerificationLab\bin\Release\net10.0\AIArena.VerificationLab.dll'
@@ -12,6 +13,7 @@ $blockedRunId = 'qa-seal-blocked-fixture-' + [Guid]::NewGuid().ToString('N')
 $blockedRunRoot = Join-Path $repositoryRoot ("artifacts\qa\$blockedRunId")
 $ownedFallbacks = [Collections.Generic.List[object]]::new()
 $failed = $false
+$previousControlOwner = $env:AI_ARENA_CONTROL_OWNER
 
 function Require {
     param([bool]$Condition, [string]$Message)
@@ -19,6 +21,36 @@ function Require {
 }
 
 try {
+    . $controlClient
+    try {
+        Remove-Item Env:AI_ARENA_CONTROL_OWNER -ErrorAction SilentlyContinue
+        $defaultEndpoint = Get-AIArenaControlEndpoint
+        $firstOwner = '11111111111111111111111111111111'
+        $secondOwner = '22222222222222222222222222222222'
+        $env:AI_ARENA_CONTROL_OWNER = $firstOwner.ToUpperInvariant()
+        $firstEndpoint = Get-AIArenaControlEndpoint
+        $env:AI_ARENA_CONTROL_OWNER = $secondOwner
+        $secondEndpoint = Get-AIArenaControlEndpoint
+        Require ([string]$defaultEndpoint.PipeName -ceq 'ai-arena-wpf-control') 'PowerShell control client changed its ordinary default pipe.'
+        Require ([string]$firstEndpoint.PipeName -ceq "ai-arena-wpf-control-$firstOwner") 'PowerShell control client did not normalize the first owner pipe.'
+        Require ([string]$secondEndpoint.PipeName -ceq "ai-arena-wpf-control-$secondOwner") 'PowerShell control client did not isolate the second owner pipe.'
+        Require ([string]$firstEndpoint.TokenPath -cne [string]$secondEndpoint.TokenPath) 'PowerShell control client reused an owner token path.'
+        Require ((Split-Path -Leaf ([string]$firstEndpoint.TokenPath)).EndsWith("-$firstOwner.token", [StringComparison]::Ordinal)) 'PowerShell control client did not bind its token path to the normalized owner.'
+        $env:AI_ARENA_CONTROL_OWNER = 'invalid-owner'
+        $invalidOwnerRejected = $false
+        try { $null = Get-AIArenaControlEndpoint }
+        catch { $invalidOwnerRejected = $true }
+        Require $invalidOwnerRejected 'PowerShell control client accepted an unsafe owner namespace.'
+    }
+    finally {
+        if ($null -eq $previousControlOwner) {
+            Remove-Item Env:AI_ARENA_CONTROL_OWNER -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:AI_ARENA_CONTROL_OWNER = $previousControlOwner
+        }
+    }
+
     . $matrixHelpers
     $matrixFixture = @(
         foreach ($pass in 1..2) {
@@ -114,6 +146,7 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
         'Protect-QaText',
         'Test-QaTextPrivacy',
         'Write-Utf8NoBom',
+        'Remove-IsolatedQaControlToken',
         'New-EvidenceAssertion',
         'Resolve-QaPathWithinDirectory',
         'Assert-QaPathHasNoReparsePoint',
@@ -133,6 +166,39 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
         'Assert-QaBlockedBundleInventory',
         'Invoke-QaBlockedFallback')) {
         Import-SealFunction -Name $helper
+    }
+
+    $cleanupOwner = [Guid]::NewGuid().ToString('N')
+    $savedOwnerForCleanup = $env:AI_ARENA_CONTROL_OWNER
+    $cleanupTokenPath = $null
+    try {
+        $env:AI_ARENA_CONTROL_OWNER = $cleanupOwner
+        $cleanupTokenPath = [string](Get-AIArenaControlEndpoint).TokenPath
+        if (Test-Path -LiteralPath $cleanupTokenPath) {
+            throw 'Fresh QA control-token cleanup fixture unexpectedly already exists.'
+        }
+        [IO.File]::WriteAllText($cleanupTokenPath, "fixture`n", [Text.UTF8Encoding]::new($false))
+        Remove-IsolatedQaControlToken -Path $cleanupTokenPath -OwnerToken $cleanupOwner
+        Require (-not (Test-Path -LiteralPath $cleanupTokenPath)) 'QA seal did not remove its exact owned control token.'
+        $unownedTokenRejected = $false
+        try {
+            Remove-IsolatedQaControlToken `
+                -Path (Join-Path ([IO.Path]::GetTempPath()) 'ai-arena-wpf-control-unowned.token') `
+                -OwnerToken $cleanupOwner
+        }
+        catch { $unownedTokenRejected = $true }
+        Require $unownedTokenRejected 'QA seal control-token cleanup accepted an unowned path.'
+    }
+    finally {
+        if ($null -ne $cleanupTokenPath -and (Test-Path -LiteralPath $cleanupTokenPath)) {
+            Remove-Item -LiteralPath $cleanupTokenPath -Force
+        }
+        if ($null -eq $savedOwnerForCleanup) {
+            Remove-Item Env:AI_ARENA_CONTROL_OWNER -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:AI_ARENA_CONTROL_OWNER = $savedOwnerForCleanup
+        }
     }
 
     $nativeResolverAst = @($ast.FindAll({
@@ -714,6 +780,10 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
         'Test-AIArenaQaFocusStep -Step $seedFocus.data -Direction next',
         '$seedFocus.data.afterIdentity',
         '$nextFocus.data.beforeIdentity',
+        '$env:AI_ARENA_CONTROL_OWNER = $ownerToken',
+        'Remove-IsolatedQaControlToken',
+        'renderFailureStage=',
+        'controlIsolation=per-run AI_ARENA_CONTROL_OWNER pipe and token namespace',
         'Save-AIArenaUIStructure',
         'Save-AIArenaScreenshot',
         "expectedStateSource -ne 'observed-visible-roots'",
@@ -806,6 +876,12 @@ catch {
     Write-Host "FAIL QA seal orchestration fixtures: $($_.Exception.Message)"
 }
 finally {
+    if ($null -eq $previousControlOwner) {
+        Remove-Item Env:AI_ARENA_CONTROL_OWNER -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:AI_ARENA_CONTROL_OWNER = $previousControlOwner
+    }
     foreach ($fallback in @($ownedFallbacks)) {
         if (Test-Path -LiteralPath $fallback.Quarantine.FinalRoot -PathType Container) {
             try {
