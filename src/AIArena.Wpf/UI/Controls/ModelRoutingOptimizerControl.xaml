@@ -1,0 +1,267 @@
+<UserControl x:Class="AIArena.Wpf.Controls.ModelRoutingOptimizerControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Name="RoutingOptimizerRoot"
+             MinWidth="320"
+             MinHeight="320"
+             Focusable="True"
+             SizeChanged="ModelRoutingOptimizerControl_SizeChanged"
+             AutomationProperties.Name="Model Routing Optimizer"
+             AutomationProperties.HelpText="Builds proposal-only model routing comparisons from persisted observed evidence. Applying a proposal is a separate explicit action.">
+    <UserControl.Resources>
+        <Style x:Key="RoutingCaption" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.LabelSize}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="RoutingCard" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource CardBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Medium}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Panel}" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Background="{DynamicResource AppBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Margin="{DynamicResource Arena.Layout.WorkspaceHeaderMargin}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock FontFamily="Segoe UI Variable Display, Segoe UI"
+                           FontSize="{DynamicResource Arena.Type.PageTitleSize}"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextBrush}"
+                           Text="Model Routing Optimizer" />
+                <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                           Style="{StaticResource RoutingCaption}"
+                           Text="Same-setup observed samples and observed hardware/capability constraints are required. Refreshing or proposing never changes routing." />
+            </StackPanel>
+            <WrapPanel Grid.Column="1" Margin="{DynamicResource Arena.Gap.Inline.Before.Comfortable}" VerticalAlignment="Top">
+                <Button x:Name="RefreshRouteEvidenceButton"
+                        MinHeight="34"
+                        Margin="{DynamicResource Arena.Gap.Wrap.After.Compact}"
+                        Style="{DynamicResource Arena.Button.Secondary}"
+                        Content="Refresh evidence"
+                        Click="RefreshRouteEvidenceButton_Click"
+                        AutomationProperties.Name="Refresh routing evidence"
+                        AutomationProperties.HelpText="Loads bounded compatible experiment and evaluation evidence without applying a route." />
+                <Button x:Name="BuildRouteProposalButton"
+                        MinHeight="34"
+                        Margin="{DynamicResource Arena.Gap.Stack.After.Compact}"
+                        Style="{DynamicResource Arena.Button.Primary}"
+                        Content="Build proposal"
+                        IsEnabled="False"
+                        Click="BuildRouteProposalButton_Click"
+                        AutomationProperties.Name="Build model route proposal"
+                        AutomationProperties.HelpText="Runs the pure proposal-only optimizer. This action never mutates provider settings." />
+            </WrapPanel>
+        </Grid>
+
+        <Border Grid.Row="1"
+                Margin="{DynamicResource Arena.Layout.WorkspaceStatusMargin}"
+                Padding="{DynamicResource Arena.Inset.StatusCard}"
+                Background="{DynamicResource InputBrush}"
+                BorderBrush="{DynamicResource DisabledBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="{DynamicResource Arena.Radius.Small}">
+            <TextBlock x:Name="RouteStatusText"
+                       Foreground="{DynamicResource MutedTextBrush}"
+                       Text="Compatible persisted evaluation evidence has not been loaded."
+                       TextWrapping="Wrap"
+                       TextTrimming="CharacterEllipsis"
+                       MaxHeight="38"
+                       AutomationProperties.Name="Routing optimizer status"
+                       AutomationProperties.LiveSetting="Polite" />
+        </Border>
+
+        <Grid Grid.Row="2" x:Name="RouteWorkspaceGrid" Margin="{DynamicResource Arena.Layout.WorkspaceBodyMargin}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="RouteEvidenceColumn" Width="330" />
+                <ColumnDefinition x:Name="RouteGapColumn" Width="10" />
+                <ColumnDefinition x:Name="RouteProposalColumn" Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition x:Name="RouteEvidenceRow" Height="*" />
+                <RowDefinition x:Name="RouteCompactGapRow" Height="0" />
+                <RowDefinition x:Name="RouteProposalRow" Height="0" />
+            </Grid.RowDefinitions>
+
+            <Border x:Name="RouteEvidencePane" Style="{StaticResource RoutingCard}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Foreground="{DynamicResource TextBrush}"
+                               FontSize="{DynamicResource Arena.Type.HeadingSize}"
+                               FontWeight="SemiBold"
+                               Text="Evidence boundary" />
+                    <TextBlock Grid.Row="1"
+                               x:Name="RouteEvidenceSummaryText"
+                               Margin="{DynamicResource Arena.Layout.ActionSectionMargin}"
+                               Style="{StaticResource RoutingCaption}"
+                               Text="Unavailable — no evidence source has completed."
+                               AutomationProperties.Name="Routing evidence summary"
+                               AutomationProperties.HelpText="Summarizes compatible observed samples and constraints without exposing response content." />
+                    <ListBox Grid.Row="2"
+                             x:Name="RouteEvidenceList"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             Foreground="{DynamicResource TextBrush}"
+                             HorizontalContentAlignment="Stretch"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                             AutomationProperties.Name="Routing evidence diagnostics">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="{DynamicResource Arena.Gap.Stack.After.Compact}"
+                                        Padding="{DynamicResource Arena.Inset.CompactAction}"
+                                        Background="{DynamicResource InputBrush}"
+                                        BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="{DynamicResource Arena.Radius.Small}">
+                                    <TextBlock Foreground="{DynamicResource MutedTextBrush}"
+                                               Text="{Binding}"
+                                               TextWrapping="Wrap" />
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <Border x:Name="RouteProposalPane"
+                    Grid.Column="2"
+                    Style="{StaticResource RoutingCard}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
+                        <TextBlock Foreground="{DynamicResource TextBrush}"
+                                   FontSize="{DynamicResource Arena.Type.HeadingSize}"
+                                   FontWeight="SemiBold"
+                                   Text="Proposal-only comparison" />
+                        <TextBlock x:Name="RouteProposalSummaryText"
+                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                   Style="{StaticResource RoutingCaption}"
+                                   Text="No route proposal exists."
+                                   AutomationProperties.Name="Route proposal summary" />
+                    </StackPanel>
+
+                    <ListBox Grid.Row="1"
+                             x:Name="RouteProposalList"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             Foreground="{DynamicResource TextBrush}"
+                             HorizontalContentAlignment="Stretch"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling"
+                             FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                             AutomationProperties.Name="Proposed route changes">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="{DynamicResource Arena.Gap.Stack.After.CompactPlus}"
+                                        Padding="{DynamicResource Arena.Inset.ListItem}"
+                                        Background="{DynamicResource InputBrush}"
+                                        BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="{DynamicResource Arena.Radius.Small}">
+                                    <StackPanel>
+                                        <TextBlock Foreground="{DynamicResource TextBrush}"
+                                                   FontWeight="SemiBold"
+                                                   Text="{Binding Heading}"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   Text="{Binding EvidenceText}"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Nano}"
+                                                   Foreground="{DynamicResource Arena.Brush.Info}"
+                                                   Text="{Binding ConstraintText}"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Padding" Value="{DynamicResource Arena.Inset.None}" />
+                                <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                <Setter Property="AutomationProperties.HelpText" Value="{Binding AutomationHelp}" />
+                                <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                    </ListBox>
+
+                    <Border Grid.Row="2"
+                            Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}"
+                            Padding="{DynamicResource Arena.Inset.Card}"
+                            Background="{DynamicResource InputBrush}"
+                            BorderBrush="{DynamicResource ControlBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{DynamicResource Arena.Radius.Small}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <CheckBox x:Name="ApproveRouteCheckBox"
+                                      Content="I explicitly approve applying this exact proposal"
+                                      IsEnabled="False"
+                                      Checked="ApproveRouteCheckBox_Changed"
+                                      Unchecked="ApproveRouteCheckBox_Changed"
+                                      FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                                      AutomationProperties.Name="Explicitly approve route proposal"
+                                      AutomationProperties.HelpText="Approval applies only to the currently displayed proposal and is cleared whenever evidence or proposal state changes." />
+                            <StackPanel Grid.Row="1" Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBox x:Name="RouteApproverText"
+                                         Width="150"
+                                         MinHeight="34"
+                                         Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
+                                         Text="operator:local"
+                                         MaxLength="80"
+                                         AutomationProperties.Name="Route approver identifier"
+                                         AutomationProperties.HelpText="A bounded local identity recorded in the immutable application receipt." />
+                                <Button x:Name="CopyRouteReceiptButton"
+                                        MinHeight="34"
+                                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
+                                        Style="{DynamicResource Arena.Button.Secondary}"
+                                        Content="Copy receipt"
+                                        IsEnabled="False"
+                                        Click="CopyRouteReceiptButton_Click"
+                                        AutomationProperties.Name="Copy process-only route application receipt"
+                                        AutomationProperties.HelpText="Copies the canonical content-free receipt. The receipt is process-only unless another integration persists it." />
+                                <Button x:Name="ApplyRouteButton"
+                                        MinHeight="34"
+                                        Style="{DynamicResource Arena.Button.Primary}"
+                                        Content="Apply approved route"
+                                        IsEnabled="False"
+                                        Click="ApplyRouteButton_Click"
+                                        AutomationProperties.Name="Apply explicitly approved route"
+                                        AutomationProperties.HelpText="Rechecks the persisted setup fingerprint and current model before a concurrency-checked route write." />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

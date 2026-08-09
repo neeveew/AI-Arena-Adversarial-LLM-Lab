@@ -7,6 +7,7 @@ public partial class MainWindow
     // Compatibility aliases keep the existing coordinators focused on behavior while
     // the rail owns its visual tree and can evolve independently from MainWindow.
     private Button ArenaNavButton => ShellNavigationRail.ArenaNavigationButton;
+    private Button ExperimentLabNavButton => ShellNavigationRail.ExperimentLabNavigationButton;
     private Button AgentNavButton => ShellNavigationRail.AgentNavigationButton;
     private Button CustomMatchNavButton => ShellNavigationRail.MatchSetupNavigationButton;
     private Button CollaborateNavButton => ShellNavigationRail.CollaborateNavigationButton;
@@ -14,6 +15,7 @@ public partial class MainWindow
     private Border ArenaLiveAgentsPanel => ShellNavigationRail.ArenaLiveAgentsPanel;
     private Border AgentLeftRailContextPanel => ShellNavigationRail.AgentContextPanel;
     private Border CollaborateLeftRailContextPanel => ShellNavigationRail.CollaborateContextPanel;
+    private Border ExperimentLeftRailContextPanel => ShellNavigationRail.ExperimentContextPanel;
     private TextBlock SessionOverviewMatchText => ShellNavigationRail.SessionMatchText;
     private TextBlock SessionOverviewTurnsText => ShellNavigationRail.SessionTurnsText;
     private TextBlock SessionOverviewParticipantsText => ShellNavigationRail.SessionParticipantsText;

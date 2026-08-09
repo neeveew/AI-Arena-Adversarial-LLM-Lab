@@ -1,7 +1,11 @@
 using System.Buffers;
+using System.Collections.Immutable;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AIArena.Core.Models;
+using AIArena.Core.Services;
 
 namespace AIArena.Core.Persistence;
 
@@ -90,6 +94,7 @@ public sealed class SessionStore
             if (snapshot is not null)
             {
                 ScrubRemovedLegacyInternetData(snapshot);
+                StructuredMemoryService.NormalizeSnapshot(snapshot);
                 TransformConfigTokens(snapshot, UnprotectSecret);
             }
 
@@ -172,6 +177,7 @@ public sealed class SessionStore
         CancellationToken cancellationToken)
     {
         ScrubRemovedLegacyInternetData(snapshot);
+        StructuredMemoryService.NormalizeSnapshot(snapshot);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         var currentRevision = await ReadPersistenceRevisionAsync(fullPath, cancellationToken);
         var expectedRevision = Math.Max(0, snapshot.PersistenceRevision);
@@ -397,6 +403,7 @@ public sealed class SessionStore
         {
             agent.Status = "waiting";
             agent.PrivateNotes.Clear();
+            agent.MemoryEntries.Clear();
         }
 
         var fullPath = Path.GetFullPath(SnapshotPath(safeSession));
@@ -471,8 +478,19 @@ public sealed class SessionStore
                     continue;
                 }
 
-                forkSnapshot.PersistenceRevision = 0;
-                if (!await TryCreateSnapshotFileAsync(forkSnapshot, targetPath, cancellationToken))
+                var candidateSnapshot = CloneSnapshot(forkSnapshot);
+                var receipt = AttachBranchReceipt(
+                    candidateSnapshot,
+                    sourceSnapshot,
+                    safeSourceSessionId,
+                    candidateSessionId,
+                    sourceRevision,
+                    forkedAt,
+                    sourceSnapshot.Engine.Messages.Count - 1,
+                    ImmutableArray<ArenaEvidenceAssertion>.Empty);
+                RebaseRetainedMemory(candidateSnapshot, sourceSnapshot.BranchReceipt?.Id ?? "", receipt.Id);
+                candidateSnapshot.PersistenceRevision = 0;
+                if (!await TryCreateSnapshotFileAsync(candidateSnapshot, targetPath, cancellationToken))
                 {
                     continue;
                 }
@@ -481,13 +499,17 @@ public sealed class SessionStore
                     safeSourceSessionId,
                     candidateSessionId,
                     sourceRevision,
-                    forkSnapshot.PersistenceRevision,
-                    forkSnapshot.Engine.TurnCount,
-                    forkSnapshot.Engine.Messages.Count,
-                    forkSnapshot.Engine.Narration.Count,
-                    forkSnapshot.Engine.Agents.Count(agent => agent.Active),
-                    forkSnapshot.GenerationHistory.Count,
-                    forkedAt);
+                    candidateSnapshot.PersistenceRevision,
+                    candidateSnapshot.Engine.TurnCount,
+                    candidateSnapshot.Engine.Messages.Count,
+                    candidateSnapshot.Engine.Narration.Count,
+                    candidateSnapshot.Engine.Agents.Count(agent => agent.Active),
+                    candidateSnapshot.GenerationHistory.Count,
+                    forkedAt)
+                {
+                    BranchReceiptId = receipt.Id,
+                    CursorMessageId = receipt.ForkPoint.MessageId
+                };
             }
             finally
             {
@@ -499,6 +521,367 @@ public sealed class SessionStore
         }
 
         throw new IOException($"Could not reserve a unique fork name based on '{baseTargetSessionId}'.");
+    }
+
+    /// <summary>
+    /// Creates an isolated branch at one exact stable transcript message. State
+    /// that cannot be proven to exist at the cursor is omitted rather than copied
+    /// from the future. The source snapshot remains unchanged.
+    /// </summary>
+    public async Task<SessionForkResult> ForkSessionAtCursorAsync(
+        string sourceSessionId,
+        string cursorMessageId,
+        string? targetSessionId = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(cursorMessageId))
+        {
+            throw new ArgumentException("A stable transcript message cursor is required.", nameof(cursorMessageId));
+        }
+
+        var safeSourceSessionId = SafeSessionId(sourceSessionId);
+        var sourcePath = Path.GetFullPath(SnapshotPath(safeSourceSessionId));
+        if (!File.Exists(sourcePath))
+        {
+            throw new FileNotFoundException($"Session '{safeSourceSessionId}' has no persisted snapshot to fork.", sourcePath);
+        }
+
+        ArenaSnapshot sourceSnapshot;
+        using (await SnapshotWriteLocks.AcquireAsync(sourcePath, cancellationToken))
+        using (await CrossProcessWriteLease.AcquireAsync(sourcePath, SnapshotWriteLeaseTimeout, cancellationToken))
+        {
+            sourceSnapshot = await LoadSnapshotAsync(safeSourceSessionId, cancellationToken)
+                ?? throw new InvalidDataException($"Session '{safeSourceSessionId}' has an unreadable snapshot and cannot be forked.");
+        }
+
+        StructuredMemoryService.NormalizeSnapshot(sourceSnapshot);
+        var normalizedCursorId = cursorMessageId.Trim();
+        var cursorIndex = sourceSnapshot.Engine.Messages.FindIndex(message =>
+            DialogueMessageIdentity.Resolve(message).Equals(normalizedCursorId, StringComparison.OrdinalIgnoreCase));
+        if (cursorIndex < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(cursorMessageId), $"Message cursor '{normalizedCursorId}' does not exist in session '{safeSourceSessionId}'.");
+        }
+
+        var sourceRevision = Math.Max(0, sourceSnapshot.PersistenceRevision);
+        var forkedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var cursor = sourceSnapshot.Engine.Messages[cursorIndex];
+        var baseTargetSessionId = string.IsNullOrWhiteSpace(targetSessionId)
+            ? SafeSessionId($"{safeSourceSessionId}-fork-{normalizedCursorId.Replace(':', '-')}")
+            : ValidateExplicitForkTargetSessionId(targetSessionId);
+
+        for (var attempt = 0; attempt < MaxForkNameAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var candidateSessionId = attempt == 0
+                ? baseTargetSessionId
+                : SafeSessionId($"{baseTargetSessionId}-{attempt + 1}");
+            var targetPath = Path.GetFullPath(SnapshotPath(candidateSessionId));
+            var targetDirectory = Path.GetDirectoryName(targetPath)!;
+            var targetDirectoryExisted = Directory.Exists(targetDirectory);
+            if (SessionIdentityExists(candidateSessionId, targetPath))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var processLock = await SnapshotWriteLocks.AcquireAsync(targetPath, cancellationToken);
+                using var writeLease = await CrossProcessWriteLease.AcquireAsync(targetPath, SnapshotWriteLeaseTimeout, cancellationToken);
+                if (File.Exists(targetPath)
+                    || SessionSideArtifactsExist(candidateSessionId)
+                    || TargetDirectoryContainsUnexpectedEntries(targetDirectory, targetPath))
+                {
+                    continue;
+                }
+
+                var candidateSnapshot = CloneSnapshot(sourceSnapshot);
+                var provisionalBranchId = BranchIdentity(
+                    safeSourceSessionId,
+                    candidateSessionId,
+                    sourceRevision,
+                    normalizedCursorId,
+                    forkedAt);
+                var projection = StructuredMemoryService.ProjectAtCursor(
+                    candidateSnapshot,
+                    cursorIndex,
+                    DateTimeOffset.FromUnixTimeSeconds(forkedAt),
+                    provisionalBranchId);
+                ProjectDerivedStateAtCursor(candidateSnapshot, cursorIndex);
+                NormalizeForkSnapshot(
+                    candidateSnapshot,
+                    safeSourceSessionId,
+                    sourceRevision,
+                    forkedAt,
+                    sourceSnapshot.Engine.TurnCount,
+                    sourceSnapshot.Engine.Messages.Count);
+
+                var evidence = ImmutableArray.CreateBuilder<ArenaEvidenceAssertion>();
+                var usesCurrentSetup = cursorIndex < sourceSnapshot.Engine.Messages.Count - 1;
+                if (usesCurrentSetup)
+                {
+                    evidence.Add(new ArenaEvidenceAssertion(
+                        "evidence:historical-setup-projection-unavailable",
+                        ArenaEvidenceState.Unavailable,
+                        "The transcript and provenance-bearing memory were projected to the selected cursor, but the current replayable setup was retained.",
+                        Limitation: "Legacy session snapshots do not retain cursor-scoped provider, persona, steering, relationship, or active-cast history."));
+                }
+                if (projection.UnprojectableEntryCount > 0)
+                {
+                    evidence.Add(new ArenaEvidenceAssertion(
+                        "evidence:legacy-memory-projection-unavailable",
+                        ArenaEvidenceState.Unavailable,
+                        "Unproven legacy memory was omitted from the historical fork.",
+                        Limitation: "Legacy memory without a source cursor or timestamp cannot be projected safely."));
+                }
+                if (cursorIndex < sourceSnapshot.Engine.Messages.Count - 1
+                    && sourceSnapshot.Engine.ResearchItems.Count > 0)
+                {
+                    evidence.Add(new ArenaEvidenceAssertion(
+                        "evidence:research-projection-unavailable",
+                        ArenaEvidenceState.Unavailable,
+                        "Research state was omitted from the historical fork.",
+                        Limitation: "Legacy research items do not contain a transcript cursor."));
+                }
+                if (cursorIndex < sourceSnapshot.Engine.Messages.Count - 1
+                    && sourceSnapshot.Engine.Attachments.Count > 0)
+                {
+                    evidence.Add(new ArenaEvidenceAssertion(
+                        "evidence:attachment-projection-unavailable",
+                        ArenaEvidenceState.Unavailable,
+                        "Attachments were omitted from the historical fork.",
+                        Limitation: "Legacy attachments do not contain a transcript cursor."));
+                }
+
+                var receipt = AttachBranchReceipt(
+                    candidateSnapshot,
+                    sourceSnapshot,
+                    safeSourceSessionId,
+                    candidateSessionId,
+                    sourceRevision,
+                    forkedAt,
+                    cursorIndex,
+                    evidence.ToImmutable(),
+                    provisionalBranchId);
+                candidateSnapshot.PersistenceRevision = 0;
+                if (!await TryCreateSnapshotFileAsync(candidateSnapshot, targetPath, cancellationToken))
+                {
+                    continue;
+                }
+
+                return new SessionForkResult(
+                    safeSourceSessionId,
+                    candidateSessionId,
+                    sourceRevision,
+                    candidateSnapshot.PersistenceRevision,
+                    candidateSnapshot.Engine.TurnCount,
+                    candidateSnapshot.Engine.Messages.Count,
+                    candidateSnapshot.Engine.Narration.Count,
+                    candidateSnapshot.Engine.Agents.Count(agent => agent.Active),
+                    candidateSnapshot.GenerationHistory.Count,
+                    forkedAt)
+                {
+                    BranchReceiptId = receipt.Id,
+                    CursorMessageId = normalizedCursorId,
+                    ExcludedMemoryEntryCount = projection.ExcludedEntryCount,
+                    UnprojectableMemoryEntryCount = projection.UnprojectableEntryCount,
+                    HistoricalSetupProjectionUnavailable = usesCurrentSetup
+                };
+            }
+            finally
+            {
+                if (!targetDirectoryExisted && !File.Exists(targetPath))
+                {
+                    TryDeleteEmptyDirectory(targetDirectory);
+                }
+            }
+        }
+
+        throw new IOException($"Could not reserve a unique fork name based on '{baseTargetSessionId}'.");
+    }
+
+    private static void ProjectDerivedStateAtCursor(ArenaSnapshot snapshot, int cursorIndex)
+    {
+        var isHistoricalCursor = cursorIndex < snapshot.Engine.Messages.Count - 1;
+        var cursor = snapshot.Engine.Messages[cursorIndex];
+        snapshot.Engine.Messages = snapshot.Engine.Messages.Take(cursorIndex + 1).ToList();
+        snapshot.Engine.Narration.RemoveAll(entry => entry.ToTurn > cursor.Turn || entry.FromTurn > cursor.Turn);
+        if (isHistoricalCursor)
+        {
+            snapshot.Engine.Attachments.Clear();
+            snapshot.Engine.ResearchItems.Clear();
+            snapshot.Engine.DecisionCard.Text = "";
+            snapshot.Engine.DecisionCard.UpdatedAt = 0;
+            snapshot.Engine.DecisionCard.InternetRequest = null;
+            snapshot.Engine.DecisionCard.InternetResult = null;
+            snapshot.Engine.Summary = "";
+            snapshot.GenerationHistory.RemoveAll(entry => cursor.CreatedAt <= 0 || entry.CreatedAt > cursor.CreatedAt);
+            foreach (var key in snapshot.Configs.Keys.ToArray())
+            {
+                snapshot.Configs[key] = ProviderSetupWithoutRuntime(snapshot.Configs[key]);
+            }
+        }
+        snapshot.Engine.TurnCount = Math.Max(0, snapshot.Engine.Messages.Select(message => message.Turn).DefaultIfEmpty(0).Max());
+        var activeIds = snapshot.Engine.Agents.Where(agent => agent.Active).Select(agent => agent.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var completedAgentTurns = snapshot.Engine.Messages.Count(message => activeIds.Contains(message.SpeakerId));
+        snapshot.Engine.TurnIndex = activeIds.Count == 0 ? 0 : completedAgentTurns % activeIds.Count;
+    }
+
+    private static ArenaBranchContract AttachBranchReceipt(
+        ArenaSnapshot target,
+        ArenaSnapshot source,
+        string parentSessionId,
+        string childSessionId,
+        long parentRevision,
+        long forkedAt,
+        int cursorIndex,
+        ImmutableArray<ArenaEvidenceAssertion> evidence,
+        string? receiptId = null)
+    {
+        DialogueMessage cursor;
+        ArenaTranscriptForkPoint forkPoint;
+        if (cursorIndex >= 0 && cursorIndex < source.Engine.Messages.Count)
+        {
+            cursor = source.Engine.Messages[cursorIndex];
+            forkPoint = new ArenaTranscriptForkPoint(
+                DialogueMessageIdentity.Resolve(cursor),
+                cursorIndex,
+                Math.Max(0, cursor.Turn),
+                DialogueMessageIdentity.Fingerprint(cursor));
+        }
+        else
+        {
+            var originHash = Sha256($"empty\n{parentSessionId}\n{parentRevision}");
+            forkPoint = new ArenaTranscriptForkPoint("message:empty-origin", 0, 0, originHash);
+        }
+
+        var id = receiptId ?? BranchIdentity(parentSessionId, childSessionId, parentRevision, forkPoint.MessageId, forkedAt);
+        var timestamp = DateTimeOffset.FromUnixTimeSeconds(forkedAt);
+        var receipt = new ArenaBranchContract(
+            ArenaContractSchemas.Branch,
+            id,
+            timestamp,
+            null,
+            parentSessionId,
+            parentRevision,
+            forkPoint,
+            SetupFingerprint(source),
+            parentRevision,
+            childSessionId,
+            timestamp,
+            evidence);
+        target.BranchReceipt = receipt;
+        return receipt;
+    }
+
+    private static string BranchIdentity(
+        string parentSessionId,
+        string childSessionId,
+        long parentRevision,
+        string cursorMessageId,
+        long forkedAt)
+    {
+        return StructuredMemoryService.StableId(
+            "branch",
+            $"{parentSessionId}\n{childSessionId}\n{parentRevision}\n{cursorMessageId}\n{forkedAt}");
+    }
+
+    internal static string SetupFingerprint(ArenaSnapshot snapshot)
+    {
+        var canonical = new List<string>
+        {
+            $"match|{snapshot.MatchType}",
+            $"steering.mode|{snapshot.Engine.Steering.Mode}",
+            $"steering.topic|{snapshot.Engine.Steering.Topic}",
+            $"steering.global|{snapshot.Engine.Steering.Global}",
+            $"windows|{snapshot.Engine.TranscriptWindow}|{snapshot.Engine.PrivateWindow}|{snapshot.Engine.NotesWindow}",
+            $"internet|{snapshot.Engine.Internet.UseInternet}|{snapshot.Engine.Internet.MaxResults}|{snapshot.Engine.Internet.SourceFreshnessMinutes}",
+            $"narrator|{snapshot.Engine.Narrator.Mode}|{snapshot.Engine.Narrator.Persona}|{snapshot.Engine.Narrator.VoiceStyle}|{snapshot.Engine.Narrator.AccentColor}|{snapshot.Engine.Narrator.Cadence}|{snapshot.Engine.Narrator.InspectPrivateNotes}",
+            $"rivalry|{snapshot.Engine.RivalryMatrix.Enabled}",
+            $"scenario-generator|{GeneratorFingerprint(snapshot.ScenarioGenerator)}",
+            $"persona-randomizer|{GeneratorFingerprint(snapshot.PersonaRandomizer)}"
+        };
+        canonical.AddRange(snapshot.MatchLocks
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => $"lock|{pair.Key}|{pair.Value}"));
+        canonical.AddRange(snapshot.Engine.Agents
+            .OrderBy(agent => agent.Id, StringComparer.Ordinal)
+            .Select(agent => $"agent|{agent.Id}|{agent.Name}|{agent.Persona}|{agent.Active}|{agent.VoiceStyle}|{agent.PressureProfile}|{agent.AccentColor}"));
+        canonical.AddRange(snapshot.Engine.RivalryMatrix.Links
+            .OrderBy(link => link.Source, StringComparer.Ordinal)
+            .ThenBy(link => link.Target, StringComparer.Ordinal)
+            .ThenBy(link => link.Stance, StringComparer.Ordinal)
+            .Select(link => $"rivalry-link|{link.Source}|{link.Target}|{link.Stance}"));
+        canonical.AddRange(snapshot.Configs
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => string.Join(
+                "|",
+                "provider",
+                pair.Key,
+                SafeProviderEndpoint(pair.Value.BaseUrl),
+                pair.Value.ApiMode,
+                pair.Value.Model,
+                pair.Value.Timeout,
+                pair.Value.Temperature.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                pair.Value.MaxOutputTokens,
+                pair.Value.ContextLength,
+                pair.Value.Reasoning,
+                pair.Value.NativeStatefulChat,
+                pair.Value.NativeIdleTtlSeconds)));
+        return Sha256(string.Join("\n", canonical));
+    }
+
+    private static string GeneratorFingerprint(GeneratorState state) =>
+        $"{state.Style}|{state.Seed}|{state.Intensity}|{state.RolePack}|{state.Absurdity}|{state.ApplyOnReset}";
+
+    private static ModelProviderConfig ProviderSetupWithoutRuntime(ModelProviderConfig config) => new()
+    {
+        BaseUrl = config.BaseUrl,
+        ApiMode = config.ApiMode,
+        ApiToken = config.ApiToken,
+        Model = config.Model,
+        Timeout = config.Timeout,
+        Temperature = config.Temperature,
+        MaxOutputTokens = config.MaxOutputTokens,
+        ContextLength = config.ContextLength,
+        Reasoning = config.Reasoning,
+        NativeStatefulChat = config.NativeStatefulChat,
+        NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
+        Extra = config.Extra
+    };
+
+    private static string SafeProviderEndpoint(string baseUrl)
+    {
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
+        {
+            return "invalid-endpoint";
+        }
+
+        var path = uri.AbsolutePath.TrimEnd('/');
+        return $"{uri.Scheme.ToLowerInvariant()}://{uri.IdnHost.ToLowerInvariant()}:{uri.Port}{path}";
+    }
+
+    private static string Sha256(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private static void RebaseRetainedMemory(ArenaSnapshot snapshot, string sourceBranchId, string childBranchId)
+    {
+        foreach (var agent in snapshot.Engine.Agents)
+        {
+            var foreignTexts = agent.MemoryEntries
+                .Where(entry => !string.IsNullOrWhiteSpace(entry.BranchId)
+                    && !entry.BranchId.Equals(sourceBranchId, StringComparison.OrdinalIgnoreCase))
+                .Select(entry => entry.Text)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            agent.MemoryEntries.RemoveAll(entry => !string.IsNullOrWhiteSpace(entry.BranchId)
+                && !entry.BranchId.Equals(sourceBranchId, StringComparison.OrdinalIgnoreCase));
+            var retainedTexts = agent.MemoryEntries.Select(entry => entry.Text).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            agent.PrivateNotes.RemoveAll(note => foreignTexts.Contains(note) && !retainedTexts.Contains(note));
+            foreach (var entry in agent.MemoryEntries)
+            {
+                entry.BranchId = childBranchId;
+            }
+        }
     }
 
     private static string ValidateExplicitForkTargetSessionId(string targetSessionId)
@@ -556,15 +939,17 @@ public sealed class SessionStore
         ArenaSnapshot snapshot,
         string parentSessionId,
         long parentPersistenceRevision,
-        long forkedAt)
+        long forkedAt,
+        int? parentTurnCount = null,
+        int? parentMessageCount = null)
     {
         snapshot.PersistenceRevision = 0;
         snapshot.ForkLineage = new SessionForkLineage
         {
             ParentSessionId = parentSessionId,
             ParentPersistenceRevision = parentPersistenceRevision,
-            ParentTurnCount = snapshot.Engine.TurnCount,
-            ParentMessageCount = snapshot.Engine.Messages.Count,
+            ParentTurnCount = parentTurnCount ?? snapshot.Engine.TurnCount,
+            ParentMessageCount = parentMessageCount ?? snapshot.Engine.Messages.Count,
             ForkedAt = forkedAt
         };
         snapshot.Engine.LastError = "";
@@ -1316,7 +1701,18 @@ public sealed record SessionForkResult(
     int NarrationCount,
     int ActiveAgentCount,
     int GenerationHistoryCount,
-    long ForkedAt);
+    long ForkedAt)
+{
+    public string BranchReceiptId { get; init; } = "";
+
+    public string CursorMessageId { get; init; } = "";
+
+    public int ExcludedMemoryEntryCount { get; init; }
+
+    public int UnprojectableMemoryEntryCount { get; init; }
+
+    public bool HistoricalSetupProjectionUnavailable { get; init; }
+}
 
 public sealed class SnapshotConcurrencyException : IOException
 {

@@ -34,6 +34,7 @@ public partial class ShellNavigationRailControl : UserControl
     }
 
     public event RoutedEventHandler? ArenaNavigationRequested;
+    public event RoutedEventHandler? ExperimentLabNavigationRequested;
     public event RoutedEventHandler? AgentNavigationRequested;
     public event RoutedEventHandler? MatchSetupNavigationRequested;
     public event RoutedEventHandler? CollaborateNavigationRequested;
@@ -44,6 +45,7 @@ public partial class ShellNavigationRailControl : UserControl
     public event MouseButtonEventHandler? SessionProviderRequested;
 
     public Button ArenaNavigationButton => ArenaNavButtonElement;
+    public Button ExperimentLabNavigationButton => ExperimentLabNavButtonElement;
     public Button AgentNavigationButton => AgentNavButtonElement;
     public Button MatchSetupNavigationButton => CustomMatchNavButtonElement;
     public Button CollaborateNavigationButton => CollaborateNavButtonElement;
@@ -51,6 +53,7 @@ public partial class ShellNavigationRailControl : UserControl
     public Border ArenaLiveAgentsPanel => ArenaLiveAgentsPanelElement;
     public Border AgentContextPanel => AgentLeftRailContextPanelElement;
     public Border CollaborateContextPanel => CollaborateLeftRailContextPanelElement;
+    public Border ExperimentContextPanel => ExperimentLeftRailContextPanelElement;
     public TextBlock SessionMatchText => SessionOverviewMatchTextElement;
     public TextBlock SessionTurnsText => SessionOverviewTurnsTextElement;
     public TextBlock SessionParticipantsText => SessionOverviewParticipantsTextElement;
@@ -67,6 +70,9 @@ public partial class ShellNavigationRailControl : UserControl
 
     private void ArenaNavButton_Click(object sender, RoutedEventArgs e) =>
         ArenaNavigationRequested?.Invoke(sender, e);
+
+    private void ExperimentLabNavButton_Click(object sender, RoutedEventArgs e) =>
+        ExperimentLabNavigationRequested?.Invoke(sender, e);
 
     private void AgentNavButton_Click(object sender, RoutedEventArgs e) =>
         AgentNavigationRequested?.Invoke(sender, e);

@@ -1,0 +1,422 @@
+<UserControl x:Class="AIArena.Wpf.Controls.InAppQaInspectorControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Name="QaInspectorRoot"
+             MinWidth="320"
+             MinHeight="360"
+             Focusable="True"
+             SizeChanged="InAppQaInspectorControl_SizeChanged"
+             AutomationProperties.Name="In-App QA Inspector"
+             AutomationProperties.HelpText="Inspects bounded local QA evidence, runs fixed focused suites, and keeps full sealing and post-render acceptance explicit.">
+    <UserControl.Resources>
+        <Style x:Key="QaCaption" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.LabelSize}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="QaCard" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource CardBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Medium}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Panel}" />
+        </Style>
+        <Style x:Key="QaSectionTitle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.HeadingSize}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Compact}" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Background="{DynamicResource AppBackgroundBrush}" Margin="{DynamicResource Arena.Layout.WorkspaceRootMargin}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Margin="{DynamicResource Arena.Gap.Stack.After.DefaultPlus}">
+            <TextBlock FontFamily="Segoe UI Variable Display, Segoe UI"
+                       FontSize="{DynamicResource Arena.Type.PageTitleSize}"
+                       FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextBrush}"
+                       Text="In-App QA Inspector" />
+            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                       Style="{StaticResource QaCaption}"
+                       Text="Evidence is local, bounded, hash-checked, and read-only. Focused runs never imply a complete seal." />
+        </StackPanel>
+
+        <Border Grid.Row="1"
+                Margin="{DynamicResource Arena.Gap.Stack.After.DefaultPlus}"
+                Padding="{DynamicResource Arena.Inset.StatusCard}"
+                Background="{DynamicResource InputBrush}"
+                BorderBrush="{DynamicResource DisabledBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="{DynamicResource Arena.Radius.Small}">
+            <TextBlock x:Name="QaStatusText"
+                       Foreground="{DynamicResource MutedTextBrush}"
+                       Text="No QA evidence has been loaded."
+                       TextWrapping="Wrap"
+                       TextTrimming="CharacterEllipsis"
+                       MaxHeight="38"
+                       AutomationProperties.Name="QA Inspector status"
+                       AutomationProperties.HelpText="No QA evidence has been loaded."
+                       AutomationProperties.LiveSetting="Polite" />
+        </Border>
+
+        <Grid Grid.Row="2" x:Name="CommandGrid" Margin="{DynamicResource Arena.Gap.Stack.After.DefaultPlus}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="EvidenceCommandColumn" Width="*" />
+                <ColumnDefinition x:Name="CommandGapColumn" Width="10" />
+                <ColumnDefinition x:Name="SuiteCommandColumn" Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition x:Name="CommandCompactGapRow" Height="0" />
+                <RowDefinition x:Name="SuiteCommandCompactRow" Height="0" />
+            </Grid.RowDefinitions>
+            <Border x:Name="EvidenceCommandPane" Style="{StaticResource QaCard}" Padding="{DynamicResource Arena.Inset.Dense}">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource QaSectionTitle}" Text="Evidence bundle" />
+                    <DockPanel LastChildFill="True">
+                        <Button x:Name="RefreshEvidenceButton"
+                                DockPanel.Dock="Right"
+                                MinWidth="82"
+                                MinHeight="34"
+                                Margin="{DynamicResource Arena.Gap.Inline.Before.CompactPlus}"
+                                Style="{DynamicResource Arena.Button.Secondary}"
+                                Content="Refresh"
+                                Click="RefreshEvidenceButton_Click"
+                                AutomationProperties.Name="Refresh QA evidence" />
+                        <ComboBox x:Name="EvidenceRunPicker"
+                                  MinHeight="34"
+                                  DisplayMemberPath="Label"
+                                  FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                                  AutomationProperties.Name="QA evidence bundle"
+                                  AutomationProperties.HelpText="Selects one bounded local QA evidence bundle." />
+                    </DockPanel>
+                    <TextBlock x:Name="ReviewProgressText"
+                               Margin="{DynamicResource Arena.Gap.Stack.Before.CompactPlus}"
+                               Style="{StaticResource QaCaption}"
+                               Text="No rendered screenshots are ready for explicit review."
+                               AutomationProperties.Name="Rendered screenshot review progress"
+                               AutomationProperties.LiveSetting="Polite" />
+                    <WrapPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" HorizontalAlignment="Right">
+                        <Button x:Name="CopyReportButton"
+                                MinHeight="34"
+                                Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
+                                Style="{DynamicResource Arena.Button.Secondary}"
+                                Content="Copy report"
+                                Click="CopyReportButton_Click"
+                                AutomationProperties.Name="Copy privacy-safe QA report" />
+                        <Button x:Name="AcceptInspectionButton"
+                                MinHeight="34"
+                                Style="{DynamicResource Arena.Button.Primary}"
+                                Content="Accept inspection"
+                                IsEnabled="False"
+                                Click="AcceptInspectionButton_Click"
+                                AutomationProperties.Name="Accept rendered inspection"
+                                AutomationProperties.HelpText="Available only after every current rendered screenshot has been explicitly selected and successfully previewed, all linked automation is verified, and the exact review manifest is current." />
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="SuiteCommandPane" Grid.Column="2" Style="{StaticResource QaCard}" Padding="{DynamicResource Arena.Inset.Dense}">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource QaSectionTitle}" Text="Focused local suite" />
+                    <DockPanel LastChildFill="True">
+                        <Button x:Name="CancelSuiteButton"
+                                DockPanel.Dock="Right"
+                                MinWidth="72"
+                                MinHeight="34"
+                                Margin="{DynamicResource Arena.Gap.Inline.Before.Compact}"
+                                Style="{DynamicResource Arena.Button.Secondary}"
+                                Content="Cancel"
+                                IsEnabled="False"
+                                Click="CancelSuiteButton_Click"
+                                AutomationProperties.Name="Cancel focused QA suite" />
+                        <Button x:Name="RunSuiteButton"
+                                DockPanel.Dock="Right"
+                                MinWidth="64"
+                                MinHeight="34"
+                                Margin="{DynamicResource Arena.Gap.Inline.Before.Compact}"
+                                Style="{DynamicResource Arena.Button.Primary}"
+                                Content="Run"
+                                Click="RunSuiteButton_Click"
+                                AutomationProperties.Name="Run selected focused QA suite" />
+                        <ComboBox x:Name="SuitePicker"
+                                  MinHeight="34"
+                                  DisplayMemberPath="Label"
+                                  FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                                  AutomationProperties.Name="Focused QA suite"
+                                  AutomationProperties.HelpText="Only fixed checked-in Release harnesses and scripts are available." />
+                    </DockPanel>
+                    <TextBlock x:Name="SuiteStatusText"
+                               Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                               Style="{StaticResource QaCaption}"
+                               Text="No focused suite has run."
+                               MaxHeight="38"
+                               TextTrimming="CharacterEllipsis"
+                               AutomationProperties.Name="Focused QA suite status"
+                               AutomationProperties.LiveSetting="Polite" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <TabControl Grid.Row="3"
+                    x:Name="EvidenceTabs"
+                    Background="{DynamicResource PanelBrush}"
+                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                    Foreground="{DynamicResource TextBrush}"
+                    FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                    AutomationProperties.Name="QA evidence sections">
+            <TabItem Header="Overview" AutomationProperties.Name="QA overview">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="{DynamicResource Arena.Inset.Panel}">
+                        <Border Style="{StaticResource QaCard}" Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource QaSectionTitle}" Text="Verdict and provenance" />
+                                <TextBlock x:Name="VerdictText" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock x:Name="ProvenanceText" Margin="{DynamicResource Arena.Gap.Stack.Before.TightPlus}" Style="{StaticResource QaCaption}" AutomationProperties.Name="QA source and tree provenance" />
+                                <TextBlock x:Name="EnvironmentText" Margin="{DynamicResource Arena.Gap.Stack.Before.TightPlus}" Style="{StaticResource QaCaption}" AutomationProperties.Name="QA environment" />
+                                <TextBlock x:Name="TestTotalsText" Margin="{DynamicResource Arena.Gap.Stack.Before.TightPlus}" Style="{StaticResource QaCaption}" AutomationProperties.Name="QA aggregate test counts" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource QaCard}" Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource QaSectionTitle}" Text="Live-provider evidence" />
+                                <TextBlock x:Name="LiveProviderText" Style="{StaticResource QaCaption}" AutomationProperties.Name="Live-provider QA limitation" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource QaCard}" Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource QaSectionTitle}" Text="Inspection state" />
+                                <TextBlock x:Name="InspectionText" Style="{StaticResource QaCaption}" AutomationProperties.Name="Rendered inspection state" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource QaCard}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource QaSectionTitle}" Text="Accepted limitations" />
+                                <ListBox x:Name="LimitationsList"
+                                         Background="Transparent"
+                                         BorderThickness="0"
+                                         Foreground="{DynamicResource TextBrush}"
+                                         HorizontalContentAlignment="Stretch"
+                                         AutomationProperties.Name="QA accepted limitations">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="{DynamicResource Arena.Gap.Stack.After.CompactPlus}">
+                                                <TextBlock Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" Text="{Binding Id}" />
+                                                <TextBlock Foreground="{DynamicResource MutedTextBrush}" Text="{Binding State}" />
+                                                <TextBlock Foreground="{DynamicResource MutedTextBrush}" Text="{Binding Summary}" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Gates" AutomationProperties.Name="QA gates">
+                <ListBox x:Name="GateList"
+                         Margin="{DynamicResource Arena.Inset.Card}"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         Foreground="{DynamicResource TextBrush}"
+                         HorizontalContentAlignment="Stretch"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         AutomationProperties.Name="QA gate results">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource QaCard}" Margin="{DynamicResource Arena.Gap.Stack.After.CompactPlus}" AutomationProperties.Name="{Binding Id}" AutomationProperties.HelpText="{Binding HelpText}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" Text="{Binding Id}" TextWrapping="Wrap" />
+                                        <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}" Foreground="{DynamicResource MutedTextBrush}" Text="{Binding Tests}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}" HorizontalAlignment="Right">
+                                        <TextBlock Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" Text="{Binding State}" HorizontalAlignment="Right" />
+                                        <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}" Foreground="{DynamicResource MutedTextBrush}" Text="{Binding Duration}" HorizontalAlignment="Right" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </TabItem>
+
+            <TabItem Header="Schemas &amp; performance" AutomationProperties.Name="QA schemas and performance">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <Grid Margin="{DynamicResource Arena.Inset.Card}" x:Name="SchemaPerformanceGrid">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition x:Name="SchemaColumn" Width="*" />
+                            <ColumnDefinition x:Name="SchemaGapColumn" Width="10" />
+                            <ColumnDefinition x:Name="PerformanceColumn" Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition x:Name="SchemaCompactGapRow" Height="0" />
+                            <RowDefinition x:Name="PerformanceCompactRow" Height="0" />
+                        </Grid.RowDefinitions>
+                        <Border x:Name="SchemaPane" Style="{StaticResource QaCard}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource QaSectionTitle}" Text="Schema checks" />
+                                <ItemsControl x:Name="SchemaList" AutomationProperties.Name="QA schema checks">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="{DynamicResource Arena.Gap.Stack.After.CompactPlus}" AutomationProperties.HelpText="{Binding HelpText}">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Foreground="{DynamicResource TextBrush}" Text="{Binding Schema}" TextWrapping="Wrap" />
+                                                    <TextBlock Foreground="{DynamicResource MutedTextBrush}" Text="{Binding Migration}" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="1" Margin="{DynamicResource Arena.Gap.Inline.Before.Default}" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" Text="{Binding State}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="PerformancePane" Grid.Column="2" Style="{StaticResource QaCard}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource QaSectionTitle}" Text="Performance thresholds" />
+                                <ItemsControl x:Name="PerformanceList" AutomationProperties.Name="QA performance thresholds">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="{DynamicResource Arena.Gap.Stack.After.CompactPlus}" AutomationProperties.HelpText="{Binding HelpText}">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Foreground="{DynamicResource TextBrush}" Text="{Binding Metric}" TextWrapping="Wrap" />
+                                                    <TextBlock Foreground="{DynamicResource MutedTextBrush}" Text="{Binding Measurement}" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="1" Margin="{DynamicResource Arena.Gap.Inline.Before.Default}" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" Text="{Binding State}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Artifacts" AutomationProperties.Name="QA artifacts">
+                <Grid Margin="{DynamicResource Arena.Inset.Card}" x:Name="ArtifactWorkspaceGrid">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition x:Name="ArtifactListColumn" Width="390" />
+                        <ColumnDefinition x:Name="ArtifactGapColumn" Width="10" />
+                        <ColumnDefinition x:Name="ArtifactPreviewColumn" Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition x:Name="ArtifactCompactGapRow" Height="0" />
+                        <RowDefinition x:Name="ArtifactPreviewCompactRow" Height="0" />
+                    </Grid.RowDefinitions>
+                    <Border x:Name="ArtifactListPane" Style="{StaticResource QaCard}">
+                        <Grid>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                            <TextBlock Style="{StaticResource QaSectionTitle}" Text="Hash-checked artifacts" />
+                            <ListBox Grid.Row="1"
+                                     x:Name="ArtifactList"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     Foreground="{DynamicResource TextBrush}"
+                                     HorizontalContentAlignment="Stretch"
+                                     SelectionChanged="ArtifactList_SelectionChanged"
+                                     VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.VirtualizationMode="Recycling"
+                                     AutomationProperties.Name="QA artifact inventory">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="{DynamicResource Arena.Gap.Stack.After.DefaultPlus}" AutomationProperties.Name="{Binding Id}" AutomationProperties.HelpText="{Binding HelpText}">
+                                            <DockPanel>
+                                                <TextBlock DockPanel.Dock="Right" Margin="{DynamicResource Arena.Gap.Inline.Before.Default}" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" Text="{Binding State}" />
+                                                <TextBlock Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" Text="{Binding Kind}" TextWrapping="Wrap" />
+                                            </DockPanel>
+                                            <TextBlock Foreground="{DynamicResource MutedTextBrush}" Text="{Binding RelativePath}" TextWrapping="Wrap" />
+                                            <TextBlock Foreground="{DynamicResource MutedTextBrush}" FontFamily="Cascadia Mono, Consolas" FontSize="{DynamicResource Arena.Type.CaptionSize}" Text="{Binding Sha256}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </Border>
+                    <Border x:Name="ArtifactPreviewPane" Grid.Column="2" Style="{StaticResource QaCard}">
+                        <Grid>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <TextBlock Style="{StaticResource QaSectionTitle}" Text="Before / after preview" />
+                            <Grid Grid.Row="1">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="8" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Border Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" CornerRadius="{DynamicResource Arena.Radius.Small}" Padding="{DynamicResource Arena.Inset.Micro}">
+                                    <Grid>
+                                        <Image x:Name="BaselinePreviewImage" Stretch="Uniform" AutomationProperties.Name="Baseline screenshot preview" />
+                                        <TextBlock x:Name="BaselineEmptyText" Foreground="{DynamicResource MutedTextBrush}" Text="No baseline supplied" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Column="2" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" CornerRadius="{DynamicResource Arena.Radius.Small}" Padding="{DynamicResource Arena.Inset.Micro}">
+                                    <Grid>
+                                        <Image x:Name="CurrentPreviewImage" Stretch="Uniform" AutomationProperties.Name="Current screenshot preview" />
+                                        <TextBlock x:Name="CurrentEmptyText" Foreground="{DynamicResource MutedTextBrush}" Text="Select a verified screenshot" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Grid>
+                                </Border>
+                            </Grid>
+                            <TextBlock Grid.Row="2" x:Name="AutomationLinkText" Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" Style="{StaticResource QaCaption}" Text="Linked automation unavailable." AutomationProperties.Name="Linked automation result" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Report" AutomationProperties.Name="Privacy-safe QA report">
+                <TextBox x:Name="ReportText"
+                         Margin="{DynamicResource Arena.Inset.Card}"
+                         Padding="{DynamicResource Arena.Inset.Card}"
+                         IsReadOnly="True"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto"
+                         HorizontalScrollBarVisibility="Disabled"
+                         Background="{DynamicResource InputBrush}"
+                         Foreground="{DynamicResource TextBrush}"
+                         BorderBrush="{DynamicResource ControlBorderBrush}"
+                         AutomationProperties.Name="Privacy-safe aggregate QA report"
+                         AutomationProperties.HelpText="Contains bounded aggregate evidence only; no raw command output, prompts, responses, credentials, or absolute paths." />
+            </TabItem>
+        </TabControl>
+
+        <Border Grid.Row="4" Margin="{DynamicResource Arena.Gap.Stack.Before.DefaultPlus}" Padding="{DynamicResource Arena.Inset.Dense}" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" CornerRadius="{DynamicResource Arena.Radius.Small}">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBlock VerticalAlignment="Center" Margin="{DynamicResource Arena.Gap.Inline.After.Default}" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" Text="Post-close seal" />
+                <TextBox Grid.Column="1"
+                         x:Name="PostCloseCommandText"
+                         IsReadOnly="True"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         Foreground="{DynamicResource MutedTextBrush}"
+                         FontFamily="Cascadia Mono, Consolas"
+                         TextWrapping="Wrap"
+                         AutomationProperties.Name="Post-close full seal command" />
+                <Button Grid.Column="2"
+                        x:Name="CopyPostCloseCommandButton"
+                        MinHeight="30"
+                        Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
+                        Style="{DynamicResource Arena.Button.Secondary}"
+                        Content="Copy"
+                        Click="CopyPostCloseCommandButton_Click"
+                        AutomationProperties.Name="Copy post-close full seal command" />
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

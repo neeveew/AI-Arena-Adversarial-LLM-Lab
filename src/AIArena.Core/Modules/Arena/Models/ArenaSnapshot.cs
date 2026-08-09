@@ -11,6 +11,10 @@ public sealed class ArenaSnapshot
     [JsonPropertyName("fork_lineage")]
     public SessionForkLineage? ForkLineage { get; set; }
 
+    [JsonPropertyName("branch_receipt")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ArenaBranchContract? BranchReceipt { get; set; }
+
     [JsonPropertyName("configs")]
     public Dictionary<string, ModelProviderConfig> Configs { get; init; } = new();
 
@@ -78,7 +82,7 @@ public sealed class EngineSnapshot
     public string LastError { get; set; } = "";
 
     [JsonPropertyName("summary")]
-    public string Summary { get; init; } = "";
+    public string Summary { get; set; } = "";
 
     [JsonPropertyName("decision_card")]
     public DecisionCardState DecisionCard { get; init; } = new();
@@ -139,6 +143,17 @@ public sealed class DialogueAgent
 
     [JsonPropertyName("private_notes")]
     public List<string> PrivateNotes { get; init; } = new();
+
+    /// <summary>
+    /// Provenance-bearing memory used by the turn runner. PrivateNotes remains a
+    /// compatibility mirror for older AI Arena builds and external snapshot tools.
+    /// </summary>
+    [JsonPropertyName("memory_entries")]
+    public List<StructuredMemoryEntry> MemoryEntries { get; init; } = new();
+
+    [JsonPropertyName("private_notes_mirror_fingerprint")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PrivateNotesMirrorFingerprint { get; set; }
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Extra { get; init; }
@@ -254,6 +269,10 @@ public sealed class DecisionCardState
 
 public sealed class DialogueMessage
 {
+    [JsonPropertyName("message_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MessageId { get; set; }
+
     [JsonPropertyName("turn")]
     public int Turn { get; init; }
 

@@ -93,6 +93,12 @@ internal static class AIArenaControlCommands
     public const string Snapshot = "snapshot";
     public const string EventsWatch = "events.watch";
     public const string AppScreenshot = "app.screenshot";
+    public const string AppQaWindowSize = "app.qa.window.size";
+    public const string AppQaStructureCapture = "app.qa.structure.capture";
+    public const string AppQaFocusAdvance = "app.qa.focus.advance";
+    public const string AppQaMotionSet = "app.qa.motion.set";
+    public const string ExperimentState = "experiment.state";
+    public const string ExperimentFeatureSelect = "experiment.feature.select";
     public const string NavigationSelect = "navigation.select";
     public const string NavigationThemeSet = "navigation.theme.set";
     public const string NavigationProviderFocus = "navigation.provider.focus";

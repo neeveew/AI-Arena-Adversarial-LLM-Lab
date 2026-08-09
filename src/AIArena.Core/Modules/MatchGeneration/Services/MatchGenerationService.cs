@@ -442,6 +442,7 @@ public sealed class MatchGenerationService : IDisposable
                 agent.Persona = persona.Persona;
                 agent.VoiceStyle = NormalizeGeneratedVoice(persona.VoiceStyle);
                 agent.PrivateNotes.Clear();
+                agent.MemoryEntries.Clear();
                 agent.Status = "waiting";
             }
         }
@@ -465,6 +466,7 @@ public sealed class MatchGenerationService : IDisposable
             {
                 agent.Status = "waiting";
                 agent.PrivateNotes.Clear();
+                agent.MemoryEntries.Clear();
             }
         }
     }

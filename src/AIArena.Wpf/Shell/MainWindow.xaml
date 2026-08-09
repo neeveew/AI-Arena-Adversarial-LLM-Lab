@@ -985,6 +985,7 @@
         <controls:ShellNavigationRailControl x:Name="ShellNavigationRail"
                                              Grid.RowSpan="2"
                                              ArenaNavigationRequested="ArenaNavButton_Click"
+                                             ExperimentLabNavigationRequested="ExperimentLabNavButton_Click"
                                              AgentNavigationRequested="AgentNavButton_Click"
                                              MatchSetupNavigationRequested="CustomMatchNavButton_Click"
                                              CollaborateNavigationRequested="CollaborateNavButton_Click"
@@ -2297,6 +2298,10 @@
             </Grid>
             </Border>
 
+            <controls:ExperimentLabControl x:Name="ExperimentLabPanel"
+                                           Visibility="Collapsed"
+                                           Margin="{DynamicResource Arena.Gap.Inline.Before.Nano}" />
+
             <Grid x:Name="AgentWorldPanel" Visibility="Collapsed">
                 <controls:AgentWorld3DControl x:Name="AgentWorld3D"
                                               HorizontalAlignment="Stretch"
@@ -3603,6 +3608,34 @@
                         <StackPanel>
                             <TextBlock Text="Agent Activity" Style="{StaticResource RightRailSectionTitle}" />
                             <StackPanel x:Name="AgentActivityItems" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+                <StackPanel x:Name="ExperimentRightRailPanel"
+                            Visibility="Collapsed">
+                    <Border Style="{StaticResource RightRailCard}">
+                        <StackPanel>
+                            <TextBlock Text="Experiment Lab" Style="{StaticResource RightRailSectionTitle}" />
+                            <TextBlock Text="Evidence contract"
+                                       Style="{StaticResource FieldLabel}"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
+                            <TextBlock Text="Observed, inferred, and unavailable results remain distinct. Absolute paths, provider tokens, and source content are excluded from persisted receipts."
+                                       Style="{StaticResource HintText}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource RightRailCard}">
+                        <StackPanel>
+                            <TextBlock Text="Available now" Style="{StaticResource RightRailSectionTitle}" />
+                            <TextBlock Text="Matrix preview &amp; history&#x0a;Historical conversation forks&#x0a;Scenario and benchmark packs&#x0a;Rubric observations&#x0a;Claim ledgers"
+                                       Foreground="{DynamicResource TextBrush}"
+                                       FontSize="{DynamicResource Arena.Type.CompactBodySize}"
+                                       TextWrapping="Wrap"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
+                            <TextBlock Text="Matrix execution uses isolated child sessions and the configured provider only after strict resolution. No synthetic provider result is substituted."
+                                       Style="{StaticResource HintText}"
+                                       TextWrapping="Wrap"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                         </StackPanel>
                     </Border>
                 </StackPanel>

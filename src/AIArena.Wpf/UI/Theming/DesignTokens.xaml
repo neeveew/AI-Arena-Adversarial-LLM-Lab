@@ -15,11 +15,15 @@
     <!-- Fluent glyphs on Windows 11 with the same code points falling back to MDL2 on Windows 10. -->
     <FontFamily x:Key="Arena.Type.IconFontFamily">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
     <sys:Double x:Key="Arena.Type.DisplaySize">22</sys:Double>
+    <sys:Double x:Key="Arena.Type.PageTitleSize">20</sys:Double>
     <sys:Double x:Key="Arena.Type.TitleSize">17</sys:Double>
     <sys:Double x:Key="Arena.Type.HeadingSize">14</sys:Double>
     <sys:Double x:Key="Arena.Type.BodySize">12.5</sys:Double>
+    <sys:Double x:Key="Arena.Type.CompactBodySize">12</sys:Double>
     <sys:Double x:Key="Arena.Type.LabelSize">11.5</sys:Double>
+    <sys:Double x:Key="Arena.Type.DenseLabelSize">11</sys:Double>
     <sys:Double x:Key="Arena.Type.CaptionSize">10.5</sys:Double>
+    <sys:Double x:Key="Arena.Type.MicroSize">10</sys:Double>
 
     <!--
         Scalar lengths are for Width, Height, offsets, and code-behind. WPF
@@ -34,39 +38,87 @@
     <sys:Double x:Key="Arena.Space.6">20</sys:Double>
     <sys:Double x:Key="Arena.Space.8">24</sys:Double>
     <Thickness x:Key="Arena.Inset.Control">8,4</Thickness>
+    <Thickness x:Key="Arena.Inset.Micro">4</Thickness>
+    <Thickness x:Key="Arena.Inset.Compact">8</Thickness>
+    <Thickness x:Key="Arena.Inset.Dense">9</Thickness>
     <Thickness x:Key="Arena.Inset.Card">10</Thickness>
     <Thickness x:Key="Arena.Inset.Panel">12</Thickness>
+    <Thickness x:Key="Arena.Inset.Section">14</Thickness>
     <Thickness x:Key="Arena.Inset.None">0</Thickness>
 
     <!-- Component insets measured from the established compact interface. -->
     <Thickness x:Key="Arena.Inset.RailAction">7,4</Thickness>
+    <Thickness x:Key="Arena.Inset.NavigationItem">9,0</Thickness>
+    <Thickness x:Key="Arena.Inset.RailContext">10,9</Thickness>
     <Thickness x:Key="Arena.Inset.QuickAction">10,4</Thickness>
     <Thickness x:Key="Arena.Inset.MatchSetupAction">11,6</Thickness>
+    <Thickness x:Key="Arena.Inset.Action">10,6</Thickness>
+    <Thickness x:Key="Arena.Inset.CompactAction">8,6</Thickness>
+    <Thickness x:Key="Arena.Inset.Tab">7,5</Thickness>
+    <Thickness x:Key="Arena.Inset.StatusCard">10,7</Thickness>
+    <Thickness x:Key="Arena.Inset.ListItem">9,7</Thickness>
+    <Thickness x:Key="Arena.Inset.PageHeader">16,12</Thickness>
     <Thickness x:Key="Arena.Inset.ToolbarAction">10,0</Thickness>
     <Thickness x:Key="Arena.Inset.StatusDock">10,8</Thickness>
     <Thickness x:Key="Arena.Layout.TopBarMargin">10,3</Thickness>
     <Thickness x:Key="Arena.Layout.StatusDockBleed">-10,8,-10,-10</Thickness>
     <Thickness x:Key="Arena.Layout.RailButtonGridBleed">0,8,-6,0</Thickness>
+    <Thickness x:Key="Arena.Layout.RailContextBleed">-10,6,-10,8</Thickness>
+    <Thickness x:Key="Arena.Layout.RailSectionMargin">0,12,0,6</Thickness>
 
     <!--
         Directional layout tokens preserve the current geometry exactly. Before
         and After describe item order in an LTR inline flow or top-to-bottom
         stack; the values remain physical WPF Thickness values.
     -->
+    <Thickness x:Key="Arena.Gap.Inline.Before.Nano">2,0,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Inline.Before.Tight">5,0,0,0</Thickness>
     <Thickness x:Key="Arena.Gap.Inline.Before.Compact">6,0,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Inline.Before.CompactPlus">7,0,0,0</Thickness>
     <Thickness x:Key="Arena.Gap.Inline.Before.Default">8,0,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Inline.Before.Comfortable">10,0,0,0</Thickness>
     <Thickness x:Key="Arena.Gap.Inline.Before.Spacious">12,0,0,0</Thickness>
     <Thickness x:Key="Arena.Gap.Inline.After.Tight">0,0,5,0</Thickness>
     <Thickness x:Key="Arena.Gap.Inline.After.Compact">0,0,6,0</Thickness>
     <Thickness x:Key="Arena.Gap.Inline.After.Default">0,0,8,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Inline.After.Spacious">0,0,12,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Wrap.After.Compact">0,0,6,6</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.Before.Nano">0,2,0,0</Thickness>
     <Thickness x:Key="Arena.Gap.Stack.Before.Micro">0,3,0,0</Thickness>
     <Thickness x:Key="Arena.Gap.Stack.Before.Tight">0,4,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.Before.TightPlus">0,5,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.Before.Compact">0,6,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.Before.CompactPlus">0,7,0,0</Thickness>
     <Thickness x:Key="Arena.Gap.Stack.Before.Default">0,8,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.Before.DefaultPlus">0,9,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.Before.Comfortable">0,10,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.Before.Section">0,12,0,0</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.After.Nano">0,0,0,2</Thickness>
     <Thickness x:Key="Arena.Gap.Stack.After.Tight">0,0,0,4</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.After.TightPlus">0,0,0,5</Thickness>
     <Thickness x:Key="Arena.Gap.Stack.After.Compact">0,0,0,6</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.After.CompactPlus">0,0,0,7</Thickness>
     <Thickness x:Key="Arena.Gap.Stack.After.Default">0,0,0,8</Thickness>
+    <Thickness x:Key="Arena.Gap.Stack.After.DefaultPlus">0,0,0,9</Thickness>
     <Thickness x:Key="Arena.Gap.Stack.After.Comfortable">0,0,0,10</Thickness>
     <Thickness x:Key="Arena.Gap.Stack.After.Section">0,0,0,12</Thickness>
+
+    <!-- Reusable workspace geometry for the experiment and inspection surfaces. -->
+    <Thickness x:Key="Arena.Layout.FormFieldMargin">0,2,0,10</Thickness>
+    <Thickness x:Key="Arena.Layout.CaptionSectionMargin">0,3,0,10</Thickness>
+    <Thickness x:Key="Arena.Layout.CaptionBlockMargin">0,3,0,8</Thickness>
+    <Thickness x:Key="Arena.Layout.ActionSectionMargin">0,4,0,10</Thickness>
+    <Thickness x:Key="Arena.Layout.InsetSectionMargin">0,2,0,8</Thickness>
+    <Thickness x:Key="Arena.Layout.FieldLabelMargin">0,6,0,4</Thickness>
+    <Thickness x:Key="Arena.Layout.SectionHeadingMargin">0,12,0,8</Thickness>
+    <Thickness x:Key="Arena.Layout.FeatureSectionMargin">2,0,0,10</Thickness>
+    <Thickness x:Key="Arena.Layout.FeatureHeaderMargin">2,2,2,10</Thickness>
+    <Thickness x:Key="Arena.Layout.WorkspaceHeaderMargin">4,2,4,10</Thickness>
+    <Thickness x:Key="Arena.Layout.WorkspaceStatusMargin">4,0,4,10</Thickness>
+    <Thickness x:Key="Arena.Layout.WorkspaceBodyMargin">4,0,4,4</Thickness>
+    <Thickness x:Key="Arena.Layout.WorkspaceRootMargin">4,2,4,4</Thickness>
+    <Thickness x:Key="Arena.Layout.WorkspaceDescriptionMargin">0,3,0,12</Thickness>
+    <Thickness x:Key="Arena.Layout.InspectorDetailMargin">4,10,4,4</Thickness>
 
     <!-- Compatibility keys retained until their existing consumers migrate. -->
     <Thickness x:Key="Arena.Gap.Inline">6,0,0,0</Thickness>

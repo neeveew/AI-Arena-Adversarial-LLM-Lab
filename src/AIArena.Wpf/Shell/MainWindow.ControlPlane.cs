@@ -100,6 +100,79 @@ public partial class MainWindow
             case AIArenaControlCommands.Status:
             case AIArenaControlCommands.Snapshot:
                 return AIArenaControlResponse.Success(request, "Snapshot captured.", BuildControlPlaneSnapshot());
+            case AIArenaControlCommands.ExperimentState:
+                return AIArenaControlResponse.Success(
+                    request,
+                    "Privacy-safe Experiment Lab state captured.",
+                    ExperimentLabPanel.ReadControlPlaneState());
+            case AIArenaControlCommands.ExperimentFeatureSelect:
+                {
+                    var key = RequiredStringArg(request, "key");
+                    if (string.IsNullOrWhiteSpace(key))
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "missing_argument",
+                            "experiment.feature.select requires args.key.",
+                            ExperimentLabPanel.ReadControlPlaneState());
+                    }
+
+                    var before = ExperimentLabPanel.ReadControlPlaneState();
+                    if (before.Busy)
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "experiment_busy",
+                            "Experiment Lab is busy; wait for the current operation before changing features.",
+                            before);
+                    }
+
+                    if (!ExperimentLabPanel.TrySelectRegisteredFeature(key, out var changed))
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "invalid_argument",
+                            "experiment.feature.select requires an exact registered feature key.",
+                            before);
+                    }
+
+                    // SelectionChanged requests the same contained coordinator
+                    // refresh as the visual selector. Re-selecting the current
+                    // feature has no WPF selection event, so request that refresh
+                    // explicitly. No experiment action or provider call is run.
+                    if (!changed)
+                    {
+                        ExperimentLab.RequestFeatureSelectionRefresh(key.Trim());
+                    }
+
+                    var refresh = ExperimentLab.DebugFeatureSelectionRefreshTask;
+                    OpenExperimentLabForControlPlaneSelection();
+                    await refresh.WaitAsync(cancellationToken);
+
+                    var state = ExperimentLabPanel.ReadControlPlaneState();
+                    var refreshFailed = state.Features.Any(feature =>
+                        string.Equals(feature.Key, state.SelectedKey, StringComparison.Ordinal)
+                        && string.Equals(feature.Status, "refresh-failed", StringComparison.Ordinal));
+                    _controlPlaneEvents.Publish(
+                        "experiment.feature.selected",
+                        refreshFailed
+                            ? "Experiment Lab feature selected; its refresh failed safely."
+                            : "Experiment Lab feature selected and refreshed.",
+                        state);
+                    if (refreshFailed)
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "experiment_refresh_failed",
+                            "Experiment Lab feature selected, but its refresh failed safely.",
+                            state);
+                    }
+
+                    return AIArenaControlResponse.Success(
+                        request,
+                        "Experiment Lab feature selected and refreshed.",
+                        state);
+                }
             case AIArenaControlCommands.NavigationSelect:
                 {
                     var view = RequiredStringArg(request, "view");
@@ -562,6 +635,18 @@ public partial class MainWindow
             IsControlPlaneEnabled,
             AgentWorkspace.ControlState,
             BuildProviderControlState());
+    }
+
+    private void OpenExperimentLabForControlPlaneSelection()
+    {
+        AppSettingsWorkflow.SetVisible(false);
+        var previousSurface = _activeShellSurface;
+        ShellNavigation.ShowExperimentLabPanel();
+        _activeShellSurface = ShellSurface.ExperimentLab;
+        ApplyShellCommandState(_activeShellSurface);
+        LabViewToggleGroup.Visibility = Visibility.Collapsed;
+        ResetRightRailAfterSurfaceChange(previousSurface);
+        ExperimentLabPanel.FocusFeatureSelector();
     }
 
     private AIArenaControlResponse SavedStateControlResponse(

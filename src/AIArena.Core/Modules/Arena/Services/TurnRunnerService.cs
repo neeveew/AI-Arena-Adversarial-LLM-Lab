@@ -267,7 +267,7 @@ public sealed class TurnRunnerService
         snapshot.Engine.TurnCount = message.Turn;
         if (result.Ok)
         {
-            UpdatePrivateMemory(agent, message);
+            UpdatePrivateMemory(snapshot, agent, message);
         }
 
         if (advanceTurnIndex)
@@ -349,7 +349,7 @@ public sealed class TurnRunnerService
         snapshot.Engine.Messages[index] = replacement;
         if (result.Ok)
         {
-            UpdatePrivateMemory(agent, replacement);
+            UpdatePrivateMemory(snapshot, agent, replacement);
         }
 
         agent.Status = result.Ok ? "spoke" : "error";
@@ -380,7 +380,7 @@ public sealed class TurnRunnerService
         }
     }
 
-    private static void UpdatePrivateMemory(DialogueAgent agent, DialogueMessage message)
+    private static void UpdatePrivateMemory(ArenaSnapshot snapshot, DialogueAgent agent, DialogueMessage message)
     {
         var note = BuildPrivateMemoryNote(message);
         if (string.IsNullOrWhiteSpace(note))
@@ -388,10 +388,10 @@ public sealed class TurnRunnerService
             return;
         }
 
-        agent.PrivateNotes.RemoveAll(existing =>
-            existing.StartsWith($"Turn {message.Turn}:", StringComparison.OrdinalIgnoreCase)
-            || existing.Equals(note, StringComparison.OrdinalIgnoreCase));
-        agent.PrivateNotes.Add(note);
+        var createdAt = message.CreatedAt > 0
+            ? DateTimeOffset.FromUnixTimeSeconds((long)message.CreatedAt)
+            : DateTimeOffset.UtcNow;
+        StructuredMemoryService.AddTurnMemory(snapshot, agent, message, note, createdAt);
         if (agent.PrivateNotes.Count > MaxPrivateMemoryNotes)
         {
             agent.PrivateNotes.RemoveRange(0, agent.PrivateNotes.Count - MaxPrivateMemoryNotes);
@@ -1110,12 +1110,13 @@ public sealed class TurnRunnerService
             active.Select(item => item.Id == plan.AgentId
                 ? $"- {item.Name} (you)"
                 : $"- {item.Name}"));
-        var privateNotes = string.Join(
-            Environment.NewLine,
-            (agent?.PrivateNotes ?? [])
-                .Where(note => !string.IsNullOrWhiteSpace(note))
-                .TakeLast(Math.Clamp(snapshot.Engine.NotesWindow, 0, 60))
-                .Select(note => $"- {note}"));
+        var privateNotes = agent is null
+            ? ""
+            : string.Join(
+                Environment.NewLine,
+                StructuredMemoryService.SelectForPrompt(snapshot, agent, DateTimeOffset.UtcNow, beforeTurn)
+                    .TakeLast(Math.Clamp(snapshot.Engine.NotesWindow, 0, 60))
+                    .Select(StructuredMemoryService.FormatPromptLine));
         var userSections = new List<string>
         {
             $"Topic: {topic}",
@@ -1128,7 +1129,12 @@ public sealed class TurnRunnerService
             userSections.Add(groundingInstruction);
         }
 
-        userSections.Add(string.IsNullOrWhiteSpace(privateNotes) ? "Your private memory notes: -" : $"Your private memory notes:{Environment.NewLine}{privateNotes}");
+        userSections.Add(string.Join(
+            Environment.NewLine,
+            StructuredMemoryService.PromptSectionHeading,
+            StructuredMemoryService.PromptSectionBegin,
+            string.IsNullOrWhiteSpace(privateNotes) ? "-" : privateNotes,
+            StructuredMemoryService.PromptSectionEnd));
         userSections.Add(string.IsNullOrWhiteSpace(transcript) ? $"{transcriptScope}: No new public transcript turns." : $"{transcriptScope}:{Environment.NewLine}{transcript}");
         userSections.Add(string.IsNullOrWhiteSpace(latestOperatorRequest) ? "Latest Operator request: -" : $"Latest Operator request: {latestOperatorRequest}");
         userSections.Add(voiceReminder);
@@ -1467,8 +1473,10 @@ public sealed class TurnRunnerService
         bool disableReasoning = false,
         bool compactForInternetEvidence = false)
     {
+        var inspectionCorrelationId = Guid.NewGuid().ToString("N");
         var primaryConfig = WithNativeContinuation(plan.Config!, snapshot, plan.AgentId, beforeTurn);
-        if (compactForInternetEvidence && InternetFastMode(snapshot, primaryConfig))
+        var primaryFastModeApplied = compactForInternetEvidence && InternetFastMode(snapshot, primaryConfig);
+        if (primaryFastModeApplied)
         {
             primaryConfig = WithInternetFastModeConfig(primaryConfig);
         }
@@ -1479,6 +1487,17 @@ public sealed class TurnRunnerService
         }
 
         var messages = BuildPromptForConfig(snapshot, plan, primaryConfig, beforeTurn, allowInternetTool, enforceVoiceDrift, extraUserMessage);
+        primaryConfig.RequestInspectionContext = BuildProviderRequestInspectionContext(
+            inspectionCorrelationId,
+            "primary",
+            snapshot,
+            plan,
+            primaryConfig,
+            beforeTurn,
+            messages,
+            extraUserMessage is not null,
+            disableReasoning,
+            primaryFastModeApplied);
         var result = await _modelClient.CompleteChatAsync(primaryConfig, messages, cancellationToken);
         if (result.Ok || plan.FallbackConfig is null)
         {
@@ -1491,7 +1510,8 @@ public sealed class TurnRunnerService
             new { speaker = plan.AgentId, failedModel = plan.Config!.Model, fallbackModel = plan.FallbackConfig.Model, error = result.Error },
             cancellationToken);
         var fallbackConfig = WithNativeContinuation(plan.FallbackConfig, snapshot, plan.AgentId, beforeTurn);
-        if (compactForInternetEvidence && InternetFastMode(snapshot, fallbackConfig))
+        var fallbackFastModeApplied = compactForInternetEvidence && InternetFastMode(snapshot, fallbackConfig);
+        if (fallbackFastModeApplied)
         {
             fallbackConfig = WithInternetFastModeConfig(fallbackConfig);
         }
@@ -1502,7 +1522,112 @@ public sealed class TurnRunnerService
         }
 
         var fallbackMessages = BuildPromptForConfig(snapshot, plan, fallbackConfig, beforeTurn, allowInternetTool, enforceVoiceDrift, extraUserMessage);
+        fallbackConfig.RequestInspectionContext = BuildProviderRequestInspectionContext(
+            inspectionCorrelationId,
+            "fallback",
+            snapshot,
+            plan,
+            fallbackConfig,
+            beforeTurn,
+            fallbackMessages,
+            extraUserMessage is not null,
+            disableReasoning,
+            fallbackFastModeApplied);
         return await _modelClient.CompleteChatAsync(fallbackConfig, fallbackMessages, cancellationToken);
+    }
+
+    private static ProviderRequestInspectionContext BuildProviderRequestInspectionContext(
+        string correlationId,
+        string phase,
+        ArenaSnapshot snapshot,
+        OneTurnPlan plan,
+        ModelProviderConfig config,
+        int? beforeTurn,
+        IReadOnlyList<ModelChatMessage> finalMessages,
+        bool includesAdditionalUserMessage,
+        bool reasoningDisabled,
+        bool fastModeApplied)
+    {
+        var eligibleTranscript = snapshot.Engine.Messages
+            .Where(message => message.Kind is "message" or "internet" or "")
+            .Where(message => beforeTurn is null || message.Turn < beforeTurn.Value)
+            .OrderBy(message => message.Turn)
+            .ToArray();
+        var continuationAfterTurn = NativeContinuationTranscriptAfterTurn(config, snapshot, plan.AgentId, beforeTurn);
+        var continuationOmitted = continuationAfterTurn is null
+            ? 0
+            : eligibleTranscript.Count(message => message.Turn <= continuationAfterTurn.Value);
+        var transcriptCandidates = continuationAfterTurn is null
+            ? eligibleTranscript.Length
+            : eligibleTranscript.Count(message => message.Turn > continuationAfterTurn.Value);
+        var transcriptIncluded = Math.Min(
+            transcriptCandidates,
+            Math.Clamp(snapshot.Engine.TranscriptWindow, 1, 60));
+        var transcriptWindowOmitted = Math.Max(0, transcriptCandidates - transcriptIncluded);
+
+        var agent = snapshot.Engine.Agents.FirstOrDefault(item => item.Id.Equals(plan.AgentId, StringComparison.OrdinalIgnoreCase));
+        var scopedMemory = agent is null
+            ? []
+            : StructuredMemoryService.SelectForPrompt(snapshot, agent, DateTimeOffset.UtcNow, beforeTurn).ToArray();
+        var memoryCandidates = scopedMemory.Length;
+        var memoryIncluded = Math.Min(memoryCandidates, Math.Clamp(snapshot.Engine.NotesWindow, 0, 60));
+        var memoryWindowOmitted = Math.Max(0, memoryCandidates - memoryIncluded);
+        var includedScopedMemory = scopedMemory.TakeLast(memoryIncluded).ToArray();
+        var includedPrivateMemory = includedScopedMemory.Count(entry => entry.Visibility.Equals(StructuredMemoryVisibilities.Private, StringComparison.OrdinalIgnoreCase));
+        var includedSharedMemory = includedScopedMemory.Count(entry => entry.Visibility.Equals(StructuredMemoryVisibilities.Shared, StringComparison.OrdinalIgnoreCase));
+
+        var explanations = new List<ProviderContextExplanation>
+        {
+            new(
+                "request_phase",
+                "observed",
+                phase.Equals("fallback", StringComparison.Ordinal)
+                    ? "This is the fallback request issued only after the primary provider result failed."
+                    : "This is the primary provider request."),
+            new(
+                "final_message_roles",
+                "observed",
+                $"Prompt construction supplied {finalMessages.Count} final message(s) to the provider adapter; adapter-specific role transformations are described separately."),
+            new(
+                "transcript_context",
+                "observed",
+                $"{transcriptIncluded} of {eligibleTranscript.Length} eligible transcript message(s) were represented: {continuationOmitted} omitted because LM Studio native continuation already owns earlier state and {transcriptWindowOmitted} omitted by transcript_window={Math.Clamp(snapshot.Engine.TranscriptWindow, 1, 60)}."),
+            new(
+                "private_memory_context",
+                "observed",
+                $"{memoryIncluded} of {memoryCandidates} eligible scoped memory entr{(memoryCandidates == 1 ? "y was" : "ies were")} represented ({includedPrivateMemory} private, {includedSharedMemory} shared, {memoryIncluded - includedPrivateMemory - includedSharedMemory} system/other); {memoryWindowOmitted} omitted by notes_window={Math.Clamp(snapshot.Engine.NotesWindow, 0, 60)}. Aggregate inspection redacts all scoped-memory content by default."),
+            new(
+                "provider_context_pressure",
+                "unavailable",
+                config.ContextLength > 0
+                    ? $"AI Arena supplied context_length={config.ContextLength}, but no provider tokenizer measured whether the serialized prompt exceeded that limit."
+                    : "No configured context-length evidence or provider tokenizer measurement is available; AI Arena did not silently claim token-level truncation.")
+        };
+        if (includesAdditionalUserMessage)
+        {
+            explanations.Add(new ProviderContextExplanation(
+                "additional_user_context",
+                "observed",
+                "An additional user-role message was appended after the base prompt, such as bounded internet evidence or a repair instruction."));
+        }
+
+        if (reasoningDisabled)
+        {
+            explanations.Add(new ProviderContextExplanation(
+                "reasoning_override",
+                "observed",
+                "Reasoning was explicitly changed to off for this request before provider serialization."));
+        }
+
+        if (fastModeApplied)
+        {
+            explanations.Add(new ProviderContextExplanation(
+                "internet_fast_mode",
+                "observed",
+                $"Internet fast mode capped max output tokens at {config.MaxOutputTokens} before provider serialization."));
+        }
+
+        return new ProviderRequestInspectionContext(correlationId, phase, explanations);
     }
 
     private static ModelProviderConfig WithReasoningDisabled(ModelProviderConfig config)

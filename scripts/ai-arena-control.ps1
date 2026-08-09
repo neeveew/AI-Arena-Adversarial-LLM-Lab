@@ -970,7 +970,61 @@ function Get-AIArenaCapabilities {
     Invoke-AIArena -Command 'capabilities' -TimeoutMs $TimeoutMs -Token $Token
 }
 
+function Get-AIArenaExperiment {
+    <#
+        .SYNOPSIS
+        Returns privacy-safe Experiment Lab registration and selection state.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [int]$TimeoutMs = 10000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    Invoke-AIArena -Command 'experiment.state' -TimeoutMs $TimeoutMs -Token $Token
+}
+
+function Select-AIArenaExperimentFeature {
+    <#
+        .SYNOPSIS
+        Opens Experiment Lab and selects one registered feature through its normal refresh boundary.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [ValidateSet(
+            'matrix',
+            'fork',
+            'packs',
+            'rubrics',
+            'claims',
+            'context-prompt-inspector',
+            'agent-memory-debugger',
+            'fault-injection',
+            'routing-optimizer',
+            'in-app-qa-inspector')]
+        [string]$Key,
+
+        [Parameter()]
+        [int]$TimeoutMs = 30000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    Invoke-AIArena -Command 'experiment.feature.select' -Args @{
+        key = $Key
+    } -TimeoutMs $TimeoutMs -Token $Token
+}
+
 function Save-AIArenaScreenshot {
+    <#
+        .SYNOPSIS
+        Saves a screenshot; RenderDpiScale is off-screen raster density, not physical display DPI.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Position = 0)]
@@ -988,6 +1042,10 @@ function Save-AIArenaScreenshot {
         [string]$Path,
 
         [Parameter()]
+        [ValidateScript({ [double]$_ -in @(1.0, 1.5, 2.0) })]
+        [double]$RenderDpiScale,
+
+        [Parameter()]
         [int]$TimeoutMs = 30000,
 
         [Parameter()]
@@ -998,8 +1056,154 @@ function Save-AIArenaScreenshot {
     if ($PSBoundParameters.ContainsKey('Path')) {
         $screenshotArgs['path'] = $Path
     }
+    if ($PSBoundParameters.ContainsKey('RenderDpiScale')) {
+        $screenshotArgs['renderDpiScale'] = $RenderDpiScale
+    }
 
     Invoke-AIArena -Command 'app.screenshot' -Args $screenshotArgs -TimeoutMs $TimeoutMs -Token $Token
+}
+
+function Set-AIArenaQAWindowSize {
+    <#
+        .SYNOPSIS
+        Sets the current AI Arena window to a bounded QA size in DIP.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [ValidateRange(960, 1500)]
+        [int]$Width,
+
+        [Parameter(Mandatory = $true, Position = 1)]
+        [ValidateRange(640, 1000)]
+        [int]$Height,
+
+        [Parameter()]
+        [int]$TimeoutMs = 10000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    Invoke-AIArena -Command 'app.qa.window.size' -Args @{
+        width = $Width
+        height = $Height
+    } -TimeoutMs $TimeoutMs -Token $Token
+}
+
+function Save-AIArenaUIStructure {
+    <#
+        .SYNOPSIS
+        Saves privacy-safe in-process WPF visual-tree structure evidence under the isolated data root.
+
+        ExpectedState is an assertion. The app derives the canonical state from
+        visible roots and rejects a mismatch instead of echoing this value.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^[0-9a-fA-F]{64}$')]
+        [string]$TreeFingerprint,
+
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$')]
+        [string]$ExpectedState,
+
+        [Parameter(Position = 0)]
+        [ValidateScript({
+            if ([string]::IsNullOrWhiteSpace($_)) {
+                throw 'UI structure path cannot be blank.'
+            }
+
+            if ([System.IO.Path]::IsPathRooted($_)) {
+                throw 'UI structure path must be relative.'
+            }
+
+            if (($_ -split '[\\/]') -contains '..') {
+                throw 'UI structure path cannot leave the isolated evidence directory.'
+            }
+
+            $extension = [System.IO.Path]::GetExtension($_)
+            if (-not [string]::IsNullOrWhiteSpace($extension) `
+                -and -not $extension.Equals('.json', [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'UI structure path must end in .json.'
+            }
+
+            return $true
+        })]
+        [string]$Path,
+
+        [Parameter()]
+        [ValidateScript({ [double]$_ -in @(1.0, 1.5, 2.0) })]
+        [double]$RenderDpiScale,
+
+        [Parameter()]
+        [int]$TimeoutMs = 30000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    $structureArgs = @{
+        treeFingerprint = $TreeFingerprint.ToLowerInvariant()
+        expectedState = $ExpectedState
+    }
+    if ($PSBoundParameters.ContainsKey('Path')) {
+        $structureArgs['path'] = $Path
+    }
+    if ($PSBoundParameters.ContainsKey('RenderDpiScale')) {
+        $structureArgs['renderDpiScale'] = $RenderDpiScale
+    }
+
+    Invoke-AIArena -Command 'app.qa.structure.capture' -Args $structureArgs -TimeoutMs $TimeoutMs -Token $Token
+}
+
+function Move-AIArenaQAFocus {
+    <#
+        .SYNOPSIS
+        Advances focus programmatically through the current WPF surface for QA evidence.
+
+        This does not send OS keyboard input and does not query external UI Automation.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [ValidateSet('next', 'previous')]
+        [string]$Direction = 'next',
+
+        [Parameter()]
+        [int]$TimeoutMs = 10000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    Invoke-AIArena -Command 'app.qa.focus.advance' -Args @{
+        direction = $Direction
+    } -TimeoutMs $TimeoutMs -Token $Token
+}
+
+function Set-AIArenaQAMotion {
+    <#
+        .SYNOPSIS
+        Sets process-only motion behavior for an isolated QA app launch.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [ValidateSet('system', 'normal', 'reduced')]
+        [string]$Mode,
+
+        [Parameter()]
+        [int]$TimeoutMs = 10000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    Invoke-AIArena -Command 'app.qa.motion.set' -Args @{
+        mode = $Mode
+    } -TimeoutMs $TimeoutMs -Token $Token
 }
 
 function Set-AIArenaRightRail {

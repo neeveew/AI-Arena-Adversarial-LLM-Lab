@@ -7,6 +7,8 @@ verified bullets into the new versioned `.txt` change file.
 
 ## Verified
 
+- Add the local Experiment Lab with a resumable matrix runner, historical conversation forks, versioned scenario and benchmark packs, rubric and provider-backed/blind judging, a provenance-preserving claim ledger, exact redacted prompt inspection, structured memory debugging, deterministic fault injection, and evidence-gated model-routing proposals with explicit application approval.
+- Add the reusable Verification Lab, in-app QA Inspector, black-box experiment control commands, and `qa-seal.ps1` evidence pipeline, including deterministic loopback providers, restart/cancellation/resource probes, strict privacy-relative artifacts, decoded rendered-UI validation, Dark Blue/Light/High Contrast matrices, frozen evidence limitations, fresh isolated acceptance validation, and explicit post-render human acceptance before sealing.
 - Add a first-class `llamacpp_native` provider for a user-owned `llama-server`, using OpenAI-compatible `/v1` chat plus capability-detected health, properties, slots, router inventory, and router load/unload controls, with honest unavailable telemetry, no file-size-derived RAM/VRAM claims, and bounded pre-accept transient retry without accepted-stream replay.
 - Add right-rail Model Comparison & QA with model-neutral baseline matching, exact secret-free Match Setup replay JSON, aggregate-only evidence, bounded corruption-recovering local history, and explicit ready/partial/blocked gates that preserve unavailable evidence.
 - Add an opt-in Roslyn Impact Explorer for symbol definitions and references, callers/callees, inheritance, project/package/XAML/test relationships, and evidence-labelled predictions for affected files, features, and focused tests.

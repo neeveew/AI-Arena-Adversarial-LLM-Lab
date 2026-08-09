@@ -42,6 +42,9 @@ public sealed class ModelProviderConfig
     [JsonIgnore]
     public string PreviousResponseId { get; init; } = "";
 
+    [JsonIgnore]
+    public ProviderRequestInspectionContext? RequestInspectionContext { get; set; }
+
     [JsonPropertyName("last_error")]
     public string LastError { get; init; } = "";
 

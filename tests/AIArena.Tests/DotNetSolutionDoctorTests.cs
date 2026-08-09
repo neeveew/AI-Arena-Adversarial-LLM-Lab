@@ -1185,6 +1185,7 @@ internal static class DotNetSolutionDoctorTests
                 "src/AIArena.Wpf/AIArena.Wpf.csproj",
                 "tests/AIArena.CodeIntelligence.Tests/AIArena.CodeIntelligence.Tests.csproj",
                 "tests/AIArena.Tests/AIArena.Tests.csproj",
+                "tests/AIArena.VerificationLab/AIArena.VerificationLab.csproj",
                 "tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj"
             ],
             StringComparer.OrdinalIgnoreCase);
@@ -1195,14 +1196,14 @@ internal static class DotNetSolutionDoctorTests
                 candidate.RelativePath.Equals(solutionPath, StringComparison.OrdinalIgnoreCase));
             Require(
                 expectedProjects.SetEquals(solution.ProjectRelativePaths),
-                $"{solutionPath} should contain the six AI Arena product and intelligence projects");
+                $"{solutionPath} should contain the seven AI Arena product, intelligence, and verification projects");
             Require(!solution.IsPartial, $"{solutionPath} should resolve without partial membership");
         }
 
         var productProjects = snapshot.Projects
             .Where(project => expectedProjects.Contains(project.RelativePath))
             .ToArray();
-        Require(productProjects.Length == 6, "the real product solutions should resolve all six projects");
+        Require(productProjects.Length == 7, "the real product solutions should resolve all seven projects");
         foreach (var project in productProjects)
         {
             var projectDirectory = Path.GetDirectoryName(
@@ -1223,16 +1224,17 @@ internal static class DotNetSolutionDoctorTests
             .Where(project => project.IsExecutableTestHarness)
             .OrderBy(project => project.RelativePath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        Require(harnesses.Length == 3, "all product test projects should classify as executable harnesses");
+        Require(harnesses.Length == 4, "all product test projects should classify as executable harnesses");
         Require(
             harnesses.Select(project => project.RelativePath).SequenceEqual(
                 [
                     "tests/AIArena.CodeIntelligence.Tests/AIArena.CodeIntelligence.Tests.csproj",
                     "tests/AIArena.Tests/AIArena.Tests.csproj",
+                    "tests/AIArena.VerificationLab/AIArena.VerificationLab.csproj",
                     "tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj"
                 ],
                 StringComparer.OrdinalIgnoreCase),
-            "the executable harness classification should identify the three real test projects");
+            "the executable harness classification should identify the four real test projects");
         foreach (var harness in harnesses)
         {
             var run = snapshot.CommandPlans.Single(plan =>

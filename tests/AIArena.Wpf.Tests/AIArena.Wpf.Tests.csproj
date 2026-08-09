@@ -9,5 +9,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\AIArena.CodeIntelligence\AIArena.CodeIntelligence.csproj" />
     <ProjectReference Include="..\..\src\AIArena.Wpf\AIArena.Wpf.csproj" />
+    <ProjectReference Include="..\AIArena.VerificationLab\AIArena.VerificationLab.csproj" />
   </ItemGroup>
 </Project>

@@ -57,6 +57,15 @@
                             Margin="0,0,0,2"
                             Click="ArenaNavButton_Click"
                             AutomationProperties.Name="Open AI Lab" />
+                    <Button x:Name="ExperimentLabNavButtonElement"
+                            Content="Experiment Lab"
+                            Style="{DynamicResource NavButton}"
+                            Height="36"
+                            Padding="{DynamicResource Arena.Inset.NavigationItem}"
+                            Margin="{DynamicResource Arena.Gap.Stack.After.Nano}"
+                            Click="ExperimentLabNavButton_Click"
+                            AutomationProperties.Name="Open Experiment Lab"
+                            AutomationProperties.HelpText="Open replayable experiment matrices, historical forks, packs, rubrics, and claim ledgers." />
                     <Button x:Name="AgentNavButtonElement"
                             Content="Agent"
                             Style="{DynamicResource NavButton}"
@@ -360,6 +369,47 @@
                                        FontSize="12"
                                        FontWeight="SemiBold" />
                         </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="ExperimentLeftRailContextPanelElement"
+                        Grid.Row="1"
+                        Grid.RowSpan="2"
+                        Visibility="Collapsed"
+                        Background="Transparent"
+                        BorderBrush="{DynamicResource DisabledBorderBrush}"
+                        BorderThickness="0,1,0,0"
+                        Padding="{DynamicResource Arena.Inset.RailContext}"
+                        Margin="{DynamicResource Arena.Layout.RailContextBleed}"
+                        AutomationProperties.Name="Experiment Lab context">
+                    <StackPanel>
+                        <TextBlock Text="Experiment Lab"
+                                   Style="{DynamicResource LeftRailSectionTitle}"
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Default}" />
+                        <Border Background="{DynamicResource InputBrush}"
+                                BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="{DynamicResource Arena.Radius.Small}"
+                                Padding="{DynamicResource Arena.Inset.Compact}">
+                            <StackPanel>
+                                <TextBlock Text="Local evidence only"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontSize="{DynamicResource Arena.Type.CompactBodySize}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Matrices, branches, packs, rubric results, and claims stay versioned and private on this machine."
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
+                                           TextWrapping="Wrap"
+                                           Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Text="Execution"
+                                   Style="{DynamicResource LeftRailSectionTitle}"
+                                   Margin="{DynamicResource Arena.Layout.RailSectionMargin}" />
+                        <TextBlock Text="Matrix Run is enabled only after the strict pack, session, and in-memory provider-profile resolver succeeds. Cancelled and completed cells remain durable."
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
+                                   TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
             </Grid>

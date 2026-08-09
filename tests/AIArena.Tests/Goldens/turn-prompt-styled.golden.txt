@@ -43,7 +43,9 @@ Relationship pressure for this turn:
 - Gamma: support and extend their strongest useful point
 
 Your private memory notes:
-- Alpha keeps skipping the rollback plan.
+<ai-arena-scoped-memory-v1>
+- [origin=legacy_unknown; visibility=private] value="Alpha keeps skipping the rollback plan."
+</ai-arena-scoped-memory-v1>
 
 Transcript:
 Turn 1 Operator: Decide whether to ship.

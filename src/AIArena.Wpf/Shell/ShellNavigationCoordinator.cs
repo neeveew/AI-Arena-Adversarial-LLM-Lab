@@ -13,11 +13,13 @@ internal sealed class ShellNavigationCoordinator
     private readonly Func<WpfSettings> settings;
     private readonly ComboBox themePicker;
     private readonly Button arenaNavButton;
+    private readonly Button experimentLabNavButton;
     private readonly Button customMatchNavButton;
     private readonly Button agentNavButton;
     private readonly Button collaborateNavButton;
     private readonly Button appSettingsButton;
     private readonly FrameworkElement transcriptPanel;
+    private readonly FrameworkElement experimentLabPanel;
     private readonly FrameworkElement customMatchPanel;
     private readonly FrameworkElement agentWorldPanel;
     private readonly FrameworkElement agentWorkspacePanel;
@@ -26,12 +28,14 @@ internal sealed class ShellNavigationCoordinator
     private readonly FrameworkElement agentTopBarMetrics;
     private readonly FrameworkElement collaborateTopBarMetrics;
     private readonly FrameworkElement arenaRightRailPanel;
+    private readonly FrameworkElement experimentRightRailPanel;
     private readonly FrameworkElement agentRightRailPanel;
     private readonly FrameworkElement collaborateRightRailPanel;
     private readonly FrameworkElement arenaSessionOverviewPanel;
     private readonly FrameworkElement arenaLiveAgentsPanel;
     private readonly FrameworkElement agentLeftRailContextPanel;
     private readonly FrameworkElement collaborateLeftRailContextPanel;
+    private readonly FrameworkElement experimentLeftRailContextPanel;
     private readonly FrameworkElement appSettingsPanel;
     private readonly Action<ThemePalette> setTheme;
     private readonly Func<string, Brush> resourceBrush;
@@ -52,11 +56,13 @@ internal sealed class ShellNavigationCoordinator
         Func<WpfSettings> settings,
         ComboBox themePicker,
         Button arenaNavButton,
+        Button experimentLabNavButton,
         Button customMatchNavButton,
         Button agentNavButton,
         Button collaborateNavButton,
         Button appSettingsButton,
         FrameworkElement transcriptPanel,
+        FrameworkElement experimentLabPanel,
         FrameworkElement customMatchPanel,
         FrameworkElement agentWorldPanel,
         FrameworkElement agentWorkspacePanel,
@@ -65,12 +71,14 @@ internal sealed class ShellNavigationCoordinator
         FrameworkElement agentTopBarMetrics,
         FrameworkElement collaborateTopBarMetrics,
         FrameworkElement arenaRightRailPanel,
+        FrameworkElement experimentRightRailPanel,
         FrameworkElement agentRightRailPanel,
         FrameworkElement collaborateRightRailPanel,
         FrameworkElement arenaSessionOverviewPanel,
         FrameworkElement arenaLiveAgentsPanel,
         FrameworkElement agentLeftRailContextPanel,
         FrameworkElement collaborateLeftRailContextPanel,
+        FrameworkElement experimentLeftRailContextPanel,
         FrameworkElement appSettingsPanel,
         Action<ThemePalette> setTheme,
         Func<string, Brush> resourceBrush,
@@ -83,11 +91,13 @@ internal sealed class ShellNavigationCoordinator
         this.settings = settings;
         this.themePicker = themePicker;
         this.arenaNavButton = arenaNavButton;
+        this.experimentLabNavButton = experimentLabNavButton;
         this.customMatchNavButton = customMatchNavButton;
         this.agentNavButton = agentNavButton;
         this.collaborateNavButton = collaborateNavButton;
         this.appSettingsButton = appSettingsButton;
         this.transcriptPanel = transcriptPanel;
+        this.experimentLabPanel = experimentLabPanel;
         this.customMatchPanel = customMatchPanel;
         this.agentWorldPanel = agentWorldPanel;
         this.agentWorkspacePanel = agentWorkspacePanel;
@@ -96,12 +106,14 @@ internal sealed class ShellNavigationCoordinator
         this.agentTopBarMetrics = agentTopBarMetrics;
         this.collaborateTopBarMetrics = collaborateTopBarMetrics;
         this.arenaRightRailPanel = arenaRightRailPanel;
+        this.experimentRightRailPanel = experimentRightRailPanel;
         this.agentRightRailPanel = agentRightRailPanel;
         this.collaborateRightRailPanel = collaborateRightRailPanel;
         this.arenaSessionOverviewPanel = arenaSessionOverviewPanel;
         this.arenaLiveAgentsPanel = arenaLiveAgentsPanel;
         this.agentLeftRailContextPanel = agentLeftRailContextPanel;
         this.collaborateLeftRailContextPanel = collaborateLeftRailContextPanel;
+        this.experimentLeftRailContextPanel = experimentLeftRailContextPanel;
         this.appSettingsPanel = appSettingsPanel;
         this.setTheme = setTheme;
         this.resourceBrush = resourceBrush;
@@ -193,6 +205,7 @@ internal sealed class ShellNavigationCoordinator
     public void ShowTranscriptPanel()
     {
         transcriptPanel.Visibility = Visibility.Visible;
+        experimentLabPanel.Visibility = Visibility.Collapsed;
         customMatchPanel.Visibility = Visibility.Collapsed;
         agentWorldPanel.Visibility = Visibility.Collapsed;
         agentWorkspacePanel.Visibility = Visibility.Collapsed;
@@ -204,6 +217,7 @@ internal sealed class ShellNavigationCoordinator
     public void ShowCustomMatchPanel()
     {
         transcriptPanel.Visibility = Visibility.Visible;
+        experimentLabPanel.Visibility = Visibility.Collapsed;
         ArenaMotion.RevealOverlay(customMatchPanel);
         agentWorldPanel.Visibility = Visibility.Collapsed;
         agentWorkspacePanel.Visibility = Visibility.Collapsed;
@@ -215,6 +229,7 @@ internal sealed class ShellNavigationCoordinator
     public void ShowWorldPanel()
     {
         transcriptPanel.Visibility = Visibility.Collapsed;
+        experimentLabPanel.Visibility = Visibility.Collapsed;
         customMatchPanel.Visibility = Visibility.Collapsed;
         agentWorldPanel.Visibility = Visibility.Visible;
         agentWorkspacePanel.Visibility = Visibility.Collapsed;
@@ -226,6 +241,7 @@ internal sealed class ShellNavigationCoordinator
     public void ShowAgentPanel()
     {
         transcriptPanel.Visibility = Visibility.Collapsed;
+        experimentLabPanel.Visibility = Visibility.Collapsed;
         customMatchPanel.Visibility = Visibility.Collapsed;
         agentWorldPanel.Visibility = Visibility.Collapsed;
         agentWorkspacePanel.Visibility = Visibility.Visible;
@@ -237,11 +253,24 @@ internal sealed class ShellNavigationCoordinator
     public void ShowCollaboratePanel()
     {
         transcriptPanel.Visibility = Visibility.Collapsed;
+        experimentLabPanel.Visibility = Visibility.Collapsed;
         customMatchPanel.Visibility = Visibility.Collapsed;
         agentWorldPanel.Visibility = Visibility.Collapsed;
         agentWorkspacePanel.Visibility = Visibility.Collapsed;
         collaboratePanel.Visibility = Visibility.Visible;
         SetSectionChromeVisible(collaborate: true, agent: false);
+        UpdateNavigationTheme();
+    }
+
+    public void ShowExperimentLabPanel()
+    {
+        transcriptPanel.Visibility = Visibility.Collapsed;
+        customMatchPanel.Visibility = Visibility.Collapsed;
+        experimentLabPanel.Visibility = Visibility.Visible;
+        agentWorldPanel.Visibility = Visibility.Collapsed;
+        agentWorkspacePanel.Visibility = Visibility.Collapsed;
+        collaboratePanel.Visibility = Visibility.Collapsed;
+        SetSectionChromeVisible(collaborate: false, agent: false, experiment: true);
         UpdateNavigationTheme();
     }
 
@@ -272,6 +301,7 @@ internal sealed class ShellNavigationCoordinator
                 || customMatchPanel.Visibility == Visibility.Visible
                 || agentWorldPanel.Visibility == Visibility.Visible,
             resourceBrush);
+        ApplyNavigationButtonState(experimentLabNavButton, experimentLabPanel.Visibility == Visibility.Visible, resourceBrush);
         ApplyNavigationButtonState(customMatchNavButton, false, resourceBrush);
         ApplyNavigationButtonState(agentNavButton, agentWorkspacePanel.Visibility == Visibility.Visible, resourceBrush);
         ApplyNavigationButtonState(collaborateNavButton, collaboratePanel.Visibility == Visibility.Visible, resourceBrush);
@@ -312,19 +342,21 @@ internal sealed class ShellNavigationCoordinator
         AutomationProperties.SetItemStatus(button, visible ? "expanded" : "collapsed");
     }
 
-    private void SetSectionChromeVisible(bool collaborate, bool agent)
+    private void SetSectionChromeVisible(bool collaborate, bool agent, bool experiment = false)
     {
         var arenaVisible = !collaborate && !agent;
         arenaTopBarMetrics.Visibility = arenaVisible ? Visibility.Visible : Visibility.Collapsed;
         agentTopBarMetrics.Visibility = agent ? Visibility.Visible : Visibility.Collapsed;
         collaborateTopBarMetrics.Visibility = collaborate ? Visibility.Visible : Visibility.Collapsed;
-        arenaRightRailPanel.Visibility = arenaVisible ? Visibility.Visible : Visibility.Collapsed;
+        arenaRightRailPanel.Visibility = arenaVisible && !experiment ? Visibility.Visible : Visibility.Collapsed;
+        experimentRightRailPanel.Visibility = experiment ? Visibility.Visible : Visibility.Collapsed;
         agentRightRailPanel.Visibility = agent ? Visibility.Visible : Visibility.Collapsed;
         collaborateRightRailPanel.Visibility = collaborate ? Visibility.Visible : Visibility.Collapsed;
-        arenaSessionOverviewPanel.Visibility = arenaVisible ? Visibility.Visible : Visibility.Collapsed;
-        arenaLiveAgentsPanel.Visibility = arenaVisible ? Visibility.Visible : Visibility.Collapsed;
+        arenaSessionOverviewPanel.Visibility = arenaVisible && !experiment ? Visibility.Visible : Visibility.Collapsed;
+        arenaLiveAgentsPanel.Visibility = arenaVisible && !experiment ? Visibility.Visible : Visibility.Collapsed;
         agentLeftRailContextPanel.Visibility = agent ? Visibility.Visible : Visibility.Collapsed;
         collaborateLeftRailContextPanel.Visibility = collaborate ? Visibility.Visible : Visibility.Collapsed;
+        experimentLeftRailContextPanel.Visibility = experiment ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void SetBrush(string key, Color color)

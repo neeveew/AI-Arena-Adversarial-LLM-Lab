@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Net;
-using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using AIArena.Core.Models;
@@ -31,11 +31,14 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
     private const int MaxProviderErrorLength = 360;
     private const string EmptyCompletionError = "Provider returned a successful response without assistant content.";
     private const int LlamaCppMaximumRetries = 2;
+    private static readonly JsonSerializerOptions ProviderPayloadJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _httpClient;
+    private readonly IProviderRequestObserver? _requestObserver;
 
-    public ModelProviderClient(HttpClient? httpClient = null)
+    public ModelProviderClient(HttpClient? httpClient = null, IProviderRequestObserver? requestObserver = null)
     {
         _httpClient = httpClient ?? new HttpClient();
+        _requestObserver = requestObserver;
         // Per-request provider timeouts are enforced by TimeoutToken. HttpClient's
         // 100-second default would otherwise win for configured timeouts above 100s.
         _httpClient.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
@@ -209,7 +212,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
 
         if (apiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
         {
-            return await CompleteOllamaNativeChatAsync(config, messages, cancellationToken);
+            return await CompleteOllamaNativeChatAsync(config, messages, requestedStreaming: false, cancellationToken);
         }
 
         return await CompleteOpenAiCompatibleChatAsync(
@@ -240,17 +243,25 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             max_tokens = config.MaxOutputTokens,
             stream = false
         };
+        var payloadBytes = SerializePayload(payload);
 
         var watch = Stopwatch.StartNew();
+        var activeObservationId = "";
         try
         {
             var endpoint = new Uri(new Uri(baseUrl + "/"), "chat/completions");
             using var timeout = TimeoutToken(config, cancellationToken);
             for (var attempt = 0; ; attempt++)
             {
+                activeObservationId = ObserveRequest(
+                    config,
+                    payloadBytes,
+                    "openai_compatible_chat",
+                    requestedStreaming: false,
+                    attempt + 1);
                 using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
                 {
-                    Content = JsonContent.Create(payload)
+                    Content = CreateJsonContent(payloadBytes)
                 };
                 ApplyAuthorization(request, config);
                 using var response = await _httpClient.SendAsync(request, timeout.Token);
@@ -261,12 +272,17 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         && attempt < LlamaCppMaximumRetries
                         && IsTransientLlamaCppFailure(response.StatusCode, body))
                     {
+                        ObserveUnavailableCompletion(
+                            activeObservationId,
+                            "retryable_provider_failure",
+                            "The provider rejected this physical attempt before accepting it; no token evidence was returned.");
+                        activeObservationId = "";
                         await DelayLlamaCppRetryAsync(attempt, timeout.Token);
                         continue;
                     }
 
                     watch.Stop();
-                    return new ModelCompletionResult(
+                    var failed = new ModelCompletionResult(
                         false,
                         baseUrl,
                         model,
@@ -278,6 +294,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         0,
                         FriendlyProviderHttpError(body, response.ReasonPhrase, baseUrl, config.ApiToken),
                         DateTimeOffset.Now);
+                    return CompleteObservation(activeObservationId, failed, "provider_error");
                 }
 
                 watch.Stop();
@@ -290,7 +307,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 var text = ExtractAssistantContent(completionRoot).Trim();
                 var reasoning = ExtractReasoning(completionRoot).Trim();
                 var responseModel = FirstString(completionRoot, "model");
-                return new ModelCompletionResult(
+                var completed = new ModelCompletionResult(
                     !string.IsNullOrWhiteSpace(text),
                     baseUrl,
                     retryLlamaCppTransientFailures && !string.IsNullOrWhiteSpace(responseModel) ? responseModel : model,
@@ -306,17 +323,26 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     telemetry.TimeToFirstTokenMs,
                     telemetry.ResponseId,
                     telemetry.ModelLoadTimeMs);
+                return CompleteObservation(
+                    activeObservationId,
+                    completed,
+                    completed.Ok ? "succeeded" : "empty_response");
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             watch.Stop();
+            ObserveUnavailableCompletion(
+                activeObservationId,
+                "caller_cancelled",
+                "The caller cancelled before provider token evidence was available.");
             throw;
         }
         catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or JsonException)
         {
             watch.Stop();
-            return new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
+            var failed = new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
+            return CompleteObservation(activeObservationId, failed, ex is OperationCanceledException ? "provider_timeout" : "transport_error");
         }
     }
 
@@ -333,14 +359,22 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         }
 
         var payload = NativeChatPayload(config, messages);
+        var payloadBytes = SerializePayload(payload);
 
         var watch = Stopwatch.StartNew();
+        var activeObservationId = "";
         try
         {
             var endpoint = new Uri(new Uri(NormalizeNativeApiBase(config.BaseUrl) + "/"), "chat");
+            activeObservationId = ObserveRequest(
+                config,
+                payloadBytes,
+                "lmstudio_native_chat",
+                requestedStreaming: false,
+                attempt: 1);
             using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
             {
-                Content = JsonContent.Create(payload)
+                Content = CreateJsonContent(payloadBytes)
             };
             ApplyAuthorization(request, config);
             using var timeout = TimeoutToken(config, cancellationToken);
@@ -349,7 +383,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             if (!response.IsSuccessStatusCode)
             {
                 watch.Stop();
-                return new ModelCompletionResult(
+                var failed = new ModelCompletionResult(
                     false,
                     baseUrl,
                     model,
@@ -361,20 +395,27 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     0,
                     FriendlyProviderHttpError(body, response.ReasonPhrase, baseUrl, config.ApiToken),
                     DateTimeOffset.Now);
+                return CompleteObservation(activeObservationId, failed, "provider_error");
             }
 
             watch.Stop();
-            return NativeCompletionFromBody(body, baseUrl, model, (int)watch.ElapsedMilliseconds);
+            var completed = NativeCompletionFromBody(body, baseUrl, model, (int)watch.ElapsedMilliseconds);
+            return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             watch.Stop();
+            ObserveUnavailableCompletion(
+                activeObservationId,
+                "caller_cancelled",
+                "The caller cancelled before provider token evidence was available.");
             throw;
         }
         catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or JsonException)
         {
             watch.Stop();
-            return new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
+            var failed = new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
+            return CompleteObservation(activeObservationId, failed, ex is OperationCanceledException ? "provider_timeout" : "transport_error");
         }
     }
 
@@ -417,7 +458,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
 
         if (apiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
         {
-            return await CompleteOllamaNativeChatAsync(config, messages, cancellationToken);
+            return await CompleteOllamaNativeChatAsync(config, messages, requestedStreaming: true, cancellationToken);
         }
 
         return await CompleteOpenAiChatStreamingAsync(
@@ -443,14 +484,22 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
 
         var payload = NativeChatPayload(config, messages);
         payload["stream"] = true;
+        var payloadBytes = SerializePayload(payload);
 
         var watch = Stopwatch.StartNew();
+        var activeObservationId = "";
         try
         {
             var endpoint = new Uri(new Uri(NormalizeNativeApiBase(config.BaseUrl) + "/"), "chat");
+            activeObservationId = ObserveRequest(
+                config,
+                payloadBytes,
+                "lmstudio_native_chat",
+                requestedStreaming: true,
+                attempt: 1);
             using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
             {
-                Content = JsonContent.Create(payload)
+                Content = CreateJsonContent(payloadBytes)
             };
             ApplyAuthorization(request, config);
             using var timeout = TimeoutToken(config, cancellationToken);
@@ -459,7 +508,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             {
                 var errorBody = await response.Content.ReadAsStringAsync(timeout.Token);
                 watch.Stop();
-                return new ModelCompletionResult(
+                var failed = new ModelCompletionResult(
                     false,
                     baseUrl,
                     model,
@@ -471,6 +520,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     0,
                     FriendlyProviderHttpError(errorBody, response.ReasonPhrase, baseUrl, config.ApiToken),
                     DateTimeOffset.Now);
+                return CompleteObservation(activeObservationId, failed, "provider_error");
             }
 
             var content = new StringBuilder();
@@ -528,12 +578,13 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             watch.Stop();
             if (!string.IsNullOrWhiteSpace(resultJson))
             {
-                return NativeCompletionFromBody(resultJson, baseUrl, model, (int)watch.ElapsedMilliseconds);
+                var completed = NativeCompletionFromBody(resultJson, baseUrl, model, (int)watch.ElapsedMilliseconds);
+                return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
             }
 
             if (!string.IsNullOrWhiteSpace(streamError))
             {
-                return new ModelCompletionResult(
+                var failed = new ModelCompletionResult(
                     false,
                     baseUrl,
                     model,
@@ -545,10 +596,11 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     0,
                     SanitizeProviderError(streamError, config.ApiToken),
                     DateTimeOffset.Now);
+                return CompleteObservation(activeObservationId, failed, "provider_stream_error");
             }
 
             var streamedContent = content.ToString().Trim();
-            return new ModelCompletionResult(
+            var streamed = new ModelCompletionResult(
                 !string.IsNullOrWhiteSpace(streamedContent),
                 baseUrl,
                 model,
@@ -560,16 +612,22 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 0,
                 string.IsNullOrWhiteSpace(streamedContent) ? EmptyCompletionError : "",
                 DateTimeOffset.Now);
+            return CompleteObservation(activeObservationId, streamed, streamed.Ok ? "succeeded" : "empty_response");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             watch.Stop();
+            ObserveUnavailableCompletion(
+                activeObservationId,
+                "caller_cancelled",
+                "The caller cancelled before provider token evidence was available.");
             throw;
         }
         catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or IOException or JsonException)
         {
             watch.Stop();
-            return new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
+            var failed = new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
+            return CompleteObservation(activeObservationId, failed, ex is OperationCanceledException ? "provider_timeout" : "transport_error");
         }
     }
 
@@ -596,17 +654,25 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             stream = true,
             stream_options = new { include_usage = true }
         };
+        var payloadBytes = SerializePayload(payload);
 
         var watch = Stopwatch.StartNew();
+        var activeObservationId = "";
         try
         {
             var endpoint = new Uri(new Uri(baseUrl + "/"), "chat/completions");
             using var timeout = TimeoutToken(config, cancellationToken);
             for (var attempt = 0; ; attempt++)
             {
+                activeObservationId = ObserveRequest(
+                    config,
+                    payloadBytes,
+                    "openai_compatible_chat",
+                    requestedStreaming: true,
+                    attempt + 1);
                 using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
                 {
-                    Content = JsonContent.Create(payload)
+                    Content = CreateJsonContent(payloadBytes)
                 };
                 ApplyAuthorization(request, config);
                 using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
@@ -617,12 +683,17 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         && attempt < LlamaCppMaximumRetries
                         && IsTransientLlamaCppFailure(response.StatusCode, errorBody))
                     {
+                        ObserveUnavailableCompletion(
+                            activeObservationId,
+                            "retryable_provider_failure",
+                            "The provider rejected this physical attempt before accepting it; no token evidence was returned.");
+                        activeObservationId = "";
                         await DelayLlamaCppRetryAsync(attempt, timeout.Token);
                         continue;
                     }
 
                     watch.Stop();
-                    return new ModelCompletionResult(
+                    var failed = new ModelCompletionResult(
                         false,
                         baseUrl,
                         model,
@@ -634,6 +705,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         0,
                         FriendlyProviderHttpError(errorBody, response.ReasonPhrase, baseUrl, config.ApiToken),
                         DateTimeOffset.Now);
+                    return CompleteObservation(activeObservationId, failed, "provider_error");
                 }
 
                 // From this point on the provider has accepted the request. Never
@@ -728,7 +800,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
 
                 watch.Stop();
                 var streamedContent = content.ToString().Trim();
-                return new ModelCompletionResult(
+                var completed = new ModelCompletionResult(
                     !string.IsNullOrWhiteSpace(streamedContent),
                     baseUrl,
                     string.IsNullOrWhiteSpace(responseModel) ? model : responseModel,
@@ -744,23 +816,30 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     firstTokenMs,
                     telemetry.ResponseId,
                     telemetry.ModelLoadTimeMs);
+                return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             watch.Stop();
+            ObserveUnavailableCompletion(
+                activeObservationId,
+                "caller_cancelled",
+                "The caller cancelled before provider token evidence was available.");
             throw;
         }
         catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or IOException or JsonException)
         {
             watch.Stop();
-            return new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
+            var failed = new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
+            return CompleteObservation(activeObservationId, failed, ex is OperationCanceledException ? "provider_timeout" : "transport_error");
         }
     }
 
     private async Task<ModelCompletionResult> CompleteOllamaNativeChatAsync(
         ModelProviderConfig config,
         IReadOnlyList<ModelChatMessage> messages,
+        bool requestedStreaming,
         CancellationToken cancellationToken)
     {
         var baseUrl = NormalizeBaseUrl(config.BaseUrl);
@@ -771,14 +850,22 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         }
 
         var payload = OllamaChatPayload(config, messages);
+        var payloadBytes = SerializePayload(payload);
 
         var watch = Stopwatch.StartNew();
+        var activeObservationId = "";
         try
         {
             var endpoint = new Uri(new Uri(NormalizeOllamaApiBase(config.BaseUrl) + "/"), "chat");
+            activeObservationId = ObserveRequest(
+                config,
+                payloadBytes,
+                "ollama_native_chat",
+                requestedStreaming,
+                attempt: 1);
             using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
             {
-                Content = JsonContent.Create(payload)
+                Content = CreateJsonContent(payloadBytes)
             };
             ApplyAuthorization(request, config);
             using var timeout = TimeoutToken(config, cancellationToken);
@@ -787,7 +874,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             if (!response.IsSuccessStatusCode)
             {
                 watch.Stop();
-                return new ModelCompletionResult(
+                var failed = new ModelCompletionResult(
                     false,
                     baseUrl,
                     model,
@@ -799,6 +886,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     0,
                     FriendlyProviderHttpError(body, response.ReasonPhrase, baseUrl, config.ApiToken),
                     DateTimeOffset.Now);
+                return CompleteObservation(activeObservationId, failed, "provider_error");
             }
 
             watch.Stop();
@@ -807,7 +895,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             var usage = ExtractOllamaUsage(completionRoot);
             var telemetry = ExtractOllamaTelemetry(completionRoot);
             var text = ExtractOllamaChatContent(completionRoot).Trim();
-            return new ModelCompletionResult(
+            var completed = new ModelCompletionResult(
                 !string.IsNullOrWhiteSpace(text),
                 baseUrl,
                 ExtractOllamaModel(completionRoot, model),
@@ -823,16 +911,154 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 telemetry.TimeToFirstTokenMs,
                 telemetry.ResponseId,
                 telemetry.ModelLoadTimeMs);
+            return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             watch.Stop();
+            ObserveUnavailableCompletion(
+                activeObservationId,
+                "caller_cancelled",
+                "The caller cancelled before provider token evidence was available.");
             throw;
         }
         catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or JsonException)
         {
             watch.Stop();
-            return new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
+            var failed = new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
+            return CompleteObservation(activeObservationId, failed, ex is OperationCanceledException ? "provider_timeout" : "transport_error");
+        }
+    }
+
+    private static byte[] SerializePayload<T>(T payload) =>
+        JsonSerializer.SerializeToUtf8Bytes(payload, ProviderPayloadJsonOptions);
+
+    private static HttpContent CreateJsonContent(byte[] exactPayload)
+    {
+        var content = new ByteArrayContent(exactPayload);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json")
+        {
+            CharSet = "utf-8"
+        };
+        return content;
+    }
+
+    private string ObserveRequest(
+        ModelProviderConfig config,
+        byte[] exactPayload,
+        string transport,
+        bool requestedStreaming,
+        int attempt)
+    {
+        if (_requestObserver is null)
+        {
+            return "";
+        }
+
+        var requestId = Guid.NewGuid().ToString("N");
+        try
+        {
+            _requestObserver.ObserveRequest(ProviderPromptInspection.CreateTrace(
+                requestId,
+                config,
+                exactPayload,
+                transport,
+                requestedStreaming,
+                attempt));
+        }
+        catch (Exception)
+        {
+            // Inspection is diagnostic-only. Observer, redaction, or storage
+            // failures must never change provider-call behavior.
+        }
+
+        return requestId;
+    }
+
+    private ModelCompletionResult CompleteObservation(
+        string requestId,
+        ModelCompletionResult result,
+        string outcome)
+    {
+        if (string.IsNullOrWhiteSpace(requestId) || _requestObserver is null)
+        {
+            return result;
+        }
+
+        var prompt = ProviderReportedCount(
+            result.PromptTokens,
+            "prompt",
+            "The provider response did not expose a positive prompt-token count; zero and absent cannot be distinguished by this adapter.");
+        var completion = ProviderReportedCount(
+            result.CompletionTokens,
+            "completion",
+            "The provider response did not expose a positive completion-token count; zero and absent cannot be distinguished by this adapter.");
+        ProviderTokenEvidence total;
+        if (result.TotalTokens <= 0)
+        {
+            total = ProviderTokenEvidence.Unavailable(
+                "The provider response did not expose a positive total-token count.");
+        }
+        else if (prompt.Kind == ProviderTokenEvidenceKind.ProviderReported
+            && completion.Kind == ProviderTokenEvidenceKind.ProviderReported
+            && result.TotalTokens == result.PromptTokens + result.CompletionTokens)
+        {
+            // Existing adapters normalize a missing total by summing provider
+            // components. Conservatively label this derived value rather than
+            // claiming the provider reported the total itself.
+            total = new ProviderTokenEvidence(
+                ProviderTokenEvidenceKind.Estimated,
+                result.TotalTokens,
+                "Derived from provider-reported prompt and completion counts; the adapter cannot prove that the provider reported total_tokens separately.");
+        }
+        else
+        {
+            total = new ProviderTokenEvidence(
+                ProviderTokenEvidenceKind.ProviderReported,
+                result.TotalTokens,
+                "Reported by the provider response and preserved by the adapter.");
+        }
+
+        ObserveCompletion(new ProviderRequestCompletionObservation(requestId, outcome, prompt, completion, total));
+        return result;
+    }
+
+    private static ProviderTokenEvidence ProviderReportedCount(
+        int value,
+        string label,
+        string unavailableExplanation) =>
+        value > 0
+            ? new ProviderTokenEvidence(
+                ProviderTokenEvidenceKind.ProviderReported,
+                value,
+                $"The {label}-token count was reported by the provider response.")
+            : ProviderTokenEvidence.Unavailable(unavailableExplanation);
+
+    private void ObserveUnavailableCompletion(string requestId, string outcome, string explanation)
+    {
+        if (string.IsNullOrWhiteSpace(requestId) || _requestObserver is null)
+        {
+            return;
+        }
+
+        var unavailable = ProviderTokenEvidence.Unavailable(explanation);
+        ObserveCompletion(new ProviderRequestCompletionObservation(
+            requestId,
+            outcome,
+            unavailable,
+            unavailable,
+            unavailable));
+    }
+
+    private void ObserveCompletion(ProviderRequestCompletionObservation completion)
+    {
+        try
+        {
+            _requestObserver?.ObserveCompletion(completion);
+        }
+        catch (Exception)
+        {
+            // Inspection is diagnostic-only and cannot fail a provider call.
         }
     }
 

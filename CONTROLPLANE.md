@@ -107,6 +107,21 @@ Set-AIArenaProviderConfig -ClearApiToken
 | `shell.input.key` | `Send-AIArenaKey K -Modifiers ctrl` | `key`: `F2`, `k`, `1`, `Escape`; optional `modifiers`: `ctrl`, `shift`, `alt`, combined with `+` |
 | `shell.input.type` | `Set-AIArenaText 'internet' SettingsSearchText` | `text`; optional `target`: a named text field, defaulting to the focused one |
 
+## Experiment Lab inspection
+
+| Command | PowerShell example | Notes |
+| --- | --- | --- |
+| `experiment.state` | `Get-AIArenaExperiment` | Its command data contains only registered feature keys/titles, the selected key, and bounded registered/selectable/busy/status summaries. `selectable` means the control-plane may change selection now; it does not claim provider, evidence, or executor readiness. Prompt, memory, provider, path, and artifact content is excluded from this command data; the standard response-envelope state remains unchanged. |
+| `experiment.feature.select` | `Select-AIArenaExperimentFeature matrix` | Requires one exact registered key, opens Experiment Lab, and waits for the same contained refresh boundary used by the visual selector. It does not run an experiment, mutate an artifact, or call a provider. |
+
+The typed selector accepts all ten production feature keys: `matrix`, `fork`, `packs`, `rubrics`, `claims`, `context-prompt-inspector`, `agent-memory-debugger`, `fault-injection`, `routing-optimizer`, and `in-app-qa-inspector`. After selecting a feature, the existing `app.screenshot` and `app.qa.structure.capture` commands can capture rendered and privacy-safe in-process WPF visual-tree evidence from that real surface. `renderDpiScale` controls off-screen raster density, not physical display DPI. `expectedState` is checked against an app-observed canonical state derived from visible roots; it is never treated as observed merely because the caller supplied it. Focus movement is programmatic WPF traversal, not OS keyboard input or an external UI Automation query.
+
+```powershell
+$selection = Select-AIArenaExperimentFeature in-app-qa-inspector
+$selection.data.selectedKey
+Save-AIArenaScreenshot "experiment/qa-inspector.png"
+```
+
 ## Match Setup and settings
 
 | Command | PowerShell example | Notes |

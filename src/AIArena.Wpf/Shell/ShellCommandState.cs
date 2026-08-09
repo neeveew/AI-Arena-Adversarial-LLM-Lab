@@ -3,6 +3,7 @@ namespace AIArena.Wpf;
 internal enum ShellSurface
 {
     Lab,
+    ExperimentLab,
     World,
     MatchSetup,
     Agent,
@@ -24,6 +25,7 @@ internal sealed record ShellCommandState(
         return surface switch
         {
             ShellSurface.Lab => Lab,
+            ShellSurface.ExperimentLab => Hidden,
             ShellSurface.World => MatchSetupOnly,
             ShellSurface.MatchSetup => Lab,
             ShellSurface.Agent => Hidden,

@@ -28,7 +28,10 @@ Active participants:
 
 Relationship pressure: neutral.
 
-Your private memory notes: -
+Your private memory notes:
+<ai-arena-scoped-memory-v1>
+-
+</ai-arena-scoped-memory-v1>
 
 Transcript:
 Turn 1 Operator: Decide whether to ship.

@@ -30,7 +30,7 @@ internal static partial class Program
             new ArenaRuntimeQaEvidence(InterruptionRecovered: true, ProviderReconnectSucceeded: true));
         var export = service.ExportJson(first, service.Compare(first, first), qa);
 
-        Require(first.Schema == ArenaEvaluationSchemas.Evaluation, "evaluation record should expose a versioned schema");
+        Require(first.Schema == AIArena.Wpf.ArenaEvaluationSchemas.Evaluation, "evaluation record should expose a versioned schema");
         Require(first.RunFingerprint == second.RunFingerprint,
             "equivalent snapshots should retain one deterministic evidence fingerprint independent of capture time");
         Require(first.RunId != second.RunId && first.RunId == exactDuplicate.RunId,

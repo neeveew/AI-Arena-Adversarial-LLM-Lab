@@ -7,6 +7,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/AIArena.CodeIntelligence.Tests/AIArena.CodeIntelligence.Tests.csproj" />
     <Project Path="tests/AIArena.Tests/AIArena.Tests.csproj" />
+    <Project Path="tests/AIArena.VerificationLab/AIArena.VerificationLab.csproj" />
     <Project Path="tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj" />
   </Folder>
 </Solution>

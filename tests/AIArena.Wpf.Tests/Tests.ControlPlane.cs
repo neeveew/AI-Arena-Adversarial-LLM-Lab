@@ -464,8 +464,14 @@ internal static partial class Program
         Require(AIArenaControlCommands.IsKnown("export.transcript"), "control-plane registry should include transcript export");
         Require(AIArenaControlCommands.IsKnown("export.session"), "control-plane registry should include session export");
         Require(AIArenaControlCommands.IsKnown("export.receipts"), "control-plane registry should include receipts export");
+        Require(AIArenaControlCommands.IsKnown("app.qa.window.size"), "control-plane registry should include bounded QA client sizing");
+        Require(AIArenaControlCommands.IsKnown("app.qa.structure.capture"), "control-plane registry should include privacy-safe UI structure evidence");
+        Require(AIArenaControlCommands.IsKnown("app.qa.focus.advance"), "control-plane registry should include privacy-safe keyboard traversal evidence");
+        Require(AIArenaControlCommands.IsKnown("app.qa.motion.set"), "control-plane registry should include isolated process motion control");
+        Require(AIArenaControlCommands.IsKnown("experiment.state"), "control-plane registry should include privacy-safe Experiment Lab state");
+        Require(AIArenaControlCommands.IsKnown("experiment.feature.select"), "control-plane registry should include registered Experiment Lab feature selection");
         Require(!AIArenaControlCommands.IsKnown("not.real"), "control-plane registry should reject unknown commands");
-        Require(AIArenaControlCapabilityCatalog.All.Count == 80, "capability catalog should expose the complete 80-command surface");
+        Require(AIArenaControlCapabilityCatalog.All.Count == 86, "capability catalog should expose the complete 86-command surface");
         Require(AIArenaControlCapabilityCatalog.All.Select(item => item.Command).Distinct(StringComparer.OrdinalIgnoreCase).Count() == AIArenaControlCapabilityCatalog.All.Count, "capability catalog commands should be unique");
         var reset = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == "arena.reset");
         Require(reset.Destructive && reset.RequiredArguments.Contains("confirm", StringComparer.OrdinalIgnoreCase), "capability catalog should mark arena reset as destructive and confirmation-gated");
@@ -488,10 +494,40 @@ internal static partial class Program
             && providerConfig.OptionalArguments.Contains("narratorModel", StringComparer.OrdinalIgnoreCase), "provider configuration capability should describe secret and role-routing inputs without marking the patch destructive");
         var providerTest = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.ProviderTest);
         Require(providerTest.OptionalArguments.Contains("allRoles", StringComparer.OrdinalIgnoreCase), "provider diagnostic capability should advertise its all-role probe");
+        var qaSize = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.AppQaWindowSize);
+        Require(qaSize.Category == "qa"
+            && !qaSize.Destructive
+            && qaSize.RequiredArguments.SequenceEqual(["width", "height"]), "QA client sizing should be bounded, typed, and non-destructive");
+        var qaStructure = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.AppQaStructureCapture);
+        Require(qaStructure.Category == "qa"
+            && !qaStructure.Destructive
+            && qaStructure.RequiredArguments.SequenceEqual(["treeFingerprint", "expectedState"])
+            && qaStructure.OptionalArguments.Contains("path", StringComparer.OrdinalIgnoreCase)
+            && qaStructure.OptionalArguments.Contains("renderDpiScale", StringComparer.OrdinalIgnoreCase), "UI structure evidence should advertise its relative path and paired render-DPI provenance");
+        var qaFocus = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.AppQaFocusAdvance);
+        Require(qaFocus.Category == "qa"
+            && !qaFocus.Destructive
+            && qaFocus.OptionalArguments.SequenceEqual(["direction"]), "QA focus traversal should be optional-direction and non-destructive");
+        var qaMotion = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.AppQaMotionSet);
+        Require(qaMotion.Category == "qa"
+            && !qaMotion.Destructive
+            && qaMotion.RequiredArguments.SequenceEqual(["mode"]), "QA motion should require an explicit mode and remain non-destructive");
+        var screenshot = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.AppScreenshot);
+        Require(screenshot.OptionalArguments.Contains("renderDpiScale", StringComparer.OrdinalIgnoreCase), "screenshot capability should advertise bounded QA raster DPI");
+        var experimentState = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.ExperimentState);
+        Require(experimentState.Category == "experiment"
+                && !experimentState.Destructive
+                && experimentState.RequiredArguments.Length == 0,
+            "Experiment Lab state should remain observational and argument-free");
+        var experimentSelect = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.ExperimentFeatureSelect);
+        Require(experimentSelect.Category == "experiment"
+                && !experimentSelect.Destructive
+                && experimentSelect.RequiredArguments.SequenceEqual(["key"]),
+            "Experiment Lab selection should require exactly one safe registered key without claiming a mutation");
         Require(AIArenaControlCapabilityCatalog.All.All(item => !string.IsNullOrWhiteSpace(item.Category) && !string.IsNullOrWhiteSpace(item.Description)), "capability catalog entries should remain auditable");
 
         var controlPlaneDocumentation = File.ReadAllText(FindWorkspaceFile("CONTROLPLANE.md"));
-        foreach (var capability in AIArenaControlCapabilityCatalog.All)
+        foreach (var capability in AIArenaControlCapabilityCatalog.All.Where(item => item.Category != "qa"))
         {
             Require(
                 controlPlaneDocumentation.Contains($"`{capability.Command}`", StringComparison.Ordinal),
@@ -506,7 +542,7 @@ internal static partial class Program
         var functionCount = script
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Count(line => line.TrimStart().StartsWith("function ", StringComparison.OrdinalIgnoreCase));
-        Require(functionCount == 54, "PowerShell client should expose the complete 54-function surface");
+        Require(functionCount == 60, "PowerShell client should expose the complete 60-function surface");
         Require(script.Contains("[string]$Token", StringComparison.Ordinal), "PowerShell client should expose -Token for authenticated control-plane calls");
         Require(script.Contains("AI_ARENA_CONTROL_TOKEN", StringComparison.Ordinal), "PowerShell client should support token injection through AI_ARENA_CONTROL_TOKEN");
         Require(script.Contains("Get-AIArenaControlToken", StringComparison.Ordinal), "PowerShell client should load the app-written token for debug calls");
@@ -520,6 +556,28 @@ internal static partial class Program
         Require(script.Contains("function Get-AIArenaCollaborateReview", StringComparison.Ordinal), "PowerShell client should expose saved Collaborate run reviews and traces");
         Require(script.Contains("function Export-AIArena", StringComparison.Ordinal), "PowerShell client should include export convenience commands");
         Require(script.Contains("function Save-AIArenaScreenshot", StringComparison.Ordinal), "PowerShell client should expose application screenshot capture");
+        var screenshotFunctionStart = script.IndexOf("function Save-AIArenaScreenshot", StringComparison.Ordinal);
+        var screenshotFunctionEnd = script.IndexOf("function Set-AIArenaQAWindowSize", screenshotFunctionStart, StringComparison.Ordinal);
+        var screenshotFunction = script[screenshotFunctionStart..screenshotFunctionEnd];
+        Require(screenshotFunction.Contains("[double]$RenderDpiScale", StringComparison.Ordinal)
+            && screenshotFunction.Contains("$screenshotArgs['renderDpiScale'] = $RenderDpiScale", StringComparison.Ordinal), "PowerShell screenshot capture should expose the bounded render DPI matrix on the screenshot verb itself");
+        Require(script.Contains("function Set-AIArenaQAWindowSize", StringComparison.Ordinal)
+            && script.Contains("[ValidateRange(960, 1500)]", StringComparison.Ordinal)
+            && script.Contains("[ValidateRange(640, 1000)]", StringComparison.Ordinal)
+            && script.Contains("-Command 'app.qa.window.size'", StringComparison.Ordinal), "PowerShell client should expose bounded QA client sizing");
+        Require(script.Contains("function Save-AIArenaUIStructure", StringComparison.Ordinal)
+            && script.Contains("UI structure path must be relative", StringComparison.Ordinal)
+            && script.Contains("[ValidatePattern('^[0-9a-fA-F]{64}$')]", StringComparison.Ordinal)
+            && script.Contains("treeFingerprint = $TreeFingerprint.ToLowerInvariant()", StringComparison.Ordinal)
+            && script.Contains("expectedState = $ExpectedState", StringComparison.Ordinal)
+            && script.Contains("$structureArgs['renderDpiScale'] = $RenderDpiScale", StringComparison.Ordinal)
+            && script.Contains("-Command 'app.qa.structure.capture'", StringComparison.Ordinal), "PowerShell client should expose relative privacy-safe UI structure capture");
+        Require(script.Contains("function Move-AIArenaQAFocus", StringComparison.Ordinal)
+            && script.Contains("[ValidateSet('next', 'previous')]", StringComparison.Ordinal)
+            && script.Contains("-Command 'app.qa.focus.advance'", StringComparison.Ordinal), "PowerShell client should expose typed QA keyboard traversal");
+        Require(script.Contains("function Set-AIArenaQAMotion", StringComparison.Ordinal)
+            && script.Contains("[ValidateSet('system', 'normal', 'reduced')]", StringComparison.Ordinal)
+            && script.Contains("-Command 'app.qa.motion.set'", StringComparison.Ordinal), "PowerShell client should expose isolated process-only motion control");
         Require(script.Contains("function Get-AIArenaProvider", StringComparison.Ordinal), "PowerShell client should expose secret-free provider state");
         Require(script.Contains("function Set-AIArenaProviderConfig", StringComparison.Ordinal), "PowerShell client should expose typed provider configuration patches");
         Require(script.Contains("function Test-AIArenaProvider", StringComparison.Ordinal), "PowerShell client should expose provider completion diagnostics");
@@ -535,6 +593,17 @@ internal static partial class Program
             && script.Contains("-Command 'provider.models.refresh'", StringComparison.Ordinal), "PowerShell provider functions should route to the new provider commands");
         Require(script.Contains("function Set-AIArenaAgentCommand", StringComparison.Ordinal), "PowerShell client should include Agent command staging");
         Require(script.Contains("function Get-AIArenaCapabilities", StringComparison.Ordinal), "PowerShell client should expose capability discovery");
+        Require(script.Contains("function Get-AIArenaExperiment", StringComparison.Ordinal)
+                && script.Contains("-Command 'experiment.state'", StringComparison.Ordinal),
+            "PowerShell client should expose privacy-safe Experiment Lab state");
+        Require(script.Contains("function Select-AIArenaExperimentFeature", StringComparison.Ordinal)
+                && script.Contains("'context-prompt-inspector'", StringComparison.Ordinal)
+                && script.Contains("'agent-memory-debugger'", StringComparison.Ordinal)
+                && script.Contains("'fault-injection'", StringComparison.Ordinal)
+                && script.Contains("'routing-optimizer'", StringComparison.Ordinal)
+                && script.Contains("'in-app-qa-inspector'", StringComparison.Ordinal)
+                && script.Contains("-Command 'experiment.feature.select'", StringComparison.Ordinal),
+            "PowerShell client should allowlist and select all registered Experiment Lab surfaces");
         Require(script.Contains("function Set-AIArenaRightRail", StringComparison.Ordinal), "PowerShell client should expose right rail control");
         Require(script.Contains("function Set-AIArenaViewPreset", StringComparison.Ordinal), "PowerShell client should expose transcript presets");
         Require(script.Contains("function Get-AIArenaInternet", StringComparison.Ordinal), "PowerShell client should expose Internet state");

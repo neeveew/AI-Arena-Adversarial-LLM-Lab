@@ -22,6 +22,44 @@ if (args.Length > 0 && args[0].Equals("--event-log-writer", StringComparison.Ord
 
 var tests = new List<(string Name, Action Test)>
 {
+    ("experimentation contracts declare every v1 schema exactly once", ExperimentationContractTests.DeclaresEveryV1SchemaExactlyOnce),
+    ("experimentation contracts serialize canonically and round trip strictly", ExperimentationContractTests.SerializesCanonicallyAndRoundTripsStrictly),
+    ("experimentation contracts enforce explicit evidence states", ExperimentationContractTests.EnforcesObservedInferredAndUnavailableEvidence),
+    ("experimentation contracts reject private payload data", ExperimentationContractTests.RejectsSecretsAbsolutePathsAndSourceContent),
+    ("experimentation contracts persist deterministic resumable run cells", ExperimentationContractTests.PersistsDeterministicExperimentRunsAndNormalizesRestart),
+    ("experimentation contracts require evidence before QA seals", ExperimentationContractTests.RequiresEvidenceBeforeQaCanSeal),
+    ("experimentation contracts reject fake and incomplete seal manifests", ExperimentationContractTests.RejectsFakeAndIncompleteSealManifests),
+    ("experimentation contracts reject unavailable evidence reported as pass", ExperimentationContractTests.RejectsUnavailableEvidenceReportedAsPass),
+    ("experimentation contracts require current visual artifact provenance", ExperimentationContractTests.RequiresCurrentVisualArtifactProvenance),
+    ("experimentation contracts require scenario route and approval provenance", ExperimentationContractTests.RequiresScenarioRouteAndApprovalProvenance),
+    ("experiment matrix expansion has deterministic order and identities", ExperimentExecutionTests.ExpandsCartesianMatrixDeterministically),
+    ("experiment pack store is strict versioned and diagnostic", ExperimentExecutionTests.StoresStrictVersionedPacksAndReportsFallbacks),
+    ("experiment run store is atomic resumable and trial preserving", ExperimentExecutionTests.PersistsRunsAtomicallyAndNormalizesRestart),
+    ("experiment run store isolates corrupt oversize and private artifacts", ExperimentExecutionTests.RunStoreIsolatesCorruptOversizeAndPrivateArtifacts),
+    ("experiment runner bounds concurrency and resumes approved cells", ExperimentExecutionTests.RunnerBoundsConcurrencyAndResumesApprovedCells),
+    ("experiment runner preflights bounded durable capacity", ExperimentExecutionTests.RunnerPreflightsBoundedDurableCapacity),
+    ("experiment runner cancellation persists only started cells", ExperimentExecutionTests.RunnerCancellationPersistsStartedCellsSafely),
+    ("experiment execution resolver validates live identities and strict behavior axes", ExperimentExecutionTests.ResolvesLiveExecutionPlansStrictly),
+    ("experiment cell executor forks routes runs resumes and persists private-safe evidence", ExperimentExecutionTests.ExecutesLiveCellsThroughIsolatedSessions),
+    ("evaluation ledger versions rubrics immutably and restarts with results", RubricClaimLedgerTests.VersionsRubricsImmutablyAndRestartsWithResults),
+    ("evaluation ledger keeps weighted sources human scores and disagreement separate", RubricClaimLedgerTests.KeepsWeightedSourcesHumanScoresAndDisagreementSeparate),
+    ("evaluation ledger conceals blind mapping until finalization", RubricClaimLedgerTests.ConcealsBlindMappingUntilFinalization),
+    ("evaluation ledger persists blind commitment before judgment receipt", RubricClaimLedgerTests.PersistsBlindCommitmentBeforeJudgmentReceipt),
+    ("evaluation ledger binds model scores to traced provider receipts", RubricClaimLedgerTests.BindsModelScoresToTracedProviderReceipts),
+    ("evaluation ledger preserves unavailable evidence and rejects measured model claims", RubricClaimLedgerTests.PreservesUnavailableEvidenceAndRejectsMeasuredModelClaims),
+    ("evaluation ledger links stable messages and labels model assertions", RubricClaimLedgerTests.LinksStableMessagesAndLabelsModelAssertions),
+    ("evaluation ledger retains contradictions reviews and original provenance", RubricClaimLedgerTests.RetainsContradictionsReviewsAndOriginalProvenance),
+    ("evaluation ledger bounds and restarts claim persistence with safe fallbacks", RubricClaimLedgerTests.BoundsAndRestartsClaimPersistenceWithSafeFallbacks),
+    ("fault decorator injects every bounded fault outside protocol client", FaultRoutingTests.InjectsEveryBoundedFaultOutsideProtocolClient),
+    ("fault decorator preserves streaming partial and malformed semantics", FaultRoutingTests.PreservesStreamingPartialAndMalformedSemantics),
+    ("fault decorator distinguishes caller cancellation from injected timeout", FaultRoutingTests.DistinguishesCallerCancellationFromInjectedTimeout),
+    ("fault decorator schedules seeded occurrences deterministically and privately", FaultRoutingTests.SchedulesSeededOccurrencesDeterministicallyAndPrivately),
+    ("fault decorator bounds concurrent provider work", FaultRoutingTests.BoundsConcurrentProviderWork),
+    ("routing optimizer proposes only from comparable observed evidence", FaultRoutingTests.ProposesOnlyFromComparableObservedEvidence),
+    ("routing optimizer refuses insufficient or mismatched evidence", FaultRoutingTests.RefusesOptimizationWithInsufficientOrMismatchedEvidence),
+    ("routing optimizer rejects private and unavailable claims", FaultRoutingTests.RejectsPrivateProposalInputsAndUnavailableClaims),
+    ("route application rechecks persisted setup and current model", RouteApplicationTests.AppliesOnlyAfterRecheckingPersistedSetupAndCurrentModel),
+    ("route application rejects duplicate and non-roster targets", RouteApplicationTests.RejectsDuplicateAndNonRosterTargetsBeforeMutation),
     ("solution doctor discovers projects and project-correct commands", DotNetSolutionDoctorTests.DiscoversSolutionsProjectsAndProjectCorrectCommands),
     ("solution doctor parses compiler MSBuild and harness evidence", DotNetSolutionDoctorTests.ParsesCompilerMsBuildAndExecutableHarnessEvidence),
     ("solution doctor plans focused conventional test retries", DotNetSolutionDoctorTests.PlansFocusedConventionalTestRetry),
@@ -63,6 +101,10 @@ var tests = new List<(string Name, Action Test)>
     ("lists Ollama native tags endpoint", ListsOllamaNativeTagsEndpoint),
     ("surfaces provider HTTP error bodies", SurfacesProviderHttpErrorBodies),
     ("redacts secrets from provider errors", RedactsSecretsFromProviderErrors),
+    ("prompt inspector hashes exact provider bytes and redacts aggregate views", PromptInspectorTests.HashesExactProviderBytesAndRedactsAggregateViews),
+    ("prompt inspector traces streaming retries and native semantics", PromptInspectorTests.TracesStreamingRetriesAndNativeSemantics),
+    ("prompt inspector bounds traces and isolates observer failures and cancellation", PromptInspectorTests.BoundsTracesAndIsolatesObserverFailuresAndCancellation),
+    ("prompt inspector explains turn runner fallback and context omissions", PromptInspectorTests.ExplainsTurnRunnerFallbackAndContextOmissions),
     ("rejects empty provider success responses", RejectsEmptyProviderSuccessResponses),
     ("handles invalid provider URLs", HandlesInvalidProviderUrls),
     ("provider config timeout overrides HttpClient default", ProviderConfigTimeoutOverridesHttpClientDefault),
@@ -129,6 +171,17 @@ var tests = new List<(string Name, Action Test)>
     ("forks full session state without mutating source", ForkFullSessionStateWithoutMutatingSource),
     ("fork session names are atomic and lineage is direct", ForkSessionNamesAreAtomicAndLineageIsDirect),
     ("fork session rejects missing and corrupt sources", ForkSessionRejectsMissingAndCorruptSources),
+    ("structured memory migrates legacy notes and stable message ids", MemoryForkTests.MigratesLegacyMemoryAndStableMessageIds),
+    ("structured memory selects only active scoped provenance", MemoryForkTests.SelectsOnlyActiveScopedMemoryWithProvenance),
+    ("structured memory retention and legacy mirror are bounded", MemoryForkTests.BoundsStructuredMemoryAndLegacyMirror),
+    ("historical fork excludes every unproven future state", MemoryForkTests.ForksAtExactCursorWithoutFutureState),
+    ("historical fork rejects source-less memory at unknown cursor time", MemoryForkTests.LegacyUnknownCursorRejectsSourceLessTimedMemory),
+    ("historical fork siblings persistence and cancellation are isolated", MemoryForkTests.ForkSiblingsAreIsolatedAndCreationIsAtomic),
+    ("session forks preserve uppercase legacy references without case collisions", MemoryForkTests.ForksLegacyUppercaseSessionsWithoutCaseCollisions),
+    ("branch setup fingerprint tracks behavior not runtime state", MemoryForkTests.SetupFingerprintTracksBehaviorNotRuntimeState),
+    ("historical fork rewinds post-cursor expiry mutations", MemoryForkTests.HistoricalProjectionRewindsFutureExpiryMutation),
+    ("historical fork rejects same-second source-less mutations", MemoryForkTests.HistoricalProjectionRejectsSameSecondSourceLessMutations),
+    ("historical fork rejects ambiguous duplicate-message provenance", MemoryForkTests.HistoricalProjectionRejectsAmbiguousDuplicateMessageProvenance),
     ("creates transcript message with reasoning metadata", CreateTranscriptMessageWithReasoningMetadata),
     ("reads existing reasoning metadata from snapshot", ReadExistingReasoningMetadataFromSnapshot),
     ("matches exact transcript messages for deletion", MatchExactTranscriptMessagesForDeletion),
@@ -5302,6 +5355,8 @@ static void RetryRepairIgnoresReplacedLmStudioResponseId()
     Require(result.Ok, $"retry failed: {result.Error}");
     Require(client.Configs.Count == 2, "empty retry should trigger one repair provider call");
     Require(client.Configs.All(config => config.PreviousResponseId == ""), "retry repair should not continue from the replaced response id");
+    Require(client.Configs[1].RequestInspectionContext?.Explanations.Any(item => item.Subject == "reasoning_override" && item.EvidenceState == "observed") == true,
+        "retry repair did not explain its reasoning-off transformation at the provider boundary");
     var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
     Require(loaded.Engine.Messages.Single(message => message.Turn == 2 && message.SpeakerId == "beta").Text == "retry repair reply", "retry repair should replace original text");
     Directory.Delete(root, recursive: true);
@@ -5331,6 +5386,8 @@ static void RunNativeOneTurnWithInternetToolRequest()
     var result = service.RunOneTurnAsync().GetAwaiter().GetResult();
     Require(result.Ok, $"turn failed: {result.Error}");
     Require(client.Requests.Count == 2, "tool turn should call model twice");
+    Require(client.Configs[1].RequestInspectionContext?.Explanations.Any(item => item.Subject == "additional_user_context" && item.EvidenceState == "observed") == true,
+        "internet continuation did not explain its appended evidence message");
     var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
     Require(loaded.Engine.Messages.Count == 2, "only the final assistant message should be appended");
     Require(loaded.Engine.Messages[1].Kind == "message", "internet access should remain hidden on the final message");
@@ -5427,6 +5484,8 @@ static void InternetFastModeCompactsProactiveSearchAndOutput()
     Require(TurnRunnerService.InternetFastMode(snapshot, snapshot.Configs["shared"]), "Gemma/low-output local model should use internal internet fast mode");
     Require(provider.Requests.Single().MaxResults == 2, "fast mode should lower proactive search max results");
     Require(client.Configs.Single().MaxOutputTokens == 900, "fast mode should cap output tokens");
+    Require(client.Configs.Single().RequestInspectionContext?.Explanations.Any(item => item.Subject == "internet_fast_mode" && item.Explanation.Contains("900", StringComparison.Ordinal)) == true,
+        "provider-boundary context did not explain the fast-mode output cap");
     var prompt = string.Join(Environment.NewLine, client.Requests.Single().Select(message => message.Content));
     Require(prompt.Contains("Fast mode:", StringComparison.Ordinal), "fast internet context should identify compact internal mode");
     Require(prompt.Contains("1. test-source: AI law update 1", StringComparison.Ordinal), "fast context should include first source");

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.ComponentModel;
 using System.IO;
+using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
 using System.Windows;
@@ -44,6 +45,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     private readonly ProviderReachabilityService _providerReachabilityService;
     private readonly ProviderConfigurationControlService _providerConfigurationControlService;
     private readonly ProviderRuntimeService _providerRuntimeService;
+    private readonly ProviderRequestTraceStore _providerRequestTraceStore;
     private readonly ModelProviderClient _modelClient;
     private readonly TranscriptService _transcriptService = new();
     private readonly TurnRunnerService _turnRunner;
@@ -102,6 +104,15 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     private readonly AgentRosterCoordinator? _agentRosterCoordinator;
     private readonly ArenaSessionMutationCoordinator? _arenaSessionMutationCoordinator;
     private readonly ShellNavigationCoordinator? _shellNavigationCoordinator;
+    private readonly ExperimentLabCoordinator? _experimentLabCoordinator;
+    private readonly AgentInspectionLabControl _agentInspectionLabControl;
+    private readonly AgentInspectionLabCoordinator _agentInspectionLabCoordinator;
+    private readonly FaultInjectionLabControl _faultInjectionLabControl;
+    private readonly FaultInjectionLabCoordinator _faultInjectionLabCoordinator;
+    private readonly ModelRoutingOptimizerControl _modelRoutingOptimizerControl;
+    private readonly ModelRoutingOptimizerCoordinator _modelRoutingOptimizerCoordinator;
+    private readonly InAppQaInspectorControl _inAppQaInspectorControl;
+    private readonly InAppQaInspectorCoordinator _inAppQaInspectorCoordinator;
     private readonly CollaborateCoordinator? _collaborateCoordinator;
     private readonly AgentWorkspaceCoordinator? _agentWorkspaceCoordinator;
     private readonly AgentImpactExplorerCoordinator? _agentImpactExplorerCoordinator;
@@ -243,6 +254,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     private ShellNavigationCoordinator ShellNavigation =>
         _shellNavigationCoordinator ?? throw new InvalidOperationException("Shell navigation coordinator is not initialized.");
 
+    private ExperimentLabCoordinator ExperimentLab =>
+        _experimentLabCoordinator ?? throw new InvalidOperationException("Experiment Lab coordinator is not initialized.");
+
     private CollaborateCoordinator Collaborate =>
         _collaborateCoordinator ?? throw new InvalidOperationException("Collaborate coordinator is not initialized.");
 
@@ -294,8 +308,10 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         _appControlHandler = new AIArenaAppControlHandler(
             new AIArenaScreenshotControlService(this, _coreSessionStore.DataRoot),
             _controlPlaneEvents,
-            ShowScreenshotReceipt);
-        _modelClient = new ModelProviderClient();
+            ShowScreenshotReceipt,
+            new AIArenaUiVerificationControlService(this, _coreSessionStore.DataRoot, () => _wpfSettings.ThemeId));
+        _providerRequestTraceStore = new ProviderRequestTraceStore();
+        _modelClient = CreateObservedModelProviderClient(_providerRequestTraceStore);
         _internetToolService = new InternetToolService(
             new LocalInternetToolProvider(ensureSearchBackendAsync: EnsureInternetBackendForSearchAsync),
             _eventLogStore);
@@ -556,17 +572,63 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         _wpfSettings = _wpfSettingsStore.Load();
         InitializeAgentAndStreamingSettingsFields();
         ShowMatchSetupSection("scenario");
+        _experimentLabCoordinator = new ExperimentLabCoordinator(
+            ExperimentLabPanel,
+            _coreSessionStore,
+            _modelClient,
+            () => _activeSession?.Id,
+            (sessionId, cancellationToken) => LoadSessionsAsync(sessionId, cancellationToken),
+            _coreSessionStore.DataRoot,
+            providerRequestTraces: _providerRequestTraceStore);
+        ExperimentLabPanel.Initialize(_experimentLabCoordinator);
+        _agentInspectionLabControl = new AgentInspectionLabControl();
+        _agentInspectionLabCoordinator = new AgentInspectionLabCoordinator(
+            _agentInspectionLabControl,
+            _providerRequestTraceStore,
+            _coreSessionStore,
+            () => _activeSession?.Id);
+        _faultInjectionLabControl = new FaultInjectionLabControl();
+        _faultInjectionLabCoordinator = new FaultInjectionLabCoordinator(
+            _faultInjectionLabControl,
+            _modelClient,
+            () => ProviderSettings.CaptureRuntimeConfig());
+        _modelRoutingOptimizerControl = new ModelRoutingOptimizerControl();
+        _modelRoutingOptimizerCoordinator = new ModelRoutingOptimizerCoordinator(
+            _modelRoutingOptimizerControl,
+            _experimentLabCoordinator.CreateRoutingEvidenceSource(),
+            ModelRoutingOptimizerCoordinator.CreateSessionApplicationBoundary(
+                new ArenaRouteApplicationService(_coreSessionStore),
+                () => _activeSession?.Id,
+                _arenaOperationLock,
+                () => _arenaBusy,
+                () => _arenaRunCoordinator?.IsAutoChatRunning == true,
+                action => ArenaOperations.TrackAsync(action),
+                (sessionId, cancellationToken) => LoadSessionsAsync(sessionId, cancellationToken)));
+        _inAppQaInspectorControl = new InAppQaInspectorControl();
+        _inAppQaInspectorCoordinator = new InAppQaInspectorCoordinator(
+            _inAppQaInspectorControl,
+            ResolveQaRepositoryRoot(AppContext.BaseDirectory),
+            isApplicationRunning: static () => true);
+        RegisterProductionExperimentFeatures(
+            ExperimentLabPanel,
+            _agentInspectionLabControl,
+            _faultInjectionLabControl,
+            _modelRoutingOptimizerControl,
+            _inAppQaInspectorControl);
+        RegisterProductionExperimentRefreshes();
         _shellNavigationCoordinator = new ShellNavigationCoordinator(
             this,
             _wpfSettingsStore,
             () => _wpfSettings,
             ThemePicker,
             ArenaNavButton,
+            ExperimentLabNavButton,
             CustomMatchNavButton,
             AgentNavButton,
             CollaborateNavButton,
             AppSettingsButton,
             TranscriptPanel,
+            ExperimentLabPanel,
             CustomMatchPanel,
             AgentWorldPanel,
             AgentWorkspacePanel,
@@ -575,12 +637,14 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             AgentTopBarMetrics,
             CollaborateTopBarMetrics,
             ArenaRightRailPanel,
+            ExperimentRightRailPanel,
             AgentRightRailPanel,
             CollaborateRightRailPanel,
             ArenaSessionOverviewPanel,
             ArenaLiveAgentsPanel,
             AgentLeftRailContextPanel,
             CollaborateLeftRailContextPanel,
+            ExperimentLeftRailContextPanel,
             AppSettingsPanel,
             theme => _theme = theme,
             ResourceBrush,
@@ -1364,6 +1428,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         {
             ArmShellEvents();
             LoadSessions();
+            _ = InitializeExperimentExtensionsSafelyAsync();
             _refreshTimer.Start();
             _providerHealthTimer.Start();
             TelemetryWorkflow.UpdateTimerState();
@@ -1379,6 +1444,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         Closing += MainWindow_Closing;
         Closed += (_, _) =>
         {
+            _appControlHandler.ResetProcessOverrides();
             SystemThemePreferences.PreferenceChanged -= OnSystemThemePreferenceChanged;
             SystemMotionPreferences.PreferenceChanged -= OnSystemMotionPreferenceChanged;
             _refreshTimer.Stop();
@@ -1389,6 +1455,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             TelemetryWorkflow.Stop();
             _transcriptSearchCoordinator?.Dispose();
             _agentImpactExplorerCoordinator?.Dispose();
+            _agentInspectionLabCoordinator.Dispose();
+            _faultInjectionLabCoordinator.Dispose();
+            _modelRoutingOptimizerCoordinator.Dispose();
+            _inAppQaInspectorCoordinator.Dispose();
+            _experimentLabCoordinator?.Dispose();
             _agentWorkspaceCoordinator?.Dispose();
             _voiceNarrationService.Dispose();
             _matchGeneration.Dispose();
@@ -1397,6 +1468,104 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             InternetWorkflow.Dispose();
             _controlPlaneHost?.Dispose();
         };
+    }
+
+    internal static ModelProviderClient CreateObservedModelProviderClient(
+        ProviderRequestTraceStore traceStore,
+        HttpClient? httpClient = null)
+    {
+        ArgumentNullException.ThrowIfNull(traceStore);
+        return new ModelProviderClient(httpClient, traceStore);
+    }
+
+    internal static void RegisterProductionExperimentFeatures(
+        ExperimentLabControl host,
+        AgentInspectionLabControl inspection,
+        FaultInjectionLabControl faultInjection,
+        ModelRoutingOptimizerControl routingOptimizer,
+        InAppQaInspectorControl qaInspector)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        ArgumentNullException.ThrowIfNull(inspection);
+        ArgumentNullException.ThrowIfNull(faultInjection);
+        ArgumentNullException.ThrowIfNull(routingOptimizer);
+        ArgumentNullException.ThrowIfNull(qaInspector);
+        foreach (var registration in inspection.DetachFeatureRegistrations())
+        {
+            host.RegisterFeature(registration);
+        }
+        host.RegisterFeature(faultInjection.FeatureRegistration);
+        host.RegisterFeature(routingOptimizer.FeatureRegistration);
+        host.RegisterFeature(qaInspector.FeatureRegistration);
+    }
+
+    private void RegisterProductionExperimentRefreshes()
+    {
+        ExperimentLab.RegisterFeatureRefresh(
+            AgentInspectionLabControl.PromptInspectorFeatureKey,
+            _ =>
+            {
+                _agentInspectionLabCoordinator.RefreshPromptTraces();
+                return Task.CompletedTask;
+            });
+        ExperimentLab.RegisterFeatureRefresh(
+            AgentInspectionLabControl.MemoryDebuggerFeatureKey,
+            async cancellationToken =>
+            {
+                await _agentInspectionLabCoordinator.InitializeAsync(cancellationToken);
+            });
+        ExperimentLab.RegisterFeatureRefresh(
+            "routing-optimizer",
+            async cancellationToken =>
+            {
+                await _modelRoutingOptimizerCoordinator.RefreshEvidenceAsync(cancellationToken);
+            });
+        ExperimentLab.RegisterFeatureRefresh(
+            "in-app-qa-inspector",
+            async cancellationToken =>
+            {
+                await _inAppQaInspectorCoordinator.RefreshAsync(cancellationToken: cancellationToken);
+            });
+    }
+
+    private async Task InitializeExperimentExtensionsSafelyAsync()
+    {
+        try
+        {
+            await _agentInspectionLabCoordinator.InitializeAsync();
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine($"Experiment inspection initialization failed safely: {exception.GetType().Name}");
+        }
+
+        try
+        {
+            await _inAppQaInspectorCoordinator.InitializeAsync();
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine($"QA Inspector initialization failed safely: {exception.GetType().Name}");
+        }
+    }
+
+    internal static string ResolveQaRepositoryRoot(string baseDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+        var candidate = new DirectoryInfo(Path.GetFullPath(baseDirectory));
+        for (var depth = 0; candidate is not null && depth < 16; depth++, candidate = candidate.Parent)
+        {
+            if (File.Exists(Path.Combine(candidate.FullName, "src", "AIArena.Wpf", "AIArena.Wpf.csproj"))
+                && File.Exists(Path.Combine(candidate.FullName, "scripts", "qa-seal.ps1")))
+            {
+                return candidate.FullName;
+            }
+        }
+
+        // Installed builds do not contain repository scripts. Pointing the
+        // inspector at the existing application directory yields an explicit
+        // unavailable result instead of guessing a repository elsewhere.
+        return Path.GetFullPath(baseDirectory);
     }
 
     private async void MainWindow_Closing(object? sender, CancelEventArgs e)
@@ -1756,6 +1925,12 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 AppSettingsWorkflow.SetVisible(false);
                 ShowCollaboratePanel();
                 return true;
+            case "experiment":
+            case "experiments":
+            case "experiment.lab":
+                AppSettingsWorkflow.SetVisible(false);
+                ShowExperimentLabPanel();
+                return true;
             case "settings":
                 AppSettingsWorkflow.SetVisible(true);
                 return true;
@@ -1783,6 +1958,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         if (CollaboratePanel.Visibility == Visibility.Visible)
         {
             return "collaborate";
+        }
+
+        if (ExperimentLabPanel.Visibility == Visibility.Visible)
+        {
+            return "experiment-lab";
         }
 
         if (CustomMatchPanel.Visibility == Visibility.Visible)
@@ -3142,6 +3322,26 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             PopulateFallbackState($"Could not load snapshot: {ex.Message}");
             SavedStateCoordinator.ClearCheckpoints("No checkpoint data.");
             LoadStatus.Text = $"Could not load session '{session.Id}': {ex.Message}";
+        }
+
+        await RefreshAgentInspectionForSessionSafelyAsync(cancellationToken);
+    }
+
+    private async Task RefreshAgentInspectionForSessionSafelyAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _agentInspectionLabCoordinator.InitializeAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            // The coordinator clears the prior private-memory view before a
+            // session switch. A failed reload therefore remains default-deny.
+            Debug.WriteLine($"Agent inspection session refresh failed safely: {exception.GetType().Name}");
         }
     }
 
@@ -4861,6 +5061,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         ApplyLabViewMode(_wpfSettings.LabViewMode, persist: false);
     }
 
+    private void ExperimentLabNavButton_Click(object sender, RoutedEventArgs e)
+    {
+        ShowExperimentLabPanel();
+    }
+
     private void MatchSetupButton_Click(object sender, RoutedEventArgs e)
     {
         if (CustomMatchPanel.Visibility == Visibility.Visible)
@@ -5123,6 +5328,30 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         AgentPromptText.Focus();
     }
 
+    private void ShowExperimentLabPanel()
+    {
+        var previousSurface = _activeShellSurface;
+        ShellNavigation.ShowExperimentLabPanel();
+        _activeShellSurface = ShellSurface.ExperimentLab;
+        ApplyShellCommandState(_activeShellSurface);
+        LabViewToggleGroup.Visibility = Visibility.Collapsed;
+        ResetRightRailAfterSurfaceChange(previousSurface);
+        ExperimentLabPanel.FocusFeatureSelector();
+        _ = RefreshExperimentLabSafelyAsync();
+    }
+
+    private async Task RefreshExperimentLabSafelyAsync()
+    {
+        try
+        {
+            await ExperimentLab.RefreshFeatureAsync(ExperimentLabPanel.SelectedFeatureKey ?? "matrix");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            ExperimentLabPanel.SetMatrixStatus($"Experiment Lab refresh failed safely ({exception.GetType().Name}).");
+        }
+    }
+
     private void ApplyWorldSnapshotIfVisible(ArenaViewSnapshot snapshot)
     {
         if (ShouldApplyWorldSnapshot(AgentWorldPanel.Visibility, IsWorldDebugEnabled(_wpfSettings)))
@@ -5158,6 +5387,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 break;
             case ShellSurface.Collaborate:
                 ShowCollaboratePanel();
+                break;
+            case ShellSurface.ExperimentLab:
+                ShowExperimentLabPanel();
                 break;
             default:
                 ShowTranscriptPanel(clearFilters: false);

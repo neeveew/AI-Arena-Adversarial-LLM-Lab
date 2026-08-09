@@ -31,6 +31,7 @@ public sealed class TranscriptService
     {
         return new DialogueMessage
         {
+            MessageId = $"message:{Guid.NewGuid():N}",
             Turn = nextTurn,
             Speaker = string.IsNullOrWhiteSpace(agent.Name) ? agent.Id : agent.Name,
             SpeakerId = agent.Id,
@@ -57,6 +58,7 @@ public sealed class TranscriptService
     {
         return new DialogueMessage
         {
+            MessageId = $"message:{Guid.NewGuid():N}",
             Turn = nextTurn,
             Speaker = "Operator",
             SpeakerId = "operator",
@@ -92,6 +94,7 @@ public sealed class TranscriptService
 
         return new DialogueMessage
         {
+            MessageId = $"message:{Guid.NewGuid():N}",
             Turn = nextTurn,
             Speaker = "Internet",
             SpeakerId = "internet",
@@ -122,6 +125,7 @@ public sealed class TranscriptService
     {
         return new DialogueMessage
         {
+            MessageId = DialogueMessageIdentity.Resolve(original),
             Turn = original.Turn,
             Speaker = string.IsNullOrWhiteSpace(agent.Name) ? agent.Id : agent.Name,
             SpeakerId = agent.Id,
@@ -268,6 +272,7 @@ public sealed class TranscriptService
     {
         return new DialogueMessage
         {
+            MessageId = DialogueMessageIdentity.Resolve(message),
             Turn = message.Turn,
             Speaker = message.Speaker,
             SpeakerId = message.SpeakerId,
