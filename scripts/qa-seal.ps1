@@ -973,7 +973,8 @@ function Invoke-AIArenaFeatureSurfaceMatrixPass {
             foreach ($featureKey in $requiredFeatureKeys) {
                 $featureStage = 'selection'
                 try {
-                $selection = Select-AIArenaExperimentFeature -Key $featureKey -TimeoutMs 30000
+                $selectionTimeoutMilliseconds = Get-AIArenaQaFeatureSelectionTimeoutMilliseconds -FeatureKey $featureKey
+                $selection = Select-AIArenaExperimentFeature -Key $featureKey -TimeoutMs $selectionTimeoutMilliseconds
                 Assert-AIArenaQaFeatureControlState `
                     -Response $selection `
                     -SelectedFeatureKey $featureKey `

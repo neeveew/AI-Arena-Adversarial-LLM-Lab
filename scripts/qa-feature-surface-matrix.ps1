@@ -88,3 +88,32 @@ function Get-AIArenaQaFeatureSurfaceIdentity {
 
     return [string]$script:AIArenaQaFeatureSurfaceIdentities[$FeatureKey]
 }
+
+function Get-AIArenaQaFeatureSelectionTimeoutMilliseconds {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet(
+            'matrix',
+            'fork',
+            'packs',
+            'rubrics',
+            'claims',
+            'context-prompt-inspector',
+            'agent-memory-debugger',
+            'fault-injection',
+            'routing-optimizer',
+            'in-app-qa-inspector')]
+        [string]$FeatureKey
+    )
+
+    # The Inspector performs a fresh isolated restore/build/currentness validation
+    # over the latest bounded evidence bundle. Historical successful cells run
+    # close to 30 seconds, so retain the ordinary bound for every other feature
+    # while giving this independently verified boundary deterministic headroom.
+    if ($FeatureKey -eq 'in-app-qa-inspector') {
+        return 90000
+    }
+
+    return 30000
+}

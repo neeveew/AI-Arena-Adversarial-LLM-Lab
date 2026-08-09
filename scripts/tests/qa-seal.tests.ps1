@@ -57,6 +57,19 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
     Require ((@(Get-AIArenaQaFeatureSurfaceKeys) -join ',') -ceq ($expectedFeatureKeys -join ',')) 'Feature-surface helper changed the closed Experiment Lab registry.'
     Require ((Get-AIArenaQaFeatureSurfaceIdentity -FeatureKey 'matrix') -ceq 'MatrixPanel') 'Feature-surface helper did not bind matrix to its visible content identity.'
     Require ((Get-AIArenaQaFeatureSurfaceIdentity -FeatureKey 'in-app-qa-inspector') -ceq 'QaInspectorRoot') 'Feature-surface helper did not bind QA Inspector to its visible content identity.'
+    foreach ($ordinaryFeatureKey in @($expectedFeatureKeys | Where-Object { $_ -cne 'in-app-qa-inspector' })) {
+        Require ((Get-AIArenaQaFeatureSelectionTimeoutMilliseconds -FeatureKey $ordinaryFeatureKey) -eq 30000) "Ordinary feature selection timeout drifted for $ordinaryFeatureKey."
+    }
+    Require ((Get-AIArenaQaFeatureSelectionTimeoutMilliseconds -FeatureKey 'in-app-qa-inspector') -eq 90000) 'QA Inspector selection does not have bounded currentness-validation headroom.'
+    Require ((Get-AIArenaQaFeatureSelectionTimeoutMilliseconds -FeatureKey 'IN-APP-QA-INSPECTOR') -eq 90000) 'QA Inspector selection timeout changed under PowerShell case-insensitive parameter binding.'
+    $unknownFeatureRejected = $false
+    try {
+        $null = Get-AIArenaQaFeatureSelectionTimeoutMilliseconds -FeatureKey 'unknown-feature'
+    }
+    catch {
+        $unknownFeatureRejected = $true
+    }
+    Require $unknownFeatureRejected 'Feature selection timeout helper accepted a key outside the closed registry.'
     $featureCells = @(
         foreach ($pass in 1..2) {
             foreach ($theme in @('dark-blue', 'light', 'high-contrast')) {
@@ -709,6 +722,8 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
         '-AttestReviewedVisuals',
         'Get-AIArenaExperiment',
         'Select-AIArenaExperimentFeature',
+        'Get-AIArenaQaFeatureSelectionTimeoutMilliseconds',
+        '-TimeoutMs $selectionTimeoutMilliseconds',
         'Set-AIArenaQAFeatureFocus',
         '$featureFocus.data.afterIdentity',
         'featureFailureStage=',
