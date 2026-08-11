@@ -152,6 +152,403 @@ static void ArenaOperationCoordinatorSelectsOperationMode()
     });
 }
 
+static void FactoryModeReadinessRequiresEligiblePublicOperatorInput()
+{
+    var agent = new AgentState("alpha", "Alpha", "waiting", "persona", "default", "default", "", "model-a", true, false, []);
+    var arenaSnapshot = SnapshotForOverviewTest(
+        providerOnline: true,
+        providerModel: "model-a",
+        providerLastError: "",
+        turnIndex: 0,
+        messages: [],
+        agents: [agent]);
+
+    var arenaReadiness = ArenaOperationCoordinator.EvaluateReadiness(arenaSnapshot);
+    Require(arenaReadiness.CanRun, "Arena mode should retain its existing readiness contract without requiring an Operator message");
+    Require(arenaReadiness.CanNarrate, "Arena mode should retain narrator availability");
+    Require(arenaReadiness.Message == "Arena actions ready.", "Arena mode should retain its established readiness copy");
+
+    var factoryWithoutInput = arenaSnapshot with { FactoryMode = true };
+    var missingReadiness = ArenaOperationCoordinator.EvaluateReadiness(factoryWithoutInput);
+    Require(!missingReadiness.CanRun, "Factory mode should wait for a public Operator root");
+    Require(!missingReadiness.CanNarrate, "Factory mode should never enable narration while participant calls bypass Match Setup");
+    Require(missingReadiness.Message.Contains("shared group conversation", StringComparison.Ordinal), "Factory readiness should explain that the first public Operator turn starts the shared group");
+    Require(missingReadiness.NarrationMessage.Contains("unavailable in Factory mode", StringComparison.Ordinal), "Factory readiness should expose honest narration help");
+
+    var ineligibleMessages = new (string Label, TranscriptMessage Message)[]
+    {
+        ("private", TranscriptForTest(1, "Operator", "operator", "private", "ok")),
+        ("narrator", TranscriptForTest(2, "Narrator", "narrator", "narration", "ok")),
+        ("error", TranscriptForTest(3, "Operator", "operator", "message", "error")),
+        ("empty", TranscriptForTest(4, "Operator", "operator", "message", "ok") with { Text = "   " })
+    };
+    foreach (var (label, message) in ineligibleMessages)
+    {
+        var candidate = factoryWithoutInput with { Messages = [message] };
+        Require(!ArenaOperationCoordinator.HasFactoryInput(candidate), $"{label} transcript content must not qualify as Factory input");
+        Require(!ArenaOperationCoordinator.EvaluateReadiness(candidate).CanRun, $"{label} transcript content must not enable Factory runs");
+    }
+
+    var publicOperatorTurn = TranscriptForTest(5, "Operator", "operator", "message", "ok") with
+    {
+        Text = "Return the exact model response for this debugging prompt."
+    };
+    var readyFactory = factoryWithoutInput with { Messages = [publicOperatorTurn] };
+    var readyFactoryState = ArenaOperationCoordinator.EvaluateReadiness(readyFactory);
+    Require(ArenaOperationCoordinator.FactoryInputState(readyFactory) == FactoryConversationInputState.PendingRoot, "an eligible unanchored Operator turn should be reported as a pending root");
+    Require(ArenaOperationCoordinator.HasFactoryInput(readyFactory), "a non-empty successful public Operator message should qualify as a pending Factory root");
+    Require(readyFactoryState.CanRun, "one active agent should be sufficient for an eligible Factory-mode call");
+    Require(!readyFactoryState.CanNarrate, "Factory narration should stay unavailable after participant readiness becomes true");
+    Require(readyFactoryState.Message.Contains("shared group root", StringComparison.Ordinal), "ready Factory copy should disclose that the initiating Operator turn becomes the durable group root");
+
+    var anchoredFactory = readyFactory with
+    {
+        HasFactoryConversationRoot = true,
+        FactoryConversationRootAssigned = true,
+        FactoryConversationEntryCount = 56,
+        FactoryConversationOmittedCount = 6
+    };
+    var anchoredState = ArenaOperationCoordinator.EvaluateReadiness(anchoredFactory);
+    Require(ArenaOperationCoordinator.FactoryInputState(anchoredFactory) == FactoryConversationInputState.Ready, "a resolved durable root should make the shared Factory conversation ready");
+    Require(anchoredState.Message.Contains("Models receive 50 of 56 eligible attributed public conversation entries", StringComparison.Ordinal), "anchored readiness should distinguish included model context from total eligible group entries");
+    Require(anchoredState.Message.Contains("own earlier replies remain self-history", StringComparison.Ordinal), "anchored readiness should explain the per-agent self-history contract");
+    Require(anchoredState.Message.Contains("6 older whole entries are omitted", StringComparison.Ordinal), "anchored readiness should report whole-entry window omissions");
+
+    var deletedRoot = readyFactory with
+    {
+        HasFactoryConversationRoot = false,
+        FactoryConversationRootAssigned = true,
+        FactoryConversationEntryCount = 3
+    };
+    var deletedRootState = ArenaOperationCoordinator.EvaluateReadiness(deletedRoot);
+    Require(ArenaOperationCoordinator.FactoryInputState(deletedRoot) == FactoryConversationInputState.MissingRoot, "surviving conversation markers with no resolvable root should be distinguished from an unanchored session");
+    Require(!ArenaOperationCoordinator.HasFactoryInput(deletedRoot), "a later eligible Operator row must not silently replace a missing anchored root");
+    Require(!deletedRootState.CanRun && deletedRootState.Message.Contains("root is missing", StringComparison.Ordinal), "a missing Factory root should block with reset-or-fork guidance");
+}
+
+static void FactoryModeTogglePersistsAcrossConcurrencyWithSafeAuditPayload()
+{
+    var tempRoot = Path.Combine(Path.GetTempPath(), "ai-arena-factory-mode-persistence-tests", Guid.NewGuid().ToString("N"));
+    const string sessionId = "factory-mode";
+    const string promptSentinel = "PRIVATE_PROMPT_SENTINEL_DO_NOT_AUDIT";
+    const string tokenSentinel = "sk-test-factory-mode-sentinel";
+    try
+    {
+        var sessionStore = new SessionStore(tempRoot);
+        var eventLogStore = new EventLogStore(tempRoot);
+        var snapshot = SessionStore.CreateDefaultSnapshot();
+        snapshot.Engine.FactoryMode = false;
+        snapshot.Engine.Steering.Topic = promptSentinel;
+        snapshot.Engine.Steering.Global = $"global {promptSentinel}";
+        snapshot.Engine.Messages.Add(new DialogueMessage
+        {
+            Turn = 1,
+            Speaker = "Operator",
+            SpeakerId = "operator",
+            Kind = "message",
+            Status = "ok",
+            Text = promptSentinel
+        });
+        var configKey = snapshot.Configs.Keys.First();
+        var config = snapshot.Configs[configKey];
+        snapshot.Configs[configKey] = new ModelProviderConfig
+        {
+            BaseUrl = config.BaseUrl,
+            ApiMode = config.ApiMode,
+            ApiToken = tokenSentinel,
+            Model = config.Model,
+            Timeout = config.Timeout,
+            Temperature = config.Temperature,
+            MaxOutputTokens = config.MaxOutputTokens,
+            ContextLength = config.ContextLength,
+            Reasoning = config.Reasoning,
+            NativeStatefulChat = config.NativeStatefulChat,
+            NativeIdleTtlSeconds = config.NativeIdleTtlSeconds
+        };
+        sessionStore.SaveSnapshotAsync(snapshot, sessionId).GetAwaiter().GetResult();
+
+        var beforeSaveCalls = 0;
+        async Task ForceFirstAttemptStaleAsync(int attempt, ArenaSnapshot _, CancellationToken cancellationToken)
+        {
+            beforeSaveCalls++;
+            if (attempt != 0)
+            {
+                return;
+            }
+
+            var concurrent = await sessionStore.LoadSnapshotAsync(sessionId, cancellationToken)
+                ?? throw new InvalidOperationException("concurrent Factory-mode fixture snapshot should load");
+            concurrent.Engine.Summary = "concurrent summary preserved";
+            await sessionStore.SaveSnapshotAsync(concurrent, sessionId, cancellationToken);
+        }
+
+        var saved = MatchSetupCoordinator.PersistFactoryModeAsync(
+            sessionStore,
+            eventLogStore,
+            sessionId,
+            factoryMode: true,
+            beforeSaveAsync: ForceFirstAttemptStaleAsync).GetAwaiter().GetResult();
+        Require(saved, "Factory mode should save after one bounded stale-revision retry");
+        Require(beforeSaveCalls == 2, "Factory-mode persistence should reload and retry exactly once after the forced concurrency conflict");
+
+        var persisted = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("persisted Factory-mode snapshot should load");
+        Require(persisted.Engine.FactoryMode, "the durable session snapshot should retain Factory mode after reload");
+        Require(persisted.Engine.Summary == "concurrent summary preserved", "the retry should preserve unrelated data saved by the concurrent writer");
+        var persistedRoot = persisted.Engine.Messages.Single();
+        var conversationId = persistedRoot.Metadata[FactoryConversationService.ConversationIdMetadataKey].GetString() ?? "";
+        Require(persistedRoot.Metadata[FactoryConversationService.IsRootMetadataKey].GetBoolean(), "the first Factory transition should durably anchor the latest eligible public Operator turn");
+        Require(!string.IsNullOrWhiteSpace(conversationId), "the Factory transition should persist an opaque conversation identity");
+
+        var eventLines = File.ReadAllLines(eventLogStore.EventPath(sessionId));
+        Require(eventLines.Length == 1, "a stale first save should emit no audit event and the successful retry should emit exactly one");
+        using (var audit = JsonDocument.Parse(eventLines[0]))
+        {
+            var root = audit.RootElement;
+            Require(root.GetProperty("type").GetString() == "native_model_behavior_mode_changed", "the durable mode change should use the stable audit event type");
+            var payload = root.GetProperty("payload");
+            var fields = payload.EnumerateObject().Select(property => property.Name).ToHashSet(StringComparer.Ordinal);
+            Require(fields.SetEquals(["previous_mode", "mode"]), "the mode-change audit payload should contain only the old and new mode");
+            Require(payload.GetProperty("previous_mode").GetString() == "arena" && payload.GetProperty("mode").GetString() == "factory", "the audit payload should truthfully record the Arena-to-Factory transition");
+        }
+
+        var auditText = eventLines[0];
+        Require(!auditText.Contains(promptSentinel, StringComparison.Ordinal), "the mode-change audit must not copy topic, global, transcript, or prompt content");
+        Require(!auditText.Contains(tokenSentinel, StringComparison.Ordinal), "the mode-change audit must not copy provider token material");
+        Require(!auditText.Contains(tempRoot, StringComparison.OrdinalIgnoreCase), "the mode-change audit must not expose an absolute data path");
+
+        var idempotent = MatchSetupCoordinator.PersistFactoryModeAsync(sessionStore, eventLogStore, sessionId, factoryMode: true).GetAwaiter().GetResult();
+        Require(idempotent, "reapplying the persisted Factory mode should succeed idempotently");
+        Require(File.ReadAllLines(eventLogStore.EventPath(sessionId)).Length == 1, "an idempotent mode write should not emit a misleading duplicate transition event");
+
+        Require(MatchSetupCoordinator.PersistFactoryModeAsync(sessionStore, eventLogStore, sessionId, factoryMode: false).GetAwaiter().GetResult(), "switching an anchored group back to Arena should persist");
+        Require(MatchSetupCoordinator.PersistFactoryModeAsync(sessionStore, eventLogStore, sessionId, factoryMode: true).GetAwaiter().GetResult(), "resuming Factory after an Arena interlude should persist");
+        var resumedFactory = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("resumed Factory transition should reload");
+        Require(resumedFactory.Engine.Messages.Single().Metadata[FactoryConversationService.ConversationIdMetadataKey].GetString() == conversationId, "mode toggles must preserve the existing Factory group identity");
+        Require(resumedFactory.Engine.Messages.Single().Metadata[FactoryConversationService.RootMessageIdMetadataKey].GetString() == persistedRoot.MessageId, "mode toggles must preserve the original Operator root");
+
+        const string pendingSessionId = "factory-mode-pending";
+        sessionStore.SaveSnapshotAsync(SessionStore.CreateDefaultSnapshot(), pendingSessionId).GetAwaiter().GetResult();
+        Require(MatchSetupCoordinator.PersistFactoryModeAsync(sessionStore, eventLogStore, pendingSessionId, factoryMode: true).GetAwaiter().GetResult(), "Factory mode should still persist before the first public Operator turn exists");
+        var pendingFactory = sessionStore.LoadSnapshotAsync(pendingSessionId).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("pending Factory transition should reload");
+        Require(pendingFactory.Engine.FactoryMode, "a no-input Factory transition should preserve the requested mode");
+        Require(!new FactoryConversationService().Inspect(pendingFactory).IsAnchored, "a no-input Factory transition must not invent a conversation root or identity");
+    }
+    finally
+    {
+        if (Directory.Exists(tempRoot))
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+}
+
+static void FactoryModeUiActionsRemainUnavailableAndHonest()
+{
+    RunStaTest(() =>
+    {
+        var agent = new AgentState("alpha", "Alpha", "waiting", "persona", "default", "default", "", "model-a", true, false, []);
+        var publicOperatorTurn = TranscriptForTest(1, "Operator", "operator", "message", "ok") with { Text = "Explain this function." };
+        var readyFactory = SnapshotForOverviewTest(true, "model-a", "", 0, [publicOperatorTurn], [agent]) with
+        {
+            FactoryMode = true,
+            DecisionCard = "Retained Arena-mode decision evidence."
+        };
+
+        var busy = false;
+        var autoChatButton = new Button();
+        var oneTurnButton = new Button();
+        var narrateButton = new Button();
+        var arenaOperations = new ArenaOperationCoordinator(
+            new SemaphoreSlim(1, 1),
+            new TextBlock(),
+            new TextBlock(),
+            autoChatButton,
+            oneTurnButton,
+            new Button(),
+            narrateButton,
+            new Button(),
+            [],
+            () => busy,
+            value => busy = value,
+            () => false,
+            (_, _) => { },
+            (_, _) => { },
+            (_, _) => { },
+            _ => { },
+            () => { },
+            _ => { },
+            _ => { },
+            _ => { },
+            _ => { },
+            () => { });
+        arenaOperations.UpdateReadiness(ArenaOperationCoordinator.EvaluateReadiness(readyFactory));
+        Require(autoChatButton.IsEnabled && oneTurnButton.IsEnabled, "Factory participant actions should enable after eligible public input");
+        Require(!narrateButton.IsEnabled, "the hosted narrator action should remain unavailable in Factory mode");
+        Require(AutomationProperties.GetHelpText(narrateButton).Contains("unavailable in Factory mode", StringComparison.Ordinal), "the disabled narrator action should expose the mode reason to UI Automation");
+        Require((narrateButton.ToolTip?.ToString() ?? "").Contains("Apply Match Setup", StringComparison.Ordinal), "pointer help should tell users how to restore narration");
+
+        var tempRoot = Path.Combine(Path.GetTempPath(), "ai-arena-factory-ui-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var agentPanel = new StackPanel();
+            Brush TestBrush(string key) => key.Contains("Danger", StringComparison.OrdinalIgnoreCase)
+                ? Brushes.IndianRed
+                : key.Contains("Warning", StringComparison.OrdinalIgnoreCase)
+                    ? Brushes.Gold
+                    : Brushes.DeepSkyBlue;
+            var agentBoard = new AgentBoardCoordinator(
+                new SessionStore(tempRoot),
+                new EventLogStore(tempRoot),
+                agentPanel,
+                () => null,
+                () => false,
+                () => false,
+                TestBrush,
+                (left, _, _) => left,
+                TestBrush,
+                value => value,
+                _ => Task.CompletedTask,
+                (_, _) => { },
+                (_, _, action, _) => action(),
+                (_, _) => Task.CompletedTask,
+                _ => Task.CompletedTask,
+                _ => { },
+                () => false);
+
+            var missingInput = readyFactory with { Messages = [] };
+            agentBoard.Populate(missingInput, "alpha");
+            var missingRun = DescendantButtons(agentPanel).Single(button => AutomationProperties.GetName(button) == "Run one turn for Alpha");
+            var missingNarrator = DescendantButtons(agentPanel).Single(button => AutomationProperties.GetName(button) == "Narrate now");
+            Require(!missingRun.IsEnabled, "the per-agent Factory action should be gated before public Operator input exists");
+            Require(AutomationProperties.GetHelpText(missingRun).Contains("public Operator turn", StringComparison.Ordinal), "the gated per-agent action should expose the missing-input prerequisite");
+            Require(!missingNarrator.IsEnabled, "the agent-board narrator action should be unavailable in Factory mode");
+            Require(AutomationProperties.GetHelpText(missingNarrator).Contains("unavailable in Factory mode", StringComparison.Ordinal), "the agent-board narrator action should expose honest help");
+
+            agentBoard.Populate(readyFactory, "alpha");
+            var readyRun = DescendantButtons(agentPanel).Single(button => AutomationProperties.GetName(button) == "Run one turn for Alpha");
+            var readyNarrator = DescendantButtons(agentPanel).Single(button => AutomationProperties.GetName(button) == "Narrate now");
+            Require(readyRun.IsEnabled, "the per-agent action should enable once its one-agent Factory prerequisites are met");
+            Require(!readyNarrator.IsEnabled, "participant readiness must not accidentally enable Factory narration");
+
+            var providerBlocked = readyFactory with { ProviderOnline = false, ProviderLastError = "offline" };
+            agentBoard.Populate(providerBlocked, "alpha");
+            var providerBlockedRun = DescendantButtons(agentPanel).Single(button => AutomationProperties.GetName(button) == "Run one turn for Alpha");
+            Require(!providerBlockedRun.IsEnabled, "the per-agent action should remain gated when the provider is offline");
+            Require(AutomationProperties.GetHelpText(providerBlockedRun).Contains("provider", StringComparison.OrdinalIgnoreCase), "a provider-blocked Factory action should report the actual provider prerequisite");
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+
+        Button CreatePanelAction(string text, RoutedEventHandler? handler, bool enabled, TranscriptActionKind _, string? __)
+        {
+            var button = new Button { Content = text, IsEnabled = enabled };
+            AutomationProperties.SetName(button, text);
+            if (handler is not null)
+            {
+                button.Click += handler;
+            }
+
+            return button;
+        }
+
+        var adjunct = new TranscriptAdjunctCoordinator(
+            new DiscourseDiagnosticsService(),
+            new VoiceStyleAdherenceService(),
+            CreateTranscriptCardRendererForTest(),
+            () => false,
+            () => new Dictionary<string, string>(),
+            () => [],
+            () => false,
+            AccentResourceBrush,
+            ShellUiHelpers.BlendBrush,
+            _ => AccentResourceBrush("AlphaAccentBrush"),
+            _ => true,
+            value => value,
+            () => false,
+            _ => AccentResourceBrush("NarratorAccentBrush"),
+            FormatTranscriptNumberForTest,
+            FormatTranscriptDurationForTest,
+            CreatePanelAction,
+            () => { },
+            _ => { },
+            () => { },
+            () => Task.CompletedTask);
+        var decisionPanel = adjunct.CreateDecisionCardPanel(readyFactory);
+        var generateDecision = DescendantButtons(decisionPanel).Single(button => AutomationProperties.GetName(button) == "Generate");
+        Require(!generateDecision.IsEnabled, "Decision Card generation should be unavailable in Factory mode");
+        Require(AutomationProperties.GetHelpText(generateDecision).Contains("unavailable in Factory mode", StringComparison.Ordinal), "disabled Decision Card generation should expose the mode reason to UI Automation");
+        var decisionText = DescendantTextBlocks(decisionPanel).Select(block => block.Text).ToArray();
+        Require(decisionText.Any(text => text.Contains("retained from an earlier Arena-mode run", StringComparison.Ordinal)), "Factory mode should label retained Decision Card evidence without presenting it as newly generated");
+        Require(decisionText.Any(text => text.Contains("Retained Arena-mode decision evidence", StringComparison.Ordinal)), "Factory mode should preserve inspectable prior Decision Card evidence");
+    });
+}
+
+static void FactoryModeFailedCompletionsKeepSystemEventStatusHonest()
+{
+    var plan = new OneTurnPlan(true, "alpha", "Alpha", null, null, "");
+    var failedMessage = new DialogueMessage
+    {
+        Turn = 3,
+        Speaker = "Alpha",
+        SpeakerId = "alpha",
+        Kind = "message",
+        Status = "error",
+        Text = "Model call failed: provider rejected the request.",
+        Model = new ModelMetadata { Model = "model-a", LatencyMs = 321 }
+    };
+    var failedCompletion = new ModelCompletionResult(
+        false,
+        "",
+        "model-a",
+        "",
+        "",
+        321,
+        0,
+        0,
+        0,
+        "provider rejected the request",
+        DateTimeOffset.UtcNow);
+    var result = OneTurnResult.Completed(plan, failedMessage, failedCompletion);
+    var original = TranscriptForTest(3, "Alpha", "alpha", "message", "ok");
+    var agent = new AgentState("alpha", "Alpha", "waiting", "", "default", "default", "", "model-a", true, false, []);
+
+    Require(result.Ok, "the persisted-turn wrapper intentionally records that the attempt executed even when the provider completion failed");
+    Require(!ArenaRunCoordinator.ModelTurnSucceeded(result), "a failed provider completion must not be reinterpreted as a successful model turn");
+    Require(ArenaRunCoordinator.OneTurnStatus(result).StartsWith("1 TURN failed:", StringComparison.Ordinal), "one-turn status should label a persisted failed completion as failed");
+    Require(ArenaRunCoordinator.AgentTurnStatus(agent, result).StartsWith("Alpha one-shot failed:", StringComparison.Ordinal), "per-agent status should label a persisted failed completion as failed");
+    Require(ArenaRunCoordinator.RetryStatus(original, result).StartsWith("Retry failed:", StringComparison.Ordinal), "retry status should not claim that a failed replacement succeeded");
+    Require(ArenaRunCoordinator.AutoChatStatus(result).StartsWith("Auto Chat stopped:", StringComparison.Ordinal), "auto chat should stop on a failed completion");
+    foreach (var status in new[]
+             {
+                 ArenaRunCoordinator.OneTurnStatus(result),
+                 ArenaRunCoordinator.AgentTurnStatus(agent, result),
+                 ArenaRunCoordinator.RetryStatus(original, result),
+                 ArenaRunCoordinator.AutoChatStatus(result)
+             })
+    {
+        Require(status.Contains("provider rejected the request", StringComparison.Ordinal), "failed-completion status should retain the bounded provider reason");
+        Require(status.Contains("System event was recorded", StringComparison.Ordinal), "an executed failure should disclose that its inspectable System event remains in the transcript");
+        Require(!status.Contains(" complete:", StringComparison.Ordinal) && !status.Contains(" spoke ", StringComparison.Ordinal), "failed-completion status must not use success language");
+    }
+
+    var transcriptFailure = TranscriptForTest(3, "Alpha", "alpha", "message", "error") with
+    {
+        Text = failedMessage.Text
+    };
+    Require(TranscriptCardRenderer.IsSystemEvent(transcriptFailure, isInternet: false), "a persisted provider failure should render through the System-event visual contract");
+    Require(TranscriptCardRenderer.TranscriptSpeakerTitle(transcriptFailure, isInternet: false, isSystemEvent: true) == "System Event", "a provider failure card should identify itself as a System event rather than an agent response");
+    Require(TranscriptCardRenderer.TranscriptRailLabel(transcriptFailure, isInternet: false) == "System", "the full transcript rail should label a provider failure as System");
+    Require(TranscriptCardRenderer.CompactRailLabel(transcriptFailure, isInternet: false) == "SYS", "the compact transcript rail should label a provider failure as SYS");
+}
+
 static void TranscriptAdjunctHelpersFormatLabels()
 {
     var left = TranscriptForTest(4, "Alpha", "alpha", "message", "ok");
@@ -494,6 +891,106 @@ static void TranscriptCardRendererLabelsInternetCards()
     Require(!TranscriptCardRenderer.CanSpeakMessage(tool with { Text = "" }), "empty transcript cards should not expose speech playback");
 }
 
+static void TranscriptCardRendererHostsAccessiblePublicOperatorCard()
+{
+    RunStaTest(() =>
+    {
+        const string operatorText = "Compare the public group evidence before the next model turn.";
+        var message = TranscriptForTest(21, "Operator", "operator", "message", "ok") with
+        {
+            Text = operatorText,
+            Model = "MODEL_METADATA_MUST_NOT_RENDER",
+            LatencyMs = 912,
+            CompletionTokens = 44,
+            TokensPerSecond = 12
+        };
+        var card = CreateTranscriptCardRendererForTest(turnCompare: true).CreateCard(
+            message,
+            retryable: true,
+            searchMatch: false,
+            isLatest: true);
+        var host = new Window
+        {
+            Width = 960,
+            Height = 360,
+            WindowStyle = WindowStyle.None,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false,
+            Left = -10000,
+            Top = -10000,
+            Content = card
+        };
+
+        try
+        {
+            host.Show();
+            host.UpdateLayout();
+            var cardPeer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(card)
+                ?? throw new InvalidOperationException("Hosted public Operator card did not create an automation grouping peer.");
+            Require(card is AccessibleCardBorder
+                && cardPeer.GetAutomationControlType() == System.Windows.Automation.Peers.AutomationControlType.Group
+                && cardPeer.GetName() == "Operator transcript card for turn 21"
+                && cardPeer.GetHelpText().Contains("Public Operator group-chat message", StringComparison.Ordinal)
+                && cardPeer.GetHelpText().Contains("Factory public group history", StringComparison.Ordinal),
+                "the hosted public Operator card must expose a named, privacy-safe UI Automation group and truthful group-history help");
+
+            var visibleText = DescendantTextBlocks(card).ToArray();
+            Require(visibleText.Any(block => block.Text == operatorText)
+                && visibleText.Count(block => block.Text == "Operator") >= 2,
+                "the hosted public group transcript must visibly render the Operator attribution in both header/rail context and preserve its response text");
+            Require(!visibleText.Any(block => block.Text.Contains("MODEL_METADATA_MUST_NOT_RENDER", StringComparison.Ordinal)
+                    || block.Text.Contains("912", StringComparison.Ordinal)
+                    || block.Text.Contains("44 Tok", StringComparison.Ordinal)),
+                "public Operator cards must not render model or provider telemetry as if the Operator were an observed model call");
+            Require(string.IsNullOrEmpty(TranscriptCardRenderer.BuildModelStatsSummary(
+                    message,
+                    FormatTranscriptDurationForTest,
+                    FormatTranscriptNumberForTest)),
+                "public Operator cards must keep model-stat synthesis unavailable even when incidental values are present");
+
+            var metadata = visibleText.Single(block =>
+                AutomationProperties.GetName(block) == "Model and role metadata for turn 21");
+            var metadataPeer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(metadata)
+                ?? new System.Windows.Automation.Peers.TextBlockAutomationPeer(metadata);
+            Require(metadata.Text == "Operator"
+                && metadataPeer.GetName() == "Model and role metadata for turn 21"
+                && metadataPeer.GetHelpText() == "Operator",
+                "Operator attribution metadata must remain available by name and help text without inventing model identity");
+
+            var operatorFilter = new CheckBox { IsChecked = true };
+            var filters = new TranscriptSearchCoordinator(
+                host,
+                System.Windows.Threading.Dispatcher.CurrentDispatcher,
+                new Popup(),
+                new Button(),
+                new TextBox(),
+                new Button(),
+                new Border(),
+                new StackPanel(),
+                new TextBlock(),
+                new ComboBox(),
+                new CheckBox { IsChecked = true },
+                new CheckBox { IsChecked = true },
+                new CheckBox { IsChecked = true },
+                operatorFilter,
+                () => false,
+                AccentResourceBrush,
+                AgentRosterService.IsParticipantId,
+                () => null,
+                () => { });
+            Require(filters.FilterMessages([message]).Single() == message,
+                "the default public transcript filter must keep the successful Operator card visible");
+            operatorFilter.IsChecked = false;
+            Require(!filters.FilterMessages([message]).Any(),
+                "disabling only the Operator speaker filter must remove the Operator card without reclassifying it as an agent or System event");
+        }
+        finally
+        {
+            host.Close();
+        }
+    });
+}
+
 static void TranscriptCardRendererHidesInternetMetadataByDefault()
 {
     var message = TranscriptForTest(9, "Beta", "beta", "message", "ok") with
@@ -560,16 +1057,15 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
             ProviderResponseId = "response-42",
             Reasoning = "Check the claim against the policy."
         };
-        const string expectedSummary = "qwen/qwen3-4b  \u00B7  10.0s  \u00B7  536 Tok  \u00B7  89 tok/s";
+        const string expectedSummary = "10.0s  \u00B7  TTFT 211 ms  \u00B7  536 Tok  \u00B7  89 tok/s";
 
         Require(
             TranscriptCardRenderer.BuildModelStatsSummary(message, FormatTranscriptDurationForTest, FormatTranscriptNumberForTest) == expectedSummary,
-            "the header summary should keep model, response time, generated tokens, and throughput in the approved order");
+            "the telemetry summary should keep response time, first-token latency, generated tokens, and throughput in the approved order");
 
         var helpText = renderer.BuildModelStatsHelpText(message);
         foreach (var expected in new[]
         {
-            "qwen/qwen3-4b",
             "Bark-only",
             "10.0s",
             "Time to first token",
@@ -582,11 +1078,13 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
             "1,394",
             "Cues: strong 88",
             "ok",
-            "response-42"
+            "Provider receipt: available (identifier hidden)"
         })
         {
             Require(helpText.Contains(expected, StringComparison.OrdinalIgnoreCase), $"model-stat help should include '{expected}'");
         }
+        Require(!helpText.Contains("response-42", StringComparison.Ordinal),
+            "transcript telemetry help must not expose the provider response identifier");
 
         var card = renderer.CreateCard(
             message,
@@ -595,12 +1093,12 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
             isLatest: false);
 
         var statsHost = LogicalDescendants<FrameworkElement>(card)
-            .SingleOrDefault(element => AutomationProperties.GetName(element).StartsWith("Model statistics for turn 12:", StringComparison.Ordinal));
-        Require(statsHost is not null, "meaningful model telemetry should create one focusable header summary");
+            .SingleOrDefault(element => AutomationProperties.GetName(element).StartsWith("Message telemetry for turn 12:", StringComparison.Ordinal));
+        Require(statsHost is not null, "meaningful model telemetry should create one focusable telemetry summary");
         Require(statsHost!.Focusable, "keyboard users should be able to focus the model-stat summary");
         Require(
             AutomationProperties.GetName(statsHost).Contains(expectedSummary, StringComparison.Ordinal),
-            "the model-stat automation name should include the same brief summary that sighted users see");
+            "the telemetry automation name should include the same brief summary that sighted users see");
         Require(
             statsHost.ToolTip is ToolTip { Content: TextBlock tooltipText } && tooltipText.Text == helpText,
             "pointer hover should reveal the same detailed model-stat text in a theme-aware tooltip");
@@ -608,11 +1106,17 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
         Require(
             statsHost is ContentControl { Content: Border { Child: TextBlock summaryText } } && summaryText.Text == expectedSummary,
             "the accessible stats host should render the deterministic brief summary");
+        var metadata = LogicalDescendants<TextBlock>(card)
+            .Single(block => AutomationProperties.GetName(block) == "Model and role metadata for turn 12");
+        Require(metadata.Text.Contains("Agent", StringComparison.Ordinal)
+            && metadata.Text.Contains("qwen/qwen3-4b", StringComparison.Ordinal)
+            && metadata.Text.Contains("Bark-only", StringComparison.Ordinal),
+            "agent identity should be followed by safe model and role metadata before the response");
 
         var actionPanel = LogicalDescendants<WrapPanel>(card)
             .SingleOrDefault(panel => AutomationProperties.GetName(panel) == "Message actions for turn 12");
         Require(actionPanel is not null, "message actions should have a stable automation-labelled footer");
-        Require(actionPanel!.HorizontalAlignment == HorizontalAlignment.Right, "the action footer should align to the right of model reasoning");
+        Require(actionPanel!.HorizontalAlignment == HorizontalAlignment.Right, "the action footer should align to the right after reasoning and telemetry");
         var actionButtons = actionPanel.Children.OfType<Button>().ToArray();
         var actions = actionButtons.Select(AutomationProperties.GetName).ToArray();
         Require(
@@ -668,7 +1172,8 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
         var reasoning = expanders.Single(expander => expander.Header?.ToString() == "Model reasoning");
         var footer = LogicalDescendants<Grid>(card)
             .Single(element => AutomationProperties.GetName(element) == "Transcript message footer for turn 12");
-        Require(Grid.GetColumn(reasoning) == 0 && Grid.GetColumnSpan(reasoning) == 2, "reasoning should span the complete footer width in every responsive tier");
+        Require(Grid.GetRow(reasoning) == 0 && Grid.GetColumn(reasoning) == 0 && Grid.GetColumnSpan(reasoning) == 1,
+            "reasoning should occupy the complete first footer row in every responsive tier");
         Require(
             reasoning.HorizontalAlignment == HorizontalAlignment.Stretch
             && reasoning.HorizontalContentAlignment == HorizontalAlignment.Stretch
@@ -682,9 +1187,8 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
                 }
             },
             "reasoning disclosure, content chrome, and text should all stretch across the card");
-        Require(
-            Panel.GetZIndex(actionPanel) > Panel.GetZIndex(reasoning),
-            "the wide action rail should overlay the reasoning header without constraining expanded reasoning content");
+        Require(Grid.GetRow(statsHost) == 1 && Grid.GetRow(actionPanel) == 3,
+            "transcript hierarchy must remain response, reasoning, telemetry, then actions at every width");
         Require(
             !LogicalDescendants<Button>(reasoning).Any(button =>
                 actions.Contains(AutomationProperties.GetName(button), StringComparer.Ordinal)),
@@ -726,11 +1230,67 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
         var noReasoningActions = LogicalDescendants<WrapPanel>(noReasoningCard)
             .Single(panel => AutomationProperties.GetName(panel) == "Message actions for turn 14");
         Require(
-            Grid.GetColumn(noReasoningActions) == 0 && Grid.GetColumnSpan(noReasoningActions) == 2,
-            "when reasoning is absent, right-aligned actions should occupy the full footer width");
+            Grid.GetRow(noReasoningActions) == 3
+            && Grid.GetColumn(noReasoningActions) == 0
+            && Grid.GetColumnSpan(noReasoningActions) == 1,
+            "when reasoning is absent, telemetry and right-aligned actions should retain their deterministic hierarchy rows");
         Require(
             !LogicalDescendants<Expander>(noReasoningFooter).Any(expander => expander.Header?.ToString() == "Model reasoning"),
             "cards without reasoning should not reserve an empty reasoning disclosure");
+
+        var detailsRenderer = CreateTranscriptCardRendererForTest(turnCompare: true, showInternetDetails: true);
+        var sourcedCard = detailsRenderer.CreateCard(
+            message with
+            {
+                Turn = 17,
+                InternetTool = "search",
+                InternetQuery = "verified source",
+                InternetSources = ["Evidence - https://example.test/evidence - verified excerpt"]
+            },
+            retryable: true,
+            searchMatch: false,
+            isLatest: false);
+        var sourcedFooter = LogicalDescendants<Grid>(sourcedCard)
+            .SingleOrDefault(element => AutomationProperties.GetName(element) == "Transcript message footer for turn 17");
+        Require(sourcedFooter is not null, "source-backed transcript card lost its ordered footer");
+        var sourcedReasoning = LogicalDescendants<Expander>(sourcedFooter!)
+            .SingleOrDefault(expander => expander.Header?.ToString() == "Model reasoning");
+        var sourcedInternet = LogicalDescendants<Expander>(sourcedFooter!)
+            .SingleOrDefault(expander => expander.Header?.ToString() == "Internet details");
+        var sourcedTelemetry = LogicalDescendants<FrameworkElement>(sourcedFooter!)
+            .SingleOrDefault(element => AutomationProperties.GetName(element).StartsWith("Message telemetry for turn 17:", StringComparison.Ordinal));
+        var sourcedActions = LogicalDescendants<WrapPanel>(sourcedFooter!)
+            .SingleOrDefault(panel => AutomationProperties.GetName(panel) == "Message actions for turn 17");
+        Require(sourcedReasoning is not null, "source-backed transcript footer lost model reasoning");
+        Require(sourcedTelemetry is not null, "source-backed transcript footer lost model telemetry");
+        Require(sourcedInternet is not null, "source-backed transcript footer lost internet evidence");
+        Require(sourcedActions is not null, "source-backed transcript footer lost actions");
+        Require(
+            Grid.GetRow(sourcedReasoning!) == 0
+            && Grid.GetRow(sourcedTelemetry!) == 1
+            && Grid.GetRow(sourcedInternet!) == 2
+            && Grid.GetRow(sourcedActions!) == 3,
+            "internet evidence must not interrupt the response, reasoning, telemetry, then actions hierarchy");
+
+        var responsiveHeader = LogicalDescendants<Grid>(card)
+            .SingleOrDefault(element => AutomationProperties.GetName(element) == "Transcript header for turn 12");
+        Require(responsiveHeader is not null, "transcript card lost its responsive header host");
+        var responsiveTime = LogicalDescendants<TextBlock>(responsiveHeader!)
+            .SingleOrDefault(element => AutomationProperties.GetName(element) == "Message time for turn 12");
+        var responsiveMetadata = LogicalDescendants<TextBlock>(responsiveHeader!)
+            .SingleOrDefault(element => AutomationProperties.GetName(element) == "Model and role metadata for turn 12");
+        Require(responsiveTime is not null && responsiveMetadata is not null,
+            "transcript header lost its time or model-role metadata contract");
+        card.Measure(new Size(680, double.PositiveInfinity));
+        card.Arrange(new Rect(0, 0, 680, card.DesiredSize.Height));
+        card.UpdateLayout();
+        Require(Grid.GetRow(responsiveTime!) == 1 && Grid.GetRow(responsiveMetadata!) == 2,
+            "a constrained transcript card should stack time and metadata instead of overflowing its header");
+        card.Measure(new Size(960, double.PositiveInfinity));
+        card.Arrange(new Rect(0, 0, 960, card.DesiredSize.Height));
+        card.UpdateLayout();
+        Require(Grid.GetRow(responsiveTime!) == 0 && Grid.GetRow(responsiveMetadata!) == 1,
+            "a wide transcript card should restore the compact inline header without changing content order");
 
         var compactRenderer = CreateTranscriptCardRendererForTest(turnCompare: true, compact: true);
         var compactCard = compactRenderer.CreateCard(
@@ -740,7 +1300,7 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
             isLatest: true);
         Require(
             LogicalDescendants<FrameworkElement>(compactCard)
-                .Any(element => AutomationProperties.GetName(element).StartsWith("Model statistics for turn 15:", StringComparison.Ordinal)),
+                .Any(element => AutomationProperties.GetName(element).StartsWith("Message telemetry for turn 15:", StringComparison.Ordinal)),
             "compact cards should keep the same model-stat summary");
         var compactActions = LogicalDescendants<WrapPanel>(compactCard)
             .Single(panel => AutomationProperties.GetName(panel) == "Message actions for turn 15");
@@ -751,6 +1311,37 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
                 && button.MinWidth == 30
                 && button.MinHeight == 30),
             "compact and regular cards should share the same quiet 30-DIP action rail");
+
+        var privateMetadataCard = renderer.CreateCard(
+            message with
+            {
+                Turn = 17,
+                Model = @"C:\private\models\secret.gguf",
+                ProviderResponseId = "private-provider-receipt"
+            },
+            retryable: true,
+            searchMatch: false,
+            isLatest: false);
+        var privateVisibleText = string.Join(
+            "\n",
+            LogicalDescendants<TextBlock>(privateMetadataCard).Select(block => block.Text));
+        var privateAutomationText = string.Join(
+            "\n",
+            LogicalDescendants<FrameworkElement>(privateMetadataCard).SelectMany(element => new[]
+            {
+                AutomationProperties.GetName(element),
+                AutomationProperties.GetHelpText(element),
+                element.ToolTip?.ToString() ?? ""
+            }));
+        Require(privateVisibleText.Contains("local model", StringComparison.OrdinalIgnoreCase)
+            && !privateVisibleText.Contains(@"C:\private", StringComparison.OrdinalIgnoreCase)
+            && !privateAutomationText.Contains(@"C:\private", StringComparison.OrdinalIgnoreCase)
+            && !privateAutomationText.Contains("private-provider-receipt", StringComparison.Ordinal),
+            "transcript model metadata and telemetry must redact absolute paths and private provider receipt identifiers from visual and automation surfaces");
+        Require(TranscriptCardRenderer.SafeModelLabel("qwen/qwen3-4b") == "qwen/qwen3-4b"
+            && TranscriptCardRenderer.SafeModelLabel(@"C:\models\secret.gguf") == "local model"
+            && TranscriptCardRenderer.SafeModelLabel("https://private.example/model") == "external model reference",
+            "model labels should preserve ordinary IDs while redacting absolute local and external references");
 
         var sharedActionCoordinator = new TranscriptActionCoordinator(() => false, () => false, AccentResourceBrush);
         var sharedIconButton = sharedActionCoordinator.CreateButton("Shared", null, true, iconGlyph: "\uE8C8");
@@ -843,8 +1434,10 @@ static void TranscriptCardRendererOmitsUnavailableStatsAndResolvesResponsiveTier
 
     Require(TranscriptCardRenderer.ResolveCardHeaderLayout(719) == TranscriptCardHeaderLayout.Stacked, "headers below 720 DIP should stack model statistics");
     Require(TranscriptCardRenderer.ResolveCardHeaderLayout(720) == TranscriptCardHeaderLayout.Inline, "headers at 720 DIP should keep model statistics inline");
-    Require(TranscriptCardRenderer.ResolveCardFooterLayout(619) == TranscriptCardFooterLayout.Stacked, "footers below 620 DIP should place actions beneath reasoning");
-    Require(TranscriptCardRenderer.ResolveCardFooterLayout(620) == TranscriptCardFooterLayout.SideBySide, "footers at 620 DIP should keep reasoning and actions side by side");
+    Require(TranscriptCardRenderer.ResolveCardFooterLayout(619) == TranscriptCardFooterLayout.Stacked
+        && TranscriptCardRenderer.ResolveCardFooterLayout(620) == TranscriptCardFooterLayout.Stacked
+        && TranscriptCardRenderer.ResolveCardFooterLayout(1500) == TranscriptCardFooterLayout.Stacked,
+        "all responsive tiers should preserve reasoning, telemetry, and actions as sequential hierarchy rows");
 }
 
 static string FormatTranscriptDurationForTest(int value)
@@ -865,7 +1458,8 @@ static string FormatTranscriptNumberForTest(int value)
 static TranscriptCardRenderer CreateTranscriptCardRendererForTest(
     bool turnCompare = false,
     bool compact = false,
-    bool selectedForCompare = false)
+    bool selectedForCompare = false,
+    bool showInternetDetails = false)
 {
     var actionCoordinator = new TranscriptActionCoordinator(() => compact, () => false, AccentResourceBrush);
     return new TranscriptCardRenderer(
@@ -894,7 +1488,7 @@ static TranscriptCardRenderer CreateTranscriptCardRendererForTest(
         _ => { },
         _ => false,
         _ => { },
-        () => false);
+        () => showInternetDetails);
 }
 
 static void TranscriptMutationCoordinatorFormatsStatuses()
@@ -910,6 +1504,89 @@ static void TranscriptMutationCoordinatorFormatsStatuses()
     Require(!TranscriptMutationCoordinator.CanMutateMessage(pinned, arenaBusy: true, session), "busy arena should block transcript mutation");
     Require(!TranscriptMutationCoordinator.CanMutateMessage(pinned, arenaBusy: false, activeSession: null), "missing session should block transcript mutation");
     Require(!TranscriptMutationCoordinator.CanMutateMessage(pinned with { Turn = 0 }, arenaBusy: false, session), "non-positive turn should block transcript mutation");
+
+    var tempRoot = Path.Combine(Path.GetTempPath(), "ai-arena-factory-root-delete-tests", Guid.NewGuid().ToString("N"));
+    const string sessionId = "factory-root-delete";
+    try
+    {
+        var sessionStore = new SessionStore(tempRoot);
+        var eventLogStore = new EventLogStore(tempRoot);
+        var transcriptService = new TranscriptService();
+        var snapshot = SessionStore.CreateDefaultSnapshot();
+        snapshot.Engine.FactoryMode = true;
+        snapshot.Engine.Messages.Clear();
+        snapshot.Engine.Agents.Clear();
+        snapshot.Engine.Agents.Add(new DialogueAgent { Id = "alpha", Name = "Alpha", Active = true });
+        var rootMessage = transcriptService.CreateOperatorMessage("Start protected Factory group.", 1);
+        var participantMessage = new DialogueMessage
+        {
+            Turn = 2,
+            Speaker = "Alpha",
+            SpeakerId = "alpha",
+            Kind = "message",
+            Status = "ok",
+            Text = "Ordinary deletable public reply.",
+            CreatedAt = rootMessage.CreatedAt + 1
+        };
+        snapshot.Engine.Messages.Add(rootMessage);
+        snapshot.Engine.Messages.Add(participantMessage);
+        snapshot.Engine.TurnCount = 2;
+        new FactoryConversationService().Resolve(snapshot);
+        sessionStore.SaveSnapshotAsync(snapshot, sessionId).GetAwaiter().GetResult();
+
+        var active = new SessionSummary(sessionId, "", true, 2, 0, 0, DateTimeOffset.UtcNow);
+        var saveCalls = 0;
+        var refreshes = 0;
+        var status = "";
+        var coordinator = new TranscriptMutationCoordinator(
+            sessionStore,
+            eventLogStore,
+            transcriptService,
+            () => active,
+            () => false,
+            async (changed, id) =>
+            {
+                saveCalls++;
+                await sessionStore.SaveSnapshotAsync(changed, id);
+            },
+            _ =>
+            {
+                refreshes++;
+                return Task.CompletedTask;
+            },
+            value => status = value);
+
+        var rootView = TranscriptForTest(rootMessage.Turn, rootMessage.Speaker, rootMessage.SpeakerId, rootMessage.Kind, rootMessage.Status) with
+        {
+            CreatedAt = rootMessage.CreatedAt,
+            Text = rootMessage.Text
+        };
+        coordinator.DeleteMessageAsync(rootView).GetAwaiter().GetResult();
+        Require(status == TranscriptMutationCoordinator.FactoryRootDeleteBlockedStatus(rootView), "a protected root delete should report the dedicated actionable status instead of claiming the turn was not found");
+        Require(status.Contains("Reset Arena", StringComparison.Ordinal) && status.Contains("clean session", StringComparison.Ordinal), "the protected-root status should explain both supported ways to begin a new group");
+        Require(saveCalls == 0 && refreshes == 0, "a blocked root deletion must not save, refresh, or announce a successful deletion");
+        var afterBlockedRoot = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("protected-root fixture should reload");
+        Require(afterBlockedRoot.Engine.Messages.Count == 2 && afterBlockedRoot.Engine.Messages.Any(FactoryConversationService.IsConversationRoot), "the root and ordinary reply should remain intact after the blocked action");
+
+        var participantView = TranscriptForTest(participantMessage.Turn, participantMessage.Speaker, participantMessage.SpeakerId, participantMessage.Kind, participantMessage.Status) with
+        {
+            CreatedAt = participantMessage.CreatedAt,
+            Text = participantMessage.Text
+        };
+        coordinator.DeleteMessageAsync(participantView).GetAwaiter().GetResult();
+        Require(saveCalls == 1 && refreshes == 1, "ordinary transcript deletion should retain its established save and refresh path");
+        var afterOrdinaryDelete = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("ordinary-delete fixture should reload");
+        Require(afterOrdinaryDelete.Engine.Messages.Count == 1 && FactoryConversationService.IsConversationRoot(afterOrdinaryDelete.Engine.Messages.Single()), "ordinary deletion should remove only the selected reply and preserve the Factory root");
+    }
+    finally
+    {
+        if (Directory.Exists(tempRoot))
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
 }
 
 static void ArenaRunCoordinatorFormatsStatuses()
@@ -3479,6 +4156,28 @@ static void ShellNavigationCoordinatorSelectsThemes()
         Require(ThemePalette.ContrastRatio(theme.Text, theme.Input) >= 4.5, $"{theme.Name} primary text must meet WCAG AA contrast against input surfaces");
         Require(ThemePalette.ContrastRatio(theme.MutedText, theme.Input) >= 4.5, $"{theme.Name} secondary text must meet WCAG AA contrast against input surfaces");
         Require(ThemePalette.ContrastRatio(theme.Border, theme.Input) >= 3.0, $"{theme.Name} enabled control boundaries must reach 3:1 contrast against input surfaces");
+        Require(ThemePalette.ContrastRatio(theme.PrimaryBorder, theme.Card) >= 3.0
+            && ThemePalette.ContrastRatio(theme.PrimaryBorder, theme.Input) >= 3.0,
+            $"{theme.Name} focus rings must reach 3:1 against card and input surfaces");
+        foreach (var (name, color) in new[]
+                 {
+                     ("info", theme.StatusInfo),
+                     ("success", theme.StatusSuccess),
+                     ("warning", theme.StatusWarning),
+                     ("critical", theme.StatusCritical)
+                 })
+        {
+            Require(ThemePalette.ContrastRatio(color, theme.Card) >= 3.0
+                && ThemePalette.ContrastRatio(color, theme.Panel) >= 3.0,
+                $"{theme.Name} {name} status boundary must reach 3:1 against card and panel surfaces");
+        }
+        Require(!new[] { theme.AlphaAccent, theme.BetaAccent, theme.GammaAccent, theme.DeltaAccent, theme.NarratorAccent, theme.OperatorAccent }
+                .Contains(theme.StatusInfo)
+            && !new[] { theme.AlphaAccent, theme.BetaAccent, theme.GammaAccent, theme.DeltaAccent, theme.NarratorAccent, theme.OperatorAccent }
+                .Contains(theme.StatusSuccess)
+            && !new[] { theme.AlphaAccent, theme.BetaAccent, theme.GammaAccent, theme.DeltaAccent, theme.NarratorAccent, theme.OperatorAccent }
+                .Contains(theme.StatusWarning),
+            $"{theme.Name} should keep status semantics distinct from agent identity accents");
         Require(theme.OperatorAccent != theme.DangerBorder, $"{theme.Name} should reserve danger red for destructive/error semantics instead of the selected public operator route");
     }
 
@@ -3666,10 +4365,11 @@ static void TranscriptViewCoordinatorNormalizesViewState()
 
 static void TranscriptViewCoordinatorAdaptsDashboardWidths()
 {
+    var coordinatorSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptViewCoordinator.cs"));
     var defaultDiagnostics = TranscriptViewCoordinator.ResolveDashboardLayout(858, "diagnostics");
     Require(defaultDiagnostics.Tier == TranscriptDashboardTier.Medium, "the default center width should use the medium dashboard tier");
     Require(defaultDiagnostics.ShowDiagnostics && !defaultDiagnostics.ShowTelemetry, "diagnostics should remain visible at the default center width");
-    Require(defaultDiagnostics.IsStacked, "the medium dashboard should stack filters below diagnostics");
+    Require(defaultDiagnostics.IsStacked, "the medium dashboard should use its wrapped compact metric tier");
     Require(defaultDiagnostics.DiagnosticsColumns == 3, "the medium diagnostics tier should use three columns");
     Require(defaultDiagnostics.DiagnosticsMinWidth == 0, "the medium diagnostics tier should not retain the desktop minimum width");
 
@@ -3689,6 +4389,9 @@ static void TranscriptViewCoordinatorAdaptsDashboardWidths()
 
     var hidden = TranscriptViewCoordinator.ResolveDashboardLayout(858, "hidden");
     Require(hidden.Tier == TranscriptDashboardTier.Hidden && !hidden.ShowTopStrip, "only an explicit hidden mode should suppress both dashboard strips");
+    Require(coordinatorSource.Contains("transcriptTelemetryGrid.Margin = new Thickness(0);", StringComparison.Ordinal)
+        && coordinatorSource.Contains("var topStripCorners = new CornerRadius(8);", StringComparison.Ordinal),
+        "the transcript top strip should use complete rounded surfaces without reserving chrome for removed inline filters");
 }
 
 static void TranscriptSearchCoordinatorKeepsCloseAvailableWhenEmpty()
@@ -3699,6 +4402,12 @@ static void TranscriptSearchCoordinatorKeepsCloseAvailableWhenEmpty()
         var clearButton = new Button();
         var turnFilterPicker = new ComboBox();
         turnFilterPicker.Items.Add(new ComboBoxItem { Content = "All Turns", Tag = "all", IsSelected = true });
+        turnFilterPicker.Items.Add(new ComboBoxItem { Content = "Latest 10", Tag = "latest10" });
+        var resultCount = new TextBlock();
+        var systemFilter = new CheckBox { IsChecked = true };
+        var agentsFilter = new CheckBox { IsChecked = true };
+        var narratorFilter = new CheckBox { IsChecked = true };
+        var operatorFilter = new CheckBox { IsChecked = true };
         var coordinator = new TranscriptSearchCoordinator(
             new Window(),
             System.Windows.Threading.Dispatcher.CurrentDispatcher,
@@ -3708,12 +4417,12 @@ static void TranscriptSearchCoordinatorKeepsCloseAvailableWhenEmpty()
             clearButton,
             new Border(),
             new StackPanel(),
-            new TextBlock(),
+            resultCount,
             turnFilterPicker,
-            new CheckBox { IsChecked = true },
-            new CheckBox { IsChecked = true },
-            new CheckBox { IsChecked = true },
-            new CheckBox { IsChecked = true },
+            systemFilter,
+            agentsFilter,
+            narratorFilter,
+            operatorFilter,
             () => false,
             AccentResourceBrush,
             _ => true,
@@ -3723,6 +4432,18 @@ static void TranscriptSearchCoordinatorKeepsCloseAvailableWhenEmpty()
         coordinator.UpdateSearchState();
         Require(clearButton.IsEnabled, "search popup close button should remain available when no search is active");
         Require(clearButton.Opacity >= 0.8, "empty-search close button should remain visibly actionable");
+        coordinator.UpdateResultCount(0, 0);
+        Require(resultCount.Text == "0 shown", "a default empty transcript should not claim that filters are active");
+        agentsFilter.IsChecked = false;
+        coordinator.UpdateResultCount(0, 0);
+        Require(resultCount.Text.Contains("Speakers filtered", StringComparison.Ordinal),
+            "an active speaker filter should remain visible in the closed-flyout summary even when both counts are zero");
+        agentsFilter.IsChecked = true;
+        turnFilterPicker.SelectedIndex = 1;
+        coordinator.UpdateResultCount(0, 0);
+        Require(resultCount.Text.Contains("Latest 10", StringComparison.Ordinal),
+            "an active turn-range filter should remain visible in the closed-flyout summary");
+        turnFilterPicker.SelectedIndex = 0;
 
         searchText.Text = "  alpha  ";
         coordinator.UpdateSearchState();

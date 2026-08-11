@@ -5,6 +5,8 @@ using System.Text.RegularExpressions;
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
 using AIArena.Core.Providers;
+using AIArena.Core.Services;
+using AIArena.Wpf.Models;
 
 namespace AIArena.Wpf.Services;
 
@@ -127,6 +129,7 @@ internal sealed class ProviderConfigurationControlService
             for (var attempt = 0; attempt < 2; attempt++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                changedFields = [];
                 var snapshot = await sessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
                 if (snapshot is null)
                 {
@@ -185,6 +188,203 @@ internal sealed class ProviderConfigurationControlService
             patch.RefreshModels);
     }
 
+    public async Task<ProviderModelAssignmentControlResult> SetModelAssignmentAsync(
+        ProviderModelAssignmentRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var validation = ValidateAssignmentRequest(request);
+        if (!validation.Ok)
+        {
+            return AssignmentFailure(
+                validation.ErrorCode,
+                validation.Message,
+                await CaptureAssignmentAsync(request.Model, cancellationToken));
+        }
+
+        if (isArenaBusy())
+        {
+            return AssignmentFailure(
+                "busy",
+                "Model assignments cannot change while the arena is running.",
+                await CaptureAssignmentAsync(request.Model, cancellationToken));
+        }
+
+        var session = activeSession();
+        if (session is null)
+        {
+            return AssignmentFailure(
+                "not_available",
+                "No active session is available.",
+                ProviderModelAssignmentProjection.Empty(ProviderModelCatalogProjectionService.SafeModelIdentifier(request.Model)));
+        }
+
+        IReadOnlyList<string> changedFields = [];
+        var savedProjection = ProviderModelAssignmentProjection.Empty(
+            ProviderModelCatalogProjectionService.SafeModelIdentifier(request.Model));
+        await arenaOperationLock.WaitAsync(cancellationToken);
+        try
+        {
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                changedFields = [];
+                var snapshot = await sessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
+                if (snapshot is null)
+                {
+                    return AssignmentFailure(
+                        "not_available",
+                        $"No snapshot was found for session {session.Id}.",
+                        ProviderModelAssignmentProjection.Empty(ProviderModelCatalogProjectionService.SafeModelIdentifier(request.Model)));
+                }
+
+                var before = ProviderModelAssignmentProjectionService.Project(session.Id, snapshot, request.Model);
+                if (!before.ProviderFingerprint.Equals(request.ExpectedProviderFingerprint, StringComparison.Ordinal))
+                {
+                    return AssignmentFailure(
+                        "stale_provider",
+                        "The provider or default model changed; refresh the model list and retry.",
+                        before);
+                }
+
+                var target = before.Targets.FirstOrDefault(item =>
+                    item.Id.Equals(request.TargetId.Trim(), StringComparison.OrdinalIgnoreCase));
+                if (target is null)
+                {
+                    return AssignmentFailure(
+                        "inactive_target",
+                        "That agent is no longer active in this session.",
+                        before);
+                }
+
+                if (!target.AssignmentFingerprint.Equals(request.ExpectedAssignmentFingerprint, StringComparison.Ordinal))
+                {
+                    return AssignmentFailure(
+                        "conflict",
+                        "That model assignment changed concurrently; refresh and retry.",
+                        before);
+                }
+
+                var shared = snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var configured)
+                    ? configured
+                    : new ModelProviderConfig();
+                var requestedModel = request.Model.Trim();
+                if (target.IsDefault)
+                {
+                    if (!request.Assigned)
+                    {
+                        if (shared.Model.Trim().Equals(requestedModel, StringComparison.Ordinal))
+                        {
+                            return AssignmentFailure(
+                                "invalid_operation",
+                                "Choose another default model before removing the current default.",
+                                before);
+                        }
+
+                        savedProjection = before;
+                        break;
+                    }
+
+                    changedFields = ApplyPatch(snapshot, DefaultModelPatch(requestedModel));
+                }
+                else
+                {
+                    var configuredModel = ProviderModelAssignmentProjectionService.ConfiguredRoleModel(
+                        snapshot.Configs,
+                        target.Id,
+                        shared);
+                    var desiredModel = request.Assigned
+                        ? requestedModel.Equals(shared.Model.Trim(), StringComparison.Ordinal) ? "" : requestedModel
+                        : "";
+                    if (!request.Assigned
+                        && configuredModel.Length > 0
+                        && !configuredModel.Equals(requestedModel, StringComparison.Ordinal))
+                    {
+                        return AssignmentFailure(
+                            "conflict",
+                            "That agent is assigned to a different model; refresh and retry.",
+                            before);
+                    }
+
+                    if (configuredModel.Equals(desiredModel, StringComparison.Ordinal))
+                    {
+                        savedProjection = before;
+                        break;
+                    }
+
+                    var (temperatureOverride, maxOutputTokensOverride) = GenerationOverrides(
+                        snapshot.Configs,
+                        target.Id,
+                        shared);
+                    SaveRoleModelConfig(
+                        snapshot.Configs,
+                        target.Id,
+                        desiredModel,
+                        shared,
+                        temperatureOverride,
+                        maxOutputTokensOverride);
+                    changedFields = [$"{target.Id}Model"];
+                }
+
+                if (changedFields.Count == 0)
+                {
+                    savedProjection = ProviderModelAssignmentProjectionService.Project(session.Id, snapshot, request.Model);
+                    break;
+                }
+
+                try
+                {
+                    await sessionStore.SaveSnapshotAsync(snapshot, session.Id, cancellationToken);
+                    savedProjection = ProviderModelAssignmentProjectionService.Project(session.Id, snapshot, request.Model);
+                    await eventLogStore.AppendAsync(session.Id, "provider_model_assignment_changed", new
+                    {
+                        TargetId = target.Id,
+                        target.IsDefault,
+                        target.IsNarrator,
+                        request.Assigned,
+                        Model = ProviderModelCatalogProjectionService.SafeModelIdentifier(requestedModel),
+                        ChangedFields = changedFields
+                    }, cancellationToken);
+                    break;
+                }
+                catch (SnapshotConcurrencyException) when (attempt == 0)
+                {
+                    // Reload and require the same provider and target assignment fingerprints.
+                }
+                catch (SnapshotConcurrencyException)
+                {
+                    return AssignmentFailure(
+                        "conflict",
+                        "Model assignments changed concurrently; refresh and retry.",
+                        await CaptureAssignmentAsync(request.Model, cancellationToken));
+                }
+            }
+        }
+        finally
+        {
+            arenaOperationLock.Release();
+        }
+
+        var message = changedFields.Count == 0
+            ? "Model assignment already matched the requested value."
+            : request.TargetId.Equals(ModelProviderRouting.SharedConfigKey, StringComparison.OrdinalIgnoreCase)
+                ? "Default model saved."
+                : request.Assigned
+                    ? "Agent model assignment saved."
+                    : "Agent now inherits the default model.";
+        await refreshHostAsync(message, false, cancellationToken);
+        var refreshedSnapshot = await sessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
+        var refreshedProjection = refreshedSnapshot is null
+            ? savedProjection
+            : ProviderModelAssignmentProjectionService.Project(session.Id, refreshedSnapshot, request.Model);
+        return new ProviderModelAssignmentControlResult(
+            true,
+            "",
+            message,
+            refreshedProjection,
+            changedFields);
+    }
+
     internal static (bool Ok, string ErrorCode, string Message) Validate(AIArenaProviderConfigurationPatch patch)
     {
         if (!patch.HasMutation)
@@ -222,7 +422,7 @@ internal sealed class ProviderConfigurationControlService
 
         foreach (var (role, model) in patch.RoleModels)
         {
-            if (!RoleKeys.Contains(role, StringComparer.OrdinalIgnoreCase))
+            if (!IsKnownAssignmentTarget(role, includeDefault: false))
             {
                 return (false, "invalid_argument", $"Unknown provider role '{role}'.");
             }
@@ -269,14 +469,18 @@ internal sealed class ProviderConfigurationControlService
 
     internal static IReadOnlyList<string> ApplyPatch(ArenaSnapshot snapshot, AIArenaProviderConfigurationPatch patch)
     {
+        var roleKeys = ConfigurationRoleKeys(snapshot)
+            .Concat(patch.RoleModels.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         var existingShared = snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var shared)
             ? shared
             : new ModelProviderConfig();
-        var existingRoleModels = RoleKeys.ToDictionary(
+        var existingRoleModels = roleKeys.ToDictionary(
             role => role,
             role => ConfiguredRoleModel(snapshot.Configs, role, existingShared),
             StringComparer.OrdinalIgnoreCase);
-        var roleOverrides = RoleKeys.ToDictionary(
+        var roleOverrides = roleKeys.ToDictionary(
             role => role,
             role => GenerationOverrides(snapshot.Configs, role, existingShared),
             StringComparer.OrdinalIgnoreCase);
@@ -327,7 +531,7 @@ internal sealed class ProviderConfigurationControlService
 
         var changed = ChangedSharedFields(existingShared, updatedShared, patch);
         snapshot.Configs[ModelProviderRouting.SharedConfigKey] = updatedShared;
-        foreach (var role in RoleKeys)
+        foreach (var role in roleKeys)
         {
             var configuredModel = patch.RoleModels.TryGetValue(role, out var requestedModel)
                 ? requestedModel.Trim()
@@ -510,7 +714,7 @@ internal sealed class ProviderConfigurationControlService
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (var key in new[] { ModelProviderRouting.SharedConfigKey }.Concat(RoleKeys))
+        foreach (var key in new[] { ModelProviderRouting.SharedConfigKey }.Concat(ConfigurationRoleKeys(snapshot)))
         {
             AppendIdentityValue(hash, key);
             if (!snapshot.Configs.TryGetValue(key, out var config))
@@ -645,6 +849,106 @@ internal sealed class ProviderConfigurationControlService
             && !config.Model.Trim().Equals(shared.Model.Trim(), StringComparison.Ordinal)
             ? config.Model.Trim()
             : "";
+    }
+
+    private async Task<ProviderModelAssignmentProjection> CaptureAssignmentAsync(
+        string model,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var session = activeSession();
+        if (session is null)
+        {
+            return ProviderModelAssignmentProjection.Empty(
+                ProviderModelCatalogProjectionService.SafeModelIdentifier(model));
+        }
+
+        var snapshot = await sessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
+        return snapshot is null
+            ? ProviderModelAssignmentProjection.Empty(ProviderModelCatalogProjectionService.SafeModelIdentifier(model))
+            : ProviderModelAssignmentProjectionService.Project(session.Id, snapshot, model);
+    }
+
+    private static ProviderModelAssignmentControlResult AssignmentFailure(
+        string errorCode,
+        string message,
+        ProviderModelAssignmentProjection assignment)
+    {
+        return new ProviderModelAssignmentControlResult(
+            false,
+            errorCode,
+            message,
+            assignment,
+            []);
+    }
+
+    private static (bool Ok, string ErrorCode, string Message) ValidateAssignmentRequest(
+        ProviderModelAssignmentRequest request)
+    {
+        if (!IsKnownAssignmentTarget(request.TargetId, includeDefault: true))
+        {
+            return (false, "invalid_argument", "Select Default, an active arena agent, or Narrator.");
+        }
+
+        if (!TryValidateModel(request.Model, allowEmpty: false))
+        {
+            return (false, "invalid_argument", "The selected model must be non-empty, at most 1024 characters, and contain no control characters.");
+        }
+
+        if (!IsOpaqueFingerprint(request.ExpectedProviderFingerprint)
+            || !IsOpaqueFingerprint(request.ExpectedAssignmentFingerprint))
+        {
+            return (false, "invalid_argument", "Refresh the model assignment state before changing it.");
+        }
+
+        return (true, "", "");
+    }
+
+    private static AIArenaProviderConfigurationPatch DefaultModelPatch(string model)
+    {
+        return new AIArenaProviderConfigurationPatch(
+            BaseUrl: null,
+            ApiMode: null,
+            ApiToken: null,
+            ClearApiToken: false,
+            Model: model,
+            TimeoutSeconds: null,
+            Temperature: null,
+            MaxOutputTokens: null,
+            ContextLength: null,
+            Reasoning: null,
+            NativeStatefulChat: null,
+            NativeIdleTtlSeconds: null,
+            RoleModels: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            RefreshModels: false);
+    }
+
+    private static IReadOnlyList<string> ConfigurationRoleKeys(ArenaSnapshot snapshot)
+    {
+        var active = snapshot.Engine.Agents
+            .Where(agent => agent.Active && AgentRosterService.IsParticipantId(agent.Id))
+            .Select(agent => agent.Id.Trim().ToLowerInvariant())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return AgentRosterService.ParticipantIds
+            .Where(role => RoleKeys.Contains(role, StringComparer.OrdinalIgnoreCase)
+                || active.Contains(role)
+                || snapshot.Configs.ContainsKey(role))
+            .Append("narrator")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static bool IsKnownAssignmentTarget(string targetId, bool includeDefault)
+    {
+        var normalized = (targetId ?? "").Trim();
+        return (includeDefault && normalized.Equals(ModelProviderRouting.SharedConfigKey, StringComparison.OrdinalIgnoreCase))
+            || normalized.Equals("narrator", StringComparison.OrdinalIgnoreCase)
+            || AgentRosterService.ParticipantIds.Contains(normalized, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsOpaqueFingerprint(string value)
+    {
+        return value is { Length: 64 } && value.All(Uri.IsHexDigit);
     }
 
     private static bool TryValidateBaseUrl(string value, out string error)

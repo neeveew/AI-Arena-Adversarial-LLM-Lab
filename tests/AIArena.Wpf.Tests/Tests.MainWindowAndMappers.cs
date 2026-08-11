@@ -14,7 +14,9 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
@@ -242,6 +244,30 @@ static void SnapshotViewMapperPreservesProviderTelemetry()
     Require(history.NarratorBrief == "Newer narrator brief", "rendered history should preserve narrator brief");
     Require(history.PersonaCount == 1, "rendered history should count participant personas only");
     Require(history.PersonaPreview.Contains("alpha: Chair", StringComparison.OrdinalIgnoreCase), "rendered history should include persona preview");
+
+    var groupSnapshot = SessionStore.CreateDefaultSnapshot();
+    groupSnapshot.Engine.FactoryMode = true;
+    groupSnapshot.Engine.Agents.Clear();
+    groupSnapshot.Engine.Agents.Add(new DialogueAgent { Id = "alpha", Name = "Alpha", Active = true });
+    groupSnapshot.Engine.Messages.Add(new TranscriptService().CreateOperatorMessage("Start group mapper fixture.", 1));
+    groupSnapshot.Engine.Messages.Add(new DialogueMessage
+    {
+        Turn = 2,
+        Speaker = "Alpha",
+        SpeakerId = "alpha",
+        Kind = "message",
+        Status = "ok",
+        Text = "Visible participant reply."
+    });
+    var factoryConversation = new FactoryConversationService();
+    factoryConversation.Resolve(groupSnapshot);
+    var renderedGroup = SnapshotViewMapper.FromCore(session, groupSnapshot);
+    Require(renderedGroup.HasFactoryConversationRoot && renderedGroup.FactoryConversationRootAssigned, "snapshot mapping should expose a valid durable Factory root separately from the mode toggle");
+    Require(renderedGroup.FactoryConversationEntryCount == 2 && renderedGroup.FactoryConversationOmittedCount == 0, "snapshot mapping should expose privacy-safe shared-group counts");
+
+    groupSnapshot.Engine.Messages.RemoveAt(0);
+    var renderedOrphan = SnapshotViewMapper.FromCore(session, groupSnapshot);
+    Require(renderedOrphan.FactoryConversationRootAssigned && !renderedOrphan.HasFactoryConversationRoot, "snapshot mapping should preserve an orphan marker so WPF readiness cannot promote a later row to root");
 }
 static void SnapshotViewMapperAttachesLatestInternetSourcesToAgents()
 {
@@ -424,6 +450,98 @@ static void CustomMatchSummaryCoordinatorNormalizesCardText()
     };
     Require(CustomMatchSummaryCoordinator.RelationshipMapText(invalidRelationshipSnapshot).Contains("no active participant rules", StringComparison.OrdinalIgnoreCase), "relationship map should ignore invalid, inactive, self, and neutral rules");
     Require(CustomMatchSummaryCoordinator.RunConstraintText(invalidRelationshipSnapshot).Contains("neutral relationships", StringComparison.OrdinalIgnoreCase), "run constraints should ignore invalid relationship noise");
+}
+
+static void FactoryModeSetupPresentationDisclosesInactiveArenaBehavior()
+{
+    var publicOperatorTurn = TranscriptForTest(1, "Operator", "operator", "message", "ok") with
+    {
+        Text = "Return the raw completion for this debugging prompt."
+    };
+    var snapshot = SnapshotForOverviewTest(
+        providerOnline: true,
+        providerModel: "local-model",
+        providerLastError: "",
+        turnIndex: 0,
+        messages: [publicOperatorTurn],
+        agents:
+        [
+            new AgentState("alpha", "Alpha", "waiting", "", "default", "", "", "local-model", true, false, [])
+        ]) with
+    {
+        FactoryMode = true,
+        RivalryMatrixEnabled = true,
+        RivalryMatrix = []
+    };
+
+    var report = ScenarioWorkflowCoordinator.BuildSetupReadinessReport(snapshot);
+    Require(report.Blockers.Count == 0, "one active agent, a selected model, and public Operator input should satisfy Factory run prerequisites");
+    Require(report.Warnings.Count == 0, "blank Arena-only guidance should not become a Factory readiness warning");
+    Require(report.Status.StartsWith("Ready: Factory mode, 1 active agent(s)", StringComparison.Ordinal), "Factory readiness should disclose its one-agent run shape");
+    var badges = report.Badges.ToDictionary(badge => badge.Label, StringComparer.Ordinal);
+    Require(badges["Mode"].Value == "Factory", "readiness should expose the active model-behavior mode without relying on colour");
+    Require(badges["Agents"].Value == "1" && badges["Agents"].Kind == "ready", "one participant should be explicitly ready in Factory mode");
+    Require(badges["Input"].Value == "Root ready", "readiness should distinguish a pending public Operator root from an anchored group");
+    foreach (var facet in new[] { "Personas", "Criteria", "Matrix" })
+    {
+        Require(badges[facet].Value == "Inactive", $"the {facet} Arena-behavior facet should be labelled inactive in Factory mode");
+        Require(badges[facet].Kind == "neutral", $"the inactive {facet} facet should not be styled as success, warning, or failure");
+        Require(badges[facet].Tooltip.Contains("not", StringComparison.OrdinalIgnoreCase), $"the inactive {facet} badge should explain that its saved behavior is not applied");
+    }
+
+    Require(badges["Narrator"].Value == "Unavailable" && badges["Narrator"].Kind == "neutral", "Factory readiness should label narration unavailable without treating it as a failed setup");
+    Require(badges["Narrator"].Tooltip.Contains("Factory mode", StringComparison.Ordinal), "the narrator badge should expose the mode reason");
+
+    var constraints = CustomMatchSummaryCoordinator.RunConstraintText(snapshot);
+    Require(constraints.Contains("Factory mode", StringComparison.Ordinal) && constraints.Contains("public Operator root ready to anchor", StringComparison.Ordinal), "run constraints should disclose Factory mode and its pending-root state");
+    Require(constraints.Contains("Match Setup guidance is inactive", StringComparison.Ordinal), "run constraints should not imply that saved Arena guidance shapes Factory calls");
+
+    var brief = CustomMatchSummaryCoordinator.CurrentSetupBrief(snapshot);
+    Require(brief.Contains("Model behavior: Factory mode", StringComparison.Ordinal), "the copyable setup brief should disclose Factory mode");
+    Require(brief.Contains("attributed public group history", StringComparison.Ordinal), "the copyable setup brief should disclose the Factory group-history boundary");
+    Require(brief.Contains("public_group_v1", StringComparison.Ordinal), "the copyable setup brief should identify the deterministic Factory conversation contract");
+    Require(brief.Contains("Match Setup saved but inactive", StringComparison.Ordinal), "the setup brief should distinguish saved guidance from applied guidance");
+
+    using var spec = JsonDocument.Parse(CustomMatchSummaryCoordinator.CurrentSetupSpec(snapshot));
+    var modelBehavior = spec.RootElement.GetProperty("modelBehavior");
+    Require(modelBehavior.GetProperty("mode").GetString() == "factory", "the setup spec should disclose Factory mode as structured data");
+    Require(!modelBehavior.GetProperty("applyMatchSetup").GetBoolean(), "the setup spec should explicitly say Match Setup is not applied");
+    Require(modelBehavior.GetProperty("input").GetString() == "attributed_public_group_history", "the setup spec should expose the exact Factory input contract");
+    Require(modelBehavior.GetProperty("contract").GetString() == "public_group_v1", "the setup spec should expose the versioned Factory conversation contract");
+    Require(modelBehavior.GetProperty("rootState").GetString() == "pending", "an eligible unanchored Operator turn should remain visibly pending until the group is anchored");
+    Require(!modelBehavior.GetProperty("narrationAvailable").GetBoolean(), "the setup spec should disclose Factory narration unavailability");
+
+    var anchored = snapshot with
+    {
+        HasFactoryConversationRoot = true,
+        FactoryConversationRootAssigned = true,
+        FactoryConversationEntryCount = 56,
+        FactoryConversationOmittedCount = 6
+    };
+    var anchoredReport = ScenarioWorkflowCoordinator.BuildSetupReadinessReport(anchored);
+    var anchoredInput = anchoredReport.Badges.Single(badge => badge.Label == "Input");
+    var anchoredBrief = CustomMatchSummaryCoordinator.CurrentSetupBrief(anchored);
+    Require(anchoredInput.Value == "Group ready" && anchoredInput.Kind == "ready", "an anchored Factory conversation should be exposed as a ready group without relying on colour");
+    Require(anchoredInput.Tooltip.Contains("Models receive 50 of 56 eligible attributed public conversation entries", StringComparison.Ordinal), "anchored setup help should distinguish included model context from total eligible entries");
+    Require(anchoredInput.Tooltip.Contains("6 older whole entries are omitted", StringComparison.Ordinal), "anchored setup help should truthfully report the fixed context-window omission count");
+    Require(anchoredBrief.Contains("50/56 entries included; 6 omitted", StringComparison.Ordinal), "copyable setup summaries must not describe omitted Factory entries as model-visible context");
+    using (var anchoredSpec = JsonDocument.Parse(CustomMatchSummaryCoordinator.CurrentSetupSpec(anchored)))
+    {
+        var anchoredBehavior = anchoredSpec.RootElement.GetProperty("modelBehavior");
+        Require(anchoredBehavior.GetProperty("rootState").GetString() == "anchored", "the structured setup spec should distinguish an anchored Factory group");
+        Require(anchoredBehavior.GetProperty("contextEntries").GetInt32() == 56 && anchoredBehavior.GetProperty("omittedEntries").GetInt32() == 6, "the setup spec should expose privacy-safe eligible and omission counts");
+    }
+
+    var orphaned = snapshot with
+    {
+        FactoryConversationRootAssigned = true,
+        HasFactoryConversationRoot = false,
+        FactoryConversationEntryCount = 0
+    };
+    var orphanedReport = ScenarioWorkflowCoordinator.BuildSetupReadinessReport(orphaned);
+    var orphanedInput = orphanedReport.Badges.Single(badge => badge.Label == "Input");
+    Require(orphanedReport.Blockers.Any(blocker => blocker.Contains("restore the anchored public Operator root", StringComparison.Ordinal)), "a missing root should block setup instead of promoting the later visible Operator turn");
+    Require(orphanedInput.Value == "Root missing" && orphanedInput.Kind == "danger", "a missing Factory root should expose a non-colour error label and danger state");
 }
 
 static void ScenarioSeedInspectorCoordinatorFormatsMetadata()
@@ -720,12 +838,17 @@ static void MainWindowAgentSectionIsTopLevel()
     Require(controlPlaneToggle.Contains("Content=\"PowerShell control plane\"", StringComparison.Ordinal), "Settings should expose the local PowerShell control-plane toggle");
     Require(controlPlaneToggle.Contains("ControlPlaneCheckBox_Changed", StringComparison.Ordinal), "control-plane toggle should persist and start or stop the host");
     Require(controlPlaneToggle.Contains("AutomationProperties.Name=\"Toggle AI Arena control plane\"", StringComparison.Ordinal), "control-plane toggle should expose automation naming");
-    var powerShellSettingsIndex = xaml.IndexOf("<Expander Header=\"PowerShell Control\"", StringComparison.Ordinal);
+    var debugSettingsIndex = xaml.IndexOf("x:Name=\"DebugControlsSettingsExpander\"", StringComparison.Ordinal);
     var controlPlaneToggleIndex = xaml.IndexOf("x:Name=\"ControlPlaneCheckBox\"", StringComparison.Ordinal);
+    var internetSettingsIndex = xaml.IndexOf("<Expander Header=\"Internet Access\"", StringComparison.Ordinal);
     var agentSettingsIndex = xaml.IndexOf("x:Name=\"AgentSettingsExpander\"", StringComparison.Ordinal);
     var agentWorkspaceToggleIndex = xaml.IndexOf("x:Name=\"AgentWorkspaceCheckBox\"", StringComparison.Ordinal);
-    Require(powerShellSettingsIndex >= 0 && controlPlaneToggleIndex > powerShellSettingsIndex, "control-plane toggle should live in the normal PowerShell Control Settings section");
-    Require(!topBarXaml.Contains("ControlPlaneCheckBox", StringComparison.Ordinal), "control-plane toggle should not live in the Debug popup");
+    Require(debugSettingsIndex >= 0
+            && controlPlaneToggleIndex > debugSettingsIndex
+            && controlPlaneToggleIndex < internetSettingsIndex,
+        "control-plane toggle should live inside the Debug controls Settings category");
+    Require(!xaml.Contains("<Expander Header=\"PowerShell Control\"", StringComparison.Ordinal), "PowerShell control should not consume a separate top-level Settings category");
+    Require(!topBarXaml.Contains("ControlPlaneCheckBox", StringComparison.Ordinal), "control-plane toggle should remain in Settings rather than the transient Debug popup");
     Require(agentSettingsIndex >= 0 && agentWorkspaceToggleIndex > agentSettingsIndex, "Agent workspace toggle should live in the normal Agent workspace Settings section");
     Require(!topBarXaml.Contains("AgentWorkspaceCheckBox", StringComparison.Ordinal), "Agent workspace toggle should not live in the Debug popup");
     Require(!xaml.Contains("AgentWorkspaceDebugCheckBox", StringComparison.Ordinal), "Debug should no longer own the Agent workspace preference");
@@ -746,6 +869,8 @@ static void MainWindowAgentSectionIsTopLevel()
     Require(code.Contains("IsAgentWorkspaceEnabled(_wpfSettings)", StringComparison.Ordinal), "Agent nav should obey the normal Agent workspace preference");
     Require(code.Contains("IsWorldDebugEnabled(_wpfSettings)", StringComparison.Ordinal), "AI World entry points should be guarded by the debug toggle");
     Require(code.Contains("ApplyWorldDebugVisibility(persistIfForcedOff: true)", StringComparison.Ordinal), "disabling master debug controls should immediately force AI World back to Transcript");
+    Require(code.Contains("ExperimentLabNavButton.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed", StringComparison.Ordinal), "Experiment Lab navigation should follow the master debug toggle");
+    Require(code.Contains("ApplyExperimentLabVisibility();", StringComparison.Ordinal), "MainWindow should apply Experiment Lab visibility after settings changes");
     Require(code.Contains("ApplyAgentWorkspaceVisibility", StringComparison.Ordinal), "MainWindow should apply Agent visibility after settings changes");
     Require(code.Contains("ShellNavigation.ShowAgentPanel();", StringComparison.Ordinal), "Agent nav should call the Agent shell surface");
     Require(code.Contains("AgentWorkspace.RefreshProviderState();", StringComparison.Ordinal), "Agent nav should refresh workspace/provider chrome when opened");
@@ -754,6 +879,8 @@ static void MainWindowAgentSectionIsTopLevel()
     Require(!MainWindow.IsWorldDebugEnabled(new WpfSettings { ShowWorldDebug = true }), "AI World should remain off without master debug controls");
     Require(!MainWindow.IsWorldDebugEnabled(new WpfSettings { AllowDebugControls = true }), "master debug controls alone should not enable AI World");
     Require(MainWindow.IsWorldDebugEnabled(new WpfSettings { AllowDebugControls = true, ShowWorldDebug = true }), "AI World should enable only when both debug gates are on");
+    Require(!MainWindow.IsExperimentLabEnabled(new WpfSettings()), "Experiment Lab should default hidden with Debug controls off");
+    Require(MainWindow.IsExperimentLabEnabled(new WpfSettings { AllowDebugControls = true }), "Experiment Lab should appear when Debug controls are enabled");
     Require(MainWindow.IsAgentWorkspaceEnabled(new WpfSettings()), "Agent workspace should be enabled by default");
     Require(MainWindow.IsAgentWorkspaceEnabled(new WpfSettings { AllowDebugControls = false, ShowAgentWorkspace = true }), "Agent workspace should not require Debug controls");
     Require(!MainWindow.IsAgentWorkspaceEnabled(new WpfSettings { AllowDebugControls = true, ShowAgentWorkspace = false }), "an explicit Agent workspace opt-out should hide it even when Debug is enabled");
@@ -761,19 +888,21 @@ static void MainWindowAgentSectionIsTopLevel()
 
 static void ShellCommandStateMapsContextualWorkspaceCommands()
 {
-    var expected = new Dictionary<ShellSurface, (bool MatchSetup, bool Search, bool Export, bool View)>
+    var expected = new Dictionary<ShellSurface, (bool MatchSetup, bool Models, bool Search, bool Export, bool View)>
     {
-        [ShellSurface.Lab] = (true, true, true, true),
-        [ShellSurface.World] = (true, false, false, false),
-        [ShellSurface.MatchSetup] = (true, true, true, true),
-        [ShellSurface.Agent] = (false, false, false, false),
-        [ShellSurface.Collaborate] = (false, true, true, false)
+        [ShellSurface.Lab] = (true, true, true, true, true),
+        [ShellSurface.World] = (true, true, false, false, false),
+        [ShellSurface.MatchSetup] = (true, true, true, true, true),
+        [ShellSurface.Models] = (true, true, true, true, true),
+        [ShellSurface.Agent] = (false, false, false, false, false),
+        [ShellSurface.Collaborate] = (false, false, true, true, false)
     };
 
     foreach (var (surface, visibility) in expected)
     {
         var state = ShellCommandState.For(surface);
         Require(state.ShowMatchSetup == visibility.MatchSetup, $"{surface} Match Setup command visibility changed unexpectedly");
+        Require(state.ShowModels == visibility.Models, $"{surface} Models command visibility changed unexpectedly");
         Require(state.ShowSearch == visibility.Search, $"{surface} search command visibility changed unexpectedly");
         Require(state.ShowExport == visibility.Export, $"{surface} export command visibility changed unexpectedly");
         Require(state.ShowView == visibility.View, $"{surface} View command visibility changed unexpectedly");
@@ -795,6 +924,7 @@ static void ShellCommandStateMapsContextualWorkspaceCommands()
     Require(collaborate.SearchAutomationName.Contains("Collaborate", StringComparison.OrdinalIgnoreCase), "Collaborate search should announce its active workspace");
     Require(collaborate.ExportAutomationName.Contains("Collaborate", StringComparison.OrdinalIgnoreCase), "Collaborate export should announce its active workspace");
     Require(ShellCommandState.For(ShellSurface.MatchSetup) == lab, "Match Setup should preserve the complete Lab command layout while replacing the transcript canvas");
+    Require(ShellCommandState.For(ShellSurface.Models) == lab, "Models should preserve the complete Lab command layout while replacing the transcript canvas");
 }
 
 static void MainWindowContextualCommandHostsAndProviderMetricsStayWired()
@@ -843,6 +973,11 @@ static void MainWindowContextualCommandHostsAndProviderMetricsStayWired()
     Require(visualsSection is not null, "the application theme should live in the Visuals settings section");
     Require(!themePicker.Ancestors().Contains(Named("TopBarCommandPanel")), "the low-frequency theme preference should not consume top-toolbar command space");
 
+    var modelsButton = Named("ModelsButton");
+    Require(modelsButton.Name.LocalName == "Button", "Models should be a direct top-rail command beside Match Setup");
+    Require(!string.IsNullOrWhiteSpace((string?)modelsButton.Attribute("AutomationProperties.Name")), "Models should expose an automation name");
+    Require(((string?)modelsButton.Attribute("AutomationProperties.HelpText"))?.Contains("assignments", StringComparison.OrdinalIgnoreCase) == true, "Models should explain its catalog and assignment destination");
+
     foreach (var name in new[] { "AgentTopProviderStatusButton", "CollaborateTopProviderStatusButton" })
     {
         var provider = Named(name);
@@ -882,6 +1017,16 @@ static void MainWindowNavigationTransitionsPreserveContext()
         Require(applyCommands > selectSurface, $"{signature} should apply contextual commands after selecting {surface}");
     }
 
+    var modelsSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.Models.cs"));
+    var showModels = CSharpMethodBlock(modelsSource, "private void ShowProviderModelsPanel()");
+    Require(showModels.Contains("ShellNavigation.ShowProviderModelsPanel()", StringComparison.Ordinal), "Models should use the shell surface transition rather than an independent window");
+    Require(showModels.Contains("_activeShellSurface = ShellSurface.Models", StringComparison.Ordinal), "Models should publish its contextual shell surface");
+    Require(showModels.Contains("ApplyShellCommandState(_activeShellSurface)", StringComparison.Ordinal), "Models should preserve the contextual top rail");
+    Require(showModels.Contains("ProviderModelsPanel.FocusCatalog()", StringComparison.Ordinal), "opening Models should move keyboard focus into the real catalog");
+
+    var closeModels = CSharpMethodBlock(modelsSource, "private void CloseProviderModelsPanel()");
+    Require(closeModels.Contains("RestoreOverlayFocus(", StringComparison.Ordinal), "closing Models should restore focus to its opener");
+    Require(closeModels.Contains("ShowTranscriptPanel(clearFilters: false)", StringComparison.Ordinal), "closing Models should fall back to AI Lab without clearing transcript state");
     var escape = CSharpMethodBlock(source, "private bool CloseTopmostShellOverlay()");
     var matchSetupVisibility = escape.IndexOf("CustomMatchPanel.Visibility == Visibility.Visible", StringComparison.Ordinal);
     var closeMatchSetup = escape.IndexOf("CloseMatchSetupFlyout()", StringComparison.Ordinal);
@@ -953,6 +1098,186 @@ static void MainWindowNavigationTransitionsPreserveContext()
     var clearSearch = providerDeepLink.IndexOf("SettingsSearchText.Clear()", StringComparison.Ordinal);
     var openProvider = providerDeepLink.IndexOf("AppSettingsWorkflow.OpenModelProviderSettings", StringComparison.Ordinal);
     Require(clearSearch >= 0 && openProvider > clearSearch, "provider deep links should clear a stale Settings filter before revealing and focusing the provider section");
+}
+
+static void ProviderModelsHeartbeatFollowsHostedEffectiveVisibility()
+{
+    RunStaTest(() =>
+    {
+        var timer = new ManualProviderModelsHeartbeatTimer(
+            ProviderModelsSurfaceCoordinator.HeartbeatInterval);
+        var heartbeatCount = 0;
+        var observedTokens = new List<CancellationToken>();
+        var firstHeartbeatRelease = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Task Heartbeat(CancellationToken cancellationToken)
+        {
+            heartbeatCount++;
+            observedTokens.Add(cancellationToken);
+            if (heartbeatCount == 1)
+            {
+                cancellationToken.Register(() =>
+                    firstHeartbeatRelease.TrySetCanceled(cancellationToken));
+                return firstHeartbeatRelease.Task;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        using var heartbeat = new ProviderModelsHeartbeatController(timer, Heartbeat);
+        var providerModelsPanel = new ProviderModelAssignmentsControl
+        {
+            Visibility = Visibility.Visible
+        };
+        AttachArenaPresentationResources(providerModelsPanel);
+        var surfaceAncestor = new Grid();
+        surfaceAncestor.Children.Add(providerModelsPanel);
+        providerModelsPanel.IsVisibleChanged += (_, _) =>
+            heartbeat.SetEffectivelyVisible(providerModelsPanel.IsVisible);
+
+        var host = new Window
+        {
+            Content = surfaceAncestor,
+            Width = 1100,
+            Height = 700,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+            Opacity = 0,
+            Left = -10000,
+            Top = -10000
+        };
+        host.Closed += (_, _) => heartbeat.Dispose();
+
+        static void DrainDispatcher() =>
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                static () => { },
+                System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+
+        static void PumpDispatcherUntil(Func<bool> condition)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(2);
+            while (!condition() && DateTime.UtcNow < deadline)
+            {
+                var frame = new System.Windows.Threading.DispatcherFrame();
+                var timer = new System.Windows.Threading.DispatcherTimer(
+                    System.Windows.Threading.DispatcherPriority.Background)
+                {
+                    Interval = TimeSpan.FromMilliseconds(10)
+                };
+                EventHandler? tick = null;
+                tick = (_, _) =>
+                {
+                    timer.Stop();
+                    timer.Tick -= tick;
+                    frame.Continue = false;
+                };
+                timer.Tick += tick;
+                timer.Start();
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+            }
+        }
+
+        host.Show();
+        try
+        {
+            DrainDispatcher();
+            Require(providerModelsPanel.IsVisible
+                    && heartbeat.Interval == TimeSpan.FromSeconds(5)
+                    && heartbeat.IsTimerRunning
+                    && timer.StartCount == 1
+                    && heartbeat.VisibilityGeneration == 1,
+                "effective Models visibility did not start generation one on the production five-second interval");
+
+            timer.RaiseTick();
+            Require(heartbeatCount == 1
+                    && heartbeat.HasInFlightHeartbeat
+                    && observedTokens.Count == 1
+                    && !observedTokens[0].IsCancellationRequested,
+                "the visible hosted Models surface did not start exactly one cancellable heartbeat");
+
+            surfaceAncestor.Visibility = Visibility.Collapsed;
+            DrainDispatcher();
+            Require(providerModelsPanel.Visibility == Visibility.Visible
+                    && !providerModelsPanel.IsVisible
+                    && observedTokens[0].IsCancellationRequested
+                    && !heartbeat.IsTimerRunning,
+                "collapsing a Models ancestor did not cancel its in-flight effective-visibility generation");
+
+            PumpDispatcherUntil(() => !heartbeat.HasInFlightHeartbeat);
+            Require(!heartbeat.HasInFlightHeartbeat,
+                "the cancelled Models heartbeat did not release its single-flight gate");
+
+            surfaceAncestor.Visibility = Visibility.Visible;
+            DrainDispatcher();
+            Require(providerModelsPanel.IsVisible
+                    && heartbeat.IsTimerRunning
+                    && timer.StartCount == 2
+                    && heartbeat.VisibilityGeneration == 2,
+                "reopening the hosted Models surface did not start a fresh heartbeat generation");
+
+            timer.RaiseTick();
+            PumpDispatcherUntil(() => heartbeatCount == 2 && !heartbeat.HasInFlightHeartbeat);
+            Require(heartbeatCount == 2
+                    && observedTokens.Count == 2
+                    && !observedTokens[1].IsCancellationRequested,
+                "the reopened Models surface did not admit one heartbeat under a fresh token");
+
+            host.Close();
+            DrainDispatcher();
+            Require(heartbeat.IsDisposed
+                    && timer.IsDisposed
+                    && !heartbeat.IsTimerRunning,
+                "closing the hosted shell did not dispose its Models heartbeat owner");
+
+            timer.RaiseTick();
+            DrainDispatcher();
+            Require(heartbeatCount == 2,
+                "a timer callback polled Models after the hosted shell closed");
+        }
+        finally
+        {
+            if (host.IsVisible)
+            {
+                host.Close();
+            }
+        }
+    });
+}
+
+private sealed class ManualProviderModelsHeartbeatTimer(TimeSpan interval)
+    : IProviderModelsHeartbeatTimer
+{
+    public event EventHandler? Tick;
+
+    public TimeSpan Interval { get; } = interval;
+
+    public bool IsEnabled { get; private set; }
+
+    public bool IsDisposed { get; private set; }
+
+    public int StartCount { get; private set; }
+
+    public void Start()
+    {
+        if (IsDisposed)
+        {
+            throw new ObjectDisposedException(nameof(ManualProviderModelsHeartbeatTimer));
+        }
+
+        StartCount++;
+        IsEnabled = true;
+    }
+
+    public void Stop() => IsEnabled = false;
+
+    public void Dispose()
+    {
+        IsEnabled = false;
+        IsDisposed = true;
+    }
+
+    public void RaiseTick() => Tick?.Invoke(this, EventArgs.Empty);
 }
 
 static string CSharpMethodBlock(string source, string signature)
@@ -1317,6 +1642,283 @@ static void MainWindowMatchSetupControlsExposeAutomation()
     }
 }
 
+static void MainWindowFactoryModeToggleExposesAutomationAndControlState()
+{
+    var mainWindowXamlPath = FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
+    var xaml = File.ReadAllText(mainWindowXamlPath);
+    var coordinatorCode = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MatchSetupCoordinator.cs"));
+    var mainWindowCode = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var modeCard = XamlStartTag(xaml, "ModelBehaviorModeCard", "Border");
+    var toggle = XamlStartTag(xaml, "ApplyMatchSetupToModelsCheckBox", "CheckBox");
+    var status = XamlStartTag(xaml, "ApplyMatchSetupToModelsStatusText", "TextBlock");
+
+    Require(modeCard.Contains("WorkflowInfoCard", StringComparison.Ordinal), "the model-behavior choice should use the shared Match Setup information surface");
+    Require(toggle.Contains("Content=\"Apply Match Setup to models\"", StringComparison.Ordinal), "the toggle label should describe the enabled behavior instead of an ambiguous debug flag");
+    Require(toggle.Contains("IsChecked=\"True\"", StringComparison.Ordinal), "new or legacy sessions should present the existing Arena behavior by default");
+    Require(toggle.Contains("ToggleSwitchCheckBox", StringComparison.Ordinal), "the binary model-behavior choice should use the established keyboard-operable toggle style");
+    Require(toggle.Contains("AutomationProperties.Name=\"Apply Match Setup to model behavior\"", StringComparison.Ordinal), "the model-behavior toggle should expose an unambiguous UI Automation name");
+    Require(toggle.Contains("AutomationProperties.HelpText=\"", StringComparison.Ordinal)
+        && toggle.Contains("attributed public Operator and agent group history", StringComparison.Ordinal)
+        && toggle.Contains("own replies as self-history", StringComparison.Ordinal)
+        && toggle.Contains("system and error events remain visible", StringComparison.Ordinal), "toggle help should disclose Factory input and evidence-preservation semantics");
+    Require(toggle.Contains("ToolTip=\"", StringComparison.Ordinal) && toggle.Contains("Factory mode", StringComparison.Ordinal), "pointer help should name the off-state mode");
+    Require(status.Contains("AutomationProperties.Name=\"Model behavior mode status\"", StringComparison.Ordinal), "the live mode status should expose a stable automation name");
+    Require(status.Contains("AutomationProperties.LiveSetting=\"Polite\"", StringComparison.Ordinal), "mode changes should be announced without interrupting the operator");
+    Require(status.Contains("TextWrapping=\"Wrap\"", StringComparison.Ordinal), "the mode explanation should wrap instead of clipping at narrow Match Setup widths");
+
+    Require(coordinatorCode.Contains("Checked += ModelBehaviorMode_Changed", StringComparison.Ordinal)
+        && coordinatorCode.Contains("Unchecked += ModelBehaviorMode_Changed", StringComparison.Ordinal), "keyboard and pointer toggle changes should share one persistence path");
+    Require(coordinatorCode.Contains("factoryMode = applyMatchSetupToModelsCheckBox.IsChecked != true", StringComparison.Ordinal), "the unchecked state should map precisely to Factory mode");
+    Require(coordinatorCode.Contains("AutomationProperties.SetItemStatus", StringComparison.Ordinal)
+        && coordinatorCode.Contains("factoryMode ? \"Factory mode\" : \"Arena mode\"", StringComparison.Ordinal), "the hosted toggle should expose its semantic mode through UI Automation ItemStatus");
+    Require(coordinatorCode.Contains("system and error events remain recorded", StringComparison.Ordinal), "the live Factory status should preserve evidence-honesty copy");
+
+    var arenaState = new AIArenaMatchSetupControlState(false, "scenario", "arena", "session", "balanced", "", 1, false);
+    Require(arenaState.ModelBehaviorMode == "arena", "the Match Setup control state should default compatibly to Arena mode");
+    var factoryState = arenaState with { ModelBehaviorMode = "factory" };
+    Require(factoryState.ModelBehaviorMode == "factory", "the Match Setup control state should carry Factory mode without changing its existing positional contract");
+    Require(mainWindowCode.Contains("ModelBehaviorMode = snapshot?.FactoryMode == true ? \"factory\" : \"arena\"", StringComparison.Ordinal), "the hosted control-state projection should reflect the rendered session mode and default missing snapshots to Arena");
+
+    RunStaTest(() =>
+    {
+        const string presentationNamespace = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        const string xamlNamespace = "http://schemas.microsoft.com/winfx/2006/xaml";
+        const string factoryStatus = "Factory mode — participants share attributed public group history while recognizing their own earlier replies. Arena guidance is saved but not sent; provider, model, and sampling settings still apply; system and error events remain recorded.";
+        XNamespace presentation = presentationNamespace;
+        XNamespace xNamespace = xamlNamespace;
+        var document = XDocument.Load(mainWindowXamlPath, LoadOptions.PreserveWhitespace);
+        XElement MainWindowStyle(string key) => document
+            .Descendants(presentation + "Style")
+            .Single(element => string.Equals((string?)element.Attribute(xNamespace + "Key"), key, StringComparison.Ordinal));
+        var hintStyle = MainWindowStyle("HintText");
+        var workflowInfoCardStyle = MainWindowStyle("WorkflowInfoCard");
+        var toggleStyle = MainWindowStyle("ToggleSwitchCheckBox");
+        var modelBehaviorCard = document
+            .Descendants(presentation + "Border")
+            .Single(element => string.Equals((string?)element.Attribute(xNamespace + "Name"), "ModelBehaviorModeCard", StringComparison.Ordinal));
+        var assemblyName = typeof(MainWindow).Assembly.GetName().Name
+            ?? throw new InvalidOperationException("WPF assembly name is unavailable.");
+        var hostedXaml = new XElement(
+            presentation + "Grid",
+            new XAttribute("xmlns", presentationNamespace),
+            new XAttribute(XNamespace.Xmlns + "x", xamlNamespace),
+            new XElement(
+                presentation + "Grid.Resources",
+                new XElement(
+                    presentation + "ResourceDictionary",
+                    new XElement(
+                        presentation + "ResourceDictionary.MergedDictionaries",
+                        new[]
+                        {
+                            "UI/Theming/ThemeBrushes.xaml",
+                            "UI/Theming/DesignTokens.xaml",
+                            "UI/Theming/ControlStyles.xaml",
+                            "UI/Theming/SurfaceStyles.xaml"
+                        }.Select(relativePath => new XElement(
+                            presentation + "ResourceDictionary",
+                            new XAttribute("Source", $"/{assemblyName};component/{relativePath}")))),
+                    new XElement(hintStyle),
+                    new XElement(workflowInfoCardStyle),
+                    new XElement(toggleStyle))),
+            new XElement(modelBehaviorCard));
+        var surface = XamlReader.Parse(hostedXaml.ToString(SaveOptions.DisableFormatting)) as Grid
+            ?? throw new InvalidOperationException("Production Factory model-behavior card did not load as a hosted Grid.");
+        var card = surface.FindName("ModelBehaviorModeCard") as Border
+            ?? throw new InvalidOperationException("Hosted production model-behavior card was not registered in its XAML namescope.");
+        var hostedToggle = surface.FindName("ApplyMatchSetupToModelsCheckBox") as CheckBox
+            ?? throw new InvalidOperationException("Hosted production Factory toggle was not registered in its XAML namescope.");
+        var hostedStatus = surface.FindName("ApplyMatchSetupToModelsStatusText") as TextBlock
+            ?? throw new InvalidOperationException("Hosted production Factory status was not registered in its XAML namescope.");
+        hostedStatus.Text = factoryStatus;
+
+        var host = new Window
+        {
+            Width = 960,
+            Height = 320,
+            WindowStyle = WindowStyle.None,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false,
+            Left = -10000,
+            Top = -10000,
+            Content = surface
+        };
+
+        static void DrainInput() => System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+            System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+            new Action(() => { }));
+
+        static Rect BoundsWithin(FrameworkElement element, Visual ancestor)
+        {
+            return element.TransformToAncestor(ancestor).TransformBounds(
+                new Rect(new Point(), element.RenderSize));
+        }
+
+        static void RequireContentInside(FrameworkElement element, string label)
+        {
+            var contentBounds = VisualTreeHelper.GetDescendantBounds(element);
+            Require(
+                contentBounds.Left >= -1
+                && contentBounds.Top >= -1
+                && contentBounds.Right <= element.ActualWidth + 1
+                && contentBounds.Bottom <= element.ActualHeight + 1,
+                $"{label} rendered content outside its arranged bounds and would be clipped");
+        }
+
+        try
+        {
+            host.Show();
+            host.Activate();
+            host.UpdateLayout();
+            DrainInput();
+
+            var peer = UIElementAutomationPeer.CreatePeerForElement(hostedToggle)
+                ?? new CheckBoxAutomationPeer(hostedToggle);
+            var toggleProvider = peer.GetPattern(PatternInterface.Toggle) as System.Windows.Automation.Provider.IToggleProvider
+                ?? throw new InvalidOperationException("Hosted production Factory toggle did not expose TogglePattern.");
+            Require(
+                peer.GetAutomationControlType() == AutomationControlType.CheckBox
+                && peer.GetName() == "Apply Match Setup to model behavior"
+                && peer.GetHelpText().Contains("attributed public Operator and agent group history", StringComparison.Ordinal),
+                "hosted production Factory toggle did not preserve its CheckBox automation name and help contract");
+            Require(toggleProvider.ToggleState == ToggleState.On && hostedToggle.IsChecked == true,
+                "hosted production Factory toggle did not initialize in the compatible Arena on-state");
+            toggleProvider.Toggle();
+            DrainInput();
+            Require(toggleProvider.ToggleState == ToggleState.Off && hostedToggle.IsChecked == false,
+                "UI Automation TogglePattern did not move the production control into Factory mode");
+            toggleProvider.Toggle();
+            DrainInput();
+            Require(hostedToggle.IsChecked == true && hostedToggle.Focus(),
+                "hosted production Factory toggle could not be restored and focused for keyboard input");
+            var inputSource = PresentationSource.FromVisual(hostedToggle)
+                ?? PresentationSource.FromVisual(host)
+                ?? throw new InvalidOperationException("Hosted production Factory toggle did not create a presentation source.");
+            var spaceDown = new KeyEventArgs(Keyboard.PrimaryDevice, inputSource, Environment.TickCount, Key.Space)
+            {
+                RoutedEvent = Keyboard.KeyDownEvent
+            };
+            var spaceUp = new KeyEventArgs(Keyboard.PrimaryDevice, inputSource, Environment.TickCount, Key.Space)
+            {
+                RoutedEvent = Keyboard.KeyUpEvent
+            };
+            hostedToggle.RaiseEvent(spaceDown);
+            hostedToggle.RaiseEvent(spaceUp);
+            DrainInput();
+            Require(spaceDown.Handled && spaceUp.Handled && hostedToggle.IsChecked == false,
+                "Space did not operate the focused production Factory toggle through its WPF keyboard contract");
+
+            var statusHeights = new Dictionary<double, double>();
+            foreach (var width in new[] { 960d, 1500d })
+            {
+                host.Width = width;
+                host.UpdateLayout();
+                DrainInput();
+                var surfaceWidth = surface.ActualWidth;
+                var cardBounds = BoundsWithin(card, surface);
+                var toggleBounds = BoundsWithin(hostedToggle, surface);
+                var statusBounds = BoundsWithin(hostedStatus, surface);
+                Require(Math.Abs(surfaceWidth - width) <= 1,
+                    $"hosted Factory surface did not arrange at the requested {width:0} DIP width");
+                Require(
+                    cardBounds.Left >= -1
+                    && cardBounds.Right <= surfaceWidth + 1
+                    && toggleBounds.Left >= cardBounds.Left - 1
+                    && toggleBounds.Right <= cardBounds.Right + 1
+                    && statusBounds.Left >= cardBounds.Left - 1
+                    && statusBounds.Right <= cardBounds.Right + 1,
+                    $"production Factory model-behavior content escaped its card at {width:0} DIP");
+                Require(hostedStatus.TextWrapping == TextWrapping.Wrap && hostedStatus.ActualHeight > 0,
+                    $"production Factory status did not retain measurable wrapping at {width:0} DIP");
+                RequireContentInside(hostedToggle, $"production Factory toggle at {width:0} DIP");
+                RequireContentInside(hostedStatus, $"production Factory status at {width:0} DIP");
+                statusHeights[width] = hostedStatus.ActualHeight;
+            }
+
+            Require(statusHeights[960] > hostedStatus.FontSize * 1.5,
+                "the full Factory explanation did not wrap at the supported 960 DIP inspection width");
+            Require(statusHeights[1500] <= statusHeights[960] + 1,
+                "the Factory explanation consumed more lines at 1500 DIP than at 960 DIP");
+        }
+        finally
+        {
+            host.Close();
+        }
+    });
+}
+
+static void AiLabHeaderAvoidsDuplicateMatchSetupAction()
+{
+    var shellXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var header = XamlStartTag(shellXaml, "ArenaWorkspaceHeader", "controls:WorkspacePageHeaderControl");
+    Require(
+        !header.Contains("PrimaryActionText=\"Match setup\"", StringComparison.Ordinal)
+        && header.Contains("IsCompactPresentation=\"True\"", StringComparison.Ordinal)
+        && header.Contains("AnnounceStatusChanges=\"False\"", StringComparison.Ordinal)
+        && header.Contains("PrimaryActionText=\"Transcript filters\"", StringComparison.Ordinal)
+        && header.Contains("PrimaryActionRequested=\"TranscriptFiltersButton_Click\"", StringComparison.Ordinal),
+        "the compact AI Lab header should use its one action for transient transcript filters instead of duplicating Match setup");
+
+    var topBarXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"));
+    var matchSetup = XamlStartTag(topBarXaml, "MatchSetupButton", "Button");
+    Require(
+        matchSetup.Contains("Content=\"Match setup\"", StringComparison.Ordinal)
+        && matchSetup.Contains("Click=\"MatchSetupRequested\"", StringComparison.Ordinal),
+        "the established top-bar Match setup command should remain visible and wired");
+
+    var filtersPopup = XamlStartTag(shellXaml, "TranscriptFiltersPopup", "Popup");
+    Require(filtersPopup.Contains("Placement=\"Bottom\"", StringComparison.Ordinal)
+        && filtersPopup.Contains("HorizontalOffset=\"-", StringComparison.Ordinal)
+        && filtersPopup.Contains("Opened=\"TranscriptFiltersPopup_Opened\"", StringComparison.Ordinal)
+        && filtersPopup.Contains("Closed=\"TranscriptFiltersPopup_Closed\"", StringComparison.Ordinal),
+        "transcript filters should use one anchored in-app flyout with explicit focus handoff");
+    var turnPicker = XamlStartTag(shellXaml, "TranscriptTurnFilterPicker", "controls:RequiredSelectionListBox");
+    Require(turnPicker.Contains("AutomationProperties.Name=\"Transcript turn range\"", StringComparison.Ordinal)
+        && turnPicker.Contains("SelectionChanged=\"TranscriptTurnFilter_SelectionChanged\"", StringComparison.Ordinal)
+        && turnPicker.Contains("AutomationProperties.HelpText=\"", StringComparison.Ordinal),
+        "turn filters should use one required-selection in-flyout list without opening a nested popup window");
+    var turnSelectionHandler = typeof(MainWindow).GetMethod(
+        "TranscriptTurnFilter_SelectionChanged",
+        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+    Require(turnSelectionHandler?.GetParameters() is [_, var eventParameter]
+        && eventParameter.ParameterType == typeof(SelectionChangedEventArgs),
+        "the production turn selector should bind an exact SelectionChangedEventArgs bridge that WPF can load at runtime");
+    var filtersOpened = CSharpMethodBlock(
+        File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs")),
+        "private void TranscriptFiltersPopup_Opened(object? sender, EventArgs e)");
+    var resetFilters = CSharpMethodBlock(
+        File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs")),
+        "private void ResetTranscriptFiltersButton_Click(object sender, RoutedEventArgs e)");
+    Require(filtersOpened.Contains("SelectedTranscriptTurnFilterEntry()", StringComparison.Ordinal)
+        && resetFilters.Contains("SelectedTranscriptTurnFilterEntry().Focus()", StringComparison.Ordinal),
+        "opening and resetting transcript filters should focus the selected option so arrow keys operate the list");
+    foreach (var name in new[]
+    {
+        "TranscriptTurnFilterPicker",
+        "TranscriptFilterSystemCheckBox",
+        "TranscriptFilterAgentsCheckBox",
+        "TranscriptFilterNarratorCheckBox",
+        "TranscriptFilterOperatorCheckBox"
+    })
+    {
+        Require(shellXaml.Contains($"x:Name=\"{name}\"", StringComparison.Ordinal),
+            $"the transcript filter flyout should preserve {name}");
+    }
+    foreach (var name in new[]
+    {
+        "TranscriptFilterSystemCheckBox",
+        "TranscriptFilterAgentsCheckBox",
+        "TranscriptFilterNarratorCheckBox",
+        "TranscriptFilterOperatorCheckBox"
+    })
+    {
+        var toggle = XamlStartTag(shellXaml, name, "CheckBox");
+        Require(toggle.Contains("AutomationProperties.Name=\"", StringComparison.Ordinal)
+            && toggle.Contains("AutomationProperties.HelpText=\"", StringComparison.Ordinal)
+            && toggle.Contains("ToolTip=\"", StringComparison.Ordinal),
+            $"{name} should explain its transient filter behavior to keyboard, pointer, and automation users");
+    }
+}
+
 static void MainWindowMatchSetupMatrixHasClearAction()
 {
     var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
@@ -1485,16 +2087,39 @@ static void MainWindowOverlaysPreserveKeyboardAndAccessibilityContracts()
     Require(providerStatusButton.Contains("Style=\"{StaticResource InteractiveTopMetricPill}\"", StringComparison.Ordinal), "the provider status opener should expose visible hover and keyboard-focus states");
     Require(providerStatusButton.Contains("AutomationProperties.HelpText=\"", StringComparison.Ordinal), "the provider status opener should explain its action to assistive technology");
 
-    foreach (var name in new[] { "ProviderHealthPopup", "ViewMenuPopup", "DebugMenuPopup" })
+    foreach (var name in new[]
+    {
+        "ProviderHealthPopup",
+        "ViewMenuPopup",
+        "DebugMenuPopup",
+        "CurrentSetupTransferPopup",
+        "GenerationCopyPopup",
+        "AgentComposerControlsPopup",
+        "DiagnosticDetailPopup",
+        "AgentPerformanceDetailPopup",
+        "TranscriptFiltersPopup"
+    })
     {
         var popup = XamlStartTag(xaml, name, "Popup");
         Require(popup.Contains("Opened=\"", StringComparison.Ordinal), $"{name} should move focus inside when opened");
         Require(popup.Contains("Closed=\"", StringComparison.Ordinal), $"{name} should restore focus when closed");
     }
 
-    foreach (var name in new[] { "TranscriptSearchPopupContent", "ProviderHealthPopupContent", "ViewMenuPopupContent", "DebugMenuPopupContent" })
+    foreach (var (name, elementType) in new[]
     {
-        var popupContent = XamlStartTag(xaml, name, "Border");
+        ("TranscriptSearchPopupContent", "Border"),
+        ("ProviderHealthPopupContent", "Border"),
+        ("ViewMenuPopupContent", "Border"),
+        ("DebugMenuPopupContent", "Border"),
+        ("CurrentSetupTransferPopupContent", "shell:ShellPopupSurface"),
+        ("GenerationCopyPopupContent", "shell:ShellPopupSurface"),
+        ("AgentComposerControlsPopupContent", "shell:ShellPopupSurface"),
+        ("DiagnosticDetailPopupContent", "shell:ShellPopupSurface"),
+        ("AgentPerformanceDetailPopupContent", "shell:ShellPopupSurface"),
+        ("TranscriptFiltersPopupContent", "shell:ShellPopupSurface")
+    })
+    {
+        var popupContent = XamlStartTag(xaml, name, elementType);
         Require(popupContent.Contains("PreviewKeyDown=\"", StringComparison.Ordinal), $"{name} should handle Escape inside the popup window");
         Require(popupContent.Contains("FocusManager.IsFocusScope=\"True\"", StringComparison.Ordinal), $"{name} should define an independent focus scope");
         Require(popupContent.Contains("KeyboardNavigation.TabNavigation=\"Cycle\"", StringComparison.Ordinal), $"{name} should cycle keyboard focus within the flyout");
@@ -1541,6 +2166,261 @@ static void MainWindowOverlaysPreserveKeyboardAndAccessibilityContracts()
     Require(source.Contains("RestoreOverlayFocus", StringComparison.Ordinal), "overlay closure should restore focus to its opener");
     Require(source.Contains("ProviderHealthPopup_Opened", StringComparison.Ordinal), "provider health should explicitly move focus inside its popup window");
     Require(source.Contains("TranscriptSearchPopup_PreviewKeyDown", StringComparison.Ordinal), "search should handle Escape after focus moves from the text editor to a result row");
+    var closeTopmostOverlay = CSharpMethodBlock(source, "private bool CloseTopmostShellOverlay()");
+    Require(closeTopmostOverlay.Contains("TranscriptFiltersPopup.IsOpen", StringComparison.Ordinal),
+        "window-level Escape should close the transcript filter flyout even after focus moves outside its content");
+    foreach (var name in new[]
+    {
+        "CurrentSetupTransferPopup",
+        "GenerationCopyPopup",
+        "AgentComposerControlsPopup",
+        "DiagnosticDetailPopup",
+        "AgentPerformanceDetailPopup",
+        "TranscriptFiltersPopup"
+    })
+    {
+        Require(source.Contains($"{name}_Opened", StringComparison.Ordinal), $"{name} should focus its first actionable entry");
+        Require(source.Contains($"{name}_Closed", StringComparison.Ordinal), $"{name} should restore focus to its opener");
+        Require(source.Contains($"{name}_PreviewKeyDown", StringComparison.Ordinal), $"{name} should close locally on Escape");
+    }
+
+    var closeTransientFlyouts = CSharpMethodBlock(source, "private void CloseNamedTransientShellFlyouts()");
+    Require(closeTransientFlyouts.Contains("CurrentSetupTransferPopup.IsOpen = false", StringComparison.Ordinal)
+        && closeTransientFlyouts.Contains("GenerationCopyPopup.IsOpen = false", StringComparison.Ordinal)
+        && closeTransientFlyouts.Contains("TranscriptFiltersPopup.IsOpen = false", StringComparison.Ordinal),
+        "shell transitions should close Match Setup child flyouts and transient transcript filters before changing surfaces");
+    var showProvider = CSharpMethodBlock(source, "private void ShowProviderHealthPopup(UIElement? opener = null)");
+    var openUserGuide = CSharpMethodBlock(source, "private void OpenUserGuideButton_Click(object sender, RoutedEventArgs e)");
+    var rightRailToggle = CSharpMethodBlock(source, "private void RightRailToggleButton_Click(object sender, RoutedEventArgs e)");
+    Require(showProvider.Contains("TranscriptFiltersPopup.IsOpen = false", StringComparison.Ordinal)
+        && openUserGuide.Contains("TranscriptFiltersPopup.IsOpen = false", StringComparison.Ordinal)
+        && rightRailToggle.Contains("CloseNamedTransientShellFlyouts()", StringComparison.Ordinal),
+        "competing dialogs and anchor-layout changes should close transient transcript filters deterministically");
+    var closeMatchSetup = CSharpMethodBlock(source, "private void CloseMatchSetupFlyout()");
+    Require(closeMatchSetup.Contains("CurrentSetupTransferPopup.IsOpen = false", StringComparison.Ordinal)
+        && closeMatchSetup.Contains("GenerationCopyPopup.IsOpen = false", StringComparison.Ordinal),
+        "closing Match Setup should close its transfer and generated-match popup windows before restoring the prior surface");
+
+    var diagnosticsSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/DiagnosticsWorkflowCoordinator.cs"));
+    Require(diagnosticsSource.Contains("openerCard.Invoked += DiagnosticChip_Invoked", StringComparison.Ordinal)
+        && xaml.Contains("<shell:ShellPopupOpenerCard x:Name=\"FrictionChip\"", StringComparison.Ordinal),
+        "diagnostic popup openers should use the peer-backed shared keyboard and automation invocation contract");
+    var performanceSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/AgentPerformanceCoordinator.cs"));
+    Require(performanceSource.Contains("ConfigureDetailCard(card, stats, displayTitle)", StringComparison.Ordinal)
+        && performanceSource.Contains("new ShellPopupOpenerCard", StringComparison.Ordinal)
+        && performanceSource.Contains("openerCard.Invoked +=", StringComparison.Ordinal),
+        "agent-performance popup openers should be keyboard reachable and use the peer-backed shared invocation contract");
+
+    HostedMainWindowPopupKeyboardContract();
+}
+
+static void HostedMainWindowPopupKeyboardContract()
+{
+    RunStaTest(() =>
+    {
+        var opener = new Button { Content = "Open actions", Width = 120, Height = 36 };
+        var refreshedOpener = new Button { Content = "Refreshed opener", Width = 120, Height = 36 };
+        var outsideDestination = new Button { Content = "Outside destination", Width = 140, Height = 36 };
+        var openerCard = new ShellPopupOpenerCard
+        {
+            Width = 140,
+            Height = 36,
+            Focusable = true,
+            Child = new TextBlock { Text = "Diagnostic card" }
+        };
+        KeyboardNavigation.SetIsTabStop(openerCard, true);
+        AutomationProperties.SetName(openerCard, "Open diagnostic detail");
+        AutomationProperties.SetHelpText(openerCard, "Open bounded diagnostic evidence.");
+        var openerInvocations = 0;
+        openerCard.Invoked += (_, _) => openerInvocations++;
+        var firstAction = new Button { Content = "First action", Width = 120, Height = 34 };
+        var turnPicker = new RequiredSelectionListBox { Width = 140, Height = 68 };
+        turnPicker.Items.Add(new ListBoxItem { Content = "All turns", IsSelected = true });
+        turnPicker.Items.Add(new ListBoxItem { Content = "Latest 10" });
+        var speakerToggle = new CheckBox { Content = "Agents", IsChecked = true, Height = 34 };
+        var lastAction = new Button { Content = "Last action", Width = 120, Height = 34 };
+        var popupContent = new StackPanel
+        {
+            Width = 180,
+            Background = Brushes.White,
+            Children = { firstAction, turnPicker, speakerToggle, lastAction }
+        };
+        var popupSurface = new ShellPopupSurface { Child = popupContent };
+        AutomationProperties.SetName(popupSurface, "Hosted popup actions");
+        FocusManager.SetIsFocusScope(popupSurface, true);
+        KeyboardNavigation.SetTabNavigation(popupSurface, KeyboardNavigationMode.Cycle);
+        KeyboardNavigation.SetControlTabNavigation(popupSurface, KeyboardNavigationMode.Cycle);
+        KeyboardNavigation.SetDirectionalNavigation(popupSurface, KeyboardNavigationMode.Contained);
+        var popup = new Popup
+        {
+            PlacementTarget = opener,
+            Placement = PlacementMode.Bottom,
+            StaysOpen = false,
+            AllowsTransparency = true,
+            Child = popupSurface
+        };
+        IInputElement? focusReturnTarget = null;
+        popup.Opened += (_, _) =>
+        {
+            focusReturnTarget ??= Keyboard.FocusedElement ?? opener;
+            MainWindow.FocusOverlayEntry(popup, firstAction);
+        };
+        popup.Closed += (_, _) =>
+        {
+            var returnTarget = popup.PlacementTarget ?? focusReturnTarget;
+            focusReturnTarget = null;
+            MainWindow.RestoreOverlayFocus(returnTarget, opener, () => !popup.IsOpen);
+        };
+        popupSurface.PreviewKeyDown += (_, args) => MainWindow.ClosePopupOnEscape(popup, args);
+        var hostContent = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Children = { opener, refreshedOpener, outsideDestination, openerCard }
+        };
+        var host = new Window
+        {
+            Width = 320,
+            Height = 180,
+            WindowStyle = WindowStyle.None,
+            ShowInTaskbar = false,
+            Left = -10000,
+            Top = -10000,
+            Content = hostContent
+        };
+
+        static void DrainInput() => System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+            System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+            new Action(() => { }));
+
+        try
+        {
+            host.Show();
+            host.Activate();
+            host.UpdateLayout();
+            var openerCardPeer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(openerCard)
+                ?? throw new InvalidOperationException("Hosted popup opener card did not create an automation peer.");
+            var invokeProvider = openerCardPeer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke)
+                as System.Windows.Automation.Provider.IInvokeProvider
+                ?? throw new InvalidOperationException("Hosted popup opener card did not expose an Invoke provider.");
+            Require(openerCardPeer.GetAutomationControlType() == System.Windows.Automation.Peers.AutomationControlType.Button
+                && openerCardPeer.GetName() == "Open diagnostic detail"
+                && openerCardPeer.GetHelpText() == "Open bounded diagnostic evidence.",
+                "hosted diagnostic/performance opener did not expose a peer-backed Button and Invoke contract");
+            invokeProvider.Invoke();
+            DrainInput();
+            Require(openerInvocations == 1,
+                "hosted diagnostic/performance opener did not route UI Automation Invoke through its shared activation contract");
+            Require(opener.Focus(), "hosted popup opener was not keyboard focusable");
+            popup.IsOpen = true;
+            DrainInput();
+            var popupSurfacePeer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(popupSurface)
+                ?? throw new InvalidOperationException("Hosted popup surface did not create an automation peer.");
+            Require(popupSurfacePeer.GetAutomationControlType() == System.Windows.Automation.Peers.AutomationControlType.Group
+                && popupSurfacePeer.GetName() == "Hosted popup actions",
+                "hosted popup surface did not expose its peer-backed automation group");
+            Require(firstAction.IsKeyboardFocused,
+                "hosted non-top-bar popup did not move keyboard focus to its first actionable entry");
+
+            var turnPickerPeer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(turnPicker)
+                ?? throw new InvalidOperationException("Hosted turn picker did not create a ListBox automation peer.");
+            var turnSelection = turnPickerPeer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Selection)
+                as System.Windows.Automation.Provider.ISelectionProvider
+                ?? throw new InvalidOperationException("Hosted turn picker did not expose SelectionPattern.");
+            var latestTurnItem = (ListBoxItem)turnPicker.Items[1];
+            var latestTurnPeer = turnPickerPeer.GetChildren()?
+                .FirstOrDefault(peer => peer.GetName().Equals("Latest 10", StringComparison.Ordinal))
+                ?? throw new InvalidOperationException("Hosted turn option did not create a ListBoxItem automation peer.");
+            var latestTurnSelection = latestTurnPeer.GetPattern(System.Windows.Automation.Peers.PatternInterface.SelectionItem)
+                as System.Windows.Automation.Provider.ISelectionItemProvider
+                ?? throw new InvalidOperationException("Hosted turn option did not expose SelectionItemPattern.");
+            Require(turnSelection.IsSelectionRequired,
+                "hosted turn picker did not report its non-empty selection contract to UI Automation");
+            var allTurnsItem = (ListBoxItem)turnPicker.Items[0];
+            Require(allTurnsItem.Focus(), "hosted popup selected turn option was not keyboard focusable");
+            var turnInputSource = PresentationSource.FromVisual(popupSurface)
+                ?? PresentationSource.FromVisual(host)
+                ?? throw new InvalidOperationException("Hosted turn picker did not create a presentation source.");
+            var down = new KeyEventArgs(Keyboard.PrimaryDevice, turnInputSource, Environment.TickCount, Key.Down)
+            {
+                RoutedEvent = Keyboard.KeyDownEvent
+            };
+            allTurnsItem.RaiseEvent(down);
+            DrainInput();
+            Require(popup.IsOpen && down.Handled && turnPicker.SelectedIndex == 1,
+                "Down from the focused selected turn option did not move selection while preserving the flyout");
+            latestTurnSelection.RemoveFromSelection();
+            DrainInput();
+            Require(popup.IsOpen && turnPicker.SelectedIndex == 0 && turnSelection.GetSelection().Length == 1,
+                "removing the selected turn through UI Automation left the required-selection list dishonest");
+            latestTurnSelection.Select();
+            DrainInput();
+            Require(popup.IsOpen && turnPicker.SelectedIndex == 1 && latestTurnSelection.IsSelected,
+                "selecting a turn-range list item did not preserve the parent flyout and SelectionItemPattern state");
+            var speakerPeer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(speakerToggle)
+                ?? throw new InvalidOperationException("Hosted speaker filter did not create a CheckBox automation peer.");
+            var toggleProvider = speakerPeer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Toggle)
+                as System.Windows.Automation.Provider.IToggleProvider
+                ?? throw new InvalidOperationException("Hosted speaker filter did not expose TogglePattern.");
+            toggleProvider.Toggle();
+            DrainInput();
+            Require(popup.IsOpen && speakerToggle.IsChecked == false,
+                "toggling a speaker filter did not preserve the parent flyout and TogglePattern state");
+
+            Require(firstAction.MoveFocus(new TraversalRequest(FocusNavigationDirection.Previous)),
+                "hosted popup did not process reverse keyboard traversal");
+            DrainInput();
+            Require(lastAction.IsKeyboardFocused,
+                "hosted popup Shift+Tab navigation escaped instead of cycling to its last action");
+            Require(lastAction.Focus(), "hosted popup final action was not keyboard focusable");
+            Require(lastAction.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)),
+                "hosted popup did not process forward keyboard traversal");
+            DrainInput();
+            Require(firstAction.IsKeyboardFocused,
+                "hosted popup Tab navigation escaped instead of cycling to its first action");
+
+            var inputSource = PresentationSource.FromVisual(popupSurface)
+                ?? PresentationSource.FromVisual(host)
+                ?? throw new InvalidOperationException("Hosted popup did not create a presentation source.");
+            var escape = new KeyEventArgs(Keyboard.PrimaryDevice, inputSource, Environment.TickCount, Key.Escape)
+            {
+                RoutedEvent = Keyboard.PreviewKeyDownEvent
+            };
+            popupSurface.RaiseEvent(escape);
+            DrainInput();
+            Require(!popup.IsOpen && escape.Handled,
+                "hosted popup Escape handling did not close and consume the popup key event");
+            Require(opener.IsKeyboardFocused,
+                "hosted popup closure did not restore keyboard focus to its opener");
+
+            popup.PlacementTarget = opener;
+            popup.IsOpen = true;
+            DrainInput();
+            Require(firstAction.IsKeyboardFocused,
+                "hosted popup did not re-enter its focus scope after reopening");
+            popup.PlacementTarget = refreshedOpener;
+            popup.IsOpen = false;
+            DrainInput();
+            Require(refreshedOpener.IsKeyboardFocused,
+                "hosted popup closure restored a stale opener after its live placement target changed");
+
+            Require(opener.Focus(), "hosted popup opener could not be refocused for pointer-dismissal coverage");
+            popup.PlacementTarget = opener;
+            popup.IsOpen = true;
+            DrainInput();
+            Require(firstAction.IsKeyboardFocused,
+                "hosted popup did not focus its entry before pointer-dismissal coverage");
+            Require(outsideDestination.Focus(), "hosted outside-click destination was not keyboard focusable");
+            popup.IsOpen = false;
+            DrainInput();
+            Require(outsideDestination.IsKeyboardFocused,
+                "outside-pointer dismissal was overwritten by popup focus restoration");
+        }
+        finally
+        {
+            popup.IsOpen = false;
+            host.Close();
+        }
+    });
 }
 
 static void MainWindowAdaptiveShellLayoutStaysWired()
@@ -1930,6 +2810,51 @@ static void MainWindowSnapshotRefreshSkipsUnchangedSessionScans()
     }
 }
 
+static void MainWindowDebugControlsRemainDiscoverable()
+{
+    var document = XDocument.Load(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    XNamespace xamlNamespace = "http://schemas.microsoft.com/winfx/2006/xaml";
+
+    var section = document
+        .Descendants()
+        .Single(element => element.Name.LocalName == "Expander"
+            && (string?)element.Attribute(xamlNamespace + "Name") == "DebugControlsSettingsExpander");
+    Require(
+        string.Equals((string?)section.Attribute("Header"), "Debug controls", StringComparison.Ordinal),
+        "debug controls should have a plainly labeled top-level Settings section");
+
+    var toggle = section
+        .Descendants()
+        .Single(element => element.Name.LocalName == "CheckBox"
+            && (string?)element.Attribute(xamlNamespace + "Name") == "DebugControlsCheckBox");
+    Require(
+        string.Equals((string?)toggle.Attribute("Content"), "Allow debug controls", StringComparison.Ordinal),
+        "the established debug-controls toggle should remain in the discoverable section");
+    Require(
+        toggle.Attribute("AutomationProperties.Name") is not null
+        && toggle.Attribute("AutomationProperties.HelpText") is not null,
+        "the debug-controls toggle should expose its purpose to UI Automation");
+    Require(
+        string.Equals((string?)toggle.Attribute("Checked"), "VisualSettings_Changed", StringComparison.Ordinal)
+        && string.Equals((string?)toggle.Attribute("Unchecked"), "VisualSettings_Changed", StringComparison.Ordinal),
+        "the promoted toggle should retain its persisted settings behavior");
+
+    var controlPlaneToggle = section
+        .Descendants()
+        .Single(element => element.Name.LocalName == "CheckBox"
+            && (string?)element.Attribute(xamlNamespace + "Name") == "ControlPlaneCheckBox");
+    Require(
+        string.Equals((string?)controlPlaneToggle.Attribute("Checked"), "ControlPlaneCheckBox_Changed", StringComparison.Ordinal)
+        && string.Equals((string?)controlPlaneToggle.Attribute("Unchecked"), "ControlPlaneCheckBox_Changed", StringComparison.Ordinal)
+        && controlPlaneToggle.Attribute("AutomationProperties.Name") is not null
+        && ((string?)controlPlaneToggle.Attribute("AutomationProperties.HelpText"))?.Contains("independent", StringComparison.OrdinalIgnoreCase) == true,
+        "PowerShell control should live inside Debug controls while retaining its independent persisted and accessible contract");
+    Require(
+        !document.Descendants().Any(element => element.Name.LocalName == "Expander"
+            && string.Equals((string?)element.Attribute("Header"), "PowerShell Control", StringComparison.Ordinal)),
+        "PowerShell control should not remain as a separate top-level Settings category");
+}
+
 static void MainWindowInternetSettingsUseOneDirectToggle()
 {
     var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
@@ -1956,7 +2881,7 @@ static void MainWindowModelProviderUsesProgressiveDisclosure()
         ?? throw new InvalidOperationException($"MainWindow XAML should contain {name}.");
 
     var provider = Named("ModelProviderSettingsExpander");
-    Require((string?)provider.Attribute("Header") == "Models & provider", "the provider section should use a task-oriented heading");
+    Require((string?)provider.Attribute("Header") == "Provider connection", "Settings should focus the provider section on connection rather than duplicating model selection");
     Require((string?)provider.Attribute("IsExpanded") == "False", "the provider section should default collapsed");
 
     var subsectionNames = new[]
@@ -1971,7 +2896,7 @@ static void MainWindowModelProviderUsesProgressiveDisclosure()
     foreach (var subsectionName in subsectionNames)
     {
         var subsection = Named(subsectionName);
-        Require(subsection.Ancestors().Contains(provider), $"{subsectionName} should stay inside Models & provider");
+        Require(subsection.Ancestors().Contains(provider), $"{subsectionName} should stay inside Provider connection");
         Require((string?)subsection.Attribute("IsExpanded") == "False", $"{subsectionName} should default collapsed");
         Require((string?)subsection.Attribute("Style") == "{StaticResource SettingsSubsectionExpander}", $"{subsectionName} should use the compact subsection style");
     }
@@ -1980,12 +2905,17 @@ static void MainWindowModelProviderUsesProgressiveDisclosure()
         .Ancestors()
         .Any(ancestor => subsectionNames.Contains((string?)ancestor.Attribute(xamlNamespace + "Name"), StringComparer.Ordinal));
 
-    foreach (var essentialName in new[] { "ProviderPresetPicker", "ProviderModelText", "TestProviderButton" })
+    foreach (var essentialName in new[] { "ProviderPresetPicker", "TestProviderButton", "OpenModelsSurfaceButton" })
     {
         var essential = Named(essentialName);
-        Require(essential.Ancestors().Contains(provider), $"{essentialName} should stay in Models & provider");
+        Require(essential.Ancestors().Contains(provider), $"{essentialName} should stay in Provider connection");
         Require(!IsInsideOptionalSubsection(essential), $"{essentialName} should remain on the short primary setup path");
     }
+
+    var compatibilityModelPickerHost = Named("ProviderModelText").Ancestors().First(element => element.Name.LocalName == "Grid");
+    Require((string?)compatibilityModelPickerHost.Attribute("Visibility") == "Collapsed", "Settings should not expose a second model selector");
+    Require((string?)Named("ProviderRoleRoutingExpander").Attribute("Visibility") == "Collapsed", "Settings should not expose a second assignment surface");
+    Require(Named("ProviderModelsPanel").Name.LocalName == "ProviderModelAssignmentsControl", "the top-rail Models surface should host the production catalog and assignment control");
 
     var expectedGroups = new Dictionary<string, string>
     {
@@ -2006,6 +2936,27 @@ static void MainWindowModelProviderUsesProgressiveDisclosure()
     Require(Named("StreamModelResponsesCheckBox").Ancestors().Contains(Named("AgentSettingsExpander")), "Agent streaming should live with Agent workspace settings");
     Require(Named("UseDefaultModelForAllRolesButton").Descendants().Any(element => (string?)element.Attribute("Text") == "Use default for every role"), "role inheritance should be described as following the default model");
     var providerSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ProviderSettingsCoordinator.cs"));
+    var preloadLifecycle = CSharpMethodBlock(providerSource, "public async Task PreloadSelectedModelsAsync(");
+    var unloadLifecycle = CSharpMethodBlock(providerSource, "public async Task UnloadSelectedModelsAsync(");
+    Require(preloadLifecycle.Contains("RunLifecycleLockedAsync", StringComparison.Ordinal)
+            && unloadLifecycle.Contains("RunLifecycleLockedAsync", StringComparison.Ordinal)
+            && preloadLifecycle.Contains("mutationStarting:", StringComparison.Ordinal)
+            && unloadLifecycle.Contains("mutationStarting:", StringComparison.Ordinal)
+            && preloadLifecycle.Contains("mutationStarted", StringComparison.Ordinal)
+            && unloadLifecycle.Contains("mutationStarted", StringComparison.Ordinal)
+            && preloadLifecycle.Contains("MutationOutcomeUnknown", StringComparison.Ordinal)
+            && unloadLifecycle.Contains("MutationOutcomeUnknown", StringComparison.Ordinal),
+        "legacy Settings lifecycle commands should share the non-queuing arena/provider operation gate");
+    var lifecycleGate = CSharpMethodBlock(providerSource, "private async Task RunLifecycleLockedAsync(");
+    Require(lifecycleGate.Contains("arenaOperationLock.WaitAsync(0", StringComparison.Ordinal)
+            && lifecycleGate.Contains("isArenaBusy()", StringComparison.Ordinal)
+            && lifecycleGate.Contains("arenaOperationLock.Release()", StringComparison.Ordinal),
+        "Settings lifecycle gating should reject overlap, recheck arena state, and release its shared lock");
+    Require(providerSource.Contains("CaptureLifecycleContext", StringComparison.Ordinal)
+            && providerSource.Contains("EnsureLifecycleContext", StringComparison.Ordinal)
+            && providerSource.Contains("ProviderSettingsLifecycleContextChangedException", StringComparison.Ordinal)
+            && providerSource.Contains("SafeStatusForDisplay", StringComparison.Ordinal),
+        "Settings lifecycle must revalidate session/provider identity at mutation time and sanitize provider details");
     var inheritStart = providerSource.IndexOf("public async Task UseDefaultModelForAllRolesAsync", StringComparison.Ordinal);
     var inheritEnd = providerSource.IndexOf("public void SaveRoleModelDrafts", inheritStart, StringComparison.Ordinal);
     Require(inheritStart >= 0 && inheritEnd > inheritStart, "the role-inheritance action should remain implemented");

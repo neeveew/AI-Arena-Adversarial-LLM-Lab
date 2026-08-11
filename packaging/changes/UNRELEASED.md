@@ -1,7 +1,7 @@
 # Unreleased
 
 This is the development ledger between versioned builds. Keep
-`0.4.128-beta` as the declared product version until the repository owner
+`0.4.129-beta` as the declared product version until the repository owner
 chooses the next version. At release time, move verified bullets into the new
 versioned `.txt` change file.
 

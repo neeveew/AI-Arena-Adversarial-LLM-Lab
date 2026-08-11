@@ -8,6 +8,7 @@ using System.Windows.Threading;
 using AIArena.Core.Models;
 using AIArena.Core.Services;
 using AIArena.Wpf.Controls;
+using AIArena.Wpf.Models;
 using AIArena.Wpf.Services;
 
 namespace AIArena.Wpf;
@@ -51,7 +52,7 @@ public partial class MainWindow
             return AIArenaControlResponse.Error(
                 request,
                 "control_plane_disabled",
-                "AI Arena control plane is disabled. Enable it in Settings > PowerShell Control first.");
+                "AI Arena control plane is disabled. Enable it in Settings > Debug controls first.");
         }
 
         if (!AIArenaControlCommands.IsKnown(request.Command))
@@ -108,6 +109,15 @@ public partial class MainWindow
                     ExperimentLabPanel.ReadControlPlaneState());
             case AIArenaControlCommands.ExperimentFeatureSelect:
                 {
+                    if (!IsExperimentLabEnabled(_wpfSettings))
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "feature_disabled",
+                            "Experiment Lab is hidden. Enable Debug controls in Settings before selecting a feature.",
+                            ExperimentLabPanel.ReadControlPlaneState());
+                    }
+
                     var key = RequiredStringArg(request, "key");
                     if (string.IsNullOrWhiteSpace(key))
                     {
@@ -207,6 +217,15 @@ public partial class MainWindow
                             request,
                             "feature_disabled",
                             "AI World is disabled. Enable Debug controls and AI World (3D) before selecting it.");
+                    }
+
+                    if (normalizedView is "experiment" or "experiments" or "experiment.lab"
+                        && !IsExperimentLabEnabled(_wpfSettings))
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "feature_disabled",
+                            "Experiment Lab is hidden. Enable Debug controls in Settings before selecting it.");
                     }
 
                     if (!SelectControlPlaneView(view))
@@ -528,6 +547,13 @@ public partial class MainWindow
                     return AIArenaControlResponse.Success(request, "Agent command staged.", AgentWorkspace.ControlState);
                 }
             case AIArenaControlCommands.ArenaStart:
+                if (await FactoryTurnPrerequisiteResponseAsync(
+                        request,
+                        "starting Auto Chat",
+                        cancellationToken) is { } startPrerequisiteFailure)
+                {
+                    return startPrerequisiteFailure;
+                }
                 _ = ArenaRun.StartAutoChatAsync();
                 return AIArenaControlResponse.Success(request, "Arena auto-chat start requested.", BuildControlPlaneSnapshot());
             case AIArenaControlCommands.ArenaStop:
@@ -537,21 +563,70 @@ public partial class MainWindow
                 // A turn is skipped when the arena is already busy. Reporting
                 // that as completed made five concurrent requests look like five
                 // turns when only three ran, and a caller had no way to tell.
-                return await ArenaRun.RunOneTurnAsync()
-                    ? AIArenaControlResponse.Success(request, "Arena one-turn request completed.", BuildControlPlaneSnapshot())
-                    : AIArenaControlResponse.Error(
-                        request,
-                        "not_available",
-                        "The arena is busy or has no active session; the turn was not run.",
-                        BuildControlPlaneSnapshot());
+                {
+                    if (await FactoryTurnPrerequisiteResponseAsync(
+                            request,
+                            "running a model",
+                            cancellationToken) is { } prerequisiteFailure)
+                    {
+                        return prerequisiteFailure;
+                    }
+
+                    var ran = await ArenaRun.RunOneTurnAsync();
+                    if (!ran)
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "not_available",
+                            "The arena is busy or has no active session; the turn was not run.",
+                            BuildControlPlaneSnapshot());
+                    }
+
+                    if (!ArenaRun.LastTurnSucceeded)
+                    {
+                        if (await FactoryTurnPrerequisiteResponseAsync(
+                                request,
+                                "running a model",
+                                cancellationToken) is { } postTurnPrerequisiteFailure)
+                        {
+                            return postTurnPrerequisiteFailure;
+                        }
+
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "model_call_failed",
+                            "The model turn did not complete. Inspect provider status and the transcript; accepted provider failures are recorded as System events.",
+                            BuildControlPlaneSnapshot());
+                    }
+
+                    return AIArenaControlResponse.Success(request, "Arena one-turn request completed.", BuildControlPlaneSnapshot());
+                }
             case AIArenaControlCommands.ArenaNarrate:
-                return await ArenaRun.NarrateNowAsync()
-                    ? AIArenaControlResponse.Success(request, "Arena narration request completed.", BuildControlPlaneSnapshot())
-                    : AIArenaControlResponse.Error(
+                {
+                    if (_lastRenderedSnapshot?.FactoryMode == true)
+                    {
+                        return AIArenaControlResponse.Error(
+                            request,
+                            "feature_unavailable",
+                            "Narration is unavailable in Factory mode. Turn Apply Match Setup to models on to use narrator guidance.",
+                            BuildControlPlaneSnapshot());
+                    }
+
+                    var ran = await ArenaRun.NarrateNowAsync();
+                    if (ran && ArenaRun.LastNarrationSucceeded)
+                    {
+                        return AIArenaControlResponse.Success(request, "Arena narration request completed.", BuildControlPlaneSnapshot());
+                    }
+
+                    var factoryMode = _lastRenderedSnapshot?.FactoryMode == true;
+                    return AIArenaControlResponse.Error(
                         request,
-                        "not_available",
-                        "The arena is busy or has no active session; narration was not run.",
+                        factoryMode ? "feature_unavailable" : "not_available",
+                        factoryMode
+                            ? "Narration is unavailable in Factory mode. Turn Apply Match Setup to models on to use narrator guidance."
+                            : "The arena is busy, has no active session, or narration did not complete.",
                         BuildControlPlaneSnapshot());
+                }
             case AIArenaControlCommands.ArenaReset:
                 if (!OptionalBoolArg(request, "confirm"))
                 {
@@ -660,6 +735,11 @@ public partial class MainWindow
 
     private void OpenExperimentLabForControlPlaneSelection()
     {
+        if (!IsExperimentLabEnabled(_wpfSettings))
+        {
+            return;
+        }
+
         AppSettingsWorkflow.SetVisible(false);
         var previousSurface = _activeShellSurface;
         ShellNavigation.ShowExperimentLabPanel();
@@ -694,6 +774,53 @@ public partial class MainWindow
 
         _controlPlaneEvents.Publish("match.generation.changed", result.Message, result.Data);
         return AIArenaControlResponse.Success(request, result.Message, result.Data);
+    }
+
+    private async Task<AIArenaControlResponse?> FactoryTurnPrerequisiteResponseAsync(
+        AIArenaControlRequest request,
+        string action,
+        CancellationToken cancellationToken)
+    {
+        var sessionId = _activeSession?.Id?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return null;
+        }
+
+        var snapshot = await _coreSessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
+        if (!sessionId.Equals(_activeSession?.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            // The run coordinator owns the no-active/session-changed result. Do
+            // not refuse a request using a snapshot that is no longer active.
+            return null;
+        }
+
+        var message = FactoryConversationPrerequisiteMessage(snapshot, action);
+        return message is null
+            ? null
+            : AIArenaControlResponse.Error(
+                request,
+                "prerequisite_missing",
+                message,
+                BuildControlPlaneSnapshot());
+    }
+
+    internal static string? FactoryConversationPrerequisiteMessage(ArenaSnapshot? snapshot, string action)
+    {
+        if (snapshot?.Engine.FactoryMode != true)
+        {
+            return null;
+        }
+
+        var inspection = new FactoryConversationService().Inspect(snapshot);
+        if (inspection.HasUsableRoot)
+        {
+            return null;
+        }
+
+        return inspection.IsAnchored
+            ? $"Factory mode cannot continue because its anchored public Operator root is missing. Restore it, or reset or fork the session before {action}."
+            : $"Factory mode needs a public Operator turn to start its shared group conversation. Send one before {action}.";
     }
 
     private static AIArenaMatchGenerationOptions GenerationOptionsFromRequest(AIArenaControlRequest request)

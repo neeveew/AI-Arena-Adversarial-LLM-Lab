@@ -22,6 +22,7 @@ public enum ShellTopBarAction
     ProviderSettingsRequested,
     LabViewRequested,
     MatchSetupRequested,
+    ModelsRequested,
     SearchRequested,
     SearchPopupPreviewKeyDown,
     SearchDragStarted,
@@ -241,6 +242,7 @@ public partial class ShellTopBarControl : UserControl
     public Button LabTranscriptViewButtonTarget => LabTranscriptViewButton;
     public Button LabWorldViewButtonTarget => LabWorldViewButton;
     public Button MatchSetupButtonTarget => MatchSetupButton;
+    public Button ModelsButtonTarget => ModelsButton;
     public Grid SearchCommandHostTarget => SearchCommandHost;
     public Button TranscriptSearchButtonTarget => TranscriptSearchButton;
     public Popup TranscriptSearchPopupTarget => TranscriptSearchPopup;
@@ -318,6 +320,7 @@ public partial class ShellTopBarControl : UserControl
     private void ProviderSettingsRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.ProviderSettingsRequested, sender, e);
     private void LabViewRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.LabViewRequested, sender, e);
     private void MatchSetupRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.MatchSetupRequested, sender, e);
+    private void ModelsRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.ModelsRequested, sender, e);
     private void SearchRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.SearchRequested, sender, e);
     private void SearchPopupPreviewKeyDown(object sender, KeyEventArgs e) => Forward(ShellTopBarAction.SearchPopupPreviewKeyDown, sender, e);
     private void SearchDragStarted(object sender, MouseButtonEventArgs e) => Forward(ShellTopBarAction.SearchDragStarted, sender, e);

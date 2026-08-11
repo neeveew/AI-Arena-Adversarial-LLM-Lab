@@ -146,6 +146,7 @@ internal static class AIArenaControlCommands
     public const string MatchSetupClose = "match.setup.close";
     public const string MatchSetupExport = "match.setup.export";
     public const string MatchSetupImport = "match.setup.import";
+    public const string MatchModelBehaviorSet = "match.model-behavior.set";
     public const string MatchRosterSet = "match.roster.set";
     public const string MatchMatrixState = "match.matrix.state";
     public const string MatchMatrixSet = "match.matrix.set";

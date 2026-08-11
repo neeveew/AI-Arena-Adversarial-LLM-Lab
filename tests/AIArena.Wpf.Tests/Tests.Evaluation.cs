@@ -1,8 +1,12 @@
 using System.Text.Json;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
 using AIArena.Core.Services;
 using AIArena.Wpf;
+using AIArena.Wpf.Controls;
 
 internal static partial class Program
 {
@@ -124,6 +128,278 @@ internal static partial class Program
             "ordinary publisher/model identifiers should remain intact in aggregate evidence");
         Require(qa.Ready && qa.OverallReadiness == "ready",
             "complete runtime evidence with a comparable baseline should pass automated QA");
+    }
+
+    private static void ArenaEvaluationKeepsFactoryAndMixedEvidenceHonest()
+    {
+        var service = new ArenaEvaluationService();
+        var capturedAt = DateTimeOffset.Parse("2026-08-11T12:00:00Z");
+
+        var factorySnapshot = EvaluationSnapshot(
+            "factory-model",
+            [
+                EvaluationMessage(1, "alpha", "Raw response one.", 800, 80, 20, model: "factory-model", promptMode: "factory"),
+                EvaluationMessage(2, "beta", "Raw response two.", 1200, 120, 30, model: "factory-model", promptMode: "factory"),
+                EvaluationMessage(3, "gamma", "Model call failed: provider unavailable.", 0, 0, 0, status: "error", model: "factory-model", promptMode: "factory")
+            ]);
+        factorySnapshot.Engine.FactoryMode = true;
+        AnchorFactoryGroup(factorySnapshot, "Factory root prompt must remain private in aggregate evidence.");
+
+        var factory = service.Capture("factory-evidence", factorySnapshot, capturedAt);
+        var factoryQa = service.EvaluateQa(factory, minimumTurns: 2);
+        var factoryComparison = service.Compare(factory, factory);
+
+        Require(factory.Evidence.ModelTurns == 3
+            && factory.Evidence.SuccessfulModelTurns == 2
+            && factory.Evidence.FailedModelTurns == 1
+            && factory.Evidence.ProviderErrors == 1,
+            "Factory evaluation should retain observed success and provider-failure evidence");
+        Require(factory.Evidence.LatencySamples == 2
+            && factory.Evidence.UsageSamples == 2
+            && factory.Evidence.ThroughputSamples == 2
+            && factory.Metrics.AverageLatencyMs == 1000
+            && factory.Metrics.AverageGeneratedTokens == 100
+            && factory.Metrics.AverageTokensPerSecond == 25,
+            "Factory evaluation should retain measured provider telemetry from successful turns");
+        Require(factory.Evidence.ArenaPromptModeTurns == 0
+            && factory.Evidence.FactoryPromptModeTurns == 3
+            && factory.Evidence.DiscourseTurns == 2,
+            "Factory evaluation should count prompt modes and exclude failed provider text from discourse evidence");
+        Require(factory.FactoryGroupContext is
+            {
+                Contract: FactoryConversationService.ContractVersion,
+                CausalSampleCount: 3,
+                IncludedEntryCount: 3,
+                EligibleEntryCount: 3,
+                OmittedEntryCount: 0
+            }
+            && factory.FactoryGroupContext.ContextFingerprint.Length == 64,
+            "Factory evaluation should retain only a privacy-safe group-context fingerprint and bounded counts");
+        Require(ArenaEvaluationPresentation.RunLabel(factory).Contains("Factory group 3 causal call(s), latest 3/3 entries", StringComparison.Ordinal),
+            "Factory evaluation summaries should disclose the bounded group-context sample without exposing its content");
+        var factoryExport = service.ExportJson(factory);
+        Require(factoryExport.Contains("public_group_v1", StringComparison.Ordinal)
+            && factoryExport.Contains("contextFingerprint", StringComparison.Ordinal)
+            && !factoryExport.Contains("Factory root prompt", StringComparison.Ordinal)
+            && !factoryExport.Contains("factory-group:", StringComparison.Ordinal)
+            && !factoryExport.Contains("rootMessageId", StringComparison.OrdinalIgnoreCase),
+            "Factory aggregate evidence should expose context identity without transcript text, conversation IDs, or root IDs");
+        Require(factory.Evidence.VoiceStyleSamples == 0
+            && factory.Metrics.BattleReviewScore is null
+            && factory.Metrics.AverageVoiceStyleScore is null
+            && factory.Metrics.RoleDriftPercent is null,
+            "Factory output must not be scored against Match Setup battle, voice, or role contracts that were not sent");
+        var factoryQualityGate = factoryQa.Gates.Single(gate => gate.Id == "quality.sample");
+        Require(factoryQualityGate.Status == ArenaQaGateStatuses.Unavailable
+            && !factoryQualityGate.Required
+            && factoryQualityGate.Explanation.Contains("Factory or mixed", StringComparison.Ordinal),
+            "Factory Match Setup quality should be explicitly unavailable without making an inapplicable gate required");
+        Require(factoryComparison.Metrics.Single(metric => metric.Id == "quality.score").Status == ArenaEvaluationStatuses.Unavailable
+            && factoryComparison.Metrics.Single(metric => metric.Id == "quality.voice-style").Status == ArenaEvaluationStatuses.Unavailable
+            && factoryComparison.Metrics.Single(metric => metric.Id == "telemetry.average-latency").Status == ArenaEvaluationStatuses.Unchanged
+            && factoryComparison.Metrics.Single(metric => metric.Id == "run.failed-turns").Status == ArenaEvaluationStatuses.Unchanged,
+            "Factory comparisons should retain telemetry and failure evidence while withholding Match Setup quality comparisons");
+        var normalizedFactory = service.NormalizeForStorage(factory with
+        {
+            Evidence = factory.Evidence with { VoiceStyleSamples = 2 },
+            Metrics = factory.Metrics with
+            {
+                BattleReviewScore = 99,
+                AverageVoiceStyleScore = 99,
+                RoleDriftPercent = 99
+            }
+        });
+        Require(normalizedFactory is not null
+            && normalizedFactory.Evidence.VoiceStyleSamples == 0
+            && normalizedFactory.Metrics.BattleReviewScore is null
+            && normalizedFactory.Metrics.AverageVoiceStyleScore is null
+            && normalizedFactory.Metrics.RoleDriftPercent is null,
+            "persisted Factory records should normalize stale Match Setup quality evidence to unavailable");
+        Require(service.NormalizeForStorage(factory with
+            {
+                FactoryGroupContext = factory.FactoryGroupContext! with { CausalSampleCount = 2 }
+            }) is null,
+            "Factory context evidence whose causal sample count disagrees with observed Factory turns should be rejected");
+        var migratedLegacyFactory = service.NormalizeForStorage(factory with { FactoryGroupContext = null });
+        Require(migratedLegacyFactory?.FactoryGroupContext is
+            {
+                Contract: FactoryConversationService.ContractVersion,
+                ContextFingerprint.Length: 0,
+                CausalSampleCount: 0,
+                IncludedEntryCount: 0,
+                EligibleEntryCount: 0,
+                OmittedEntryCount: 0
+            }
+            && service.Compare(migratedLegacyFactory, migratedLegacyFactory).Status == ArenaEvaluationStatuses.Unavailable
+            && service.EvaluateQa(migratedLegacyFactory).Gates.Single(gate => gate.Id == "factory.group-context") is
+            {
+                Required: true,
+                Status: ArenaQaGateStatuses.Unavailable
+            },
+            "legacy Factory evaluation rows should migrate to explicit unavailable group evidence without fabricating comparability");
+        var legacyWithoutBaselineQa = service.EvaluateQa(migratedLegacyFactory!);
+        var legacyBaselineQa = service.EvaluateQa(migratedLegacyFactory!, migratedLegacyFactory);
+        Require(legacyBaselineQa.OverallReadiness == legacyWithoutBaselineQa.OverallReadiness
+            && legacyBaselineQa.Failed == legacyWithoutBaselineQa.Failed
+            && legacyBaselineQa.Gates.Single(gate => gate.Id == "baseline.comparable").Status == ArenaQaGateStatuses.Unavailable
+            && legacyBaselineQa.Gates.Single(gate => gate.Id == "baseline.regression").Status == ArenaQaGateStatuses.Unavailable,
+            "missing Factory group identity should keep baseline claims unavailable without adding a failure beyond observed runtime failures");
+        var rawFactoryWithoutPromptMetadata = factory with
+        {
+            FactoryGroupContext = null,
+            Evidence = factory.Evidence with
+            {
+                ArenaPromptModeTurns = factory.Evidence.ModelTurns,
+                FactoryPromptModeTurns = 0
+            }
+        };
+        Require(service.Compare(rawFactoryWithoutPromptMetadata, rawFactoryWithoutPromptMetadata).Status == ArenaEvaluationStatuses.Unavailable,
+            "raw Factory records must infer their context requirement from the replay package even when prompt metadata and context evidence are absent");
+
+        var boundedSnapshot = EvaluationSnapshot(
+            "factory-bounded-context",
+            Enumerable.Range(1, 55)
+                .Select(index => EvaluationMessage(
+                    index,
+                    index % 2 == 0 ? "alpha" : "beta",
+                    $"Bounded public reply {index}.",
+                    500 + index,
+                    20 + index,
+                    10 + index,
+                    model: "factory-bounded-context",
+                    promptMode: "factory"))
+                .ToArray());
+        boundedSnapshot.Engine.FactoryMode = true;
+        AnchorFactoryGroup(boundedSnapshot, "Bounded Factory root.");
+        var boundedFactory = service.Capture("factory-bounded-context", boundedSnapshot, capturedAt);
+        Require(boundedFactory.FactoryGroupContext is
+            {
+                CausalSampleCount: 55,
+                IncludedEntryCount: FactoryConversationService.MaxContextEntries,
+                EligibleEntryCount: 55,
+                OmittedEntryCount: 5
+            },
+            "Factory evaluation should report every causal prompt sample plus root-and-newest-49 retention at the final call");
+
+        var failedOnlySnapshot = EvaluationSnapshot(
+            "factory-failed-only",
+            [EvaluationMessage(
+                1,
+                "alpha",
+                "Model call failed: 100% consensus proves the universal law and complete validation.",
+                0,
+                0,
+                0,
+                status: "error",
+                model: "factory-failed-only",
+                promptMode: "factory")]);
+        failedOnlySnapshot.Engine.FactoryMode = true;
+        AnchorFactoryGroup(failedOnlySnapshot, "Failed-only Factory root.");
+        var failedOnly = service.Capture("factory-failed-only", failedOnlySnapshot, capturedAt);
+        Require(failedOnly.Evidence.FailedModelTurns == 1
+            && failedOnly.Evidence.ProviderErrors == 1
+            && failedOnly.Evidence.DiscourseTurns == 0
+            && failedOnly.Metrics.BattleReviewScore is null
+            && failedOnly.Metrics.ConsensusPercent is null
+            && failedOnly.Metrics.RoleDriftPercent is null
+            && failedOnly.Metrics.UnsupportedClaimCount is null
+            && failedOnly.Metrics.EvidencePressureScore is null
+            && failedOnly.Metrics.NarrativeHeatScore is null,
+            "a failed-only Factory run must retain the failure without fabricating discourse metrics from its system-event text");
+
+        var mixedSnapshot = EvaluationSnapshot(
+            "mixed-model",
+            [
+                EvaluationMessage(1, "alpha", "Arena-guided response.", 900, 90, 18, model: "mixed-model"),
+                EvaluationMessage(2, "beta", "Factory response.", 1100, 110, 22, model: "mixed-model", promptMode: "factory"),
+                EvaluationMessage(3, "gamma", "Model call failed: raw provider error.", 0, 0, 0, status: "error", model: "mixed-model", promptMode: "factory")
+            ]);
+        AnchorFactoryGroup(mixedSnapshot, "Mixed-mode Factory root.");
+        var mixed = service.Capture("mixed-evidence", mixedSnapshot, capturedAt);
+        Require(mixed.Evidence.ArenaPromptModeTurns == 1
+            && mixed.Evidence.FactoryPromptModeTurns == 2
+            && mixed.Evidence.DiscourseTurns == 2
+            && mixed.Evidence.ProviderErrors == 1,
+            "mixed evaluation should preserve prompt-mode, successful discourse, and failed-provider counts independently");
+        Require(mixed.Metrics.AverageLatencyMs == 1000
+            && mixed.Metrics.AverageGeneratedTokens == 100
+            && mixed.Metrics.AverageTokensPerSecond == 20
+            && mixed.Metrics.BattleReviewScore is null
+            && mixed.Metrics.AverageVoiceStyleScore is null
+            && mixed.Metrics.RoleDriftPercent is null,
+            "mixed prompt histories should retain telemetry while withholding Match Setup-dependent quality");
+        var mixedQualityGate = service.EvaluateQa(mixed, minimumTurns: 2).Gates.Single(gate => gate.Id == "quality.sample");
+        Require(mixedQualityGate.Status == ArenaQaGateStatuses.Unavailable
+            && !mixedQualityGate.Required,
+            "mixed prompt histories should expose Match Setup quality as explicitly unavailable");
+
+        var differentGroupSnapshot = EvaluationSnapshot(
+            "factory-model-b",
+            [
+                EvaluationMessage(1, "alpha", "Raw response one.", 800, 80, 20, model: "factory-model-b", promptMode: "factory"),
+                EvaluationMessage(2, "beta", "Raw response two.", 1200, 120, 30, model: "factory-model-b", promptMode: "factory")
+            ]);
+        differentGroupSnapshot.Engine.FactoryMode = true;
+        AnchorFactoryGroup(differentGroupSnapshot, "Independently reconstructed Factory root.");
+        var differentGroup = service.Capture("factory-different-group", differentGroupSnapshot, capturedAt);
+        var refusedGroupComparison = service.Compare(factory, differentGroup);
+        Require(factory.ScenarioFingerprint == differentGroup.ScenarioFingerprint
+            && refusedGroupComparison.Status == ArenaEvaluationStatuses.NotComparable
+            && refusedGroupComparison.Summary.Contains("public-group context", StringComparison.Ordinal),
+            "Factory runs with matching model-neutral setup but different durable group context must not produce directional deltas");
+        var mismatchedGroupQa = service.EvaluateQa(differentGroup, factory);
+        Require(mismatchedGroupQa.OverallReadiness == "blocked"
+            && mismatchedGroupQa.Gates.Single(gate => gate.Id == "baseline.comparable").Status == ArenaQaGateStatuses.Fail,
+            "two valid but different Factory group identities should remain a proven non-comparable baseline failure");
+
+        var sharedInput = EvaluationSnapshot("factory-shared-input", []);
+        sharedInput.Engine.FactoryMode = true;
+        AnchorFactoryGroup(sharedInput, "Identical causal input for two model trials.");
+        var leftSameInput = JsonSerializer.Deserialize<ArenaSnapshot>(JsonSerializer.Serialize(sharedInput))
+            ?? throw new InvalidOperationException("Factory comparison fixture clone failed.");
+        var rightSameInput = JsonSerializer.Deserialize<ArenaSnapshot>(JsonSerializer.Serialize(sharedInput))
+            ?? throw new InvalidOperationException("Factory comparison fixture clone failed.");
+        AppendFactoryOutput(leftSameInput, EvaluationMessage(
+            1, "alpha", "First model output.", 700, 70, 20, model: "factory-model-left", promptMode: "factory"));
+        AppendFactoryOutput(rightSameInput, EvaluationMessage(
+            1, "alpha", "Materially different second model output.", 900, 90, 22, model: "factory-model-right", promptMode: "factory"));
+        var leftSameInputRecord = service.Capture("factory-same-input-left", leftSameInput, capturedAt);
+        var rightSameInputRecord = service.Capture("factory-same-input-right", rightSameInput, capturedAt);
+        var sameInputComparison = service.Compare(leftSameInputRecord, rightSameInputRecord);
+        Require(leftSameInputRecord.FactoryGroupContext?.ContextFingerprint
+                == rightSameInputRecord.FactoryGroupContext?.ContextFingerprint
+            && sameInputComparison.Status == ArenaEvaluationStatuses.Insufficient,
+            "different one-turn outputs from the same exact causal Factory prompt should pass context identity and remain insufficient only because the metric sample is small");
+        var factoryContextGate = factoryQa.Gates.Single(gate => gate.Id == "factory.group-context");
+        Require(factoryContextGate.Required
+            && factoryContextGate.Status == ArenaQaGateStatuses.Pass
+            && factoryContextGate.Evidence.Contains("3/3 included", StringComparison.Ordinal),
+            "Factory QA should require and report valid privacy-safe group context evidence");
+
+        var successfulText = EvaluationMessage(1, "alpha", "A bounded proposal with one open question.", 900, 90, 18);
+        var clean = service.Capture(
+            "clean-discourse",
+            EvaluationSnapshot("model-clean", [successfulText]),
+            capturedAt);
+        var noisy = service.Capture(
+            "noisy-discourse",
+            EvaluationSnapshot(
+                "model-clean",
+                [
+                    successfulText,
+                    EvaluationMessage(2, "beta", "Model call failed: 100% consensus proves an absolute universal law.", 0, 0, 0, status: "error"),
+                    EvaluationMessage(3, "system", "Complete validation with 100% consensus.", 0, 0, 0, model: "system-event")
+                ]),
+            capturedAt);
+        Require(noisy.Evidence.DiscourseTurns == 1
+            && noisy.Evidence.ProviderErrors == 1
+            && noisy.Metrics.BattleReviewScore == clean.Metrics.BattleReviewScore
+            && noisy.Metrics.ConsensusPercent == clean.Metrics.ConsensusPercent
+            && noisy.Metrics.RoleDriftPercent == clean.Metrics.RoleDriftPercent
+            && noisy.Metrics.UnsupportedClaimCount == clean.Metrics.UnsupportedClaimCount
+            && noisy.Metrics.EvidencePressureScore == clean.Metrics.EvidencePressureScore
+            && noisy.Metrics.NarrativeHeatScore == clean.Metrics.NarrativeHeatScore,
+            "failed and system-event text must remain runtime evidence without influencing discourse-derived metrics");
     }
 
     private static void ArenaEvaluationComparesSameScenarioAndClassifiesRegression()
@@ -560,6 +836,149 @@ internal static partial class Program
         Require(ArenaEvaluationPresentation.BrushKey(ArenaEvaluationStatuses.Regressed) == "DangerTextBrush"
             && ArenaEvaluationPresentation.BrushKey(ArenaEvaluationStatuses.Improved) == "PrimaryBorderBrush",
             "comparison states should retain theme-aware colour reinforcement in addition to non-colour glyphs");
+
+        Require(ArenaEvaluationPresentation.DisplayMetricLabel(metric) == "Latency"
+            && ArenaEvaluationPresentation.DisplayMetricLabel(metric with { Id = "quality.score" }) == "Quality score"
+            && ArenaEvaluationPresentation.DisplayMetricLabel(metric with { Id = "telemetry.generated-tokens" }) == "Generated tokens"
+            && ArenaEvaluationPresentation.DisplayMetricLabel(metric with { Id = "telemetry.throughput" }) == "Throughput"
+            && ArenaEvaluationPresentation.DisplayMetricLabel(metric with { Id = "run.success-rate" }) == "Successful turns"
+            && ArenaEvaluationPresentation.DisplayMetricLabel(metric with { Id = "run.failed-turns" }) == "Failed turns",
+            "metric cards should use the requested latency, quality, token, throughput, successful-turn, and failed-turn labels");
+
+        RunStaTest(() =>
+        {
+            static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject
+            {
+                foreach (var child in LogicalTreeHelper.GetChildren(root).OfType<DependencyObject>())
+                {
+                    if (child is T match) yield return match;
+                    foreach (var descendant in Descendants<T>(child)) yield return descendant;
+                }
+            }
+
+            var comparisonCard = ArenaEvaluationCoordinator.CreateMetricCard(metric, AccentResourceBrush);
+            var unavailableCard = ArenaEvaluationCoordinator.CreateMetricCard(unavailableZeroCount, AccentResourceBrush);
+            var host = new Window
+            {
+                Width = 320,
+                Height = 520,
+                ShowInTaskbar = false,
+                WindowStyle = WindowStyle.None,
+                Content = new StackPanel { Children = { comparisonCard, unavailableCard } }
+            };
+            try
+            {
+                host.Show();
+                host.UpdateLayout();
+                var comparisonCardPeer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(comparisonCard)
+                    ?? throw new InvalidOperationException("Metric card did not create an automation grouping peer.");
+                var unavailableCardPeer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(unavailableCard)
+                    ?? throw new InvalidOperationException("Unavailable metric card did not create an automation grouping peer.");
+                var bars = Descendants<MetricSparklineControl>(comparisonCard).Single();
+                var barsPeer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(bars)
+                    ?? throw new InvalidOperationException("Metric sparkline did not create an automation peer.");
+                var comparisonText = Descendants<TextBlock>(comparisonCard).Select(block => block.Text).ToArray();
+                var unavailableText = Descendants<TextBlock>(unavailableCard).Select(block => block.Text).ToArray();
+                Require(comparisonCard.Tag?.ToString() == "Ready",
+                    "hosted comparable metric card lost its semantic Ready state");
+                Require(comparisonCardPeer.GetAutomationControlType() == System.Windows.Automation.Peers.AutomationControlType.Group
+                    && comparisonCardPeer.GetName().Contains("Latency", StringComparison.Ordinal)
+                    && comparisonCardPeer.GetItemStatus() == "Ready",
+                    "hosted comparable metric card did not expose its aggregate grouping peer");
+                Require(barsPeer.GetAutomationControlType() == System.Windows.Automation.Peers.AutomationControlType.Image
+                    && barsPeer.GetName().Contains("baseline and current comparison bars", StringComparison.Ordinal)
+                    && barsPeer.GetHelpText().Contains("Baseline 1,200 ms; current 800 ms.", StringComparison.Ordinal)
+                    && bars.Mode == "bars"
+                    && bars.Values.SequenceEqual([1200d, 800d])
+                    && comparisonText.Contains("1,200 ms", StringComparer.Ordinal)
+                    && comparisonText.Contains("800 ms", StringComparer.Ordinal)
+                    && comparisonText.Any(text => text.Contains("↓ −400 ms", StringComparison.Ordinal)),
+                    "hosted metric card did not expose exact values, directional delta, and a real accessible comparison-bar peer");
+                Require(unavailableCard.Tag?.ToString() == "Unavailable",
+                    "hosted unavailable metric card lost its semantic state");
+                Require(unavailableCardPeer.GetAutomationControlType() == System.Windows.Automation.Peers.AutomationControlType.Group
+                    && unavailableCardPeer.GetItemStatus() == "Unavailable"
+                    && unavailableCardPeer.GetName().Contains("Unavailable", StringComparison.Ordinal),
+                    "hosted unavailable metric card did not expose its aggregate grouping peer");
+                Require(!Descendants<MetricSparklineControl>(unavailableCard).Any()
+                    && unavailableText.Count(text => text == "Unavailable") >= 2
+                    && !unavailableText.Any(text => text.Contains("0 → 0", StringComparison.Ordinal)),
+                    "unavailable hosted metric cards must omit numeric bars and must not present placeholder zeroes as observations");
+            }
+            finally
+            {
+                host.Close();
+            }
+        });
+
+        RunStaTest(() =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ai-arena-evaluation-state-cards-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                const string sessionId = "evaluation-state-cards";
+                var store = new SessionStore(root);
+                var snapshot = EvaluationSnapshot(
+                    "model-state-cards",
+                    [
+                        EvaluationMessage(1, "alpha", "Baseline evidence.", 800, 80, 24),
+                        EvaluationMessage(2, "beta", "Second baseline sample.", 900, 90, 25)
+                    ]);
+                store.SaveSnapshotAsync(snapshot, sessionId).GetAwaiter().GetResult();
+                var service = new ArenaEvaluationService();
+                var history = new ArenaEvaluationHistoryStore(Path.Combine(root, "history.json"), service);
+                var comparisonSummary = new TextBlock();
+                var comparisonItems = new StackPanel();
+                var qaSummary = new TextBlock();
+                var qaItems = new StackPanel();
+                var coordinator = new ArenaEvaluationCoordinator(
+                    store,
+                    service,
+                    history,
+                    new TextBlock(),
+                    new TextBlock(),
+                    new TextBlock(),
+                    new TextBlock(),
+                    comparisonSummary,
+                    comparisonItems,
+                    new StackPanel(),
+                    qaSummary,
+                    qaItems,
+                    new Button(),
+                    new Button(),
+                    new Button(),
+                    new Button(),
+                    new Button(),
+                    () => new SessionSummary(sessionId, "", true, 2, 0, 0, DateTimeOffset.UtcNow),
+                    () => false,
+                    AccentResourceBrush,
+                    _ => { });
+
+                Require(comparisonItems.Children.OfType<Border>().Any(card => Equals(card.Tag, "Empty"))
+                        && qaItems.Children.OfType<Border>().Any(card => Equals(card.Tag, "Unavailable")),
+                    "initial comparison and QA surfaces did not retain explicit Empty and Unavailable cards");
+                RunExperimentDispatcherTask(() => coordinator.CaptureBaselineAsync());
+                Require(comparisonItems.Children.OfType<Border>().Any(card => Equals(card.Tag, "Empty"))
+                        && comparisonSummary.Text.Contains("Baseline is ready", StringComparison.Ordinal),
+                    "baseline-only transition left the comparison surface visually blank");
+
+                var changed = store.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+                    ?? throw new InvalidOperationException("Evaluation state-card fixture disappeared.");
+                changed.Configs["shared"] = EvaluationProviderWith(
+                    changed.Configs["shared"],
+                    temperature: 0.9);
+                store.SaveSnapshotAsync(changed, sessionId).GetAwaiter().GetResult();
+                RunExperimentDispatcherTask(() => coordinator.CompareCurrentAsync());
+                Require(comparisonItems.Children.OfType<Border>().Any(card => Equals(card.Tag, "Unavailable"))
+                        && comparisonSummary.Text.Contains("required", StringComparison.OrdinalIgnoreCase),
+                    "empty-metric comparison transition lost its explicit Unavailable card and reason");
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        });
     }
 
     private static void ArenaEvaluationSurfaceStaysReplayableAndAccessible()
@@ -682,9 +1101,10 @@ internal static partial class Program
         string status = "ok",
         string model = "model-a",
         int? promptTokens = null,
-        int? totalTokens = null)
+        int? totalTokens = null,
+        string promptMode = "")
     {
-        return new DialogueMessage
+        var message = new DialogueMessage
         {
             Turn = turn,
             Speaker = char.ToUpperInvariant(speakerId[0]) + speakerId[1..],
@@ -704,5 +1124,50 @@ internal static partial class Program
                 TimeToFirstTokenMs = latencyMs > 0 ? Math.Max(1, latencyMs / 4) : 0
             }
         };
+        if (!string.IsNullOrWhiteSpace(promptMode))
+        {
+            message.Metadata["prompt_mode"] = JsonSerializer.SerializeToElement(promptMode.Trim().ToLowerInvariant());
+        }
+
+        return message;
+    }
+
+    private static void AnchorFactoryGroup(ArenaSnapshot snapshot, string operatorText)
+    {
+        var existing = snapshot.Engine.Messages.ToArray();
+        snapshot.Engine.Messages.Clear();
+        var root = new TranscriptService().CreateOperatorMessage(operatorText, 0, preserveOuterWhitespace: true);
+        snapshot.Engine.Messages.Add(root);
+        var service = new FactoryConversationService();
+        var inspection = service.Resolve(snapshot);
+        Require(inspection.HasUsableRoot
+            && inspection.IsAnchored
+            && !inspection.IsOrphaned
+            && inspection.ContextFingerprint.Length == 64,
+            "Factory evaluation fixture could not establish its durable public-group root");
+        foreach (var message in existing
+                     .OrderBy(message => message.Turn)
+                     .ThenBy(message => message.CreatedAt))
+        {
+            if (FactoryConversationService.HasFactoryPromptContract(message))
+            {
+                AppendFactoryOutput(snapshot, message);
+            }
+            else
+            {
+                service.StampPublicParticipant(snapshot, message);
+                snapshot.Engine.Messages.Add(message);
+            }
+        }
+    }
+
+    private static void AppendFactoryOutput(ArenaSnapshot snapshot, DialogueMessage message)
+    {
+        var service = new FactoryConversationService();
+        var context = service.BuildPromptContext(snapshot, message.SpeakerId);
+        Require(context.Ok && context.ContextFingerprint.Length == 64,
+            "Factory evaluation fixture could not capture causal prompt evidence");
+        service.StampPublicParticipant(message, context);
+        snapshot.Engine.Messages.Add(message);
     }
 }

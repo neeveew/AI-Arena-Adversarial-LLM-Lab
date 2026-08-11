@@ -51,6 +51,11 @@ public partial class MainWindow
                 {
                     CloseMatchSetupFlyout();
                 }
+
+                if (ProviderModelsPanel.Visibility == System.Windows.Visibility.Visible)
+                {
+                    CloseProviderModelsPanel();
+                }
             };
         }
 

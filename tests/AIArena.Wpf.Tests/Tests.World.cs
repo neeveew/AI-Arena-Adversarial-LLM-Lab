@@ -1062,6 +1062,7 @@ static void AgentWorldHudResizesForNarrowPanes()
         var narrowInspectorWidth = control.DebugInspectorPanelWidth;
         var narrowControlMaxWidth = control.DebugWorldControlPanelMaxWidth;
         var narrowInspectorTop = control.DebugInspectorPanelMargin.Top;
+        var narrowHeaderBottom = control.DebugWorldHeaderTextBounds.Bottom;
 
         control.Width = 720;
         control.Measure(new Size(720, 460));
@@ -1070,13 +1071,14 @@ static void AgentWorldHudResizesForNarrowPanes()
         var wideInspectorWidth = control.DebugInspectorPanelWidth;
         var wideControlMaxWidth = control.DebugWorldControlPanelMaxWidth;
         var wideInspectorTop = control.DebugInspectorPanelMargin.Top;
+        var wideHeaderBottom = control.DebugWorldHeaderTextBounds.Bottom;
 
         Require(narrowInspectorWidth <= 328, "narrow AI World inspector should fit inside the pane margins");
         Require(narrowControlMaxWidth <= 328, "narrow AI World camera controls should fit inside the pane margins");
-        Require(narrowInspectorTop >= 128, "narrow AI World inspector should sit below wrapped camera controls");
+        Require(narrowInspectorTop >= narrowHeaderBottom + 70, "narrow AI World inspector should sit below the shared header and wrapped camera controls");
         Require(wideInspectorWidth == 310, "wide AI World inspector should keep its comfortable default width");
         Require(wideControlMaxWidth >= 680, "wide AI World camera controls should use the available HUD width");
-        Require(wideInspectorTop == 96, "wide AI World inspector should keep its compact top position");
+        Require(wideInspectorTop >= wideHeaderBottom + 40, "wide AI World inspector should stay below the shared header and compact camera controls");
     });
 }
 
@@ -1118,11 +1120,17 @@ static void AgentWorldHeaderBadgeFitsLongSpeakerNames()
         var headerBounds = control.DebugWorldHeaderTextBounds;
         var badgeBounds = control.DebugWorldBadgeBounds;
 
+        Require(control.DebugWorldHeaderTitle == "AI World"
+            && control.DebugWorldHeaderDescription.Contains("live arena", StringComparison.OrdinalIgnoreCase)
+            && control.DebugWorldHeaderPrimaryAction == "Reset view"
+            && control.DebugWorldHeaderPrimaryActionAutomationName == "Reset AI World view",
+            "AI World should use the shared title, one-line purpose, and contextual primary-action header contract");
         Require(control.DebugWorldBadgeText.StartsWith("FOLLOWING ALPHA OPERATIONAL", StringComparison.Ordinal), "world badge should still describe the followed speaker");
-        Require(control.DebugWorldBadgeMaxWidth <= 148, "narrow AI World badge should clamp to a compact width");
-        Require(!headerBounds.IntersectsWith(badgeBounds), "world badge should not overlap the title/status header text");
-        Require(badgeBounds.Right <= 360 - 16 + 0.5, "world badge should stay inside the right pane margin");
-        Require(badgeBounds.Left >= headerBounds.Right - 0.5, "world badge should reserve its own header column");
+        Require(control.DebugWorldHeaderUsesCompactLayout, "narrow AI World should wrap its primary action below the title and status");
+        Require(control.DebugWorldBadgeMaxWidth <= headerBounds.Width, "narrow AI World status chip should remain bounded by its shared header");
+        Require(headerBounds.Contains(badgeBounds), "AI World status should remain inside the shared page-header surface");
+        Require(headerBounds.Left >= 16 - 0.5 && headerBounds.Right <= 360 - 16 + 0.5,
+            "AI World shared header should stay inside the narrow pane margins");
     });
 }
 

@@ -73,6 +73,7 @@ public partial class FaultInjectionLabControl : UserControl
     internal IReadOnlyList<FaultObservationItem> ObservationItems =>
         FaultObservationList.Items.Cast<FaultObservationItem>().ToArray();
     internal bool CanRunProbe => RunFaultProbeButton.IsEnabled;
+    internal WorkspacePageHeaderControl WorkspaceHeader => FaultWorkspaceHeader;
 
     internal void SetInput(FaultLabInput input)
     {
@@ -97,7 +98,7 @@ public partial class FaultInjectionLabControl : UserControl
 
     internal void SetLifecycle(bool connected, bool armed, bool busy)
     {
-        ArmFaultButton.IsEnabled = connected && !armed && !busy;
+        FaultWorkspaceHeader.IsPrimaryActionEnabled = connected && !armed && !busy;
         RunFaultProbeButton.IsEnabled = connected && armed && !busy;
         DisarmFaultButton.IsEnabled = armed;
         FaultKindPicker.IsEnabled = !armed && !busy;
@@ -107,7 +108,7 @@ public partial class FaultInjectionLabControl : UserControl
         FaultIntensityText.IsEnabled = !armed && !busy;
         FaultOccurrencesText.IsEnabled = !armed && !busy;
         FaultConcurrencyText.IsEnabled = !armed && !busy;
-        AutomationProperties.SetItemStatus(ArmFaultButton, ArmFaultButton.IsEnabled ? "available" : "unavailable");
+        AutomationProperties.SetItemStatus(FaultWorkspaceHeader.PrimaryAction, FaultWorkspaceHeader.IsPrimaryActionEnabled ? "available" : "unavailable");
         AutomationProperties.SetItemStatus(RunFaultProbeButton, RunFaultProbeButton.IsEnabled ? "available" : "unavailable");
         AutomationProperties.SetItemStatus(DisarmFaultButton, DisarmFaultButton.IsEnabled ? "available" : "unavailable");
     }

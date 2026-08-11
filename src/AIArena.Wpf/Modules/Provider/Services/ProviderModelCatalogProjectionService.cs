@@ -1,0 +1,634 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.IO;
+using AIArena.Core.Models;
+using AIArena.Core.Providers;
+using AIArena.Wpf.Models;
+
+namespace AIArena.Wpf.Services;
+
+/// <summary>
+/// Projects provider-specific catalog evidence into one privacy-safe contract.
+/// Fetching remains with the existing provider services; a refresh lease prevents
+/// a late result from a previous session or provider identity from being published.
+/// </summary>
+internal sealed partial class ProviderModelCatalogProjectionService
+{
+    internal const int MaximumModelCount = 256;
+    private const int MaximumIdentifierLength = 192;
+    private const int MaximumStatusLength = 512;
+    private readonly object sync = new();
+    private long generation;
+    private ProviderModelCatalogRefreshLease? activeLease;
+    private ProviderModelCatalogSnapshot? current;
+
+    public ProviderModelCatalogSnapshot? Current
+    {
+        get
+        {
+            lock (sync)
+            {
+                return current;
+            }
+        }
+    }
+
+    public ProviderModelCatalogRefreshLease BeginRefresh(string sessionId, ArenaSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var shared = snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var configured)
+            ? configured
+            : new ModelProviderConfig();
+        return BeginRefresh(sessionId, shared);
+    }
+
+    public ProviderModelCatalogRefreshLease BeginRefresh(string sessionId, ModelProviderConfig sharedConfig)
+    {
+        ArgumentNullException.ThrowIfNull(sharedConfig);
+        var normalizedSessionId = (sessionId ?? "").Trim();
+        lock (sync)
+        {
+            var lease = new ProviderModelCatalogRefreshLease(
+                ++generation,
+                normalizedSessionId,
+                ProviderFingerprint(normalizedSessionId, sharedConfig));
+            activeLease = lease;
+            return lease;
+        }
+    }
+
+    public bool TryPublish(
+        ProviderModelCatalogRefreshLease lease,
+        ProviderModelCatalogSnapshot candidate,
+        out ProviderModelCatalogSnapshot published)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(candidate);
+        lock (sync)
+        {
+            if (activeLease is null
+                || activeLease.Generation != lease.Generation
+                || !activeLease.SessionId.Equals(lease.SessionId, StringComparison.Ordinal)
+                || !activeLease.ProviderFingerprint.Equals(lease.ProviderFingerprint, StringComparison.Ordinal)
+                || candidate.Generation != lease.Generation
+                || !candidate.SessionId.Equals(lease.SessionId, StringComparison.Ordinal)
+                || !candidate.ProviderFingerprint.Equals(lease.ProviderFingerprint, StringComparison.Ordinal))
+            {
+                published = current ?? candidate;
+                return false;
+            }
+
+            current = candidate;
+            published = candidate;
+            return true;
+        }
+    }
+
+    public void Invalidate()
+    {
+        lock (sync)
+        {
+            generation++;
+            activeLease = null;
+            current = null;
+        }
+    }
+
+    internal static string ProviderFingerprint(string sessionId, ArenaSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var shared = snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var configured)
+            ? configured
+            : new ModelProviderConfig();
+        return ProviderFingerprint(sessionId, shared);
+    }
+
+    internal static string ProviderFingerprint(string sessionId, ModelProviderConfig sharedConfig)
+    {
+        ArgumentNullException.ThrowIfNull(sharedConfig);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendConnectionFingerprintValues(hash, sessionId, sharedConfig);
+        AppendFingerprintValue(hash, sharedConfig.Model.Trim());
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    internal static string ConnectionFingerprint(string sessionId, ModelProviderConfig sharedConfig)
+    {
+        ArgumentNullException.ThrowIfNull(sharedConfig);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendConnectionFingerprintValues(hash, sessionId, sharedConfig);
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    internal static ProviderModelCatalogSnapshot FromLmStudio(
+        ProviderModelCatalogRefreshLease lease,
+        LmStudioModelCatalog source,
+        string configuredModel,
+        DateTimeOffset checkedAt)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!source.Ok)
+        {
+            return Build(
+                lease,
+                [],
+                ProviderCatalogEvidenceState.Unavailable,
+                ProviderCatalogEvidenceState.Unavailable,
+                configuredModel,
+                source.Error.Length == 0 ? "LM Studio model list unavailable." : source.Error,
+                checkedAt);
+        }
+
+        var chatModels = source.ChatModels;
+        var items = chatModels.Select(model =>
+        {
+            var loadState = !model.HasResidencyEvidence
+                ? ProviderModelLoadState.Unavailable
+                : model.Loaded
+                    ? ProviderModelLoadState.Loaded
+                    : ProviderModelLoadState.NotLoaded;
+            var hasUnloadableInstance = model.LoadedInstances.Any(instance =>
+                !string.IsNullOrWhiteSpace(instance.Id));
+            return new ProviderModelCatalogItem(
+                SafeModelIdentifier(model.PreferredIdentifier),
+                SafeModelIdentifier(model.DisplayTitle),
+                loadState,
+                CanLoad: model.HasResidencyEvidence && !model.Loaded,
+                CanUnload: model.HasResidencyEvidence && model.Loaded && hasUnloadableInstance,
+                SafeText(model.Publisher, MaximumIdentifierLength),
+                SafeText(model.QuantizationName, MaximumIdentifierLength),
+                model.LoadedContextLength ?? model.MaxContextLength,
+                model.SizeBytes,
+                LmStudioCapabilitySummary(model),
+                SafeAliases(model.Aliases));
+        }).ToArray();
+        var evidenceCount = chatModels.Count(model => model.HasResidencyEvidence);
+        var residencyEvidence = evidenceCount == chatModels.Count
+            ? ProviderCatalogEvidenceState.Ready
+            : evidenceCount > 0
+                ? ProviderCatalogEvidenceState.Partial
+                : ProviderCatalogEvidenceState.Unavailable;
+        var loadedCount = items.Count(item => item.LoadState == ProviderModelLoadState.Loaded);
+        var availableCount = items.Count(item => item.LoadState == ProviderModelLoadState.NotLoaded);
+        var unavailableCount = items.Count(item => item.LoadState == ProviderModelLoadState.Unavailable);
+        var statusParts = new List<string>
+        {
+            $"{loadedCount} loaded",
+            $"{availableCount} available"
+        };
+        if (unavailableCount > 0)
+        {
+            statusParts.Add($"{unavailableCount} load state unavailable");
+        }
+
+        return Build(
+            lease,
+            items,
+            ProviderCatalogEvidenceState.Ready,
+            residencyEvidence,
+            configuredModel,
+            string.Join("; ", statusParts) + ".",
+            checkedAt);
+    }
+
+    internal static ProviderModelCatalogSnapshot FromOllama(
+        ProviderModelCatalogRefreshLease lease,
+        OllamaModelCatalog source,
+        string configuredModel,
+        DateTimeOffset checkedAt)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!source.Ok)
+        {
+            return Build(
+                lease,
+                [],
+                ProviderCatalogEvidenceState.Unavailable,
+                ProviderCatalogEvidenceState.Unavailable,
+                configuredModel,
+                source.Error.Length == 0 ? "Ollama model list unavailable." : source.Error,
+                checkedAt);
+        }
+
+        var residencyEvidence = source.RunningModelsOk
+            ? ProviderCatalogEvidenceState.Ready
+            : ProviderCatalogEvidenceState.Unavailable;
+        var items = source.Models.Select(model =>
+        {
+            var loadState = source.RunningModelsOk
+                ? model.Loaded ? ProviderModelLoadState.Loaded : ProviderModelLoadState.NotLoaded
+                : ProviderModelLoadState.Unavailable;
+            return new ProviderModelCatalogItem(
+                SafeModelIdentifier(model.PreferredIdentifier),
+                SafeModelIdentifier(model.PreferredIdentifier),
+                loadState,
+                CanLoad: source.RunningModelsOk && !model.Loaded,
+                CanUnload: source.RunningModelsOk && model.Loaded,
+                SafeText(model.Family, MaximumIdentifierLength),
+                SafeText(model.QuantizationLevel, MaximumIdentifierLength),
+                model.ContextLength,
+                model.SizeBytes,
+                OllamaCapabilitySummary(model),
+                SafeAliases(model.Aliases));
+        }).ToArray();
+        var status = source.RunningModelsOk
+            ? $"{items.Count(item => item.LoadState == ProviderModelLoadState.Loaded)} loaded; {items.Count(item => item.LoadState != ProviderModelLoadState.Loaded)} available."
+            : source.RunningModelsError.Length == 0
+                ? "Available models loaded; running-model evidence unavailable."
+                : $"Available models loaded; running-model evidence unavailable: {source.RunningModelsError}";
+        return Build(
+            lease,
+            items,
+            ProviderCatalogEvidenceState.Ready,
+            residencyEvidence,
+            configuredModel,
+            status,
+            checkedAt);
+    }
+
+    internal static ProviderModelCatalogSnapshot FromLlamaCpp(
+        ProviderModelCatalogRefreshLease lease,
+        LlamaCppRuntimeSnapshot source,
+        string configuredModel)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var catalogAvailable = source.Available && source.Models.Count > 0;
+        if (!catalogAvailable)
+        {
+            return Build(
+                lease,
+                [],
+                ProviderCatalogEvidenceState.Unavailable,
+                ProviderCatalogEvidenceState.Unavailable,
+                configuredModel,
+                source.Error.Length == 0 ? "llama.cpp model inventory unavailable." : source.Error,
+                source.CheckedAt);
+        }
+
+        var residencyAvailable = source.RouterMode || source.Capabilities.OpenAiModels;
+        var items = source.Models.Select(model =>
+        {
+            var loadState = residencyAvailable
+                ? model.Loaded == true ? ProviderModelLoadState.Loaded : ProviderModelLoadState.NotLoaded
+                : ProviderModelLoadState.Unavailable;
+            return new ProviderModelCatalogItem(
+                SafeModelIdentifier(model.Id),
+                SafeModelIdentifier(model.Id),
+                loadState,
+                CanLoad: source.Capabilities.ModelLifecycle && model.Loaded == false,
+                CanUnload: source.Capabilities.ModelLifecycle && model.Loaded == true,
+                "llama.cpp",
+                SafeText(model.Quantization, MaximumIdentifierLength),
+                model.ContextLength,
+                model.ModelSizeBytes,
+                LlamaCppCapabilitySummary(model),
+                SafeAliases([model.Id]));
+        }).ToArray();
+        return Build(
+            lease,
+            items,
+            ProviderCatalogEvidenceState.Ready,
+            residencyAvailable ? ProviderCatalogEvidenceState.Ready : ProviderCatalogEvidenceState.Unavailable,
+            configuredModel,
+            source.RouterMode ? "llama.cpp router inventory available." : "llama.cpp live-model inventory available.",
+            source.CheckedAt);
+    }
+
+    internal static ProviderModelCatalogSnapshot FromCompatible(
+        ProviderModelCatalogRefreshLease lease,
+        IReadOnlyList<string> advertisedModels,
+        bool catalogAvailable,
+        string error,
+        string configuredModel,
+        DateTimeOffset checkedAt)
+    {
+        ArgumentNullException.ThrowIfNull(advertisedModels);
+        var items = catalogAvailable
+            ? advertisedModels.Select(model => new ProviderModelCatalogItem(
+                    SafeModelIdentifier(model),
+                    SafeModelIdentifier(model),
+                    ProviderModelLoadState.Unavailable,
+                    CanLoad: false,
+                    CanUnload: false,
+                    "",
+                    "",
+                    null,
+                    null,
+                    "Provider-advertised model; load state unavailable.",
+                    SafeAliases([model])))
+                .ToArray()
+            : [];
+        return Build(
+            lease,
+            items,
+            catalogAvailable ? ProviderCatalogEvidenceState.Ready : ProviderCatalogEvidenceState.Unavailable,
+            ProviderCatalogEvidenceState.Unavailable,
+            configuredModel,
+            catalogAvailable
+                ? "Provider models available; load state unavailable."
+                : error.Length == 0 ? "Provider model list unavailable." : error,
+            checkedAt);
+    }
+
+    internal static string SafeModelIdentifier(string value)
+    {
+        var normalized = SafeText(value, MaximumIdentifierLength);
+        if (normalized.Length == 0)
+        {
+            return "";
+        }
+
+        if (Path.IsPathRooted(normalized)
+            || Uri.TryCreate(normalized, UriKind.Absolute, out var uri) && uri.IsFile)
+        {
+            var fileName = Path.GetFileName(normalized.Replace('/', Path.DirectorySeparatorChar));
+            return SafeText(string.IsNullOrWhiteSpace(fileName) ? "local model" : fileName, MaximumIdentifierLength);
+        }
+
+        return normalized;
+    }
+
+    private static ProviderModelCatalogSnapshot Build(
+        ProviderModelCatalogRefreshLease lease,
+        IReadOnlyList<ProviderModelCatalogItem> sourceItems,
+        ProviderCatalogEvidenceState catalogEvidence,
+        ProviderCatalogEvidenceState residencyEvidence,
+        string configuredModel,
+        string status,
+        DateTimeOffset checkedAt)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        var normalized = Deduplicate(sourceItems);
+        var configured = (configuredModel ?? "").Trim();
+        var matchingConfigured = normalized.FirstOrDefault(item => Matches(item, configured));
+        var configuredMissing = configured.Length > 0 && matchingConfigured is null;
+        var sourceLimit = configuredMissing ? MaximumModelCount - 1 : MaximumModelCount;
+        var retained = normalized.Take(sourceLimit).ToList();
+        if (matchingConfigured is not null && !retained.Contains(matchingConfigured))
+        {
+            if (retained.Count == MaximumModelCount)
+            {
+                retained.RemoveAt(retained.Count - 1);
+            }
+
+            retained.Add(matchingConfigured);
+        }
+
+        var retainedSourceCount = retained.Count;
+        if (configuredMissing)
+        {
+            var safeConfigured = SafeModelIdentifier(configured);
+            if (safeConfigured.Length > 0)
+            {
+                retained.Add(new ProviderModelCatalogItem(
+                    safeConfigured,
+                    safeConfigured,
+                    ProviderModelLoadState.Unavailable,
+                    CanLoad: false,
+                    CanUnload: false,
+                    "",
+                    "",
+                    null,
+                    null,
+                    "Current selection; not present in the latest provider catalog.",
+                    [safeConfigured],
+                    IsConfiguredOnly: true));
+            }
+        }
+
+        var loaded = retained
+            .Where(item => item.LoadState == ProviderModelLoadState.Loaded)
+            .OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var available = retained
+            .Where(item => item.LoadState != ProviderModelLoadState.Loaded)
+            .OrderByDescending(item => item.IsConfiguredOnly)
+            .ThenBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return new ProviderModelCatalogSnapshot(
+            lease.Generation,
+            lease.SessionId,
+            lease.ProviderFingerprint,
+            catalogEvidence,
+            residencyEvidence,
+            loaded,
+            available,
+            SafeModelIdentifier(configured),
+            configuredMissing,
+            Math.Max(0, normalized.Count - retainedSourceCount),
+            SafeStatus(status),
+            checkedAt);
+    }
+
+    private static IReadOnlyList<ProviderModelCatalogItem> Deduplicate(
+        IReadOnlyList<ProviderModelCatalogItem> sourceItems)
+    {
+        var retained = new List<ProviderModelCatalogItem>();
+        foreach (var source in sourceItems)
+        {
+            var id = SafeModelIdentifier(source.Id);
+            if (id.Length == 0)
+            {
+                continue;
+            }
+
+            var aliases = SafeAliases(source.Aliases.Append(id));
+            var item = source with
+            {
+                Id = id,
+                DisplayName = SafeModelIdentifier(source.DisplayName.Length == 0 ? id : source.DisplayName),
+                Publisher = SafeText(source.Publisher, MaximumIdentifierLength),
+                Quantization = SafeText(source.Quantization, MaximumIdentifierLength),
+                CapabilitySummary = SafeText(source.CapabilitySummary, MaximumStatusLength),
+                Aliases = aliases
+            };
+            var duplicateIndex = retained.FindIndex(existing =>
+                existing.Aliases.Any(alias => aliases.Contains(alias, StringComparer.OrdinalIgnoreCase)));
+            if (duplicateIndex < 0)
+            {
+                retained.Add(item);
+                continue;
+            }
+
+            retained[duplicateIndex] = Merge(retained[duplicateIndex], item);
+        }
+
+        return retained
+            .OrderByDescending(item => item.LoadState == ProviderModelLoadState.Loaded)
+            .ThenBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static ProviderModelCatalogItem Merge(ProviderModelCatalogItem first, ProviderModelCatalogItem second)
+    {
+        var loadState = first.LoadState == ProviderModelLoadState.Loaded || second.LoadState == ProviderModelLoadState.Loaded
+            ? ProviderModelLoadState.Loaded
+            : first.LoadState == ProviderModelLoadState.NotLoaded || second.LoadState == ProviderModelLoadState.NotLoaded
+                ? ProviderModelLoadState.NotLoaded
+                : ProviderModelLoadState.Unavailable;
+        return first with
+        {
+            DisplayName = Prefer(first.DisplayName, second.DisplayName, first.Id),
+            LoadState = loadState,
+            CanLoad = loadState != ProviderModelLoadState.Loaded && (first.CanLoad || second.CanLoad),
+            CanUnload = loadState == ProviderModelLoadState.Loaded && (first.CanUnload || second.CanUnload),
+            Publisher = Prefer(first.Publisher, second.Publisher),
+            Quantization = Prefer(first.Quantization, second.Quantization),
+            ContextLength = first.ContextLength ?? second.ContextLength,
+            SizeBytes = first.SizeBytes ?? second.SizeBytes,
+            CapabilitySummary = Prefer(first.CapabilitySummary, second.CapabilitySummary),
+            Aliases = first.Aliases.Concat(second.Aliases).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            IsConfiguredOnly = first.IsConfiguredOnly && second.IsConfiguredOnly
+        };
+    }
+
+    private static bool Matches(ProviderModelCatalogItem item, string model)
+    {
+        if (model.Length == 0)
+        {
+            return false;
+        }
+
+        var safeModel = SafeModelIdentifier(model);
+        return item.Id.Equals(safeModel, StringComparison.OrdinalIgnoreCase)
+            || item.Aliases.Any(alias => alias.Equals(safeModel, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static IReadOnlyList<string> SafeAliases(IEnumerable<string> aliases)
+    {
+        return aliases
+            .Select(SafeModelIdentifier)
+            .Where(alias => alias.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(32)
+            .ToArray();
+    }
+
+    private static string LmStudioCapabilitySummary(LmStudioModelInfo model)
+    {
+        var parts = new List<string>();
+        if (model.TrainedForToolUse)
+        {
+            parts.Add("tools");
+        }
+
+        if (model.Vision)
+        {
+            parts.Add("vision");
+        }
+
+        if (model.ReasoningOptions.Count > 0 || model.ReasoningDefault.Length > 0)
+        {
+            parts.Add("reasoning");
+        }
+
+        if (model.MaxContextLength is int context && context > 0)
+        {
+            parts.Add($"{context} ctx");
+        }
+
+        return parts.Count == 0 ? "LM Studio chat model." : string.Join(" / ", parts);
+    }
+
+    private static string OllamaCapabilitySummary(OllamaModelInfo model)
+    {
+        var parts = new[]
+        {
+            model.ParameterSize,
+            model.QuantizationLevel,
+            model.Family,
+            model.Format,
+            model.ContextLength is int context && context > 0 ? $"{context} ctx" : ""
+        };
+        var observed = parts.Where(part => !string.IsNullOrWhiteSpace(part)).ToArray();
+        return observed.Length == 0 ? "Ollama model." : string.Join(" / ", observed);
+    }
+
+    private static string LlamaCppCapabilitySummary(LlamaCppRuntimeModel model)
+    {
+        var parts = new[]
+        {
+            model.Quantization,
+            model.ContextLength is int context && context > 0 ? $"{context} ctx" : "",
+            model.ParallelSlots is int slots && slots > 0 ? $"{slots} slots" : ""
+        };
+        var observed = parts.Where(part => !string.IsNullOrWhiteSpace(part)).ToArray();
+        return observed.Length == 0 ? "llama.cpp model." : string.Join(" / ", observed);
+    }
+
+    private static string Prefer(string first, string second, string fallback = "")
+    {
+        if (!string.IsNullOrWhiteSpace(first) && !first.Equals(fallback, StringComparison.OrdinalIgnoreCase))
+        {
+            return first;
+        }
+
+        return string.IsNullOrWhiteSpace(second) ? first : second;
+    }
+
+    internal static string SafeStatusForDisplay(string value, string apiToken = "")
+    {
+        var normalized = SafeText(
+            ProviderConfigurationControlService.SanitizeError(value, apiToken),
+            MaximumStatusLength);
+        normalized = InstanceIdentifierRegex().Replace(normalized, "$1[redacted]");
+        normalized = FileUriRegex().Replace(normalized, "[local path]");
+        normalized = WindowsPathRegex().Replace(normalized, "[local path]");
+        return UnixPathRegex().Replace(normalized, "[local path]");
+    }
+
+    private static string SafeStatus(string value) => SafeStatusForDisplay(value);
+
+    private static string SafeText(string value, int maximumLength)
+    {
+        var normalized = string.Join(" ", (value ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (normalized.Length <= maximumLength)
+        {
+            return normalized;
+        }
+
+        return normalized[..(maximumLength - 12)].TrimEnd()
+            + "...#"
+            + ShortFingerprint(normalized);
+    }
+
+    private static string ShortFingerprint(string value)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(bytes.AsSpan(0, 4));
+    }
+
+    private static void AppendConnectionFingerprintValues(
+        IncrementalHash hash,
+        string sessionId,
+        ModelProviderConfig sharedConfig)
+    {
+        AppendFingerprintValue(hash, (sessionId ?? "").Trim());
+        AppendFingerprintValue(hash, sharedConfig.BaseUrl.Trim().TrimEnd('/'));
+        AppendFingerprintValue(hash, ModelProviderApiModes.Normalize(sharedConfig.ApiMode));
+        AppendFingerprintValue(hash, sharedConfig.ApiToken);
+    }
+
+    private static void AppendFingerprintValue(IncrementalHash hash, string? value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value ?? "");
+        hash.AppendData(BitConverter.GetBytes(bytes.Length));
+        hash.AppendData(bytes);
+    }
+
+    [GeneratedRegex(@"(?i)file:///?[^\s]+", RegexOptions.CultureInvariant)]
+    private static partial Regex FileUriRegex();
+
+    [GeneratedRegex("""(?i)(\b"?instance(?:_id)?"?\s*[:=]\s*"?)[^"\s,;}\]]+""", RegexOptions.CultureInvariant)]
+    private static partial Regex InstanceIdentifierRegex();
+
+    [GeneratedRegex(@"(?i)(?:[A-Z]:[\\/]|\\\\)[^\s,;]*", RegexOptions.CultureInvariant)]
+    private static partial Regex WindowsPathRegex();
+
+    [GeneratedRegex(@"(?<![:/\w])/(?:[^/\s]+/)*[^/\s,;]+", RegexOptions.CultureInvariant)]
+    private static partial Regex UnixPathRegex();
+}

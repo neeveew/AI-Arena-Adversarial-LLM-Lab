@@ -1,0 +1,457 @@
+<UserControl x:Class="AIArena.Wpf.Controls.ProviderModelAssignmentsControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:AIArena.Wpf.Controls"
+             x:Name="ModelsSurfaceRoot"
+             MinWidth="320"
+             MinHeight="420"
+             Focusable="False"
+             Loaded="ProviderModelAssignmentsControl_Loaded"
+             Unloaded="ProviderModelAssignmentsControl_Unloaded"
+             SizeChanged="ProviderModelAssignmentsControl_SizeChanged"
+             PreviewKeyDown="ProviderModelAssignmentsControl_PreviewKeyDown"
+             AutomationProperties.Name="Models and assignments"
+             AutomationProperties.HelpText="Browse loaded, available, and load-state-unavailable provider models, request confirmed LM Studio residency changes, then assign models to routing targets.">
+    <UserControl.Resources>
+        <Style x:Key="ModelsSurfacePane" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource PanelBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Medium}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Panel}" />
+        </Style>
+        <Style x:Key="ModelsSurfaceCaption" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.LabelSize}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="ModelsSurfaceSectionLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.DenseLabelSize}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="ModelsSurfaceFineCaption"
+               TargetType="TextBlock"
+               BasedOn="{StaticResource ModelsSurfaceCaption}">
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.CaptionSize}" />
+        </Style>
+        <Style x:Key="ModelsSurfaceStatusCard" TargetType="Border">
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.StatusCard}" />
+            <Setter Property="Background" Value="{DynamicResource InputBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Small}" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Background="{DynamicResource AppBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid x:Name="HeaderGrid"
+              Margin="{DynamicResource Arena.Layout.WorkspaceHeaderMargin}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition x:Name="CompactHeaderActionsRow" Height="0" />
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition x:Name="HeaderActionsGapColumn" Width="16" />
+                <ColumnDefinition x:Name="HeaderActionsColumn" Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel>
+                <TextBlock Text="Models &amp; assignments"
+                           Foreground="{DynamicResource TextBrush}"
+                           FontFamily="{DynamicResource Arena.Type.FontFamily}"
+                           FontSize="{DynamicResource Arena.Type.PageTitleSize}"
+                           FontWeight="SemiBold"
+                           AutomationProperties.HeadingLevel="Level1" />
+                <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                           Foreground="{DynamicResource MutedTextBrush}"
+                           FontFamily="{DynamicResource Arena.Type.FontFamily}"
+                           Text="Choose provider models and route them to arena targets."
+                           TextWrapping="Wrap" />
+                <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                            Orientation="Horizontal">
+                    <TextBlock x:Name="ProviderNameText"
+                               Foreground="{DynamicResource TextBrush}"
+                               FontWeight="SemiBold"
+                               Text="Provider" />
+                    <Border x:Name="ConnectionStatusChip"
+                            Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
+                            Padding="{DynamicResource Arena.Inset.StatusChip}"
+                            Background="{DynamicResource InputBrush}"
+                            BorderBrush="{DynamicResource DisabledBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{DynamicResource Arena.Radius.Small}"
+                            AutomationProperties.Name="Provider connection status">
+                        <TextBlock x:Name="ConnectionStatusText"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
+                                   FontWeight="SemiBold"
+                                   Text="Unavailable"
+                                   TextTrimming="CharacterEllipsis"
+                                   AutomationProperties.LiveSetting="Polite" />
+                    </Border>
+                </StackPanel>
+            </StackPanel>
+
+            <WrapPanel x:Name="HeaderActionsPanel"
+                       Grid.Column="2"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Top">
+                <Button x:Name="ConnectionButton"
+                        MinHeight="34"
+                        Margin="{DynamicResource Arena.Layout.StateCardMargin}"
+                        Padding="{DynamicResource Arena.Inset.Action}"
+                        Style="{DynamicResource Arena.Button.Secondary}"
+                        Content="Connection"
+                        Click="ConnectionButton_Click"
+                        AutomationProperties.Name="Open provider connection settings"
+                        AutomationProperties.HelpText="Open the host's provider connection settings without changing model assignments." />
+                <Button x:Name="RefreshButton"
+                        MinHeight="34"
+                        Margin="{DynamicResource Arena.Layout.StateCardMargin}"
+                        Padding="{DynamicResource Arena.Inset.Action}"
+                        Style="{DynamicResource Arena.Button.Secondary}"
+                        Content="Refresh"
+                        Click="RefreshButton_Click"
+                        AutomationProperties.Name="Refresh provider models"
+                        AutomationProperties.HelpText="Refresh loaded and available model evidence while preserving the current selection and assignments." />
+                <Button x:Name="CloseButton"
+                        MinHeight="34"
+                        Margin="{DynamicResource Arena.Gap.Stack.After.Default}"
+                        Padding="{DynamicResource Arena.Inset.Action}"
+                        Style="{DynamicResource Arena.Button.Quiet}"
+                        Content="Close"
+                        Click="CloseButton_Click"
+                        AutomationProperties.Name="Close models surface"
+                        AutomationProperties.HelpText="Close this models surface and return focus through the host." />
+            </WrapPanel>
+        </Grid>
+
+        <Border Grid.Row="1"
+                Margin="{DynamicResource Arena.Layout.WorkspaceStatusMargin}"
+                Padding="{DynamicResource Arena.Inset.StatusCard}"
+                Background="{DynamicResource InputBrush}"
+                BorderBrush="{DynamicResource DisabledBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="{DynamicResource Arena.Radius.Small}">
+            <TextBlock x:Name="CatalogStatusText"
+                       Foreground="{DynamicResource MutedTextBrush}"
+                       Text="Model evidence is unavailable."
+                       TextWrapping="Wrap"
+                       AutomationProperties.Name="Provider model catalog status"
+                       AutomationProperties.LiveSetting="Polite" />
+        </Border>
+
+        <Grid x:Name="WorkspaceGrid"
+              Grid.Row="2"
+              Margin="{DynamicResource Arena.Layout.WorkspaceBodyMargin}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="MasterColumn" Width="72*" />
+                <ColumnDefinition x:Name="WorkspaceGapColumn" Width="12" />
+                <ColumnDefinition x:Name="DetailColumn" Width="28*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition x:Name="MasterRow" Height="*" />
+                <RowDefinition x:Name="CompactWorkspaceGapRow" Height="0" />
+                <RowDefinition x:Name="DetailRow" Height="0" />
+            </Grid.RowDefinitions>
+
+            <Border x:Name="MasterPane"
+                    Style="{StaticResource ModelsSurfacePane}"
+                    AutomationProperties.Name="Provider models master list">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="Find a model"
+                               Style="{StaticResource ModelsSurfaceSectionLabel}"
+                               AutomationProperties.HeadingLevel="Level2" />
+                    <TextBox x:Name="ModelSearchText"
+                             Grid.Row="1"
+                             MinHeight="36"
+                             Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                             Style="{DynamicResource Arena.TextBox}"
+                             TextChanged="ModelSearchText_TextChanged"
+                             AutomationProperties.Name="Search provider models"
+                             AutomationProperties.HelpText="Filter loaded and available models by name, identifier, status, or metadata." />
+
+                    <Grid Grid.Row="2"
+                          Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
+                        <ListBox x:Name="ModelsList"
+                                 Style="{DynamicResource Arena.ListBox}"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 HorizontalContentAlignment="Stretch"
+                                 SelectionChanged="ModelsList_SelectionChanged"
+                                 ScrollViewer.CanContentScroll="True"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                 VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.IsVirtualizingWhenGrouping="True"
+                                 VirtualizingPanel.VirtualizationMode="Recycling"
+                                 AutomationProperties.Name="Provider models by load state"
+                                 AutomationProperties.HelpText="Models are grouped as Loaded, Available, then Load State Unavailable. Select a model to inspect residency evidence and target assignments.">
+                            <ListBox.GroupStyle>
+                                <GroupStyle>
+                                    <GroupStyle.HeaderTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="{DynamicResource Arena.Layout.FeatureGroupHeaderMargin}"
+                                                    Padding="{DynamicResource Arena.Inset.MenuItem}"
+                                                    Background="{DynamicResource InputBrush}"
+                                                    BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                                    BorderThickness="0,0,0,1">
+                                                <TextBlock Foreground="{DynamicResource MutedTextBrush}"
+                                                           FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
+                                                           FontWeight="SemiBold"
+                                                           Text="{Binding Name}"
+                                                           AutomationProperties.Name="{Binding Name}"
+                                                           AutomationProperties.HeadingLevel="Level3" />
+                                            </Border>
+                                        </DataTemplate>
+                                    </GroupStyle.HeaderTemplate>
+                                    <GroupStyle.Panel>
+                                        <ItemsPanelTemplate>
+                                            <VirtualizingStackPanel />
+                                        </ItemsPanelTemplate>
+                                    </GroupStyle.Panel>
+                                </GroupStyle>
+                            </ListBox.GroupStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Foreground="{DynamicResource TextBrush}"
+                                                   FontWeight="SemiBold"
+                                                   Text="{Binding DisplayName}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding DisplayName}" />
+                                        <Border Grid.Column="1"
+                                                Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
+                                                Padding="{DynamicResource Arena.Inset.StatusChipCompact}"
+                                                Background="{DynamicResource InputBrush}"
+                                                BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="{DynamicResource Arena.Radius.Small}">
+                                            <TextBlock Foreground="{DynamicResource MutedTextBrush}"
+                                                       FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
+                                                       FontWeight="SemiBold"
+                                                       Text="{Binding Status}" />
+                                        </Border>
+                                        <TextBlock Grid.Row="1"
+                                                   Grid.ColumnSpan="2"
+                                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   FontSize="{DynamicResource Arena.Type.LabelSize}"
+                                                   Text="{Binding Metadata}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Metadata}" />
+                                        <TextBlock Grid.Row="2"
+                                                   Grid.ColumnSpan="2"
+                                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Nano}"
+                                                   Foreground="{DynamicResource Arena.Brush.Info}"
+                                                   FontSize="{DynamicResource Arena.Type.LabelSize}"
+                                                   Text="{Binding AssignmentSummary}"
+                                                   TextWrapping="Wrap" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <Border x:Name="ModelsEmptyState"
+                                Padding="{DynamicResource Arena.Inset.Section}"
+                                Background="{DynamicResource InputBrush}"
+                                BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="{DynamicResource Arena.Radius.Small}"
+                                Visibility="Collapsed"
+                                IsHitTestVisible="False"
+                                AutomationProperties.Name="No provider models shown">
+                            <StackPanel HorizontalAlignment="Center"
+                                        VerticalAlignment="Center">
+                                <TextBlock HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontWeight="SemiBold"
+                                           Text="No models shown" />
+                                <TextBlock x:Name="ModelsEmptyStateText"
+                                           Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           Text="Refresh the provider model list or change the search."
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <Border x:Name="DetailPane"
+                    Grid.Column="2"
+                    Style="{StaticResource ModelsSurfacePane}"
+                    AutomationProperties.Name="Selected model residency and assignment details">
+                <Grid>
+                    <Grid x:Name="ModelDetailContent" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="Model details"
+                                   Style="{StaticResource ModelsSurfaceSectionLabel}"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <StackPanel Grid.Row="1"
+                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
+                            <TextBlock x:Name="SelectedModelNameText"
+                                       Foreground="{DynamicResource TextBrush}"
+                                       FontSize="{DynamicResource Arena.Type.TitleSize}"
+                                       FontWeight="SemiBold"
+                                       TextWrapping="Wrap"
+                                       AutomationProperties.HeadingLevel="Level2" />
+                            <TextBlock x:Name="SelectedModelIdentifierText"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Nano}"
+                                       Style="{StaticResource ModelsSurfaceCaption}"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="SelectedModelMetadataText"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                       Style="{StaticResource ModelsSurfaceCaption}" />
+                            <TextBlock x:Name="SelectedModelAssignmentsText"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                       Foreground="{DynamicResource Arena.Brush.Info}"
+                                       FontSize="{DynamicResource Arena.Type.LabelSize}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="2"
+                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}">
+                            <TextBlock Text="LM Studio residency"
+                                       Foreground="{DynamicResource TextBrush}"
+                                       FontWeight="SemiBold"
+                                       AutomationProperties.HeadingLevel="Level3" />
+                            <TextBlock x:Name="SelectedModelLifecycleHelpText"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                       Style="{StaticResource ModelsSurfaceFineCaption}"
+                                       Text="Loading changes provider residency only; assignments remain unchanged." />
+                            <Button x:Name="LifecycleButton"
+                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                                    Padding="{DynamicResource Arena.Inset.Action}"
+                                    HorizontalAlignment="Stretch"
+                                    Style="{DynamicResource Arena.Button.Secondary}"
+                                    Content="Load state unavailable"
+                                    IsEnabled="False"
+                                    Click="LifecycleButton_Click"
+                                    AutomationProperties.Name="Load state unavailable"
+                                    AutomationProperties.HelpText="Select a model with LM Studio lifecycle evidence."
+                                    AutomationProperties.ItemStatus="Unavailable" />
+                            <Border x:Name="LifecycleStatusCard"
+                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                    Style="{StaticResource ModelsSurfaceStatusCard}">
+                                <TextBlock x:Name="LifecycleStatusText"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontSize="{DynamicResource Arena.Type.CaptionSize}"
+                                           Text="LM Studio load state is unavailable for this model."
+                                           TextWrapping="Wrap"
+                                           AutomationProperties.Name="LM Studio lifecycle status"
+                                           AutomationProperties.LiveSetting="Polite" />
+                            </Border>
+                        </StackPanel>
+
+                        <Border Grid.Row="3"
+                                Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}"
+                                BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                BorderThickness="0,1,0,0" />
+                        <StackPanel Grid.Row="4"
+                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}">
+                            <TextBlock Text="Assign to"
+                                       Foreground="{DynamicResource TextBrush}"
+                                       FontWeight="SemiBold"
+                                       AutomationProperties.HeadingLevel="Level3" />
+                            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                       Style="{StaticResource ModelsSurfaceCaption}"
+                                       Text="Changes save immediately. Assignment controls change routing only and do not activate a target." />
+                        </StackPanel>
+
+                        <ScrollViewer Grid.Row="5"
+                                      Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto"
+                                      AutomationProperties.Name="Assignment targets">
+                            <ItemsControl x:Name="AssignmentTargetsItems">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <controls:ProviderAssignmentCheckBox MinHeight="36"
+                                                                              Margin="{DynamicResource Arena.Gap.Stack.After.Tight}"
+                                                                              Style="{DynamicResource Arena.CheckBox.Standard}"
+                                                                              Content="{Binding DisplayName}"
+                                                                              IsChecked="{Binding IsAssigned, Mode=TwoWay}"
+                                                                              IsEnabled="{Binding CanAssign}"
+                                                                              ToggleRequested="AssignmentTargetCheckBox_ToggleRequested"
+                                                                              AutomationProperties.Name="{Binding AutomationName}"
+                                                                              AutomationProperties.HelpText="{Binding AutomationHelp}"
+                                                                              AutomationProperties.ItemStatus="{Binding ItemStatus}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+
+                        <Border x:Name="AssignmentSaveStatusCard"
+                                Grid.Row="6"
+                                Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}"
+                                Style="{StaticResource ModelsSurfaceStatusCard}">
+                            <TextBlock x:Name="AssignmentSaveStatusText"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       Text="Ready to assign."
+                                       TextWrapping="Wrap"
+                                       AutomationProperties.Name="Assignment save status"
+                                       AutomationProperties.LiveSetting="Polite" />
+                        </Border>
+                    </Grid>
+
+                    <Border x:Name="ModelDetailEmptyState"
+                            Padding="{DynamicResource Arena.Inset.Section}"
+                            Background="{DynamicResource InputBrush}"
+                            BorderBrush="{DynamicResource DisabledBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{DynamicResource Arena.Radius.Small}"
+                            AutomationProperties.Name="No model selected">
+                        <StackPanel HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <TextBlock HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextBrush}"
+                                       FontWeight="SemiBold"
+                                       Text="Select a model" />
+                            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       Text="Choose a model to inspect its residency evidence and target assignments."
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

@@ -73,6 +73,8 @@ internal sealed class ArenaRunCoordinator
     }
 
     public bool IsAutoChatRunning => autoChatCancellation is not null;
+    public bool LastTurnSucceeded { get; private set; }
+    public bool LastNarrationSucceeded { get; private set; }
 
     /// <summary>
     /// Raised with a run-loop transition - "started", "stopped", "turn" or
@@ -115,7 +117,7 @@ internal sealed class ArenaRunCoordinator
                 var status = AutoChatStatus(result);
                 finalStatus = status;
                 await refreshActiveSessionAsync(status);
-                if (!result.Ok)
+                if (!ModelTurnSucceeded(result))
                 {
                     break;
                 }
@@ -201,6 +203,7 @@ internal sealed class ArenaRunCoordinator
     /// <summary>False when there was no session, or the arena was already busy.</summary>
     public async Task<bool> NarrateNowAsync()
     {
+        LastNarrationSucceeded = false;
         var session = activeSession();
         if (session is null)
         {
@@ -212,6 +215,7 @@ internal sealed class ArenaRunCoordinator
         {
             var result = await narratorService.NarrateNowAsync(session.Id, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            LastNarrationSucceeded = result.Ok && result.Message is not null;
             var status = NarratorStatus(result);
             await refreshActiveSessionAsync(status);
             if (result.Ok && result.Message is not null)
@@ -234,6 +238,7 @@ internal sealed class ArenaRunCoordinator
     /// <summary>False when there was no session, or the arena was already busy.</summary>
     public async Task<bool> RunOneTurnAsync()
     {
+        LastTurnSucceeded = false;
         var session = activeSession();
         if (session is null)
         {
@@ -245,6 +250,7 @@ internal sealed class ArenaRunCoordinator
         {
             var result = await turnRunner.RunOneTurnAsync(session.Id, shouldEnforceVoiceDrift(), cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            LastTurnSucceeded = ModelTurnSucceeded(result);
             var status = OneTurnStatus(result);
             await refreshActiveSessionAsync(status);
             SetBothStatuses(status);
@@ -299,16 +305,16 @@ internal sealed class ArenaRunCoordinator
 
     internal static string AutoChatStatus(OneTurnResult result)
     {
-        return result.Ok && result.Message is not null
-            ? $"Auto Chat: {result.Message.Speaker} spoke ({result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms)"
-            : $"Auto Chat stopped: {result.Error}";
+        return ModelTurnSucceeded(result)
+            ? $"Auto Chat: {result.Message!.Speaker} spoke ({result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms)"
+            : $"Auto Chat stopped: {TurnFailureDetail(result)}";
     }
 
     internal static string OneTurnStatus(OneTurnResult result)
     {
-        return result.Ok && result.Message is not null
-            ? $"1 TURN complete: {result.Message.Speaker} ({result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms)"
-            : $"1 TURN failed: {result.Error}";
+        return ModelTurnSucceeded(result)
+            ? $"1 TURN complete: {result.Message!.Speaker} ({result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms)"
+            : $"1 TURN failed: {TurnFailureDetail(result)}";
     }
 
     internal static string NarratorStatus(NarratorResult result)
@@ -320,16 +326,42 @@ internal sealed class ArenaRunCoordinator
 
     internal static string AgentTurnStatus(AgentState agent, OneTurnResult result)
     {
-        return result.Ok && result.Message is not null
-            ? $"{agent.Name} one-shot complete: {result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms"
-            : $"{agent.Name} one-shot failed: {result.Error}";
+        return ModelTurnSucceeded(result)
+            ? $"{agent.Name} one-shot complete: {result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms"
+            : $"{agent.Name} one-shot failed: {TurnFailureDetail(result)}";
     }
 
     internal static string RetryStatus(TranscriptMessage originalMessage, OneTurnResult result)
     {
-        return result.Ok && result.Message is not null
-            ? $"Retry replaced turn {originalMessage.Turn}: {result.Message.Speaker} ({result.Message.Model.Model}, {result.Message.Model.LatencyMs} ms)"
-            : $"Retry failed: {result.Error}";
+        return ModelTurnSucceeded(result)
+            ? $"Retry replaced turn {originalMessage.Turn}: {result.Message!.Speaker} ({result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms)"
+            : $"Retry failed: {TurnFailureDetail(result)}";
+    }
+
+    internal static bool ModelTurnSucceeded(OneTurnResult result)
+    {
+        return result.Ok
+            && result.Message is not null
+            && result.Completion?.Ok == true
+            && !result.Message.Status.Equals("error", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string TurnFailureDetail(OneTurnResult result)
+    {
+        var detail = result.Completion?.Error;
+        if (string.IsNullOrWhiteSpace(detail))
+        {
+            detail = result.Error;
+        }
+
+        if (string.IsNullOrWhiteSpace(detail))
+        {
+            detail = "the provider did not return a successful model completion";
+        }
+
+        return result.Executed
+            ? $"{detail} A System event was recorded in the transcript."
+            : detail;
     }
 
     private void SetBothStatuses(string status)

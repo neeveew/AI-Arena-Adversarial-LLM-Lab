@@ -1,6 +1,7 @@
 <UserControl x:Class="AIArena.Wpf.Controls.ExperimentLabControl"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:AIArena.Wpf.Controls"
              MinWidth="480"
              MinHeight="320"
              Focusable="False"
@@ -42,6 +43,9 @@
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
+            <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
+            <Setter Property="AutomationProperties.HelpText" Value="{Binding HelpText}" />
+            <Setter Property="AutomationProperties.ItemStatus" Value="{Binding RefreshStatusLabel}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="{x:Type ListBoxItem}">
@@ -87,6 +91,28 @@
             <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
         </Style>
 
+        <Style x:Key="ExperimentStageCard" TargetType="Border" BasedOn="{StaticResource ExperimentCard}">
+            <Setter Property="Background" Value="{DynamicResource PanelBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+        </Style>
+
+        <Style x:Key="ExperimentStatusChip" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource InputBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Small}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.StatusChipCompact}" />
+        </Style>
+
+        <Style x:Key="ExperimentEmptyState" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource InputBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource Arena.Radius.Small}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Card}" />
+            <Setter Property="MinHeight" Value="64" />
+        </Style>
+
         <Style x:Key="ExperimentTitle" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
             <Setter Property="FontSize" Value="{DynamicResource Arena.Type.PageTitleSize}" />
@@ -101,7 +127,21 @@
         </Style>
     </UserControl.Resources>
 
-    <Grid x:Name="LayoutRoot">
+    <Grid Background="{DynamicResource AppBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <controls:WorkspacePageHeaderControl x:Name="ExperimentWorkspaceHeader"
+                                              Title="Experiment Lab"
+                                               Description="Configure replayable local experiments, inspect bounded evidence, and review truthful feature refresh state."
+                                               Status="{Binding SelectedItem.RefreshStatusLabel, ElementName=FeatureSelector}"
+                                               StatusKind="{Binding SelectedItem.RefreshStatusKind, ElementName=FeatureSelector}"
+                                              PrimaryActionText="Refresh selected"
+                                              PrimaryActionAutomationName="Refresh selected Experiment Lab feature"
+                                              PrimaryActionHelpText="Refresh only the currently selected feature while keeping grouped navigation available for supersession."
+                                              PrimaryActionRequested="RefreshSelectedFeatureHeader_Click" />
+    <Grid x:Name="LayoutRoot" Grid.Row="1">
         <Grid.RowDefinitions>
             <RowDefinition x:Name="SelectorRow" Height="*" />
             <RowDefinition x:Name="CompactGapRow" Height="0" />
@@ -122,11 +162,11 @@
                 AutomationProperties.Name="Experiment Lab features">
             <DockPanel LastChildFill="True">
                 <StackPanel DockPanel.Dock="Top" Margin="{DynamicResource Arena.Layout.FeatureHeaderMargin}">
-                    <TextBlock Text="Experiment Lab"
+                    <TextBlock Text="Features"
                                Foreground="{DynamicResource TextBrush}"
                                FontSize="{DynamicResource Arena.Type.TitleSize}"
                                FontWeight="SemiBold" />
-                    <TextBlock Text="Replayable local evidence"
+                    <TextBlock Text="Grouped workspaces"
                                Foreground="{DynamicResource MutedTextBrush}"
                                FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
                                Margin="{DynamicResource Arena.Gap.Stack.Before.Nano}" />
@@ -139,19 +179,50 @@
                          ScrollViewer.VerticalScrollBarVisibility="Auto"
                          SelectionChanged="FeatureSelector_SelectionChanged"
                          ItemContainerStyle="{StaticResource ExperimentFeatureItem}"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         VirtualizingPanel.IsVirtualizingWhenGrouping="True"
                          AutomationProperties.Name="Available Experiment Lab features">
+                    <ListBox.GroupStyle>
+                        <GroupStyle>
+                            <GroupStyle.HeaderTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Name}"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               FontSize="{DynamicResource Arena.Type.MicroSize}"
+                                               FontWeight="SemiBold"
+                                               Margin="{DynamicResource Arena.Layout.FeatureGroupHeaderMargin}"
+                                               TextWrapping="Wrap"
+                                               AutomationProperties.Name="{Binding Name}" />
+                                </DataTemplate>
+                            </GroupStyle.HeaderTemplate>
+                        </GroupStyle>
+                    </ListBox.GroupStyle>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <StackPanel ToolTip="{Binding HelpText}">
+                            <Grid ToolTip="{Binding HelpText}">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
                                 <TextBlock Text="{Binding Title}"
                                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ListBoxItem}}"
+                                           FontWeight="SemiBold"
                                            TextWrapping="Wrap" />
-                                <TextBlock Text="{Binding Summary}"
+                                <TextBlock Grid.Row="1" Text="{Binding Summary}"
                                            Foreground="{DynamicResource MutedTextBrush}"
                                            FontSize="{DynamicResource Arena.Type.MicroSize}"
                                            Margin="{DynamicResource Arena.Gap.Stack.Before.Nano}"
                                            TextWrapping="Wrap" />
-                            </StackPanel>
+                                <Border Grid.Row="2" Style="{StaticResource ExperimentStatusChip}"
+                                        HorizontalAlignment="Left"
+                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}">
+                                    <TextBlock Text="{Binding RefreshStatusLabel}"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               FontSize="{DynamicResource Arena.Type.MicroSize}" />
+                                </Border>
+                            </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
@@ -169,12 +240,33 @@
                     <TextBlock Text="Build and validate a deterministic bounded matrix. Run becomes available only when the exact pack, session setup, and process-memory provider profiles resolve."
                                Style="{StaticResource HintText}" TextWrapping="Wrap" />
                 </StackPanel>
-                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ScrollViewer x:Name="MatrixScrollViewer" Grid.Row="1"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              AutomationProperties.Name="Matrix Runner stages">
                     <StackPanel>
-                        <Border Style="{StaticResource ExperimentCard}">
+                        <Border x:Name="MatrixConfigureStage" Style="{StaticResource ExperimentStageCard}"
+                                AutomationProperties.Name="Matrix stage 1 Configure"
+                                AutomationProperties.HelpText="Define the exact scenario, provider, dimension, rubric, and bounded execution inputs.">
                             <StackPanel>
-                                <TextBlock Text="Matrix draft" Style="{StaticResource ExperimentSectionTitle}" />
-                                <Grid>
+                                <DockPanel LastChildFill="True">
+                                    <Border DockPanel.Dock="Left" Style="{StaticResource ExperimentStatusChip}"
+                                            Background="{DynamicResource NavActiveBrush}"
+                                            BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Default}">
+                                        <TextBlock Text="1" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" />
+                                    </Border>
+                                    <Border DockPanel.Dock="Right" Style="{StaticResource ExperimentStatusChip}">
+                                        <TextBlock Text="Draft" Foreground="{DynamicResource MutedTextBrush}"
+                                                   FontSize="{DynamicResource Arena.Type.MicroSize}" />
+                                    </Border>
+                                    <StackPanel>
+                                        <TextBlock Text="Configure" Style="{StaticResource ExperimentSectionTitle}" Margin="{DynamicResource Arena.Inset.None}" />
+                                        <TextBlock Text="Choose bounded inputs. Any change requires validation before Run becomes available."
+                                                   Style="{StaticResource HintText}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </DockPanel>
+                                <Grid Margin="{DynamicResource Arena.Gap.Stack.Before.Section}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="10" />
@@ -189,21 +281,25 @@
                                     </Grid.RowDefinitions>
                                     <StackPanel>
                                         <TextBlock Text="Title" Style="{StaticResource FieldLabel}" />
-                                        <TextBox x:Name="MatrixTitleText" Text="Local comparison" Style="{StaticResource FormTextBox}" MaxLength="120" />
+                                        <TextBox x:Name="MatrixTitleText" Text="Local comparison" Style="{StaticResource FormTextBox}" MaxLength="120"
+                                                 TextChanged="MatrixConfiguration_TextChanged" />
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
                                         <TextBlock Text="Scenario pack ID" Style="{StaticResource FieldLabel}" />
                                         <TextBox x:Name="MatrixScenarioPackText" Text="" Style="{StaticResource FormTextBox}" MaxLength="160"
+                                                 TextChanged="MatrixConfiguration_TextChanged"
                                                  AutomationProperties.HelpText="Filled from the canonical scenario-pack store when available." />
                                     </StackPanel>
                                     <StackPanel Grid.Row="1" Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                                         <TextBlock Text="Provider profile IDs (comma separated)" Style="{StaticResource FieldLabel}" />
                                         <TextBox x:Name="MatrixProvidersText" Text="" Style="{StaticResource FormTextBox}" MaxLength="512"
+                                                 TextChanged="MatrixConfiguration_TextChanged"
                                                  AutomationProperties.HelpText="Filled from safe identities derived from active-session provider configs; credentials remain in process memory." />
                                     </StackPanel>
                                     <StackPanel Grid.Row="1" Grid.Column="2" Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                                         <TextBlock Text="Executable dimension" Style="{StaticResource FieldLabel}" />
-                                        <ComboBox x:Name="MatrixDimensionParameterPicker" Style="{DynamicResource Arena.ComboBox}" SelectedIndex="1">
+                                        <ComboBox x:Name="MatrixDimensionParameterPicker" Style="{DynamicResource Arena.ComboBox}" SelectedIndex="1"
+                                                  SelectionChanged="MatrixConfiguration_SelectionChanged">
                                             <ComboBoxItem Content="None (provider-only comparison)" Tag="" />
                                             <ComboBoxItem Content="Temperature" Tag="temperature" />
                                             <ComboBoxItem Content="Max output tokens" Tag="max_output_tokens" />
@@ -212,7 +308,8 @@
                                             <ComboBoxItem Content="Timeout seconds" Tag="timeout_seconds" />
                                         </ComboBox>
                                         <TextBlock Text="Dimension values (comma separated)" Style="{StaticResource FieldLabel}" Margin="{DynamicResource Arena.Layout.FieldLabelMargin}" />
-                                        <TextBox x:Name="MatrixDimensionValuesText" Text="0.2,0.7" Style="{StaticResource FormTextBox}" MaxLength="1024" />
+                                        <TextBox x:Name="MatrixDimensionValuesText" Text="0.2,0.7" Style="{StaticResource FormTextBox}" MaxLength="1024"
+                                                 TextChanged="MatrixConfiguration_TextChanged" />
                                     </StackPanel>
                                     <StackPanel Grid.Row="2" Grid.ColumnSpan="3" Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                                         <TextBlock Text="Benchmark pack (optional)" Style="{StaticResource FieldLabel}" />
@@ -224,6 +321,7 @@
                                     <StackPanel Grid.Row="3" Grid.ColumnSpan="3" Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                                         <TextBlock Text="Rubric IDs (comma separated)" Style="{StaticResource FieldLabel}" />
                                         <TextBox x:Name="MatrixRubricsText" Text="" Style="{StaticResource FormTextBox}" MaxLength="1024"
+                                                 TextChanged="MatrixConfiguration_TextChanged"
                                                  AutomationProperties.Name="Experiment rubric identities"
                                                  AutomationProperties.HelpText="A scenario-only experiment still requires at least one versioned rubric identity. Benchmark selection fills its required rubric identities automatically." />
                                     </StackPanel>
@@ -231,28 +329,114 @@
                                         <WrapPanel>
                                             <StackPanel Width="132" Margin="{DynamicResource Arena.Gap.Inline.After.Default}">
                                                 <TextBlock Text="Repetitions (1-100)" Style="{StaticResource FieldLabel}" />
-                                                <TextBox x:Name="MatrixRepetitionsText" Text="1" Style="{StaticResource FormTextBox}" MaxLength="3" />
+                                                <TextBox x:Name="MatrixRepetitionsText" Text="1" Style="{StaticResource FormTextBox}" MaxLength="3"
+                                                         TextChanged="MatrixConfiguration_TextChanged" />
                                             </StackPanel>
                                             <StackPanel Width="132" Margin="{DynamicResource Arena.Gap.Inline.After.Default}">
                                                 <TextBlock Text="Turn budget (1-100)" Style="{StaticResource FieldLabel}" />
-                                                <TextBox x:Name="MatrixTurnBudgetText" Text="4" Style="{StaticResource FormTextBox}" MaxLength="3" />
+                                                <TextBox x:Name="MatrixTurnBudgetText" Text="4" Style="{StaticResource FormTextBox}" MaxLength="3"
+                                                         TextChanged="MatrixConfiguration_TextChanged" />
                                             </StackPanel>
                                             <StackPanel Width="150">
                                                 <TextBlock Text="Parallelism (1-32)" Style="{StaticResource FieldLabel}" />
-                                                <TextBox x:Name="MatrixParallelismText" Text="1" Style="{StaticResource FormTextBox}" MaxLength="2" />
+                                                <TextBox x:Name="MatrixParallelismText" Text="1" Style="{StaticResource FormTextBox}" MaxLength="2"
+                                                         TextChanged="MatrixConfiguration_TextChanged" />
                                             </StackPanel>
                                         </WrapPanel>
                                     </StackPanel>
                                 </Grid>
-                                <WrapPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Section}">
-                                    <Button x:Name="ValidateMatrixButton" Content="Validate &amp; expand" Click="ValidateMatrixButton_Click"
-                                            Style="{DynamicResource Arena.Button.Primary}" MinWidth="150" Margin="{DynamicResource Arena.Gap.Inline.After.Default}"
-                                            AutomationProperties.Name="Validate and expand experiment matrix" />
-                                    <Button x:Name="RefreshRunHistoryButton" Content="Refresh history" Click="RefreshRunHistoryButton_Click"
-                                            Style="{DynamicResource Arena.Button.Secondary}" MinWidth="120" Margin="{DynamicResource Arena.Gap.Inline.After.Default}"
-                                            AutomationProperties.Name="Refresh persisted experiment run history" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="MatrixValidateStage" Style="{StaticResource ExperimentStageCard}"
+                                AutomationProperties.Name="Matrix stage 2 Validate"
+                                AutomationProperties.HelpText="Persist and validate the draft, resolve prerequisites, and inspect the deterministic expansion."
+                                AutomationProperties.ItemStatus="needs-validation">
+                            <StackPanel>
+                                <DockPanel LastChildFill="True">
+                                    <Border DockPanel.Dock="Left" Style="{StaticResource ExperimentStatusChip}"
+                                            Background="{DynamicResource NavActiveBrush}"
+                                            BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Default}">
+                                        <TextBlock Text="2" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" />
+                                    </Border>
+                                    <Border DockPanel.Dock="Right" Style="{StaticResource ExperimentStatusChip}">
+                                        <TextBlock x:Name="MatrixValidationStageStatusText" Text="Needs validation"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   FontSize="{DynamicResource Arena.Type.MicroSize}" />
+                                    </Border>
+                                    <StackPanel>
+                                        <TextBlock Text="Validate" Style="{StaticResource ExperimentSectionTitle}" Margin="{DynamicResource Arena.Inset.None}" />
+                                        <TextBlock Text="Validation persists the exact draft and resolves packs, rubrics, session setup, and process-memory provider profiles."
+                                                   Style="{StaticResource HintText}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </DockPanel>
+                                <Button x:Name="ValidateMatrixButton" Content="Validate &amp; expand" Click="ValidateMatrixButton_Click"
+                                        Style="{DynamicResource Arena.Button.Primary}" MinWidth="150" HorizontalAlignment="Left"
+                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Section}"
+                                        AutomationProperties.Name="Validate and expand experiment matrix" />
+                                <TextBlock x:Name="MatrixStatusText" Text="Draft not validated."
+                                           Style="{StaticResource HintText}" Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}" TextWrapping="Wrap"
+                                           AutomationProperties.LiveSetting="Polite" />
+                                <DockPanel Margin="{DynamicResource Arena.Layout.SectionHeadingMargin}" LastChildFill="True">
+                                    <Border DockPanel.Dock="Right" Style="{StaticResource ExperimentStatusChip}">
+                                        <TextBlock x:Name="MatrixPreviewStateText" Text="Empty"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   FontSize="{DynamicResource Arena.Type.MicroSize}" />
+                                    </Border>
+                                    <TextBlock Text="Expansion preview" Style="{StaticResource ExperimentSectionTitle}" Margin="{DynamicResource Arena.Inset.None}" />
+                                </DockPanel>
+                                <Border x:Name="MatrixPreviewEmptyState" Style="{StaticResource ExperimentEmptyState}"
+                                        AutomationProperties.Name="Experiment expansion empty state">
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="No expansion yet" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" />
+                                        <TextBlock x:Name="MatrixPreviewEmptyText"
+                                                   Text="Validate the current configuration to generate a bounded expansion preview."
+                                                   Style="{StaticResource HintText}" TextWrapping="Wrap"
+                                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}" />
+                                    </StackPanel>
+                                </Border>
+                                <ListBox x:Name="MatrixPreviewItems" Style="{DynamicResource Arena.ListBox}" MinHeight="80" MaxHeight="210"
+                                         Visibility="Collapsed"
+                                         Background="{DynamicResource InputBrush}" Foreground="{DynamicResource TextBrush}"
+                                         BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                         VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                                         AutomationProperties.Name="Experiment expansion cells" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="MatrixRunStage" Style="{StaticResource ExperimentStageCard}"
+                                AutomationProperties.Name="Matrix stage 3 Run"
+                                AutomationProperties.HelpText="Run only the resolved matrix; cancellation and explicit retry preserve durable cell evidence."
+                                AutomationProperties.ItemStatus="blocked">
+                            <StackPanel>
+                                <DockPanel LastChildFill="True">
+                                    <Border DockPanel.Dock="Left" Style="{StaticResource ExperimentStatusChip}"
+                                            Background="{DynamicResource NavActiveBrush}"
+                                            BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Default}">
+                                        <TextBlock Text="3" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" />
+                                    </Border>
+                                    <Border DockPanel.Dock="Right" Style="{StaticResource ExperimentStatusChip}">
+                                        <TextBlock x:Name="MatrixRunStageStatusText" Text="Blocked"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   FontSize="{DynamicResource Arena.Type.MicroSize}" />
+                                    </Border>
+                                    <StackPanel>
+                                        <TextBlock Text="Run" Style="{StaticResource ExperimentSectionTitle}" Margin="{DynamicResource Arena.Inset.None}" />
+                                        <TextBlock Text="Run remains blocked until validation resolves every prerequisite. Retry approval is consumed by one Run only."
+                                                   Style="{StaticResource HintText}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </DockPanel>
+                                <CheckBox x:Name="MatrixRetryApprovedCheckBox"
+                                          Style="{DynamicResource Arena.CheckBox.Standard}"
+                                          Content="Rerun every terminal cell once (explicit approval)"
+                                          Margin="{DynamicResource Arena.Gap.Stack.Before.Section}"
+                                          AutomationProperties.Name="Approve one retry of every terminal experiment cell"
+                                          AutomationProperties.HelpText="Consumed by the next Run only. Each retried cell gets a new attempt, trial identity, and isolated child; prior evidence remains durable." />
+                                <WrapPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}">
                                     <Button x:Name="ExecuteMatrixButton" Content="Run matrix" IsEnabled="False" Click="ExecuteMatrixButton_Click"
-                                            Style="{DynamicResource Arena.Button.Secondary}" MinWidth="110"
+                                            Style="{DynamicResource Arena.Button.Primary}" MinWidth="110"
                                             ToolTip="Validate the matrix to resolve execution availability."
                                             AutomationProperties.Name="Run experiment matrix"
                                             AutomationProperties.HelpText="Runs the resolved matrix through isolated child sessions and the configured provider, then persists content-free evidence." />
@@ -261,27 +445,51 @@
                                             AutomationProperties.Name="Cancel experiment matrix"
                                             AutomationProperties.HelpText="Requests cancellation of the active matrix run; completed cell evidence remains durable." />
                                 </WrapPanel>
-                                <CheckBox x:Name="MatrixRetryApprovedCheckBox"
-                                          Style="{DynamicResource Arena.CheckBox.Standard}"
-                                          Content="Rerun every terminal cell once (explicit approval)"
-                                          Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}"
-                                          AutomationProperties.Name="Approve one retry of every terminal experiment cell"
-                                          AutomationProperties.HelpText="Consumed by the next Run only. Each retried cell gets a new attempt, trial identity, and isolated child; prior evidence remains durable." />
-                                <TextBlock x:Name="MatrixStatusText" Text="Draft not validated."
-                                           Style="{StaticResource HintText}" Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}" TextWrapping="Wrap"
-                                           AutomationProperties.LiveSetting="Polite" />
                             </StackPanel>
                         </Border>
-                        <Border Style="{StaticResource ExperimentCard}">
+
+                        <Border x:Name="MatrixReviewStage" Style="{StaticResource ExperimentStageCard}"
+                                AutomationProperties.Name="Matrix stage 4 Review"
+                                AutomationProperties.HelpText="Inspect bounded persisted run receipts without exposing prompts or provider credentials.">
                             <StackPanel>
-                                <TextBlock Text="Expansion preview" Style="{StaticResource ExperimentSectionTitle}" />
-                                <ListBox x:Name="MatrixPreviewItems" Style="{DynamicResource Arena.ListBox}" MinHeight="80" MaxHeight="210"
-                                         Background="{DynamicResource InputBrush}" Foreground="{DynamicResource TextBrush}"
-                                         BorderBrush="{DynamicResource DisabledBorderBrush}" AutomationProperties.Name="Experiment expansion cells" />
-                                <TextBlock Text="Persisted run history" Style="{StaticResource ExperimentSectionTitle}" Margin="{DynamicResource Arena.Layout.SectionHeadingMargin}" />
+                                <DockPanel LastChildFill="True">
+                                    <Border DockPanel.Dock="Left" Style="{StaticResource ExperimentStatusChip}"
+                                            Background="{DynamicResource NavActiveBrush}"
+                                            BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                                            Margin="{DynamicResource Arena.Gap.Inline.After.Default}">
+                                        <TextBlock Text="4" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" />
+                                    </Border>
+                                    <Border DockPanel.Dock="Right" Style="{StaticResource ExperimentStatusChip}">
+                                        <TextBlock x:Name="RunHistoryStateText" Text="Empty"
+                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                   FontSize="{DynamicResource Arena.Type.MicroSize}" />
+                                    </Border>
+                                    <StackPanel>
+                                        <TextBlock Text="Review" Style="{StaticResource ExperimentSectionTitle}" Margin="{DynamicResource Arena.Inset.None}" />
+                                        <TextBlock Text="Review expansion outcomes and durable run history. Empty, loading, and failed states remain distinct."
+                                                   Style="{StaticResource HintText}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </DockPanel>
+                                <Button x:Name="RefreshRunHistoryButton" Content="Refresh history" Click="RefreshRunHistoryButton_Click"
+                                        Style="{DynamicResource Arena.Button.Secondary}" MinWidth="120" HorizontalAlignment="Left"
+                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Section}"
+                                        AutomationProperties.Name="Refresh persisted experiment run history" />
+                                <Border x:Name="RunHistoryEmptyState" Style="{StaticResource ExperimentEmptyState}"
+                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}"
+                                        AutomationProperties.Name="Experiment run history empty state">
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="No run history" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" />
+                                        <TextBlock x:Name="RunHistoryEmptyText" Text="No persisted experiment runs are available yet."
+                                                   Style="{StaticResource HintText}" TextWrapping="Wrap"
+                                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}" />
+                                    </StackPanel>
+                                </Border>
                                 <ListBox x:Name="RunHistoryItems" Style="{DynamicResource Arena.ListBox}" MinHeight="60" MaxHeight="180"
+                                         Visibility="Collapsed" Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}"
                                          Background="{DynamicResource InputBrush}" Foreground="{DynamicResource TextBrush}"
-                                         BorderBrush="{DynamicResource DisabledBorderBrush}" AutomationProperties.Name="Persisted experiment run history" />
+                                         BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                         VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                                         AutomationProperties.Name="Persisted experiment run history" />
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -517,9 +725,28 @@
                     <TextBlock Text="Link bounded claim summaries to stable message references, observed evidence, reviewer decisions, and monotonic contradiction history."
                                Style="{StaticResource HintText}" TextWrapping="Wrap" />
                 </StackPanel>
-                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel>
-                        <Border Style="{StaticResource ExperimentCard}">
+                <ScrollViewer x:Name="ClaimScrollViewer"
+                              Grid.Row="1"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              AutomationProperties.Name="Claim Ledger workspace">
+                    <Grid x:Name="ClaimWorkspaceGrid"
+                          KeyboardNavigation.TabNavigation="Continue">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition x:Name="ClaimMasterColumn" Width="260" />
+                            <ColumnDefinition x:Name="ClaimWideGapColumn" Width="12" />
+                            <ColumnDefinition x:Name="ClaimDetailColumn" Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition x:Name="ClaimMasterRow" Height="Auto" />
+                            <RowDefinition x:Name="ClaimCompactGapRow" Height="0" />
+                            <RowDefinition x:Name="ClaimDetailRow" Height="0" />
+                        </Grid.RowDefinitions>
+
+                        <Border x:Name="ClaimMasterPane"
+                                Style="{StaticResource ExperimentCard}"
+                                AutomationProperties.Name="Claim Ledger master controls"
+                                AutomationProperties.HelpText="Create, refresh, and select the monotonic ledger whose claims are shown in the detail pane.">
                             <StackPanel>
                                 <TextBlock Text="Ledger" Style="{StaticResource ExperimentSectionTitle}" />
                                 <Grid>
@@ -541,10 +768,14 @@
                                 </WrapPanel>
                                 <TextBlock Text="Stored ledger" Style="{StaticResource FieldLabel}" Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}" />
                                 <ComboBox x:Name="ClaimLedgerPicker" Style="{DynamicResource Arena.ComboBox}" DisplayMemberPath="DisplayText"
-                                          SelectionChanged="ClaimLedgerPicker_SelectionChanged" AutomationProperties.Name="Stored claim ledger" />
+                                           SelectionChanged="ClaimLedgerPicker_SelectionChanged" AutomationProperties.Name="Stored claim ledger" />
                             </StackPanel>
                         </Border>
-                        <Border Style="{StaticResource ExperimentCard}">
+                        <Border x:Name="ClaimDetailPane"
+                                Grid.Column="2"
+                                Style="{StaticResource ExperimentCard}"
+                                AutomationProperties.Name="Claim Ledger detail controls"
+                                AutomationProperties.HelpText="Add and review claims in the selected ledger, or link exactly two selected claims as contradictory.">
                             <StackPanel>
                                 <TextBlock Text="Add or review claim" Style="{StaticResource ExperimentSectionTitle}" />
                                 <TextBlock Text="Stable transcript message" Style="{StaticResource FieldLabel}" />
@@ -565,6 +796,10 @@
                                 <ListBox x:Name="ClaimItems" Style="{DynamicResource Arena.ListBox}" SelectionMode="Extended" MinHeight="110" MaxHeight="230"
                                          Background="{DynamicResource InputBrush}" Foreground="{DynamicResource TextBrush}"
                                          BorderBrush="{DynamicResource DisabledBorderBrush}" DisplayMemberPath="DisplayText"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         VirtualizingPanel.IsVirtualizing="True"
+                                         VirtualizingPanel.VirtualizationMode="Recycling"
                                          AutomationProperties.Name="Claims in selected ledger" />
                                 <Button Content="Link selected contradiction" Click="LinkContradictionButton_Click" Style="{DynamicResource Arena.Button.Secondary}"
                                         HorizontalAlignment="Left" MinWidth="170" Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}"
@@ -574,9 +809,10 @@
                                            AutomationProperties.LiveSetting="Polite" />
                             </StackPanel>
                         </Border>
-                    </StackPanel>
+                    </Grid>
                 </ScrollViewer>
             </Grid>
         </Grid>
+    </Grid>
     </Grid>
 </UserControl>

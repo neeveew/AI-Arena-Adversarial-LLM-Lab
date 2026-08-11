@@ -1,4 +1,8 @@
 using System.Windows.Automation;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using AIArena.Core.Models;
@@ -7,6 +11,7 @@ using AIArena.Core.Providers;
 using AIArena.Core.Services;
 using AIArena.Wpf;
 using AIArena.Wpf.Controls;
+using AIArena.Wpf.Services;
 
 internal static partial class Program
 {
@@ -160,6 +165,20 @@ internal static partial class Program
                     && control.MemoryPrivacy.Text.Contains("Other agents", StringComparison.OrdinalIgnoreCase),
                     "privacy copy should identify the selected scope and the excluded scope");
 
+                var populated = coordinator.DebugMemoryItems.First();
+                Require(
+                    coordinator.SelectMemory(populated.MemoryId).Ok
+                    && control.MemoryEditor.Text.Contains("alpha", StringComparison.OrdinalIgnoreCase),
+                    "the scoped fixture should populate the selected private-memory editor");
+                coordinator.SetMemoryFilter("expired");
+                Require(
+                    coordinator.DebugMemoryItems.Count == 0
+                    && control.MemoryEditor.Text.Length == 0
+                    && control.MemoryMetadata.Text.Equals("No memory selected.", StringComparison.Ordinal)
+                    && control.MemoryStatus.Text.StartsWith("No expired", StringComparison.Ordinal),
+                    "an empty scoped filter must clear stale private editor and provenance content while keeping a truthful empty state");
+                coordinator.SetMemoryFilter("all");
+
                 var legacy = new StructuredMemoryEntry
                 {
                     MemoryId = "memory:legacy",
@@ -182,7 +201,12 @@ internal static partial class Program
                     "legacy_unknown records should not invent source or creation evidence");
 
                 var missing = coordinator.SelectAuthorizedAgent("not-an-agent");
-                Require(!missing.Ok && coordinator.DebugMemoryItems.Count == 0, "invalid scope selection should collapse private content");
+                Require(
+                    !missing.Ok
+                    && coordinator.DebugMemoryItems.Count == 0
+                    && control.MemoryEditor.Text.Length == 0
+                    && !control.MemoryMetadata.Text.Contains("alpha", StringComparison.OrdinalIgnoreCase),
+                    "invalid scope selection should collapse private content and clear stale editor or provenance text");
 
                 var failingControl = new AgentInspectionLabControl();
                 using var failingCoordinator = new AgentInspectionLabCoordinator(
@@ -211,6 +235,103 @@ internal static partial class Program
             finally
             {
                 Directory.Delete(root, recursive: true);
+            }
+        });
+    }
+
+    static void InspectionLabDisablesMemoryAcceptanceWhileRevalidating()
+    {
+        RunStaTest(() =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ai-arena-inspection-revalidating-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var releaseLoad = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            try
+            {
+                const string staleSentinel = "REVALIDATION_STALE_PRIVATE_SENTINEL";
+                var store = new SessionStore(root);
+                var snapshot = SessionStore.CreateDefaultSnapshot();
+                var agent = snapshot.Engine.Agents[0];
+                var now = new DateTimeOffset(2031, 2, 3, 4, 5, 6, TimeSpan.Zero);
+                var memory = StructuredMemoryService.AddManualMemory(
+                    snapshot,
+                    agent,
+                    staleSentinel,
+                    StructuredMemoryVisibilities.Private,
+                    now);
+                store.SaveSnapshotAsync(snapshot, "revalidating").GetAwaiter().GetResult();
+
+                var loadStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var loadCalls = 0;
+                async Task<ArenaSnapshot?> LoadSnapshotAsync(string sessionId, CancellationToken cancellationToken)
+                {
+                    if (Interlocked.Increment(ref loadCalls) > 1)
+                    {
+                        loadStarted.TrySetResult(true);
+                        await releaseLoad.Task.WaitAsync(cancellationToken);
+                    }
+
+                    return await store.LoadSnapshotAsync(sessionId, cancellationToken);
+                }
+
+                var control = new AgentInspectionLabControl();
+                using var coordinator = new AgentInspectionLabCoordinator(
+                    control,
+                    new ProviderRequestTraceStore(),
+                    store,
+                    () => "revalidating",
+                    loadSnapshotAsync: LoadSnapshotAsync,
+                    clock: () => now.AddMinutes(1));
+                Require(RunInspectionDispatcherTask(() => coordinator.InitializeAsync()).Ok,
+                    "revalidation fixture did not initialize");
+                Require(coordinator.SelectAuthorizedAgent(agent.Id).Ok
+                        && coordinator.SelectMemory(memory.MemoryId).Ok
+                        && control.MemoryEditor.Text.Equals(staleSentinel, StringComparison.Ordinal),
+                    "revalidation fixture did not establish a populated scoped editor");
+
+                var refresh = coordinator.RefreshMemoryAsync();
+                Require(loadStarted.Task.IsCompleted && !refresh.IsCompleted,
+                    "same-session refresh did not enter the controllable revalidation interval");
+                Require(
+                    control.IsMemoryBusy
+                    && control.MemoryBusyState.Visibility == Visibility.Visible
+                    && control.MemoryBusyStatus.Text.Contains("Revalidating", StringComparison.OrdinalIgnoreCase)
+                    && control.MemoryStatus.Text.Contains("Revalidating", StringComparison.OrdinalIgnoreCase)
+                    && !control.MemoryStatus.Text.StartsWith("No ", StringComparison.Ordinal)
+                    && control.MemoryEditor.Text.Equals(staleSentinel, StringComparison.Ordinal),
+                    "revalidation should cover retained same-session evidence with a truthful busy state, not a false empty state");
+                Require(
+                    !control.MemoryAdd.IsEnabled
+                    && !control.MemoryCorrect.IsEnabled
+                    && !control.MemoryExpire.IsEnabled
+                    && !control.MemoryList.IsEnabled
+                    && !control.MemoryEditor.IsEnabled
+                    && !control.MemoryVisibility.IsEnabled
+                    && !control.MemoryExpiry.IsEnabled,
+                    "revalidation must disable mutation acceptance, selection, and editor inputs until the loaded scope is current");
+
+                releaseLoad.TrySetResult(true);
+                var refreshed = RunInspectionDispatcherTask(() => refresh);
+                Require(
+                    refreshed.Ok
+                    && !control.IsMemoryBusy
+                    && control.MemoryBusyState.Visibility == Visibility.Collapsed
+                    && control.MemoryStatus.Text.StartsWith("Showing ", StringComparison.Ordinal)
+                    && control.MemoryEditor.Text.Equals(staleSentinel, StringComparison.Ordinal)
+                    && control.MemoryAdd.IsEnabled
+                    && control.MemoryCorrect.IsEnabled
+                    && control.MemoryExpire.IsEnabled
+                    && control.MemoryVisibility.IsEnabled
+                    && control.MemoryExpiry.IsEnabled,
+                    "successful revalidation should restore the scoped evidence and only the actions allowed by the current record");
+            }
+            finally
+            {
+                releaseLoad.TrySetResult(true);
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
             }
         });
     }
@@ -502,8 +623,12 @@ internal static partial class Program
         Require(
             AgentInspectionLabControl.ResolveLayout(1500) == InspectionLabLayoutTier.Wide
             && AgentInspectionLabControl.ResolveLayout(960) == InspectionLabLayoutTier.Wide
+            && AgentInspectionLabControl.ResolveLayout(746) == InspectionLabLayoutTier.Wide
+            && AgentInspectionLabControl.ResolveLayout(746, 1500) == InspectionLabLayoutTier.Wide
+            && AgentInspectionLabControl.ResolveLayout(746, 960) == InspectionLabLayoutTier.Stacked
+            && AgentInspectionLabControl.ResolveLayout(719) == InspectionLabLayoutTier.Stacked
             && AgentInspectionLabControl.ResolveLayout(700) == InspectionLabLayoutTier.Stacked,
-            "inspection layout should resolve deterministically at standard, minimum-window, and narrow pane widths");
+            "inspection layout should use the host viewport when available while retaining a detached content-width fallback");
 
         var snapshot = SessionStore.CreateDefaultSnapshot();
         var agent = snapshot.Engine.Agents[0];
@@ -596,6 +721,218 @@ internal static partial class Program
             && xaml.Contains("AutomationProperties.Name=\"Structured memory entries\"", StringComparison.Ordinal)
             && xaml.Contains("AutomationProperties.LiveSetting=\"Polite\"", StringComparison.Ordinal),
             "lists and status changes should remain keyboard and automation discoverable");
+    }
+
+    static void InspectionLabHostsResponsiveThemeAndVirtualizationContracts()
+    {
+        RunStaTest(() =>
+        {
+            var control = new AgentInspectionLabControl();
+            AttachArenaPresentationResources(control);
+            ApplyExperimentSurfaceTheme(control, ThemePalette.Resolve("dark-blue"));
+
+            var promptItems = Enumerable.Range(0, 384)
+                .Select(index => PromptTraceListItem.From(PromptTraceFixture(
+                    $"request-responsive-{index}",
+                    $"turn:responsive:{index / 4}",
+                    index % 2 == 0 ? "primary" : "retry",
+                    "completed",
+                    ProviderTokenEvidence.Unavailable("No tokenizer ran for this hosted layout fixture."))))
+                .ToList();
+            var promptView = new ListCollectionView(promptItems);
+            promptView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(PromptTraceListItem.CorrelationId)));
+            control.PromptList.ItemsSource = promptView;
+            control.PromptList.MaxHeight = 240;
+
+            var snapshot = SessionStore.CreateDefaultSnapshot();
+            var agent = snapshot.Engine.Agents[0];
+            var now = new DateTimeOffset(2032, 4, 5, 6, 7, 8, TimeSpan.Zero);
+            for (var index = 0; index < StructuredMemoryService.MaximumEntriesPerAgent + 32; index++)
+            {
+                StructuredMemoryService.AddManualMemory(
+                    snapshot,
+                    agent,
+                    $"virtualized memory {index}",
+                    StructuredMemoryVisibilities.Private,
+                    now.AddSeconds(index));
+            }
+
+            var memoryItems = AgentInspectionLabCoordinator.BuildMemoryItems(
+                snapshot,
+                agent.Id,
+                MemoryEntryStateFilter.All,
+                now.AddHours(1));
+            control.MemoryList.ItemsSource = memoryItems;
+            control.MemoryList.MaxHeight = 240;
+
+            var featureFrame = new Grid
+            {
+                Width = 800,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            featureFrame.Children.Add(control);
+            var host = new Window
+            {
+                Content = featureFrame,
+                Width = 1500,
+                Height = 760,
+                ShowInTaskbar = false,
+                WindowStyle = WindowStyle.None,
+                Opacity = 0,
+                Left = -10000,
+                Top = -10000
+            };
+            host.Show();
+            try
+            {
+                void ArrangeAt(double viewportWidth, double hostedControlWidth)
+                {
+                    host.Width = viewportWidth;
+                    featureFrame.Width = hostedControlWidth;
+                    host.UpdateLayout();
+                    System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                        System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+                        new Action(() => { }));
+                    control.ApplyResponsiveLayout(control.PromptFeatureRoot.ActualWidth);
+                    host.UpdateLayout();
+                }
+
+                ArrangeAt(1500, 800);
+                Require(
+                    control.PromptLayoutTier == InspectionLabLayoutTier.Wide
+                    && control.MemoryLayoutTier == InspectionLabLayoutTier.Wide
+                    && control.PromptFeatureRoot.ActualWidth is >= 730 and <= 780
+                    && Grid.GetColumn(control.PromptDetailPane) == 1
+                    && Grid.GetColumn(control.MemoryDetailPane) == 1
+                    && control.PromptDetailColumn.Width.IsStar
+                    && control.MemoryDetailColumn.Width.IsStar,
+                    "1500-DIP shell should retain master-detail in its approximately 746-DIP hosted feature area");
+
+                ArrangeAt(960, 800);
+                Require(
+                    control.PromptLayoutTier == InspectionLabLayoutTier.Stacked
+                    && control.MemoryLayoutTier == InspectionLabLayoutTier.Stacked
+                    && control.PromptFeatureRoot.ActualWidth is >= 730 and <= 780
+                    && Grid.GetRow(control.PromptDetailPane) == 1
+                    && Grid.GetRow(control.MemoryDetailPane) == 1,
+                    "960-DIP shell should stack the same approximately 746-DIP hosted feature area instead of retaining narrow columns");
+
+                ArrangeAt(1500, 800);
+                Require(
+                    control.PromptLayoutTier == InspectionLabLayoutTier.Wide
+                    && control.MemoryLayoutTier == InspectionLabLayoutTier.Wide
+                    && Grid.GetColumn(control.PromptDetailPane) == 1
+                    && Grid.GetColumn(control.MemoryDetailPane) == 1,
+                    "hosted inspection should retain master-detail at the real feature width inside a 1500-DIP shell");
+
+                ArrangeAt(1500, 740);
+                Require(
+                    control.PromptLayoutTier == InspectionLabLayoutTier.Stacked
+                    && control.MemoryLayoutTier == InspectionLabLayoutTier.Stacked
+                    && Grid.GetRow(control.PromptDetailPane) == 1
+                    && Grid.GetRow(control.MemoryDetailPane) == 1
+                    && Grid.GetRow(control.PromptHeaderActions) == 1
+                    && Grid.GetRow(control.MemoryHeaderActions) == 1
+                    && Grid.GetColumnSpan(control.PromptHeaderActions) == 2
+                    && Grid.GetColumnSpan(control.MemoryHeaderActions) == 2
+                    && control.PromptDetailColumn.Width.Value == 0
+                    && control.MemoryDetailColumn.Width.Value == 0,
+                    "narrow hosted inspection should stack detail and wrap header actions without leaving a clipped phantom column");
+
+                ArrangeAt(960, 380);
+                control.Tabs.SelectedIndex = 1;
+                host.UpdateLayout();
+                var agentFilterOrigin = control.MemoryAgentFilterGroup.TranslatePoint(new Point(0, 0), control.MemoryFilterPanel);
+                var stateFilterOrigin = control.MemoryStateFilterGroup.TranslatePoint(new Point(0, 0), control.MemoryFilterPanel);
+                Require(
+                    stateFilterOrigin.Y > agentFilterOrigin.Y
+                    && control.MemoryFilterPanel.ActualWidth <= control.MemoryFeatureRoot.ActualWidth + 0.5,
+                    "very narrow structured-memory filters should wrap as labeled units instead of creating horizontal overflow");
+
+                ArrangeAt(960, 800);
+                control.Tabs.SelectedIndex = 0;
+                host.UpdateLayout();
+                Require(VirtualizingPanel.GetIsVirtualizingWhenGrouping(control.PromptList),
+                    "grouped provider traces must explicitly preserve virtualization");
+                AssertExperimentListVirtualization(control.PromptList, host, "grouped provider request traces");
+                var firstPromptContainer = control.PromptList.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem
+                    ?? throw new InvalidOperationException("The first provider request was not realized.");
+                Require(
+                    AutomationProperties.GetName(firstPromptContainer).Equals(promptItems[0].AutomationName, StringComparison.Ordinal)
+                    && AutomationProperties.GetHelpText(firstPromptContainer).Equals(promptItems[0].AutomationHelp, StringComparison.Ordinal),
+                    "virtualized provider rows should retain their bounded automation name and help bindings");
+
+                control.Tabs.SelectedIndex = 1;
+                host.UpdateLayout();
+                AssertExperimentListVirtualization(control.MemoryList, host, "structured memory entries");
+                var firstMemoryContainer = control.MemoryList.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem
+                    ?? throw new InvalidOperationException("The first structured-memory item was not realized.");
+                Require(
+                    AutomationProperties.GetName(firstMemoryContainer).Equals(memoryItems[0].AutomationName, StringComparison.Ordinal)
+                    && AutomationProperties.GetHelpText(firstMemoryContainer).Equals(memoryItems[0].AutomationHelp, StringComparison.Ordinal),
+                    "virtualized structured-memory rows should retain their scoped automation name and help bindings");
+                Require(
+                    ReferenceEquals(control.PromptList.Style, control.FindResource("Arena.ListBox"))
+                    && ReferenceEquals(control.MemoryList.Style, control.FindResource("Arena.ListBox"))
+                    && ReferenceEquals(control.MemoryAgent.Style, control.FindResource("Arena.ComboBox"))
+                    && ReferenceEquals(control.MemoryState.Style, control.FindResource("Arena.ComboBox"))
+                    && ReferenceEquals(control.MemoryVisibility.Style, control.FindResource("Arena.ComboBox"))
+                    && ReferenceEquals(control.MemoryExpiry.Style, control.FindResource("Arena.ComboBox")),
+                    "inspection lists and all combo boxes should resolve the shared arena control styles");
+
+                foreach (var themeId in new[] { "dark-blue", "light", "high-contrast" })
+                {
+                    var theme = ThemePalette.Resolve(themeId);
+                    ApplyExperimentSurfaceTheme(control, theme);
+                    host.Activate();
+                    host.UpdateLayout();
+
+                    var selectedMemory = control.MemoryList.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem
+                        ?? throw new InvalidOperationException("The first structured-memory item was not realized.");
+                    control.MemoryList.SelectedIndex = 0;
+                    selectedMemory.ApplyTemplate();
+                    host.UpdateLayout();
+                    var itemChrome = RequireExperimentTemplatePart<Border>(selectedMemory, "ItemChrome");
+                    Require(
+                        ExperimentBrushMatches(itemChrome.Background, theme.NavActive)
+                        && ExperimentBrushMatches(itemChrome.BorderBrush, theme.PrimaryBorder),
+                        $"structured-memory list selection fell through shared theme chrome under {theme.Id}");
+
+                    FocusExperimentControl(control.MemoryState, host, theme.Id);
+                    var stateToggle = RequireExperimentTemplatePart<ToggleButton>(control.MemoryState, "DropDownToggle");
+                    var toggleChrome = RequireExperimentTemplatePart<Border>(stateToggle, "ToggleChrome");
+                    AssertExperimentFocusChrome(toggleChrome, theme, "structured-memory state picker", theme.Input);
+
+                    control.MemoryState.IsDropDownOpen = true;
+                    host.UpdateLayout();
+                    var dropDown = RequireExperimentTemplatePart<Border>(control.MemoryState, "DropDown");
+                    Require(
+                        ExperimentBrushMatches(dropDown.Background, theme.Input)
+                        && ExperimentBrushMatches(dropDown.BorderBrush, theme.Border),
+                        $"structured-memory popup fell through native white or black chrome under {theme.Id}");
+                    control.MemoryState.IsDropDownOpen = false;
+                    host.UpdateLayout();
+                    System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                        System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+                        new Action(() => { }));
+
+                    control.MemoryExpiry.IsEnabled = false;
+                    host.UpdateLayout();
+                    var expiryToggle = RequireExperimentTemplatePart<ToggleButton>(control.MemoryExpiry, "DropDownToggle");
+                    var expiryChrome = RequireExperimentTemplatePart<Border>(expiryToggle, "ToggleChrome");
+                    Require(
+                        ExperimentBrushMatches(expiryChrome.Background, theme.Disabled)
+                        && ExperimentBrushMatches(expiryChrome.BorderBrush, theme.DisabledBorder),
+                        $"disabled structured-memory combo chrome was not palette-bound under {theme.Id}");
+                    control.MemoryExpiry.IsEnabled = true;
+                }
+            }
+            finally
+            {
+                control.MemoryState.IsDropDownOpen = false;
+                host.Close();
+            }
+        });
     }
 
     private static T RunInspectionDispatcherTask<T>(Func<Task<T>> action)

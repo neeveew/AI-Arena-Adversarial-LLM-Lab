@@ -11,6 +11,19 @@
                 <ResourceDictionary Source="UI/Theming/ControlStyles.xaml" />
                 <ResourceDictionary Source="UI/Theming/SurfaceStyles.xaml" />
             </ResourceDictionary.MergedDictionaries>
+            <!-- Popup children and independently hosted controls do not always
+                 inherit MainWindow's implicit styles. Application-scope chrome
+                 prevents native light/dark fallthrough without changing any
+                 control's data, selection, or virtualization contract. -->
+            <Style TargetType="{x:Type ComboBox}" BasedOn="{StaticResource Arena.ComboBox}" />
+            <Style TargetType="{x:Type ComboBoxItem}" BasedOn="{StaticResource Arena.ComboBoxItem}" />
+            <Style TargetType="{x:Type ListBox}" BasedOn="{StaticResource Arena.ListBox}" />
+            <Style TargetType="{x:Type ListBoxItem}" BasedOn="{StaticResource Arena.ListBoxItem}" />
+            <Style TargetType="{x:Type ScrollBar}" BasedOn="{StaticResource Arena.ScrollBar}" />
+            <Style TargetType="{x:Type ToolTip}" BasedOn="{StaticResource Arena.ToolTip}" />
+            <Style TargetType="{x:Type ContextMenu}" BasedOn="{StaticResource Arena.ContextMenu}" />
+            <Style TargetType="{x:Type MenuItem}" BasedOn="{StaticResource Arena.MenuItem}" />
+            <Style TargetType="{x:Type Separator}" BasedOn="{StaticResource Arena.MenuSeparator}" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>

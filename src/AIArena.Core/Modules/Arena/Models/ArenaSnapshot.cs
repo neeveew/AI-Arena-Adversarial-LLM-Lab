@@ -60,6 +60,9 @@ public sealed class SessionForkLineage
 
 public sealed class EngineSnapshot
 {
+    [JsonPropertyName("factory_mode")]
+    public bool FactoryMode { get; set; }
+
     [JsonPropertyName("agents")]
     public List<DialogueAgent> Agents { get; init; } = new();
 

@@ -292,6 +292,23 @@ function Get-AIArenaMatchSetup {
     Invoke-AIArena -Command 'match.setup.state' -TimeoutMs $TimeoutMs -Token $Token
 }
 
+function Set-AIArenaModelBehavior {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [ValidateSet('arena', 'factory')]
+        [string]$Mode,
+
+        [Parameter()]
+        [int]$TimeoutMs = 30000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    Invoke-AIArena -Command 'match.model-behavior.set' -Args @{ mode = $Mode } -TimeoutMs $TimeoutMs -Token $Token
+}
+
 function Open-AIArenaMatchSetup {
     [CmdletBinding()]
     param(

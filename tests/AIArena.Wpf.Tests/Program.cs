@@ -28,6 +28,11 @@ if (args.Length == 2 && args[0].Equals("--control-plane-owner-fixture", StringCo
     return RunControlPlaneOwnerFixture(args[1]);
 }
 
+if (args.Length == 1 && args[0].Equals("--shared-popup-theme-fixture", StringComparison.Ordinal))
+{
+    return RunSharedPopupThemeFixture();
+}
+
 var tests = new List<(string Name, Action Test)>
 {
     ("saves and reloads visual generation settings", SaveReloadVisualGenerationSettings),
@@ -55,6 +60,13 @@ var tests = new List<(string Name, Action Test)>
     ("provider reachability merges status after concurrent saves", ProviderReachabilityMergesStatusAfterConcurrentSaves),
     ("provider reachability rejects stale status after identity changes", ProviderReachabilityRejectsStaleStatusAfterIdentityChanges),
     ("provider configuration control applies atomic secret-safe patches", ProviderConfigurationControlAppliesAtomicSecretSafePatches),
+    ("provider catalog projection separates loaded and available evidence", ProviderCatalogProjectionSeparatesLoadedAndAvailableEvidence),
+    ("provider catalog projection preserves llama and compatible truth", ProviderCatalogProjectionPreservesLlamaAndCompatibleTruth),
+    ("provider catalog projection rejects stale generations", ProviderCatalogProjectionRejectsStaleGenerations),
+    ("provider model assignment persists dynamic targets atomically", ProviderModelAssignmentPersistsDynamicTargetsAtomically),
+    ("provider model assignment rejects stale and inactive targets", ProviderModelAssignmentRejectsStaleAndInactiveTargets),
+    ("provider Models Default assignment survives host refresh", ProviderModelsDefaultAssignmentSurvivesHostRefresh),
+    ("provider Models lifecycle uses confirmed LM Studio heartbeat", ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat),
     ("provider runtime rejects stale probe persistence", ProviderRuntimeRejectsStaleProbePersistence),
     ("provider runtime treats timeout changes as stale probe identity", ProviderRuntimeTreatsTimeoutChangesAsStaleProbeIdentity),
     ("provider runtime caps and redacts model catalogs", ProviderRuntimeCapsAndRedactsModelCatalogs),
@@ -128,6 +140,7 @@ var tests = new List<(string Name, Action Test)>
     ("agent workspace blocks command approval during chat", AgentWorkspaceBlocksCommandApprovalDuringChat),
     ("agent workspace restores chat after restart", AgentWorkspaceRestoresChatAfterRestart),
     ("operator turn coordinator disables input during busy work", OperatorTurnCoordinatorDisablesInputDuringBusyWork),
+    ("operator turn factory ingestion preserves exact public input", OperatorTurnCoordinatorPreservesFactoryPublicIngestionBoundaries),
     ("operator turn coordinator suggests interventions", OperatorTurnCoordinatorSuggestsInterventions),
     ("transcript action coordinator exposes automation names", TranscriptActionCoordinatorExposesAutomationNames),
     ("transcript export coordinator previews scope", TranscriptExportCoordinatorPreviewsScope),
@@ -159,6 +172,11 @@ var tests = new List<(string Name, Action Test)>
     ("agent world material cache is bounded without invalidating live geometry", AgentWorldMaterialCacheIsBoundedWithoutInvalidatingLiveGeometry),
     ("main window skips hidden world snapshot refresh", MainWindowSkipsHiddenWorldSnapshotRefresh),
     ("arena operation coordinator selects operation mode", ArenaOperationCoordinatorSelectsOperationMode),
+    ("factory mode readiness requires eligible public Operator input", FactoryModeReadinessRequiresEligiblePublicOperatorInput),
+    ("control plane Factory prerequisites use the durable snapshot", ControlPlaneFactoryPrerequisitesUseDurableSnapshot),
+    ("factory mode toggle persists across concurrency with safe audit payload", FactoryModeTogglePersistsAcrossConcurrencyWithSafeAuditPayload),
+    ("factory mode UI actions remain unavailable and honest", FactoryModeUiActionsRemainUnavailableAndHonest),
+    ("factory mode failed completions keep System-event status honest", FactoryModeFailedCompletionsKeepSystemEventStatusHonest),
     ("scenario workflow separates replay and copy actions during auto chat", ScenarioWorkflowSeparatesReplayAndCopyDuringAutoChat),
     ("scenario workflow clipboard helper handles busy clipboard", ScenarioWorkflowClipboardHelperHandlesBusyClipboard),
     ("scenario workflow preserves generation history selection", ScenarioWorkflowPreservesGenerationHistorySelection),
@@ -169,6 +187,7 @@ var tests = new List<(string Name, Action Test)>
     ("transcript battle review summarizes match", TranscriptBattleReviewSummarizesMatch),
     ("transcript run trace summarizes spans", TranscriptRunTraceSummarizesSpans),
     ("arena evaluation captures repeatable secret-free evidence", ArenaEvaluationCapturesRepeatableSecretFreeEvidence),
+    ("arena evaluation keeps factory and mixed evidence honest", ArenaEvaluationKeepsFactoryAndMixedEvidenceHonest),
     ("arena evaluation compares same scenarios and classifies regressions", ArenaEvaluationComparesSameScenarioAndClassifiesRegression),
     ("arena evaluation QA reports explicit evidence states", ArenaEvaluationQaReportsExplicitEvidenceStates),
     ("arena evaluation history is bounded atomic and corrupt-recovering", ArenaEvaluationHistoryIsBoundedAtomicAndRecoversCorruption),
@@ -193,6 +212,7 @@ var tests = new List<(string Name, Action Test)>
     ("Experiment Lab provider judge cancellation owns its lifetime", ExperimentLabProviderJudgeCancellationOwnsItsLifetime),
     ("Experiment Lab blind judge conceals identities until durable submit", ExperimentLabBlindJudgeConcealsIdentitiesUntilDurableSubmit),
     ("transcript card renderer labels internet cards", TranscriptCardRendererLabelsInternetCards),
+    ("transcript card renderer hosts accessible public Operator group card", TranscriptCardRendererHostsAccessiblePublicOperatorCard),
     ("transcript card renderer hides internet metadata by default", TranscriptCardRendererHidesInternetMetadataByDefault),
     ("transcript card renderer shows source globe on sourced turns", TranscriptCardRendererShowsSourceGlobeOnSourcedTurns),
     ("transcript card renderer exposes model stats and persistent actions", TranscriptCardRendererExposesModelStatsAndPersistentActions),
@@ -310,6 +330,7 @@ var tests = new List<(string Name, Action Test)>
     ("snapshot view mapper attaches latest internet sources to agents", SnapshotViewMapperAttachesLatestInternetSourcesToAgents),
     ("agent internet sources presenter formats copy text", AgentInternetSourcesPresenterFormatsCopyText),
     ("custom match summary coordinator normalizes card text", CustomMatchSummaryCoordinatorNormalizesCardText),
+    ("factory mode setup presentation discloses inactive Arena behavior", FactoryModeSetupPresentationDisclosesInactiveArenaBehavior),
     ("scenario seed inspector coordinator formats metadata", ScenarioSeedInspectorCoordinatorFormatsMetadata),
     ("provider quick setup coordinator formats defaults", ProviderQuickSetupCoordinatorFormatsDefaults),
     ("main window combobox template uses theme resources", MainWindowComboBoxTemplateUsesThemeResources),
@@ -321,10 +342,14 @@ var tests = new List<(string Name, Action Test)>
     ("shell command state maps contextual workspace commands", ShellCommandStateMapsContextualWorkspaceCommands),
     ("main window contextual command hosts and provider metrics stay wired", MainWindowContextualCommandHostsAndProviderMetricsStayWired),
     ("main window navigation transitions preserve context", MainWindowNavigationTransitionsPreserveContext),
+    ("provider Models heartbeat follows hosted effective visibility", ProviderModelsHeartbeatFollowsHostedEffectiveVisibility),
     ("main window agent command rail exposes approval contract", MainWindowAgentCommandRailExposesApprovalContract),
     ("main window export button switches context", MainWindowExportButtonSwitchesContext),
     ("main window match setup controls expose automation", MainWindowMatchSetupControlsExposeAutomation),
+    ("main window factory mode toggle exposes automation and control state", MainWindowFactoryModeToggleExposesAutomationAndControlState),
+    ("AI Lab header avoids duplicate match setup action", AiLabHeaderAvoidsDuplicateMatchSetupAction),
     ("main window voice tts settings expose automation", MainWindowVoiceTtsSettingsExposeAutomation),
+    ("main window debug controls remain discoverable", MainWindowDebugControlsRemainDiscoverable),
     ("main window internet settings use one direct toggle", MainWindowInternetSettingsUseOneDirectToggle),
     ("main window model provider uses progressive disclosure", MainWindowModelProviderUsesProgressiveDisclosure),
     ("settings search expands nested disclosures and restores state", SettingsSearchExpandsNestedDisclosuresAndRestoresState),
@@ -361,8 +386,14 @@ var tests = new List<(string Name, Action Test)>
     ("UI verification uses semantic transcript count instead of placeholder rows", UiVerificationUsesSemanticTranscriptCountInsteadOfPlaceholderRows),
     ("UI verification control handler bounds window and routes commands", UiVerificationControlHandlerBoundsWindowAndRoutesCommands),
     ("UI verification binds Experiment Lab evidence to the observed feature", UiVerificationBindsExperimentEvidenceToObservedFeature),
+    ("shared pointer feedback releases dead STA motion subscriptions", SharedPointerFeedbackReleasesDeadStaMotionSubscriptions),
     ("UI verification advances privacy-safe focus and overrides motion only in isolation", UiVerificationAdvancesPrivacySafeFocusAndOverridesMotionOnlyInIsolation),
     ("UI verification captures one owner-bound atomic shell focus cycle", UiVerificationCapturesOwnerBoundAtomicShellFocusCycle),
+    ("workspace page header hosts responsive accessible contract", WorkspacePageHeaderHostsResponsiveAccessibleContract),
+    ("provider Models surface hosts responsive accessible contract", ProviderModelAssignmentsControlHostsResponsiveAccessibleContract),
+    ("provider Models surface raises immediate truthful events", ProviderModelAssignmentsControlRaisesImmediateTruthfulEvents),
+    ("provider Models surface hosts causal LM Studio lifecycle action", ProviderModelAssignmentsControlHostsCausalLmStudioLifecycleAction),
+    ("shared menu popup hosts theme focus and disabled contracts", SharedMenuPopupHostsThemeFocusAndDisabledContracts),
     ("QA screenshot render DPI preserves DIP viewport and bounds raster scale", QaScreenshotRenderDpiPreservesDipViewportAndBoundsRasterScale),
     ("real WPF automation artifact passes authoritative evidence CLI", RealWpfAutomationArtifactPassesAuthoritativeEvidenceCli),
     ("provider control handler routes commands and publishes events", ProviderControlHandlerRoutesCommandsAndPublishesEvents),
@@ -374,6 +405,7 @@ var tests = new List<(string Name, Action Test)>
     ("session fork control handler and PowerShell helper route safely", SessionForkControlHandlerAndPowerShellHelperRouteSafely),
     ("shell overlay control service preserves navigation contracts", ShellOverlayControlServicePreservesNavigationContracts),
     ("match setup control handler validates roster changes", MatchSetupControlHandlerValidatesRosterChanges),
+    ("match setup model behavior control shares the visual mutation path", MatchSetupModelBehaviorControlSharesVisualMutationPath),
     ("match setup package codec round trips exact portable state", MatchSetupPackageCodecRoundTripsExactPortableState),
     ("match setup portability creates clean sessions and protects tokens", MatchSetupPortabilityCreatesCleanSessionsAndProtectsTokens),
     ("match setup control handler exports and imports portable packages", MatchSetupControlHandlerExportsAndImportsPortablePackages),
@@ -395,10 +427,12 @@ var tests = new List<(string Name, Action Test)>
     ("agent workspace profile refresh disposes safely", AgentWorkspaceProfileRefreshDisposesSafely),
     ("inspection lab presents exact prompt evidence honestly", InspectionLabPresentsExactPromptEvidenceHonestly),
     ("inspection lab keeps memory private until one agent is selected", InspectionLabKeepsMemoryPrivateUntilOneAgentIsSelected),
+    ("inspection lab disables memory acceptance while revalidating", InspectionLabDisablesMemoryAcceptanceWhileRevalidating),
     ("inspection lab persists correction and expiry lifecycles", InspectionLabPersistsCorrectionAndExpiryLifecycles),
     ("inspection lab clears private view during session switches", InspectionLabClearsPrivateViewDuringSessionSwitch),
     ("inspection lab clears private view when session changes during mutation save", InspectionLabClearsPrivateViewWhenSessionChangesDuringMutationSave),
     ("inspection lab stays bounded responsive and accessible", InspectionLabStaysBoundedResponsiveAndAccessible),
+    ("inspection lab hosts responsive theme and virtualization contracts", InspectionLabHostsResponsiveThemeAndVirtualizationContracts),
     ("resilience labs register responsive accessible features", ResilienceLabsRegisterResponsiveAccessibleFeatures),
     ("fault lab arms runs and disarms every bounded kind", FaultLabArmsRunsAndDisarmsEveryBoundedKind),
     ("routing optimizer consumes persisted evidence and requires approval", RoutingOptimizerConsumesPersistedObservedEvidenceAndRequiresApproval),
@@ -442,6 +476,10 @@ foreach (var (name, test) in tests)
     {
         failures++;
         Console.Error.WriteLine($"FAIL {name}: {ex.Message}");
+        if (Environment.GetEnvironmentVariable("AIARENA_TEST_VERBOSE_FAILURES") == "1")
+        {
+            Console.Error.WriteLine(ex);
+        }
     }
 }
 

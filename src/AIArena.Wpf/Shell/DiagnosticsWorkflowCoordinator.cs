@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -162,9 +163,23 @@ internal sealed class DiagnosticsWorkflowCoordinator
 
         foreach (var (chip, key) in chips)
         {
+            var spec = ExplanationSpecFor(key);
             chip.Tag = key;
             chip.Cursor = Cursors.Hand;
-            chip.MouseLeftButtonUp += DiagnosticChip_MouseLeftButtonUp;
+            chip.Focusable = true;
+            KeyboardNavigation.SetIsTabStop(chip, true);
+            chip.SetResourceReference(FrameworkElement.FocusVisualStyleProperty, "Arena.FocusVisual");
+            AutomationProperties.SetName(chip, $"Open {spec.Title}");
+            AutomationProperties.SetHelpText(chip, $"Open the {spec.Title} reasons, movement, evidence, and operator guidance.");
+            if (chip is ShellPopupOpenerCard openerCard)
+            {
+                openerCard.Invoked += DiagnosticChip_Invoked;
+            }
+            else
+            {
+                chip.MouseLeftButtonUp += DiagnosticChip_MouseLeftButtonUp;
+                chip.KeyDown += DiagnosticChip_KeyDown;
+            }
         }
 
         ResetTileVisuals();
@@ -356,6 +371,28 @@ internal sealed class DiagnosticsWorkflowCoordinator
     private void DiagnosticChip_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         if (sender is not FrameworkElement chip || chip.Tag is not string key)
+        {
+            return;
+        }
+
+        chip.Focus();
+        ShowDetail(key, chip);
+        e.Handled = true;
+    }
+
+    private void DiagnosticChip_Invoked(object? sender, EventArgs e)
+    {
+        if (sender is FrameworkElement chip && chip.Tag is string key)
+        {
+            ShowDetail(key, chip);
+        }
+    }
+
+    private void DiagnosticChip_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Enter or Key.Return or Key.Space)
+            || sender is not FrameworkElement chip
+            || chip.Tag is not string key)
         {
             return;
         }

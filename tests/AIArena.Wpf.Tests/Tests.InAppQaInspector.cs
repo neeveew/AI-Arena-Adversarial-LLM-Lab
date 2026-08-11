@@ -88,6 +88,7 @@ internal static partial class Program
                 Gate("gate:pass", ArenaQaGateOutcome.Pass, QaObserved("evidence:pass"), 1, 0),
                 Gate("gate:partial", ArenaQaGateOutcome.Partial, QaInferred("evidence:partial"), 0, 0),
                 Gate("gate:blocked", ArenaQaGateOutcome.Blocked, QaUnavailable("evidence:blocked"), 0, 0),
+                Gate("gate:failed", ArenaQaGateOutcome.Fail, QaObserved("evidence:failed"), 0, 1),
                 Gate("gate:unavailable", ArenaQaGateOutcome.Unavailable, QaUnavailable("evidence:unavailable"), 0, 0)
             ]
         };
@@ -104,8 +105,12 @@ internal static partial class Program
             "Loaded.");
         var presentation = QaInspectorPresentation.Create(new(QaInspectorState.Partial, "qa.loaded", "Loaded.", snapshot));
         Require(
-            presentation.Gates.Select(item => item.State).SequenceEqual(["PASS", "PARTIAL", "BLOCKED", "UNAVAILABLE"]),
+            presentation.Gates.Select(item => item.State).SequenceEqual(["PASS", "PARTIAL", "BLOCKED", "FAILED", "UNAVAILABLE"]),
             "QA gate states were not rendered with non-colour labels");
+        Require(presentation.SummaryCards.Select(card => card.Kind).Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .SequenceEqual(["Blocked", "Failed", "Partial", "Ready", "Unavailable"], StringComparer.Ordinal),
+            "QA summary cards did not preserve each Ready, Partial, Blocked, Failed, and Unavailable contract state");
         Require(presentation.TestTotals.Contains("total", StringComparison.Ordinal), "QA aggregate test counts were omitted");
         Require(presentation.LiveProvider.Contains("Limitation:", StringComparison.Ordinal), "live-provider limitation was omitted");
 
@@ -118,7 +123,10 @@ internal static partial class Program
 
         static void ApplyInspectorTheme(FrameworkElement element, ThemePalette theme)
         {
+            element.Resources["AppBackgroundBrush"] = ThemeBrush(theme.AppBackground);
             element.Resources["PanelBrush"] = ThemeBrush(theme.Panel);
+            element.Resources["CardBrush"] = ThemeBrush(theme.Card);
+            element.Resources["InputBrush"] = ThemeBrush(theme.Input);
             element.Resources["ControlBorderBrush"] = ThemeBrush(theme.Border);
             element.Resources["TextBrush"] = ThemeBrush(theme.Text);
             element.Resources["MutedTextBrush"] = ThemeBrush(theme.MutedText);
@@ -128,11 +136,31 @@ internal static partial class Program
             element.Resources["NavActiveBrush"] = ThemeBrush(theme.NavActive);
             element.Resources["DisabledBorderBrush"] = ThemeBrush(theme.DisabledBorder);
             element.Resources["DisabledTextBrush"] = ThemeBrush(theme.DisabledText);
+            element.Resources["DisabledBrush"] = ThemeBrush(theme.Disabled);
+            element.Resources["DangerBrush"] = ThemeBrush(theme.Danger);
+            element.Resources["DangerBorderBrush"] = ThemeBrush(theme.DangerBorder);
+            element.Resources["Arena.Brush.FocusRing"] = ThemeBrush(theme.PrimaryBorder);
+            element.Resources["Arena.Brush.FocusRingInner"] = ThemeBrush(theme.Text);
+            element.Resources["Arena.Brush.Info"] = ThemeBrush(theme.StatusInfo);
+            element.Resources["Arena.Brush.Success"] = ThemeBrush(theme.StatusSuccess);
+            element.Resources["Arena.Brush.Warning"] = ThemeBrush(theme.StatusWarning);
+            element.Resources["Arena.Brush.Critical"] = ThemeBrush(theme.StatusCritical);
+        }
+
+        static IEnumerable<T> VisualDescendants<T>(DependencyObject root) where T : DependencyObject
+        {
+            for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+            {
+                var child = VisualTreeHelper.GetChild(root, index);
+                if (child is T match) yield return match;
+                foreach (var descendant in VisualDescendants<T>(child)) yield return descendant;
+            }
         }
 
         RunStaTest(() =>
         {
             var control = new InAppQaInspectorControl();
+            AttachArenaPresentationResources(control);
             const string evidenceLabel = "20260809t042925z-ea67c771";
             const string evidencePath = "artifacts/qa/20260809t042925z-ea67c771/qa-evidence.json";
             var suite = QaLocalSuiteCatalog.All.Single(item => item.Id == QaLocalSuite.Wpf);
@@ -144,19 +172,28 @@ internal static partial class Program
             Require(!string.IsNullOrWhiteSpace(control.FeatureRegistration.HelpText), "QA Inspector feature help is missing");
             Require(AutomationProperties.GetName(control) == "In-App QA Inspector", "QA Inspector root automation name is missing");
             Require(!InAppQaInspectorControl.UsesCompactLayout(960)
+                && !InAppQaInspectorControl.UsesCompactLayout(746)
+                && !InAppQaInspectorControl.UsesCompactLayout(746, 1500)
+                && InAppQaInspectorControl.UsesCompactLayout(746, 960)
+                && InAppQaInspectorControl.UsesCompactLayout(719)
                 && InAppQaInspectorControl.UsesCompactLayout(620)
                 && !InAppQaInspectorControl.UsesCompactLayout(double.NaN),
-                "QA Inspector responsive tier is not deterministic");
+                "QA Inspector should use the host viewport when available while retaining a detached content-width fallback");
             control.ApplyPresentation(presentation);
             control.ApplyResponsiveLayout(compact: true);
             control.ApplyResponsiveLayout(compact: false);
-            Require(control.RefreshEvidenceButton.MinHeight >= 34 && control.RunSuiteButton.MinHeight >= 34, "QA Inspector pointer targets are undersized");
             Require(AutomationProperties.GetLiveSetting(control.QaStatusText) == AutomationLiveSetting.Polite, "QA status is not a polite live region");
             Require(AutomationProperties.GetName(control.AcceptInspectionButton) == "Accept rendered inspection", "inspection acceptance lacks an automation name");
+            var featureFrame = new Grid
+            {
+                Width = 746,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            featureFrame.Children.Add(control);
             var host = new Window
             {
-                Content = control,
-                Width = 960,
+                Content = featureFrame,
+                Width = 1500,
                 Height = 700,
                 ShowInTaskbar = false,
                 WindowStyle = WindowStyle.None,
@@ -165,8 +202,79 @@ internal static partial class Program
             host.Show();
             try
             {
+                void ArrangeAt(double viewportWidth, double featureWidth)
+                {
+                    host.Width = viewportWidth;
+                    featureFrame.Width = featureWidth;
+                    host.UpdateLayout();
+                    System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                        System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+                        new Action(() => { }));
+                    host.UpdateLayout();
+                }
+
                 host.Activate();
+                ArrangeAt(1500, 746);
+                Require(control.ActualWidth is >= 745 and <= 747
+                    && Grid.GetRow(control.CurrentPreviewPane) == 0
+                    && Grid.GetColumn(control.CurrentPreviewPane) == 2,
+                    "QA Inspector should retain master-detail in its approximately 746-DIP feature area at a 1500-DIP viewport");
+                ArrangeAt(960, 746);
+                Require(Grid.GetRow(control.CurrentPreviewPane) == 2
+                    && Grid.GetColumn(control.CurrentPreviewPane) == 0,
+                    "QA Inspector should stack the same approximately 746-DIP feature area at a 960-DIP viewport");
+                ArrangeAt(1500, 719);
+                Require(Grid.GetRow(control.CurrentPreviewPane) == 2
+                    && Grid.GetColumn(control.CurrentPreviewPane) == 0,
+                    "QA Inspector should retain its detached content-width fallback below the master-detail threshold");
+                ArrangeAt(960, 746);
+                Require(control.QaWorkspaceHeader.PrimaryActionButton.MinHeight >= 36
+                    && control.RunSuiteButton.MinHeight >= 34,
+                    $"QA Inspector pointer targets are undersized (header {control.QaWorkspaceHeader.PrimaryActionButton.MinHeight:0.#}, suite {control.RunSuiteButton.MinHeight:0.#})");
+                var summaryCardBorders = VisualDescendants<Border>(control.SummaryCards)
+                    .Where(border => border.DataContext is QaSummaryCardPresentation && border.Width == 300)
+                    .ToArray();
+                var summaryCardExpanders = VisualDescendants<Expander>(control.SummaryCards)
+                    .Where(expander => expander.DataContext is QaSummaryCardPresentation)
+                    .ToArray();
+                var summaryCardPeers = summaryCardExpanders
+                    .Select(expander => new System.Windows.Automation.Peers.ExpanderAutomationPeer(expander))
+                    .ToArray();
+                var summaryGroupingPeers = summaryCardBorders
+                    .Cast<AccessibleCardBorder>()
+                    .Select(card => System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(card)
+                        ?? throw new InvalidOperationException("QA summary card did not create an automation grouping peer."))
+                    .ToArray();
+                Require(summaryCardBorders.Length == presentation.SummaryCards.Count
+                    && summaryCardExpanders.Length == presentation.SummaryCards.Count
+                    && summaryGroupingPeers.Length == presentation.SummaryCards.Count
+                    && summaryCardBorders.Select(border => border.Tag?.ToString()).ToHashSet(StringComparer.Ordinal)
+                        .IsSupersetOf(["Ready", "Partial", "Blocked", "Failed", "Unavailable"])
+                    && summaryGroupingPeers.All(peer =>
+                        peer.GetAutomationControlType() == System.Windows.Automation.Peers.AutomationControlType.Group
+                        && peer.GetName().Contains("QA evidence:", StringComparison.Ordinal)
+                        && !string.IsNullOrWhiteSpace(peer.GetHelpText()))
+                    && summaryGroupingPeers.Select(peer => peer.GetItemStatus()).ToHashSet(StringComparer.Ordinal)
+                        .IsSupersetOf(["Ready", "Partial", "Blocked", "Failed", "Unavailable"])
+                    && summaryCardPeers.Select(peer => peer.GetItemStatus()).ToHashSet(StringComparer.Ordinal)
+                        .IsSupersetOf(["Ready", "Partial", "Blocked", "Failed", "Unavailable"])
+                    && summaryCardPeers.All(peer => peer.GetName().Contains("QA evidence:", StringComparison.Ordinal)
+                        && !string.IsNullOrWhiteSpace(peer.GetHelpText())
+                        && peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.ExpandCollapse)
+                            is System.Windows.Automation.Provider.IExpandCollapseProvider),
+                    "hosted QA summary cards did not expose every evidence state and concise reason through an expandable automation peer");
+                var firstSummaryExpander = summaryCardExpanders[0];
+                var firstSummaryProvider = (System.Windows.Automation.Provider.IExpandCollapseProvider)
+                    summaryCardPeers[0].GetPattern(System.Windows.Automation.Peers.PatternInterface.ExpandCollapse)!;
+                firstSummaryProvider.Expand();
                 host.UpdateLayout();
+                var firstSummaryDetails = VisualDescendants<TextBox>(firstSummaryExpander).Single();
+                Require(firstSummaryProvider.ExpandCollapseState == System.Windows.Automation.ExpandCollapseState.Expanded
+                    && firstSummaryExpander.IsExpanded
+                    && firstSummaryDetails.IsReadOnly
+                    && firstSummaryDetails.Focus()
+                    && firstSummaryDetails.Text == ((QaSummaryCardPresentation)firstSummaryExpander.DataContext).Details,
+                    "QA summary evidence details were not keyboard reachable and inspectable after automation expansion");
                 var evidenceLabelText = DescendantTextBlocks(control.EvidenceRunPicker)
                     .SingleOrDefault(item => item.Text == evidenceLabel);
                 var suiteLabelText = DescendantTextBlocks(control.SuitePicker)
@@ -206,17 +314,24 @@ internal static partial class Program
                             && unselectedTabChrome.BorderBrush is SolidColorBrush unselectedBorder
                             && unselectedBorder.Color == theme.Border,
                         $"QA Inspector tab chrome did not resolve the {themeId} palette");
+                    Require(control.Resources["Arena.Brush.Info"] is SolidColorBrush info && info.Color == theme.StatusInfo
+                        && control.Resources["Arena.Brush.Success"] is SolidColorBrush success && success.Color == theme.StatusSuccess
+                        && control.Resources["Arena.Brush.Warning"] is SolidColorBrush warning && warning.Color == theme.StatusWarning
+                        && control.Resources["Arena.Brush.Critical"] is SolidColorBrush critical && critical.Color == theme.StatusCritical,
+                        $"QA Inspector semantic state cards did not resolve the {themeId} status palette");
                 }
-                Require(control.RefreshEvidenceButton.Focus(), "QA Inspector refresh action was not keyboard focusable at 960 DIP");
-                Require(control.RefreshEvidenceButton.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.Next)),
+                Require(control.QaWorkspaceHeader.PrimaryActionButton.Focus(), "QA Inspector header refresh action was not keyboard focusable at 960 DIP");
+                Require(control.QaWorkspaceHeader.PrimaryActionButton.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.Next)),
                     "QA Inspector keyboard traversal did not reach the next action");
-                host.Width = 620;
-                host.UpdateLayout();
-                control.ApplyResponsiveLayout(compact: true);
+                Require(Grid.GetRow(control.CurrentPreviewPane) == 2 && Grid.GetColumn(control.CurrentPreviewPane) == 0,
+                    "QA Inspector preview did not retain its stacked narrow-viewport layout at 960 DIP");
+                ArrangeAt(620, 620);
                 Require(control.ArtifactGapColumn.Width.Value == 0
                     && control.SchemaGapColumn.Width.Value == 0
                     && control.CommandGapColumn.Width.Value == 0
-                    && Grid.GetRow(control.SuiteCommandPane) == 2,
+                    && Grid.GetRow(control.SuiteCommandPane) == 2
+                    && Grid.GetRow(control.CurrentPreviewPane) == 2
+                    && Grid.GetColumn(control.CurrentPreviewPane) == 0,
                     "QA Inspector narrow layout retained wide-only gaps");
             }
             finally
@@ -590,6 +705,12 @@ internal static partial class Program
                     RunExperimentDispatcherTask(() => currentness.SecondCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
                     Require(!refreshTask.IsCompleted
                         && !control.AcceptInspectionButton.IsEnabled
+                        && !control.CopyReportButton.IsEnabled
+                        && !control.EvidenceTabs.IsEnabled
+                        && control.EvidenceRevalidationOverlay.Visibility == Visibility.Visible
+                        && control.QaStatusText.Text == "Revalidating selected evidence…"
+                        && control.QaWorkspaceHeader.Status == control.QaStatusText.Text
+                        && control.QaWorkspaceHeader.StatusKind == "Revalidating"
                         && control.ReviewProgressText.Text.StartsWith(
                             "Revalidating evidence. The previously loaded bundle contained 192 rendered screenshot(s).",
                             StringComparison.Ordinal)
@@ -606,6 +727,9 @@ internal static partial class Program
                     && refreshed.RelativeEvidencePath == newestBundle.RelativeEvidencePath
                     && refreshed.Artifacts.Count(item => item.Artifact.Kind == "rendered-ui-screenshot") == 2
                     && control.ReviewProgressText.Text.StartsWith("Reviewed 0/2 screenshot(s).", StringComparison.Ordinal)
+                    && control.EvidenceRevalidationOverlay.Visibility == Visibility.Collapsed
+                    && control.EvidenceTabs.IsEnabled
+                    && control.CopyReportButton.IsEnabled
                     && !control.AcceptInspectionButton.IsEnabled,
                     "completed latest-bundle revalidation did not replace the historical count with the newest exact screenshot count");
             });
@@ -674,6 +798,9 @@ internal static partial class Program
                             "Revalidating evidence. The previously loaded bundle contained 2 rendered screenshot(s).",
                             StringComparison.Ordinal)
                         && control.CurrentPreviewImage.Source is null
+                        && control.EvidenceRevalidationOverlay.Visibility == Visibility.Visible
+                        && !control.CopyReportButton.IsEnabled
+                        && !control.EvidenceTabs.IsEnabled
                         && !control.AcceptInspectionButton.IsEnabled,
                         "cancelled-revalidation fixture did not reach the bounded safe in-flight state");
                     cancellation.Cancel();
@@ -693,6 +820,9 @@ internal static partial class Program
                     && !control.ReviewProgressText.Text.Contains("Revalidating", StringComparison.Ordinal)
                     && control.CurrentPreviewImage.Source is null
                     && control.BaselinePreviewImage.Source is null
+                    && control.EvidenceRevalidationOverlay.Visibility == Visibility.Collapsed
+                    && control.EvidenceTabs.IsEnabled
+                    && control.CopyReportButton.IsEnabled
                     && !control.AcceptInspectionButton.IsEnabled
                     && !File.Exists(reviewPath),
                     "cancelled evidence revalidation left stale review progress, preview, persistence, or acceptance available");

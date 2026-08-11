@@ -49,6 +49,7 @@ public partial class ModelRoutingOptimizerControl : UserControl
     internal string Status => RouteStatusText.Text;
     internal int ProposalItemCount => RouteProposalList.Items.Count;
     internal bool CanApply => ApplyRouteButton.IsEnabled;
+    internal WorkspacePageHeaderControl WorkspaceHeader => RoutingWorkspaceHeader;
 
     internal void SetExplicitApproval(bool approved, string approverId = "operator:local")
     {
@@ -69,8 +70,8 @@ public partial class ModelRoutingOptimizerControl : UserControl
         RouteEvidenceSummaryText.Text = summary;
         RouteEvidenceList.ItemsSource = diagnostics.ToArray();
         evidenceCanPropose = canPropose;
-        BuildRouteProposalButton.IsEnabled = canPropose && !busy;
-        AutomationProperties.SetItemStatus(BuildRouteProposalButton, BuildRouteProposalButton.IsEnabled ? "available" : "unavailable");
+        RoutingWorkspaceHeader.IsPrimaryActionEnabled = canPropose && !busy;
+        AutomationProperties.SetItemStatus(RoutingWorkspaceHeader.PrimaryAction, RoutingWorkspaceHeader.IsPrimaryActionEnabled ? "available" : "unavailable");
     }
 
     internal void SetProposal(string summary, IEnumerable<RouteProposalItem> changes, bool canApply, bool applicationConnected)
@@ -95,7 +96,8 @@ public partial class ModelRoutingOptimizerControl : UserControl
     {
         busy = value;
         RefreshRouteEvidenceButton.IsEnabled = !busy;
-        BuildRouteProposalButton.IsEnabled = !busy && evidenceCanPropose;
+        RoutingWorkspaceHeader.IsPrimaryActionEnabled = !busy && evidenceCanPropose;
+        AutomationProperties.SetItemStatus(RoutingWorkspaceHeader.PrimaryAction, RoutingWorkspaceHeader.IsPrimaryActionEnabled ? "available" : "unavailable");
         ApproveRouteCheckBox.IsEnabled = !busy && proposalCanApply && applyBoundaryConnected;
         RouteApproverText.IsEnabled = !busy;
         CopyRouteReceiptButton.IsEnabled = !busy && coordinator?.LastReceipt is not null;

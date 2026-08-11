@@ -1,6 +1,7 @@
 <UserControl x:Class="AIArena.Wpf.Controls.AgentWorld3DControl"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:AIArena.Wpf.Controls"
              MinHeight="420">
     <Grid x:Name="WorldRoot"
           Background="{DynamicResource InputBrush}"
@@ -10,47 +11,21 @@
                     IsHitTestVisible="False" />
         <Canvas x:Name="OverlayCanvas"
                 IsHitTestVisible="True" />
-        <Grid Margin="16"
-              VerticalAlignment="Top"
-              IsHitTestVisible="False">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel x:Name="WorldHeaderTextPanel"
-                        Grid.Column="0"
-                        Margin="0,0,12,0">
-                <TextBlock Text="AI World"
-                           Foreground="{DynamicResource TextBrush}"
-                           FontSize="22"
-                           FontWeight="SemiBold" />
-                <TextBlock x:Name="WorldStatusText"
-                           Text="Waiting for arena snapshot."
-                           Foreground="{DynamicResource MutedTextBrush}"
-                           FontSize="12"
-                           TextWrapping="Wrap" />
-            </StackPanel>
-            <Border x:Name="WorldBadge"
-                    Grid.Column="1"
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Top"
-                    MaxWidth="220"
-                    Background="{DynamicResource PanelBrush}"
-                    BorderBrush="{DynamicResource PrimaryBorderBrush}"
-                    BorderThickness="1"
-                    Padding="10,5">
-                <TextBlock x:Name="WorldBadgeText"
-                           Text="LIVE WORLD"
-                           Foreground="{DynamicResource PrimaryBorderBrush}"
-                           FontSize="11"
-                           FontWeight="SemiBold"
-                           TextTrimming="CharacterEllipsis" />
-            </Border>
-        </Grid>
+        <local:WorkspacePageHeaderControl x:Name="WorldWorkspaceHeader"
+                                          Margin="16"
+                                          VerticalAlignment="Top"
+                                          Title="AI World"
+                                          Description="Inspect the live arena, agent activity, and camera context in one spatial view."
+                                          Status="Waiting for arena snapshot"
+                                          StatusKind="Loading"
+                                          PrimaryActionText="Reset view"
+                                          PrimaryActionAutomationName="Reset AI World view"
+                                          PrimaryActionHelpText="Return to the current speaker and reset the AI World camera."
+                                          PrimaryActionRequested="WorldWorkspaceHeader_PrimaryActionRequested" />
         <Border x:Name="WorldControlPanel"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Top"
-                Margin="16,52,16,0"
+                Margin="{DynamicResource Arena.Inset.PageHeader}"
                 Background="{DynamicResource OverlayBrush}"
                 BorderBrush="{DynamicResource DisabledBorderBrush}"
                 BorderThickness="1"
@@ -94,7 +69,7 @@
                 Visibility="Collapsed"
                 HorizontalAlignment="Left"
                 VerticalAlignment="Top"
-                Margin="16,76,16,0"
+                Margin="{DynamicResource Arena.Inset.PageHeader}"
                 Background="{DynamicResource OverlayBrush}"
                 BorderBrush="{DynamicResource DisabledBorderBrush}"
                 BorderThickness="1"

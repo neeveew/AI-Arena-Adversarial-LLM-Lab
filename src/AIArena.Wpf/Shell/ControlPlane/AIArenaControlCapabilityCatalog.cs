@@ -39,6 +39,7 @@ internal static class AIArenaControlCapabilityCatalog
         Capability(AIArenaControlCommands.MatchSetupClose, "match", "Close Match Setup and return to its originating workspace."),
         Capability(AIArenaControlCommands.MatchSetupExport, "match", "Export the exact active Match Setup as secret-free portable JSON."),
         Capability(AIArenaControlCommands.MatchSetupImport, "match", "Validate portable Match Setup JSON from args.json or a local args.path and create a clean imported session without overwriting the active run.", optional: ["json", "path", "name"]),
+        Capability(AIArenaControlCommands.MatchModelBehaviorSet, "match", "Switch participant model behavior through the same persisted Match Setup path used by the visual toggle.", ["mode"]),
         Capability(AIArenaControlCommands.MatchRosterSet, "match", "Resize the active match cast through the normal session persistence path.", ["count"]),
         Capability(AIArenaControlCommands.MatchMatrixState, "match", "Capture the active relationship matrix and links."),
         Capability(AIArenaControlCommands.MatchMatrixSet, "match", "Atomically apply a named relationship-pressure pattern.", ["pattern"], ["enabled"]),

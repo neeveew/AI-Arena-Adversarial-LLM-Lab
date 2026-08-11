@@ -1,0 +1,8 @@
+AI Arena 0.4.129-beta
+
+- Modernize the WPF visual system with shared semantic tokens, responsive workspace headers and master-detail layouts, consistent state cards, reduced-motion-aware feedback, themed popup surfaces, and stronger keyboard and UI Automation contracts.
+- Reclaim AI Lab transcript space by compacting its header, removing duplicate Match Setup actions, and moving turn and speaker filters into an accessible anchored flyout with truthful active-filter state.
+- Add Factory mode shared public-group memory: one durable Operator root, chronological Operator and participant history, target-relative self/peer roles, bounded 50-entry replay, strict provider-role alternation, causal retries, and privacy-safe evaluation evidence.
+- Add the top-rail Models & assignments workspace with live Loaded/Available/Unavailable catalog evidence, dynamic Default and agent routing, LM Studio load/unload actions, and a visibility-scoped five-second residency heartbeat.
+- Harden provider and UI state transitions against stale refreshes, session/provider changes, concurrent assignments, lifecycle uncertainty, private-detail disclosure, and false completion or readiness states.
+- Expand Core and hosted WPF regression coverage for Factory conversations, real provider payloads, responsive layouts, accessibility peers, popup focus, catalog virtualization, assignment persistence, and lifecycle confirmation.

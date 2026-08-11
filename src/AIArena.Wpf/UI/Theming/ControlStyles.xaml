@@ -1,5 +1,6 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:arena="clr-namespace:AIArena.Wpf">
     <!--
         Explicit, semantic controls for incremental adoption. These styles consume
         the active MainWindow palette through DynamicResource and never replace an
@@ -7,6 +8,7 @@
     -->
 
     <Style x:Key="Arena.Button.Base" TargetType="{x:Type Button}">
+        <Setter Property="arena:ArenaMotion.IsPointerFeedbackEnabled" Value="True" />
         <Setter Property="Background" Value="{DynamicResource InputBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
@@ -40,7 +42,6 @@
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource HoverBorderBrush}" />
-                            <Setter TargetName="Chrome" Property="Opacity" Value="0.94" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
                             <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
@@ -50,7 +51,7 @@
                             <Setter TargetName="Chrome" Property="BorderThickness" Value="2" />
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="Chrome" Property="Opacity" Value="0.78" />
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource HoverBorderBrush}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource DisabledBrush}" />
@@ -149,13 +150,6 @@
                 <Setter Property="Background" Value="{DynamicResource NavActiveBrush}" />
                 <Setter Property="BorderBrush" Value="{DynamicResource Arena.Brush.FocusRing}" />
                 <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
-            </MultiTrigger>
-            <MultiTrigger>
-                <MultiTrigger.Conditions>
-                    <Condition Property="IsEnabled" Value="True" />
-                    <Condition Property="IsPressed" Value="True" />
-                </MultiTrigger.Conditions>
-                <Setter Property="Opacity" Value="0.78" />
             </MultiTrigger>
             <Trigger Property="IsEnabled" Value="False">
                 <Setter Property="Background" Value="Transparent" />
@@ -497,7 +491,10 @@
     </Style>
 
     <Style x:Key="Arena.ComboBoxItem" TargetType="{x:Type ComboBoxItem}">
+        <Setter Property="arena:ArenaMotion.IsPointerFeedbackEnabled" Value="True" />
         <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
         <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
         <Setter Property="FontSize" Value="{DynamicResource Arena.Type.BodySize}" />
@@ -513,6 +510,9 @@
                             Margin="4,2"
                             Padding="{TemplateBinding Padding}"
                             Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            SnapsToDevicePixels="True"
                             CornerRadius="{DynamicResource Arena.Radius.Small}">
                         <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                           VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
@@ -521,11 +521,18 @@
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsHighlighted" Value="True">
                             <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource NavHoverBrush}" />
+                            <Setter TargetName="ItemChrome" Property="BorderBrush" Value="{DynamicResource HoverBorderBrush}" />
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
                             <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource PrimaryBrush}" />
+                            <Setter TargetName="ItemChrome" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="ItemChrome" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource DisabledBrush}" />
+                            <Setter TargetName="ItemChrome" Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
                             <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
@@ -620,7 +627,7 @@
                                Focusable="False"
                                IsOpen="{TemplateBinding IsDropDownOpen}"
                                Placement="Bottom"
-                               PopupAnimation="Fade">
+                               PopupAnimation="None">
                             <Border x:Name="DropDown"
                                     MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
                                     MaxHeight="{TemplateBinding MaxDropDownHeight}"
@@ -669,6 +676,7 @@
     </Style>
 
     <Style x:Key="Arena.ListBoxItem" TargetType="{x:Type ListBoxItem}">
+        <Setter Property="arena:ArenaMotion.IsPointerFeedbackEnabled" Value="True" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="BorderThickness" Value="1" />
@@ -878,6 +886,221 @@
                             <Setter TargetName="ScrollBarRoot" Property="Opacity" Value="0.45" />
                         </Trigger>
                     </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="Arena.ContextMenu" TargetType="{x:Type ContextMenu}">
+        <Setter Property="Background" Value="{DynamicResource CardBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Menu}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type ContextMenu}">
+                    <Border x:Name="MenuChrome"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{DynamicResource Arena.Radius.Medium}"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      CanContentScroll="True">
+                            <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" />
+                        </ScrollViewer>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="Arena.ToolTip" TargetType="{x:Type ToolTip}">
+        <Setter Property="Background" Value="{DynamicResource CardBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Arena.Type.FontFamily}" />
+        <Setter Property="FontSize" Value="{DynamicResource Arena.Type.BodySize}" />
+        <Setter Property="Padding" Value="{DynamicResource Arena.Inset.MenuItem}" />
+        <Setter Property="MaxWidth" Value="420" />
+        <Setter Property="HasDropShadow" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type ToolTip}">
+                    <Border x:Name="ToolTipChrome"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{DynamicResource Arena.Radius.Small}"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter Content="{TemplateBinding Content}"
+                                          ContentStringFormat="{TemplateBinding ContentStringFormat}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          RecognizesAccessKey="True" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="Arena.MenuItem" TargetType="{x:Type MenuItem}">
+        <Setter Property="arena:ArenaMotion.IsPointerFeedbackEnabled" Value="True" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="MinHeight" Value="{DynamicResource Arena.Target.Compact}" />
+        <Setter Property="Padding" Value="{DynamicResource Arena.Inset.MenuItem}" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type MenuItem}">
+                    <Grid SnapsToDevicePixels="True">
+                        <Border x:Name="MenuItemChrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{DynamicResource Arena.Radius.Small}"
+                                MinHeight="{TemplateBinding MinHeight}"
+                                Padding="{TemplateBinding Padding}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition x:Name="GlyphColumn" Width="20" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition x:Name="GestureColumn" Width="Auto" />
+                                    <ColumnDefinition x:Name="ArrowColumn" Width="18" />
+                                </Grid.ColumnDefinitions>
+                                <Grid x:Name="GlyphPresenter"
+                                      Width="16" Height="16"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center">
+                                    <ContentPresenter x:Name="IconPresenter"
+                                                      Content="{TemplateBinding Icon}"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                    <Path x:Name="CheckMark"
+                                          Width="12"
+                                          Height="10"
+                                          Data="M 1,5 L 4.5,8.5 L 11,1"
+                                          Stroke="{TemplateBinding Foreground}"
+                                          StrokeThickness="1.8"
+                                          StrokeStartLineCap="Round"
+                                          StrokeEndLineCap="Round"
+                                          Visibility="Collapsed" />
+                                </Grid>
+                                <ContentPresenter Grid.Column="1"
+                                                  ContentSource="Header"
+                                                  RecognizesAccessKey="True"
+                                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalAlignment="Center" />
+                                <TextBlock x:Name="InputGestureText"
+                                           Grid.Column="2"
+                                           Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           Text="{TemplateBinding InputGestureText}" />
+                                <Path x:Name="SubmenuArrow"
+                                      Grid.Column="3"
+                                      Width="6"
+                                      Height="10"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      Data="M 0,0 L 5,5 L 0,10"
+                                      Stroke="{TemplateBinding Foreground}"
+                                      StrokeThickness="1.5"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      Visibility="Collapsed" />
+                            </Grid>
+                        </Border>
+                        <Popup x:Name="PART_Popup"
+                               AllowsTransparency="True"
+                               Focusable="False"
+                               IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
+                               Placement="Right"
+                               PlacementTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
+                               PopupAnimation="None">
+                            <Border x:Name="SubmenuChrome"
+                                    MinWidth="180"
+                                    Margin="{DynamicResource Arena.Gap.Inline.Before.Nano}"
+                                    Padding="{DynamicResource Arena.Inset.Menu}"
+                                    Background="{DynamicResource CardBrush}"
+                                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="{DynamicResource Arena.Radius.Medium}"
+                                    SnapsToDevicePixels="True">
+                                <ScrollViewer CanContentScroll="True"
+                                              HorizontalScrollBarVisibility="Disabled"
+                                              VerticalScrollBarVisibility="Auto">
+                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" />
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="Role" Value="TopLevelHeader">
+                            <Setter TargetName="GlyphColumn" Property="Width" Value="0" />
+                            <Setter TargetName="GestureColumn" Property="Width" Value="0" />
+                            <Setter TargetName="ArrowColumn" Property="Width" Value="0" />
+                            <Setter TargetName="GlyphPresenter" Property="Visibility" Value="Collapsed" />
+                            <Setter TargetName="InputGestureText" Property="Visibility" Value="Collapsed" />
+                            <Setter TargetName="SubmenuArrow" Property="Visibility" Value="Collapsed" />
+                            <Setter TargetName="PART_Popup" Property="Placement" Value="Bottom" />
+                        </Trigger>
+                        <Trigger Property="Role" Value="TopLevelItem">
+                            <Setter TargetName="GlyphColumn" Property="Width" Value="0" />
+                            <Setter TargetName="GestureColumn" Property="Width" Value="0" />
+                            <Setter TargetName="ArrowColumn" Property="Width" Value="0" />
+                            <Setter TargetName="GlyphPresenter" Property="Visibility" Value="Collapsed" />
+                            <Setter TargetName="InputGestureText" Property="Visibility" Value="Collapsed" />
+                            <Setter TargetName="SubmenuArrow" Property="Visibility" Value="Collapsed" />
+                        </Trigger>
+                        <Trigger Property="Role" Value="SubmenuHeader">
+                            <Setter TargetName="SubmenuArrow" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="CheckMark" Property="Visibility" Value="Visible" />
+                            <Setter TargetName="IconPresenter" Property="Visibility" Value="Collapsed" />
+                        </Trigger>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="MenuItemChrome" Property="Background" Value="{DynamicResource NavHoverBrush}" />
+                            <Setter TargetName="MenuItemChrome" Property="BorderBrush" Value="{DynamicResource HoverBorderBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="MenuItemChrome" Property="Background" Value="{DynamicResource NavActiveBrush}" />
+                            <Setter TargetName="MenuItemChrome" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsSubmenuOpen" Value="True">
+                            <Setter TargetName="MenuItemChrome" Property="Background" Value="{DynamicResource NavActiveBrush}" />
+                            <Setter TargetName="MenuItemChrome" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="MenuItemChrome" Property="Background" Value="{DynamicResource DisabledBrush}" />
+                            <Setter TargetName="MenuItemChrome" Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+                            <Setter TargetName="InputGestureText" Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="Arena.MenuSeparator" TargetType="{x:Type Separator}">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Margin" Value="{DynamicResource Arena.Layout.MenuSeparatorMargin}" />
+        <Setter Property="Background" Value="{DynamicResource DisabledBorderBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type Separator}">
+                    <Border Height="1" Background="{TemplateBinding Background}" />
                 </ControlTemplate>
             </Setter.Value>
         </Setter>

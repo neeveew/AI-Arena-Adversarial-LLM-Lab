@@ -541,7 +541,7 @@ internal static partial class ProviderPromptInspection
                 includeContent
                     ? BoundRoleContent(RedactText(input.GetString()))
                     : "[OMITTED:PAYLOAD_EXCEEDS_SAFE_PREVIEW_BOUND]",
-                "Non-system messages were trimmed and consolidated into the LM Studio native input string."));
+                "LM Studio native serialized the non-system conversation into one input string. Any assistant or public-speaker attribution is encoded in that string rather than represented as a structured native role."));
         }
 
         return roles;
@@ -559,7 +559,7 @@ internal static partial class ProviderPromptInspection
             context.Add(new ProviderContextExplanation(
                 "role_transformation",
                 "observed",
-                "LM Studio native transport consolidates system messages into system_prompt and non-system messages into input; blank entries are omitted."));
+                "LM Studio native transport consolidates system messages into system_prompt and serializes non-system conversation entries into one input string; blank entries are omitted and role or public-speaker attribution is encoded in that string."));
             context.Add(root.TryGetProperty("previous_response_id", out _)
                 ? new ProviderContextExplanation("native_continuation", "observed", "A previous response identifier was sent but its value is intentionally redacted.")
                 : new ProviderContextExplanation("native_continuation", "observed", "No valid previous response identifier was sent; the payload contains the supplied transcript context."));

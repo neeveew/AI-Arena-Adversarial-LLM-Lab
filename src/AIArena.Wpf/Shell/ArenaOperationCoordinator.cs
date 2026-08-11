@@ -6,6 +6,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using AIArena.Core.Persistence;
+using AIArena.Core.Services;
 using AIArena.Wpf.Models;
 using AIArena.Wpf.Services;
 
@@ -342,7 +343,7 @@ internal sealed class ArenaOperationCoordinator
         var autoChatRunning = isAutoChatRunning();
         autoChatButton.IsEnabled = !busy && arenaReady;
         oneTurnButton.IsEnabled = !busy && arenaReady;
-        narrateNowButton.IsEnabled = (!busy || autoChatRunning) && arenaReady;
+        narrateNowButton.IsEnabled = (!busy || autoChatRunning) && arenaReady && readiness.CanNarrate;
 
         if (readinessStatus is not null)
         {
@@ -352,11 +353,26 @@ internal sealed class ArenaOperationCoordinator
 
         ApplyReadinessHelp(autoChatButton, autoChatReadyHelp);
         ApplyReadinessHelp(oneTurnButton, oneTurnReadyHelp);
-        ApplyReadinessHelp(narrateNowButton, narrateReadyHelp);
+        var narrationHelp = !readiness.CanNarrate
+            ? string.IsNullOrWhiteSpace(readiness.NarrationMessage)
+                ? readinessMessage
+                : readiness.NarrationMessage
+            : !arenaReady
+                ? readinessMessage
+                : narrateReadyHelp;
+        AutomationProperties.SetHelpText(narrateNowButton, narrationHelp);
+        narrateNowButton.ToolTip = narrationHelp;
     }
 
     internal static ArenaActionReadiness EvaluateReadiness(ArenaViewSnapshot snapshot)
     {
+        const string factoryNarrationUnavailable = "Narration is unavailable in Factory mode. Turn Apply Match Setup to models on to use narrator guidance.";
+        ArenaActionReadiness Readiness(bool canRun, string message) => new(
+            canRun,
+            message,
+            CanNarrate: !snapshot.FactoryMode,
+            NarrationMessage: snapshot.FactoryMode ? factoryNarrationUnavailable : "");
+
         var activeAgentCount = snapshot.Agents.Count(agent => agent.Active);
         var current = SessionOverviewCoordinator.CurrentTurnAgent(snapshot);
         var currentModel = SessionOverviewCoordinator.CurrentTurnModel(snapshot, current);
@@ -364,25 +380,87 @@ internal sealed class ArenaOperationCoordinator
         var modelSelected = !string.IsNullOrWhiteSpace(currentModel) && currentModel != "-";
         if (activeAgentCount == 0 && (!providerReachable || !modelSelected))
         {
-            return new ArenaActionReadiness(false, "Finish provider, model, and cast setup before running the arena.");
+            return Readiness(false, "Finish provider, model, and cast setup before running the arena.");
         }
 
         if (activeAgentCount == 0)
         {
-            return new ArenaActionReadiness(false, "Add an active agent in Match Setup before running the arena.");
+            return Readiness(false, "Add an active agent in Match Setup before running the arena.");
         }
 
         if (!providerReachable)
         {
-            return new ArenaActionReadiness(false, "Connect the configured provider before running the arena.");
+            return Readiness(false, "Connect the configured provider before running the arena.");
         }
 
         if (!modelSelected)
         {
-            return new ArenaActionReadiness(false, "Select a model before running the arena.");
+            return Readiness(false, "Select a model before running the arena.");
+        }
+
+        var factoryInput = FactoryInputState(snapshot);
+        if (snapshot.FactoryMode && factoryInput == FactoryConversationInputState.MissingRoot)
+        {
+            return Readiness(false, "Factory group root is missing. Restore the original public Operator turn, or reset or fork the session before running a model.");
+        }
+
+        if (snapshot.FactoryMode && factoryInput == FactoryConversationInputState.None)
+        {
+            return Readiness(false, "Factory mode needs a public Operator turn to start its shared group conversation. Send one from AI Lab before running a model.");
+        }
+
+        if (snapshot.FactoryMode)
+        {
+            return Readiness(
+                true,
+                factoryInput == FactoryConversationInputState.PendingRoot
+                    ? "Factory mode ready. The public Operator turn will become the shared group root when the first model runs."
+                    : FactoryConversationReadyMessage(snapshot));
         }
 
         return new ArenaActionReadiness(true, "Arena actions ready.");
+    }
+
+    internal static bool HasFactoryInput(ArenaViewSnapshot snapshot)
+    {
+        return FactoryInputState(snapshot) is FactoryConversationInputState.PendingRoot or FactoryConversationInputState.Ready;
+    }
+
+    internal static FactoryConversationInputState FactoryInputState(ArenaViewSnapshot snapshot)
+    {
+        if (snapshot.HasFactoryConversationRoot)
+        {
+            return FactoryConversationInputState.Ready;
+        }
+
+        if (snapshot.FactoryConversationRootAssigned)
+        {
+            return FactoryConversationInputState.MissingRoot;
+        }
+
+        return HasEligiblePendingFactoryRoot(snapshot)
+            ? FactoryConversationInputState.PendingRoot
+            : FactoryConversationInputState.None;
+    }
+
+    private static bool HasEligiblePendingFactoryRoot(ArenaViewSnapshot snapshot)
+    {
+        return snapshot.Messages.Any(message =>
+            message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase)
+            && message.Status.Equals("ok", StringComparison.OrdinalIgnoreCase)
+            && message.Kind.Equals("message", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(message.Text));
+    }
+
+    internal static string FactoryConversationReadyMessage(ArenaViewSnapshot snapshot)
+    {
+        var eligible = Math.Max(1, snapshot.FactoryConversationEntryCount);
+        var omitted = Math.Clamp(snapshot.FactoryConversationOmittedCount, 0, Math.Max(0, eligible - 1));
+        var included = Math.Max(1, eligible - omitted);
+        var received = omitted > 0
+            ? $"{included} of {eligible} eligible attributed public conversation entries; {omitted} older whole entr{(omitted == 1 ? "y is" : "ies are")} omitted from the {FactoryConversationService.MaxContextEntries}-entry model context"
+            : $"all {included} attributed public conversation entr{(included == 1 ? "y" : "ies")}";
+        return $"Factory mode ready. Models receive {received}; each agent's own earlier replies remain self-history.";
     }
 
     private void ApplyReadinessHelp(Button button, string readyHelp)
@@ -582,7 +660,19 @@ internal sealed class ArenaOperationCoordinator
     }
 }
 
-internal sealed record ArenaActionReadiness(bool CanRun, string Message);
+internal sealed record ArenaActionReadiness(
+    bool CanRun,
+    string Message,
+    bool CanNarrate = true,
+    string NarrationMessage = "");
+
+internal enum FactoryConversationInputState
+{
+    None,
+    PendingRoot,
+    Ready,
+    MissingRoot
+}
 
 internal enum ArenaOperationMode
 {

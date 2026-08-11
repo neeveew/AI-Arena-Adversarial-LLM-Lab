@@ -43,6 +43,9 @@ public sealed class ModelProviderConfig
     public string PreviousResponseId { get; init; } = "";
 
     [JsonIgnore]
+    public bool PreserveNativeInputWhitespace { get; init; }
+
+    [JsonIgnore]
     public ProviderRequestInspectionContext? RequestInspectionContext { get; set; }
 
     [JsonPropertyName("last_error")]

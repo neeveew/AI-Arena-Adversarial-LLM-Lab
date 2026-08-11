@@ -61,19 +61,29 @@ public class LmStudioModelCatalogService
     public static IReadOnlyList<LmStudioModelInfo> ParseModels(string json)
     {
         using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException("LM Studio model catalog root must be an object.");
+        }
+
         if (!TryGetArray(doc.RootElement, "models", out var models)
             && !TryGetArray(doc.RootElement, "data", out models))
         {
-            return [];
+            throw new JsonException("LM Studio model catalog did not contain a models array.");
         }
 
         var entries = new List<LmStudioModelInfo>();
         foreach (var item in models.EnumerateArray())
         {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                throw new JsonException("LM Studio model catalog contained a malformed model entry.");
+            }
+
             var key = ProviderHttpHelpers.FirstString(item, "key", "id", "selected_variant", "model").Trim();
             if (string.IsNullOrWhiteSpace(key))
             {
-                continue;
+                throw new JsonException("LM Studio model catalog contained a model without an identifier.");
             }
 
             var displayName = ProviderHttpHelpers.FirstString(item, "display_name", "name").Trim();
@@ -98,7 +108,12 @@ public class LmStudioModelCatalogService
                 ? reasoningElement
                 : default;
 
-            var loadedInstances = ParseLoadedInstances(item);
+            var hasResidencyEvidence = item.TryGetProperty("loaded_instances", out var loadedInstancesElement)
+                && loadedInstancesElement.ValueKind == JsonValueKind.Array
+                && loadedInstancesElement.EnumerateArray().All(instance => instance.ValueKind == JsonValueKind.Object);
+            var loadedInstances = hasResidencyEvidence
+                ? ParseLoadedInstances(loadedInstancesElement)
+                : [];
             var aliases = new[]
                 {
                     key,
@@ -130,7 +145,8 @@ public class LmStudioModelCatalogService
                 ReasoningDefault: reasoning.ValueKind == JsonValueKind.Object ? ProviderHttpHelpers.FirstString(reasoning, "default") : "",
                 SelectedVariant: selectedVariant,
                 Aliases: aliases,
-                Description: ProviderHttpHelpers.FirstString(item, "description")));
+                Description: ProviderHttpHelpers.FirstString(item, "description"),
+                HasResidencyEvidence: hasResidencyEvidence));
         }
 
         return entries;
@@ -155,16 +171,16 @@ public class LmStudioModelCatalogService
         return $"{trimmed}/api/v1";
     }
 
-    private static IReadOnlyList<LmStudioLoadedInstance> ParseLoadedInstances(JsonElement item)
+    private static IReadOnlyList<LmStudioLoadedInstance> ParseLoadedInstances(JsonElement loadedInstances)
     {
-        if (!TryGetArray(item, "loaded_instances", out var loadedInstances))
-        {
-            return [];
-        }
-
         var instances = new List<LmStudioLoadedInstance>();
         foreach (var instance in loadedInstances.EnumerateArray())
         {
+            if (instance.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
             var config = instance.TryGetProperty("config", out var configElement)
                 && configElement.ValueKind == JsonValueKind.Object
                 ? configElement
@@ -321,7 +337,8 @@ public sealed record LmStudioModelInfo(
     string ReasoningDefault,
     string SelectedVariant,
     IReadOnlyList<string> Aliases,
-    string Description)
+    string Description,
+    bool HasResidencyEvidence)
 {
     public string PreferredIdentifier => string.IsNullOrWhiteSpace(Key)
         ? Aliases.FirstOrDefault() ?? ""
@@ -447,7 +464,7 @@ public sealed record LmStudioModelInfo(
         lines.Add($"Capabilities: {CapabilitySummary}");
         if (LoadedInstances.Count > 0)
         {
-            lines.Add($"Loaded instance: {string.Join(", ", LoadedInstances.Select(instance => instance.Id).Where(id => !string.IsNullOrWhiteSpace(id)))}");
+            lines.Add($"Loaded instances: {LoadedInstances.Count}");
         }
 
         return string.Join(Environment.NewLine, lines.Where(line => !string.IsNullOrWhiteSpace(line)));

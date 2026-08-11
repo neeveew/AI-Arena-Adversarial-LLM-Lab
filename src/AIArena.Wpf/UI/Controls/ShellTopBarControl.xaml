@@ -366,7 +366,7 @@
                        VerticalOffset="8"
                        StaysOpen="False"
                        AllowsTransparency="True"
-                       PopupAnimation="Fade"
+                       PopupAnimation="None"
                        Opened="ProviderPopupOpened"
                        Closed="ProviderPopupClosed">
                     <Border x:Name="ProviderHealthPopupContent"
@@ -540,6 +540,20 @@
                         AutomationProperties.HelpText="Open or close the Match Setup flyout."
                         ToolTip="Open Match Setup (Ctrl+M)" />
 
+                <Button x:Name="ModelsButton"
+                        Content="Models"
+                        Click="ModelsRequested"
+                        Style="{StaticResource Arena.Button.Secondary}"
+                        Height="38"
+                        Width="82"
+                        Padding="{DynamicResource Arena.Inset.ToolbarAction}"
+                        VerticalAlignment="Center"
+                        Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
+                        AutomationProperties.Name="Open Models"
+                        AutomationProperties.HelpText="Open or close model catalog and agent assignments."
+                        AutomationProperties.ItemStatus="closed"
+                        ToolTip="Open Models (Ctrl+Shift+M)" />
+
                 <Border Style="{StaticResource ToolbarGroup}">
                     <StackPanel Orientation="Horizontal">
                         <Grid x:Name="SearchCommandHost" VerticalAlignment="Center">
@@ -558,7 +572,7 @@
                                    VerticalOffset="18"
                                    StaysOpen="True"
                                    AllowsTransparency="True"
-                                   PopupAnimation="Fade">
+                                   PopupAnimation="None">
                                 <Border x:Name="TranscriptSearchPopupContent"
                                         Style="{StaticResource FlyoutCard}"
                                         PreviewKeyDown="SearchPopupPreviewKeyDown"
@@ -725,7 +739,7 @@
                                    Opened="ViewMenuOpened"
                                    Closed="ViewMenuClosed"
                                    AllowsTransparency="True"
-                                   PopupAnimation="Fade">
+                                   PopupAnimation="None">
                                 <Border x:Name="ViewMenuPopupContent"
                                         Style="{StaticResource FlyoutCard}"
                                         Width="280"
@@ -806,7 +820,7 @@
                                    Opened="DebugMenuOpened"
                                    Closed="DebugMenuClosed"
                                    AllowsTransparency="True"
-                                   PopupAnimation="Fade">
+                                   PopupAnimation="None">
                                 <Border x:Name="DebugMenuPopupContent"
                                         Style="{StaticResource FlyoutCard}"
                                         Width="280"

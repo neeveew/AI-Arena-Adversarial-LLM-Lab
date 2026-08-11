@@ -144,6 +144,12 @@ internal sealed class AgentInspectionLabCoordinator : IDisposable
         var acquired = false;
         try
         {
+            await OnViewAsync(() =>
+            {
+                view.SetMemoryBusy(true, "Revalidating structured memory…");
+                SetMemoryStatus("Revalidating structured memory for the active session. Editing and lifecycle actions are paused until the refresh completes.");
+            });
+
             // A refresh can be queued behind an in-flight mutation/save. Clear
             // the prior session's private content before waiting on that gate;
             // ResetMemorySession also advances the scope generation observed by
@@ -253,6 +259,8 @@ internal sealed class AgentInspectionLabCoordinator : IDisposable
             {
                 memoryGate.Release();
             }
+
+            await OnViewAsync(() => view.SetMemoryBusy(false));
         }
     }
 
@@ -466,6 +474,12 @@ internal sealed class AgentInspectionLabCoordinator : IDisposable
         var acquired = false;
         try
         {
+            await OnViewAsync(() =>
+            {
+                view.SetMemoryBusy(true, "Validating and persisting the memory change…");
+                SetMemoryStatus("Validating the scoped memory change. Editing and lifecycle actions are paused until persistence completes.");
+            });
+
             await memoryGate.WaitAsync(linked.Token);
             acquired = true;
             var sessionId = NormalizeSessionId(currentSessionId());
@@ -578,6 +592,8 @@ internal sealed class AgentInspectionLabCoordinator : IDisposable
             {
                 memoryGate.Release();
             }
+
+            await OnViewAsync(() => view.SetMemoryBusy(false));
         }
     }
 
@@ -648,7 +664,7 @@ internal sealed class AgentInspectionLabCoordinator : IDisposable
         var items = BuildMemoryItems(memorySnapshot, authorizedAgentId, memoryFilter, clock());
         view.MemoryList.ItemsSource = items;
         view.MemoryPrivacy.Text = $"Scoped to {SafeAgentLabel(agent)} only. Private entries belonging to other agents are neither counted nor displayed.";
-        view.MemoryAdd.IsEnabled = true;
+        view.SetMemoryActionAvailability(add: true, correct: false, expire: false);
         var selected = items.FirstOrDefault(item =>
             item.MemoryId.Equals(selectedMemoryId, StringComparison.OrdinalIgnoreCase));
         view.MemoryList.SelectedItem = selected;
@@ -664,9 +680,7 @@ internal sealed class AgentInspectionLabCoordinator : IDisposable
         view.MemoryPrivacy.Text = "No agent is authorized in this view. Other-agent private content is not aggregated or previewed.";
         view.MemoryMetadata.Text = "No memory selected.";
         view.MemoryEditor.Clear();
-        view.MemoryAdd.IsEnabled = false;
-        view.MemoryCorrect.IsEnabled = false;
-        view.MemoryExpire.IsEnabled = false;
+        view.SetMemoryActionAvailability(add: false, correct: false, expire: false);
         SetMemoryStatus(status);
     }
 
@@ -676,8 +690,11 @@ internal sealed class AgentInspectionLabCoordinator : IDisposable
         {
             selectedMemoryId = "";
             view.MemoryMetadata.Text = "No memory selected.";
-            view.MemoryCorrect.IsEnabled = false;
-            view.MemoryExpire.IsEnabled = false;
+            view.MemoryEditor.Clear();
+            view.SetMemoryActionAvailability(
+                add: memorySnapshot is not null && authorizedAgentId.Length > 0,
+                correct: false,
+                expire: false);
             return;
         }
 
@@ -697,8 +714,10 @@ internal sealed class AgentInspectionLabCoordinator : IDisposable
         }
 
         var current = item.State == MemoryEntryStateFilter.Active;
-        view.MemoryCorrect.IsEnabled = current;
-        view.MemoryExpire.IsEnabled = current;
+        view.SetMemoryActionAvailability(
+            add: memorySnapshot is not null && authorizedAgentId.Length > 0,
+            correct: current,
+            expire: current);
     }
 
     private void RenderPromptTrace(ProviderRequestTrace? trace)

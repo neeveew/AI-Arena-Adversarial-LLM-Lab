@@ -1016,6 +1016,7 @@ public sealed class SessionStore
         var canonical = new List<string>
         {
             $"match|{snapshot.MatchType}",
+            $"model-behavior|{(snapshot.Engine.FactoryMode ? "factory" : "arena")}",
             $"steering.mode|{snapshot.Engine.Steering.Mode}",
             $"steering.topic|{snapshot.Engine.Steering.Topic}",
             $"steering.global|{snapshot.Engine.Steering.Global}",
@@ -1026,6 +1027,10 @@ public sealed class SessionStore
             $"scenario-generator|{GeneratorFingerprint(snapshot.ScenarioGenerator)}",
             $"persona-randomizer|{GeneratorFingerprint(snapshot.PersonaRandomizer)}"
         };
+        if (snapshot.Engine.FactoryMode)
+        {
+            canonical.Add($"factory-conversation-contract|{FactoryConversationService.ContractVersion}");
+        }
         canonical.AddRange(snapshot.MatchLocks
             .OrderBy(pair => pair.Key, StringComparer.Ordinal)
             .Select(pair => $"lock|{pair.Key}|{pair.Value}"));

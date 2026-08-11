@@ -151,6 +151,7 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
     private readonly Func<string, CancellationToken, Task<ImmutableArray<ExperimentForkCursorItem>>>? forkCursorLoadOverride;
     private readonly Dictionary<string, Func<CancellationToken, Task>> registeredFeatureRefreshes = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim actionGate = new(1, 1);
+    private readonly object featureSelectionRefreshSync = new();
     private CancellationTokenSource? featureSelectionRefreshCancellation;
     private Task featureSelectionRefreshTask = Task.CompletedTask;
     private string? featureSelectionRefreshKey;
@@ -364,6 +365,7 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
     }
 
     internal Task DebugFeatureSelectionRefreshTask => Volatile.Read(ref featureSelectionRefreshTask);
+    internal bool DebugFeatureSelectionRefreshActive => Volatile.Read(ref featureSelectionRefreshCancellation) is not null;
 
     internal void RequestFeatureSelectionRefresh(string key)
     {
@@ -373,16 +375,25 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
             return;
         }
 
-        var generation = Interlocked.Increment(ref featureSelectionRefreshGeneration);
-        var previousKey = Interlocked.Exchange(ref featureSelectionRefreshKey, key);
-        if (!string.IsNullOrWhiteSpace(previousKey)
+        var cancellation = new CancellationTokenSource();
+        long generation;
+        string? previousKey;
+        CancellationTokenSource? previous;
+        lock (featureSelectionRefreshSync)
+        {
+            generation = ++featureSelectionRefreshGeneration;
+            previousKey = featureSelectionRefreshKey;
+            previous = featureSelectionRefreshCancellation;
+            featureSelectionRefreshKey = key;
+            featureSelectionRefreshCancellation = cancellation;
+        }
+        if (previous is not null
+            && !string.IsNullOrWhiteSpace(previousKey)
             && !string.Equals(previousKey, key, StringComparison.Ordinal))
         {
             control.SetFeatureRefreshSummary(previousKey, "superseded");
         }
         control.SetFeatureRefreshSummary(key, "refreshing");
-        var cancellation = new CancellationTokenSource();
-        var previous = Interlocked.Exchange(ref featureSelectionRefreshCancellation, cancellation);
         CancelSafely(previous);
         var refresh = RefreshFeatureSelectionSafelyAsync(key, generation, cancellation);
         Interlocked.Exchange(ref featureSelectionRefreshTask, refresh);
@@ -1304,7 +1315,23 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         restoredMatrixDefinition = definitionWrite.Artifact;
         matrixDefinitionRestoreReceipt = null;
         preview = BuildMatrixPreview(definitionWrite.Artifact);
-        control.SetMatrixPreview(preview.PreviewRows);
+        // Refresh durable sources and run history before publishing validation.
+        // Replacing source-backed picker items raises presentation-only change
+        // events; finalizing afterward ensures those events cannot immediately
+        // clear the exact validated preview and Run availability.
+        await RefreshMatrixCoreAsync(cancellationToken).ConfigureAwait(true);
+        if (!MatrixInputMatches(definitionWrite.Artifact))
+        {
+            control.SetMatrixPreview([]);
+            control.SetMatrixExecutionAvailability(
+                false,
+                "Matrix sources changed during validation. Review the reconciled configuration and validate again.");
+            control.SetMatrixStatus(
+                "Matrix sources changed during validation; no runnable claim was retained. Validate the reconciled configuration again.");
+            return;
+        }
+
+        preview = BuildMatrixPreview(definitionWrite.Artifact);
         var execution = await ResolveMatrixExecutionAsync(preview.Contract, cancellationToken).ConfigureAwait(true);
         control.ReconcileMatrixProviderProfiles(
             execution.ProviderProfileIds,
@@ -1312,9 +1339,9 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         var diagnosticText = DiagnosticSummary(execution.Diagnostics.Select(item => item.Code),
             execution.IsAvailable ? "Execution resolved" : "Execution unavailable");
         control.SetMatrixExecutionAvailability(execution.IsAvailable, diagnosticText);
+        control.SetMatrixPreview(preview.PreviewRows);
         control.SetMatrixStatus(
             $"Valid {definitionWrite.Artifact.Status.ToString().ToLowerInvariant()} definition · {preview.Expansion.Variants.Length} variant(s) · {preview.Expansion.Cells.Length} cell(s) · fingerprint {preview.Expansion.ExperimentFingerprint[..12]}. {diagnosticText}");
-        await RefreshMatrixCoreAsync(cancellationToken).ConfigureAwait(true);
     }, control.SetMatrixStatus);
 
     internal async Task ExecuteMatrixAsync()
@@ -1512,7 +1539,13 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
     }
 
     internal async Task RefreshRunHistoryAsync() =>
-        await ExecuteUiAsync(RefreshMatrixCoreAsync, control.SetMatrixStatus);
+        await ExecuteUiAsync(
+            RefreshMatrixCoreAsync,
+            status =>
+            {
+                control.SetRunHistoryRefreshFailed();
+                control.SetMatrixStatus(status);
+            });
 
     internal async Task RefreshForkCursorsAsync() =>
         await ExecuteUiAsync(RefreshForkCursorsCoreAsync, control.SetForkStatus);
@@ -1949,6 +1982,7 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
 
     private async Task RefreshMatrixCoreAsync(CancellationToken cancellationToken)
     {
+        control.SetRunHistoryRefreshing();
         await ReconcileMatrixSourcesAsync(cancellationToken).ConfigureAwait(true);
         await EnsureMatrixDefinitionRestoredAsync(cancellationToken).ConfigureAwait(true);
         var history = await ListRunHistoryAsync(cancellationToken).ConfigureAwait(true);
@@ -1957,7 +1991,7 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
             .Take(MaximumHistoryRows)
             .Select(item => $"{item.Id} · {item.State} · attempt {item.Attempts} · {item.TrialIds.Length} trial reference(s)")
             .ToArray();
-        control.SetRunHistory(rows.Length == 0 ? ["No persisted experiment runs."] : rows);
+        control.SetRunHistory(rows);
         if (history.Diagnostics.Length > 0)
         {
             control.SetMatrixStatus(DiagnosticSummary(history.Diagnostics.Select(item => item.Code), "Run history loaded with diagnostics"));
@@ -2172,12 +2206,11 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
             if (IsCurrentFeatureSelectionRefresh(key, generation, cancellation))
             {
                 await OnControlDispatcherAsync(() =>
-                    {
-                        if (IsCurrentFeatureSelectionRefresh(key, generation, cancellation))
-                        {
-                            control.SetFeatureRefreshSummary(key, "ready");
-                        }
-                    })
+                    FinalizeFeatureSelectionRefresh(
+                        key,
+                        generation,
+                        cancellation,
+                        () => control.SetFeatureRefreshSummary(key, "ready")))
                     .ConfigureAwait(false);
             }
         }
@@ -2196,10 +2229,17 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
                             return;
                         }
 
-                        SetFeatureRefreshStatus(
+                        FinalizeFeatureSelectionRefresh(
                             key,
-                            $"Feature refresh failed safely ({exception.GetType().Name}); persisted Experiment Lab evidence was not rewritten.");
-                        control.SetFeatureRefreshSummary(key, "refresh-failed");
+                            generation,
+                            cancellation,
+                            () =>
+                            {
+                                SetFeatureRefreshStatus(
+                                    key,
+                                    $"Feature refresh failed safely ({exception.GetType().Name}); persisted Experiment Lab evidence was not rewritten.");
+                                control.SetFeatureRefreshSummary(key, "refresh-failed");
+                            });
                     })
                     .ConfigureAwait(false);
             }
@@ -2210,16 +2250,35 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
             {
                 await OnControlDispatcherAsync(() =>
                 {
-                    if (IsCurrentFeatureSelectionRefresh(key, generation, cancellation))
-                    {
-                        control.SetFeatureSelectionRefreshing(false);
-                    }
+                    FinalizeFeatureSelectionRefresh(key, generation, cancellation);
                 }).ConfigureAwait(false);
                 actionGate.Release();
             }
 
-            Interlocked.CompareExchange(ref featureSelectionRefreshCancellation, null, cancellation);
             cancellation.Dispose();
+        }
+    }
+
+    private bool FinalizeFeatureSelectionRefresh(
+        string key,
+        long generation,
+        CancellationTokenSource cancellation,
+        Action? publish = null)
+    {
+        lock (featureSelectionRefreshSync)
+        {
+            if (generation != Volatile.Read(ref featureSelectionRefreshGeneration)
+                || !ReferenceEquals(featureSelectionRefreshCancellation, cancellation)
+                || !string.Equals(featureSelectionRefreshKey, key, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            publish?.Invoke();
+            control.SetFeatureSelectionRefreshing(false);
+            featureSelectionRefreshCancellation = null;
+            featureSelectionRefreshKey = null;
+            return true;
         }
     }
 
@@ -2273,6 +2332,7 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         switch (key)
         {
             case "matrix":
+                control.SetRunHistoryRefreshFailed();
                 control.SetMatrixStatus(status);
                 break;
             case "fork":
@@ -2297,9 +2357,15 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
             return;
         }
         disposed = true;
-        Interlocked.Increment(ref featureSelectionRefreshGeneration);
-        Volatile.Write(ref featureSelectionRefreshKey, null);
-        CancelSafely(Interlocked.Exchange(ref featureSelectionRefreshCancellation, null));
+        CancellationTokenSource? featureCancellation;
+        lock (featureSelectionRefreshSync)
+        {
+            featureSelectionRefreshGeneration++;
+            featureSelectionRefreshKey = null;
+            featureCancellation = featureSelectionRefreshCancellation;
+            featureSelectionRefreshCancellation = null;
+        }
+        CancelSafely(featureCancellation);
         matrixRunCancellation?.Cancel();
         var judgeLifetime = Volatile.Read(ref providerJudgeLifetime);
         if (judgeLifetime is { CommitStarted: false }) CancelSafely(judgeLifetime.Cancellation);

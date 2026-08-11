@@ -513,6 +513,15 @@ public sealed partial class ModelRoutingOptimizerCoordinator : IDisposable
             }
             catch (ArenaRouteApplicationConflictException)
             {
+                var conflictedProposal = proposal;
+                proposal = null;
+                loadedEvidence = null;
+                control.SetEvidence("Refresh required after route conflict.", [], false);
+                control.SetProposal(
+                    $"Stale proposal {conflictedProposal.Id} · refresh compatible evidence before rebuilding.",
+                    conflictedProposal.Changes.Select(ToItem),
+                    canApply: false,
+                    applicationConnected: applyApproved is not null);
                 control.SetStatus("The setup or current model changed after proposal creation; refresh evidence before trying again.");
                 return;
             }

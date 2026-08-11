@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AIArena.Core.Models;
 using AIArena.Core.Providers;
+using AIArena.Core.Services;
 using AgentInternetSourceItem = AIArena.Wpf.Models.AgentInternetSourceItem;
 using AgentInternetSourceSummary = AIArena.Wpf.Models.AgentInternetSourceSummary;
 using AgentState = AIArena.Wpf.Models.AgentState;
@@ -18,6 +19,7 @@ public static class SnapshotViewMapper
     public static RenderSnapshot FromCore(CoreSessionSummary session, CoreSnapshot snapshot)
     {
         var sharedConfig = Config(snapshot, "shared");
+        var factoryGroup = new FactoryConversationService().Inspect(snapshot);
         return new RenderSnapshot(
             session.Id,
             session.SnapshotPath,
@@ -72,6 +74,11 @@ public static class SnapshotViewMapper
             ParseMessages(snapshot.Engine.Messages, snapshot),
             ParseAgents(snapshot.Engine.Agents, snapshot))
         {
+            FactoryMode = snapshot.Engine.FactoryMode,
+            HasFactoryConversationRoot = factoryGroup.IsAnchored && factoryGroup.HasUsableRoot,
+            FactoryConversationRootAssigned = factoryGroup.IsAnchored,
+            FactoryConversationEntryCount = factoryGroup.EligibleEntryCount,
+            FactoryConversationOmittedCount = factoryGroup.OmittedEntryCount,
             RoleOverrides = RoleOverridesFrom(snapshot, sharedConfig),
             ProviderLastLatencyMs = sharedConfig.LastLatencyMs
         };
@@ -214,6 +221,11 @@ public static class SnapshotViewMapper
 
     private static string VoiceStyleForMessage(DialogueMessage message, CoreSnapshot snapshot)
     {
+        if (MetadataString(message, "prompt_mode").Equals("factory", StringComparison.OrdinalIgnoreCase))
+        {
+            return "";
+        }
+
         var stored = MetadataString(message, "voice_style");
         if (!string.IsNullOrWhiteSpace(stored))
         {

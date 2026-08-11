@@ -1,4 +1,6 @@
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Media;
 
 namespace AIArena.Wpf.Controls;
@@ -55,6 +57,8 @@ public sealed class MetricSparklineControl : FrameworkElement
         get => (double)GetValue(MaxValueProperty);
         set => SetValue(MaxValueProperty, value);
     }
+
+    protected override AutomationPeer OnCreateAutomationPeer() => new MetricSparklineAutomationPeer(this);
 
     protected override Size MeasureOverride(Size availableSize)
     {
@@ -271,5 +275,21 @@ public sealed class MetricSparklineControl : FrameworkElement
             ? double.PositiveInfinity
             : Math.Max(lower, max);
         return Math.Clamp(length, lower, upper);
+    }
+
+    private sealed class MetricSparklineAutomationPeer(MetricSparklineControl owner)
+        : FrameworkElementAutomationPeer(owner)
+    {
+        protected override string GetClassNameCore() => nameof(MetricSparklineControl);
+
+        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Image;
+
+        protected override bool IsControlElementCore() => HasAccessibleDescription();
+
+        protected override bool IsContentElementCore() => HasAccessibleDescription();
+
+        private bool HasAccessibleDescription() =>
+            !string.IsNullOrWhiteSpace(AutomationProperties.GetName(Owner))
+            || !string.IsNullOrWhiteSpace(AutomationProperties.GetHelpText(Owner));
     }
 }

@@ -143,6 +143,12 @@ internal sealed class CustomMatchSummaryCoordinator
     internal static string RunConstraintText(ArenaViewSnapshot snapshot)
     {
         var activeAgents = snapshot.Agents.Count(agent => agent.Active);
+        if (snapshot.FactoryMode)
+        {
+            var input = FactoryConversationConstraintText(snapshot);
+            return $"{activeAgents} active agent(s), Factory mode, {input}; saved Match Setup guidance is inactive.";
+        }
+
         var locks = LockLabels(snapshot).ToArray();
         var lockText = locks.Length == 0 ? "no locks" : $"{locks.Length} lock(s)";
         var activeIds = ActiveAgents(snapshot)
@@ -164,6 +170,7 @@ internal sealed class CustomMatchSummaryCoordinator
             "AI Arena current setup",
             $"Session: {DisplayLabel(snapshot.SessionId, "unknown session")}",
             $"Readiness: {ScenarioWorkflowCoordinator.SetupReadinessStatus(snapshot)}",
+            $"Model behavior: {(snapshot.FactoryMode ? $"Factory mode — attributed public group history ({FactoryConversationService.ContractVersion}); Match Setup saved but inactive" : "Arena mode — Match Setup guidance applied")}",
             "",
             "Scenario",
             $"- Topic: {ScenarioTopicText(snapshot.ScenarioTopic)}",
@@ -201,6 +208,17 @@ internal sealed class CustomMatchSummaryCoordinator
             {
                 status = ScenarioWorkflowCoordinator.SetupReadinessStatus(snapshot),
                 constraints = RunConstraintText(snapshot)
+            },
+            modelBehavior = new
+            {
+                mode = snapshot.FactoryMode ? "factory" : "arena",
+                applyMatchSetup = !snapshot.FactoryMode,
+                input = snapshot.FactoryMode ? "attributed_public_group_history" : "arena_context",
+                contract = snapshot.FactoryMode ? FactoryConversationService.ContractVersion : "arena",
+                rootState = snapshot.FactoryMode ? FactoryConversationRootState(snapshot) : "not_applicable",
+                contextEntries = snapshot.FactoryMode ? snapshot.FactoryConversationEntryCount : 0,
+                omittedEntries = snapshot.FactoryMode ? snapshot.FactoryConversationOmittedCount : 0,
+                narrationAvailable = !snapshot.FactoryMode
             },
             scenario = new
             {
@@ -261,6 +279,38 @@ internal sealed class CustomMatchSummaryCoordinator
         };
 
         return JsonSerializer.Serialize(spec, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static string FactoryConversationConstraintText(ArenaViewSnapshot snapshot)
+    {
+        return ArenaOperationCoordinator.FactoryInputState(snapshot) switch
+        {
+            FactoryConversationInputState.Ready => FactoryConversationReadyConstraint(snapshot),
+            FactoryConversationInputState.PendingRoot => "public Operator root ready to anchor",
+            FactoryConversationInputState.MissingRoot => "anchored public Operator root missing",
+            _ => "public Operator root required"
+        };
+    }
+
+    private static string FactoryConversationReadyConstraint(ArenaViewSnapshot snapshot)
+    {
+        var eligible = Math.Max(1, snapshot.FactoryConversationEntryCount);
+        var omitted = Math.Clamp(snapshot.FactoryConversationOmittedCount, 0, Math.Max(0, eligible - 1));
+        var included = Math.Max(1, eligible - omitted);
+        return omitted > 0
+            ? $"shared public group ready ({included}/{eligible} entries included; {omitted} omitted)"
+            : $"shared public group ready ({included} entr{(included == 1 ? "y" : "ies")})";
+    }
+
+    private static string FactoryConversationRootState(ArenaViewSnapshot snapshot)
+    {
+        return ArenaOperationCoordinator.FactoryInputState(snapshot) switch
+        {
+            FactoryConversationInputState.Ready => "anchored",
+            FactoryConversationInputState.PendingRoot => "pending",
+            FactoryConversationInputState.MissingRoot => "missing",
+            _ => "none"
+        };
     }
 
     private void PopulateScenario(ArenaViewSnapshot snapshot)

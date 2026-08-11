@@ -1,6 +1,7 @@
 <UserControl x:Class="AIArena.Wpf.Controls.ModelRoutingOptimizerControl"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:AIArena.Wpf.Controls"
              x:Name="RoutingOptimizerRoot"
              MinWidth="320"
              MinHeight="320"
@@ -31,41 +32,16 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <Grid Margin="{DynamicResource Arena.Layout.WorkspaceHeaderMargin}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel>
-                <TextBlock FontFamily="Segoe UI Variable Display, Segoe UI"
-                           FontSize="{DynamicResource Arena.Type.PageTitleSize}"
-                           FontWeight="SemiBold"
-                           Foreground="{DynamicResource TextBrush}"
-                           Text="Model Routing Optimizer" />
-                <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                           Style="{StaticResource RoutingCaption}"
-                           Text="Same-setup observed samples and observed hardware/capability constraints are required. Refreshing or proposing never changes routing." />
-            </StackPanel>
-            <WrapPanel Grid.Column="1" Margin="{DynamicResource Arena.Gap.Inline.Before.Comfortable}" VerticalAlignment="Top">
-                <Button x:Name="RefreshRouteEvidenceButton"
-                        MinHeight="34"
-                        Margin="{DynamicResource Arena.Gap.Wrap.After.Compact}"
-                        Style="{DynamicResource Arena.Button.Secondary}"
-                        Content="Refresh evidence"
-                        Click="RefreshRouteEvidenceButton_Click"
-                        AutomationProperties.Name="Refresh routing evidence"
-                        AutomationProperties.HelpText="Loads bounded compatible experiment and evaluation evidence without applying a route." />
-                <Button x:Name="BuildRouteProposalButton"
-                        MinHeight="34"
-                        Margin="{DynamicResource Arena.Gap.Stack.After.Compact}"
-                        Style="{DynamicResource Arena.Button.Primary}"
-                        Content="Build proposal"
-                        IsEnabled="False"
-                        Click="BuildRouteProposalButton_Click"
-                        AutomationProperties.Name="Build model route proposal"
-                        AutomationProperties.HelpText="Runs the pure proposal-only optimizer. This action never mutates provider settings." />
-            </WrapPanel>
-        </Grid>
+        <controls:WorkspacePageHeaderControl x:Name="RoutingWorkspaceHeader"
+                                              Title="Model Routing Optimizer"
+                                              Description="Compare compatible observed evidence, then separately approve an exact route application. Proposing never changes routing."
+                                              Status="Proposal only"
+                                              StatusKind="Status"
+                                              PrimaryActionText="Build proposal"
+                                              PrimaryActionAutomationName="Build model route proposal"
+                                              PrimaryActionHelpText="Runs the pure proposal-only optimizer. This action never mutates provider settings."
+                                              IsPrimaryActionEnabled="False"
+                                              PrimaryActionRequested="BuildRouteProposalButton_Click" />
 
         <Border Grid.Row="1"
                 Margin="{DynamicResource Arena.Layout.WorkspaceStatusMargin}"
@@ -74,14 +50,30 @@
                 BorderBrush="{DynamicResource DisabledBorderBrush}"
                 BorderThickness="1"
                 CornerRadius="{DynamicResource Arena.Radius.Small}">
-            <TextBlock x:Name="RouteStatusText"
-                       Foreground="{DynamicResource MutedTextBrush}"
-                       Text="Compatible persisted evaluation evidence has not been loaded."
-                       TextWrapping="Wrap"
-                       TextTrimming="CharacterEllipsis"
-                       MaxHeight="38"
-                       AutomationProperties.Name="Routing optimizer status"
-                       AutomationProperties.LiveSetting="Polite" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="RouteStatusText"
+                           Foreground="{DynamicResource MutedTextBrush}"
+                           Text="Compatible persisted evaluation evidence has not been loaded."
+                           TextWrapping="Wrap"
+                           TextTrimming="CharacterEllipsis"
+                           MaxHeight="38"
+                           VerticalAlignment="Center"
+                           AutomationProperties.Name="Routing optimizer status"
+                           AutomationProperties.LiveSetting="Polite" />
+                <Button x:Name="RefreshRouteEvidenceButton"
+                        Grid.Column="1"
+                        MinHeight="34"
+                        Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
+                        Style="{DynamicResource Arena.Button.Secondary}"
+                        Content="Refresh evidence"
+                        Click="RefreshRouteEvidenceButton_Click"
+                        AutomationProperties.Name="Refresh routing evidence"
+                        AutomationProperties.HelpText="Loads bounded compatible experiment and evaluation evidence without applying a route." />
+            </Grid>
         </Border>
 
         <Grid Grid.Row="2" x:Name="RouteWorkspaceGrid" Margin="{DynamicResource Arena.Layout.WorkspaceBodyMargin}">

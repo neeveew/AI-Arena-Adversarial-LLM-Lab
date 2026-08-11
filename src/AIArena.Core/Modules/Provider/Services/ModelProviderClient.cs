@@ -1420,7 +1420,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         var payload = new Dictionary<string, object>
         {
             ["model"] = config.Model,
-            ["input"] = NativeChatInput(messages),
+            ["input"] = NativeChatInput(messages, config.PreserveNativeInputWhitespace),
             ["temperature"] = config.Temperature,
             ["max_output_tokens"] = config.MaxOutputTokens,
             ["store"] = config.NativeStatefulChat
@@ -1444,14 +1444,10 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         }
 
         var reasoning = ModelProviderReasoningModes.Normalize(config.Reasoning);
-        if (!string.IsNullOrWhiteSpace(reasoning))
+        if (!string.IsNullOrWhiteSpace(reasoning)
+            && !reasoning.Equals("off", StringComparison.OrdinalIgnoreCase))
         {
             payload["reasoning"] = reasoning;
-        }
-
-        if (config.NativeIdleTtlSeconds > 0)
-        {
-            payload["ttl"] = config.NativeIdleTtlSeconds;
         }
 
         return payload;
@@ -1536,11 +1532,13 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 .Where(message => !string.IsNullOrWhiteSpace(message)));
     }
 
-    private static string NativeChatInput(IReadOnlyList<ModelChatMessage> messages)
+    private static string NativeChatInput(
+        IReadOnlyList<ModelChatMessage> messages,
+        bool preserveInputWhitespace)
     {
         var nonSystem = messages
             .Where(message => !message.Role.Equals("system", StringComparison.OrdinalIgnoreCase))
-            .Select(FormatNativeChatMessage)
+            .Select(message => FormatNativeChatMessage(message, preserveInputWhitespace))
             .Where(message => !string.IsNullOrWhiteSpace(message))
             .ToArray();
         if (nonSystem.Length > 0)
@@ -1551,9 +1549,11 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         return messages.LastOrDefault()?.Content ?? "";
     }
 
-    private static string FormatNativeChatMessage(ModelChatMessage message)
+    private static string FormatNativeChatMessage(
+        ModelChatMessage message,
+        bool preserveInputWhitespace)
     {
-        var content = message.Content.Trim();
+        var content = preserveInputWhitespace ? message.Content : message.Content.Trim();
         if (string.IsNullOrWhiteSpace(content))
         {
             return "";

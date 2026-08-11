@@ -1,6 +1,7 @@
 <UserControl x:Class="AIArena.Wpf.Controls.AgentInspectionLabControl"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:AIArena.Wpf.Controls"
              x:Name="InspectionLabRoot"
              MinWidth="320"
              MinHeight="320"
@@ -27,16 +28,6 @@
             <Setter Property="FontSize" Value="{DynamicResource Arena.Type.HeadingSize}" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
-        <Style x:Key="InspectionListBox" TargetType="ListBox">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
-            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
-            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
-            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
-            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
-        </Style>
     </UserControl.Resources>
 
     <Grid Background="{DynamicResource AppBackgroundBrush}">
@@ -45,23 +36,13 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <Border Padding="{DynamicResource Arena.Inset.PageHeader}"
-                Background="{DynamicResource TopBarBrush}"
-                BorderBrush="{DynamicResource ControlBorderBrush}"
-                BorderThickness="0,0,0,1">
-            <StackPanel>
-                <TextBlock FontFamily="Segoe UI Variable Display, Segoe UI"
-                           FontSize="{DynamicResource Arena.Type.PageTitleSize}"
-                           FontWeight="SemiBold"
-                           Foreground="{DynamicResource TextBrush}"
-                           Text="Agent Inspection" />
-                <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                           Foreground="{DynamicResource MutedTextBrush}"
-                           FontSize="{DynamicResource Arena.Type.CompactBodySize}"
-                           Text="Observed provider-boundary evidence and provenance-aware memory. Unavailable evidence remains explicitly unavailable."
-                           TextWrapping="Wrap" />
-            </StackPanel>
-        </Border>
+        <controls:WorkspacePageHeaderControl x:Name="InspectionWorkspaceHeader"
+                                              Title="Agent Inspection"
+                                              Description="Inspect privacy-redacted provider requests and one explicitly selected agent's provenance-aware memory."
+                                              PrimaryActionText="Refresh current"
+                                              PrimaryActionAutomationName="Refresh current inspection workspace"
+                                              PrimaryActionHelpText="Refreshes the selected Context and Prompt or Agent Memory workspace without changing privacy scope."
+                                              PrimaryActionRequested="RefreshCurrentWorkspaceHeader_Click" />
 
         <TabControl Grid.Row="1"
                     x:Name="InspectionTabs"
@@ -84,10 +65,15 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
+                    <Grid x:Name="PromptHeaderGrid"
+                          Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition x:Name="PromptHeaderActionRow" Height="0" />
+                        </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition x:Name="PromptHeaderActionColumn" Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel>
                             <TextBlock Style="{StaticResource InspectionHeading}"
@@ -95,7 +81,9 @@
                             <TextBlock Style="{StaticResource InspectionCaption}"
                                        Text="Process-memory only. Hash and byte count describe the exact outbound body; preview content is redacted." />
                         </StackPanel>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <WrapPanel x:Name="PromptHeaderActions"
+                                   Grid.Column="1"
+                                   HorizontalAlignment="Right">
                             <Button x:Name="PromptRefreshButton"
                                     Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
                                     Style="{DynamicResource Arena.Button.Secondary}"
@@ -108,9 +96,9 @@
                                     Style="{DynamicResource Arena.Button.Secondary}"
                                     Content="Clear"
                                     AutomationProperties.Name="Clear provider request traces"
-                                    AutomationProperties.HelpText="Clears process-memory traces only. No session data is changed."
-                                    ToolTip="Clear process-memory traces" />
-                        </StackPanel>
+                                     AutomationProperties.HelpText="Clears process-memory traces only. No session data is changed."
+                                     ToolTip="Clear process-memory traces" />
+                        </WrapPanel>
                     </Grid>
 
                     <Border Grid.Row="1"
@@ -151,8 +139,9 @@
                                            Text="Request groups" />
                                 <ListBox Grid.Row="1"
                                          x:Name="PromptTraceList"
-                                         Style="{StaticResource InspectionListBox}"
+                                         Style="{DynamicResource Arena.ListBox}"
                                          FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                                         VirtualizingPanel.IsVirtualizingWhenGrouping="True"
                                          AutomationProperties.Name="Provider request traces"
                                          AutomationProperties.HelpText="Requests grouped by correlation identifier. Select a physical attempt to inspect observed evidence.">
                                     <ListBox.GroupStyle>
@@ -171,57 +160,41 @@
                                     </ListBox.GroupStyle>
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
-                                            <Border Margin="{DynamicResource Arena.Gap.Stack.After.Compact}"
-                                                    Padding="{DynamicResource Arena.Inset.ListItem}"
-                                                    Background="{DynamicResource InputBrush}"
-                                                    BorderBrush="{DynamicResource DisabledBorderBrush}"
-                                                    BorderThickness="1"
-                                                    CornerRadius="{DynamicResource Arena.Radius.Small}"
-                                                    ToolTip="{Binding AutomationHelp}">
-                                                <Grid>
-                                                    <Grid.RowDefinitions>
-                                                        <RowDefinition Height="Auto" />
-                                                        <RowDefinition Height="Auto" />
-                                                        <RowDefinition Height="Auto" />
-                                                    </Grid.RowDefinitions>
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="*" />
-                                                        <ColumnDefinition Width="Auto" />
-                                                    </Grid.ColumnDefinitions>
-                                                    <TextBlock FontWeight="SemiBold"
-                                                               Foreground="{DynamicResource TextBrush}"
-                                                               Text="{Binding Phase}"
-                                                               TextTrimming="CharacterEllipsis" />
-                                                    <TextBlock Grid.Column="1"
-                                                               Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
-                                                               Foreground="{DynamicResource MutedTextBrush}"
-                                                               Text="{Binding AttemptLabel}" />
-                                                    <TextBlock Grid.Row="1"
-                                                               Grid.ColumnSpan="2"
-                                                               Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                                               Foreground="{DynamicResource MutedTextBrush}"
-                                                               Text="{Binding ModelTransport}"
-                                                               TextTrimming="CharacterEllipsis" />
-                                                    <TextBlock Grid.Row="2"
-                                                               Grid.ColumnSpan="2"
-                                                               Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                                               Foreground="{DynamicResource MutedTextBrush}"
-                                                               Text="{Binding OutcomeLabel}"
-                                                               TextTrimming="CharacterEllipsis" />
-                                                </Grid>
-                                            </Border>
+                                            <Grid ToolTip="{Binding AutomationHelp}"
+                                                  AutomationProperties.Name="{Binding AutomationName}"
+                                                  AutomationProperties.HelpText="{Binding AutomationHelp}">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource TextBrush}"
+                                                           Text="{Binding Phase}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Column="1"
+                                                           Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
+                                                           Foreground="{DynamicResource MutedTextBrush}"
+                                                           Text="{Binding AttemptLabel}" />
+                                                <TextBlock Grid.Row="1"
+                                                           Grid.ColumnSpan="2"
+                                                           Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                           Foreground="{DynamicResource MutedTextBrush}"
+                                                           Text="{Binding ModelTransport}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Row="2"
+                                                           Grid.ColumnSpan="2"
+                                                           Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                           Foreground="{DynamicResource MutedTextBrush}"
+                                                           Text="{Binding OutcomeLabel}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                            </Grid>
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
-                                    <ListBox.ItemContainerStyle>
-                                        <Style TargetType="ListBoxItem">
-                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.None}" />
-                                            <Setter Property="Margin" Value="{DynamicResource Arena.Inset.None}" />
-                                            <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
-                                            <Setter Property="AutomationProperties.HelpText" Value="{Binding AutomationHelp}" />
-                                            <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
-                                        </Style>
-                                    </ListBox.ItemContainerStyle>
                                 </ListBox>
                             </Grid>
                         </Border>
@@ -334,56 +307,72 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
+                    <Grid x:Name="MemoryHeaderGrid"
+                          Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition x:Name="MemoryHeaderActionRow" Height="0" />
+                        </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition x:Name="MemoryHeaderActionColumn" Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel>
                             <TextBlock Style="{StaticResource InspectionHeading}" Text="Structured memory" />
                             <TextBlock Style="{StaticResource InspectionCaption}"
                                        Text="Private content stays hidden until one agent is explicitly selected. Corrections and expiry preserve historical evidence." />
                         </StackPanel>
-                        <Button x:Name="MemoryRefreshButton"
-                                Grid.Column="1"
-                                Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
-                                Style="{DynamicResource Arena.Button.Secondary}"
-                                Content="Refresh"
-                                AutomationProperties.Name="Refresh structured memory"
-                                AutomationProperties.HelpText="Reloads the active session before showing memory evidence."
-                                ToolTip="Refresh structured memory" />
+                        <WrapPanel x:Name="MemoryHeaderActions"
+                                   Grid.Column="1"
+                                   HorizontalAlignment="Right">
+                            <Button x:Name="MemoryRefreshButton"
+                                    Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
+                                    Style="{DynamicResource Arena.Button.Secondary}"
+                                    Content="Refresh"
+                                    AutomationProperties.Name="Refresh structured memory"
+                                    AutomationProperties.HelpText="Reloads the active session before showing memory evidence."
+                                    ToolTip="Refresh structured memory" />
+                        </WrapPanel>
                     </Grid>
 
-                    <WrapPanel Grid.Row="1" Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
-                        <TextBlock Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
-                                   VerticalAlignment="Center"
-                                   Style="{StaticResource InspectionCaption}"
-                                   Text="Authorized agent" />
-                        <ComboBox x:Name="MemoryAgentPicker"
-                                  Width="220"
-                                  MinHeight="32"
-                                  Margin="{DynamicResource Arena.Gap.Inline.After.Spacious}"
-                                  DisplayMemberPath="DisplayName"
-                                  SelectedValuePath="AgentId"
-                                  FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
-                                  AutomationProperties.Name="Authorized memory agent"
-                                  AutomationProperties.HelpText="Selecting an agent authorizes this view to display only that agent's private structured memory." />
-                        <TextBlock Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
-                                   VerticalAlignment="Center"
-                                   Style="{StaticResource InspectionCaption}"
-                                   Text="State" />
-                        <ComboBox x:Name="MemoryStatePicker"
-                                  Width="150"
-                                  MinHeight="32"
-                                  SelectedValuePath="Tag"
-                                  FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
-                                  AutomationProperties.Name="Memory state filter"
-                                  AutomationProperties.HelpText="Filters active, expired, superseded, or all memory records.">
-                            <ComboBoxItem Content="Active" Tag="active" IsSelected="True" />
-                            <ComboBoxItem Content="Expired" Tag="expired" />
-                            <ComboBoxItem Content="Superseded" Tag="superseded" />
-                            <ComboBoxItem Content="All states" Tag="all" />
-                        </ComboBox>
+                    <WrapPanel x:Name="MemoryFilterPanel"
+                               Grid.Row="1"
+                               Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
+                        <StackPanel x:Name="MemoryAgentFilterGroup"
+                                    MinWidth="220"
+                                    Margin="{DynamicResource Arena.Gap.Inline.After.Spacious}">
+                            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.After.Micro}"
+                                       Style="{StaticResource InspectionCaption}"
+                                       Text="Authorized agent" />
+                            <ComboBox x:Name="MemoryAgentPicker"
+                                      MinWidth="220"
+                                      MinHeight="32"
+                                      Style="{DynamicResource Arena.ComboBox}"
+                                      DisplayMemberPath="DisplayName"
+                                      SelectedValuePath="AgentId"
+                                      FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                                      AutomationProperties.Name="Authorized memory agent"
+                                      AutomationProperties.HelpText="Selecting an agent authorizes this view to display only that agent's private structured memory." />
+                        </StackPanel>
+                        <StackPanel x:Name="MemoryStateFilterGroup"
+                                    MinWidth="150">
+                            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.After.Micro}"
+                                       Style="{StaticResource InspectionCaption}"
+                                       Text="State" />
+                            <ComboBox x:Name="MemoryStatePicker"
+                                      MinWidth="150"
+                                      MinHeight="32"
+                                      Style="{DynamicResource Arena.ComboBox}"
+                                      SelectedValuePath="Tag"
+                                      FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                                      AutomationProperties.Name="Memory state filter"
+                                      AutomationProperties.HelpText="Filters active, expired, superseded, or all memory records.">
+                                <ComboBoxItem Content="Active" Tag="active" IsSelected="True" />
+                                <ComboBoxItem Content="Expired" Tag="expired" />
+                                <ComboBoxItem Content="Superseded" Tag="superseded" />
+                                <ComboBoxItem Content="All states" Tag="all" />
+                            </ComboBox>
+                        </StackPanel>
                     </WrapPanel>
 
                     <Grid Grid.Row="2" x:Name="MemoryWorkspaceGrid">
@@ -413,58 +402,44 @@
                                            AutomationProperties.Name="Memory debugger status" />
                                 <ListBox Grid.Row="1"
                                          x:Name="MemoryEntryList"
-                                         Style="{StaticResource InspectionListBox}"
+                                         Style="{DynamicResource Arena.ListBox}"
                                          FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                                         VirtualizingPanel.IsVirtualizingWhenGrouping="True"
                                          AutomationProperties.Name="Structured memory entries"
                                          AutomationProperties.HelpText="Bounded entries belonging only to the explicitly selected agent.">
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
-                                            <Border Margin="{DynamicResource Arena.Gap.Stack.After.Compact}"
-                                                    Padding="{DynamicResource Arena.Inset.ListItem}"
-                                                    Background="{DynamicResource InputBrush}"
-                                                    BorderBrush="{DynamicResource DisabledBorderBrush}"
-                                                    BorderThickness="1"
-                                                    CornerRadius="{DynamicResource Arena.Radius.Small}"
-                                                    ToolTip="{Binding AutomationHelp}">
-                                                <StackPanel>
-                                                    <Grid>
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="*" />
-                                                            <ColumnDefinition Width="Auto" />
-                                                        </Grid.ColumnDefinitions>
-                                                        <TextBlock FontWeight="SemiBold"
-                                                                   Foreground="{DynamicResource TextBrush}"
-                                                                   Text="{Binding OriginLabel}"
-                                                                   TextTrimming="CharacterEllipsis" />
-                                                        <TextBlock Grid.Column="1"
-                                                                   Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
-                                                                   Foreground="{DynamicResource Arena.Brush.Info}"
-                                                                   Text="{Binding StateLabel}" />
-                                                    </Grid>
-                                                    <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}"
-                                                               MaxHeight="42"
+                                            <StackPanel ToolTip="{Binding AutomationHelp}"
+                                                        AutomationProperties.Name="{Binding AutomationName}"
+                                                        AutomationProperties.HelpText="{Binding AutomationHelp}">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock FontWeight="SemiBold"
                                                                Foreground="{DynamicResource TextBrush}"
-                                                               Text="{Binding Text}"
-                                                               TextTrimming="CharacterEllipsis"
-                                                               TextWrapping="Wrap" />
-                                                    <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}"
-                                                               Foreground="{DynamicResource MutedTextBrush}"
-                                                               FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
-                                                               Text="{Binding ScopeLabel}"
+                                                               Text="{Binding OriginLabel}"
                                                                TextTrimming="CharacterEllipsis" />
-                                                </StackPanel>
-                                            </Border>
+                                                    <TextBlock Grid.Column="1"
+                                                               Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
+                                                               Foreground="{DynamicResource Arena.Brush.Info}"
+                                                               Text="{Binding StateLabel}" />
+                                                </Grid>
+                                                <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}"
+                                                           MaxHeight="42"
+                                                           Foreground="{DynamicResource TextBrush}"
+                                                           Text="{Binding Text}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           TextWrapping="Wrap" />
+                                                <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}"
+                                                           Foreground="{DynamicResource MutedTextBrush}"
+                                                           FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
+                                                           Text="{Binding ScopeLabel}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
-                                    <ListBox.ItemContainerStyle>
-                                        <Style TargetType="ListBoxItem">
-                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.None}" />
-                                            <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
-                                            <Setter Property="AutomationProperties.HelpText" Value="{Binding AutomationHelp}" />
-                                            <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
-                                        </Style>
-                                    </ListBox.ItemContainerStyle>
                                 </ListBox>
                             </Grid>
                         </Border>
@@ -506,35 +481,39 @@
                                              AutomationProperties.HelpText="Text for a new manual memory or a correction. Existing records are never overwritten silently." />
 
                                     <WrapPanel Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
-                                        <TextBlock Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
-                                                   VerticalAlignment="Center"
-                                                   Style="{StaticResource InspectionCaption}"
-                                                   Text="Visibility" />
-                                        <ComboBox x:Name="MemoryVisibilityPicker"
-                                                  Width="130"
-                                                  MinHeight="32"
-                                                  Margin="{DynamicResource Arena.Gap.Inline.After.Spacious}"
-                                                  SelectedValuePath="Tag"
-                                                  FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
-                                                  AutomationProperties.Name="New memory visibility">
-                                            <ComboBoxItem Content="Private" Tag="private" IsSelected="True" />
-                                            <ComboBoxItem Content="Shared" Tag="shared" />
-                                        </ComboBox>
-                                        <TextBlock Margin="{DynamicResource Arena.Gap.Inline.After.Compact}"
-                                                   VerticalAlignment="Center"
-                                                   Style="{StaticResource InspectionCaption}"
-                                                   Text="Expire after" />
-                                        <ComboBox x:Name="MemoryExpiryPicker"
-                                                  Width="150"
-                                                  MinHeight="32"
-                                                  SelectedValuePath="Tag"
-                                                  FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
-                                                  AutomationProperties.Name="New memory expiry">
-                                            <ComboBoxItem Content="Never" Tag="none" IsSelected="True" />
-                                            <ComboBoxItem Content="1 hour" Tag="1" />
-                                            <ComboBoxItem Content="24 hours" Tag="24" />
-                                            <ComboBoxItem Content="7 days" Tag="168" />
-                                        </ComboBox>
+                                        <StackPanel MinWidth="130"
+                                                    Margin="{DynamicResource Arena.Gap.Inline.After.Spacious}">
+                                            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.After.Micro}"
+                                                       Style="{StaticResource InspectionCaption}"
+                                                       Text="Visibility" />
+                                            <ComboBox x:Name="MemoryVisibilityPicker"
+                                                      MinWidth="130"
+                                                      MinHeight="32"
+                                                      Style="{DynamicResource Arena.ComboBox}"
+                                                      SelectedValuePath="Tag"
+                                                      FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                                                      AutomationProperties.Name="New memory visibility">
+                                                <ComboBoxItem Content="Private" Tag="private" IsSelected="True" />
+                                                <ComboBoxItem Content="Shared" Tag="shared" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel MinWidth="150">
+                                            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.After.Micro}"
+                                                       Style="{StaticResource InspectionCaption}"
+                                                       Text="Expire after" />
+                                            <ComboBox x:Name="MemoryExpiryPicker"
+                                                      MinWidth="150"
+                                                      MinHeight="32"
+                                                      Style="{DynamicResource Arena.ComboBox}"
+                                                      SelectedValuePath="Tag"
+                                                      FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                                                      AutomationProperties.Name="New memory expiry">
+                                                <ComboBoxItem Content="Never" Tag="none" IsSelected="True" />
+                                                <ComboBoxItem Content="1 hour" Tag="1" />
+                                                <ComboBoxItem Content="24 hours" Tag="24" />
+                                                <ComboBoxItem Content="7 days" Tag="168" />
+                                            </ComboBox>
+                                        </StackPanel>
                                     </WrapPanel>
 
                                     <WrapPanel HorizontalAlignment="Right">
@@ -560,6 +539,60 @@
                                     </WrapPanel>
                                 </StackPanel>
                             </ScrollViewer>
+                        </Border>
+
+                        <Border x:Name="MemoryBusyOverlay"
+                                Grid.RowSpan="2"
+                                Grid.ColumnSpan="2"
+                                Panel.ZIndex="10"
+                                Padding="{DynamicResource Arena.Inset.Panel}"
+                                Background="{DynamicResource CardBrush}"
+                                BorderBrush="{DynamicResource ControlBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="{DynamicResource Arena.Radius.Medium}"
+                                Visibility="Collapsed"
+                                AutomationProperties.Name="Structured memory revalidation state">
+                            <StackPanel MaxWidth="520"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center">
+                                <Path Width="24"
+                                      Height="24"
+                                      HorizontalAlignment="Center"
+                                      Data="M 16,4 A 8,8 0 1 0 19,9 M 16,4 L 16,9 M 16,4 L 11,4"
+                                      Stretch="Uniform"
+                                      Stroke="{DynamicResource Arena.Brush.Info}"
+                                      StrokeLineJoin="Round"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      StrokeThickness="2" />
+                                <TextBlock x:Name="MemoryBusyText"
+                                           Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                                           HorizontalAlignment="Center"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           Text="Revalidating structured memory…"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap"
+                                           AutomationProperties.LiveSetting="Polite"
+                                           AutomationProperties.Name="Structured memory progress" />
+                                <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}"
+                                           HorizontalAlignment="Center"
+                                           Style="{StaticResource InspectionCaption}"
+                                           Text="Editing and lifecycle actions are paused until the active session is revalidated."
+                                           TextAlignment="Center" />
+                                <Border Width="220"
+                                        Height="6"
+                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                                        HorizontalAlignment="Center"
+                                        Background="{DynamicResource DisabledBorderBrush}"
+                                        CornerRadius="{DynamicResource Arena.Radius.Pill}" />
+                                <Border Width="160"
+                                        Height="6"
+                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}"
+                                        HorizontalAlignment="Center"
+                                        Background="{DynamicResource DisabledBorderBrush}"
+                                        CornerRadius="{DynamicResource Arena.Radius.Pill}" />
+                            </StackPanel>
                         </Border>
                     </Grid>
                 </Grid>

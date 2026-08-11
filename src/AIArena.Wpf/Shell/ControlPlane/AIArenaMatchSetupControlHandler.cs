@@ -13,6 +13,7 @@ internal sealed class AIArenaMatchSetupControlHandler
         AIArenaControlCommands.MatchSetupClose,
         AIArenaControlCommands.MatchSetupExport,
         AIArenaControlCommands.MatchSetupImport,
+        AIArenaControlCommands.MatchModelBehaviorSet,
         AIArenaControlCommands.MatchRosterSet,
         AIArenaControlCommands.MatchMatrixState,
         AIArenaControlCommands.MatchMatrixSet
@@ -22,6 +23,7 @@ internal sealed class AIArenaMatchSetupControlHandler
     private readonly Func<int, Task<AIArenaAgentRosterResizeResult>> resizeRoster;
     private readonly RivalryMatrixControlService matrix;
     private readonly MatchSetupPortabilityService portability;
+    private readonly Func<bool, CancellationToken, Task<AIArenaModelBehaviorModeResult>> setModelBehaviorMode;
     private readonly AIArenaControlPlaneEventHub events;
 
     public AIArenaMatchSetupControlHandler(
@@ -29,12 +31,14 @@ internal sealed class AIArenaMatchSetupControlHandler
         Func<int, Task<AIArenaAgentRosterResizeResult>> resizeRoster,
         RivalryMatrixControlService matrix,
         MatchSetupPortabilityService portability,
+        Func<bool, CancellationToken, Task<AIArenaModelBehaviorModeResult>> setModelBehaviorMode,
         AIArenaControlPlaneEventHub events)
     {
         this.overlays = overlays;
         this.resizeRoster = resizeRoster;
         this.matrix = matrix;
         this.portability = portability;
+        this.setModelBehaviorMode = setModelBehaviorMode;
         this.events = events;
     }
 
@@ -64,6 +68,8 @@ internal sealed class AIArenaMatchSetupControlHandler
                         : await portability.ImportFileAsync(packagePath, requestedName, cancellationToken);
                     return PortabilityResponse(request, result);
                 }
+            case AIArenaControlCommands.MatchModelBehaviorSet:
+                return await SetModelBehaviorModeAsync(request, cancellationToken);
             case AIArenaControlCommands.MatchRosterSet:
                 return await ResizeRosterAsync(request);
             case AIArenaControlCommands.MatchMatrixState:
@@ -73,6 +79,38 @@ internal sealed class AIArenaMatchSetupControlHandler
             default:
                 return AIArenaControlResponse.Error(request, "unknown_command", $"Unsupported Match Setup command '{request.Command}'.");
         }
+    }
+
+    private async Task<AIArenaControlResponse> SetModelBehaviorModeAsync(
+        AIArenaControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!AIArenaControlArguments.Has(request, "mode")
+            || string.IsNullOrWhiteSpace(AIArenaControlArguments.String(request, "mode")))
+        {
+            return AIArenaControlResponse.Error(
+                request,
+                "missing_argument",
+                "match.model-behavior.set requires args.mode: arena or factory.",
+                overlays.CaptureMatchSetup());
+        }
+
+        var mode = AIArenaControlArguments.String(request, "mode").Trim().ToLowerInvariant();
+        if (mode is not ("arena" or "factory"))
+        {
+            return AIArenaControlResponse.Error(
+                request,
+                "invalid_argument",
+                "match.model-behavior.set args.mode must be arena or factory.",
+                overlays.CaptureMatchSetup());
+        }
+
+        var result = await setModelBehaviorMode(mode == "factory", cancellationToken);
+        var state = overlays.CaptureMatchSetup();
+        var data = new { state, result.Mode, result.Changed };
+        return result.Ok
+            ? AIArenaControlResponse.Success(request, result.Message, data)
+            : AIArenaControlResponse.Error(request, result.ErrorCode, result.Message, data);
     }
 
     private async Task<AIArenaControlResponse> SetMatrixAsync(

@@ -7,8 +7,8 @@ This root document is the authoritative command reference for the WPF applicatio
 ## Settings
 
 1. Open AI Arena.
-2. Open Settings -> PowerShell Control.
-3. Use the PowerShell control plane toggle to enable or disable automation. It is on by default and does not require Debug controls.
+2. Open Settings -> Debug controls.
+3. Use the PowerShell control plane toggle to enable or disable automation. It is organized with developer tools, but remains on by default and does not require Allow debug controls.
 
 The PowerShell helper lives at:
 
@@ -97,7 +97,7 @@ Set-AIArenaProviderConfig -ClearApiToken
 
 | Command | PowerShell example | Args |
 | --- | --- | --- |
-| `navigation.select` | `Invoke-AIArena navigation.select -View agent` | `view`: `arena`, `agent`, `collaborate`, `world`, `custom-match`, `settings`, `provider` |
+| `navigation.select` | `Invoke-AIArena navigation.select -View models` | `view`: `arena`, `models`, `agent`, `collaborate`, `world`, `custom-match`, `settings`, `provider`. The Models surface revalidates LM Studio residency every five seconds while visible; load/unload remains an explicit in-app action and is not implied by navigation or assignment. |
 | `navigation.theme.set` | `Invoke-AIArena navigation.theme.set -Theme "Dark Arena"` | `theme` or `themeId` |
 | `navigation.provider.focus` | `Invoke-AIArena navigation.provider.focus` | Optional `baseUrl`, `model` |
 | `navigation.rail.set` | `Set-AIArenaRightRail show` | `state`: `show`, `hide`, `toggle` |
@@ -126,11 +126,12 @@ Save-AIArenaScreenshot "experiment/qa-inspector.png"
 
 | Command | PowerShell example | Notes |
 | --- | --- | --- |
-| `match.setup.state` | `Get-AIArenaMatchSetup` | Returns overlay visibility, selected section, return view, session, match type, scenario, active cast, and busy state. |
+| `match.setup.state` | `Get-AIArenaMatchSetup` | Returns overlay visibility, selected section, return view, session, match type, scenario, active cast, model-behavior mode (`arena` or `factory`), and busy state. |
 | `match.setup.open` | `Open-AIArenaMatchSetup matrix` | Closes Settings and transient shell flyouts, then opens `scenario`, `cast`, `matrix`, or `saved` while preserving the workspace to return to. |
 | `match.setup.close` | `Close-AIArenaMatchSetup` | Closes Match Setup using the same return/focus path as the UI. |
-| `match.setup.export` | `Export-AIArenaMatchSetup ".\review.json"` | Returns the exact active setup as `ai_arena.match_setup.v2` JSON and optionally writes it as UTF-8. Provider API tokens and runtime history are excluded. |
+| `match.setup.export` | `Export-AIArenaMatchSetup ".\review.json"` | Returns the exact active setup as `ai_arena.match_setup.v2` JSON and optionally writes it as UTF-8. Provider API tokens, transcript data, and Factory public-group history are excluded. |
 | `match.setup.import` | `Import-AIArenaMatchSetup ".\review.json" -Name review-copy` | Validates JSON from `args.json` or a local `.json` `args.path`, creates a collision-free clean session, and selects it. It never overwrites the active run. |
+| `match.model-behavior.set` | `Set-AIArenaModelBehavior factory` | Requires `mode`: `arena` or `factory`. Uses the same busy gate, durable save, concurrency handling, UI refresh, and safe change event as the Match Setup toggle. Invalid modes return `invalid_argument`, active work returns `busy`, and a missing active session returns `session_unavailable`. |
 | `match.roster.set` | `Set-AIArenaMatchRoster 6` | Resizes the active cast to 1-8 agents through the same bounded session-save, event-log, busy-state, and refresh path as Match Setup. |
 | `match.matrix.state` | `Get-AIArenaMatchMatrix` | Returns enabled state, active-agent count, and every normalized source/target/stance link. |
 | `match.matrix.set` | `Set-AIArenaMatchMatrix evidence_ladder` | Atomically applies a named relationship pattern; use `off` to disable and clear it. Busy and invalid mutations leave the session unchanged. |
@@ -151,7 +152,7 @@ Every authenticated command response includes a fresh post-command `state` summa
 
 `match.setup.open` and `navigation.select -View custom-match` share the same overlay transition. Both dismiss Settings, provider health, transcript search, View, Debug, diagnostic detail, generation help, Agent composer controls, and Agent performance detail before showing Match Setup. Their successful post-command state therefore reports `View = custom-match`, `MatchSetupOpen = true`, and `SettingsOpen = false`; closing Match Setup still returns to the workspace that was active before the transition.
 
-Portable Match Setup packages contain exact scenario text, generator recipe, active cast personas/styles/colors, narrator behavior, locks, normalized relationship links, context windows, Internet policy, and non-secret provider configuration. API-token fields are omitted, and credentials, query strings, or fragments embedded in provider URLs are stripped. The canonical setup fingerprint excludes metadata such as the source session name. Import starts from a clean runtime: transcript, narration, attachments, research items, decision card, and generation history are not copied. A local provider token is reused only when the imported endpoint and API mode exactly match the trusted active-session configuration; otherwise the token is cleared and the receipt reports a warning. Import is unavailable while the arena is busy.
+Portable Match Setup packages contain exact scenario text, generator recipe, active cast personas/styles/colors, narrator behavior, locks, normalized relationship links, context windows, Internet policy, Factory/Arena model-behavior mode, and non-secret provider configuration. Factory setup identity is salted with the `public_group_v1` prompt contract. API-token fields are omitted, and credentials, query strings, or fragments embedded in provider URLs are stripped. The canonical setup fingerprint excludes metadata such as the source session name. Import starts from a clean runtime: transcript, Factory public-group history, narration, attachments, research items, decision card, and generation history are not copied. A Factory import therefore needs a new public Operator turn to establish its conversation root. A local provider token is reused only when the imported endpoint and API mode exactly match the trusted active-session configuration; otherwise the token is cleared and the receipt reports a warning. Import is unavailable while the arena is busy.
 
 ```powershell
 $export = Export-AIArenaMatchSetup ".\portable-review.json"
@@ -220,7 +221,7 @@ The other commands return the refreshed session/checkpoint inventory in `data`; 
 | `arena.turn` | `Invoke-AIArenaArena turn` | Runs one model-driven turn and waits for completion. |
 | `arena.narrate` | `Invoke-AIArenaArena narrate` | Runs the narrator and waits for completion. |
 | `arena.reset` | `Invoke-AIArenaArena reset -ConfirmReset` | Clears transcript/live state. Explicit `confirm=true` is required; setup and checkpoints are preserved. |
-| `arena.operator.send` | `Invoke-AIArenaArena operator.send -Prompt "Push on the weak assumption" -Route public` | `prompt`, optional `route`: `public`, `private`, `narrator`. Unknown routes are rejected without sending or changing the draft. |
+| `arena.operator.send` | `Invoke-AIArenaArena operator.send -Prompt "Push on the weak assumption" -Route public` | `prompt`, optional `route`: `public`, `private`, `narrator`. A public send starts an unanchored Factory group when no eligible Operator turn exists, and later public sends append after a root is anchored. If Factory is first enabled after eligible public Operator history already exists, the latest eligible turn is anchored before inference. Private and narrator routes never enter the group. Strict provider templates receive a losslessly batched, alternating-role wire sequence without changing logical group entries. Unknown routes are rejected without sending or changing the draft. |
 
 ## Internet
 
@@ -275,8 +276,8 @@ The event stream emits line-delimited JSON.
 Most shell events are reported whichever way the change happened. Opening Match
 Setup with `F2` or the top bar emits the same `shell.overlay.changed` as the
 `match.setup.open` command, and the same holds for navigation, the right rail,
-the theme, the transcript view preset, the Internet setting and diagnostic, and
-the arena run loop. Watching the stream therefore shows a person using the app,
+the theme, the transcript view preset, model-behavior mode, the Internet setting
+and diagnostic, and the arena run loop. Watching the stream therefore shows a person using the app,
 not only an operator driving it from a script. Earlier versions published these
 from the command handlers alone, so anything done by hand was invisible.
 
@@ -317,6 +318,7 @@ Current event types:
 - `view.preset.changed`
 - `match.setup.exported`
 - `match.setup.imported`
+- `match.model-behavior.changed`
 - `session.saved-state.changed`
 - `shell.overlay.changed`
 - `match.roster.changed`
@@ -356,6 +358,7 @@ Invoke-AIArena navigation.select -View agent
 Set-AIArenaRightRail show
 Set-AIArenaViewPreset diagnostics
 Open-AIArenaMatchSetup saved
+Set-AIArenaModelBehavior factory
 Set-AIArenaMatchRoster 6
 Set-AIArenaMatchMatrix evidence_ladder
 New-AIArenaMatch random -Style technical -Seed CONTROL-SMOKE

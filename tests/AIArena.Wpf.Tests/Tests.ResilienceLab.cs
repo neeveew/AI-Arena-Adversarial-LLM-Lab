@@ -30,6 +30,9 @@ internal static partial class Program
             Require(AutomationProperties.GetName(fault) == "Fault-Injection Lab"
                     && AutomationProperties.GetName(routing) == "Model Routing Optimizer",
                 "resilience roots lost automation names");
+            Require(AutomationProperties.GetName(fault.WorkspaceHeader.PrimaryAction) == "Arm fault profile"
+                    && AutomationProperties.GetName(routing.WorkspaceHeader.PrimaryAction) == "Build model route proposal",
+                "resilience workspaces lost the shared contextual page-header actions");
             fault.ApplyResponsiveLayout(compact: true);
             fault.ApplyResponsiveLayout(compact: false);
             routing.ApplyResponsiveLayout(compact: true);
@@ -39,8 +42,10 @@ internal static partial class Program
         var faultXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/FaultInjectionLabControl.xaml"));
         var routeXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ModelRoutingOptimizerControl.xaml"));
         Require(faultXaml.Contains("DynamicResource CardBrush", StringComparison.Ordinal)
-                && faultXaml.Contains("AutomationProperties.Name=\"Arm fault profile\"", StringComparison.Ordinal)
+                && faultXaml.Contains("WorkspacePageHeaderControl", StringComparison.Ordinal)
+                && faultXaml.Contains("PrimaryActionAutomationName=\"Arm fault profile\"", StringComparison.Ordinal)
                 && routeXaml.Contains("DynamicResource CardBrush", StringComparison.Ordinal)
+                && routeXaml.Contains("WorkspacePageHeaderControl", StringComparison.Ordinal)
                 && routeXaml.Contains("AutomationProperties.Name=\"Apply explicitly approved route\"", StringComparison.Ordinal)
                 && !faultXaml.Contains("Storyboard", StringComparison.Ordinal)
                 && !routeXaml.Contains("Storyboard", StringComparison.Ordinal),
@@ -461,6 +466,54 @@ internal static partial class Program
                             && !control.Status.Contains(root, StringComparison.OrdinalIgnoreCase),
                         "approved application did not return a clearly process-only receipt boundary");
                 });
+
+                var conflictControl = new ModelRoutingOptimizerControl();
+                using (var conflictCoordinator = new ModelRoutingOptimizerCoordinator(
+                           conflictControl,
+                           routableSource,
+                           (_, _, _, _) => Task.FromException<ArenaRouteApplicationReceiptContract>(
+                               new ArenaRouteApplicationConflictException("Injected exact-proposal conflict.")),
+                           new ResilienceFixedTimeProvider(at.AddMinutes(3))))
+                {
+                    RunExperimentDispatcherTask(async () =>
+                    {
+                        await conflictCoordinator.RefreshEvidenceAsync();
+                        await conflictCoordinator.BuildProposalAsync();
+                        conflictControl.SetExplicitApproval(true);
+                        Require(conflictControl.CanApply, "conflict fixture was not approved before application");
+                        await conflictCoordinator.ApplyApprovedAsync();
+                        Require(conflictCoordinator.CurrentProposal is null
+                                && !conflictControl.CanApply
+                                && !conflictControl.IsExplicitlyApproved
+                                && !conflictControl.WorkspaceHeader.IsPrimaryActionEnabled
+                                && conflictControl.Status.Contains("refresh evidence", StringComparison.OrdinalIgnoreCase),
+                            "a hard route conflict left stale evidence, proposal approval, or Apply retryable");
+                    });
+                }
+
+                var busyControl = new ModelRoutingOptimizerControl();
+                using (var busyCoordinator = new ModelRoutingOptimizerCoordinator(
+                           busyControl,
+                           routableSource,
+                           (_, _, _, _) => Task.FromException<ArenaRouteApplicationReceiptContract>(
+                               new ArenaRouteApplicationBusyException()),
+                           new ResilienceFixedTimeProvider(at.AddMinutes(4))))
+                {
+                    RunExperimentDispatcherTask(async () =>
+                    {
+                        await busyCoordinator.RefreshEvidenceAsync();
+                        await busyCoordinator.BuildProposalAsync();
+                        busyControl.SetExplicitApproval(true);
+                        var exactProposal = busyCoordinator.CurrentProposal;
+                        await busyCoordinator.ApplyApprovedAsync();
+                        Require(exactProposal is not null
+                                && busyCoordinator.CurrentProposal?.Id == exactProposal.Id
+                                && busyControl.CanApply
+                                && busyControl.IsExplicitlyApproved
+                                && busyControl.Status.Contains("Stop the active", StringComparison.Ordinal),
+                            "a transient busy route application did not preserve the exact approved proposal for retry");
+                    });
+                }
 
                 var beforeRetryRuns = runStore.LoadAllAsync().GetAwaiter().GetResult();
                 var beforeRetry = beforeRetryRuns.Runs.Single(item => item.CellKey == attemptAgnosticCell.CellKey);

@@ -1682,9 +1682,16 @@ static void ModelPreloadReloadsLowContextNativeInstance()
     });
     var httpClient = new HttpClient(handler);
     var service = new ModelPreloadService(httpClient, new LmStudioModelCatalogService(httpClient));
+    var mutationStarts = 0;
 
     var results = service
-        .PreloadAsync("http://127.0.0.1:1234/v1", ["google/gemma-4-26b-a4b"], ModelProviderApiModes.LmStudioNative, "secret-token", contextLength: 32768)
+        .PreloadAsync(
+            "http://127.0.0.1:1234/v1",
+            ["google/gemma-4-26b-a4b"],
+            ModelProviderApiModes.LmStudioNative,
+            "secret-token",
+            contextLength: 32768,
+            mutationStarting: () => mutationStarts++)
         .GetAwaiter()
         .GetResult();
 
@@ -1700,6 +1707,7 @@ static void ModelPreloadReloadsLowContextNativeInstance()
     Require(handler.AuthorizationHeaders.Count(header => header == "Bearer secret-token") == 3, "catalog, unload, and load should send configured bearer token");
     Require(handler.Bodies.Any(body => body.Contains("\"instance_id\":\"google/gemma-4-26b-a4b\"", StringComparison.Ordinal)), "context reload should unload the existing instance id");
     Require(handler.Bodies.Any(body => body.Contains("\"context_length\":32768", StringComparison.Ordinal)), "context reload should load with requested context length");
+    Require(mutationStarts == 2, "context reload should revalidate lifecycle identity immediately before both unload and load mutations");
 }
 
 static void ModelPreloadReloadsUnknownContextNativeInstance()
@@ -1834,6 +1842,55 @@ static void ModelUnloadSendsBearerToken()
     Require(handler.AuthorizationHeaders.Count(header => header == "Bearer secret-token") == 2, "catalog and unload requests should send configured bearer token");
     Require(handler.Requests.Any(uri => uri.AbsolutePath.EndsWith("/api/v1/models/unload", StringComparison.OrdinalIgnoreCase)), "native unload endpoint should be called");
     Require(handler.Bodies.Any(body => body.Contains("\"instance_id\":\"google/gemma-4-26b-a4b\"", StringComparison.Ordinal)), "native unload should send loaded instance id");
+
+    var guardedHandler = new TestHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        if (path.EndsWith("/models", StringComparison.OrdinalIgnoreCase))
+        {
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"models":[{"type":"llm","key":"two-instance-model","loaded_instances":[{"id":"instance-one"},{"id":"instance-two"}]}]}""")
+            };
+        }
+
+        return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}")
+        };
+    });
+    using var guardedClient = new HttpClient(guardedHandler);
+    var guardedService = new ModelPreloadService(guardedClient, new LmStudioModelCatalogService(guardedClient));
+    var guardedStarts = 0;
+    var contextChangeSurfaced = false;
+    try
+    {
+        _ = guardedService.UnloadAsync(
+                "http://127.0.0.1:1234/v1",
+                ["two-instance-model"],
+                ModelProviderApiModes.LmStudioNative,
+                "secret-token",
+                mutationStarting: () =>
+                {
+                    guardedStarts++;
+                    if (guardedStarts == 2)
+                    {
+                        throw new InvalidOperationException("session changed");
+                    }
+                })
+            .GetAwaiter()
+            .GetResult();
+    }
+    catch (InvalidOperationException exception) when (exception.Message == "session changed")
+    {
+        contextChangeSurfaced = true;
+    }
+
+    Require(contextChangeSurfaced
+            && guardedStarts == 2
+            && guardedHandler.Requests.Count(uri => uri.AbsolutePath.EndsWith("/api/v1/models/unload", StringComparison.OrdinalIgnoreCase)) == 1,
+        "a session change before the second instance mutation must stop the next POST while surfacing the earlier partial mutation");
 }
 
 static void ModelPreloadUsesOllamaKeepAlive()

@@ -35,6 +35,7 @@ internal sealed class OperatorTurnCoordinator
     private readonly SessionStore sessionStore;
     private readonly EventLogStore eventLogStore;
     private readonly TranscriptService transcriptService;
+    private readonly FactoryConversationService factoryConversationService = new();
     private readonly NarratorService narratorService;
     private readonly DiscourseDiagnosticsService discourseDiagnostics;
     private readonly WpfSettingsStore settingsStore;
@@ -74,6 +75,7 @@ internal sealed class OperatorTurnCoordinator
     private bool sendInProgress;
     private bool lastBusy;
     private bool lastAutoChatRunning;
+    private bool factoryMode;
 
     public OperatorTurnCoordinator(
         SessionStore sessionStore,
@@ -179,6 +181,7 @@ internal sealed class OperatorTurnCoordinator
 
     public void ApplySnapshot(ArenaViewSnapshot snapshot)
     {
+        factoryMode = snapshot.FactoryMode;
         var nextSessionId = snapshot.SessionId?.Trim() ?? "";
         if (!draftSessionId.Equals(nextSessionId, StringComparison.OrdinalIgnoreCase))
         {
@@ -190,10 +193,19 @@ internal sealed class OperatorTurnCoordinator
             RestoreVisibleDraft();
         }
 
+        if (factoryMode && routeMode.Equals("narrator", StringComparison.OrdinalIgnoreCase))
+        {
+            CaptureVisibleDraft();
+            routeMode = "public";
+            RememberCurrentRoute();
+            RestoreVisibleDraft();
+        }
+
         PopulatePrivateTargetPicker(snapshot);
         UpdateRouteUi();
         UpdateQuickInterventions();
         UpdateTurnMeter();
+        UpdateBusyState(lastBusy, lastAutoChatRunning);
     }
 
     public void OnPrivateTargetChanged()
@@ -238,15 +250,22 @@ internal sealed class OperatorTurnCoordinator
         lastBusy = busy;
         lastAutoChatRunning = autoChatRunning;
         var enabled = OperatorInputEnabled(busy, autoChatRunning, sendInProgress);
-        sendButton.IsEnabled = enabled;
+        sendButton.IsEnabled = enabled && (!factoryMode || !routeMode.Equals("narrator", StringComparison.OrdinalIgnoreCase));
         turnText.IsEnabled = enabled;
         publicRouteButton.IsEnabled = enabled;
         privateRouteButton.IsEnabled = enabled;
-        narratorRouteButton.IsEnabled = enabled;
+        narratorRouteButton.IsEnabled = enabled && !factoryMode;
+        var narratorHelp = factoryMode
+            ? "Narrator routing is unavailable in Factory mode. Turn Apply Match Setup to models on to use narrator guidance."
+            : "Ask the narrator to reply publicly.";
+        narratorRouteButton.ToolTip = narratorHelp;
+        AutomationProperties.SetHelpText(narratorRouteButton, narratorHelp);
         privateTargetPicker.IsEnabled = enabled;
         foreach (var button in quickInterventionButtons)
         {
-            button.IsEnabled = enabled && button.Tag is OperatorInterventionSuggestion;
+            button.IsEnabled = enabled
+                && button.Tag is OperatorInterventionSuggestion suggestion
+                && (!factoryMode || !suggestion.Route.Equals("narrator", StringComparison.OrdinalIgnoreCase));
         }
 
         RefreshTemplateActionState(enabled);
@@ -266,7 +285,9 @@ internal sealed class OperatorTurnCoordinator
             return;
         }
 
-        var text = turnText.Text.Trim();
+        var mode = routeMode;
+        var rawText = turnText.Text ?? "";
+        var text = NormalizeOperatorRoute(mode) == "public" ? rawText : rawText.Trim();
         if (string.IsNullOrWhiteSpace(text))
         {
             setArenaRunStatus("Operator turn is empty.");
@@ -279,7 +300,6 @@ internal sealed class OperatorTurnCoordinator
             return;
         }
 
-        var mode = routeMode;
         var sent = await RunOperatorSendAsync(() => SendOperatorPromptAsync(session, text, mode));
         if (sent)
         {
@@ -302,7 +322,8 @@ internal sealed class OperatorTurnCoordinator
             return;
         }
 
-        var text = prompt?.Trim() ?? "";
+        var rawText = prompt ?? "";
+        var text = normalizedRoute == "public" ? rawText : rawText.Trim();
         if (string.IsNullOrWhiteSpace(text))
         {
             setArenaRunStatus("Operator turn is empty.");
@@ -357,11 +378,22 @@ internal sealed class OperatorTurnCoordinator
                 return;
             }
 
-            var message = transcriptService.CreateOperatorMessage(text, snapshot.Engine.TurnCount + 1);
+            var message = transcriptService.CreateOperatorMessage(
+                text,
+                snapshot.Engine.TurnCount + 1,
+                // Public Operator text can become the Factory root later, or
+                // join an already-anchored group during an Arena interlude.
+                // Preserve the durable public text at ingestion; Arena prompt
+                // construction still applies its own established trimming.
+                preserveOuterWhitespace: true);
             snapshot.Engine.Messages.Add(message);
+            factoryConversationService.StampPublicOperator(snapshot, message);
             snapshot.Engine.TurnCount = message.Turn;
             await saveSnapshotWithFeedbackAsync(snapshot, session.Id);
-            await eventLogStore.AppendAsync(session.Id, "native_operator_turn_added", new { message.Turn, message.Text, Route = "public" });
+            await eventLogStore.AppendAsync(
+                session.Id,
+                "native_operator_turn_added",
+                new { message.Turn, TextLength = message.Text.Length, Route = "public" });
             await refreshActiveSessionAsync("Public operator turn added.");
             sent = true;
         }, true);
@@ -487,7 +519,7 @@ internal sealed class OperatorTurnCoordinator
             await eventLogStore.AppendAsync(session.Id, "native_operator_private_guidance_added", new
             {
                 Targets = targets.Select(agent => agent.Id).ToArray(),
-                Text = text
+                TextLength = text.Length
             });
             await refreshActiveSessionAsync($"Private guidance sent to {FormatOperatorTargetSummary(targets)}.");
             sent = true;
@@ -631,9 +663,13 @@ internal sealed class OperatorTurnCoordinator
         AutomationProperties.SetName(sendButton, sendLabel);
         var sendHelp = routeMode switch
         {
-            "private" => $"{OperatorVisibilitySummary(routeMode)} {OperatorDestinationSummary(routeMode, ShellUiHelpers.SelectedComboTag(privateTargetPicker, "all"), lastRenderedSnapshot())}.",
+            "private" => factoryMode
+                ? $"{OperatorVisibilitySummary(routeMode)} {OperatorDestinationSummary(routeMode, ShellUiHelpers.SelectedComboTag(privateTargetPicker, "all"), lastRenderedSnapshot())}. Saved to memory, but Factory-mode participant calls do not send private notes."
+                : $"{OperatorVisibilitySummary(routeMode)} {OperatorDestinationSummary(routeMode, ShellUiHelpers.SelectedComboTag(privateTargetPicker, "all"), lastRenderedSnapshot())}.",
             "narrator" => OperatorVisibilitySummary(routeMode),
-            _ => OperatorVisibilitySummary(routeMode)
+            _ => factoryMode
+                ? "Public group-chat turn. Its exact text appears in the transcript and joins the Factory conversation seen by participant models."
+                : OperatorVisibilitySummary(routeMode)
         };
         AutomationProperties.SetHelpText(sendButton, $"{sendHelp} Session: {DraftSessionLabel()}.");
         turnText.Tag = routeMode switch

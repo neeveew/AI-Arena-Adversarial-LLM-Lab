@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -18,6 +19,71 @@ using AIArena.Wpf.Services;
 
 internal static partial class Program
 {
+    static void ControlPlaneFactoryPrerequisitesUseDurableSnapshot()
+    {
+        var session = new SessionSummary(
+            "factory-prerequisite",
+            "snapshot.json",
+            true,
+            0,
+            0,
+            0,
+            DateTimeOffset.UtcNow);
+        var staleCore = SessionStore.CreateDefaultSnapshot();
+        staleCore.Engine.FactoryMode = true;
+        var staleRendered = SnapshotViewMapper.FromCore(session, staleCore);
+        Require(
+            !ArenaOperationCoordinator.HasFactoryInput(staleRendered),
+            "the regression fixture should represent the stale rendered no-root view that previously refused the command");
+
+        var durable = SessionStore.CreateDefaultSnapshot();
+        durable.Engine.FactoryMode = true;
+        var root = new TranscriptService().CreateOperatorMessage("Durable Factory root.", 1);
+        durable.Engine.Messages.Add(root);
+        var conversations = new FactoryConversationService();
+        var anchored = conversations.Resolve(durable);
+        Require(
+            anchored.IsAnchored && anchored.HasUsableRoot && !anchored.IsOrphaned,
+            "the durable regression fixture should have an anchored public Operator root");
+        Require(
+            MainWindow.FactoryConversationPrerequisiteMessage(durable, "running a model") is null
+                && MainWindow.FactoryConversationPrerequisiteMessage(durable, "starting Auto Chat") is null,
+            "a stale rendered no-root view must not make the control plane refuse an authoritative durable Factory root");
+
+        var missing = SessionStore.CreateDefaultSnapshot();
+        missing.Engine.FactoryMode = true;
+        Require(
+            MainWindow.FactoryConversationPrerequisiteMessage(missing, "running a model")
+                == "Factory mode needs a public Operator turn to start its shared group conversation. Send one before running a model.",
+            "a genuinely missing durable root should retain the existing actionable prerequisite message");
+
+        var participant = new DialogueMessage
+        {
+            Turn = 2,
+            Speaker = "Alpha",
+            SpeakerId = "alpha",
+            Kind = "message",
+            Status = "ok",
+            Text = "Durable participant marker."
+        };
+        durable.Engine.Messages.Add(participant);
+        conversations.StampPublicParticipant(durable, participant);
+        durable.Engine.Messages.Remove(root);
+        Require(
+            conversations.Inspect(durable) is { IsAnchored: true, IsOrphaned: true, HasUsableRoot: false },
+            "the orphan regression fixture should retain a durable conversation marker after its root is removed");
+        Require(
+            MainWindow.FactoryConversationPrerequisiteMessage(durable, "starting Auto Chat")
+                == "Factory mode cannot continue because its anchored public Operator root is missing. Restore it, or reset or fork the session before starting Auto Chat.",
+            "an orphaned durable root should retain the existing reset-or-fork guidance");
+
+        missing.Engine.FactoryMode = false;
+        Require(
+            MainWindow.FactoryConversationPrerequisiteMessage(missing, "running a model") is null
+                && MainWindow.FactoryConversationPrerequisiteMessage(null, "running a model") is null,
+            "Arena mode and an unavailable snapshot should continue to the run coordinator instead of inventing a Factory prerequisite");
+    }
+
     static void ControlPlaneParsesCommandsAndStableResponses()
     {
         var json = """
@@ -674,6 +740,7 @@ internal static partial class Program
         Require(AIArenaControlCommands.IsKnown("match.setup.close"), "control-plane registry should include Match Setup close");
         Require(AIArenaControlCommands.IsKnown("match.setup.export"), "control-plane registry should include portable Match Setup export");
         Require(AIArenaControlCommands.IsKnown("match.setup.import"), "control-plane registry should include portable Match Setup import");
+        Require(AIArenaControlCommands.IsKnown("match.model-behavior.set"), "control-plane registry should include persisted model-behavior switching");
         Require(AIArenaControlCommands.IsKnown("match.generation.state"), "control-plane registry should include generation state");
         Require(AIArenaControlCommands.IsKnown("match.generate.random"), "control-plane registry should include random generation");
         Require(AIArenaControlCommands.IsKnown("match.generate.ai"), "control-plane registry should include AI Choice generation");
@@ -741,7 +808,7 @@ internal static partial class Program
         Require(AIArenaControlCommands.IsKnown("experiment.state"), "control-plane registry should include privacy-safe Experiment Lab state");
         Require(AIArenaControlCommands.IsKnown("experiment.feature.select"), "control-plane registry should include registered Experiment Lab feature selection");
         Require(!AIArenaControlCommands.IsKnown("not.real"), "control-plane registry should reject unknown commands");
-        Require(AIArenaControlCapabilityCatalog.All.Count == 88, "capability catalog should expose the complete 88-command surface");
+        Require(AIArenaControlCapabilityCatalog.All.Count == 89, "capability catalog should expose the complete 89-command surface");
         Require(AIArenaControlCapabilityCatalog.All.Select(item => item.Command).Distinct(StringComparer.OrdinalIgnoreCase).Count() == AIArenaControlCapabilityCatalog.All.Count, "capability catalog commands should be unique");
         var reset = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == "arena.reset");
         Require(reset.Destructive && reset.RequiredArguments.Contains("confirm", StringComparer.OrdinalIgnoreCase), "capability catalog should mark arena reset as destructive and confirmation-gated");
@@ -806,6 +873,11 @@ internal static partial class Program
                 && !experimentSelect.Destructive
                 && experimentSelect.RequiredArguments.SequenceEqual(["key"]),
             "Experiment Lab selection should require exactly one safe registered key without claiming a mutation");
+        var modelBehaviorSet = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.MatchModelBehaviorSet);
+        Require(modelBehaviorSet.Category == "match"
+                && !modelBehaviorSet.Destructive
+                && modelBehaviorSet.RequiredArguments.SequenceEqual(["mode"]),
+            "model-behavior switching should advertise one required non-destructive mode argument");
         Require(AIArenaControlCapabilityCatalog.All.All(item => !string.IsNullOrWhiteSpace(item.Category) && !string.IsNullOrWhiteSpace(item.Description)), "capability catalog entries should remain auditable");
 
         var controlPlaneDocumentation = File.ReadAllText(FindWorkspaceFile("CONTROLPLANE.md"));
@@ -824,7 +896,7 @@ internal static partial class Program
         var functionCount = script
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Count(line => line.TrimStart().StartsWith("function ", StringComparison.OrdinalIgnoreCase));
-        Require(functionCount == 63, "PowerShell client should expose the complete 63-function surface");
+        Require(functionCount == 64, "PowerShell client should expose the complete 64-function surface");
         Require(script.Contains("function Get-AIArenaControlEndpoint", StringComparison.Ordinal)
             && script.Contains("AI_ARENA_CONTROL_OWNER", StringComparison.Ordinal)
             && script.Contains("$endpoint.PipeName", StringComparison.Ordinal)
@@ -912,6 +984,10 @@ internal static partial class Program
         Require(script.Contains("function New-AIArenaCheckpoint", StringComparison.Ordinal), "PowerShell client should expose checkpoint creation");
         Require(script.Contains("function Restore-AIArenaCheckpoint", StringComparison.Ordinal), "PowerShell client should expose checkpoint restore");
         Require(script.Contains("function Get-AIArenaMatchSetup", StringComparison.Ordinal), "PowerShell client should expose Match Setup state");
+        Require(script.Contains("function Set-AIArenaModelBehavior", StringComparison.Ordinal)
+            && script.Contains("[ValidateSet('arena', 'factory')]", StringComparison.Ordinal)
+            && script.Contains("-Command 'match.model-behavior.set'", StringComparison.Ordinal),
+            "PowerShell client should expose a typed Arena/Factory model-behavior switch");
         Require(script.Contains("function Open-AIArenaMatchSetup", StringComparison.Ordinal), "PowerShell client should expose Match Setup sections");
         Require(script.Contains("function Close-AIArenaMatchSetup", StringComparison.Ordinal), "PowerShell client should expose Match Setup close");
         Require(script.Contains("function Export-AIArenaMatchSetup", StringComparison.Ordinal), "PowerShell client should expose portable Match Setup export");
@@ -1179,6 +1255,12 @@ internal static partial class Program
                 () => null,
                 () => false,
                 (_, _) => Task.CompletedTask),
+            (factoryMode, _) => Task.FromResult(new AIArenaModelBehaviorModeResult(
+                false,
+                "not_used",
+                "Not used.",
+                factoryMode ? "factory" : "arena",
+                false)),
             events);
 
         Require(AIArenaControlPlaneProtocol.TryParseRequest("""{"id":"bad","command":"match.roster.set","args":{"count":"many"}}""", out var badRequest, out _), "invalid roster request shape should still parse at the protocol boundary");
@@ -1201,6 +1283,196 @@ internal static partial class Program
                 Directory.Delete(matrixRoot, recursive: true);
             }
         }
+    }
+
+    static void MatchSetupModelBehaviorControlSharesVisualMutationPath()
+    {
+        static T Pump<T>(Func<Task<T>> start)
+        {
+            var dispatcher = Dispatcher.CurrentDispatcher;
+            var previousContext = SynchronizationContext.Current;
+            try
+            {
+                SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
+                var task = start();
+                if (!task.IsCompleted)
+                {
+                    var frame = new DispatcherFrame();
+                    _ = task.ContinueWith(
+                        _ => dispatcher.BeginInvoke(
+                            new Action(() => frame.Continue = false),
+                            DispatcherPriority.Send),
+                        CancellationToken.None,
+                        TaskContinuationOptions.None,
+                        TaskScheduler.Default);
+                    Dispatcher.PushFrame(frame);
+                }
+
+                return task.GetAwaiter().GetResult();
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        }
+
+        RunStaTest(() =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ai-arena-model-behavior-control-{Guid.NewGuid():N}");
+            try
+            {
+                var store = new SessionStore(root);
+                var eventStore = new EventLogStore(root);
+                store.EnsureDefaultSessionAsync().GetAwaiter().GetResult();
+                SessionSummary? active = store.ListSessionsAsync().GetAwaiter().GetResult().Single();
+                var observedMode = "arena";
+                var refreshCalls = 0;
+                var mutationRuns = 0;
+                var eventHub = new AIArenaControlPlaneEventHub();
+                AIArenaControlEvent? published = null;
+                using var subscription = eventHub.Subscribe(item => published = item);
+                var modelBehaviorToggle = new CheckBox { IsChecked = true };
+                var modelBehaviorStatus = new TextBlock();
+                var coordinator = new MatchSetupCoordinator(
+                    store,
+                    eventStore,
+                    new CheckBox(),
+                    new StackPanel(),
+                    new StackPanel(),
+                    new TextBlock(),
+                    new TextBlock(),
+                    new Button(),
+                    new Button(),
+                    new ComboBox(),
+                    new Button(),
+                    modelBehaviorToggle,
+                    modelBehaviorStatus,
+                    () => active,
+                    _ => Brushes.Gray,
+                    _ => Brushes.CornflowerBlue,
+                    value => value,
+                    (first, _, _) => first,
+                    async (_, _, action, _) =>
+                    {
+                        mutationRuns++;
+                        await action();
+                        return true;
+                    },
+                    (snapshot, sessionId) => store.SaveSnapshotAsync(snapshot, sessionId),
+                    _ =>
+                    {
+                        refreshCalls++;
+                        return Task.CompletedTask;
+                    },
+                    (mode, message) =>
+                    {
+                        observedMode = mode;
+                        eventHub.Publish("match.model-behavior.changed", message, new { mode });
+                    });
+
+                var factory = Pump(() => coordinator.SetModelBehaviorModeAsync(factoryMode: true));
+                Require(factory.Ok && factory.Changed && factory.Mode == "factory", "the shared coordinator should persist a real Arena-to-Factory transition");
+                Require(store.LoadSnapshotAsync("default").GetAwaiter().GetResult()?.Engine.FactoryMode == true, "the shared model-behavior path should durably save Factory mode");
+                Require(modelBehaviorToggle.IsChecked == false
+                    && AutomationProperties.GetItemStatus(modelBehaviorToggle) == "Factory mode"
+                    && modelBehaviorStatus.Text.Contains("public group history", StringComparison.OrdinalIgnoreCase),
+                    "the same successful mutation should refresh truthful visible and automation state");
+                Require(refreshCalls == 1 && mutationRuns == 1, "one requested model-behavior transition should use one busy mutation and one session refresh");
+                Require(published?.Type == "match.model-behavior.changed" && observedMode == "factory", "the shared path should publish one model-behavior event for UI and automation callers");
+                var eventJson = published!.ToJsonLine();
+                Require(eventJson.Contains("\"mode\":\"factory\"", StringComparison.Ordinal)
+                    && !eventJson.Contains("prompt", StringComparison.OrdinalIgnoreCase)
+                    && !eventJson.Contains("content", StringComparison.OrdinalIgnoreCase),
+                    "the model-behavior event should expose mode only, never conversation content");
+
+                published = null;
+                var idempotent = Pump(() => coordinator.SetModelBehaviorModeAsync(factoryMode: true));
+                Require(idempotent.Ok && !idempotent.Changed && published is null, "an idempotent mode request should refresh state without inventing a change event");
+
+                var overlays = new ShellOverlayControlService(
+                    () => new AIArenaMatchSetupControlState(false, "scenario", "arena", active?.Id ?? "", "balanced", "Audit", 4, false)
+                    {
+                        ModelBehaviorMode = observedMode
+                    },
+                    () => { },
+                    () => { },
+                    _ => true,
+                    () => new AIArenaSettingsControlState(false, "", "dark-blue", false, true, "diagnostics", false, false, false, false, false, true, false, false, false, true, false, false, true, false),
+                    () => { },
+                    () => { },
+                    _ => { });
+                var matrix = new RivalryMatrixControlService(
+                    store,
+                    eventStore,
+                    () => active,
+                    () => false,
+                    (_, action) => action(CancellationToken.None),
+                    (_, _) => Task.CompletedTask);
+                var handler = new AIArenaMatchSetupControlHandler(
+                    overlays,
+                    _ => Task.FromResult(new AIArenaAgentRosterResizeResult(false, "not_used", "Not used.", 4)),
+                    matrix,
+                    new MatchSetupPortabilityService(
+                        store,
+                        eventStore,
+                        () => active,
+                        () => false,
+                        (_, _) => Task.CompletedTask),
+                    (factoryMode, cancellationToken) => coordinator.SetModelBehaviorModeAsync(factoryMode, cancellationToken),
+                    eventHub);
+
+                Require(AIArenaControlPlaneProtocol.TryParseRequest(
+                    """{"id":"missing","command":"match.model-behavior.set","args":{}}""",
+                    out var missingRequest,
+                    out _), "missing model-behavior mode should parse at the protocol boundary");
+                var missing = Pump(() => handler.ExecuteAsync(missingRequest));
+                Require(!missing.Ok && missing.ErrorCode == "missing_argument" && mutationRuns == 2, "a missing mode should fail before the shared mutation path runs");
+
+                Require(AIArenaControlPlaneProtocol.TryParseRequest(
+                    """{"id":"invalid","command":"match.model-behavior.set","args":{"mode":"raw-ish"}}""",
+                    out var invalidRequest,
+                    out _), "invalid model-behavior mode should parse at the protocol boundary");
+                var invalid = Pump(() => handler.ExecuteAsync(invalidRequest));
+                Require(!invalid.Ok && invalid.ErrorCode == "invalid_argument" && mutationRuns == 2, "an invalid mode should fail before mutation with a stable error");
+
+                Require(AIArenaControlPlaneProtocol.TryParseRequest(
+                    """{"id":"arena","command":"match.model-behavior.set","args":{"mode":"arena"}}""",
+                    out var arenaRequest,
+                    out _), "valid Arena mode should parse");
+                published = null;
+                var arena = Pump(() => handler.ExecuteAsync(arenaRequest));
+                Require(arena.Ok
+                    && observedMode == "arena"
+                    && store.LoadSnapshotAsync("default").GetAwaiter().GetResult()?.Engine.FactoryMode == false,
+                    "the control command should call the same coordinator and return its refreshed durable Arena state");
+                Require(published?.Type == "match.model-behavior.changed", "the control route should receive the shared content-free change event exactly once");
+
+                coordinator.UpdateBusyState(true);
+                Require(AIArenaControlPlaneProtocol.TryParseRequest(
+                    """{"id":"busy","command":"match.model-behavior.set","args":{"mode":"factory"}}""",
+                    out var busyRequest,
+                    out _), "busy model-behavior request should parse");
+                var busy = Pump(() => handler.ExecuteAsync(busyRequest));
+                Require(!busy.Ok && busy.ErrorCode == "busy", "the shared coordinator should return a stable busy error without changing mode");
+
+                coordinator.UpdateBusyState(false);
+                active = null;
+                var noSession = Pump(() => handler.ExecuteAsync(busyRequest));
+                Require(!noSession.Ok && noSession.ErrorCode == "session_unavailable", "the shared coordinator should return a stable no-session error");
+
+                var mainWindow = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+                var coordinatorSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MatchSetupCoordinator.cs"));
+                Require(mainWindow.Contains("MatchSetup.SetModelBehaviorModeAsync(factoryMode, cancellationToken)", StringComparison.Ordinal), "the control handler delegate should target the hosted MatchSetupCoordinator rather than duplicating persistence");
+                Require(coordinatorSource.Contains("var result = await SetModelBehaviorModeAsync(factoryMode);", StringComparison.Ordinal), "the visual checkbox should use the same coordinator mutation method as the control command");
+            }
+            finally
+            {
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+            }
+        });
     }
 
     static void AgentRosterControlPathPersistsBoundedCastChanges()
@@ -2030,6 +2302,7 @@ internal static partial class Program
         Require(combined.Contains("\"status.changed\"", StringComparison.Ordinal), "control-plane should publish status changed events");
         Require(combined.Contains("\"shell.overlay.changed\"", StringComparison.Ordinal), "control-plane should publish shell overlay changes");
         Require(combined.Contains("\"match.matrix.changed\"", StringComparison.Ordinal), "control-plane should publish relationship matrix changes");
+        Require(mainWindow.Contains("\"match.model-behavior.changed\"", StringComparison.Ordinal), "control-plane should publish model-behavior changes from the shared visual mutation path");
         Require(mainWindow.Contains("MatchSetupOpen =", StringComparison.Ordinal) && mainWindow.Contains("SettingsOpen =", StringComparison.Ordinal), "uniform command state should include Match Setup and Settings overlays");
         Require(mainWindow.Contains("\"match.generation.changed\"", StringComparison.Ordinal), "control-plane should publish match generation changes");
         Require(mainWindow.Contains("GenerationHistoryCount =", StringComparison.Ordinal), "uniform command state should include replay history count");
@@ -2058,6 +2331,7 @@ internal static partial class Program
         Require(selectBlock.Contains("AppSettingsWorkflow.SetVisible(false);", StringComparison.Ordinal), "main control-plane navigation views should close Settings");
         Require(selectBlock.Contains("case \"world\":", StringComparison.Ordinal) && selectBlock.Contains("if (!IsWorldDebugEnabled(_wpfSettings))", StringComparison.Ordinal), "control-plane World navigation should obey the default-off debug gate");
         Require(selectBlock.Contains("case \"agent\":", StringComparison.Ordinal) && selectBlock.Contains("if (!IsAgentWorkspaceEnabled(_wpfSettings))", StringComparison.Ordinal), "control-plane Agent navigation should obey the normal Settings preference");
+        Require(selectBlock.Contains("case \"experiment\":", StringComparison.Ordinal) && selectBlock.Contains("if (!IsExperimentLabEnabled(_wpfSettings))", StringComparison.Ordinal), "control-plane Experiment Lab navigation should obey the master debug gate");
         Require(mainWindow.Contains("\"feature_disabled\"", StringComparison.Ordinal) && mainWindow.Contains("Settings -> Agent workspace", StringComparison.Ordinal), "disabled optional surfaces should report a stable actionable control-plane error");
         var selectedBlock = mainWindow[selectedStart..Math.Min(mainWindow.Length, selectedStart + 800)];
         var settingsIndex = selectedBlock.IndexOf("AppSettingsPanel.Visibility", StringComparison.Ordinal);
@@ -2109,6 +2383,13 @@ internal static partial class Program
         var customMatch = select[customMatchStart..worldStart];
         Require(customMatch.Contains("OpenMatchSetupFromControlPlane()", StringComparison.Ordinal), "navigation.select and match.setup.open should share one overlay-consistent path");
         Require(!customMatch.Contains("ShowCustomMatchPanel()", StringComparison.Ordinal), "navigation.select should not bypass Match Setup overlay cleanup");
+
+        var modelsStart = select.IndexOf("case \"models\":", StringComparison.Ordinal);
+        var modelsEnd = select.IndexOf("case \"world\":", modelsStart, StringComparison.Ordinal);
+        Require(modelsStart >= 0 && modelsEnd > modelsStart, "navigation.select should expose the top-rail Models surface");
+        var models = select[modelsStart..modelsEnd];
+        Require(models.Contains("CloseNamedTransientShellFlyouts()", StringComparison.Ordinal), "navigation.select models should dismiss transient shell flyouts");
+        Require(models.Contains("ShowProviderModelsPanel()", StringComparison.Ordinal), "navigation.select models should share the visible Models surface path");
 
         var state = CSharpMethodBlock(mainWindow, "private object BuildControlPlaneStateSummary()");
         Require(state.Contains("MatchSetupOpen = CustomMatchPanel.Visibility == Visibility.Visible", StringComparison.Ordinal), "post-command state should report actual Match Setup visibility");

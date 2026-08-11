@@ -56,8 +56,14 @@
     <Thickness x:Key="Arena.Inset.CompactAction">8,6</Thickness>
     <Thickness x:Key="Arena.Inset.Tab">7,5</Thickness>
     <Thickness x:Key="Arena.Inset.StatusCard">10,7</Thickness>
+    <Thickness x:Key="Arena.Inset.InteractiveCard">12,10</Thickness>
+    <Thickness x:Key="Arena.Inset.StatusChip">8,3</Thickness>
+    <Thickness x:Key="Arena.Inset.StatusChipCompact">6,2</Thickness>
+    <Thickness x:Key="Arena.Inset.Menu">3</Thickness>
+    <Thickness x:Key="Arena.Inset.MenuItem">10,5</Thickness>
     <Thickness x:Key="Arena.Inset.ListItem">9,7</Thickness>
     <Thickness x:Key="Arena.Inset.PageHeader">16,12</Thickness>
+    <Thickness x:Key="Arena.Inset.PageHeader.Compact">0,3,0,6</Thickness>
     <Thickness x:Key="Arena.Inset.ToolbarAction">10,0</Thickness>
     <Thickness x:Key="Arena.Inset.StatusDock">10,8</Thickness>
     <Thickness x:Key="Arena.Layout.TopBarMargin">10,3</Thickness>
@@ -119,6 +125,15 @@
     <Thickness x:Key="Arena.Layout.WorkspaceRootMargin">4,2,4,4</Thickness>
     <Thickness x:Key="Arena.Layout.WorkspaceDescriptionMargin">0,3,0,12</Thickness>
     <Thickness x:Key="Arena.Layout.InspectorDetailMargin">4,10,4,4</Thickness>
+    <Thickness x:Key="Arena.Layout.PageHeaderMargin">0,0,0,12</Thickness>
+    <Thickness x:Key="Arena.Layout.PageHeaderCompactMargin">0,0,0,6</Thickness>
+    <Thickness x:Key="Arena.Layout.PageHeaderActionMargin">12,0,0,0</Thickness>
+    <Thickness x:Key="Arena.Layout.StateCardMargin">0,0,8,8</Thickness>
+    <Thickness x:Key="Arena.Layout.FeatureGroupHeaderMargin">4,10,4,5</Thickness>
+    <Thickness x:Key="Arena.Layout.HeaderStatusMargin">10,1,0,0</Thickness>
+    <sys:Double x:Key="Arena.Layout.HeaderStatusMaxWidth">300</sys:Double>
+    <Thickness x:Key="Arena.Layout.MenuSeparatorMargin">8,4</Thickness>
+    <Thickness x:Key="Arena.Layout.SkeletonLeadMargin">0,16,0,8</Thickness>
 
     <!-- Compatibility keys retained until their existing consumers migrate. -->
     <Thickness x:Key="Arena.Gap.Inline">6,0,0,0</Thickness>
@@ -127,6 +142,7 @@
 
     <!-- Target sizes include the full hit surface, not only the visible glyph. -->
     <sys:Double x:Key="Arena.Target.Minimum">32</sys:Double>
+    <sys:Double x:Key="Arena.Target.Primary">36</sys:Double>
     <sys:Double x:Key="Arena.Target.Compact">28</sys:Double>
     <sys:Double x:Key="Arena.Target.Icon">30</sys:Double>
     <sys:Double x:Key="Arena.ScrollBar.Thickness">12</sys:Double>
@@ -143,14 +159,15 @@
         Timeline while still respecting reduced-motion expectations.
     -->
     <Duration x:Key="Arena.Motion.StaticDuration">0:0:0</Duration>
+    <Duration x:Key="Arena.Motion.QuickDuration">0:0:0.12</Duration>
+    <Duration x:Key="Arena.Motion.FeedbackDuration">0:0:0.14</Duration>
+    <Duration x:Key="Arena.Motion.DisclosureDuration">0:0:0.16</Duration>
 
-    <!-- Theme-independent accessibility accents. Theme surfaces remain dynamic. -->
-    <SolidColorBrush x:Key="Arena.Brush.FocusRing" Color="#9FE7FF" />
-    <SolidColorBrush x:Key="Arena.Brush.FocusRingInner" Color="#E8FAFF" />
-    <SolidColorBrush x:Key="Arena.Brush.Info" Color="#65D7F0" />
-    <SolidColorBrush x:Key="Arena.Brush.Success" Color="#83DB93" />
-    <SolidColorBrush x:Key="Arena.Brush.Warning" Color="#F2CB72" />
-    <SolidColorBrush x:Key="Arena.Brush.Critical" Color="#FF8F96" />
+    <!--
+        Semantic accessibility brushes live in ThemeBrushes.xaml and are
+        replaced from the active palette at runtime. Keeping them palette-bound
+        is essential on Light, where the old fixed pastel values fell below 3:1.
+    -->
     <SolidColorBrush x:Key="Arena.Brush.HoverOverlay" Color="#12FFFFFF" />
     <SolidColorBrush x:Key="Arena.Brush.PressedOverlay" Color="#1F000000" />
 

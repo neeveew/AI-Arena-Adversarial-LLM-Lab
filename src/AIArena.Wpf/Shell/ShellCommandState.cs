@@ -6,12 +6,14 @@ internal enum ShellSurface
     ExperimentLab,
     World,
     MatchSetup,
+    Models,
     Agent,
     Collaborate
 }
 
 internal sealed record ShellCommandState(
     bool ShowMatchSetup,
+    bool ShowModels,
     bool ShowSearch,
     bool ShowExport,
     bool ShowView,
@@ -28,9 +30,11 @@ internal sealed record ShellCommandState(
             ShellSurface.ExperimentLab => Hidden,
             ShellSurface.World => MatchSetupOnly,
             ShellSurface.MatchSetup => Lab,
+            ShellSurface.Models => Lab,
             ShellSurface.Agent => Hidden,
             ShellSurface.Collaborate => new(
                 ShowMatchSetup: false,
+                ShowModels: false,
                 ShowSearch: true,
                 ShowExport: true,
                 ShowView: false,
@@ -44,6 +48,7 @@ internal sealed record ShellCommandState(
 
     private static ShellCommandState Lab { get; } = new(
         ShowMatchSetup: true,
+        ShowModels: true,
         ShowSearch: true,
         ShowExport: true,
         ShowView: true,
@@ -54,6 +59,7 @@ internal sealed record ShellCommandState(
 
     private static ShellCommandState MatchSetupOnly { get; } = new(
         ShowMatchSetup: true,
+        ShowModels: true,
         ShowSearch: false,
         ShowExport: false,
         ShowView: false,
@@ -64,6 +70,7 @@ internal sealed record ShellCommandState(
 
     private static ShellCommandState Hidden { get; } = new(
         ShowMatchSetup: false,
+        ShowModels: false,
         ShowSearch: false,
         ShowExport: false,
         ShowView: false,

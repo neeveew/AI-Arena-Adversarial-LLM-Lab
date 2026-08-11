@@ -4,10 +4,11 @@
         Startup and design-time defaults for the shell's themed brushes.
 
         ShellNavigationCoordinator.ApplyTheme writes every one of these keys into
-        the window's own resources at startup, and the window shadows the
-        application scope, so at runtime these values are replaced before the
-        first frame. They matter for the XAML designer, and as the fallback for
-        any lookup that happens before a theme is applied.
+        both the window and application resources at startup. The application
+        copy is required by detached context-menu, tooltip, and nested-popup
+        presentation sources; at runtime both scopes are replaced before the
+        first frame. These defaults still matter for the XAML designer and any
+        lookup that happens before a theme is applied.
 
         The values mirror ThemePalette "dark-arena", which is the default theme.
         ThemeBrushDefaultsTests asserts that mirror still holds - three of these
@@ -51,4 +52,13 @@
     <SolidColorBrush x:Key="DeltaAccentBrush" Color="#9EA6FF" />
     <SolidColorBrush x:Key="NarratorAccentBrush" Color="#E17DB6" />
     <SolidColorBrush x:Key="OperatorAccentBrush" Color="#7FB7FF" />
+
+    <!-- Palette-bound semantic aliases. ShellNavigationCoordinator replaces
+         these with each active theme before the first interactive frame. -->
+    <SolidColorBrush x:Key="Arena.Brush.FocusRing" Color="#2EA889" />
+    <SolidColorBrush x:Key="Arena.Brush.FocusRingInner" Color="#DDE7E2" />
+    <SolidColorBrush x:Key="Arena.Brush.Info" Color="#4DD4EF" />
+    <SolidColorBrush x:Key="Arena.Brush.Success" Color="#7DD98B" />
+    <SolidColorBrush x:Key="Arena.Brush.Warning" Color="#F0C36A" />
+    <SolidColorBrush x:Key="Arena.Brush.Critical" Color="#FF7B82" />
 </ResourceDictionary>

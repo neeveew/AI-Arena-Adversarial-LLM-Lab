@@ -47,6 +47,13 @@ internal sealed class TranscriptMutationCoordinator
 
         await MutateTranscriptAsync(DeleteStatus(message), async snapshot =>
         {
+            var storedMessage = TranscriptService.FindMessage(snapshot, message.Turn, message.SpeakerId, message.CreatedAt);
+            if (storedMessage is not null && FactoryConversationService.IsConversationRoot(storedMessage))
+            {
+                setLoadStatus(FactoryRootDeleteBlockedStatus(message));
+                return false;
+            }
+
             var deleted = transcriptService.DeleteMessage(snapshot, message.Turn, message.SpeakerId, message.CreatedAt);
             if (!deleted)
             {
@@ -89,6 +96,11 @@ internal sealed class TranscriptMutationCoordinator
     internal static string DeleteStatus(TranscriptMessage message)
     {
         return $"Deleted turn {message.Turn}.";
+    }
+
+    internal static string FactoryRootDeleteBlockedStatus(TranscriptMessage message)
+    {
+        return $"Turn {message.Turn} is the Factory group root and cannot be deleted individually. Use Reset Arena or start a clean session to begin a new group.";
     }
 
     internal static string PinStatus(TranscriptMessage message)

@@ -103,6 +103,7 @@ var tests = new List<(string Name, Action Test)>
     ("llama.cpp retry delay honors caller cancellation", LlamaCppRetryDelayHonorsCallerCancellation),
     ("extracts LM Studio native chat response", ExtractLmStudioNativeChatResponse),
     ("runs LM Studio native chat endpoint", RunsLmStudioNativeChatEndpoint),
+    ("omits disabled reasoning from LM Studio native chat", OmitsDisabledReasoningFromLmStudioNativeChat),
     ("continues LM Studio native chat by response id", ContinuesLmStudioNativeChatByResponseId),
     ("can disable LM Studio native stateful chat", CanDisableLmStudioNativeStatefulChat),
     ("lists LM Studio native models endpoint", ListsLmStudioNativeModelsEndpoint),
@@ -243,6 +244,27 @@ var tests = new List<(string Name, Action Test)>
     ("voice adherence scores cute tone", VoiceAdherenceScoresCuteTone),
     ("generates narrator decision card", GenerateNarratorDecisionCard),
     ("narrator decision card preserves internet evidence", NarratorDecisionCardPreservesInternetEvidence),
+    ("factory mode remains opt-in and standard prompt is unchanged", FactoryModeTests.StandardModeDefaultUnchanged),
+    ("factory mode preserves and sends the exact initiating Operator root", FactoryModeTests.SendsExactInitiatingPublicOperatorRoot),
+    ("factory mode flattens exact public group history in LM Studio native HTTP payload", FactoryModeTests.LmStudioNativePayloadPreservesExactInput),
+    ("factory mode preserves structured public group history in OpenAI compatible HTTP payload", FactoryModeTests.OpenAiCompatiblePayloadPreservesStructuredGroupHistory),
+    ("factory mode preserves structured public group history in Ollama native HTTP payload", FactoryModeTests.OllamaNativePayloadPreservesStructuredGroupHistory),
+    ("factory mode missing input does not call provider or mutate state", FactoryModeTests.MissingInputDoesNotCallProviderOrMutateState),
+    ("factory mode bypasses Arena orchestration and native continuation", FactoryModeTests.BypassesArenaOrchestrationAndNativeContinuation),
+    ("factory mode bypasses repair and fallback", FactoryModeTests.BypassesRepairAndFallback),
+    ("factory mode retry uses causal public group history", FactoryModeTests.RetryUsesCausalPublicGroup),
+    ("factory group maps self peers and Operator turns per target", FactoryModeTests.BuildsTargetRelativePublicGroupHistory),
+    ("factory group normalizes adjacent roles for strict chat templates", FactoryModeTests.NormalizesAdjacentRolesForStrictChatTemplates),
+    ("factory group preserves durable participant history across roster resize", FactoryModeTests.PreservesDurableParticipantHistoryAcrossRosterResize),
+    ("factory group preserves self history when an agent model changes", FactoryModeTests.PreservesSelfHistoryWhenAgentModelChanges),
+    ("factory group retains root plus newest forty nine entries", FactoryModeTests.RetainsRootAndNewestFortyNineEntries),
+    ("factory group fingerprints retained target-relative provider context", FactoryModeTests.FingerprintsActualRetainedProviderContext),
+    ("factory group preserves Arena interludes and later Operator turns", FactoryModeTests.PreservesArenaInterludeAndLaterOperatorTurns),
+    ("factory group orphaned root never silently reanchors", FactoryModeTests.OrphanedRootNeverSilentlyReanchors),
+    ("factory group protects sole root deletion without blocking reset", FactoryModeTests.ProtectsSoleRootDeletionWithoutBlockingReset),
+    ("factory group persists restart and projects forks causally", FactoryModeTests.PersistsAcrossRestartAndProjectsForksCausally),
+    ("factory group migrates legacy history from causal root", FactoryModeTests.MigratesLegacyFactoryHistoryFromCausalRoot),
+    ("factory group retry uses original contract and causal history", FactoryModeTests.RetryUsesOriginalFactoryContractAndCausalGroup),
     ("plans next native one turn speaker", PlanNextNativeOneTurnSpeaker),
     ("native prompt prioritizes operator cooperation", NativePromptPrioritizesOperatorCooperation),
     ("native runner carries previous LM Studio response id", NativeRunnerCarriesPreviousLmStudioResponseId),
@@ -851,35 +873,37 @@ static void RunsLmStudioNativeChatEndpoint()
     }
     """);
     var client = new ModelProviderClient(new HttpClient(handler));
+    var config = new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:1234/v1",
+        ApiMode = ModelProviderApiModes.LmStudioNative,
+        ApiToken = "secret-token",
+        Model = "local-model",
+        Timeout = 5,
+        Temperature = 0.2,
+        MaxOutputTokens = 64,
+        ContextLength = 8192,
+        Reasoning = "low",
+        NativeIdleTtlSeconds = 300
+    };
 
     var result = client.CompleteChatAsync(
-        new ModelProviderConfig
-        {
-            BaseUrl = "http://127.0.0.1:1234/v1",
-            ApiMode = ModelProviderApiModes.LmStudioNative,
-            ApiToken = "secret-token",
-            Model = "local-model",
-            Timeout = 5,
-            Temperature = 0.2,
-            MaxOutputTokens = 64,
-            ContextLength = 8192,
-            Reasoning = "low",
-            NativeIdleTtlSeconds = 300
-        },
+        config,
         [
             new ModelChatMessage("system", "System rule."),
-            new ModelChatMessage("user", "User request.")
+            new ModelChatMessage("user", "  User request.  ")
         ]).GetAwaiter().GetResult();
 
     Require(result.Ok, $"native chat failed: {result.Error}");
     Require(handler.RequestUri?.AbsoluteUri == "http://127.0.0.1:1234/api/v1/chat", "native chat should post to /api/v1/chat");
     Require(handler.Authorization == "Bearer secret-token", "native chat should include configured bearer token");
     Require(handler.Body.Contains("\"system_prompt\":\"System rule.\"", StringComparison.Ordinal), "native payload should include system_prompt");
-    Require(handler.Body.Contains("\"input\":\"User request.\"", StringComparison.Ordinal), "native payload should include input");
+    Require(handler.Body.Contains("\"input\":\"User request.\"", StringComparison.Ordinal), "default native payload formatting should retain its trimmed input contract");
     Require(handler.Body.Contains("\"context_length\":8192", StringComparison.Ordinal), "native payload should include context_length");
     Require(handler.Body.Contains("\"reasoning\":\"low\"", StringComparison.Ordinal), "native payload should include reasoning");
     Require(handler.Body.Contains("\"store\":true", StringComparison.Ordinal), "native payload should enable LM Studio stateful chat by default");
-    Require(handler.Body.Contains("\"ttl\":300", StringComparison.Ordinal), "native payload should include idle TTL when configured");
+    Require(!handler.Body.Contains("\"ttl\"", StringComparison.Ordinal), "current LM Studio /api/v1/chat payload must omit unsupported ttl");
+    Require(config.NativeIdleTtlSeconds == 300, "omitting chat ttl must not discard the saved model-lifecycle setting");
     Require(result.Text == "native answer", "native answer mismatch");
     Require(result.Reasoning == "native trace", "native reasoning mismatch");
     Require(result.TotalTokens == 15, "native usage mismatch");
@@ -887,6 +911,36 @@ static void RunsLmStudioNativeChatEndpoint()
     Require(result.TimeToFirstTokenMs == 500, "native telemetry TTFT mismatch");
     Require(result.ModelLoadTimeMs == 1250, "native model load telemetry mismatch");
     Require(result.ResponseId == "resp_native", "native response id mismatch");
+}
+
+static void OmitsDisabledReasoningFromLmStudioNativeChat()
+{
+    var handler = new CaptureHandler("""
+    {
+      "model_instance_id": "local-model",
+      "output": [
+        {"type":"message","content":"native answer"}
+      ]
+    }
+    """);
+    var client = new ModelProviderClient(new HttpClient(handler));
+    var config = new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:1234/v1",
+        ApiMode = ModelProviderApiModes.LmStudioNative,
+        Model = "local-model",
+        Timeout = 5,
+        Reasoning = "off"
+    };
+
+    var result = client.CompleteChatAsync(
+        config,
+        [new ModelChatMessage("user", "User request.")]).GetAwaiter().GetResult();
+
+    Require(result.Ok, $"native chat with reasoning disabled failed: {result.Error}");
+    using var payload = JsonDocument.Parse(handler.Body);
+    Require(!payload.RootElement.TryGetProperty("reasoning", out _),
+        "LM Studio native reasoning=off must omit the optional reasoning field");
 }
 
 static void ContinuesLmStudioNativeChatByResponseId()
@@ -4291,6 +4345,16 @@ static void NarratorPromptIncludesInternetContext()
     snapshot.Engine.Messages.Add(new DialogueMessage
     {
         Turn = 3,
+        Speaker = "Operator",
+        SpeakerId = "operator",
+        Kind = "message",
+        Status = "ok",
+        Text = "\t  Padded narrator transcript input.  \r\n",
+        CreatedAt = 3
+    });
+    snapshot.Engine.Messages.Add(new DialogueMessage
+    {
+        Turn = 3,
         Speaker = "Internet",
         SpeakerId = "internet",
         Kind = "internet_tool",
@@ -4308,6 +4372,9 @@ static void NarratorPromptIncludesInternetContext()
     Require(requestText.Contains("Available arena context already in the transcript", StringComparison.OrdinalIgnoreCase), "narrator prompt should label existing arena context");
     Require(requestText.Contains("New safety rule changed the risk framing", StringComparison.OrdinalIgnoreCase), "narrator prompt should include external internet context");
     Require(requestText.Contains("benchmark regressions are unresolved", StringComparison.OrdinalIgnoreCase), "narrator prompt should include internet tool context");
+    Require(requestText.Contains("Turn 3 Operator: Padded narrator transcript input.", StringComparison.Ordinal)
+        && !requestText.Contains("\t  Padded narrator transcript input.", StringComparison.Ordinal),
+        "narrator prompts must trim durable Operator edges outside Factory mode");
     Require(requestText.Contains("do not fetch new data", StringComparison.OrdinalIgnoreCase), "narrator prompt should avoid new external data fetches");
     Directory.Delete(root, recursive: true);
 }
@@ -4665,6 +4732,16 @@ static void GenerateNarratorDecisionCard()
         Text = "External context says the rollback threshold tightened.",
         CreatedAt = 2
     });
+    snapshot.Engine.Messages.Add(new DialogueMessage
+    {
+        Turn = 3,
+        Speaker = "Operator",
+        SpeakerId = "operator",
+        Kind = "message",
+        Status = "ok",
+        Text = "\t  Padded decision-card transcript input.  \r\n",
+        CreatedAt = 3
+    });
     store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
     var client = new FakeModelProviderClient("Agreed: test\nConflict: risk\nRisk: drift\nNext operator move: ask for evidence", "decision reasoning");
     var service = new NarratorService(client, store, log);
@@ -4674,6 +4751,9 @@ static void GenerateNarratorDecisionCard()
     var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
     var requestText = string.Join(Environment.NewLine, client.Requests[0].Select(message => message.Content));
     Require(requestText.Contains("External context says the rollback threshold tightened", StringComparison.OrdinalIgnoreCase), "decision card prompt should include existing internet context");
+    Require(requestText.Contains("Turn 3 Operator: Padded decision-card transcript input.", StringComparison.Ordinal)
+        && !requestText.Contains("\t  Padded decision-card transcript input.", StringComparison.Ordinal),
+        "decision-card prompts must trim durable Operator edges outside Factory mode");
     Require(requestText.Contains("do not fetch new data", StringComparison.OrdinalIgnoreCase), "decision card prompt should avoid new external data fetches");
     Require(loaded.Engine.DecisionCard.Text.Contains("Next operator move", StringComparison.OrdinalIgnoreCase), "decision card text was not stored");
     Require(loaded.Engine.DecisionCard.UpdatedAt > 0, "decision card timestamp was not stored");

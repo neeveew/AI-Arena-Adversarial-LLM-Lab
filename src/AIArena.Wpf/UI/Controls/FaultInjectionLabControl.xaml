@@ -1,6 +1,7 @@
 <UserControl x:Class="AIArena.Wpf.Controls.FaultInjectionLabControl"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:AIArena.Wpf.Controls"
              x:Name="FaultLabRoot"
              MinWidth="320"
              MinHeight="320"
@@ -35,16 +36,15 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <StackPanel Margin="{DynamicResource Arena.Layout.WorkspaceHeaderMargin}">
-            <TextBlock FontFamily="Segoe UI Variable Display, Segoe UI"
-                       FontSize="{DynamicResource Arena.Type.PageTitleSize}"
-                       FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextBrush}"
-                       Text="Fault-Injection Lab" />
-            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                       Style="{StaticResource FaultLabCaption}"
-                       Text="Armed profiles are process-only. A provider-boundary observation proves the injected cause, not higher-level recovery." />
-        </StackPanel>
+        <controls:WorkspacePageHeaderControl x:Name="FaultWorkspaceHeader"
+                                              Title="Fault-Injection Lab"
+                                              Description="Arm a bounded process-only profile and keep injected cause separate from unavailable recovery evidence."
+                                              Status="Process only"
+                                              StatusKind="Status"
+                                              PrimaryActionText="Arm profile"
+                                              PrimaryActionAutomationName="Arm fault profile"
+                                              PrimaryActionHelpText="Validates and arms this process-only provider fault profile."
+                                              PrimaryActionRequested="ArmFaultButton_Click" />
 
         <Border Grid.Row="1"
                 Margin="{DynamicResource Arena.Layout.WorkspaceStatusMargin}"
@@ -133,14 +133,6 @@
                                  AutomationProperties.Name="Maximum concurrent provider calls" />
 
                         <WrapPanel HorizontalAlignment="Right">
-                            <Button x:Name="ArmFaultButton"
-                                    MinHeight="34"
-                                    Margin="{DynamicResource Arena.Gap.Wrap.After.Compact}"
-                                    Style="{DynamicResource Arena.Button.Primary}"
-                                    Content="Arm"
-                                    Click="ArmFaultButton_Click"
-                                    AutomationProperties.Name="Arm fault profile"
-                                    AutomationProperties.HelpText="Validates and arms this process-only provider fault profile." />
                             <Button x:Name="RunFaultProbeButton"
                                     MinHeight="34"
                                     Margin="{DynamicResource Arena.Gap.Wrap.After.Compact}"

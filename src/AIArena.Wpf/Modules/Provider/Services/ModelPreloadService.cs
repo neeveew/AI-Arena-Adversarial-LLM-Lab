@@ -30,7 +30,9 @@ public sealed class ModelPreloadService
         string apiToken = "",
         int contextLength = 0,
         int nativeIdleTtlSeconds = 0,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool requireCatalogMatch = false,
+        Action? mutationStarting = null)
     {
         var models = NormalizeSelectedModels(selectedModels);
 
@@ -42,7 +44,14 @@ public sealed class ModelPreloadService
         var normalizedApiMode = ModelProviderApiModes.Normalize(apiMode);
         if (normalizedApiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
         {
-            return await PreloadOllamaAsync(providerBaseUrl, models, apiToken, contextLength, nativeIdleTtlSeconds, cancellationToken);
+            return await PreloadOllamaAsync(
+                providerBaseUrl,
+                models,
+                apiToken,
+                contextLength,
+                nativeIdleTtlSeconds,
+                mutationStarting,
+                cancellationToken);
         }
 
         if (!normalizedApiMode.Equals(ModelProviderApiModes.LmStudioNative, StringComparison.OrdinalIgnoreCase))
@@ -57,7 +66,11 @@ public sealed class ModelPreloadService
         if (!catalog.Ok)
         {
             return models
-                .Select(model => new ModelPreloadResult(model, "unsupported", catalog.Error, true))
+                .Select(model => new ModelPreloadResult(
+                    model,
+                    "unsupported",
+                    ProviderModelCatalogProjectionService.SafeStatusForDisplay(catalog.Error, apiToken),
+                    true))
                 .ToArray();
         }
 
@@ -66,6 +79,16 @@ public sealed class ModelPreloadService
         {
             cancellationToken.ThrowIfCancellationRequested();
             var entry = catalog.Find(model);
+            if (entry is null && requireCatalogMatch)
+            {
+                results.Add(new ModelPreloadResult(
+                    model,
+                    "missing",
+                    "The model is no longer present in LM Studio's native catalog. Refresh before loading it.",
+                    true));
+                continue;
+            }
+
             var loadModel = entry?.PreferredIdentifier ?? model;
             var effectiveContextLength = EffectiveContextLength(entry, contextLength);
             var effectiveNativeIdleTtlSeconds = NormalizeNativeIdleTtlSeconds(nativeIdleTtlSeconds);
@@ -80,23 +103,28 @@ public sealed class ModelPreloadService
                 var unloadResults = new List<ModelPreloadResult>();
                 if (!TryLoadedInstanceIds(entry, model, out var instanceIds))
                 {
-                    results.Add(new ModelPreloadResult(model, "failed", MissingLoadedInstanceIdDetail(entry), true));
+                    results.Add(new ModelPreloadResult(model, "failed", MissingLoadedInstanceIdDetail(), true));
                     continue;
                 }
 
                 foreach (var instanceId in instanceIds)
                 {
-                    unloadResults.Add(await UnloadModelAsync(apiBase, model, instanceId, apiToken, cancellationToken));
+                    unloadResults.Add(await UnloadModelAsync(apiBase, model, instanceId, apiToken, mutationStarting, cancellationToken));
                 }
 
                 var unloadFailures = unloadResults.Where(result => result.IsFailure).ToArray();
                 if (unloadFailures.Length > 0)
                 {
-                    results.Add(new ModelPreloadResult(model, "failed", $"Could not unload low-context instance before reload. {string.Join(" ", unloadFailures.Select(result => result.Detail))}", true));
+                    results.Add(new ModelPreloadResult(
+                        model,
+                        "failed",
+                        $"Could not unload low-context instance before reload. {string.Join(" ", unloadFailures.Select(result => result.Detail))}",
+                        true,
+                        MutationOutcomeUnknown: unloadResults.Any(result => !result.IsFailure || result.MutationOutcomeUnknown)));
                     continue;
                 }
 
-                var loadResult = await LoadModelAsync(apiBase, model, loadModel, apiToken, effectiveContextLength, effectiveNativeIdleTtlSeconds, cancellationToken);
+                var loadResult = await LoadModelAsync(apiBase, model, loadModel, apiToken, effectiveContextLength, effectiveNativeIdleTtlSeconds, mutationStarting, cancellationToken);
                 results.Add(loadResult.IsFailure
                     ? ApplyContextCapDetail(loadResult, entry, contextLength, effectiveContextLength)
                     : loadResult with
@@ -107,7 +135,7 @@ public sealed class ModelPreloadService
                 continue;
             }
 
-            var result = await LoadModelAsync(apiBase, model, loadModel, apiToken, effectiveContextLength, effectiveNativeIdleTtlSeconds, cancellationToken);
+            var result = await LoadModelAsync(apiBase, model, loadModel, apiToken, effectiveContextLength, effectiveNativeIdleTtlSeconds, mutationStarting, cancellationToken);
             results.Add(ApplyContextCapDetail(result, entry, contextLength, effectiveContextLength));
         }
 
@@ -119,7 +147,8 @@ public sealed class ModelPreloadService
         IEnumerable<string> selectedModels,
         string apiMode = ModelProviderApiModes.LmStudioNative,
         string apiToken = "",
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? mutationStarting = null)
     {
         var models = NormalizeSelectedModels(selectedModels);
         if (models.Length == 0)
@@ -130,7 +159,7 @@ public sealed class ModelPreloadService
         var normalizedApiMode = ModelProviderApiModes.Normalize(apiMode);
         if (normalizedApiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
         {
-            return await UnloadOllamaAsync(providerBaseUrl, models, apiToken, cancellationToken);
+            return await UnloadOllamaAsync(providerBaseUrl, models, apiToken, mutationStarting, cancellationToken);
         }
 
         if (!normalizedApiMode.Equals(ModelProviderApiModes.LmStudioNative, StringComparison.OrdinalIgnoreCase))
@@ -145,7 +174,11 @@ public sealed class ModelPreloadService
         if (!catalog.Ok)
         {
             return models
-                .Select(model => new ModelPreloadResult(model, "unsupported", catalog.Error, true))
+                .Select(model => new ModelPreloadResult(
+                    model,
+                    "unsupported",
+                    ProviderModelCatalogProjectionService.SafeStatusForDisplay(catalog.Error, apiToken),
+                    true))
                 .ToArray();
         }
 
@@ -169,19 +202,24 @@ public sealed class ModelPreloadService
             var unloadResults = new List<ModelPreloadResult>();
             if (!TryLoadedInstanceIds(entry, model, out var instanceIds))
             {
-                results.Add(new ModelPreloadResult(model, "failed", MissingLoadedInstanceIdDetail(entry), true));
+                results.Add(new ModelPreloadResult(model, "failed", MissingLoadedInstanceIdDetail(), true));
                 continue;
             }
 
             foreach (var instanceId in instanceIds)
             {
-                unloadResults.Add(await UnloadModelAsync(apiBase, model, instanceId, apiToken, cancellationToken));
+                unloadResults.Add(await UnloadModelAsync(apiBase, model, instanceId, apiToken, mutationStarting, cancellationToken));
             }
 
             var failures = unloadResults.Where(result => result.IsFailure).ToArray();
             results.Add(failures.Length == 0
                 ? new ModelPreloadResult(model, "unloaded", $"Unloaded {unloadResults.Count} instance(s) from LM Studio.", false)
-                : new ModelPreloadResult(model, "failed", string.Join(" ", failures.Select(result => result.Detail)), true));
+                : new ModelPreloadResult(
+                    model,
+                    "failed",
+                    string.Join(" ", failures.Select(result => result.Detail)),
+                    true,
+                    MutationOutcomeUnknown: unloadResults.Any(result => !result.IsFailure || result.MutationOutcomeUnknown)));
         }
 
         return results;
@@ -193,6 +231,7 @@ public sealed class ModelPreloadService
         string apiToken,
         int contextLength,
         int nativeIdleTtlSeconds,
+        Action? mutationStarting,
         CancellationToken cancellationToken)
     {
         var apiBase = ModelProviderClient.NormalizeOllamaApiBase(providerBaseUrl);
@@ -209,6 +248,7 @@ public sealed class ModelPreloadService
                 contextLength,
                 loadedStatus: "loaded",
                 loadedDetailPrefix: "Kept alive in Ollama",
+                mutationStarting,
                 cancellationToken));
         }
 
@@ -219,6 +259,7 @@ public sealed class ModelPreloadService
         string providerBaseUrl,
         IReadOnlyList<string> models,
         string apiToken,
+        Action? mutationStarting,
         CancellationToken cancellationToken)
     {
         var apiBase = ModelProviderClient.NormalizeOllamaApiBase(providerBaseUrl);
@@ -234,6 +275,7 @@ public sealed class ModelPreloadService
                 contextLength: 0,
                 loadedStatus: "unloaded",
                 loadedDetailPrefix: "Released from Ollama",
+                mutationStarting,
                 cancellationToken));
         }
 
@@ -248,6 +290,7 @@ public sealed class ModelPreloadService
         int contextLength,
         string loadedStatus,
         string loadedDetailPrefix,
+        Action? mutationStarting,
         CancellationToken cancellationToken)
     {
         var startedAt = DateTimeOffset.Now;
@@ -277,11 +320,19 @@ public sealed class ModelPreloadService
                 Content = JsonContent.Create(payload)
             };
             ProviderHttpHelpers.ApplyAuthorization(request, apiToken);
+            mutationStarting?.Invoke();
             using var response = await httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return new ModelPreloadResult(model, "failed", ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Native model lifecycle request failed.", "message", "error", "detail"), true);
+                return new ModelPreloadResult(
+                    model,
+                    "failed",
+                    ProviderModelCatalogProjectionService.SafeStatusForDisplay(
+                        ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Native model lifecycle request failed.", "message", "error", "detail"),
+                        apiToken),
+                    true,
+                    MutationOutcomeUnknown: IsMutationOutcomeUnknown(response.StatusCode));
             }
 
             var loadMs = ExtractOllamaLoadMilliseconds(body);
@@ -298,7 +349,11 @@ public sealed class ModelPreloadService
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or UriFormatException)
         {
-            return new ModelPreloadResult(model, "failed", FriendlyException(ex), true);
+            return new ModelPreloadResult(
+                model,
+                "failed",
+                ProviderModelCatalogProjectionService.SafeStatusForDisplay(FriendlyException(ex), apiToken),
+                true);
         }
     }
 
@@ -309,6 +364,7 @@ public sealed class ModelPreloadService
         string apiToken,
         int contextLength,
         int nativeIdleTtlSeconds,
+        Action? mutationStarting,
         CancellationToken cancellationToken)
     {
         var endpoint = new Uri(new Uri(apiBase + "/"), "models/load");
@@ -335,11 +391,19 @@ public sealed class ModelPreloadService
                 Content = JsonContent.Create(payload)
             };
             ProviderHttpHelpers.ApplyAuthorization(request, apiToken);
+            mutationStarting?.Invoke();
             using var response = await httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return new ModelPreloadResult(selectedModel, "failed", ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Native model lifecycle request failed.", "message", "error", "detail"), true);
+                return new ModelPreloadResult(
+                    selectedModel,
+                    "failed",
+                    ProviderModelCatalogProjectionService.SafeStatusForDisplay(
+                        ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Native model lifecycle request failed.", "message", "error", "detail"),
+                        apiToken),
+                    true,
+                    MutationOutcomeUnknown: IsMutationOutcomeUnknown(response.StatusCode));
             }
 
             var seconds = ExtractLoadSeconds(body);
@@ -354,7 +418,12 @@ public sealed class ModelPreloadService
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
-            return new ModelPreloadResult(selectedModel, "failed", FriendlyException(ex), true);
+            return new ModelPreloadResult(
+                selectedModel,
+                "failed",
+                ProviderModelCatalogProjectionService.SafeStatusForDisplay(FriendlyException(ex), apiToken),
+                true,
+                MutationOutcomeUnknown: true);
         }
     }
 
@@ -363,6 +432,7 @@ public sealed class ModelPreloadService
         string selectedModel,
         string instanceId,
         string apiToken,
+        Action? mutationStarting,
         CancellationToken cancellationToken)
     {
         var endpoint = new Uri(new Uri(apiBase + "/"), "models/unload");
@@ -373,14 +443,32 @@ public sealed class ModelPreloadService
                 Content = JsonContent.Create(new { instance_id = instanceId })
             };
             ProviderHttpHelpers.ApplyAuthorization(request, apiToken);
+            mutationStarting?.Invoke();
             using var response = await httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return new ModelPreloadResult(selectedModel, "failed", ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Native model lifecycle request failed.", "message", "error", "detail"), true);
+                var detail = ProviderHttpHelpers.FriendlyBody(
+                    body,
+                    response.ReasonPhrase,
+                    "Native model lifecycle request failed.",
+                    "message",
+                    "error",
+                    "detail");
+                if (!string.IsNullOrWhiteSpace(instanceId))
+                {
+                    detail = detail.Replace(instanceId, "[instance]", StringComparison.Ordinal);
+                }
+
+                return new ModelPreloadResult(
+                    selectedModel,
+                    "failed",
+                    ProviderModelCatalogProjectionService.SafeStatusForDisplay(detail, apiToken),
+                    true,
+                    MutationOutcomeUnknown: IsMutationOutcomeUnknown(response.StatusCode));
             }
 
-            return new ModelPreloadResult(selectedModel, "unloaded", $"Unloaded instance {instanceId}.", false);
+            return new ModelPreloadResult(selectedModel, "unloaded", "Unloaded one LM Studio instance.", false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -388,7 +476,12 @@ public sealed class ModelPreloadService
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
-            return new ModelPreloadResult(selectedModel, "failed", FriendlyException(ex), true);
+            return new ModelPreloadResult(
+                selectedModel,
+                "failed",
+                ProviderModelCatalogProjectionService.SafeStatusForDisplay(FriendlyException(ex), apiToken),
+                true,
+                MutationOutcomeUnknown: true);
         }
     }
 
@@ -454,9 +547,15 @@ public sealed class ModelPreloadService
         return instanceIds.Length > 0;
     }
 
-    private static string MissingLoadedInstanceIdDetail(LmStudioModelInfo model)
+    private static string MissingLoadedInstanceIdDetail()
     {
-        return $"LM Studio reports {model.DisplayTitle} as loaded but did not provide a loaded instance id. Refresh the model catalog or reload the model in LM Studio before unloading.";
+        return "LM Studio reports the selected model as loaded but did not provide a loaded instance id. Refresh the model catalog or reload the model in LM Studio before unloading.";
+    }
+
+    private static bool IsMutationOutcomeUnknown(System.Net.HttpStatusCode statusCode)
+    {
+        var numeric = (int)statusCode;
+        return numeric >= 500 || statusCode == System.Net.HttpStatusCode.RequestTimeout;
     }
 
     private static double ExtractLoadSeconds(string json)
@@ -554,4 +653,9 @@ public sealed class ModelPreloadService
     }
 }
 
-public sealed record ModelPreloadResult(string Model, string Status, string Detail, bool IsFailure);
+public sealed record ModelPreloadResult(
+    string Model,
+    string Status,
+    string Detail,
+    bool IsFailure,
+    bool MutationOutcomeUnknown = false);

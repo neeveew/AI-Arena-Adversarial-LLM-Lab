@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -310,7 +311,7 @@ internal sealed class AgentPerformanceCoordinator
         var alertSummary = stats.Failures > 0
             ? $"{displayTitle}: {stats.Failures} failed turn{(stats.Failures == 1 ? "" : "s")}. Click for details."
             : $"{displayTitle}: click for details.";
-        var card = new Border
+        var card = new ShellPopupOpenerCard
         {
             Background = blendBrush(resourceBrush("InputBrush"), accent, 0.05),
             BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.22),
@@ -322,11 +323,7 @@ internal sealed class AgentPerformanceCoordinator
             Cursor = Cursors.Hand,
             Child = grid
         };
-        card.MouseLeftButtonUp += (_, e) =>
-        {
-            ShowDetail(stats, card);
-            e.Handled = true;
-        };
+        ConfigureDetailCard(card, stats, displayTitle);
 
         return card;
     }
@@ -450,7 +447,7 @@ internal sealed class AgentPerformanceCoordinator
             alerts.Add($"{FormatTokensPerSecond(stats.AverageTokensPerSecond)} tok/s");
         }
 
-        var card = new Border
+        var card = new ShellPopupOpenerCard
         {
             Background = blendBrush(resourceBrush("InputBrush"), accent, 0.08),
             BorderBrush = blendBrush(resourceBrush("ControlBorderBrush"), accent, 0.32),
@@ -462,11 +459,7 @@ internal sealed class AgentPerformanceCoordinator
             Cursor = Cursors.Hand,
             Child = stack
         };
-        card.MouseLeftButtonUp += (_, e) =>
-        {
-            ShowDetail(stats, card);
-            e.Handled = true;
-        };
+        ConfigureDetailCard(card, stats, displayTitle);
 
         return card;
     }
@@ -586,6 +579,37 @@ internal sealed class AgentPerformanceCoordinator
         }
 
         RenderDetail(stats, lastSnapshot, target, resetPopup: true);
+    }
+
+    private void ConfigureDetailCard(Border card, AgentPerformanceStats stats, string displayTitle)
+    {
+        card.Focusable = true;
+        KeyboardNavigation.SetIsTabStop(card, true);
+        card.SetResourceReference(FrameworkElement.FocusVisualStyleProperty, "Arena.FocusVisual");
+        AutomationProperties.SetName(card, $"Open agent performance detail for {displayTitle}");
+        AutomationProperties.SetHelpText(card, "Open turn, speed, context-use, quality, and failure details for this agent.");
+        if (card is ShellPopupOpenerCard openerCard)
+        {
+            openerCard.Invoked += (_, _) => ShowDetail(stats, card);
+            return;
+        }
+
+        card.MouseLeftButtonUp += (_, e) =>
+        {
+            card.Focus();
+            ShowDetail(stats, card);
+            e.Handled = true;
+        };
+        card.KeyDown += (_, e) =>
+        {
+            if (e.Key is not (Key.Enter or Key.Return or Key.Space))
+            {
+                return;
+            }
+
+            ShowDetail(stats, card);
+            e.Handled = true;
+        };
     }
 
     private void RenderDetail(

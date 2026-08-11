@@ -3,23 +3,30 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
+using AIArena.Wpf;
 using AIArena.Wpf.Services;
 
 namespace AIArena.Wpf.Controls;
 
 public partial class InAppQaInspectorControl : UserControl
 {
-    internal const double CompactLayoutThreshold = 760;
+    internal const double CompactLayoutThreshold = 720;
+    internal const double CompactViewportThreshold = 1200;
     private InAppQaInspectorCoordinator? coordinator;
+    private Window? responsiveHostWindow;
     private bool suppressEvidenceSelection;
     private bool suppressArtifactSelection;
     private bool readOnlyMode;
+    private bool evidenceBusy;
+    private bool evidenceRevalidating;
     private Task<QaEvidenceLoadResult>? evidenceSelectionRefreshTask;
 
     public InAppQaInspectorControl()
     {
         InitializeComponent();
         EvidenceRunPicker.SelectionChanged += EvidenceRunPicker_SelectionChanged;
+        Loaded += InAppQaInspectorControl_Loaded;
+        Unloaded += InAppQaInspectorControl_Unloaded;
     }
 
     public ExperimentLabFeatureRegistration FeatureRegistration => new(
@@ -29,8 +36,9 @@ public partial class InAppQaInspectorControl : UserControl
         "Inspect current local seal evidence, run allowlisted focused suites, and explicitly accept verified post-render artifacts.",
         this);
 
-    internal static bool UsesCompactLayout(double width) =>
-        !double.IsNaN(width) && width > 0 && width < CompactLayoutThreshold;
+    internal static bool UsesCompactLayout(double width, double viewportWidth = double.NaN) =>
+        IsUsableWidth(viewportWidth) && viewportWidth < CompactViewportThreshold
+        || IsUsableWidth(width) && width < CompactLayoutThreshold;
 
     internal void Initialize(InAppQaInspectorCoordinator value) =>
         coordinator = value ?? throw new ArgumentNullException(nameof(value));
@@ -40,7 +48,7 @@ public partial class InAppQaInspectorControl : UserControl
         readOnlyMode = value;
         RunSuiteButton.IsEnabled = !value;
         CancelSuiteButton.IsEnabled = false;
-        AcceptInspectionButton.IsEnabled = false;
+        UpdateEvidenceInteraction();
         AutomationProperties.SetItemStatus(QaInspectorRoot, value ? "read-only-capture" : "interactive");
         if (value)
         {
@@ -87,6 +95,7 @@ public partial class InAppQaInspectorControl : UserControl
     internal void ApplyPresentation(QaInspectorPresentation value)
     {
         SetStatus(value.Status);
+        QaWorkspaceHeader.StatusKind = QaInspectorPresentation.CardKind(value.State);
         VerdictText.Text = value.Verdict;
         ProvenanceText.Text = value.Provenance;
         EnvironmentText.Text = value.Environment;
@@ -97,11 +106,16 @@ public partial class InAppQaInspectorControl : UserControl
         SchemaList.ItemsSource = value.Schemas;
         PerformanceList.ItemsSource = value.Performance;
         LimitationsList.ItemsSource = value.Limitations;
+        SummaryCards.ItemsSource = value.SummaryCards;
         suppressArtifactSelection = true;
         ArtifactList.ItemsSource = value.Artifacts;
         ArtifactList.SelectedIndex = -1;
         suppressArtifactSelection = false;
+        evidenceRevalidating = false;
+        EvidenceRevalidationOverlay.Visibility = Visibility.Collapsed;
+        UpdateEvidenceInteraction();
         AutomationProperties.SetItemStatus(QaInspectorRoot, value.State.ToString());
+        ArenaMotion.RevealCard(SummaryCards);
     }
 
     internal void SetStatus(string value)
@@ -113,17 +127,17 @@ public partial class InAppQaInspectorControl : UserControl
 
     internal void SetEvidenceBusy(bool busy)
     {
-        RefreshEvidenceButton.IsEnabled = !busy;
-        EvidenceRunPicker.IsEnabled = !busy;
-        ArtifactList.IsEnabled = !busy;
-        AcceptInspectionButton.IsEnabled = !readOnlyMode && !busy && AcceptInspectionButton.Tag as bool? == true;
+        evidenceBusy = busy;
+        UpdateEvidenceInteraction();
     }
 
     internal void SetAcceptanceAvailable(bool available)
     {
         AcceptInspectionButton.Tag = available;
-        AcceptInspectionButton.IsEnabled = !readOnlyMode && available && RefreshEvidenceButton.IsEnabled;
-        AutomationProperties.SetItemStatus(AcceptInspectionButton, !readOnlyMode && available ? "available" : "unavailable");
+        UpdateEvidenceInteraction();
+        AutomationProperties.SetItemStatus(
+            AcceptInspectionButton,
+            !readOnlyMode && available && !evidenceBusy && !evidenceRevalidating ? "available" : "unavailable");
     }
 
     internal void SetReviewProgress(int reviewed, int total, int unacceptedLimitations)
@@ -146,20 +160,33 @@ public partial class InAppQaInspectorControl : UserControl
 
     internal void SetReviewRevalidating(int knownScreenshotCount)
     {
+        const string status = "Revalidating selected evidence…";
         var text = knownScreenshotCount > 0
             ? $"Revalidating evidence. The previously loaded bundle contained {knownScreenshotCount} rendered screenshot(s). Explicit review and acceptance remain unavailable until validation completes."
             : "Loading and revalidating rendered screenshots. Explicit review and acceptance remain unavailable until validation completes.";
         ReviewProgressText.Text = text;
+        RevalidationProgressText.Text = text;
+        evidenceRevalidating = true;
+        EvidenceRevalidationOverlay.Visibility = Visibility.Visible;
+        SetStatus(status);
+        QaWorkspaceHeader.StatusKind = "Revalidating";
+        UpdateEvidenceInteraction();
         ToolTipService.SetToolTip(ReviewProgressText, text);
         AutomationProperties.SetHelpText(ReviewProgressText, text);
         AutomationProperties.SetHelpText(AcceptInspectionButton, text);
         AutomationProperties.SetItemStatus(ReviewProgressText, "revalidating");
+        AutomationProperties.SetHelpText(EvidenceRevalidationOverlay, text);
+        ArenaMotion.StatusChanged(EvidenceRevalidationOverlay);
     }
 
     internal void SetReviewCancelled()
     {
         const string text = "Screenshot review is unavailable because evidence revalidation was cancelled. Refresh to load current review evidence.";
         ReviewProgressText.Text = text;
+        evidenceRevalidating = false;
+        EvidenceRevalidationOverlay.Visibility = Visibility.Collapsed;
+        QaWorkspaceHeader.StatusKind = "Unavailable";
+        UpdateEvidenceInteraction();
         ToolTipService.SetToolTip(ReviewProgressText, text);
         AutomationProperties.SetHelpText(ReviewProgressText, text);
         AutomationProperties.SetHelpText(AcceptInspectionButton, text);
@@ -202,6 +229,9 @@ public partial class InAppQaInspectorControl : UserControl
             CurrentEmptyText.Visibility = Visibility.Visible;
             BaselineEmptyText.Visibility = Visibility.Visible;
             AutomationLinkText.Text = "Linked automation unavailable.";
+            AutomationProperties.SetHelpText(CurrentPreviewImage, "No current verified screenshot is selected.");
+            AutomationProperties.SetHelpText(BaselinePreviewImage, "No verified baseline screenshot is selected.");
+            AutomationProperties.SetHelpText(AutomationLinkText, AutomationLinkText.Text);
             return false;
         }
 
@@ -249,6 +279,15 @@ public partial class InAppQaInspectorControl : UserControl
             Grid.SetColumn(ArtifactPreviewPane, 0);
             Grid.SetColumnSpan(ArtifactPreviewPane, 3);
             ArtifactListPane.MaxHeight = 340;
+
+            BaselinePreviewColumn.Width = new GridLength(1, GridUnitType.Star);
+            PreviewGapColumn.Width = new GridLength(0);
+            CurrentPreviewColumn.Width = new GridLength(0);
+            PreviewCompactGapRow.Height = new GridLength(8);
+            CurrentPreviewCompactRow.Height = GridLength.Auto;
+            Grid.SetRow(CurrentPreviewPane, 2);
+            Grid.SetColumn(CurrentPreviewPane, 0);
+            Grid.SetColumnSpan(CurrentPreviewPane, 3);
         }
         else
         {
@@ -279,7 +318,30 @@ public partial class InAppQaInspectorControl : UserControl
             Grid.SetColumn(ArtifactPreviewPane, 2);
             Grid.SetColumnSpan(ArtifactPreviewPane, 1);
             ArtifactListPane.ClearValue(MaxHeightProperty);
+
+            BaselinePreviewColumn.Width = new GridLength(1, GridUnitType.Star);
+            PreviewGapColumn.Width = new GridLength(8);
+            CurrentPreviewColumn.Width = new GridLength(1, GridUnitType.Star);
+            PreviewCompactGapRow.Height = new GridLength(0);
+            CurrentPreviewCompactRow.Height = new GridLength(0);
+            Grid.SetRow(CurrentPreviewPane, 0);
+            Grid.SetColumn(CurrentPreviewPane, 2);
+            Grid.SetColumnSpan(CurrentPreviewPane, 1);
         }
+    }
+
+    private void UpdateEvidenceInteraction()
+    {
+        var interactive = !evidenceBusy && !evidenceRevalidating;
+        RefreshEvidenceButton.IsEnabled = interactive;
+        QaWorkspaceHeader.IsPrimaryActionEnabled = interactive;
+        EvidenceRunPicker.IsEnabled = interactive;
+        ArtifactList.IsEnabled = interactive;
+        EvidenceTabs.IsEnabled = interactive;
+        CopyReportButton.IsEnabled = interactive;
+        AcceptInspectionButton.IsEnabled = !readOnlyMode
+            && interactive
+            && AcceptInspectionButton.Tag as bool? == true;
     }
 
     private static BitmapSource? DecodePng(byte[] bytes)
@@ -301,8 +363,65 @@ public partial class InAppQaInspectorControl : UserControl
         }
     }
 
-    private void InAppQaInspectorControl_SizeChanged(object sender, SizeChangedEventArgs e) =>
-        ApplyResponsiveLayout(UsesCompactLayout(e.NewSize.Width));
+    private void InAppQaInspectorControl_Loaded(object sender, RoutedEventArgs e)
+    {
+        AttachResponsiveHostWindow();
+        ApplyResponsiveLayout(UsesCompactLayout(ActualWidth, HostedViewportWidth()));
+    }
+
+    private void InAppQaInspectorControl_Unloaded(object sender, RoutedEventArgs e) =>
+        DetachResponsiveHostWindow();
+
+    private void InAppQaInspectorControl_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        AttachResponsiveHostWindow();
+        ApplyResponsiveLayout(UsesCompactLayout(e.NewSize.Width, HostedViewportWidth()));
+    }
+
+    private void AttachResponsiveHostWindow()
+    {
+        var hostWindow = Window.GetWindow(this);
+        if (ReferenceEquals(responsiveHostWindow, hostWindow))
+        {
+            return;
+        }
+
+        DetachResponsiveHostWindow();
+        responsiveHostWindow = hostWindow;
+        if (responsiveHostWindow is not null)
+        {
+            responsiveHostWindow.SizeChanged += ResponsiveHostWindow_SizeChanged;
+        }
+    }
+
+    private void DetachResponsiveHostWindow()
+    {
+        if (responsiveHostWindow is not null)
+        {
+            responsiveHostWindow.SizeChanged -= ResponsiveHostWindow_SizeChanged;
+            responsiveHostWindow = null;
+        }
+    }
+
+    private void ResponsiveHostWindow_SizeChanged(object sender, SizeChangedEventArgs e) =>
+        ApplyResponsiveLayout(UsesCompactLayout(ActualWidth, e.NewSize.Width));
+
+    private double HostedViewportWidth()
+    {
+        var width = responsiveHostWindow?.ActualWidth ?? Window.GetWindow(this)?.ActualWidth ?? double.NaN;
+        return IsUsableWidth(width) ? width : double.NaN;
+    }
+
+    private static bool IsUsableWidth(double width) =>
+        !double.IsNaN(width) && !double.IsInfinity(width) && width > 0;
+
+    private void EvidenceDetailsExpander_Expanded(object sender, RoutedEventArgs e)
+    {
+        if (sender is Expander { Content: FrameworkElement content })
+        {
+            ArenaMotion.DisclosureOpened(content);
+        }
+    }
 
     private async void RefreshEvidenceButton_Click(object sender, RoutedEventArgs e)
     {

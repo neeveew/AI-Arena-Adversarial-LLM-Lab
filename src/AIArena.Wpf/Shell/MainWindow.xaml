@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="clr-namespace:AIArena.Wpf.Controls"
+        xmlns:shell="clr-namespace:AIArena.Wpf"
         Title="AI Arena"
         Icon="/Assets/ai-arena-icon.ico"
         Width="1500"
@@ -1004,11 +1005,130 @@
             <Grid x:Name="TranscriptPanel">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
+                <controls:WorkspacePageHeaderControl x:Name="ArenaWorkspaceHeader"
+                                                      Grid.Row="0"
+                                                      Title="AI Lab"
+                                                      Description="Run multi-agent matches, inspect the transcript, and compare evidence without exposing private provider data."
+                                                      Status="{Binding Text, ElementName=TranscriptResultCountText}"
+                                                      StatusKind="Transcript count"
+                                                      IsCompactPresentation="True"
+                                                      AnnounceStatusChanges="False"
+                                                      PrimaryActionText="Transcript filters"
+                                                      PrimaryActionAutomationName="Open transcript filters"
+                                                      PrimaryActionHelpText="Filter the transcript by turn range and speaker type."
+                                                      PrimaryActionRequested="TranscriptFiltersButton_Click" />
+
+                <TextBlock x:Name="TranscriptResultCountText"
+                           Text="0 shown"
+                           Visibility="Collapsed" />
+
+                <Popup x:Name="TranscriptFiltersPopup"
+                       Placement="Bottom"
+                       HorizontalOffset="-228"
+                       VerticalOffset="6"
+                       StaysOpen="False"
+                       AllowsTransparency="True"
+                       PopupAnimation="None"
+                       Opened="TranscriptFiltersPopup_Opened"
+                       Closed="TranscriptFiltersPopup_Closed">
+                    <shell:ShellPopupSurface x:Name="TranscriptFiltersPopupContent"
+                                             Style="{StaticResource FlyoutCard}"
+                                             Width="360"
+                                             PreviewKeyDown="TranscriptFiltersPopup_PreviewKeyDown"
+                                             FocusManager.IsFocusScope="True"
+                                             KeyboardNavigation.TabNavigation="Cycle"
+                                             KeyboardNavigation.ControlTabNavigation="Cycle"
+                                             KeyboardNavigation.DirectionalNavigation="Contained"
+                                             AutomationProperties.Name="Transcript filters">
+                        <StackPanel>
+                            <TextBlock Text="Transcript filters"
+                                       Style="{StaticResource PanelTitle}" />
+                            <TextBlock Text="Narrow this transcript view without changing the saved conversation."
+                                       Style="{StaticResource HintText}"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                       TextWrapping="Wrap" />
+                            <TextBlock Text="Turns"
+                                       Style="{StaticResource FieldLabel}"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
+                            <controls:RequiredSelectionListBox x:Name="TranscriptTurnFilterPicker"
+                                                              Style="{StaticResource Arena.ListBox}"
+                                                              SelectionChanged="TranscriptTurnFilter_SelectionChanged"
+                                                              AutomationProperties.Name="Transcript turn range"
+                                                              AutomationProperties.HelpText="Choose which transcript turns remain visible. Use the arrow keys to change the selection.">
+                                <controls:RequiredSelectionListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <UniformGrid Columns="2" />
+                                    </ItemsPanelTemplate>
+                                </controls:RequiredSelectionListBox.ItemsPanel>
+                                <ListBoxItem Content="All Turns" Tag="all" IsSelected="True" />
+                                <ListBoxItem Content="Latest 10" Tag="latest10" />
+                                <ListBoxItem Content="Latest 25" Tag="latest25" />
+                                <ListBoxItem Content="Errors Only" Tag="errors" />
+                                <ListBoxItem Content="Pinned Only" Tag="pinned" />
+                            </controls:RequiredSelectionListBox>
+                            <TextBlock Text="Speakers"
+                                       Style="{StaticResource FieldLabel}"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
+                            <UniformGrid Columns="2">
+                                <CheckBox x:Name="TranscriptFilterSystemCheckBox"
+                                          Content="System"
+                                          Style="{StaticResource FilterChipCheckBox}"
+                                          IsChecked="True"
+                                          Checked="TranscriptFilter_Changed"
+                                          Unchecked="TranscriptFilter_Changed"
+                                          Margin="{DynamicResource Arena.Gap.Wrap.After.Compact}"
+                                          AutomationProperties.Name="Include system events"
+                                          AutomationProperties.HelpText="Include or hide system events in the current transcript view."
+                                          ToolTip="Include system events" />
+                                <CheckBox x:Name="TranscriptFilterAgentsCheckBox"
+                                          Content="Agents"
+                                          Style="{StaticResource FilterChipCheckBox}"
+                                          IsChecked="True"
+                                          Checked="TranscriptFilter_Changed"
+                                          Unchecked="TranscriptFilter_Changed"
+                                          Margin="{DynamicResource Arena.Gap.Wrap.After.Compact}"
+                                          AutomationProperties.Name="Include agent turns"
+                                          AutomationProperties.HelpText="Include or hide agent turns in the current transcript view."
+                                          ToolTip="Include agent turns" />
+                                <CheckBox x:Name="TranscriptFilterNarratorCheckBox"
+                                          Content="Narrator"
+                                          Style="{StaticResource FilterChipCheckBox}"
+                                          IsChecked="True"
+                                          Checked="TranscriptFilter_Changed"
+                                          Unchecked="TranscriptFilter_Changed"
+                                          Margin="{DynamicResource Arena.Gap.Wrap.After.Compact}"
+                                          AutomationProperties.Name="Include narrator turns"
+                                          AutomationProperties.HelpText="Include or hide narrator turns in the current transcript view."
+                                          ToolTip="Include narrator turns" />
+                                <CheckBox x:Name="TranscriptFilterOperatorCheckBox"
+                                          Content="Operator"
+                                          Style="{StaticResource FilterChipCheckBox}"
+                                          IsChecked="True"
+                                          Checked="TranscriptFilter_Changed"
+                                          Unchecked="TranscriptFilter_Changed"
+                                          Margin="{DynamicResource Arena.Gap.Wrap.After.Compact}"
+                                          AutomationProperties.Name="Include operator turns"
+                                          AutomationProperties.HelpText="Include or hide operator turns in the current transcript view."
+                                          ToolTip="Include operator turns" />
+                            </UniformGrid>
+                            <Button x:Name="ResetTranscriptFiltersButton"
+                                    Content="Reset filters"
+                                    Style="{StaticResource Arena.Button.Secondary}"
+                                    HorizontalAlignment="Left"
+                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}"
+                                    Click="ResetTranscriptFiltersButton_Click"
+                                    AutomationProperties.Name="Reset transcript filters"
+                                    AutomationProperties.HelpText="Show every turn and speaker type and clear the transcript search filter." />
+                        </StackPanel>
+                    </shell:ShellPopupSurface>
+                </Popup>
+
                 <controls:TranscriptListBox x:Name="TranscriptItems"
-                                            Grid.Row="1"
+                                            Grid.Row="2"
                                             Background="Transparent"
                                             BorderThickness="0"
                                             Padding="0"
@@ -1037,7 +1157,7 @@
                     </controls:TranscriptListBox.ItemContainerStyle>
                 </controls:TranscriptListBox>
                 <Grid x:Name="TranscriptDashboardGrid"
-                      Grid.Row="0"
+                      Grid.Row="1"
                       Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                       SizeChanged="TranscriptDashboardGrid_SizeChanged">
                     <Grid.ColumnDefinitions>
@@ -1052,7 +1172,7 @@
                             Background="{DynamicResource InputBrush}"
                             BorderBrush="{DynamicResource DisabledBorderBrush}"
                             BorderThickness="1"
-                            CornerRadius="8,0,0,8"
+                            CornerRadius="{DynamicResource Arena.Radius.Medium}"
                             Padding="0"
                             ToolTip="Heuristic live discourse diagnostics. These signals estimate discussion dynamics, not factual correctness.">
                         <Grid>
@@ -1061,7 +1181,7 @@
                                       VerticalScrollBarVisibility="Disabled">
                             <UniformGrid x:Name="TranscriptDiagnosticsGrid"
                                          Columns="6">
-                        <Border x:Name="FrictionChip" Style="{StaticResource DashboardMetricChip}">
+                        <shell:ShellPopupOpenerCard x:Name="FrictionChip" Style="{StaticResource DashboardMetricChip}">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -1073,8 +1193,8 @@
                                     <TextBlock x:Name="FrictionTrendText" Text="-" Style="{StaticResource DashboardMetricTrend}" />
                                 </WrapPanel>
                             </Grid>
-                        </Border>
-                        <Border x:Name="ConsensusChip" Style="{StaticResource DashboardMetricChip}">
+                        </shell:ShellPopupOpenerCard>
+                        <shell:ShellPopupOpenerCard x:Name="ConsensusChip" Style="{StaticResource DashboardMetricChip}">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -1093,8 +1213,8 @@
                                     <controls:MetricSparklineControl x:Name="ConsensusSparkline" Grid.Column="1" Width="78" Height="22" HorizontalAlignment="Right" />
                                 </Grid>
                             </Grid>
-                        </Border>
-                        <Border x:Name="RoleDriftChip" Style="{StaticResource DashboardMetricChip}">
+                        </shell:ShellPopupOpenerCard>
+                        <shell:ShellPopupOpenerCard x:Name="RoleDriftChip" Style="{StaticResource DashboardMetricChip}">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -1113,8 +1233,8 @@
                                     <controls:MetricSparklineControl x:Name="RoleDriftSparkline" Grid.Column="1" Width="78" Height="22" HorizontalAlignment="Right" />
                                 </Grid>
                             </Grid>
-                        </Border>
-                        <Border x:Name="UnsupportedClaimsChip" Style="{StaticResource DashboardMetricChip}">
+                        </shell:ShellPopupOpenerCard>
+                        <shell:ShellPopupOpenerCard x:Name="UnsupportedClaimsChip" Style="{StaticResource DashboardMetricChip}">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -1133,8 +1253,8 @@
                                     <controls:MetricSparklineControl x:Name="UnsupportedClaimsSparkline" Grid.Column="1" Width="78" Height="22" HorizontalAlignment="Right" Mode="bars" MaxValue="8" />
                                 </Grid>
                             </Grid>
-                        </Border>
-                        <Border x:Name="EvidencePressureChip" Style="{StaticResource DashboardMetricChip}">
+                        </shell:ShellPopupOpenerCard>
+                        <shell:ShellPopupOpenerCard x:Name="EvidencePressureChip" Style="{StaticResource DashboardMetricChip}">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -1153,8 +1273,8 @@
                                     <controls:MetricSparklineControl x:Name="EvidencePressureSparkline" Grid.Column="1" Width="78" Height="22" HorizontalAlignment="Right" />
                                 </Grid>
                             </Grid>
-                        </Border>
-                        <Border x:Name="NarrativeHeatChip" Style="{StaticResource DashboardMetricChip}" BorderThickness="0">
+                        </shell:ShellPopupOpenerCard>
+                        <shell:ShellPopupOpenerCard x:Name="NarrativeHeatChip" Style="{StaticResource DashboardMetricChip}" BorderThickness="0">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -1173,7 +1293,7 @@
                                     <controls:MetricSparklineControl x:Name="NarrativeHeatSparkline" Grid.Column="1" Width="78" Height="22" HorizontalAlignment="Right" />
                                 </Grid>
                             </Grid>
-                        </Border>
+                        </shell:ShellPopupOpenerCard>
                             </UniformGrid>
                         </ScrollViewer>
                             <Border x:Name="TranscriptDiagnosticsEmptyState"
@@ -1204,11 +1324,20 @@
                            VerticalOffset="8"
                            StaysOpen="False"
                            AllowsTransparency="True"
-                           PopupAnimation="Fade">
-                        <Border Style="{StaticResource FlyoutCard}"
+                           PopupAnimation="None"
+                           Opened="DiagnosticDetailPopup_Opened"
+                           Closed="DiagnosticDetailPopup_Closed">
+                        <shell:ShellPopupSurface x:Name="DiagnosticDetailPopupContent"
+                                Style="{StaticResource FlyoutCard}"
                                 Width="420"
                                 MaxHeight="460"
-                                BorderBrush="{DynamicResource ControlBorderBrush}">
+                                BorderBrush="{DynamicResource ControlBorderBrush}"
+                                PreviewKeyDown="DiagnosticDetailPopup_PreviewKeyDown"
+                                FocusManager.IsFocusScope="True"
+                                KeyboardNavigation.TabNavigation="Cycle"
+                                KeyboardNavigation.ControlTabNavigation="Cycle"
+                                KeyboardNavigation.DirectionalNavigation="Contained"
+                                AutomationProperties.Name="Diagnostic detail">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -1251,13 +1380,13 @@
                                     <StackPanel x:Name="DiagnosticDetailContent" />
                                 </ScrollViewer>
                             </Grid>
-                        </Border>
+                        </shell:ShellPopupSurface>
                     </Popup>
                     <Border x:Name="TranscriptTelemetryHost"
                             Grid.Column="0"
                             Background="Transparent"
                             BorderThickness="0"
-                            CornerRadius="6,0,0,6"
+                            CornerRadius="{DynamicResource Arena.Radius.Medium}"
                             Padding="0"
                             Visibility="Collapsed"
                             ToolTip="Local system telemetry. GPU/VRAM prefer nvidia-smi and fall back to Windows GPU performance counters.">
@@ -1336,41 +1465,6 @@
                             </Border>
                         </UniformGrid>
                     </Border>
-                    <Border x:Name="TranscriptFiltersHost"
-                            Grid.Column="1"
-                            Background="{DynamicResource InputBrush}"
-                            BorderBrush="{DynamicResource DisabledBorderBrush}"
-                            BorderThickness="0,1,1,1"
-                            CornerRadius="0,8,8,0"
-                            Padding="7,5"
-                            Margin="0,0,0,0">
-                        <DockPanel LastChildFill="True">
-                            <Border Style="{StaticResource TranscriptFilterSummaryPill}">
-                                <TextBlock x:Name="TranscriptResultCountText"
-                                           Text="0 shown"
-                                           Foreground="{DynamicResource MutedTextBrush}"
-                                           FontWeight="SemiBold"
-                                           VerticalAlignment="Center" />
-                            </Border>
-                            <WrapPanel VerticalAlignment="Center">
-                                <ComboBox x:Name="TranscriptTurnFilterPicker"
-                                          Width="116"
-                                          Style="{StaticResource CompactComboBox}"
-                                          SelectionChanged="TranscriptFilter_Changed"
-                                          Margin="{DynamicResource Arena.Gap.Inline.After.Compact}">
-                                    <ComboBoxItem Content="All Turns" Tag="all" IsSelected="True" />
-                                    <ComboBoxItem Content="Latest 10" Tag="latest10" />
-                                    <ComboBoxItem Content="Latest 25" Tag="latest25" />
-                                    <ComboBoxItem Content="Errors Only" Tag="errors" />
-                                    <ComboBoxItem Content="Pinned Only" Tag="pinned" />
-                                </ComboBox>
-                                <CheckBox x:Name="TranscriptFilterSystemCheckBox" Content="System" Style="{StaticResource FilterChipCheckBox}" IsChecked="True" Checked="TranscriptFilter_Changed" Unchecked="TranscriptFilter_Changed" Margin="{DynamicResource Arena.Gap.Inline.After.Compact}" />
-                                <CheckBox x:Name="TranscriptFilterAgentsCheckBox" Content="Agents" Style="{StaticResource FilterChipCheckBox}" IsChecked="True" Checked="TranscriptFilter_Changed" Unchecked="TranscriptFilter_Changed" Margin="{DynamicResource Arena.Gap.Inline.After.Compact}" />
-                                <CheckBox x:Name="TranscriptFilterNarratorCheckBox" Content="Narrator" Style="{StaticResource FilterChipCheckBox}" IsChecked="True" Checked="TranscriptFilter_Changed" Unchecked="TranscriptFilter_Changed" Margin="{DynamicResource Arena.Gap.Inline.After.Compact}" />
-                                <CheckBox x:Name="TranscriptFilterOperatorCheckBox" Content="Operator" Style="{StaticResource FilterChipCheckBox}" IsChecked="True" Checked="TranscriptFilter_Changed" Unchecked="TranscriptFilter_Changed" />
-                            </WrapPanel>
-                        </DockPanel>
-                    </Border>
                 </Grid>
             </Grid>
 
@@ -1413,6 +1507,40 @@
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
+                    <Border x:Name="ModelBehaviorModeCard"
+                            Style="{StaticResource WorkflowInfoCard}"
+                            Margin="{DynamicResource Arena.Gap.Section}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Model behavior"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock x:Name="ApplyMatchSetupToModelsStatusText"
+                                           Text="Arena mode — Match Setup guides participant behavior."
+                                           Style="{StaticResource HintText}"
+                                           Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                           TextWrapping="Wrap"
+                                           AutomationProperties.Name="Model behavior mode status"
+                                           AutomationProperties.LiveSetting="Polite" />
+                            </StackPanel>
+                            <CheckBox x:Name="ApplyMatchSetupToModelsCheckBox"
+                                      Grid.Column="1"
+                                      Content="Apply Match Setup to models"
+                                      IsChecked="True"
+                                      Style="{StaticResource ToggleSwitchCheckBox}"
+                                      Foreground="{DynamicResource TextBrush}"
+                                      FontWeight="SemiBold"
+                                      VerticalAlignment="Top"
+                                      Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}"
+                                      AutomationProperties.Name="Apply Match Setup to model behavior"
+                                      AutomationProperties.HelpText="On uses Arena guidance. Off uses attributed public Operator and agent group history while keeping each agent's own replies as self-history. Provider, model, and sampling settings still apply; system and error events remain visible."
+                                      ToolTip="Turn off for Factory mode: participants share the public group conversation without Match Setup guidance." />
+                        </Grid>
+                    </Border>
                     <!-- Readiness leads with a one-line verdict; the chips, preflight
                          checklist, and transfer actions stay one click away. -->
                     <Expander x:Name="SetupReadinessExpander"
@@ -1466,9 +1594,17 @@
                                        VerticalOffset="6"
                                        StaysOpen="False"
                                        AllowsTransparency="True"
-                                       PopupAnimation="Fade">
-                                    <Border Style="{StaticResource FlyoutCard}"
+                                       PopupAnimation="None"
+                                       Opened="CurrentSetupTransferPopup_Opened"
+                                       Closed="CurrentSetupTransferPopup_Closed">
+                                    <shell:ShellPopupSurface x:Name="CurrentSetupTransferPopupContent"
+                                            Style="{StaticResource FlyoutCard}"
                                             MinWidth="210"
+                                            PreviewKeyDown="CurrentSetupTransferPopup_PreviewKeyDown"
+                                            FocusManager.IsFocusScope="True"
+                                            KeyboardNavigation.TabNavigation="Cycle"
+                                            KeyboardNavigation.ControlTabNavigation="Cycle"
+                                            KeyboardNavigation.DirectionalNavigation="Contained"
                                             AutomationProperties.Name="Match setup transfer actions">
                                         <StackPanel>
                                             <Button x:Name="CopyCurrentSetupBriefButton"
@@ -1497,7 +1633,7 @@
                                                     AutomationProperties.HelpText="Validate Match Setup JSON from the clipboard and create a clean imported session without overwriting the current run."
                                                     ToolTip="Import portable Match Setup JSON from the clipboard into a clean session" />
                                         </StackPanel>
-                                    </Border>
+                                    </shell:ShellPopupSurface>
                                 </Popup>
                             </Grid>
                         </StackPanel>
@@ -1777,7 +1913,7 @@
                            Placement="Bottom"
                            StaysOpen="False"
                            AllowsTransparency="True"
-                           PopupAnimation="Fade">
+                           PopupAnimation="None">
                         <Border Style="{StaticResource FlyoutCard}"
                                 Width="340">
                             <StackPanel>
@@ -2042,9 +2178,17 @@
                                            VerticalOffset="6"
                                            StaysOpen="False"
                                            AllowsTransparency="True"
-                                           PopupAnimation="Fade">
-                                        <Border Style="{StaticResource FlyoutCard}"
+                                           PopupAnimation="None"
+                                           Opened="GenerationCopyPopup_Opened"
+                                           Closed="GenerationCopyPopup_Closed">
+                                        <shell:ShellPopupSurface x:Name="GenerationCopyPopupContent"
+                                                Style="{StaticResource FlyoutCard}"
                                                 MinWidth="230"
+                                                PreviewKeyDown="GenerationCopyPopup_PreviewKeyDown"
+                                                FocusManager.IsFocusScope="True"
+                                                KeyboardNavigation.TabNavigation="Cycle"
+                                                KeyboardNavigation.ControlTabNavigation="Cycle"
+                                                KeyboardNavigation.DirectionalNavigation="Contained"
                                                 AutomationProperties.Name="Generated match copy actions">
                                             <StackPanel>
                                                 <Button x:Name="CopyGenerationSeedButton"
@@ -2088,7 +2232,7 @@
                                                         AutomationProperties.HelpText="Copy an evaluation rubric for judging this generated match."
                                                         ToolTip="Copy an evaluation rubric for judging this generated match" />
                                             </StackPanel>
-                                        </Border>
+                                        </shell:ShellPopupSurface>
                                     </Popup>
                                 </Grid>
                                 </WrapPanel>
@@ -2298,6 +2442,16 @@
             </Grid>
             </Border>
 
+            <controls:ProviderModelAssignmentsControl x:Name="ProviderModelsPanel"
+                                                       Visibility="Collapsed"
+                                                       Panel.ZIndex="40"
+                                                       IsVisibleChanged="ProviderModelsPanel_IsVisibleChanged"
+                                                       CloseRequested="ProviderModelsPanel_CloseRequested"
+                                                       RefreshRequested="ProviderModelsPanel_RefreshRequested"
+                                                       ConnectionSettingsRequested="ProviderModelsPanel_ConnectionSettingsRequested"
+                                                       AssignmentChanged="ProviderModelsPanel_AssignmentChanged"
+                                                       LifecycleRequested="ProviderModelsPanel_LifecycleRequested" />
+
             <controls:ExperimentLabControl x:Name="ExperimentLabPanel"
                                            Visibility="Collapsed"
                                            Margin="{DynamicResource Arena.Gap.Inline.Before.Nano}" />
@@ -2317,34 +2471,25 @@
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel>
-                        <TextBlock Text="Agent Session"
-                                   Foreground="{DynamicResource TextBrush}"
-                                   FontSize="18"
-                                   FontWeight="SemiBold"
-                                   TextTrimming="CharacterEllipsis" />
-                        <TextBlock x:Name="AgentStatusText"
-                                   Text="Ready."
-                                   AutomationProperties.LiveSetting="Polite"
-                                   Style="{StaticResource PanelSubtitle}" />
-                    </StackPanel>
-                    <Button x:Name="AgentClearHistoryButton"
-                            Grid.Column="1"
-                            Content="Clear History"
-                            Click="AgentClearHistoryButton_Click"
-                            Style="{StaticResource SecondaryButton}"
-                            Padding="12,7"
-                            Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}"
-                            VerticalAlignment="Top"
-                            AutomationProperties.Name="Clear Agent chat history"
-                            AutomationProperties.HelpText="Clear the Agent conversation, staged command state, and persisted Agent history for this workspace."
-                            ToolTip="Clear Agent chat history" />
-                </Grid>
+                <controls:WorkspacePageHeaderControl x:Name="AgentWorkspaceHeader"
+                                                      Status="{Binding Text, ElementName=AgentStatusText}"
+                                                      StatusKind="Status"
+                                                      Title="Agent"
+                                                      Description="Plan, execute, and review repository work inside the explicitly selected workspace boundary."
+                                                      PrimaryActionText="Clear history"
+                                                      PrimaryActionAutomationName="Clear Agent chat history"
+                                                      PrimaryActionHelpText="Clear the Agent conversation, staged command state, and persisted Agent history for this workspace."
+                                                      PrimaryActionRequested="AgentClearHistoryButton_Click" />
+                <!-- Coordinator-compatible state targets remain in the namescope;
+                     the shared header is their only visible presentation. -->
+                <TextBlock x:Name="AgentStatusText"
+                           Text="Ready."
+                           Visibility="Collapsed"
+                           AutomationProperties.LiveSetting="Polite" />
+                <Button x:Name="AgentClearHistoryButton"
+                        Content="Clear History"
+                        Click="AgentClearHistoryButton_Click"
+                        Visibility="Collapsed" />
                 <Expander x:Name="AgentWorkspaceControlsExpander"
                           Grid.Row="1"
                           Header="Workspace"
@@ -2460,9 +2605,18 @@
                                VerticalOffset="-8"
                                StaysOpen="False"
                                AllowsTransparency="True"
-                               PopupAnimation="Fade">
-                            <Border Style="{StaticResource FlyoutCard}"
-                                    Width="360">
+                               PopupAnimation="None"
+                               Opened="AgentComposerControlsPopup_Opened"
+                               Closed="AgentComposerControlsPopup_Closed">
+                            <shell:ShellPopupSurface x:Name="AgentComposerControlsPopupContent"
+                                    Style="{StaticResource FlyoutCard}"
+                                    Width="360"
+                                    PreviewKeyDown="AgentComposerControlsPopup_PreviewKeyDown"
+                                    FocusManager.IsFocusScope="True"
+                                    KeyboardNavigation.TabNavigation="Cycle"
+                                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                                    KeyboardNavigation.DirectionalNavigation="Contained"
+                                    AutomationProperties.Name="Agent controls">
                                 <StackPanel>
                                     <TextBlock Text="Agent Controls"
                                                Style="{StaticResource FlyoutSectionLabel}" />
@@ -2541,7 +2695,7 @@
                                                 ToolTip="Toggle Planner and Reviewer for this session" />
                                     </UniformGrid>
                                 </StackPanel>
-                            </Border>
+                            </shell:ShellPopupSurface>
                         </Popup>
                         <TextBox x:Name="AgentPromptText"
                                  Grid.Row="1"
@@ -2637,27 +2791,23 @@
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <Grid Margin="{DynamicResource Arena.Gap.Section}">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel>
-                        <TextBlock Text="AI Collaborate" Style="{StaticResource PanelTitle}" />
-                        <TextBlock x:Name="CollaborateStatusText"
-                                   Text="Ready."
-                                   AutomationProperties.LiveSetting="Polite"
-                                   Style="{StaticResource PanelSubtitle}" />
-                    </StackPanel>
-                    <Button x:Name="CollaborateClearButton"
-                            Grid.Column="1"
-                            Content="Clear"
-                            Click="CollaborateClearButton_Click"
-                            Style="{StaticResource SecondaryButton}"
-                            Padding="12,7"
-                            Margin="{DynamicResource Arena.Gap.Inline.Before.Spacious}"
-                            VerticalAlignment="Top" />
-                </Grid>
+                <controls:WorkspacePageHeaderControl x:Name="CollaborateWorkspaceHeader"
+                                                      Status="{Binding Text, ElementName=CollaborateStatusText}"
+                                                      StatusKind="Status"
+                                                      Title="AI Collaborate"
+                                                      Description="Coordinate a bounded team response, inspect its run plan, and preserve the conversation receipt."
+                                                      PrimaryActionText="Clear chat"
+                                                      PrimaryActionAutomationName="Clear AI Collaborate chat"
+                                                      PrimaryActionHelpText="Clear the visible AI Collaborate conversation and return to a truthful empty state."
+                                                      PrimaryActionRequested="CollaborateClearButton_Click" />
+                <TextBlock x:Name="CollaborateStatusText"
+                           Text="Ready."
+                           Visibility="Collapsed"
+                           AutomationProperties.LiveSetting="Polite" />
+                <Button x:Name="CollaborateClearButton"
+                        Content="Clear"
+                        Click="CollaborateClearButton_Click"
+                        Visibility="Collapsed" />
                 <Border Grid.Row="1"
                         Style="{StaticResource ContentFrame}"
                         Margin="{DynamicResource Arena.Gap.Section}">
@@ -2905,11 +3055,20 @@
                        HorizontalOffset="-8"
                        StaysOpen="False"
                        AllowsTransparency="True"
-                       PopupAnimation="Fade">
-                    <Border Width="380"
+                       PopupAnimation="None"
+                       Opened="AgentPerformanceDetailPopup_Opened"
+                       Closed="AgentPerformanceDetailPopup_Closed">
+                    <shell:ShellPopupSurface x:Name="AgentPerformanceDetailPopupContent"
+                            Width="380"
                             MaxHeight="540"
                             Style="{StaticResource FlyoutCard}"
-                            BorderBrush="{DynamicResource ControlBorderBrush}">
+                            BorderBrush="{DynamicResource ControlBorderBrush}"
+                            PreviewKeyDown="AgentPerformanceDetailPopup_PreviewKeyDown"
+                            FocusManager.IsFocusScope="True"
+                            KeyboardNavigation.TabNavigation="Cycle"
+                            KeyboardNavigation.ControlTabNavigation="Cycle"
+                            KeyboardNavigation.DirectionalNavigation="Contained"
+                            AutomationProperties.Name="Agent performance detail">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -2938,7 +3097,7 @@
                                 <StackPanel x:Name="AgentPerformanceDetailContent" />
                             </ScrollViewer>
                         </Grid>
-                    </Border>
+                    </shell:ShellPopupSurface>
                 </Popup>
 
                 <Expander x:Name="ArenaEvaluationExpander"
@@ -3904,13 +4063,13 @@
                               HorizontalScrollBarVisibility="Disabled">
                     <StackPanel x:Name="SettingsSectionsPanel">
                 <Expander x:Name="ModelProviderSettingsExpander"
-                          Header="Models &amp; provider"
+                          Header="Provider connection"
                           Tag="&#xE713;"
                           Style="{StaticResource SettingsExpander}"
                           IsExpanded="False"
                           Expanded="ModelProviderSettingsExpander_Expanded">
                     <StackPanel>
-                        <TextBlock Text="Connect a provider and choose the model AI Arena should call. The optional groups below handle saved setups, role routing, and local-model tuning."
+                        <TextBlock Text="Connect AI Arena to LM Studio, Ollama, llama.cpp, or another compatible provider. Model discovery and agent assignments now live in the Models workspace."
                                    Style="{StaticResource HintText}"
                                    Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                    TextWrapping="Wrap" />
@@ -3978,8 +4137,11 @@
                                      ToolTip="Optional bearer token for local providers, Ollama Cloud, proxies, or OpenAI-compatible endpoints that require Authorization." />
                             </StackPanel>
                         </Expander>
-                        <TextBlock Text="Default model" Style="{StaticResource FieldLabel}" />
-                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
+                        <!-- Compatibility editors remain in the visual tree while the Models
+                             workspace becomes the single visible routing surface. Existing
+                             coordinators and saved profiles keep their behavior during migration. -->
+                        <TextBlock Text="Default model" Style="{StaticResource FieldLabel}" Visibility="Collapsed" />
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack}" Visibility="Collapsed">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="8" />
@@ -4018,7 +4180,20 @@
                                    Style="{StaticResource HintText}"
                                    AutomationProperties.LiveSetting="Polite"
                                    Margin="0,4,0,10"
+                                   Visibility="Collapsed"
                                    Text="Available models refresh while this section is open." />
+                        <Button x:Name="OpenModelsSurfaceButton"
+                                Click="OpenModelsSurfaceButton_Click"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
+                                AutomationProperties.Name="Open Models and assignments"
+                                AutomationProperties.HelpText="Open the Models workspace to browse loaded and available models and assign them to agents."
+                                ToolTip="Open Models and assignments">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <TextBlock Text="&#xE8B7;" Style="{StaticResource CommandButtonIcon}" />
+                                <TextBlock Text="Open Models &amp; assignments" Style="{StaticResource CommandButtonLabel}" />
+                            </StackPanel>
+                        </Button>
 
                         <Expander x:Name="ProviderSavedSetupsExpander"
                                   Header="Saved setups"
@@ -4071,7 +4246,8 @@
                         <Expander x:Name="ProviderRoleRoutingExpander"
                                   Header="Role routing"
                                   Style="{StaticResource SettingsSubsectionExpander}"
-                                  IsExpanded="False">
+                                  IsExpanded="False"
+                                  Visibility="Collapsed">
                             <StackPanel>
                         <Button x:Name="UseDefaultModelForAllRolesButton"
                                 Click="UseDefaultModelForAllRolesButton_Click"
@@ -4912,7 +5088,15 @@
                             <ComboBoxItem Content="System telemetry" Tag="telemetry" />
                             <ComboBoxItem Content="Hidden" Tag="hidden" />
                         </ComboBox>
-                        <TextBlock Text="Experimental controls" Style="{StaticResource FieldLabel}" />
+                    </StackPanel>
+                </Expander>
+
+                <Expander x:Name="DebugControlsSettingsExpander"
+                          Header="Debug controls"
+                          Tag="&#xE7BA;"
+                          Style="{StaticResource SettingsExpander}"
+                          IsExpanded="False">
+                    <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                         <CheckBox x:Name="DebugControlsCheckBox"
                                   Content="Allow debug controls"
                                   Style="{StaticResource ToggleSwitchCheckBox}"
@@ -4921,15 +5105,15 @@
                                   Checked="VisualSettings_Changed"
                                   Unchecked="VisualSettings_Changed"
                                   Margin="{DynamicResource Arena.Gap.Stack.After.Compact}"
-                                  ToolTip="Show the top-rail Debug menu for experimental diagnostics. Remembered across restarts." />
-                        <TextBlock Text="Debug controls expose optional diagnostics, AI World, and other experimental tools without cluttering the default shell."
+                                  AutomationProperties.Name="Allow debug controls"
+                                  AutomationProperties.HelpText="Show Experiment Lab, the top-rail Debug menu, and optional experimental diagnostics. This preference is remembered across restarts."
+                                  ToolTip="Show Experiment Lab and the top-rail Debug menu for experimental diagnostics. Remembered across restarts." />
+                        <TextBlock Text="Shows Experiment Lab, the Debug menu, AI World, and other optional diagnostics without changing normal arena workflows."
                                    Style="{StaticResource HintText}"
                                    TextWrapping="Wrap" />
-                    </StackPanel>
-                </Expander>
-
-                <Expander Header="PowerShell Control" Tag="&#xE756;" Style="{StaticResource SettingsExpander}" IsExpanded="False">
-                    <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
+                        <TextBlock Text="PowerShell automation"
+                                   Style="{StaticResource FieldLabel}"
+                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Section}" />
                         <CheckBox x:Name="ControlPlaneCheckBox"
                                   Content="PowerShell control plane"
                                   Style="{StaticResource ToggleSwitchCheckBox}"
@@ -4937,11 +5121,11 @@
                                   FontWeight="SemiBold"
                                   Checked="ControlPlaneCheckBox_Changed"
                                   Unchecked="ControlPlaneCheckBox_Changed"
-                                  Margin="{DynamicResource Arena.Gap.Stack}"
+                                  Margin="{DynamicResource Arena.Gap.Stack.After.Compact}"
                                   AutomationProperties.Name="Toggle AI Arena control plane"
-                                  AutomationProperties.HelpText="Enable or disable authenticated local PowerShell automation. Enabled by default."
+                                  AutomationProperties.HelpText="Enable or disable authenticated local PowerShell automation. Enabled by default and independent of Allow debug controls."
                                   ToolTip="Enable authenticated local PowerShell control, state inspection, and event streaming" />
-                        <TextBlock Text="Enabled by default. Commands use a per-run token and the local named pipe; turn this off to stop PowerShell automation for this app instance."
+                        <TextBlock Text="Organized here with developer tools, but independent of Allow debug controls. Commands use a per-run token and the local named pipe; turn this off to stop PowerShell automation for this app instance."
                                    Style="{StaticResource HintText}"
                                    TextWrapping="Wrap" />
                     </StackPanel>

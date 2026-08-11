@@ -303,6 +303,43 @@ internal static class MemoryForkTests
         baseline.Configs["shared"] = CopyConfig(baseline.Configs["shared"], apiToken: "secret-that-must-not-affect-provenance");
         Require(SessionStore.SetupFingerprint(baseline) == original, "provider token changed the setup fingerprint");
 
+        baseline.Engine.FactoryMode = true;
+        var factoryChanged = SessionStore.SetupFingerprint(baseline);
+        Require(factoryChanged != original,
+            "Factory public-group prompt behavior did not change the setup fingerprint");
+        var conversations = new FactoryConversationService();
+        var root = new DialogueMessage
+        {
+            MessageId = "message:factory-root",
+            Turn = 1,
+            Speaker = "Operator",
+            SpeakerId = "operator",
+            Text = "Factory conversation root",
+            Kind = "message",
+            CreatedAt = 100
+        };
+        baseline.Engine.Messages.Add(root);
+        var inspection = conversations.Resolve(baseline);
+        Require(inspection.HasUsableRoot, "Factory setup-fingerprint fixture did not establish a root");
+        var context = conversations.BuildPromptContext(baseline, "alpha");
+        var reply = new DialogueMessage
+        {
+            MessageId = "message:factory-reply",
+            Turn = 2,
+            Speaker = "Alpha",
+            SpeakerId = "alpha",
+            Text = "Factory runtime output",
+            Kind = "message",
+            CreatedAt = 101
+        };
+        conversations.StampPublicParticipant(reply, context);
+        baseline.Engine.Messages.Add(reply);
+        Require(SessionStore.SetupFingerprint(baseline) == factoryChanged,
+            "Factory runtime group messages or causal metadata changed the setup fingerprint");
+        baseline.Engine.FactoryMode = false;
+        Require(SessionStore.SetupFingerprint(baseline) == original,
+            "Factory runtime group state remained in the setup fingerprint after Factory mode was disabled");
+
         baseline.Engine.Steering.Global = "Changed global behavior";
         var globalChanged = SessionStore.SetupFingerprint(baseline);
         Require(globalChanged != original, "global steering did not change the setup fingerprint");

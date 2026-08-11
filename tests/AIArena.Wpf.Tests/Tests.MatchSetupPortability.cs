@@ -11,6 +11,7 @@ internal static partial class Program
         var source = SessionStore.CreateDefaultSnapshot();
         AgentRosterService.EnsureParticipantCount(source, 6);
         source.MatchType = "scientific";
+        source.Engine.FactoryMode = true;
         source.Engine.Steering.Topic = "Which evidence should decide the launch?";
         source.Engine.Steering.Global = "Quality contract: cite evidence and end with an actionable decision.";
         source.ScenarioGenerator.Style = "technical";
@@ -61,6 +62,24 @@ internal static partial class Program
         var package = MatchSetupPackageCodec.FromSnapshot("portable-source", source);
         var json = MatchSetupPackageCodec.Serialize(package);
         Require(json.Contains(MatchSetupPackageCodec.Schema, StringComparison.Ordinal), "portable JSON should declare the v2 setup schema");
+        Require(MatchSetupPackageCodec.FactoryConversationContract == "public_group_v1", "Factory setup identity should declare the public group prompt contract");
+        Require(package.Setup.FactoryMode && json.Contains("\"factoryMode\": true", StringComparison.Ordinal), "portable JSON should preserve Factory mode without changing the v2 schema");
+        var packageState = MatchSetupPackageCodec.ToState("portable-source", package);
+        Require(packageState.FactoryMode, "portable package state should project Factory mode for control-plane consumers");
+        var canonicalSetup = System.Text.Json.JsonSerializer.Serialize(
+            package.Setup,
+            new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+                DictionaryKeyPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            });
+        var expectedSaltedFingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(
+                    $"factory-conversation-contract|{FactoryConversationService.ContractVersion}\n{canonicalSetup}")))
+            .ToLowerInvariant();
+        Require(MatchSetupPackageCodec.Fingerprint(package) == expectedSaltedFingerprint,
+            "Factory portable setup identity should be explicitly salted by the public-group prompt contract");
         Require(!json.Contains("top-secret-token", StringComparison.Ordinal), "portable JSON must never serialize provider API tokens");
         Require(!json.Contains("Runtime text", StringComparison.Ordinal), "portable JSON must not include transcript runtime state");
         Require(!json.Contains("history", StringComparison.OrdinalIgnoreCase), "portable JSON must not include generation history");
@@ -83,6 +102,7 @@ internal static partial class Program
         var target = SessionStore.CreateDefaultSnapshot();
         var applied = MatchSetupPackageCodec.Apply(parsed.Package!, target, source.Configs);
         Require(applied.Ok, $"portable setup should apply atomically: {applied.Message}");
+        Require(target.Engine.FactoryMode, "round trip should preserve Factory mode");
         Require(target.MatchType == "scientific" && target.Engine.Steering.Topic == source.Engine.Steering.Topic, "round trip should preserve scenario identity");
         Require(target.Engine.Agents.Count(agent => agent.Active && AgentRosterService.IsParticipantId(agent.Id)) == 6, "round trip should preserve dynamic cast size");
         Require(target.Engine.Agents.Single(agent => agent.Id == "alpha").Persona == source.Engine.Agents[0].Persona, "round trip should preserve exact personas");
@@ -95,6 +115,45 @@ internal static partial class Program
         Require(
             MatchSetupPackageCodec.Fingerprint(recaptured) == MatchSetupPackageCodec.Fingerprint(package),
             "canonical setup fingerprints should survive an export/import round trip");
+
+        var arenaPackage = MatchSetupPackageCodec.FromSnapshot("portable-arena", source);
+        arenaPackage.Setup.FactoryMode = false;
+        Require(
+            MatchSetupPackageCodec.Fingerprint(arenaPackage) != MatchSetupPackageCodec.Fingerprint(package),
+            "Factory mode should change the exact portable Match Setup fingerprint");
+        var arenaTarget = SessionStore.CreateDefaultSnapshot();
+        Require(MatchSetupPackageCodec.Apply(arenaPackage, arenaTarget, source.Configs).Ok, "Arena-mode comparison setup should apply");
+        var evaluation = new ArenaEvaluationService();
+        var factoryIdentity = evaluation.Capture("portable-factory", target, DateTimeOffset.UnixEpoch);
+        var arenaIdentity = evaluation.Capture("portable-arena", arenaTarget, DateTimeOffset.UnixEpoch);
+        Require(factoryIdentity.ExactSetupFingerprint != arenaIdentity.ExactSetupFingerprint, "Factory mode should change evaluation exact-setup identity");
+        Require(factoryIdentity.ScenarioFingerprint != arenaIdentity.ScenarioFingerprint, "Factory mode should change model-neutral scenario identity");
+
+        var blankFactorySnapshot = SessionStore.CreateDefaultSnapshot();
+        blankFactorySnapshot.Engine.FactoryMode = true;
+        blankFactorySnapshot.Engine.Steering.Topic = "";
+        blankFactorySnapshot.Engine.Steering.Global = "";
+        foreach (var agent in blankFactorySnapshot.Engine.Agents.Where(agent => agent.Active))
+        {
+            agent.Persona = "";
+        }
+        blankFactorySnapshot.Engine.Agents[0].Name = "";
+        blankFactorySnapshot.Engine.Narrator.Persona = "";
+        blankFactorySnapshot.Engine.RivalryMatrix.Enabled = true;
+        var blankFactoryJson = MatchSetupPackageCodec.Serialize(MatchSetupPackageCodec.FromSnapshot("blank-factory", blankFactorySnapshot));
+        var blankFactory = MatchSetupPackageCodec.Parse(blankFactoryJson);
+        Require(blankFactory.Ok && blankFactory.Package?.Setup.FactoryMode == true, "Factory package with blank Arena-only guidance should remain valid");
+        Require(blankFactory.Warnings.Any(warning => warning.Contains("Factory mode does not send Arena-only guidance", StringComparison.Ordinal)), "Factory import should explain why blank Arena guidance does not block the raw run");
+        Require(!blankFactory.Warnings.Any(warning => warning.Contains("remain blocked", StringComparison.OrdinalIgnoreCase)
+            || warning.StartsWith("Participant '", StringComparison.Ordinal) && warning.Contains("blank persona", StringComparison.OrdinalIgnoreCase)
+            || warning.Equals("Narrator persona is blank.", StringComparison.Ordinal)), "Factory import should suppress Arena-only blocked/persona warnings");
+        Require(blankFactory.Warnings.Any(warning => warning.Contains("blank name", StringComparison.OrdinalIgnoreCase)), "Factory import should retain structural cast warnings");
+        Require(blankFactory.Warnings.Any(warning => warning.Contains("Relationship pressure is enabled", StringComparison.Ordinal)), "Factory import should retain relationship-matrix validation warnings");
+
+        var legacyJson = blankFactoryJson.Replace("\"factoryMode\": true,", "", StringComparison.Ordinal);
+        var legacy = MatchSetupPackageCodec.Parse(legacyJson);
+        Require(legacy.Ok && legacy.Package?.Setup.FactoryMode == false, "legacy v2 packages without factoryMode should default to Arena mode");
+        Require(legacy.Warnings.Any(warning => warning.Contains("Scenario topic is blank", StringComparison.Ordinal)), "legacy packages should retain Arena-mode readiness warnings");
 
         var invalidJson = json.Replace("\"id\": \"beta\"", "\"id\": \"alpha\"", StringComparison.Ordinal);
         var invalid = MatchSetupPackageCodec.Parse(invalidJson);
@@ -146,8 +205,13 @@ internal static partial class Program
             var events = new EventLogStore(root);
             store.EnsureDefaultSessionAsync().GetAwaiter().GetResult();
             var sourceSnapshot = store.LoadSnapshotAsync("default").GetAwaiter().GetResult()!;
+            sourceSnapshot.Engine.FactoryMode = true;
             sourceSnapshot.Engine.Steering.Topic = "Portable safety review";
-            sourceSnapshot.Engine.Messages.Add(new DialogueMessage { Turn = 1, Speaker = "Beta", SpeakerId = "beta", Text = "Do not copy this" });
+            var runtimeMessage = new DialogueMessage { Turn = 1, Speaker = "Beta", SpeakerId = "beta", Text = "Do not copy this" };
+            runtimeMessage.Metadata[FactoryConversationService.ContractMetadataKey] = System.Text.Json.JsonSerializer.SerializeToElement(FactoryConversationService.ContractVersion);
+            runtimeMessage.Metadata[FactoryConversationService.ConversationIdMetadataKey] = System.Text.Json.JsonSerializer.SerializeToElement("conversation-runtime-must-not-export");
+            runtimeMessage.Metadata[FactoryConversationService.ContextFingerprintMetadataKey] = System.Text.Json.JsonSerializer.SerializeToElement(new string('a', 64));
+            sourceSnapshot.Engine.Messages.Add(runtimeMessage);
             sourceSnapshot.Configs["shared"] = new ModelProviderConfig
             {
                 BaseUrl = "http://localhost:1234/v1",
@@ -170,7 +234,12 @@ internal static partial class Program
 
             var exported = service.ExportAsync().GetAwaiter().GetResult();
             Require(exported.Ok && exported.State is not null, "active setup should export through the headless service");
+            Require(exported.State!.FactoryMode, "headless export state should expose Factory mode");
             Require(!exported.State!.Json.Contains("trusted-local-token", StringComparison.Ordinal), "service export should remain secret-free");
+            Require(!exported.State.Json.Contains("Do not copy this", StringComparison.Ordinal)
+                && !exported.State.Json.Contains("conversation-runtime-must-not-export", StringComparison.Ordinal)
+                && !exported.State.Json.Contains("factory_context_fingerprint", StringComparison.Ordinal),
+                "portable Factory setup export must exclude transcript bodies and runtime group-contract metadata");
             var parsed = MatchSetupPackageCodec.Parse(exported.State.Json);
             Require(parsed.Ok && parsed.Package is not null, "service export should be accepted by the same codec");
             parsed.Package!.Setup.Providers["shared"].BaseUrl = "https://example.invalid/v1";
@@ -179,9 +248,18 @@ internal static partial class Program
             var imported = service.ImportAsync(changedEndpointJson, "review-copy").GetAwaiter().GetResult();
             Require(imported.Ok && imported.Receipt?.TargetSessionId == "review-copy", "import should create and select the requested clean session");
             Require(imported.Receipt!.Warnings.Any(warning => warning.Contains("token", StringComparison.OrdinalIgnoreCase)), "endpoint changes should produce a token-clearing warning");
+            Require(imported.Receipt.Warnings.Any(warning => warning.Contains("public group history", StringComparison.OrdinalIgnoreCase)
+                && warning.Contains("public Operator turn", StringComparison.OrdinalIgnoreCase)),
+                "a clean Factory import should explain that runtime history was excluded and a new Operator root is required");
             var target = store.LoadSnapshotAsync("review-copy").GetAwaiter().GetResult();
             Require(target is not null && target.Engine.Steering.Topic == "Portable safety review", "imported session should carry the portable setup");
+            Require(target!.Engine.FactoryMode, "service import should preserve Factory mode in the clean session");
             Require(target!.Engine.Messages.Count == 0 && target.GenerationHistory.Count == 0, "imported session should start with clean runtime state");
+            var importedGroup = new FactoryConversationService().Inspect(target);
+            Require(!importedGroup.IsAnchored
+                && !importedGroup.HasUsableRoot
+                && importedGroup.ContextFingerprint.Length == 0,
+                "portable Factory import must not recreate or infer a runtime group root");
             Require(target.Configs["shared"].BaseUrl == "https://example.invalid/v1" && target.Configs["shared"].ApiToken == "", "an imported endpoint must not inherit a trusted token for another host");
             var original = store.LoadSnapshotAsync("default").GetAwaiter().GetResult();
             Require(original?.Configs["shared"].ApiToken == "trusted-local-token", "import must not mutate the source session or its trusted token");
@@ -226,6 +304,7 @@ internal static partial class Program
             var eventStore = new EventLogStore(root);
             store.EnsureDefaultSessionAsync().GetAwaiter().GetResult();
             var source = store.LoadSnapshotAsync("default").GetAwaiter().GetResult()!;
+            source.Engine.FactoryMode = true;
             source.Engine.Steering.Topic = "Portable handler audit";
             store.SaveSnapshotAsync(source, "default").GetAwaiter().GetResult();
             SessionSummary? active = store.ListSessionsAsync().GetAwaiter().GetResult().Single();
@@ -263,6 +342,12 @@ internal static partial class Program
                 _ => Task.FromResult(new AIArenaAgentRosterResizeResult(false, "not_used", "Not used.", 4)),
                 matrix,
                 portability,
+                (factoryMode, _) => Task.FromResult(new AIArenaModelBehaviorModeResult(
+                    false,
+                    "not_used",
+                    "Not used.",
+                    factoryMode ? "factory" : "arena",
+                    false)),
                 events);
 
             Require(AIArenaControlPlaneProtocol.TryParseRequest(
@@ -284,6 +369,7 @@ internal static partial class Program
             var imported = handler.ExecuteAsync(importRequest).GetAwaiter().GetResult();
             Require(imported.Ok && published?.Type == "match.setup.imported", "handler import should return a receipt and publish an auditable event");
             Require(store.LoadSnapshotAsync("handler-import").GetAwaiter().GetResult()?.Engine.Steering.Topic == "Portable handler audit", "handler import should persist and select the clean setup session");
+            Require(store.LoadSnapshotAsync("handler-import").GetAwaiter().GetResult()?.Engine.FactoryMode == true, "handler import should preserve Factory mode");
         }
         finally
         {

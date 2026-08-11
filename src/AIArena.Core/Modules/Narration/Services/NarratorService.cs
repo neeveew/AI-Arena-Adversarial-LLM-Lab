@@ -8,6 +8,9 @@ namespace AIArena.Core.Services;
 
 public sealed class NarratorService : IDisposable
 {
+    internal const string FactoryNarrationUnavailableError =
+        "Narration is unavailable in Factory mode. Switch Apply Match Setup to models on to use narrator guidance.";
+
     private const string EvidenceBeginMarker = "<<< BEGIN UNTRUSTED INTERNET EVIDENCE >>>";
     private const string EvidenceEndMarker = "<<< END UNTRUSTED INTERNET EVIDENCE >>>";
     private static readonly Regex ToolRequestMarkerRegex = new(
@@ -66,6 +69,11 @@ public sealed class NarratorService : IDisposable
         if (snapshot is null)
         {
             return DecisionCardResult.Failed($"No snapshot found for session {sessionId}.");
+        }
+
+        if (snapshot.Engine.FactoryMode)
+        {
+            return DecisionCardResult.Failed(FactoryNarrationUnavailableError);
         }
 
         var config = ModelProviderRouting.Resolve(snapshot, "narrator", out var fallbackConfig);
@@ -134,6 +142,11 @@ public sealed class NarratorService : IDisposable
         if (snapshot is null)
         {
             return NarratorResult.Failed($"No snapshot found for session {sessionId}.");
+        }
+
+        if (snapshot.Engine.FactoryMode)
+        {
+            return NarratorResult.Failed(FactoryNarrationUnavailableError);
         }
 
         var config = ModelProviderRouting.Resolve(snapshot, "narrator", out var fallbackConfig);
@@ -511,7 +524,7 @@ public sealed class NarratorService : IDisposable
                 .Where(item => item.Kind is "message" or "")
                 .OrderBy(item => item.Turn)
                 .TakeLast(Math.Clamp(snapshot.Engine.TranscriptWindow, 1, 60))
-                .Select(item => $"Turn {item.Turn} {item.Speaker}: {item.Text}"));
+                .Select(item => $"Turn {item.Turn} {item.Speaker}: {NarratorPromptTranscriptText(item)}"));
         var arenaContext = NarratorContextBlock(snapshot, 8);
         var topic = string.IsNullOrWhiteSpace(snapshot.Engine.Steering.Topic) ? "Open arena discussion" : snapshot.Engine.Steering.Topic;
         var persona = string.IsNullOrWhiteSpace(snapshot.Engine.Narrator.Persona)
@@ -563,6 +576,13 @@ public sealed class NarratorService : IDisposable
         var source = string.IsNullOrWhiteSpace(item.Speaker) ? item.SpeakerId : item.Speaker;
         var kind = string.IsNullOrWhiteSpace(item.Kind) ? "context" : item.Kind;
         return $"Turn {item.Turn} {source} [{kind}]: {CompactNarratorContextText(item.Text, 520)}";
+    }
+
+    private static string NarratorPromptTranscriptText(DialogueMessage message)
+    {
+        return message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase)
+            ? message.Text.Trim()
+            : message.Text;
     }
 
     private static string NarratorContextBlock(ArenaSnapshot snapshot, int maxCards)
@@ -619,7 +639,7 @@ public sealed class NarratorService : IDisposable
                 .Where(item => item.Kind is "message" or "")
                 .OrderBy(item => item.Turn)
                 .TakeLast(Math.Clamp(snapshot.Engine.TranscriptWindow, 1, 60))
-                .Select(item => $"Turn {item.Turn} {item.Speaker}: {item.Text}"));
+                .Select(item => $"Turn {item.Turn} {item.Speaker}: {NarratorPromptTranscriptText(item)}"));
         var arenaContext = NarratorContextBlock(snapshot, 8);
         var topic = string.IsNullOrWhiteSpace(snapshot.Engine.Steering.Topic) ? "Open arena discussion" : snapshot.Engine.Steering.Topic;
         return

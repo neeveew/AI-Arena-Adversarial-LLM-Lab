@@ -2082,6 +2082,11 @@ internal sealed record QaSchemaPresentation(string Schema, string State, string 
 internal sealed record QaPerformancePresentation(string Metric, string Measurement, string State, string HelpText);
 internal sealed record QaLimitationPresentation(string Id, string State, string Summary);
 internal sealed record QaArtifactPresentation(string Id, string Kind, string RelativePath, string Sha256, string State, string HelpText);
+internal sealed record QaSummaryCardPresentation(string Kind, string Title, string Reason, string Details)
+{
+    public string AutomationName => $"{Kind} QA evidence: {Title}";
+    public string DetailsAutomationName => $"{Title} evidence details";
+}
 
 internal sealed record QaInspectorPresentation(
     QaInspectorState State,
@@ -2092,6 +2097,7 @@ internal sealed record QaInspectorPresentation(
     string TestTotals,
     string LiveProvider,
     string Inspection,
+    IReadOnlyList<QaSummaryCardPresentation> SummaryCards,
     IReadOnlyList<QaGatePresentation> Gates,
     IReadOnlyList<QaSchemaPresentation> Schemas,
     IReadOnlyList<QaPerformancePresentation> Performance,
@@ -2102,7 +2108,21 @@ internal sealed record QaInspectorPresentation(
     {
         if (result.Snapshot is not { } snapshot)
         {
-            return new(result.State, result.Summary, StateLabel(result.State), "Source evidence unavailable.", "Environment unavailable.", "Tests unavailable.", "Live-provider evidence unavailable.", "Inspection unavailable.", [], [], [], [], []);
+            return new(
+                result.State,
+                result.Summary,
+                StateLabel(result.State),
+                "Source evidence unavailable.",
+                "Environment unavailable.",
+                "Tests unavailable.",
+                "Live-provider evidence unavailable.",
+                "Inspection unavailable.",
+                [new QaSummaryCardPresentation(
+                    CardKind(result.State),
+                    "Evidence bundle",
+                    result.Summary,
+                    $"State: {StateLabel(result.State)}{System.Environment.NewLine}Source, environment, tests, and inspection evidence are unavailable for this selection.")],
+                [], [], [], [], []);
         }
         var contract = snapshot.Contract;
         var totals = contract.Gates.Aggregate(new ArenaQaTestCounts(0, 0, 0, 0), (value, gate) => new(
@@ -2110,6 +2130,7 @@ internal sealed record QaInspectorPresentation(
             value.Failed + gate.Tests.Failed,
             value.Skipped + gate.Tests.Skipped,
             value.Total + gate.Tests.Total));
+        var summaryCards = CreateSummaryCards(result, snapshot, totals);
         return new(
             result.State,
             result.Summary,
@@ -2121,6 +2142,7 @@ internal sealed record QaInspectorPresentation(
             contract.Inspection.UserAccepted
                 ? $"Accepted at {contract.Inspection.AcceptedAtUtc:O}; {contract.Inspection.ScreenshotArtifactIds.Length} screenshot(s), {contract.Inspection.AutomationArtifactIds.Length} automation artifact(s)."
                 : $"Not accepted; {contract.Inspection.ScreenshotArtifactIds.Length} screenshot(s), {contract.Inspection.AutomationArtifactIds.Length} automation artifact(s) currently referenced.",
+            summaryCards,
             contract.Gates.Select(gate => new QaGatePresentation(
                 gate.Id,
                 GateLabel(gate.Outcome),
@@ -2155,6 +2177,112 @@ internal sealed record QaInspectorPresentation(
                 $"{item.Artifact.Id}. {item.Artifact.Kind}. Hash {(item.HashMatches ? "verified" : "invalid")}. Relative path {item.Artifact.RelativePath}.")).ToArray());
     }
 
+    internal static string CardKind(QaInspectorState state) => state switch
+    {
+        QaInspectorState.Pass => "Ready",
+        QaInspectorState.Partial => "Partial",
+        QaInspectorState.Blocked => "Blocked",
+        _ => "Unavailable"
+    };
+
+    private static IReadOnlyList<QaSummaryCardPresentation> CreateSummaryCards(
+        QaEvidenceLoadResult result,
+        QaEvidenceSnapshot snapshot,
+        ArenaQaTestCounts totals)
+    {
+        var contract = snapshot.Contract;
+        var newline = System.Environment.NewLine;
+        var cards = new List<QaSummaryCardPresentation>
+        {
+            new(
+                CardKind(result.State),
+                "Evidence readiness",
+                result.Summary,
+                $"Contract verdict: {contract.Verdict}{newline}Clean passes: {contract.CleanFullPasses}{newline}Tests: {totals.Passed} passed, {totals.Failed} failed, {totals.Skipped} skipped, {totals.Total} total."),
+            new(
+                CardKind(snapshot.Currentness.State),
+                "Repository currentness",
+                snapshot.Currentness.Summary,
+                $"Currentness code: {snapshot.Currentness.Code}{newline}Recorded tree fingerprint: {contract.TreeFingerprint}{newline}Recorded working tree clean: {(contract.IsWorkingTreeClean ? "yes" : "no")}."),
+            new(
+                EvidenceKind(contract.LiveProviderCoverage.State),
+                "Live-provider coverage",
+                LiveCoverageReason(contract.LiveProviderCoverage),
+                LiveCoverage(contract.LiveProviderCoverage)),
+            new(
+                InspectionKind(contract.Inspection),
+                "Rendered inspection",
+                contract.Inspection.UserAccepted
+                    ? "The recorded inspection is explicitly accepted."
+                    : "The recorded inspection has not been explicitly accepted.",
+                contract.Inspection.UserAccepted
+                    ? $"Accepted at: {contract.Inspection.AcceptedAtUtc:O}{newline}Screenshots: {contract.Inspection.ScreenshotArtifactIds.Length}{newline}Automation artifacts: {contract.Inspection.AutomationArtifactIds.Length}{newline}Evidence: {contract.Inspection.Evidence.State}."
+                    : $"Screenshots referenced: {contract.Inspection.ScreenshotArtifactIds.Length}{newline}Automation artifacts referenced: {contract.Inspection.AutomationArtifactIds.Length}{newline}Evidence: {contract.Inspection.Evidence.State}.")
+        };
+
+        foreach (var group in contract.Gates
+                     .GroupBy(gate => gate.Outcome)
+                     .OrderBy(group => GateSummaryOrder(group.Key)))
+        {
+            var gates = group.OrderBy(gate => gate.Id, StringComparer.Ordinal).ToArray();
+            var kind = GateCardKind(group.Key);
+            var title = kind switch
+            {
+                "Ready" => "Ready gates",
+                "Failed" => "Failed gates",
+                "Blocked" => "Blocked gates",
+                "Partial" => "Partial gates",
+                _ => "Unavailable gates"
+            };
+            var reason = $"{gates.Length} gate{(gates.Length == 1 ? "" : "s")} reported {GateLabel(group.Key).ToLowerInvariant()}.";
+            var details = string.Join(newline, gates.Select(gate =>
+                $"{gate.Id}: {GateLabel(gate.Outcome)}; required {(gate.Required ? "yes" : "no")}; evidence {gate.Evidence.State}; tests {gate.Tests.Passed}/{gate.Tests.Total} passed, {gate.Tests.Failed} failed, {gate.Tests.Skipped} skipped."));
+            cards.Add(new(kind, title, reason, details));
+        }
+
+        return cards;
+    }
+
+    private static string EvidenceKind(ArenaEvidenceState state) => state switch
+    {
+        ArenaEvidenceState.Observed => "Ready",
+        ArenaEvidenceState.Inferred => "Partial",
+        _ => "Unavailable"
+    };
+
+    private static string InspectionKind(ArenaQaInspectionEvidence inspection)
+    {
+        if (inspection.Evidence.State == ArenaEvidenceState.Unavailable) return "Unavailable";
+        return inspection.UserAccepted && inspection.Evidence.State == ArenaEvidenceState.Observed
+            ? "Ready"
+            : "Partial";
+    }
+
+    private static string GateCardKind(ArenaQaGateOutcome outcome) => outcome switch
+    {
+        ArenaQaGateOutcome.Pass => "Ready",
+        ArenaQaGateOutcome.Fail => "Failed",
+        ArenaQaGateOutcome.Partial => "Partial",
+        ArenaQaGateOutcome.Blocked => "Blocked",
+        _ => "Unavailable"
+    };
+
+    private static int GateSummaryOrder(ArenaQaGateOutcome outcome) => outcome switch
+    {
+        ArenaQaGateOutcome.Fail => 0,
+        ArenaQaGateOutcome.Blocked => 1,
+        ArenaQaGateOutcome.Partial => 2,
+        ArenaQaGateOutcome.Unavailable => 3,
+        _ => 4
+    };
+
+    private static string LiveCoverageReason(ArenaQaLiveProviderCoverage value) => value.State switch
+    {
+        ArenaEvidenceState.Observed => "Live-provider coverage is observed within the recorded evidence boundary.",
+        ArenaEvidenceState.Inferred => "Live-provider coverage is inferred, not directly observed.",
+        _ => "Live-provider coverage is unavailable."
+    };
+
     private static string StateLabel(QaInspectorState state) => state switch
     {
         QaInspectorState.Pass => "PASS",
@@ -2169,7 +2297,7 @@ internal sealed record QaInspectorPresentation(
         ArenaQaGateOutcome.Partial => "PARTIAL",
         ArenaQaGateOutcome.Unavailable => "UNAVAILABLE",
         ArenaQaGateOutcome.Blocked => "BLOCKED",
-        _ => "BLOCKED (failed)"
+        _ => "FAILED"
     };
 
     private static string LiveCoverage(ArenaQaLiveProviderCoverage value)

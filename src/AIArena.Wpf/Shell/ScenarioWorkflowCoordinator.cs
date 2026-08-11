@@ -1234,6 +1234,18 @@ internal sealed class ScenarioWorkflowCoordinator
     private static string SetupReadinessRunSummary(ArenaViewSnapshot snapshot, string rolePack, string style, string intensity, string absurdity)
     {
         var activeAgents = snapshot.Agents.Count(agent => agent.Active);
+        if (snapshot.FactoryMode)
+        {
+            var input = ArenaOperationCoordinator.FactoryInputState(snapshot) switch
+            {
+                FactoryConversationInputState.Ready => "shared public group ready",
+                FactoryConversationInputState.PendingRoot => "public Operator root ready to anchor",
+                FactoryConversationInputState.MissingRoot => "anchored public Operator root missing",
+                _ => "public Operator root needed"
+            };
+            return $"Factory mode, {activeAgents} active agent(s), {input}; Match Setup behavior is inactive";
+        }
+
         var history = snapshot.GenerationHistory.Count == 0
             ? "no replay history yet"
             : $"{snapshot.GenerationHistory.Count} replayable setup(s)";
@@ -1267,7 +1279,7 @@ internal sealed class ScenarioWorkflowCoordinator
         if (blockers.Count == 0 && warnings.Count == 0)
         {
             lines.Add("");
-            lines.Add("Locks and relationship pressure will be preserved when applicable.");
+            lines.Add("All active run prerequisites are satisfied.");
         }
 
         return string.Join(Environment.NewLine, lines);
@@ -1281,8 +1293,16 @@ internal sealed class ScenarioWorkflowCoordinator
         var providerError = !string.IsNullOrWhiteSpace(snapshot.ProviderLastError) && snapshot.ProviderLastError != "-";
         var lockCount = SetupLockCount(snapshot);
         var providerModelState = ProviderModelState(snapshot);
+        var requiredAgentCount = snapshot.FactoryMode ? 1 : 2;
         return
         [
+            new SetupReadinessBadge(
+                "Mode",
+                snapshot.FactoryMode ? "Factory" : "Arena",
+                snapshot.FactoryMode ? "neutral" : "ready",
+                snapshot.FactoryMode
+                    ? "Match Setup behavior is saved but inactive. Participant calls use attributed public group history."
+                    : "Match Setup guidance will shape participant calls."),
             new SetupReadinessBadge(
                 "State",
                 blockers.Count > 0 ? "Blocked" : warnings.Count > 0 ? "Warnings" : "Ready",
@@ -1291,8 +1311,31 @@ internal sealed class ScenarioWorkflowCoordinator
             new SetupReadinessBadge(
                 "Agents",
                 activeAgents.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                activeAgents < 2 ? "danger" : "ready",
-                activeAgents < 2 ? "Activate at least two participants for an arena exchange." : $"{activeAgents} active participant(s) are available."),
+                activeAgents < requiredAgentCount ? "danger" : "ready",
+                activeAgents < requiredAgentCount
+                    ? snapshot.FactoryMode ? "Activate at least one participant for a Factory-mode call." : "Activate at least two participants for an arena exchange."
+                    : $"{activeAgents} active participant(s) are available."),
+            new SetupReadinessBadge(
+                "Input",
+                snapshot.FactoryMode
+                    ? ArenaOperationCoordinator.FactoryInputState(snapshot) switch
+                    {
+                        FactoryConversationInputState.Ready => "Group ready",
+                        FactoryConversationInputState.PendingRoot => "Root ready",
+                        FactoryConversationInputState.MissingRoot => "Root missing",
+                        _ => "Root needed"
+                    }
+                    : "Arena context",
+                snapshot.FactoryMode && !ArenaOperationCoordinator.HasFactoryInput(snapshot) ? "danger" : "ready",
+                snapshot.FactoryMode
+                    ? ArenaOperationCoordinator.FactoryInputState(snapshot) switch
+                    {
+                        FactoryConversationInputState.Ready => ArenaOperationCoordinator.FactoryConversationReadyMessage(snapshot),
+                        FactoryConversationInputState.PendingRoot => "The public Operator turn will become the durable group root on the first Factory model call.",
+                        FactoryConversationInputState.MissingRoot => "The anchored root no longer resolves. Restore it, or reset or fork before running a participant model.",
+                        _ => "Send a public Operator turn from AI Lab to start the shared group conversation."
+                    }
+                    : "Scenario, cast, memory, transcript, and applicable tool guidance may shape participant calls."),
             new SetupReadinessBadge(
                 "Provider",
                 snapshot.ProviderOnline ? providerModelState : providerError ? "Error" : "Offline",
@@ -1300,26 +1343,30 @@ internal sealed class ScenarioWorkflowCoordinator
                 ProviderBadgeTooltip(snapshot, providerModelState)),
             new SetupReadinessBadge(
                 "Personas",
-                blankPersonaCount == 0 ? "Filled" : $"{blankPersonaCount} blank",
-                blankPersonaCount == 0 ? "ready" : "warning",
-                blankPersonaCount == 0 ? "Active agents have persona text." : "Blank personas can make agent behavior generic."),
+                snapshot.FactoryMode ? "Inactive" : blankPersonaCount == 0 ? "Filled" : $"{blankPersonaCount} blank",
+                snapshot.FactoryMode ? "neutral" : blankPersonaCount == 0 ? "ready" : "warning",
+                snapshot.FactoryMode ? "Participant personas are saved but are not sent in Factory mode." : blankPersonaCount == 0 ? "Active agents have persona text." : "Blank personas can make agent behavior generic."),
             new SetupReadinessBadge(
                 "Narrator",
-                string.IsNullOrWhiteSpace(snapshot.NarratorPersona) ? "Blank" : "Briefed",
-                string.IsNullOrWhiteSpace(snapshot.NarratorPersona) ? "warning" : "ready",
-                string.IsNullOrWhiteSpace(snapshot.NarratorPersona) ? "Add narrator guidance for clearer judging and summaries." : "Narrator guidance is present."),
+                snapshot.FactoryMode ? "Unavailable" : string.IsNullOrWhiteSpace(snapshot.NarratorPersona) ? "Blank" : "Briefed",
+                snapshot.FactoryMode ? "neutral" : string.IsNullOrWhiteSpace(snapshot.NarratorPersona) ? "warning" : "ready",
+                snapshot.FactoryMode ? "Narration is unavailable while participant models run in Factory mode." : string.IsNullOrWhiteSpace(snapshot.NarratorPersona) ? "Add narrator guidance for clearer judging and summaries." : "Narrator guidance is present."),
             new SetupReadinessBadge(
                 "Criteria",
-                HasScenarioQualityContract(snapshot) ? "Auditable" : "Basic",
-                HasScenarioQualityContract(snapshot) ? "ready" : "warning",
-                HasScenarioQualityContract(snapshot)
+                snapshot.FactoryMode ? "Inactive" : HasScenarioQualityContract(snapshot) ? "Auditable" : "Basic",
+                snapshot.FactoryMode ? "neutral" : HasScenarioQualityContract(snapshot) ? "ready" : "warning",
+                snapshot.FactoryMode
+                    ? "Scenario quality criteria are saved but are not sent or scored as model-behavior evidence in Factory mode."
+                    : HasScenarioQualityContract(snapshot)
                     ? "Scenario defines success, unacceptable failure, an edge-case test, actionable output, and unresolved uncertainty."
                     : "Generate a new setup or add a quality contract to make closure criteria auditable."),
             new SetupReadinessBadge(
                 "Matrix",
-                snapshot.RivalryMatrixEnabled ? relationshipCount == 0 ? "No rules" : $"{relationshipCount} rule(s)" : "Neutral",
-                snapshot.RivalryMatrixEnabled && relationshipCount == 0 ? "danger" : "ready",
-                snapshot.RivalryMatrixEnabled
+                snapshot.FactoryMode ? "Inactive" : snapshot.RivalryMatrixEnabled ? relationshipCount == 0 ? "No rules" : $"{relationshipCount} rule(s)" : "Neutral",
+                snapshot.FactoryMode ? "neutral" : snapshot.RivalryMatrixEnabled && relationshipCount == 0 ? "danger" : "ready",
+                snapshot.FactoryMode
+                    ? "Relationship rules are saved but are not sent in Factory mode."
+                    : snapshot.RivalryMatrixEnabled
                     ? relationshipCount == 0 ? "Relationship matrix is enabled but has no active normalized rules." : $"{relationshipCount} active relationship rule(s) will shape prompts."
                     : "Relationship pressure is neutral."),
             new SetupReadinessBadge(
@@ -1359,6 +1406,28 @@ internal sealed class ScenarioWorkflowCoordinator
     private static IEnumerable<string> SetupReadinessBlockers(ArenaViewSnapshot snapshot)
     {
         var activeAgents = snapshot.Agents.Count(agent => agent.Active);
+        if (snapshot.FactoryMode)
+        {
+            if (activeAgents == 0)
+            {
+                yield return "activate at least one participant for a Factory-mode call";
+            }
+
+            if (!HasRunnableModelAssignment(snapshot))
+            {
+                yield return "choose a shared provider model or assign models to every active agent";
+            }
+
+            if (!ArenaOperationCoordinator.HasFactoryInput(snapshot))
+            {
+                yield return ArenaOperationCoordinator.FactoryInputState(snapshot) == FactoryConversationInputState.MissingRoot
+                    ? "restore the anchored public Operator root, or reset or fork the session"
+                    : "send a public Operator turn from AI Lab to start the shared group conversation";
+            }
+
+            yield break;
+        }
+
         if (activeAgents < 2)
         {
             yield return "activate at least two agents for a real arena exchange";
@@ -1392,6 +1461,11 @@ internal sealed class ScenarioWorkflowCoordinator
             yield return string.IsNullOrWhiteSpace(snapshot.ProviderLastError) || snapshot.ProviderLastError == "-"
                 ? "provider is offline; run Test connection before starting"
                 : $"provider is offline: {ShortHistoryText(snapshot.ProviderLastError, 96)}";
+        }
+
+        if (snapshot.FactoryMode)
+        {
+            yield break;
         }
 
         var blankPersonaCount = BlankActivePersonaCount(snapshot);

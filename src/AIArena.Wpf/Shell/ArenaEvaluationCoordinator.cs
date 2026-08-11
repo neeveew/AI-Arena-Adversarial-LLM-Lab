@@ -6,6 +6,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using AIArena.Core.Persistence;
+using AIArena.Wpf.Controls;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 
 namespace AIArena.Wpf;
@@ -149,7 +150,7 @@ internal sealed class ArenaEvaluationCoordinator
                 lastQa = qa;
                 historyText.Text = ArenaEvaluationPresentation.FormatHistory(saved.Entries.Count);
                 RenderCurrent();
-                SetStatus("Baseline captured. Change the model or provider, replay the same setup, then compare current.");
+                SetStatus("Baseline captured. Change the model or provider, replay the same setup, then compare current. Factory comparisons also require the same durable public-group context.");
             },
             cancellationToken);
     }
@@ -301,7 +302,7 @@ internal sealed class ArenaEvaluationCoordinator
 
     private void RenderEmpty()
     {
-        statusText.Text = "Capture a baseline, then replay the same setup with another model to compare it.";
+        statusText.Text = "Capture a baseline, then replay the same setup with another model. Factory comparisons also retain the same durable public-group context.";
         historyText.Text = "No local evaluation history";
         baselineText.Text = "Baseline: not selected";
         candidateText.Text = "Current: not captured";
@@ -310,6 +311,14 @@ internal sealed class ArenaEvaluationCoordinator
         comparisonItems.Children.Clear();
         modelItems.Children.Clear();
         qaItems.Children.Clear();
+        comparisonItems.Children.Add(CreateStateNotice(
+            "Empty",
+            "No comparison evidence",
+            "Capture a baseline, then replay the same model-neutral setup to compare current values; Factory runs also require matching public-group context."));
+        qaItems.Children.Add(CreateStateNotice(
+            "Unavailable",
+            "QA not run",
+            "Run the local evidence checks after a session has produced model turns."));
         AutomationProperties.SetHelpText(statusText, statusText.Text);
     }
 
@@ -325,33 +334,45 @@ internal sealed class ArenaEvaluationCoordinator
         comparisonItems.Children.Clear();
         if (lastComparison is null)
         {
-            comparisonSummaryText.Text = lastBaseline is not null && ReferenceEquals(lastBaseline, lastCandidate)
+            var baselineOnly = lastBaseline is not null && ReferenceEquals(lastBaseline, lastCandidate);
+            comparisonSummaryText.Text = baselineOnly
                 ? "Baseline is ready; run the same setup again to compare."
                 : "No comparison evidence.";
+            comparisonItems.Children.Add(CreateStateNotice(
+                "Empty",
+                baselineOnly ? "Baseline ready" : "No comparison evidence",
+                comparisonSummaryText.Text));
         }
         else
         {
             comparisonSummaryText.Text = lastComparison.Summary;
             foreach (var metric in lastComparison.Metrics)
             {
-                comparisonItems.Children.Add(CreateLine(
-                    ArenaEvaluationPresentation.FormatMetric(metric),
-                    ArenaEvaluationPresentation.BrushKey(metric.Status)));
+                comparisonItems.Children.Add(CreateMetricCard(metric, resourceBrush));
+            }
+            if (lastComparison.Metrics.Count == 0)
+            {
+                comparisonItems.Children.Add(CreateStateNotice(
+                    "Unavailable",
+                    "Comparison unavailable",
+                    lastComparison.Summary));
             }
         }
 
         modelItems.Children.Clear();
         if (lastBaseline is not null)
         {
-            modelItems.Children.Add(CreateLine(
-                "Baseline · " + ArenaEvaluationPresentation.FormatModels(lastBaseline.Models),
+            modelItems.Children.Add(CreateEvidenceCard(
+                "Baseline",
+                ArenaEvaluationPresentation.FormatModels(lastBaseline.Models),
                 "MutedTextBrush"));
         }
 
         if (lastCandidate is not null)
         {
-            modelItems.Children.Add(CreateLine(
-                "Current · " + ArenaEvaluationPresentation.FormatModels(lastCandidate.Models),
+            modelItems.Children.Add(CreateEvidenceCard(
+                "Current",
+                ArenaEvaluationPresentation.FormatModels(lastCandidate.Models),
                 "TextBrush"));
         }
 
@@ -359,6 +380,10 @@ internal sealed class ArenaEvaluationCoordinator
         if (lastQa is null)
         {
             qaSummaryText.Text = "QA has not run.";
+            qaItems.Children.Add(CreateStateNotice(
+                "Unavailable",
+                "QA not run",
+                "Run the local evidence checks after a session has produced model turns."));
         }
         else
         {
@@ -370,22 +395,225 @@ internal sealed class ArenaEvaluationCoordinator
                          .ThenBy(gate => gate.Id, StringComparer.Ordinal)
                          .Take(5))
             {
-                qaItems.Children.Add(CreateLine(
-                    ArenaEvaluationPresentation.FormatGate(gate),
-                    ArenaEvaluationPresentation.QaBrushKey(gate.Status)));
+                qaItems.Children.Add(CreateQaGateCard(gate));
             }
         }
     }
 
-    private TextBlock CreateLine(string text, string brushKey)
+    internal static Border CreateMetricCard(
+        ArenaEvaluationMetricComparison metric,
+        Func<string, Brush> resourceBrush)
     {
-        return new TextBlock
+        var kind = ArenaEvaluationPresentation.CardKind(metric.Status);
+        var stateLabel = ArenaEvaluationPresentation.StatusLabel(metric.Status);
+        var displayLabel = ArenaEvaluationPresentation.DisplayMetricLabel(metric);
+        var comparable = metric.Status != ArenaEvaluationStatuses.Unavailable
+            && metric.BaselineValue is not null
+            && metric.CandidateValue is not null;
+        var baselineValue = comparable
+            ? ArenaEvaluationPresentation.FormatEndpoint(metric.BaselineValue, metric.Unit)
+            : "Unavailable";
+        var candidateValue = comparable
+            ? ArenaEvaluationPresentation.FormatEndpoint(metric.CandidateValue, metric.Unit)
+            : "Unavailable";
+        var delta = comparable
+            ? ArenaEvaluationPresentation.FormatDirectionalDelta(metric.Delta, metric.Unit)
+            : "No observed comparison";
+
+        var card = new AccessibleCardBorder
         {
-            Text = text,
-            Foreground = resourceBrush(brushKey),
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 3, 0, 0)
+            Tag = kind,
+            Margin = new Thickness(0, 6, 0, 0),
+            MinHeight = 120
         };
+        card.SetResourceReference(FrameworkElement.StyleProperty, "Arena.StateCard");
+        AutomationProperties.SetName(card, $"{stateLabel} comparison metric: {displayLabel}");
+        AutomationProperties.SetItemStatus(card, kind);
+        AutomationProperties.SetHelpText(
+            card,
+            $"{displayLabel}. Baseline {baselineValue}. Current {candidateValue}. {delta}. {metric.Explanation} Evidence samples: baseline {metric.BaselineEvidence}, current {metric.CandidateEvidence}.");
+
+        var content = new StackPanel();
+        var header = new DockPanel { LastChildFill = true };
+        header.Children.Add(CreateStatusChip(kind, stateLabel, resourceBrush));
+        var label = new TextBlock
+        {
+            Text = displayLabel,
+            Foreground = resourceBrush("TextBrush"),
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        header.Children.Add(label);
+        content.Children.Add(header);
+
+        var values = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        values.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        values.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(10) });
+        values.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        values.Children.Add(CreateMetricEndpoint("Baseline", baselineValue, resourceBrush));
+        var current = CreateMetricEndpoint("Current", candidateValue, resourceBrush);
+        Grid.SetColumn(current, 2);
+        values.Children.Add(current);
+        content.Children.Add(values);
+
+        if (comparable)
+        {
+            var maximum = Math.Max(Math.Abs(metric.BaselineValue!.Value), Math.Abs(metric.CandidateValue!.Value));
+            var sparkline = new MetricSparklineControl
+            {
+                Height = 32,
+                MinWidth = 120,
+                Margin = new Thickness(0, 9, 0, 0),
+                Mode = "bars",
+                Values = [Math.Max(0, metric.BaselineValue.Value), Math.Max(0, metric.CandidateValue.Value)],
+                MaxValue = maximum <= 0 ? 1 : maximum * 1.08,
+                AccentBrush = resourceBrush(ArenaEvaluationPresentation.BrushKey(metric.Status))
+            };
+            AutomationProperties.SetName(sparkline, $"{metric.Label} baseline and current comparison bars");
+            AutomationProperties.SetHelpText(sparkline, $"Baseline {baselineValue}; current {candidateValue}.");
+            content.Children.Add(sparkline);
+        }
+
+        var deltaText = new TextBlock
+        {
+            Text = delta,
+            Foreground = resourceBrush(ArenaEvaluationPresentation.BrushKey(metric.Status)),
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        content.Children.Add(deltaText);
+        content.Children.Add(new TextBlock
+        {
+            Text = metric.Explanation,
+            Foreground = resourceBrush("MutedTextBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0)
+        });
+        card.Child = content;
+        ArenaMotion.RevealCard(card);
+        return card;
+    }
+
+    private static Border CreateMetricEndpoint(
+        string label,
+        string value,
+        Func<string, Brush> resourceBrush)
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock
+        {
+            Text = label,
+            Foreground = resourceBrush("MutedTextBrush"),
+            FontSize = 10,
+            FontWeight = FontWeights.SemiBold
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = value,
+            Foreground = resourceBrush("TextBrush"),
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 2, 0, 0)
+        });
+        return new Border { Child = panel };
+    }
+
+    private static Border CreateStatusChip(
+        string kind,
+        string label,
+        Func<string, Brush> resourceBrush)
+    {
+        var chip = new Border
+        {
+            Tag = kind,
+            Margin = new Thickness(8, 0, 0, 0)
+        };
+        DockPanel.SetDock(chip, Dock.Right);
+        chip.SetResourceReference(FrameworkElement.StyleProperty, "Arena.StatusChip");
+        chip.Child = new TextBlock
+        {
+            Text = label,
+            Foreground = resourceBrush("TextBrush"),
+            FontSize = 10,
+            FontWeight = FontWeights.SemiBold
+        };
+        return chip;
+    }
+
+    private Border CreateEvidenceCard(string label, string details, string brushKey)
+    {
+        var card = new AccessibleCardBorder { Margin = new Thickness(0, 5, 0, 0) };
+        card.SetResourceReference(FrameworkElement.StyleProperty, "Arena.Surface.Card");
+        card.Child = new StackPanel
+        {
+            Children =
+            {
+                new TextBlock { Text = label, Foreground = resourceBrush("TextBrush"), FontWeight = FontWeights.SemiBold },
+                new TextBlock { Text = details, Foreground = resourceBrush(brushKey), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0) }
+            }
+        };
+        AutomationProperties.SetName(card, $"{label} model evidence");
+        AutomationProperties.SetItemStatus(card, "evidence");
+        AutomationProperties.SetHelpText(card, details);
+        return card;
+    }
+
+    private Border CreateQaGateCard(ArenaRuntimeQaGate gate)
+    {
+        var kind = gate.Status switch
+        {
+            ArenaQaGateStatuses.Fail => "Failed",
+            ArenaQaGateStatuses.Warn => "Partial",
+            ArenaQaGateStatuses.Pass => "Ready",
+            _ => "Unavailable"
+        };
+        var card = new AccessibleCardBorder { Tag = kind, Margin = new Thickness(0, 5, 0, 0) };
+        card.SetResourceReference(FrameworkElement.StyleProperty, "Arena.StateCard");
+        var panel = new StackPanel();
+        var header = new DockPanel { LastChildFill = true };
+        header.Children.Add(CreateStatusChip(kind, kind, resourceBrush));
+        header.Children.Add(new TextBlock
+        {
+            Text = gate.Id,
+            Foreground = resourceBrush("TextBrush"),
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap
+        });
+        panel.Children.Add(header);
+        panel.Children.Add(new TextBlock
+        {
+            Text = gate.Explanation,
+            Foreground = resourceBrush("MutedTextBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 5, 0, 0)
+        });
+        card.Child = panel;
+        AutomationProperties.SetName(card, $"{kind} runtime QA gate: {gate.Id}");
+        AutomationProperties.SetItemStatus(card, kind);
+        AutomationProperties.SetHelpText(card, gate.Explanation);
+        ArenaMotion.RevealCard(card);
+        return card;
+    }
+
+    private Border CreateStateNotice(string kind, string title, string guidance)
+    {
+        var card = new AccessibleCardBorder { Tag = kind, Margin = new Thickness(0, 5, 0, 0) };
+        card.SetResourceReference(FrameworkElement.StyleProperty, "Arena.StateCard");
+        card.Child = new StackPanel
+        {
+            Children =
+            {
+                new TextBlock { Text = title, Foreground = resourceBrush("TextBrush"), FontWeight = FontWeights.SemiBold },
+                new TextBlock { Text = guidance, Foreground = resourceBrush("MutedTextBrush"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) }
+            }
+        };
+        AutomationProperties.SetName(card, $"{kind} state: {title}");
+        AutomationProperties.SetItemStatus(card, kind);
+        AutomationProperties.SetHelpText(card, guidance);
+        return card;
     }
 
     private void UpdateButtons()
@@ -425,6 +653,61 @@ internal sealed class ArenaEvaluationCoordinator
 
 internal static class ArenaEvaluationPresentation
 {
+    internal static string CardKind(string status) => status switch
+    {
+        ArenaEvaluationStatuses.Improved => "Ready",
+        ArenaEvaluationStatuses.Unchanged => "Ready",
+        ArenaEvaluationStatuses.Regressed => "Failed",
+        ArenaEvaluationStatuses.Unavailable => "Unavailable",
+        ArenaEvaluationStatuses.Insufficient => "Unavailable",
+        ArenaEvaluationStatuses.NotComparable => "Unavailable",
+        _ => "Partial"
+    };
+
+    internal static string StatusLabel(string status) => status switch
+    {
+        ArenaEvaluationStatuses.Improved => "Improved",
+        ArenaEvaluationStatuses.Regressed => "Regressed",
+        ArenaEvaluationStatuses.Unchanged => "Unchanged",
+        ArenaEvaluationStatuses.NotComparable => "Not comparable",
+        ArenaEvaluationStatuses.Insufficient => "Insufficient",
+        _ => "Unavailable"
+    };
+
+    internal static string DisplayMetricLabel(ArenaEvaluationMetricComparison metric) => metric.Id switch
+    {
+        "quality.score" => "Quality score",
+        "run.success-rate" => "Successful turns",
+        "run.failed-turns" => "Failed turns",
+        "telemetry.average-latency" => "Latency",
+        "telemetry.generated-tokens" => "Generated tokens",
+        "telemetry.throughput" => "Throughput",
+        _ => metric.Label
+    };
+
+    internal static string FormatEndpoint(double? value, string unit)
+    {
+        if (value is null) return "Unavailable";
+        var suffix = unit.Equals("percentage points", StringComparison.OrdinalIgnoreCase)
+            ? "%"
+            : string.IsNullOrWhiteSpace(unit)
+                ? ""
+                : $" {unit}";
+        return FormatNumber(value.Value) + suffix;
+    }
+
+    internal static string FormatDirectionalDelta(double? delta, string unit)
+    {
+        if (delta is null) return "No observed delta";
+        var glyph = delta.Value > 0 ? "↑" : delta.Value < 0 ? "↓" : "→";
+        var suffix = unit.Equals("percentage points", StringComparison.OrdinalIgnoreCase)
+            ? " pp"
+            : string.IsNullOrWhiteSpace(unit)
+                ? ""
+                : $" {unit}";
+        return $"{glyph} {FormatSigned(delta.Value)}{suffix}";
+    }
+
     public static string FormatHistory(int count)
     {
         return count == 1 ? "1 local run" : $"{Math.Max(0, count)} local runs";
@@ -436,7 +719,12 @@ internal static class ArenaEvaluationPresentation
         var modelLabel = evaluation.Models.Count == 0
             ? "no model evidence"
             : string.Join(", ", evaluation.Models.Select(model => model.Model).Take(2));
-        return $"{modelLabel} · {modelTurns} model turn{(modelTurns == 1 ? "" : "s")} · {evaluation.RunId}";
+        var factoryGroup = evaluation.FactoryGroupContext is null
+            ? ""
+            : string.IsNullOrWhiteSpace(evaluation.FactoryGroupContext.ContextFingerprint)
+                ? " · Factory group unavailable"
+                : $" · Factory group {evaluation.FactoryGroupContext.CausalSampleCount} causal call(s), latest {evaluation.FactoryGroupContext.IncludedEntryCount}/{evaluation.FactoryGroupContext.EligibleEntryCount} entries";
+        return $"{modelLabel} · {modelTurns} model turn{(modelTurns == 1 ? "" : "s")}{factoryGroup} · {evaluation.RunId}";
     }
 
     public static string FormatModels(IReadOnlyList<ArenaEvaluationModelAggregate> models)

@@ -211,6 +211,232 @@ static void OperatorTurnCoordinatorDisablesInputDuringBusyWork()
     });
 }
 
+static void OperatorTurnCoordinatorPreservesFactoryPublicIngestionBoundaries()
+{
+    static void PumpCoordinatorTask(Func<Task> start)
+    {
+        var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        var previousContext = SynchronizationContext.Current;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(
+                new System.Windows.Threading.DispatcherSynchronizationContext(dispatcher));
+            var task = start();
+            if (!task.IsCompleted)
+            {
+                var frame = new System.Windows.Threading.DispatcherFrame();
+                _ = task.ContinueWith(
+                    _ => dispatcher.BeginInvoke(
+                        new Action(() => frame.Continue = false),
+                        System.Windows.Threading.DispatcherPriority.Send),
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+            }
+
+            task.GetAwaiter().GetResult();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+        }
+    }
+
+    RunStaTest(() =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ai-arena-operator-factory-ingestion-tests", Guid.NewGuid().ToString("N"));
+        const string sessionId = "factory-ingestion";
+        try
+        {
+            var sessionStore = new SessionStore(root);
+            var eventLogStore = new EventLogStore(root);
+            var settingsStore = new WpfSettingsStore(Path.Combine(root, "configs", "settings.json"));
+            var modelClient = new SequentialAgentModelClient("Narrator acknowledged.");
+            using var narrator = new NarratorService(
+                modelClient,
+                sessionStore,
+                eventLogStore,
+                new TranscriptService());
+
+            var publicRouteButton = new Button();
+            var privateRouteButton = new Button();
+            var narratorRouteButton = new Button();
+            var privateTargetPicker = new ComboBox();
+            var turnText = new TextBox();
+            var sendButton = new Button();
+            var currentSession = new SessionSummary(sessionId, "", false, 0, 0, 0, DateTimeOffset.UtcNow);
+            var viewAgent = new AgentState("alpha", "Alpha", "waiting", "persona", "default", "default", "", "model-a", true, false, []);
+            ArenaViewSnapshot View(bool factoryMode) => SnapshotForOverviewTest(
+                providerOnline: true,
+                providerModel: "model-a",
+                providerLastError: "",
+                turnIndex: 0,
+                messages: [],
+                agents: [viewAgent]) with
+            {
+                SessionId = sessionId,
+                FactoryMode = factoryMode
+            };
+            var lastView = View(factoryMode: true);
+            var coordinator = new OperatorTurnCoordinator(
+                sessionStore,
+                eventLogStore,
+                new TranscriptService(),
+                narrator,
+                new DiscourseDiagnosticsService(),
+                settingsStore,
+                publicRouteButton,
+                privateRouteButton,
+                narratorRouteButton,
+                new Grid(),
+                privateTargetPicker,
+                new TextBlock(),
+                new TextBlock(),
+                new TextBlock(),
+                new TextBlock(),
+                [new Button(), new Button(), new Button(), new Button()],
+                new ComboBox(),
+                new Button(),
+                new Button(),
+                new Button(),
+                turnText,
+                sendButton,
+                () => new WpfSettings { OperatorTemplates = [] },
+                () => currentSession,
+                () => lastView,
+                () => false,
+                AccentResourceBrush,
+                (_, _, action, _) => action(),
+                (snapshot, id) => sessionStore.SaveSnapshotAsync(snapshot, id),
+                _ => Task.CompletedTask,
+                _ => { },
+                _ => { });
+            coordinator.InitializeControls();
+            coordinator.ApplySnapshot(lastView);
+            coordinator.SetRouteMode("public");
+            Require(
+                AutomationProperties.GetHelpText(sendButton).Contains("Public group-chat turn", StringComparison.Ordinal)
+                && AutomationProperties.GetHelpText(sendButton).Contains("joins the Factory conversation", StringComparison.Ordinal),
+                "the hosted public action should explain that Operator turns remain visible and join the same Factory group history as agent replies");
+
+            var factoryUiText = $"  {Environment.NewLine}Factory UI first line{Environment.NewLine}Factory UI second line  {Environment.NewLine}";
+            turnText.Text = factoryUiText;
+            coordinator.UpdateTurnMeter();
+            PumpCoordinatorTask(coordinator.SendOperatorTurnAsync);
+            Require(turnText.Text == factoryUiText, "a failed hosted Factory public send should retain every character of the visible draft");
+
+            var snapshot = SessionStore.CreateDefaultSnapshot();
+            snapshot.Engine.FactoryMode = true;
+            snapshot.Configs["shared"] = new ModelProviderConfig
+            {
+                BaseUrl = "http://127.0.0.1:1234/v1",
+                ApiMode = ModelProviderApiModes.OpenAiCompatible,
+                Model = "narrator-test-model"
+            };
+            sessionStore.SaveSnapshotAsync(snapshot, sessionId).GetAwaiter().GetResult();
+
+            PumpCoordinatorTask(coordinator.SendOperatorTurnAsync);
+            var factoryAfterUi = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException("Factory UI snapshot should reload");
+            var factoryRoot = factoryAfterUi.Engine.Messages.Single(message => message.SpeakerId == "operator");
+            Require(factoryRoot.Text == factoryUiText, "a successful hosted Factory public send should persist outer whitespace and newlines exactly");
+            Require(!string.IsNullOrWhiteSpace(factoryRoot.MessageId), "the first hosted Factory public turn should receive a durable message identity");
+            Require(factoryRoot.Metadata[FactoryConversationService.ContractMetadataKey].GetString() == FactoryConversationService.ContractVersion, "the hosted Factory root should carry the versioned public-group contract");
+            Require(factoryRoot.Metadata[FactoryConversationService.IsRootMetadataKey].GetBoolean(), "the initiating hosted Operator turn should be marked as the durable group root");
+            var conversationId = factoryRoot.Metadata[FactoryConversationService.ConversationIdMetadataKey].GetString() ?? "";
+            Require(!string.IsNullOrWhiteSpace(conversationId), "the hosted Factory root should carry an opaque conversation identity");
+            Require(factoryRoot.Metadata[FactoryConversationService.RootMessageIdMetadataKey].GetString() == factoryRoot.MessageId, "the root provenance should resolve to the initiating visible Operator card");
+            Require(turnText.Text == "", "the hosted public composer should clear only after the Factory turn is durably saved");
+
+            coordinator.SetRouteMode("private");
+            var visiblePrivateDraft = $"  Visible private draft{Environment.NewLine}";
+            turnText.Text = visiblePrivateDraft;
+            coordinator.UpdateTurnMeter();
+            var factoryControlText = $"{Environment.NewLine}  Factory control first line{Environment.NewLine}Factory control second line  {Environment.NewLine}";
+            PumpCoordinatorTask(() => coordinator.ControlSendAsync(factoryControlText, "public"));
+            var factoryAfterControl = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException("Factory control snapshot should reload");
+            var controlOperator = factoryAfterControl.Engine.Messages.Last(message => message.SpeakerId == "operator");
+            Require(controlOperator.Text == factoryControlText, "a Factory control public prompt should persist exactly without pre-trimming");
+            Require(controlOperator.Metadata[FactoryConversationService.ContractMetadataKey].GetString() == FactoryConversationService.ContractVersion, "PowerShell and hosted public sends should use the same Factory provenance contract");
+            Require(controlOperator.Metadata[FactoryConversationService.ConversationIdMetadataKey].GetString() == conversationId, "PowerShell public sends should join the same opaque group as the hosted root");
+            Require(controlOperator.Metadata[FactoryConversationService.RootMessageIdMetadataKey].GetString() == factoryRoot.MessageId, "PowerShell public sends should retain the visible initiating Operator root");
+            Require(!controlOperator.Metadata[FactoryConversationService.IsRootMetadataKey].GetBoolean(), "a later PowerShell Operator turn must not replace the initiating group root");
+            Require(turnText.Text == visiblePrivateDraft, "a control public send should not clear or rewrite the visible UI draft");
+            Require(AutomationProperties.GetItemStatus(privateRouteButton) == "selected", "a control public send should not commandeer the visible UI route");
+
+            var arenaSnapshot = factoryAfterControl;
+            arenaSnapshot.Engine.FactoryMode = false;
+            sessionStore.SaveSnapshotAsync(arenaSnapshot, sessionId).GetAwaiter().GetResult();
+            lastView = View(factoryMode: false);
+            coordinator.ApplySnapshot(lastView);
+            coordinator.SetRouteMode("public");
+            var arenaUiText = $" {Environment.NewLine}  Arena UI text  {Environment.NewLine} ";
+            turnText.Text = arenaUiText;
+            coordinator.UpdateTurnMeter();
+            PumpCoordinatorTask(coordinator.SendOperatorTurnAsync);
+            var arenaAfterUi = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException("Arena UI snapshot should reload");
+            var arenaInterludeOperator = arenaAfterUi.Engine.Messages.Last(message => message.SpeakerId == "operator");
+            Require(arenaInterludeOperator.Text == arenaUiText, "Arena-mode hosted public input must preserve exact text because it joins the resumed Factory group");
+            Require(arenaInterludeOperator.Metadata[FactoryConversationService.ConversationIdMetadataKey].GetString() == conversationId, "an Arena-mode public Operator interlude should remain in an already-anchored Factory group");
+            Require(arenaInterludeOperator.Metadata[FactoryConversationService.RootMessageIdMetadataKey].GetString() == factoryRoot.MessageId, "mode toggles must not reset or replace the shared group root");
+            Require(turnText.Text == "", "a successful Arena public send should retain the established composer-clearing behavior");
+
+            coordinator.SetRouteMode("private");
+            turnText.Text = visiblePrivateDraft;
+            coordinator.UpdateTurnMeter();
+            var arenaControlText = $" {Environment.NewLine}  Arena control text  {Environment.NewLine} ";
+            PumpCoordinatorTask(() => coordinator.ControlSendAsync(arenaControlText, "public"));
+            var arenaAfterControl = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException("Arena control snapshot should reload");
+            Require(arenaAfterControl.Engine.Messages.Last(message => message.SpeakerId == "operator").Text == arenaControlText, "Arena-mode control public input must preserve exact text for future Factory reconstruction");
+            Require(turnText.Text == visiblePrivateDraft, "an Arena control send should also preserve the visible UI draft");
+
+            var publicEventLog = File.ReadAllText(eventLogStore.EventPath(sessionId));
+            Require(publicEventLog.Contains("\"TextLength\":", StringComparison.Ordinal)
+                && !publicEventLog.Contains("\"Text\":", StringComparison.Ordinal)
+                && !publicEventLog.Contains("Factory UI first line", StringComparison.Ordinal)
+                && !publicEventLog.Contains("Factory control first line", StringComparison.Ordinal)
+                && !publicEventLog.Contains("Arena UI text", StringComparison.Ordinal)
+                && !publicEventLog.Contains("Arena control text", StringComparison.Ordinal),
+                "public Operator audit events must retain bounded lengths without duplicating prompt bodies");
+
+            var privateText = $" {Environment.NewLine}  Private guidance  {Environment.NewLine} ";
+            turnText.Text = privateText;
+            coordinator.UpdateTurnMeter();
+            PumpCoordinatorTask(coordinator.SendOperatorTurnAsync);
+            var afterPrivate = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException("private guidance snapshot should reload");
+            Require(afterPrivate.Engine.Agents.Where(agent => agent.Active).All(agent => agent.PrivateNotes.Last() == "Operator private: Private guidance"), "private UI guidance should continue trimming outer whitespace before persistence");
+            Require(turnText.Text == "", "a successful private UI send should clear only its matching visible draft");
+            var privateEventLog = File.ReadAllText(eventLogStore.EventPath(sessionId));
+            Require(!privateEventLog.Contains("\"Text\":", StringComparison.Ordinal)
+                && !privateEventLog.Contains("Private guidance", StringComparison.Ordinal),
+                "private Operator audit events must never duplicate the private guidance body");
+
+            coordinator.SetRouteMode("narrator");
+            var narratorText = $" {Environment.NewLine}  Narrator question  {Environment.NewLine} ";
+            turnText.Text = narratorText;
+            coordinator.UpdateTurnMeter();
+            PumpCoordinatorTask(coordinator.SendOperatorTurnAsync);
+            Require(modelClient.CompletedMessages.Count > 0, "the hosted narrator route should reach the recording model client in Arena mode");
+            var narratorUserMessage = modelClient.CompletedMessages.Last().Last(message => message.Role == "user").Content;
+            Require(narratorUserMessage.EndsWith($"Operator request for narrator:{Environment.NewLine}Narrator question", StringComparison.Ordinal), "narrator UI input should continue trimming outer whitespace before prompt ingestion");
+            Require(!narratorUserMessage.Contains(narratorText, StringComparison.Ordinal), "the narrator prompt should not preserve public-only outer whitespace semantics");
+            Require(turnText.Text == "", "a successful narrator UI send should clear only its matching visible draft");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    });
+}
+
 static void OperatorTurnCoordinatorSuggestsInterventions()
 {
     var starter = OperatorTurnCoordinator.BuildInterventionSuggestions(null, null);

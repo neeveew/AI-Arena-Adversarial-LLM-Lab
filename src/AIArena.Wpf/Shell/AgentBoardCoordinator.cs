@@ -35,6 +35,10 @@ internal sealed class AgentBoardCoordinator
     private readonly List<MenuItem> agentModeMenuItems = [];
     private readonly List<(Button Button, bool HasPersistentAction)> agentOverflowButtons = [];
     private readonly List<Button> narratorActionButtons = [];
+    private bool participantActionsReady;
+    private string participantReadinessMessage = "Complete provider, model, and cast setup before running this model.";
+    private bool narratorActionsReady;
+    private bool factoryMode;
 
     public AgentBoardCoordinator(
         SessionStore sessionStore,
@@ -76,6 +80,11 @@ internal sealed class AgentBoardCoordinator
 
     public void Populate(ArenaViewSnapshot snapshot, string? currentAgentId)
     {
+        var readiness = ArenaOperationCoordinator.EvaluateReadiness(snapshot);
+        participantActionsReady = readiness.CanRun;
+        participantReadinessMessage = readiness.Message;
+        narratorActionsReady = readiness.CanRun && readiness.CanNarrate;
+        factoryMode = snapshot.FactoryMode;
         var agents = snapshot.Agents;
         Clear();
 
@@ -106,7 +115,7 @@ internal sealed class AgentBoardCoordinator
     {
         foreach (var button in agentTurnButtons)
         {
-            button.IsEnabled = !busy;
+            button.IsEnabled = !busy && participantActionsReady;
         }
         foreach (var button in agentModeButtons)
         {
@@ -126,7 +135,7 @@ internal sealed class AgentBoardCoordinator
 
         foreach (var button in narratorActionButtons)
         {
-            button.IsEnabled = ModeActionEnabled(busy, isAutoChatRunning());
+            button.IsEnabled = ModeActionEnabled(busy, isAutoChatRunning()) && narratorActionsReady;
         }
     }
 
@@ -207,7 +216,7 @@ internal sealed class AgentBoardCoordinator
             IsEnabled = !string.IsNullOrWhiteSpace(agent.Id)
                 && (isPaused
                     ? ModeActionEnabled(isArenaBusy(), isAutoChatRunning())
-                    : !isArenaBusy()),
+                    : !isArenaBusy() && participantActionsReady),
             Width = 32,
             MinWidth = 32,
             Height = 32,
@@ -228,14 +237,18 @@ internal sealed class AgentBoardCoordinator
             Foreground = isPaused ? resourceBrush("Arena.Brush.Warning") : resourceBrush("TextBrush"),
             ToolTip = isPaused
                 ? $"Resume {agent.Name}"
-                : $"Run one turn for {agent.Name}"
+                : participantActionsReady
+                    ? $"Run one turn for {agent.Name}"
+                    : ParticipantRunUnavailableHelp()
         };
         SetButtonAutomation(
             primaryActionButton,
             isPaused ? $"Resume {agent.Name}" : $"Run one turn for {agent.Name}",
             isPaused
                 ? $"Returns {agent.Name} to the active roster."
-                : $"Runs one turn for {agent.Name}.");
+                : participantActionsReady
+                    ? $"Runs one turn for {agent.Name}."
+                    : ParticipantRunUnavailableHelp());
         if (isPaused)
         {
             primaryActionButton.Click += async (_, _) => await SetAgentMuteAsync(agent.Id, mute: false);
@@ -533,7 +546,10 @@ internal sealed class AgentBoardCoordinator
         var isRunning = IsAgentWorkingStatus(snapshot.NarratorStatus);
         var modelText = string.IsNullOrWhiteSpace(snapshot.NarratorModel) ? "model not set" : snapshot.NarratorModel;
         var status = string.IsNullOrWhiteSpace(snapshot.NarratorStatus) ? "idle" : snapshot.NarratorStatus;
-        var buttonEnabled = !isArenaBusy() || isAutoChatRunning();
+        var buttonEnabled = (!isArenaBusy() || isAutoChatRunning()) && narratorActionsReady;
+        var narratorHelp = factoryMode
+            ? "Narration is unavailable in Factory mode. Turn Apply Match Setup to models on to use narrator guidance."
+            : "Narrate now. Ask the narrator to speak without advancing the participant turn order.";
         var playButton = new Button
         {
             Content = CreateAgentButtonGlyph("\uE768", 12),
@@ -548,9 +564,9 @@ internal sealed class AgentBoardCoordinator
             Background = blendBrush(resourceBrush("InputBrush"), accent, 0.5),
             BorderBrush = accent,
             Foreground = resourceBrush("TextBrush"),
-            ToolTip = "Narrate now"
+            ToolTip = narratorHelp
         };
-        SetButtonAutomation(playButton, "Narrate now", "Ask the narrator to speak without advancing the participant turn order.");
+        SetButtonAutomation(playButton, "Narrate now", narratorHelp);
         playButton.Click += narrateNowHandler;
         narratorActionButtons.Add(playButton);
 
@@ -631,6 +647,13 @@ internal sealed class AgentBoardCoordinator
     internal static bool ModeActionEnabled(bool busy, bool autoChatRunning)
     {
         return !busy || autoChatRunning;
+    }
+
+    private string ParticipantRunUnavailableHelp()
+    {
+        return string.IsNullOrWhiteSpace(participantReadinessMessage)
+            ? "Complete provider, model, and cast setup before running this model."
+            : participantReadinessMessage;
     }
 
     internal static bool ShouldAnimateActivity(bool systemAnimationsEnabled, bool isRunning)

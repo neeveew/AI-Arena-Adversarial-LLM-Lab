@@ -1,0 +1,71 @@
+<UserControl x:Class="AIArena.Wpf.Controls.WorkspacePageHeaderControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Name="HeaderRoot"
+             Focusable="False"
+             SizeChanged="WorkspacePageHeaderControl_SizeChanged">
+    <Border x:Name="HeaderChrome" Style="{DynamicResource Arena.PageHeader}">
+        <Grid x:Name="HeaderLayout">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition x:Name="ActionColumn" Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition x:Name="CompactActionRow" Height="0" />
+            </Grid.RowDefinitions>
+
+            <Grid x:Name="PresentationLayout">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <WrapPanel x:Name="TitleStatusPanel"
+                           Grid.ColumnSpan="2"
+                           VerticalAlignment="Center">
+                    <TextBlock x:Name="TitleText"
+                               Text="{Binding Title, ElementName=HeaderRoot}"
+                               Style="{DynamicResource Arena.Text.PageTitle}"
+                               VerticalAlignment="Center" />
+                    <Border x:Name="StatusChip"
+                            Style="{DynamicResource Arena.StatusChip}"
+                            Tag="{Binding StatusKind, ElementName=HeaderRoot}"
+                            MaxWidth="{DynamicResource Arena.Layout.HeaderStatusMaxWidth}"
+                            Margin="{DynamicResource Arena.Layout.HeaderStatusMargin}">
+                        <TextBlock x:Name="StatusText"
+                                   Text="{Binding Status, ElementName=HeaderRoot}"
+                                   Foreground="{DynamicResource TextBrush}"
+                                   FontSize="{DynamicResource Arena.Type.CaptionSize}"
+                                   FontWeight="SemiBold"
+                                   TextWrapping="NoWrap"
+                                   TextTrimming="CharacterEllipsis" />
+                    </Border>
+                </WrapPanel>
+                <TextBlock x:Name="DescriptionText"
+                           Grid.Row="1"
+                           Grid.ColumnSpan="2"
+                           Text="{Binding Description, ElementName=HeaderRoot}"
+                           Style="{DynamicResource Arena.Text.Secondary}"
+                           Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                           MaxWidth="920"
+                           HorizontalAlignment="Left"
+                           ToolTip="{Binding Description, ElementName=HeaderRoot}" />
+            </Grid>
+
+            <Button x:Name="PrimaryActionButton"
+                    Grid.Column="1"
+                    Content="{Binding PrimaryActionText, ElementName=HeaderRoot}"
+                    IsEnabled="{Binding IsPrimaryActionEnabled, ElementName=HeaderRoot}"
+                    Style="{DynamicResource Arena.Button.Primary}"
+                    MinHeight="{DynamicResource Arena.Target.Primary}"
+                    MinWidth="104"
+                    VerticalAlignment="Top"
+                    Margin="{DynamicResource Arena.Layout.PageHeaderActionMargin}"
+                    Click="PrimaryActionButton_Click" />
+        </Grid>
+    </Border>
+</UserControl>

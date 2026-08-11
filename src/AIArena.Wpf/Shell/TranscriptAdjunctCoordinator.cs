@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
@@ -282,7 +283,18 @@ internal sealed class TranscriptAdjunctCoordinator
             hasCard,
             TranscriptActionKind.Neutral,
             decisionCardExpanded ? "\uE70E" : "\uE70D");
-        var generateButton = PanelActionButton("Generate", async (_, _) => await generateDecisionCardAsync(), true, TranscriptActionKind.Primary, "\uE9D2");
+        var generateButton = PanelActionButton(
+            "Generate",
+            async (_, _) => await generateDecisionCardAsync(),
+            !snapshot.FactoryMode,
+            TranscriptActionKind.Primary,
+            "\uE9D2");
+        if (snapshot.FactoryMode)
+        {
+            const string unavailable = "Decision Card generation is unavailable in Factory mode. Turn Apply Match Setup to models on to use narrator guidance.";
+            generateButton.ToolTip = unavailable;
+            AutomationProperties.SetHelpText(generateButton, unavailable);
+        }
         SetDecisionCardActionSize(expandButton);
         SetDecisionCardActionSize(generateButton);
         actions.Children.Add(expandButton);
@@ -311,6 +323,18 @@ internal sealed class TranscriptAdjunctCoordinator
         }
 
         content.Children.Add(titleRow);
+        if (snapshot.FactoryMode)
+        {
+            content.Children.Add(new TextBlock
+            {
+                Text = "Unavailable in Factory mode. Any card shown below is retained from an earlier Arena-mode run.",
+                Foreground = resourceBrush("Arena.Brush.Warning"),
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 4, 0, 0),
+                ToolTip = "Factory mode does not send narrator or Decision Card instructions to a model."
+            });
+        }
         var summary = hasCard
             ? snapshot.DecisionCard.Trim().Replace("\r", " ").Replace("\n", " ")
             : "No decision card yet. Generate one to capture agreed points, conflict, risk, and the next operator move.";

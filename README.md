@@ -2,7 +2,7 @@
 
 A native Windows lab for running adversarial multi-agent conversations and collaborative AI team chats between local or OpenAI-compatible LLMs.
 
-[Download 0.4.128-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.128-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
+[Download 0.4.129-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.129-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
 
 AI Arena is not a chatbot and not just a model comparison board. It is a local multi-agent LLM lab where agents can debate, collaborate, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
 
@@ -41,6 +41,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 - Context-aware top-rail export for AI Lab transcripts and AI Collaborate chats.
 - Surface-aware top commands that hide transcript-only Search, Export, and View actions outside the workspaces they control.
 - Match Setup returns to the workspace and keyboard focus that opened it; Escape closes it without clearing transcript filters.
+- Top-rail **Models** opens a wide, searchable model catalog with observed loaded models first and provider-available models below. While the surface is open, LM Studio residency is rechecked every five seconds. Selecting a model exposes a narrow pane with one evidence-driven **Load model** or **Unload model** action plus immediate routing assignments; neither workflow claims to choose GPU placement.
 - Narrow-window right rail opens as an overlay drawer so the main workspace keeps its usable width.
 - Default-on, token-authenticated local PowerShell control plane with a normal Settings toggle, typed commands for navigation, secret-free portable Match Setup export/import, cast sizing/relationship patterns/generation/history/replay, searchable and safely mutable Settings, full-state current-match forks with parent lineage, saved-session and checkpoint recovery, provider/Agent/Collaborate state, Collaborate run-review/trace inspection, arena turn/narration/reset, Internet state/toggle/diagnostics, self-screenshots, exports, live events, and an authoritative post-command state snapshot on every response.
 - Configurable AI Collaborate rounds for deeper team drafting, critique, and hardening passes.
@@ -55,8 +56,8 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 - OpenAI-compatible provider support, including LM Studio, plus a first-class `llamacpp_native` mode for a user-installed, user-owned `llama-server`. AI Arena sends chat through `/v1/chat/completions`; it does not bundle, download, start, stop, replace, or silently reconfigure llama.cpp.
 - Capability-detected llama.cpp runtime inspection for optional `/health`, `/props`, `/slots`, router `/models`, and router model load/unload endpoints. Missing measurements stay unavailable, and model file size or parameter count is never presented as measured RAM or VRAM use.
 - Conservative llama.cpp transient handling: bounded retries are limited to 429, 503, loading, busy, unavailable, no-slot, or queue-full responses rejected before acceptance; an accepted stream is never replayed.
-- AI Lab right-rail **Model Comparison & QA** for capturing a baseline, comparing another model against the same model-neutral Match Setup, copying exact secret-free replay JSON and aggregate-only evidence, and reporting runtime QA as ready, partial, or blocked with unavailable evidence called out explicitly.
-- Wide Match Setup flyout for scenario framing, readiness badges, preset-gallery metadata, run-shape preview, pressure graph preview, copyable setup receipts, personas, locks, checkpoints, sessions, and operator controls.
+- AI Lab right-rail **Model Comparison & QA** for capturing a baseline, comparing another model against the same model-neutral Match Setup and, for Factory runs, the same privacy-safe public-group context fingerprint, copying exact secret-free replay JSON and aggregate-only evidence, and reporting runtime QA as ready, partial, or blocked with unavailable evidence called out explicitly.
+- Wide Match Setup flyout for scenario framing, readiness badges, preset-gallery metadata, run-shape preview, pressure graph preview, copyable setup receipts, personas, locks, checkpoints, sessions, and operator controls. Its per-match **Apply Match Setup to models** toggle can enter Factory mode, where the latest eligible public Operator turn present when Factory first runs anchors a continuous public group conversation: each participant sees that root, its own earlier public replies, attributed peer replies, and later public Operator turns without receiving Match Setup behavior guidance. For strict chat templates, adjacent logical entries that map to the same role are losslessly batched into one transport block; chronology, attribution, retained text, and logical entry counts remain unchanged.
 - Random Seed presets with category, best-use, risk, and exact preset-match metadata, plus role-pack, pressure, style, absurdity controls, AI Choice, Wild Seed, and replayable generation history.
 - Scenario and cast locks for controlled regeneration.
 - Local sessions, restore points, and scenario templates.
@@ -79,10 +80,9 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 1. Download and run the latest beta installer from the
    [GitHub releases page](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases).
 2. Start LM Studio, another OpenAI-compatible provider, or your own `llama-server` process.
-3. Open Settings, then **Models & provider**.
-4. Choose a provider preset, press **Use preset**, and select a **Default model**.
-5. Press **Test connection**.
-6. If your provider needs a different endpoint or token, open **Custom connection**. For a standard LM Studio OpenAI-compatible endpoint, use:
+3. Open Settings, then **Provider connection**.
+4. Choose a provider preset and press **Use preset**.
+5. If your provider needs a different endpoint or token, open **Custom connection**. For a standard LM Studio OpenAI-compatible endpoint, use:
 
    ```text
    http://127.0.0.1:1234/v1
@@ -90,8 +90,9 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 
    For a typical user-started llama.cpp server, choose **llama.cpp** / **llama.cpp native /v1** and use `http://127.0.0.1:8080/v1`.
 
-7. Optionally open **Model recommendations** to scan local hardware and spread different models across roles.
-8. Open AI Lab, then Match Setup, to create or replay a setup with Random Seed, AI Choice, or Wild Seed.
+6. Press **Models** in the AI Lab top rail. Pick a model from **Loaded Models** or **Available Models**. For LM Studio, use the single residency button to request Load or Unload; the row moves sections only after LM Studio confirms the new state. Check **Default** or any active agent/Narrator target to save routing immediately.
+7. Use **Connection** from the Models header to return to Provider connection and press **Test connection** for the selected default model. Optionally open **Model recommendations** to scan local hardware and recommend a role spread. The provider still owns device placement.
+8. Open Match Setup to create or replay a setup with Random Seed, AI Choice, or Wild Seed.
 9. Run 1 TURN or AUTO CHAT to start an adversarial match.
 10. Open Agent when you want the team to plan or review software work inside a selected project folder with approved command execution.
 11. Open AI Collaborate when you want the team to produce a synthesized answer instead of running a turn-by-turn match.
@@ -137,11 +138,11 @@ For llama.cpp, install and start `llama-server` yourself, then choose the **llam
 http://127.0.0.1:8080/v1
 ```
 
-AI Arena uses `/v1/chat/completions` for model turns. Under **Settings -> Models & provider -> Local model tools**, **Inspect** and **Reconnect** probe the configured process without taking ownership of it. `/health`, `/props`, `/slots`, and router `/models` vary by llama.cpp build and mode, so unsupported evidence remains visibly unavailable. Preload and Unload are enabled only when router lifecycle support is detected. Context and GPU-layer values are treated as server startup evidence, and model file size is labelled as file size rather than inferred RAM or VRAM consumption.
+AI Arena uses `/v1/chat/completions` for model turns. Under **Settings -> Provider connection -> Local model tools**, **Inspect** and **Reconnect** probe the configured process without taking ownership of it. `/health`, `/props`, `/slots`, and router `/models` vary by llama.cpp build and mode, so unsupported evidence remains visibly unavailable. Preload and Unload are enabled only when router lifecycle support is detected. Context and GPU-layer values are treated as server startup evidence, and model file size is labelled as file size rather than inferred RAM or VRAM consumption.
 
 ## PowerShell Control
 
-The local, token-authenticated WPF control plane is enabled by default. Its toggle is under **Settings -> PowerShell Control** and is independent of Debug controls. Load the helper, then inspect or administer the active session's provider:
+The local, token-authenticated WPF control plane is enabled by default. Its toggle is organized under **Settings -> Debug controls** with the other developer tools, but it remains independently enabled when **Allow debug controls** is off. Load the helper, then inspect or administer the active session's provider:
 
 ```powershell
 . "$env:LOCALAPPDATA\Programs\AI Arena\ai-arena-control.ps1"

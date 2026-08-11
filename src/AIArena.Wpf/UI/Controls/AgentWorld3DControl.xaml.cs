@@ -111,6 +111,7 @@ public partial class AgentWorld3DControl : UserControl
     private bool miniMapRosterDirty = true;
     private bool miniMapStyleDirty = true;
     private string worldPulseSummary = "";
+    private string worldStatusSummary = "Waiting for arena snapshot.";
     private string worldBadgeLabel = "";
     private int snapshotApplyCount;
     // Content+theme signature of the last rendered world; identical re-applies skip the
@@ -174,15 +175,25 @@ public partial class AgentWorld3DControl : UserControl
 
     internal Thickness DebugInspectorPanelMargin => AgentInspectorPanel.Margin;
 
-    internal Rect DebugWorldHeaderTextBounds => ElementBounds(WorldHeaderTextPanel);
+    internal Rect DebugWorldHeaderTextBounds => ElementBounds(WorldWorkspaceHeader);
 
-    internal Rect DebugWorldBadgeBounds => ElementBounds(WorldBadge);
+    internal Rect DebugWorldBadgeBounds => ElementBounds(WorldWorkspaceHeader.StatusChip);
 
-    internal double DebugWorldBadgeMaxWidth => WorldBadge.MaxWidth;
+    internal double DebugWorldBadgeMaxWidth => WorldWorkspaceHeader.StatusChip.ActualWidth;
 
-    internal string DebugWorldBadgeText => WorldBadgeText.Text;
+    internal string DebugWorldBadgeText => WorldWorkspaceHeader.Status;
 
-    internal string DebugWorldStatusText => WorldStatusText.Text;
+    internal string DebugWorldStatusText => worldStatusSummary;
+
+    internal string DebugWorldHeaderTitle => WorldWorkspaceHeader.Title;
+
+    internal string DebugWorldHeaderDescription => WorldWorkspaceHeader.Description;
+
+    internal string DebugWorldHeaderPrimaryAction => WorldWorkspaceHeader.PrimaryActionText;
+
+    internal string DebugWorldHeaderPrimaryActionAutomationName => AutomationProperties.GetName(WorldWorkspaceHeader.PrimaryAction);
+
+    internal bool DebugWorldHeaderUsesCompactLayout => WorldWorkspaceHeader.UsesCompactLayout;
 
     internal AgentWorldPulse? DebugWorldPulse => currentWorld?.Pulse;
 
@@ -508,6 +519,7 @@ public partial class AgentWorld3DControl : UserControl
         this.animationsEnabledProvider = animationsEnabledProvider ?? throw new ArgumentNullException(nameof(animationsEnabledProvider));
         this.observeSystemMotionPreferences = observeSystemMotionPreferences;
         InitializeComponent();
+        WorldWorkspaceHeader.SizeChanged += (_, _) => UpdateHudLayout();
         camera = new PerspectiveCamera
         {
             FieldOfView = 42
@@ -571,14 +583,10 @@ public partial class AgentWorld3DControl : UserControl
         lastWorldSignature = signature;
         var shouldSnapCamera = firstSnapshot || sessionChanged || currentWorld.Avatars.Count == 0;
         worldPulseSummary = WorldPulseSummary(currentWorld.Pulse);
-        WorldStatusText.Text = WorldStatus(currentWorld);
-        WorldStatusText.ToolTip = worldPulseSummary;
-        AutomationProperties.SetName(WorldStatusText, "AI World pulse");
-        AutomationProperties.SetHelpText(WorldStatusText, WorldStatusText.Text);
-        WorldBadge.ToolTip = worldPulseSummary;
-        AutomationProperties.SetHelpText(WorldBadge, worldPulseSummary);
+        worldStatusSummary = WorldStatus(currentWorld);
+        WorldWorkspaceHeader.ToolTip = $"{worldStatusSummary}{Environment.NewLine}{worldPulseSummary}";
+        AutomationProperties.SetHelpText(WorldWorkspaceHeader, $"{WorldWorkspaceHeader.Description} {worldStatusSummary} {worldPulseSummary}");
         EmptyStatePanel.Visibility = currentWorld.Avatars.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        WorldBadge.Visibility = currentWorld.Avatars.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         if (currentWorld.Avatars.Count == 0 || sessionChanged)
         {
             ResetWorldViewState();
@@ -2263,17 +2271,28 @@ public partial class AgentWorld3DControl : UserControl
         camera.Position = cameraPosition;
         camera.LookDirection = cameraTarget - cameraPosition;
         camera.UpDirection = new Vector3D(0, 1, 0);
-        var badgeLabel = cameraMode switch
+        var badgeLabel = currentWorld switch
         {
-            AgentWorldCameraMode.FollowSpeaker when focusedFollowVisual is { } focused => focused.FollowBadgeLabel,
-            AgentWorldCameraMode.Free => "FREE CAMERA",
-            AgentWorldCameraMode.Overview => "OVERVIEW",
-            _ => "EXPLORE WORLD"
+            null => "Waiting for arena snapshot",
+            { Avatars.Count: 0 } => "No agents available",
+            _ => cameraMode switch
+            {
+                AgentWorldCameraMode.FollowSpeaker when focusedFollowVisual is { } focused => focused.FollowBadgeLabel,
+                AgentWorldCameraMode.Free => "FREE CAMERA",
+                AgentWorldCameraMode.Overview => "OVERVIEW",
+                _ => "EXPLORE WORLD"
+            }
         };
         if (!worldBadgeLabel.Equals(badgeLabel, StringComparison.Ordinal))
         {
             worldBadgeLabel = badgeLabel;
-            WorldBadgeText.Text = badgeLabel;
+            WorldWorkspaceHeader.Status = badgeLabel;
+            WorldWorkspaceHeader.StatusKind = currentWorld switch
+            {
+                null => "Loading",
+                { Avatars.Count: 0 } => "Unavailable",
+                _ => "Ready"
+            };
         }
     }
 
@@ -3106,6 +3125,13 @@ public partial class AgentWorld3DControl : UserControl
         SetCameraMode(AgentWorldCameraMode.Overview);
     }
 
+    private void WorldWorkspaceHeader_PrimaryActionRequested(object sender, RoutedEventArgs e)
+    {
+        ResetCameraView();
+        WorldRoot.Focus();
+        e.Handled = true;
+    }
+
     private void CinematicCameraCheckBox_Changed(object sender, RoutedEventArgs e)
     {
         SetCinematicAutoCamera(CinematicCameraCheckBox.IsChecked == true);
@@ -3256,9 +3282,17 @@ public partial class AgentWorld3DControl : UserControl
         }
 
         var usableWidth = Math.Max(1, width - (HudSideMargin * 2));
+        var headerBottom = HudSideMargin + Math.Max(WorldWorkspaceHeader.ActualHeight, width < 620 ? 104 : 78);
+        var controlsTop = headerBottom + 8;
+        var cueTop = controlsTop + Math.Max(WorldControlPanel.ActualHeight, 34) + 8;
         AgentInspectorPanel.Width = Math.Min(310, usableWidth);
-        AgentInspectorPanel.Margin = new Thickness(HudSideMargin, width < 620 ? 136 : 96, HudSideMargin, 0);
-        WorldBadge.MaxWidth = Math.Clamp(usableWidth * 0.45, 118, 220);
+        AgentInspectorPanel.Margin = new Thickness(
+            HudSideMargin,
+            width < 620 ? cueTop + Math.Max(WorldCuePanel.ActualHeight, 34) + 8 : controlsTop + 44,
+            HudSideMargin,
+            0);
+        WorldControlPanel.Margin = new Thickness(HudSideMargin, controlsTop, HudSideMargin, 0);
+        WorldCuePanel.Margin = new Thickness(HudSideMargin, cueTop, HudSideMargin, 0);
         WorldControlPanel.MaxWidth = usableWidth;
         WorldControlItems.MaxWidth = Math.Max(1, usableWidth - 16);
         WorldCuePanel.MaxWidth = Math.Clamp(usableWidth * (width < 620 ? 0.88 : 0.58), 220, 520);

@@ -51,6 +51,7 @@ public partial class MainWindow
     private Button LabTranscriptViewButton => ShellTopBar.LabTranscriptViewButtonTarget;
     private Button LabWorldViewButton => ShellTopBar.LabWorldViewButtonTarget;
     private Button MatchSetupButton => ShellTopBar.MatchSetupButtonTarget;
+    private Button ModelsButton => ShellTopBar.ModelsButtonTarget;
     private Grid SearchCommandHost => ShellTopBar.SearchCommandHostTarget;
     private Button TranscriptSearchButton => ShellTopBar.TranscriptSearchButtonTarget;
     private Popup TranscriptSearchPopup => ShellTopBar.TranscriptSearchPopupTarget;
@@ -131,6 +132,9 @@ public partial class MainWindow
                 break;
             case ShellTopBarAction.MatchSetupRequested:
                 MatchSetupButton_Click(e.SourceElement, Args<RoutedEventArgs>(e));
+                break;
+            case ShellTopBarAction.ModelsRequested:
+                ModelsButton_Click(e.SourceElement, Args<RoutedEventArgs>(e));
                 break;
             case ShellTopBarAction.SearchRequested:
                 TranscriptSearchButton_Click(e.SourceElement, Args<RoutedEventArgs>(e));

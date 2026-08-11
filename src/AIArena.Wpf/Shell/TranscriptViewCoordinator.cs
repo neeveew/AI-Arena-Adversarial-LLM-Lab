@@ -65,7 +65,6 @@ internal sealed class TranscriptViewCoordinator
     private readonly UniformGrid transcriptDiagnosticsGrid;
     private readonly Border transcriptTelemetryHost;
     private readonly UniformGrid transcriptTelemetryGrid;
-    private readonly Border transcriptFiltersHost;
     private readonly Func<IReadOnlyList<TranscriptMessage>> renderedMessages;
     private readonly Func<ArenaViewSnapshot?> lastRenderedSnapshot;
     private readonly Action<IReadOnlyList<TranscriptMessage>> populateTranscript;
@@ -112,7 +111,6 @@ internal sealed class TranscriptViewCoordinator
         UniformGrid transcriptDiagnosticsGrid,
         Border transcriptTelemetryHost,
         UniformGrid transcriptTelemetryGrid,
-        Border transcriptFiltersHost,
         Func<IReadOnlyList<TranscriptMessage>> renderedMessages,
         Func<ArenaViewSnapshot?> lastRenderedSnapshot,
         Action<IReadOnlyList<TranscriptMessage>> populateTranscript,
@@ -156,7 +154,6 @@ internal sealed class TranscriptViewCoordinator
         this.transcriptDiagnosticsGrid = transcriptDiagnosticsGrid;
         this.transcriptTelemetryHost = transcriptTelemetryHost;
         this.transcriptTelemetryGrid = transcriptTelemetryGrid;
-        this.transcriptFiltersHost = transcriptFiltersHost;
         this.renderedMessages = renderedMessages;
         this.lastRenderedSnapshot = lastRenderedSnapshot;
         this.populateTranscript = populateTranscript;
@@ -418,35 +415,17 @@ internal sealed class TranscriptViewCoordinator
         Grid.SetRow(transcriptTelemetryHost, 0);
         Grid.SetColumn(transcriptTelemetryHost, 0);
         Grid.SetColumnSpan(transcriptTelemetryHost, stacked ? 2 : 1);
-        Grid.SetRow(transcriptFiltersHost, stacked ? 1 : 0);
-        Grid.SetColumn(transcriptFiltersHost, showTopStrip && !stacked ? 1 : 0);
-        Grid.SetColumnSpan(transcriptFiltersHost, showTopStrip && !stacked ? 1 : 2);
-
         transcriptDiagnosticsHost.Visibility = layout.ShowDiagnostics ? Visibility.Visible : Visibility.Collapsed;
         transcriptTelemetryHost.Visibility = layout.ShowTelemetry ? Visibility.Visible : Visibility.Collapsed;
+        transcriptDashboardGrid.Margin = showTopStrip ? new Thickness(0, 0, 0, 10) : new Thickness(0);
         transcriptDiagnosticsGrid.Columns = layout.DiagnosticsColumns;
         transcriptDiagnosticsGrid.MinWidth = layout.DiagnosticsMinWidth;
         transcriptTelemetryGrid.Columns = layout.TelemetryColumns;
         transcriptTelemetryGrid.MinWidth = layout.TelemetryMinWidth;
-        transcriptTelemetryGrid.Margin = stacked ? new Thickness(0) : new Thickness(0, 0, 6, 0);
-        var topStripCorners = stacked
-            ? new CornerRadius(8, 8, 0, 0)
-            : new CornerRadius(8, 0, 0, 8);
+        transcriptTelemetryGrid.Margin = new Thickness(0);
+        var topStripCorners = new CornerRadius(8);
         transcriptDiagnosticsHost.CornerRadius = topStripCorners;
         transcriptTelemetryHost.CornerRadius = topStripCorners;
-        transcriptFiltersHost.HorizontalAlignment = showTopStrip
-            ? HorizontalAlignment.Stretch
-            : HorizontalAlignment.Right;
-        transcriptFiltersHost.CornerRadius = stacked
-            ? new CornerRadius(0, 0, 8, 8)
-            : !showTopStrip
-                ? new CornerRadius(8)
-                : new CornerRadius(0, 8, 8, 0);
-        transcriptFiltersHost.BorderThickness = stacked
-            ? new Thickness(1, 0, 1, 1)
-            : !showTopStrip
-                ? new Thickness(1)
-                : new Thickness(0, 1, 1, 1);
         if (layout.ShowDiagnostics)
         {
             updateDiagnostics(renderedMessages());

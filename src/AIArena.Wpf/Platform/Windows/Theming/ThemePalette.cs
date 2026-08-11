@@ -38,6 +38,10 @@ public sealed record ThemePalette
     public required Color DeltaAccent { get; init; }
     public required Color NarratorAccent { get; init; }
     public required Color OperatorAccent { get; init; }
+    public required Color StatusInfo { get; init; }
+    public required Color StatusSuccess { get; init; }
+    public required Color StatusWarning { get; init; }
+    public required Color StatusCritical { get; init; }
 
     /// <summary>Navigation hover wash, derived from the input surface and primary accent.</summary>
     public Color NavHover => Blend(Input, PrimaryBorder, 0.18);
@@ -96,6 +100,10 @@ public sealed record ThemePalette
             DeltaAccent = ColorFrom("#9EA6FF"),
             NarratorAccent = ColorFrom("#E17DB6"),
             OperatorAccent = ColorFrom("#7FB7FF"),
+            StatusInfo = ColorFrom("#70D2E8"),
+            StatusSuccess = ColorFrom("#7EDB96"),
+            StatusWarning = ColorFrom("#ECC36F"),
+            StatusCritical = ColorFrom("#F5848D"),
         },
         new()
         {
@@ -128,6 +136,10 @@ public sealed record ThemePalette
             DeltaAccent = ColorFrom("#9EA6FF"),
             NarratorAccent = ColorFrom("#E17DB6"),
             OperatorAccent = ColorFrom("#7FB7FF"),
+            StatusInfo = ColorFrom("#70D2E8"),
+            StatusSuccess = ColorFrom("#7EDB96"),
+            StatusWarning = ColorFrom("#ECC36F"),
+            StatusCritical = ColorFrom("#F5848D"),
         },
         new()
         {
@@ -160,6 +172,10 @@ public sealed record ThemePalette
             DeltaAccent = ColorFrom("#A5AEFF"),
             NarratorAccent = ColorFrom("#D88BC9"),
             OperatorAccent = ColorFrom("#7FB7FF"),
+            StatusInfo = ColorFrom("#6AD0E4"),
+            StatusSuccess = ColorFrom("#77D696"),
+            StatusWarning = ColorFrom("#EBC36D"),
+            StatusCritical = ColorFrom("#F28686"),
         },
         new()
         {
@@ -192,6 +208,10 @@ public sealed record ThemePalette
             DeltaAccent = ColorFrom("#9EAFFF"),
             NarratorAccent = ColorFrom("#D185CE"),
             OperatorAccent = ColorFrom("#7FB7FF"),
+            StatusInfo = ColorFrom("#75C8E8"),
+            StatusSuccess = ColorFrom("#76D69B"),
+            StatusWarning = ColorFrom("#EDC466"),
+            StatusCritical = ColorFrom("#F78690"),
         },
         new()
         {
@@ -214,7 +234,9 @@ public sealed record ThemePalette
             DangerText = ColorFrom("#8F2E33"),
             Disabled = ColorFrom("#E2E6E4"),
             DisabledBorder = ColorFrom("#C2CBC7"),
-            DisabledText = ColorFrom("#7C8781"),
+            // Readable against the disabled/unavailable surface while remaining
+            // visually secondary to enabled Light-theme content.
+            DisabledText = ColorFrom("#78837D"),
             HoverBorder = ColorFrom("#1F8A6B"),
             PressedPrimary = ColorFrom("#A5D3C2"),
             Overlay = ColorFrom("#CCE2E9E5"),
@@ -224,6 +246,10 @@ public sealed record ThemePalette
             DeltaAccent = ColorFrom("#4A55C0"),
             NarratorAccent = ColorFrom("#A93E78"),
             OperatorAccent = ColorFrom("#2C69AC"),
+            StatusInfo = ColorFrom("#176B82"),
+            StatusSuccess = ColorFrom("#26743B"),
+            StatusWarning = ColorFrom("#805A0B"),
+            StatusCritical = ColorFrom("#923A3E"),
         },
         new()
         {
@@ -256,6 +282,10 @@ public sealed record ThemePalette
             DeltaAccent = ColorFrom("#B3B8FF"),
             NarratorAccent = ColorFrom("#FF8FD4"),
             OperatorAccent = ColorFrom("#B9D2FF"),
+            StatusInfo = ColorFrom("#85DDF3"),
+            StatusSuccess = ColorFrom("#99F29B"),
+            StatusWarning = ColorFrom("#F4D276"),
+            StatusCritical = ColorFrom("#F6A6A6"),
         }
     ];
 

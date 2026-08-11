@@ -8,7 +8,10 @@ internal sealed record AIArenaMatchSetupControlState(
     string MatchType,
     string Scenario,
     int ActiveAgents,
-    bool Busy);
+    bool Busy)
+{
+    public string ModelBehaviorMode { get; init; } = "arena";
+}
 
 internal sealed record AIArenaSettingsControlState(
     bool Open,

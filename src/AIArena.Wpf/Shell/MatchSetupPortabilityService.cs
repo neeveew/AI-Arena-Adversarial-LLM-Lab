@@ -20,7 +20,10 @@ internal sealed record AIArenaMatchSetupPackageState(
     int CastCount,
     int RelationshipCount,
     bool InternetEnabled,
-    string Json);
+    string Json)
+{
+    public bool FactoryMode { get; init; }
+}
 
 internal sealed record AIArenaMatchSetupPackageReceipt(
     string Operation,
@@ -89,7 +92,7 @@ internal sealed class MatchSetupPortabilityService
 
         var state = MatchSetupPackageCodec.ToState(session.Id, validation.Package);
         return Success(
-            "Exported the active Match Setup as a portable JSON package. Provider API tokens were excluded.",
+            "Exported the active Match Setup as a portable JSON package. Provider API tokens and runtime group history were excluded.",
             state,
             new AIArenaMatchSetupPackageReceipt("export", session.Id, "", state.Fingerprint, validation.Warnings));
     }
@@ -190,6 +193,11 @@ internal sealed class MatchSetupPortabilityService
         var importedPackage = MatchSetupPackageCodec.FromSnapshot(targetSessionId, target);
         var state = MatchSetupPackageCodec.ToState(targetSessionId, importedPackage);
         var warnings = parsed.Warnings.Concat(apply.Warnings).Distinct(StringComparer.Ordinal).ToList();
+        if (state.FactoryMode)
+        {
+            warnings.Add(
+                "Factory public group history is runtime state and was not imported. Send a public Operator turn to establish a new conversation root before running participants.");
+        }
         try
         {
             await eventLogStore.AppendAsync(targetSessionId, "control_match_setup_imported", new
@@ -326,6 +334,7 @@ internal sealed class MatchSetupPortabilityService
 internal static class MatchSetupPackageCodec
 {
     public const string Schema = "ai_arena.match_setup.v2";
+    public const string FactoryConversationContract = FactoryConversationService.ContractVersion;
     public const int MaxPackageBytes = 512 * 1024;
     private const int MaxPackageChars = 512 * 1024;
     private const int MaxTextChars = 20_000;
@@ -403,6 +412,7 @@ internal static class MatchSetupPackageCodec
             Setup = new MatchSetupDefinitionPackage
             {
                 MatchType = snapshot.MatchType,
+                FactoryMode = snapshot.Engine.FactoryMode,
                 Scenario = new MatchSetupScenarioPackage
                 {
                     Topic = snapshot.Engine.Steering.Topic,
@@ -470,12 +480,18 @@ internal static class MatchSetupPackageCodec
             package.Setup.Cast.Count,
             package.Setup.Relationship.Links.Count,
             package.Setup.Internet.Enabled,
-            json);
+            json)
+        {
+            FactoryMode = package.Setup.FactoryMode
+        };
     }
 
     public static string Fingerprint(MatchSetupPackage package)
     {
-        var canonical = JsonSerializer.Serialize(package.Setup, CanonicalJsonOptions);
+        var setup = JsonSerializer.Serialize(package.Setup, CanonicalJsonOptions);
+        var canonical = package.Setup.FactoryMode
+            ? $"factory-conversation-contract|{FactoryConversationContract}\n{setup}"
+            : setup;
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }
 
@@ -583,6 +599,7 @@ internal static class MatchSetupPackageCodec
 
         var setup = package.Setup;
         target.MatchType = setup.MatchType.Trim();
+        target.Engine.FactoryMode = setup.FactoryMode;
         target.Engine.Steering.Topic = setup.Scenario.Topic;
         target.Engine.Steering.Global = setup.Scenario.Global;
         target.ScenarioGenerator.Style = setup.Generation.ScenarioStyle;
@@ -776,8 +793,11 @@ internal static class MatchSetupPackageCodec
         CheckText("setup.scenario.topic", setup.Scenario.Topic, MaxTextChars, errors);
         CheckText("setup.scenario.global", setup.Scenario.Global, MaxTextChars, errors);
         CheckText("metadata.name", package.Metadata.Name, 128, errors);
-        WarnIfBlank("Scenario topic is blank; the imported setup will remain blocked until a topic is added.", setup.Scenario.Topic, warnings);
-        WarnIfBlank("Scenario global instruction is blank; the imported setup will remain blocked until run guidance is added.", setup.Scenario.Global, warnings);
+        if (!setup.FactoryMode)
+        {
+            WarnIfBlank("Scenario topic is blank; the imported setup will remain blocked until a topic is added.", setup.Scenario.Topic, warnings);
+            WarnIfBlank("Scenario global instruction is blank; the imported setup will remain blocked until run guidance is added.", setup.Scenario.Global, warnings);
+        }
         foreach (var (name, value) in new[]
                  {
                      ("scenarioStyle", setup.Generation.ScenarioStyle),
@@ -822,7 +842,10 @@ internal static class MatchSetupPackageCodec
             CheckText($"setup.cast[{index}].pressureProfile", agent.PressureProfile, MaxShortTextChars, errors);
             CheckText($"setup.cast[{index}].accentColor", agent.AccentColor, 32, errors);
             WarnIfBlank($"Participant '{id}' has a blank name.", agent.Name, warnings);
-            WarnIfBlank($"Participant '{id}' has a blank persona.", agent.Persona, warnings);
+            if (!setup.FactoryMode)
+            {
+                WarnIfBlank($"Participant '{id}' has a blank persona.", agent.Persona, warnings);
+            }
             if (!string.IsNullOrWhiteSpace(agent.AccentColor) && string.IsNullOrWhiteSpace(AgentAccentService.NormalizeColor(agent.AccentColor)))
             {
                 errors.Add($"setup.cast[{index}].accentColor must be a six-digit hexadecimal color.");
@@ -838,7 +861,20 @@ internal static class MatchSetupPackageCodec
         CheckText("setup.narrator.persona", setup.Narrator.Persona, MaxTextChars, errors);
         CheckText("setup.narrator.voiceStyle", setup.Narrator.VoiceStyle, MaxShortTextChars, errors);
         CheckText("setup.narrator.accentColor", setup.Narrator.AccentColor, 32, errors);
-        WarnIfBlank("Narrator persona is blank.", setup.Narrator.Persona, warnings);
+        if (!setup.FactoryMode)
+        {
+            WarnIfBlank("Narrator persona is blank.", setup.Narrator.Persona, warnings);
+        }
+        else
+        {
+            var blankArenaGuidance = FactoryModeBlankArenaGuidance(setup);
+            if (blankArenaGuidance.Count > 0)
+            {
+                var verb = blankArenaGuidance.Count == 1 ? "does" : "do";
+                warnings.Add(
+                    $"Factory mode does not send Arena-only guidance to participant models. Blank {string.Join(", ", blankArenaGuidance)} {verb} not block this import; complete the missing guidance before switching to Arena mode.");
+            }
+        }
         if (!string.IsNullOrWhiteSpace(setup.Narrator.AccentColor) && string.IsNullOrWhiteSpace(AgentAccentService.NormalizeColor(setup.Narrator.AccentColor)))
         {
             errors.Add("setup.narrator.accentColor must be a six-digit hexadecimal color.");
@@ -1062,6 +1098,33 @@ internal static class MatchSetupPackageCodec
         }
     }
 
+    private static IReadOnlyList<string> FactoryModeBlankArenaGuidance(MatchSetupDefinitionPackage setup)
+    {
+        var blank = new List<string>();
+        if (string.IsNullOrWhiteSpace(setup.Scenario.Topic))
+        {
+            blank.Add("scenario topic");
+        }
+
+        if (string.IsNullOrWhiteSpace(setup.Scenario.Global))
+        {
+            blank.Add("global instruction");
+        }
+
+        var blankPersonas = setup.Cast.Count(agent => agent is not null && string.IsNullOrWhiteSpace(agent.Persona));
+        if (blankPersonas > 0)
+        {
+            blank.Add(blankPersonas == 1 ? "participant persona" : $"{blankPersonas} participant personas");
+        }
+
+        if (string.IsNullOrWhiteSpace(setup.Narrator.Persona))
+        {
+            blank.Add("narrator persona");
+        }
+
+        return blank;
+    }
+
     private static ParseResult Invalid(string code, string message) => new(false, code, message, null, []);
 }
 
@@ -1080,6 +1143,7 @@ internal sealed class MatchSetupMetadataPackage
 internal sealed class MatchSetupDefinitionPackage
 {
     public string MatchType { get; set; } = "balanced";
+    public bool FactoryMode { get; set; }
     public MatchSetupScenarioPackage Scenario { get; set; } = new();
     public MatchSetupGenerationPackage Generation { get; set; } = new();
     public List<MatchSetupAgentPackage> Cast { get; set; } = [];

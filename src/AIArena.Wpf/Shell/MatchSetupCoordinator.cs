@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Media;
 using AIArena.Core.Persistence;
@@ -8,6 +9,13 @@ using AIArena.Wpf.Models;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 
 namespace AIArena.Wpf;
+
+internal sealed record AIArenaModelBehaviorModeResult(
+    bool Ok,
+    string ErrorCode,
+    string Message,
+    string Mode,
+    bool Changed);
 
 internal sealed class MatchSetupCoordinator
 {
@@ -22,18 +30,23 @@ internal sealed class MatchSetupCoordinator
     private readonly Button clearRivalryMatrixButton;
     private readonly ComboBox rivalryMatrixPatternPicker;
     private readonly Button applyRivalryMatrixPatternButton;
+    private readonly CheckBox applyMatchSetupToModelsCheckBox;
+    private readonly TextBlock applyMatchSetupToModelsStatusText;
     private readonly Func<CoreSessionSummary?> activeSession;
     private readonly Func<string, Brush> resourceBrush;
     private readonly Func<string, Brush> accentForSpeaker;
     private readonly Func<string, string> displayStatusValue;
     private readonly Func<Brush, Brush, double, Brush> blendBrush;
-    private readonly Func<string, Button?, Func<Task>, bool, Task> runArenaBusyAsync;
+    private readonly Func<string, Button?, Func<Task>, bool, Task<bool>> runArenaBusyAsync;
     private readonly Func<AIArena.Core.Models.ArenaSnapshot, string, Task> saveSnapshotWithFeedbackAsync;
     private readonly Func<string, Task> refreshActiveSessionAsync;
+    private readonly Action<string, string> modelBehaviorChanged;
 
     private readonly List<RivalryMatrixControlRow> rivalryMatrixControls = [];
     private bool rivalryMatrixBusy;
     private bool isUpdatingRivalryMatrix;
+    private bool isUpdatingModelBehavior;
+    private bool currentFactoryMode;
 
     public MatchSetupCoordinator(
         SessionStore sessionStore,
@@ -47,14 +60,17 @@ internal sealed class MatchSetupCoordinator
         Button clearRivalryMatrixButton,
         ComboBox rivalryMatrixPatternPicker,
         Button applyRivalryMatrixPatternButton,
+        CheckBox applyMatchSetupToModelsCheckBox,
+        TextBlock applyMatchSetupToModelsStatusText,
         Func<CoreSessionSummary?> activeSession,
         Func<string, Brush> resourceBrush,
         Func<string, Brush> accentForSpeaker,
         Func<string, string> displayStatusValue,
         Func<Brush, Brush, double, Brush> blendBrush,
-        Func<string, Button?, Func<Task>, bool, Task> runArenaBusyAsync,
+        Func<string, Button?, Func<Task>, bool, Task<bool>> runArenaBusyAsync,
         Func<AIArena.Core.Models.ArenaSnapshot, string, Task> saveSnapshotWithFeedbackAsync,
-        Func<string, Task> refreshActiveSessionAsync)
+        Func<string, Task> refreshActiveSessionAsync,
+        Action<string, string> modelBehaviorChanged)
     {
         this.sessionStore = sessionStore;
         this.eventLogStore = eventLogStore;
@@ -67,6 +83,8 @@ internal sealed class MatchSetupCoordinator
         this.clearRivalryMatrixButton = clearRivalryMatrixButton;
         this.rivalryMatrixPatternPicker = rivalryMatrixPatternPicker;
         this.applyRivalryMatrixPatternButton = applyRivalryMatrixPatternButton;
+        this.applyMatchSetupToModelsCheckBox = applyMatchSetupToModelsCheckBox;
+        this.applyMatchSetupToModelsStatusText = applyMatchSetupToModelsStatusText;
         this.activeSession = activeSession;
         this.resourceBrush = resourceBrush;
         this.accentForSpeaker = accentForSpeaker;
@@ -75,12 +93,16 @@ internal sealed class MatchSetupCoordinator
         this.runArenaBusyAsync = runArenaBusyAsync;
         this.saveSnapshotWithFeedbackAsync = saveSnapshotWithFeedbackAsync;
         this.refreshActiveSessionAsync = refreshActiveSessionAsync;
+        this.modelBehaviorChanged = modelBehaviorChanged;
         this.rivalryMatrixEnabledCheckBox.Checked += (_, _) => RefreshDraftRivalryMatrixPreview();
         this.rivalryMatrixEnabledCheckBox.Unchecked += (_, _) => RefreshDraftRivalryMatrixPreview();
+        this.applyMatchSetupToModelsCheckBox.Checked += ModelBehaviorMode_Changed;
+        this.applyMatchSetupToModelsCheckBox.Unchecked += ModelBehaviorMode_Changed;
     }
 
     public void PopulateRivalryMatrix(ArenaViewSnapshot snapshot)
     {
+        PopulateModelBehavior(snapshot.FactoryMode);
         isUpdatingRivalryMatrix = true;
         try
         {
@@ -133,11 +155,244 @@ internal sealed class MatchSetupCoordinator
         clearRivalryMatrixButton.IsEnabled = !busy;
         rivalryMatrixPatternPicker.IsEnabled = !busy;
         applyRivalryMatrixPatternButton.IsEnabled = !busy;
+        applyMatchSetupToModelsCheckBox.IsEnabled = !busy;
         foreach (var (_, targetPicker, stancePicker) in RivalryMatrixControls())
         {
             targetPicker.IsEnabled = !busy;
             stancePicker.IsEnabled = !busy;
         }
+    }
+
+    private void PopulateModelBehavior(bool factoryMode)
+    {
+        currentFactoryMode = factoryMode;
+        isUpdatingModelBehavior = true;
+        try
+        {
+            applyMatchSetupToModelsCheckBox.IsChecked = !factoryMode;
+        }
+        finally
+        {
+            isUpdatingModelBehavior = false;
+        }
+
+        ApplyModelBehaviorPresentation(factoryMode);
+    }
+
+    private async void ModelBehaviorMode_Changed(object sender, RoutedEventArgs e)
+    {
+        if (isUpdatingModelBehavior)
+        {
+            return;
+        }
+
+        var factoryMode = applyMatchSetupToModelsCheckBox.IsChecked != true;
+        var result = await SetModelBehaviorModeAsync(factoryMode);
+        if (!result.Ok)
+        {
+            PopulateModelBehavior(result.ErrorCode == "session_unavailable" ? false : currentFactoryMode);
+            SetModelBehaviorStatus(result.Message, "DangerTextBrush");
+        }
+    }
+
+    public async Task<AIArenaModelBehaviorModeResult> SetModelBehaviorModeAsync(
+        bool factoryMode,
+        CancellationToken cancellationToken = default)
+    {
+        var mode = factoryMode ? "factory" : "arena";
+        var session = activeSession();
+        if (session is null)
+        {
+            return new AIArenaModelBehaviorModeResult(
+                false,
+                "session_unavailable",
+                "No active session is available for this model behavior setting.",
+                "",
+                false);
+        }
+
+        if (rivalryMatrixBusy)
+        {
+            return new AIArenaModelBehaviorModeResult(
+                false,
+                "busy",
+                "Model behavior cannot change while the arena is busy.",
+                currentFactoryMode ? "factory" : "arena",
+                false);
+        }
+
+        var changed = currentFactoryMode != factoryMode;
+        var saved = false;
+        var completed = false;
+        var message = ModelBehaviorSuccessMessage(factoryMode);
+        var ran = await runArenaBusyAsync(
+            factoryMode ? "Enabling Factory mode..." : "Enabling Arena mode...",
+            null,
+            async () =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                saved = await PersistFactoryModeAsync(
+                    sessionStore,
+                    eventLogStore,
+                    session.Id,
+                    factoryMode,
+                    cancellationToken);
+                PopulateModelBehavior(saved ? factoryMode : currentFactoryMode);
+                await refreshActiveSessionAsync(saved
+                    ? message
+                    : "Model behavior mode changed concurrently and was not saved; the current session was reloaded.");
+                completed = true;
+            },
+            true);
+
+        if (!ran)
+        {
+            return new AIArenaModelBehaviorModeResult(
+                false,
+                "busy",
+                "Model behavior cannot change while the arena is busy.",
+                currentFactoryMode ? "factory" : "arena",
+                false);
+        }
+
+        if (!completed)
+        {
+            return new AIArenaModelBehaviorModeResult(
+                false,
+                cancellationToken.IsCancellationRequested ? "operation_cancelled" : "operation_failed",
+                cancellationToken.IsCancellationRequested
+                    ? "Model behavior change was cancelled."
+                    : "Model behavior could not be changed. Inspect the current session state and retry.",
+                currentFactoryMode ? "factory" : "arena",
+                false);
+        }
+
+        if (!saved)
+        {
+            return new AIArenaModelBehaviorModeResult(
+                false,
+                "concurrency_conflict",
+                "Model behavior changed concurrently and was not saved; the current session was reloaded.",
+                currentFactoryMode ? "factory" : "arena",
+                false);
+        }
+
+        if (changed)
+        {
+            modelBehaviorChanged(mode, message);
+        }
+
+        return new AIArenaModelBehaviorModeResult(true, "", message, mode, changed);
+    }
+
+    private static string ModelBehaviorSuccessMessage(bool factoryMode)
+    {
+        return factoryMode
+            ? "Factory mode enabled. Participant models now use attributed public group history."
+            : "Arena mode enabled. Match Setup guidance now applies to participant models.";
+    }
+
+    private void ApplyModelBehaviorPresentation(bool factoryMode)
+    {
+        var status = factoryMode
+            ? "Factory mode — participants share attributed public group history while recognizing their own earlier replies. Arena guidance is saved but not sent; provider, model, and sampling settings still apply; system and error events remain recorded."
+            : "Arena mode — Match Setup guides participant behavior.";
+        SetModelBehaviorStatus(status, "MutedTextBrush");
+        AutomationProperties.SetItemStatus(
+            applyMatchSetupToModelsCheckBox,
+            factoryMode ? "Factory mode" : "Arena mode");
+    }
+
+    private void SetModelBehaviorStatus(string status, string brushKey)
+    {
+        var changed = !string.Equals(applyMatchSetupToModelsStatusText.Text, status, StringComparison.Ordinal);
+        applyMatchSetupToModelsStatusText.Text = status;
+        applyMatchSetupToModelsStatusText.ToolTip = status;
+        applyMatchSetupToModelsStatusText.Foreground = resourceBrush(brushKey);
+        AutomationProperties.SetHelpText(applyMatchSetupToModelsStatusText, status);
+        if (changed && applyMatchSetupToModelsStatusText.IsLoaded)
+        {
+            ArenaMotion.StatusChanged(applyMatchSetupToModelsStatusText);
+            UIElementAutomationPeer.CreatePeerForElement(applyMatchSetupToModelsStatusText)?
+                .RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+        }
+    }
+
+    internal static async Task<bool> PersistFactoryModeAsync(
+        SessionStore sessionStore,
+        EventLogStore eventLogStore,
+        string sessionId,
+        bool factoryMode,
+        CancellationToken cancellationToken = default,
+        Func<string, bool, bool, CancellationToken, Task>? appendEventAsync = null,
+        Func<int, AIArena.Core.Models.ArenaSnapshot, CancellationToken, Task>? beforeSaveAsync = null)
+    {
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var snapshot = await sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
+            if (snapshot is null)
+            {
+                return false;
+            }
+
+            var previousMode = snapshot.Engine.FactoryMode;
+            if (previousMode == factoryMode)
+            {
+                return true;
+            }
+
+            snapshot.Engine.FactoryMode = factoryMode;
+            if (factoryMode)
+            {
+                var factoryConversation = new FactoryConversationService();
+                var inspection = factoryConversation.Inspect(snapshot);
+                if (!inspection.IsAnchored && inspection.HasUsableRoot)
+                {
+                    factoryConversation.Resolve(snapshot);
+                }
+            }
+            if (beforeSaveAsync is not null)
+            {
+                await beforeSaveAsync(attempt, snapshot, cancellationToken);
+            }
+
+            try
+            {
+                await sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
+                try
+                {
+                    if (appendEventAsync is not null)
+                    {
+                        await appendEventAsync(sessionId, previousMode, factoryMode, cancellationToken);
+                    }
+                    else
+                    {
+                        await eventLogStore.AppendAsync(
+                            sessionId,
+                            "native_model_behavior_mode_changed",
+                            new
+                            {
+                                previous_mode = previousMode ? "factory" : "arena",
+                                mode = factoryMode ? "factory" : "arena"
+                            },
+                            cancellationToken);
+                    }
+                }
+                catch
+                {
+                    // The snapshot is authoritative. An auxiliary audit-log failure
+                    // must not roll the visible toggle back after the atomic save.
+                }
+
+                return true;
+            }
+            catch (SnapshotConcurrencyException) when (attempt == 0)
+            {
+                // Reload once so an unrelated concurrent snapshot update is kept.
+            }
+        }
+
+        return false;
     }
 
     public void ClearDraftRivalryMatrix()

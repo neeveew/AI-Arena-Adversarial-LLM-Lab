@@ -1,20 +1,87 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using AIArena.Core.Models;
 using AIArena.Wpf.Services;
 
 namespace AIArena.Wpf.Controls;
 
-public sealed record ExperimentLabFeatureRegistration(
-    string Key,
-    string Title,
-    string Summary,
-    string HelpText,
-    FrameworkElement Content);
+public sealed class ExperimentLabFeatureRegistration : INotifyPropertyChanged
+{
+    private string refreshStatus = "registered";
+
+    public ExperimentLabFeatureRegistration(
+        string key,
+        string title,
+        string summary,
+        string helpText,
+        FrameworkElement content,
+        string group = "Inspect & verify",
+        string iconGlyph = "")
+    {
+        Key = key;
+        Title = title;
+        Summary = summary;
+        HelpText = helpText;
+        Content = content;
+        Group = group;
+        IconGlyph = iconGlyph;
+    }
+
+    public string Key { get; }
+    public string Title { get; }
+    public string Summary { get; }
+    public string HelpText { get; }
+    public FrameworkElement Content { get; }
+    public string Group { get; }
+    public string IconGlyph { get; }
+
+    public string RefreshStatus
+    {
+        get => refreshStatus;
+        internal set
+        {
+            if (string.Equals(refreshStatus, value, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            refreshStatus = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(RefreshStatusLabel));
+            OnPropertyChanged(nameof(RefreshStatusKind));
+        }
+    }
+
+    public string RefreshStatusLabel => refreshStatus switch
+    {
+        "refreshing" => "Refreshing",
+        "ready" => "Ready",
+        "refresh-failed" => "Refresh failed",
+        "superseded" => "Superseded",
+        _ => "Available"
+    };
+
+    public string RefreshStatusKind => refreshStatus switch
+    {
+        "refreshing" => "Revalidating",
+        "ready" => "Ready",
+        "refresh-failed" => "Failed",
+        "superseded" => "Partial",
+        _ => "Status"
+    };
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+}
 
 internal sealed record ExperimentLabFeatureControlState(
     string Key,
@@ -72,16 +139,23 @@ public partial class ExperimentLabControl : UserControl
     private bool matrixRunning;
     private bool operationBusy;
     private bool featureSelectionRefreshing;
+    private bool matrixUiInitialized;
 
     public ExperimentLabControl()
     {
         InitializeComponent();
-        FeatureSelector.ItemsSource = features;
+        var featureView = CollectionViewSource.GetDefaultView(features);
+        if (featureView.CanGroup)
+        {
+            featureView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(ExperimentLabFeatureRegistration.Group)));
+        }
+        FeatureSelector.ItemsSource = featureView;
         RegisterBuiltInFeatures();
         if (features.Count > 0)
         {
             FeatureSelector.SelectedIndex = 0;
         }
+        matrixUiInitialized = true;
     }
 
     internal IReadOnlyList<ExperimentLabFeatureRegistration> RegisteredFeatures => features;
@@ -170,6 +244,8 @@ public partial class ExperimentLabControl : UserControl
     internal static bool UsesCompactLayout(double width) =>
         !double.IsNaN(width) && width > 0 && width < CompactLayoutThreshold;
 
+    internal bool ClaimLedgerUsesStackedLayout => Grid.GetRow(ClaimDetailPane) == 2;
+
     internal ExperimentMatrixInput ReadMatrixInput()
     {
         var benchmark = MatrixBenchmarkPicker.SelectedItem as ExperimentBenchmarkSelection;
@@ -244,6 +320,7 @@ public partial class ExperimentLabControl : UserControl
         }
 
         featureRefreshSummaryByKey[key] = summary;
+        featureByKey[key].RefreshStatus = summary;
     }
 
     internal void ShowBlindJudgeView(ArenaBlindPairwiseJudgeView view)
@@ -331,8 +408,53 @@ public partial class ExperimentLabControl : UserControl
         CancelProviderJudgeButton.Visibility = Visibility.Collapsed;
     }
 
-    internal void SetMatrixPreview(IEnumerable<string> values) => MatrixPreviewItems.ItemsSource = values.ToArray();
-    internal void SetRunHistory(IEnumerable<string> values) => RunHistoryItems.ItemsSource = values.ToArray();
+    internal void SetMatrixPreview(IEnumerable<string> values)
+    {
+        var items = values.ToArray();
+        MatrixPreviewItems.ItemsSource = items;
+        var empty = items.Length == 0;
+        MatrixPreviewItems.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
+        MatrixPreviewEmptyState.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+        MatrixPreviewStateText.Text = empty ? "Empty" : $"{items.Length} expansion row(s)";
+        MatrixPreviewEmptyText.Text = "Validate the current configuration to generate a bounded expansion preview.";
+        AutomationProperties.SetItemStatus(MatrixPreviewItems, empty ? "empty" : "ready");
+    }
+
+    internal void SetRunHistory(IEnumerable<string> values)
+    {
+        var items = values.ToArray();
+        RunHistoryItems.ItemsSource = items;
+        var empty = items.Length == 0;
+        RunHistoryItems.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
+        RunHistoryEmptyState.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+        RunHistoryStateText.Text = empty ? "Empty" : $"{items.Length} persisted run(s)";
+        RunHistoryEmptyText.Text = "No persisted experiment runs are available yet.";
+        AutomationProperties.SetItemStatus(RunHistoryItems, empty ? "empty" : "ready");
+    }
+
+    internal void SetRunHistoryRefreshing()
+    {
+        var hasRows = RunHistoryItems.Items.Count > 0;
+        RunHistoryStateText.Text = hasRows ? "Revalidating" : "Loading";
+        RunHistoryItems.Visibility = hasRows ? Visibility.Visible : Visibility.Collapsed;
+        RunHistoryEmptyState.Visibility = hasRows ? Visibility.Collapsed : Visibility.Visible;
+        RunHistoryEmptyText.Text = hasRows
+            ? ""
+            : "Loading persisted experiment run history…";
+        AutomationProperties.SetItemStatus(RunHistoryItems, hasRows ? "revalidating" : "loading");
+    }
+
+    internal void SetRunHistoryRefreshFailed()
+    {
+        var hasRows = RunHistoryItems.Items.Count > 0;
+        RunHistoryStateText.Text = "Failed";
+        RunHistoryItems.Visibility = hasRows ? Visibility.Visible : Visibility.Collapsed;
+        RunHistoryEmptyState.Visibility = hasRows ? Visibility.Collapsed : Visibility.Visible;
+        RunHistoryEmptyText.Text = hasRows
+            ? ""
+            : "Run history could not be refreshed. Existing persisted evidence was not reinterpreted.";
+        AutomationProperties.SetItemStatus(RunHistoryItems, "failed");
+    }
     internal void SetMatrixBenchmarks(IEnumerable<object> values) => SetItems(MatrixBenchmarkPicker, values);
     internal void SetForkCursors(IEnumerable<object> values) => SetItems(ForkCursorPicker, values);
     internal void SetPacks(IEnumerable<object> values) => SetItems(PackItems, values);
@@ -347,6 +469,7 @@ public partial class ExperimentLabControl : UserControl
         operationBusy = busy;
         FeatureSelector.IsEnabled = !busy && !matrixRunning;
         FeatureContentGrid.IsEnabled = !busy && !featureSelectionRefreshing;
+        ExperimentWorkspaceHeader.IsPrimaryActionEnabled = !busy && !matrixRunning && !featureSelectionRefreshing;
     }
 
     internal void SetFeatureSelectionRefreshing(bool refreshing)
@@ -356,6 +479,7 @@ public partial class ExperimentLabControl : UserControl
         // newer pointer or keyboard selection can supersede a slow refresh.
         FeatureSelector.IsEnabled = !operationBusy && !matrixRunning;
         FeatureContentGrid.IsEnabled = !operationBusy && !refreshing;
+        ExperimentWorkspaceHeader.IsPrimaryActionEnabled = !operationBusy && !matrixRunning && !refreshing;
     }
 
     internal void ReconcileMatrixProviderProfiles(
@@ -462,6 +586,10 @@ public partial class ExperimentLabControl : UserControl
         ExecuteMatrixButton.ToolTip = helpText;
         AutomationProperties.SetHelpText(ExecuteMatrixButton, helpText);
         AutomationProperties.SetItemStatus(ExecuteMatrixButton, available ? "available" : "unavailable");
+        MatrixValidationStageStatusText.Text = available ? "Ready" : "Unavailable";
+        MatrixRunStageStatusText.Text = available ? "Ready" : "Blocked";
+        AutomationProperties.SetItemStatus(MatrixValidateStage, available ? "ready" : "unavailable");
+        AutomationProperties.SetItemStatus(MatrixRunStage, available ? "ready" : "blocked");
     }
 
     internal void SetMatrixRunning(bool running)
@@ -484,6 +612,13 @@ public partial class ExperimentLabControl : UserControl
         ExecuteMatrixButton.IsEnabled = !running && ExecuteMatrixButton.Tag is true;
         CancelMatrixButton.IsEnabled = running;
         AutomationProperties.SetItemStatus(CancelMatrixButton, running ? "available" : "unavailable");
+        MatrixRunStageStatusText.Text = running
+            ? "Running"
+            : ExecuteMatrixButton.Tag is true
+                ? "Ready"
+                : "Blocked";
+        AutomationProperties.SetItemStatus(MatrixRunStage, running ? "running" : ExecuteMatrixButton.Tag is true ? "ready" : "blocked");
+        ExperimentWorkspaceHeader.IsPrimaryActionEnabled = !running && !operationBusy && !featureSelectionRefreshing;
     }
 
     private void RegisterBuiltInFeatures()
@@ -493,31 +628,36 @@ public partial class ExperimentLabControl : UserControl
             "Matrix Runner",
             "Deterministic expansion",
             "Validate bounded experiment matrices and inspect durable run history.",
-            MatrixPanel));
+            MatrixPanel,
+            "Run & replay"));
         RegisterFeature(new(
             "fork",
             "Conversation Fork",
             "Exact historical cursor",
             "Create and load an isolated child session at a stable transcript cursor.",
-            ForkPanel));
+            ForkPanel,
+            "Run & replay"));
         RegisterFeature(new(
             "packs",
             "Scenario Packs",
             "Canonical local artifacts",
             "Create, import, export, and diagnose scenario and benchmark packs.",
-            PacksPanel));
+            PacksPanel,
+            "Definitions & evidence"));
         RegisterFeature(new(
             "rubrics",
             "Rubric Studio",
             "Separated judgments",
             "Version rubrics and record human, deterministic, model, or unavailable evidence.",
-            RubricPanel));
+            RubricPanel,
+            "Definitions & evidence"));
         RegisterFeature(new(
             "claims",
             "Claim Ledger",
             "Evidence provenance",
             "Add, review, and contradict claims through monotonic stable references.",
-            ClaimPanel));
+            ClaimPanel,
+            "Definitions & evidence"));
     }
 
     private void FeatureSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -534,7 +674,36 @@ public partial class ExperimentLabControl : UserControl
                 : Visibility.Collapsed;
         }
 
+        bool AnimateSelectedContainer()
+        {
+            if (ReferenceEquals(FeatureSelector.SelectedItem, selected)
+                && FeatureSelector.ItemContainerGenerator.ContainerFromItem(selected) is UIElement container)
+            {
+                ArenaMotion.NavigationSelected(container);
+                return true;
+            }
+
+            return false;
+        }
+
+        if (!AnimateSelectedContainer())
+        {
+            Dispatcher.BeginInvoke(
+                (Action)(() => AnimateSelectedContainer()),
+                System.Windows.Threading.DispatcherPriority.Loaded);
+        }
+
         if (coordinator is not null)
+        {
+            coordinator.RequestFeatureSelectionRefresh(selected.Key);
+        }
+    }
+
+    private void RefreshSelectedFeatureHeader_Click(object sender, RoutedEventArgs e)
+    {
+        if (coordinator is not null
+            && FeatureSelector.SelectedItem is ExperimentLabFeatureRegistration selected
+            && ExperimentWorkspaceHeader.IsPrimaryActionEnabled)
         {
             coordinator.RequestFeatureSelectionRefresh(selected.Key);
         }
@@ -545,6 +714,7 @@ public partial class ExperimentLabControl : UserControl
 
     internal void ApplyResponsiveLayout(bool compact)
     {
+        ApplyClaimLedgerLayout(compact);
         if (compact)
         {
             SelectorColumn.Width = new GridLength(1, GridUnitType.Star);
@@ -579,8 +749,68 @@ public partial class ExperimentLabControl : UserControl
         }
     }
 
+    private void ApplyClaimLedgerLayout(bool stacked)
+    {
+        if (stacked)
+        {
+            ClaimMasterColumn.Width = new GridLength(1, GridUnitType.Star);
+            ClaimWideGapColumn.Width = new GridLength(0);
+            ClaimDetailColumn.Width = new GridLength(0);
+            ClaimMasterRow.Height = GridLength.Auto;
+            ClaimCompactGapRow.Height = new GridLength(12);
+            ClaimDetailRow.Height = GridLength.Auto;
+            Grid.SetRow(ClaimMasterPane, 0);
+            Grid.SetColumn(ClaimMasterPane, 0);
+            Grid.SetColumnSpan(ClaimMasterPane, 3);
+            Grid.SetRow(ClaimDetailPane, 2);
+            Grid.SetColumn(ClaimDetailPane, 0);
+            Grid.SetColumnSpan(ClaimDetailPane, 3);
+            return;
+        }
+
+        ClaimMasterColumn.Width = new GridLength(260);
+        ClaimWideGapColumn.Width = new GridLength(12);
+        ClaimDetailColumn.Width = new GridLength(1, GridUnitType.Star);
+        ClaimMasterRow.Height = GridLength.Auto;
+        ClaimCompactGapRow.Height = new GridLength(0);
+        ClaimDetailRow.Height = new GridLength(0);
+        Grid.SetRow(ClaimMasterPane, 0);
+        Grid.SetColumn(ClaimMasterPane, 0);
+        Grid.SetColumnSpan(ClaimMasterPane, 1);
+        Grid.SetRow(ClaimDetailPane, 0);
+        Grid.SetColumn(ClaimDetailPane, 2);
+        Grid.SetColumnSpan(ClaimDetailPane, 1);
+    }
+
     private async void ValidateMatrixButton_Click(object sender, RoutedEventArgs e) =>
         await RunAsync(static value => value.ValidateMatrixAsync());
+
+    private void MatrixConfiguration_TextChanged(object sender, TextChangedEventArgs e) =>
+        InvalidateMatrixValidation();
+
+    private void MatrixConfiguration_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        InvalidateMatrixValidation();
+
+    private void InvalidateMatrixValidation()
+    {
+        if (!matrixUiInitialized || matrixRunning)
+        {
+            return;
+        }
+
+        ExecuteMatrixButton.Tag = false;
+        ExecuteMatrixButton.IsEnabled = false;
+        const string helpText = "Configuration changed. Validate the matrix again before running.";
+        ExecuteMatrixButton.ToolTip = helpText;
+        AutomationProperties.SetHelpText(ExecuteMatrixButton, helpText);
+        AutomationProperties.SetItemStatus(ExecuteMatrixButton, "unavailable");
+        MatrixValidationStageStatusText.Text = "Needs validation";
+        MatrixRunStageStatusText.Text = "Blocked";
+        AutomationProperties.SetItemStatus(MatrixValidateStage, "needs-validation");
+        AutomationProperties.SetItemStatus(MatrixRunStage, "blocked");
+        MatrixStatusText.Text = helpText;
+        SetMatrixPreview([]);
+    }
 
     private async void RefreshRunHistoryButton_Click(object sender, RoutedEventArgs e) =>
         await RunAsync(static value => value.RefreshRunHistoryAsync());
@@ -593,6 +823,8 @@ public partial class ExperimentLabControl : UserControl
             MatrixScenarioPackText.Text = selection.ScenarioPackId;
             MatrixRubricsText.Text = string.Join(", ", selection.RubricIds);
         }
+
+        InvalidateMatrixValidation();
     }
 
     private async void ExecuteMatrixButton_Click(object sender, RoutedEventArgs e) =>

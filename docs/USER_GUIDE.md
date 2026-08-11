@@ -8,11 +8,11 @@ The app is designed for local experimentation with model behavior. You can creat
 
 1. Install AI Arena from the versioned setup file.
 2. Start LM Studio, another OpenAI-compatible provider, or your own `llama-server` process.
-3. Open Settings, then **Models & provider**.
-4. Choose a provider preset, press **Use preset**, and select a **Default model**.
-5. Press **Test connection**.
-6. Open **Custom connection** only when you need to change the connection type, server address, or access token. A standard LM Studio OpenAI-compatible address is `http://127.0.0.1:1234/v1`; a typical user-started llama.cpp server uses **llama.cpp native /v1** at `http://127.0.0.1:8080/v1`.
-7. Optionally use **Model recommendations** to scan local hardware and recommend a multi-model role spread.
+3. Open Settings, then **Provider connection**.
+4. Choose a provider preset and press **Use preset**.
+5. Open **Custom connection** only when you need to change the connection type, server address, or access token. A standard LM Studio OpenAI-compatible address is `http://127.0.0.1:1234/v1`; a typical user-started llama.cpp server uses **llama.cpp native /v1** at `http://127.0.0.1:8080/v1`.
+6. Press **Models** in the AI Lab top rail. Select a loaded or available model, then check **Default** or an active agent/Narrator target. Assignment changes save immediately.
+7. Use **Connection** from the Models header, then press **Test connection** for the selected default model. Optionally use **Model recommendations** to recommend a multi-model role spread. Provider hardware placement remains independent.
 8. Open AI Lab, then use Match Setup in the top rail to choose a preset, role pack, style, pressure, absurdity level, AI Choice, or Wild Seed.
 9. Close Match Setup and run 1 TURN or AUTO CHAT.
 10. Open Agent, choose a workspace folder, and preview commands before approval when using the software workspace.
@@ -33,8 +33,9 @@ The left rail contains the app identity, navigation, contextual status, and a co
 
 The center area contains the active page:
 
-- AI Lab: the arena transcript, diagnostics, filters, timeline, memory notes, compare tools, and the Match Setup flyout.
+- AI Lab: the arena transcript, diagnostics, filters, timeline, memory notes, compare tools, and the Match Setup and Models surfaces.
 - Match Setup: a wide AI Lab flyout for scenario preview, cast preview, locks, per-agent voice styles, pressure controls, grouped generation controls, generation history, and checkpoint/session tools.
+- Models: a wide searchable catalog with loaded models first, provider-available models second, and a narrow pane for LM Studio residency plus immediate assignments to Default, active Alpha-Theta participants, and Narrator.
 - Agent: workspace-scoped software chat with a Codex-like centered conversation lane, bottom composer, visible session Full Access control, plus-menu popup for prompt presets/session controls, collapsed Workspace/Advanced drawers for deeper tuning, workspace profiling, planning, review, app-building and verification prompts, visible Planner/Reviewer/Builder progress, compact Outputs summaries, staged command proposals, action/result cards, generated artifact suggestions, Auto Rescue, loop-guarded Auto Continue autonomy, command history/replay, approved terminal output, and file-change receipts.
 - AI Collaborate: classic AI chat where Alpha, Beta, Gamma, and Narrator collaborate on the operator's prompt.
 
@@ -49,7 +50,7 @@ In AI Collaborate, the right rail changes to Collaborate controls: mode, provide
 
 In Agent, the right rail changes to Progress, Build Evidence, Outputs, Agent activity, and a collapsed Advanced drawer for command approval, terminal output, and command history.
 
-The top rail adapts to the active workspace. AI Lab shows Match Setup, transcript search/export, and View. AI Collaborate shows collaboration search/export without transcript-only View controls. Agent hides transcript-only commands. Provider details, Help, the optional Debug menu, the right-rail toggle, and Settings remain available where relevant.
+The top rail adapts to the active workspace. AI Lab shows Match Setup, Models, transcript search/export, and View. AI Collaborate shows collaboration search/export without transcript-only View controls. Agent hides transcript-only commands. Provider details, Help, the optional Debug menu, the right-rail toggle, and Settings remain available where relevant.
 
 At narrower window sizes, opening the right rail reveals it as a drawer over the workspace instead of squeezing the center content. Hide it again with the same top-rail toggle.
 
@@ -61,6 +62,7 @@ At narrower window sizes, opening the right rail reveals it as a drawer over the
 - Turns: transcript turn count.
 - Actionable idle/run guidance appears in the bottom-left status dock rather than adding a second top-rail row. Routine Ready and Provider online messages stay hidden.
 - Match Setup: opens the wide AI Lab setup flyout for scenario, cast, lock, generation, and saved-state controls.
+- Models: opens the wide model catalog and immediate assignment surface. Escape or Close returns to the workspace and focus that opened it.
 - Search icon: opens a draggable search popup. In AI Lab it searches transcript text, speakers, models, and sources. In AI Collaborate it uses collaboration-oriented placeholder text and recent searches.
 - Export icon: in AI Lab, exports the current transcript scope to Markdown; in AI Collaborate, exports the current chat with run reviews and team trace details.
 - View menu: applies transcript presets and toggles Compact transcript, Turn compare, Quality timeline, Battle review, Memory notes, and Auto-scroll.
@@ -134,7 +136,7 @@ The memory panel lets you refresh, edit, clear individual agent notes, or clear 
 
 ### Debug Controls
 
-Open Settings -> Visuals, then enable Allow debug controls. The top rail shows a Debug menu for experimental helpers. Decision card shows a compact narrator-generated operator summary above the transcript. Style fit shows optional cue chips for constrained voice styles. Review mode can also surface Decision card and Style fit as part of the review cockpit. Voice drift enforcement injects stricter per-turn voice reminders into agent prompts while Debug is enabled. AI World is also Debug-gated and remains off by default. PowerShell control and the default-on Agent workspace are normal Settings features and are not gated by Debug controls.
+Open Settings -> Visuals, then enable Allow debug controls. The top rail shows a Debug menu for experimental helpers. Decision card shows a compact narrator-generated operator summary above the transcript. Style fit shows optional cue chips for constrained voice styles. Review mode can also surface Decision card and Style fit as part of the review cockpit. Voice drift enforcement injects stricter per-turn voice reminders into agent prompts while Debug is enabled. AI World is also Debug-gated and remains off by default. PowerShell control is organized in the Debug controls Settings category but remains independently enabled, while the default-on Agent workspace is a normal Settings feature and is not gated by Debug controls.
 
 ## Discourse Diagnostics
 
@@ -177,9 +179,9 @@ Click a performance card to open a compact detail popup. The popup shows persona
 
 ## Model Comparison & QA
 
-Open **Model Comparison & QA** in the AI Lab right rail when you want repeatable, local evidence for a model change. First run the scenario and choose **Capture baseline**. Import or keep the same Match Setup, change only the provider/model assignment you intend to test, run it again, then choose **Compare current**. Comparison is allowed only when the model-neutral scenario fingerprint matches; a different scenario is labelled not comparable instead of producing a misleading delta.
+Open **Model Comparison & QA** in the AI Lab right rail when you want repeatable, local evidence for a model change. First run the scenario and choose **Capture baseline**. Import or keep the same Match Setup, change only the provider/model assignment you intend to test, run it again, then choose **Compare current**. Comparison is allowed only when the model-neutral scenario fingerprint matches. Factory and mixed-mode comparisons also require the same privacy-safe causal-context profile; changed context is labelled not comparable, while missing context remains unavailable instead of producing a misleading delta. The profile hashes the ordered prompt-context fingerprints and entry-count evidence recorded for actual Factory provider calls. Two one-turn trials can therefore compare when they received identical causal input even if their outputs differ; later calls become non-comparable when earlier output differences changed what those calls actually saw.
 
-The card compares evidenced aggregates such as completed and failed turns, latency, generated tokens, throughput, and local Battle Review quality. Each metric includes sample counts and a non-colour status marker. Missing telemetry remains **unavailable** and is not converted to zero. **Copy evidence** exports aggregate evaluation JSON without transcript bodies, raw provider responses, provider error bodies, or credentials. **Copy replay setup** copies the exact secret-free Match Setup JSON used for replay.
+The card compares evidenced aggregates such as completed and failed turns, latency, generated tokens, throughput, and local Battle Review quality. Each metric includes sample counts and a non-colour status marker. Missing telemetry remains **unavailable** and is not converted to zero. Factory and mixed runs retain observed runtime metrics, while Battle Review, role-drift, and voice-style claims stay unavailable because Match Setup behavior was not consistently applied. **Copy evidence** exports aggregate evaluation JSON with only the Factory context contract, SHA-256 causal-profile fingerprint, causal sample count, and latest entry/omission counts—never transcript bodies, raw provider responses, provider error bodies, conversation/root IDs, or credentials. **Copy replay setup** copies the exact secret-free Match Setup JSON used for replay; public group history remains separate runtime state.
 
 **Run QA** evaluates setup identity, the replay package, minimum turn sample, provider/transcript errors, stuck thinking state, telemetry completeness, quality sample, optional Internet evidence, and baseline comparability/regression. The result is:
 
@@ -280,11 +282,11 @@ After a command runs, Agent adds a result card with exit state, file-change coun
 
 AI Arena includes a local PowerShell control plane for smoke tests, scripting, and hands-on automation. It is enabled by default, uses a local named pipe, and requires the per-run token written to the current user's app-data directory.
 
-This is a normal application setting, not a Debug feature. Disabling Debug controls does not disable PowerShell automation.
+This toggle is organized under Debug controls with the other developer tools, but it is independent of Allow debug controls. Disabling Debug controls does not disable PowerShell automation.
 
 Enable it in the app:
 
-1. Open Settings -> PowerShell Control.
+1. Open Settings -> Debug controls.
 2. Leave PowerShell control plane enabled, or turn it off when local automation is not wanted.
 
 Load the helper script in PowerShell:
@@ -571,6 +573,10 @@ AI Collaborate history is stored locally under `%LOCALAPPDATA%\AI Arena\configs\
 
 Match Setup controls the scenario and cast from a wide flyout inside AI Lab. The top console is grouped into Generate, Tune, Agents, and Recent so setup controls stay compact. The header shows setup readiness, readiness badges, Copy Setup, Copy JSON, and Import JSON actions. Tune shows a recipe summary so you can see the selected pack, style, pressure, persona mixer, preset category, best-use guidance, and risk notes before generating.
 
+**Apply Match Setup to models** is on by default (Arena mode). Turn it off for Factory mode when you want to inspect a model without AI Arena behavior guidance. The latest eligible non-empty public Operator turn already present when Factory first runs—or the next one sent if none exists—becomes the stable conversation root and remains the first chronological context entry. Later requests reconstruct up to 50 public entries: the root plus the newest 49 eligible public Operator and successful participant turns. A participant receives its own earlier replies as assistant history; peer replies and later Operator turns are attributed group input. Whole older entries are omitted when the bound is reached, retained text is not silently shortened, and the omission count remains inspectable. Before sending, adjacent logical entries that map to the same chat role are losslessly batched into one transport block so strict model templates receive an alternating role sequence; the root, chronology, speaker envelopes, retained text, and logical entry counts are unchanged, and no synthetic user prompt is added. Topic, global rules, personas, voice and pressure instructions, relationships, private memory, Internet/tool rows and instructions, System/error rows, reasoning metadata, repair prompts, fallback models, and native conversation continuation are not sent. Successful public Arena-mode replies produced after the Factory root remain part of the public group when Factory resumes. Provider/model selection and generation settings such as temperature, output limit, context length, reasoning mode, and timeout still apply. The saved idle-unload setting remains available for explicit LM Studio model-load requests and maps to Ollama `keep_alive` where supported; current LM Studio `/api/v1/chat` participant requests omit `ttl` because that endpoint rejects it. Provider adapters and the model's own chat template still operate, so this is raw at the AI Arena prompt layer rather than token-level completion mode.
+
+Factory mode requires a public Operator turn before 1 Turn, Auto Chat, or an individual participant can run. That Operator card remains visible in the public transcript like the participant cards. Private notes and Narrator-routed drafts do not qualify. Once established, the root is not silently replaced by a later prompt, and switching Arena/Factory modes does not clear it. Resetting the arena or starting/importing a clean session requires a new public Operator root. Narration and Decision Card generation are unavailable because they inherently require Arena instructions. System and error events remain recorded and visible for diagnosis but never enter Factory model context.
+
 - Generate chooses how to create a setup: Manual, Random Seed, AI Choice, or Wild Seed.
 - Tune chooses the role pack, scenario style, debate pressure, and absurdity level.
 - Agents resizes the active cast for duel, classic, council, swarm, or custom runs.
@@ -670,15 +676,21 @@ App settings, AI Collaborate history, and bounded aggregate Model Comparison & Q
 
 Settings are grouped into collapsible sections.
 
-### Models & provider
+### Provider connection
 
-The primary setup path stays short: choose a provider, choose the default model, then press **Test connection**. The app refreshes advertised models while Settings is open, and you can type a model identifier manually when it is not advertised.
+Settings now owns connection details rather than duplicating model selection. Choose a provider preset, open **Custom connection** only when needed, and press **Test connection**. Use the top-rail **Models** surface to browse and assign models.
+
+The Models surface keeps the catalog as the main area and a narrow control pane on the right. **Loaded Models** contains active processes actually reported by the provider; a configured or assigned model is never treated as loaded by itself. **Available Models** contains the remaining provider catalog. When residency cannot be observed, the catalog stays available but load state is labelled unavailable rather than inferred. A configured model missing from the latest catalog remains visible as configured-only.
+
+With LM Studio native mode, the surface checks residency every five seconds while it is visible and stops when closed. The selected row exposes one state-driven action: **Load model** when LM Studio reports it available, or **Unload model** when LM Studio reports it loaded. A successful request does not move the row immediately; AI Arena refreshes the native catalog and moves it only after LM Studio confirms the new state. If confirmation is temporarily unavailable, the row stays in its last confirmed group with a neutral **Awaiting confirmation** state until a later heartbeat resolves it. The heartbeat pauses during that operation, overlapping requests are rejected, and routing assignments remain unchanged. LM Studio still owns hardware placement.
+
+Checking Default, an active Alpha-Theta participant, or Narrator saves that routing change immediately. There is no Apply or Reset button, and assigning a model does not load or unload it.
 
 Optional controls are grouped separately:
 
 - **Custom connection**: connection type, server address, and optional access token. OpenAI-compatible, LM Studio native, Ollama native, and llama.cpp native connections are supported.
 - **Saved setups**: save or reuse provider and role-routing configurations. Access tokens are never included.
-- **Role routing**: assign Alpha, Beta, Gamma, Delta, and Narrator individually, add per-role temperature or response-limit overrides, test role-model access, or make every role follow the default model again.
+- **Models workspace**: assign the default plus every currently active Alpha-Theta participant and Narrator. Unchecking a participant returns it to the default while preserving unrelated generation overrides.
 - **Model recommendations**: scans GPU/RAM and provider models, then recommends a conservative, balanced, performance, max-variety, low-VRAM, or Absurd Lab spread. **Use recommendation** saves it to the current session. LM Studio still controls final GPU offload and device placement.
 - **Local model tools**: preload, unload, download, or pull models when using an LM Studio or Ollama native connection. In `llamacpp_native` mode, the dedicated runtime card inspects the configured user-owned `llama-server`; it never downloads, launches, stops, or replaces that process.
 - **Advanced model calls**: timeout, temperature, response token limit, provider context, reasoning, idle unload, and LM Studio stateful-chat behavior.

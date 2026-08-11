@@ -178,7 +178,12 @@ internal sealed class AIArenaUiVerificationControlService
     internal const string CaptureLimitation = "OS UI Automation and OS input are not queried; focus traversal and the privacy-safe visual-tree snapshot are programmatic and in-process. RenderDpiScale is off-screen raster density, not physical or per-monitor display DPI. Motion fields prove preference plumbing, not rendered animation playback. Accessible names, help text, and all dynamic control content are omitted.";
     internal const string ExpectedStateSource = "observed-visible-roots";
     internal const string FocusCaptureAnchorIdentity = "ArenaNavButtonElement";
-    internal const string FocusCapturePeerIdentity = "ExperimentLabNavButtonElement";
+    private static readonly string[] FocusCapturePeerIdentities =
+    [
+        "ExperimentLabNavButtonElement",
+        "AgentNavButtonElement",
+        "CollaborateNavButtonElement"
+    ];
     private const string QaOwnerMarkerFileName = ".ai-arena-qa-owner";
     private const uint GenericReadAccess = 0x80000000;
     private const uint OpenReparsePoint = 0x00200000;
@@ -956,7 +961,7 @@ internal sealed class AIArenaUiVerificationControlService
             || !SameFocus(next.AfterIdentity, next.AfterControlType, capture.AfterIdentity, capture.AfterControlType)
             || !string.Equals(anchor.AfterIdentity, FocusCaptureAnchorIdentity, StringComparison.Ordinal)
             || !string.Equals(anchor.AfterControlType, "Button", StringComparison.Ordinal)
-            || !string.Equals(next.AfterIdentity, FocusCapturePeerIdentity, StringComparison.Ordinal)
+            || !IsFocusCapturePeerIdentity(next.AfterIdentity)
             || !string.Equals(next.AfterControlType, "Button", StringComparison.Ordinal))
         {
             return "cycle";
@@ -964,6 +969,9 @@ internal sealed class AIArenaUiVerificationControlService
 
         return "";
     }
+
+    internal static bool IsFocusCapturePeerIdentity(string identity) =>
+        FocusCapturePeerIdentities.Contains(identity, StringComparer.Ordinal);
 
     private static bool IsClosedFocusStep(AIArenaQaFocusTraversalResult step, string direction)
     {

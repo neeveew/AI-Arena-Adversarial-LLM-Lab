@@ -439,8 +439,10 @@ internal sealed class ProviderSettingsCoordinator
 
     public async Task PreloadSelectedModelsAsync(CancellationToken cancellationToken = default)
     {
-        await RunBusyAsync(preloadSelectedModelsButton, async () =>
-        {
+        await RunBusyAsync(
+            preloadSelectedModelsButton,
+            () => RunLifecycleLockedAsync("preload", cancellationToken, async () =>
+            {
             SaveRoleModelDrafts();
             var models = SelectedModelsForPreload();
             var preview = CurrentLoadPlanPreview();
@@ -487,14 +489,45 @@ internal sealed class ProviderSettingsCoordinator
             }
 
             var apiToken = await CurrentProviderApiTokenAsync();
-            var results = await modelPreloadService.PreloadAsync(
-                providerBaseUrlText.Text.Trim(),
-                models,
-                CurrentApiMode(),
-                apiToken,
-                contextLength,
-                nativeIdleTtlSeconds,
-                cancellationToken);
+            var lifecycleContext = CaptureLifecycleContext(apiToken);
+            if (lifecycleContext is null)
+            {
+                SetLifecycleContextStatus("No active session is available; no preload request was sent.");
+                return;
+            }
+
+            IReadOnlyList<ModelPreloadResult> results;
+            var mutationStarted = false;
+            try
+            {
+                results = await modelPreloadService.PreloadAsync(
+                    providerBaseUrlText.Text.Trim(),
+                    models,
+                    CurrentApiMode(),
+                    apiToken,
+                    contextLength,
+                    nativeIdleTtlSeconds,
+                    cancellationToken,
+                    mutationStarting: () =>
+                    {
+                        EnsureLifecycleContext(lifecycleContext);
+                        mutationStarted = true;
+                    });
+            }
+            catch (ProviderSettingsLifecycleContextChangedException)
+            {
+                SetLifecycleContextStatus(mutationStarted
+                    ? "The provider or session changed after preload mutation began. The model load state is unknown; refresh to verify it."
+                    : "The provider or session changed before mutation; no preload request was sent.");
+                return;
+            }
+
+            if (!LifecycleContextMatches(lifecycleContext))
+            {
+                SetLifecycleContextStatus("The provider or session changed while preloading. The model load state is unknown; refresh to verify it.");
+                return;
+            }
+
             lastPreloadResults.Clear();
             foreach (var result in results)
             {
@@ -502,25 +535,34 @@ internal sealed class ProviderSettingsCoordinator
             }
 
             var failures = results.Count(result => result.IsFailure);
-            preloadModelsStatusText.Foreground = failures > 0
-                ? resourceBrush("DangerTextBrush")
+            var unknown = results.Count(result => result.MutationOutcomeUnknown);
+            preloadModelsStatusText.Foreground = unknown > 0
+                ? resourceBrush("BetaAccentBrush")
+                : failures > 0
+                    ? resourceBrush("DangerTextBrush")
                 : resourceBrush("AlphaAccentBrush");
-            preloadModelsStatusText.Text = $"Last preload: {DateTime.Now:h:mm:ss tt} - {results.Count} model(s), {failures} warning(s).";
+            preloadModelsStatusText.Text = unknown > 0
+                ? $"Last preload: {DateTime.Now:h:mm:ss tt} - {unknown} outcome(s) unconfirmed; refresh LM Studio state."
+                : $"Last preload: {DateTime.Now:h:mm:ss tt} - {results.Count} model(s), {failures} warning(s).";
             PopulatePreloadModelBadges(results);
             UpdateLoadPlanPreview();
-            providerTestStatus.Text = failures > 0
+            providerTestStatus.Text = unknown > 0
+                ? "A model preload request started without a definite outcome. Refresh to verify residency."
+                : failures > 0
                 ? "Model preload finished with warnings. See preload telemetry."
                 : "Selected models preloaded or already available.";
 
             await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
             UpdateModelStateLabels();
-        });
+            }));
     }
 
     public async Task UnloadSelectedModelsAsync(CancellationToken cancellationToken = default)
     {
-        await RunBusyAsync(unloadSelectedModelsButton, async () =>
-        {
+        await RunBusyAsync(
+            unloadSelectedModelsButton,
+            () => RunLifecycleLockedAsync("unload", cancellationToken, async () =>
+            {
             SaveRoleModelDrafts();
             var models = SelectedModelsForPreload();
             if (models.Count == 0)
@@ -535,12 +577,43 @@ internal sealed class ProviderSettingsCoordinator
             preloadModelsItems.Children.Clear();
 
             var apiToken = await CurrentProviderApiTokenAsync();
-            var results = await modelPreloadService.UnloadAsync(
-                providerBaseUrlText.Text.Trim(),
-                models,
-                CurrentApiMode(),
-                apiToken,
-                cancellationToken);
+            var lifecycleContext = CaptureLifecycleContext(apiToken);
+            if (lifecycleContext is null)
+            {
+                SetLifecycleContextStatus("No active session is available; no unload request was sent.");
+                return;
+            }
+
+            IReadOnlyList<ModelPreloadResult> results;
+            var mutationStarted = false;
+            try
+            {
+                results = await modelPreloadService.UnloadAsync(
+                    providerBaseUrlText.Text.Trim(),
+                    models,
+                    CurrentApiMode(),
+                    apiToken,
+                    cancellationToken,
+                    mutationStarting: () =>
+                    {
+                        EnsureLifecycleContext(lifecycleContext);
+                        mutationStarted = true;
+                    });
+            }
+            catch (ProviderSettingsLifecycleContextChangedException)
+            {
+                SetLifecycleContextStatus(mutationStarted
+                    ? "The provider or session changed after unload mutation began. The model load state is unknown; refresh to verify it."
+                    : "The provider or session changed before mutation; no unload request was sent.");
+                return;
+            }
+
+            if (!LifecycleContextMatches(lifecycleContext))
+            {
+                SetLifecycleContextStatus("The provider or session changed while unloading. The model load state is unknown; refresh to verify it.");
+                return;
+            }
+
             lastPreloadResults.Clear();
             foreach (var result in results)
             {
@@ -548,18 +621,25 @@ internal sealed class ProviderSettingsCoordinator
             }
 
             var failures = results.Count(result => result.IsFailure);
-            preloadModelsStatusText.Foreground = failures > 0
-                ? resourceBrush("DangerTextBrush")
+            var unknown = results.Count(result => result.MutationOutcomeUnknown);
+            preloadModelsStatusText.Foreground = unknown > 0
+                ? resourceBrush("BetaAccentBrush")
+                : failures > 0
+                    ? resourceBrush("DangerTextBrush")
                 : resourceBrush("AlphaAccentBrush");
-            preloadModelsStatusText.Text = $"Last unload: {DateTime.Now:h:mm:ss tt} - {results.Count} model(s), {failures} warning(s).";
+            preloadModelsStatusText.Text = unknown > 0
+                ? $"Last unload: {DateTime.Now:h:mm:ss tt} - {unknown} outcome(s) unconfirmed; refresh LM Studio state."
+                : $"Last unload: {DateTime.Now:h:mm:ss tt} - {results.Count} model(s), {failures} warning(s).";
             PopulatePreloadModelBadges(results);
-            providerTestStatus.Text = failures > 0
+            providerTestStatus.Text = unknown > 0
+                ? "A model unload request started without a definite outcome. Refresh to verify residency."
+                : failures > 0
                 ? "Model unload finished with warnings. See unload telemetry."
                 : "Selected models unloaded or already idle.";
 
             await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
             UpdateModelStateLabels();
-        });
+            }));
     }
 
     public async Task DownloadModelAsync(CancellationToken cancellationToken = default)
@@ -1264,7 +1344,11 @@ internal sealed class ProviderSettingsCoordinator
                     advertisedModels = AdvertisedModelNames([], lastLmStudioCatalog, lastOllamaCatalog);
                     lastProviderModelCount = advertisedModels.Count;
                     providerModelsStatus.Text = FormatProviderModelsStatus(advertisedModels.Count, lastLmStudioCatalog, lastOllamaCatalog);
-                    providerModelsStatus.ToolTip = FormatProviderModelsTooltip(lastLmStudioCatalog, lastOllamaCatalog, "");
+                    providerModelsStatus.ToolTip = FormatProviderModelsTooltip(
+                        lastLmStudioCatalog,
+                        lastOllamaCatalog,
+                        "",
+                        CurrentProviderApiTokenText());
                     isUpdatingRoleModelEditor = true;
                     try
                     {
@@ -1299,7 +1383,11 @@ internal sealed class ProviderSettingsCoordinator
                     advertisedModels = AdvertisedModelNames([], lastLmStudioCatalog, lastOllamaCatalog);
                     lastProviderModelCount = advertisedModels.Count;
                     providerModelsStatus.Text = FormatProviderModelsStatus(advertisedModels.Count, lastLmStudioCatalog, lastOllamaCatalog);
-                    providerModelsStatus.ToolTip = FormatProviderModelsTooltip(lastLmStudioCatalog, lastOllamaCatalog, "");
+                    providerModelsStatus.ToolTip = FormatProviderModelsTooltip(
+                        lastLmStudioCatalog,
+                        lastOllamaCatalog,
+                        "",
+                        CurrentProviderApiTokenText());
                     isUpdatingRoleModelEditor = true;
                     try
                     {
@@ -1347,7 +1435,11 @@ internal sealed class ProviderSettingsCoordinator
                 advertisedModels = AdvertisedModelNames(result.Models, lastLmStudioCatalog, lastOllamaCatalog);
                 lastProviderModelCount = advertisedModels.Count;
                 providerModelsStatus.Text = FormatProviderModelsStatus(advertisedModels.Count, lastLmStudioCatalog, lastOllamaCatalog);
-                providerModelsStatus.ToolTip = FormatProviderModelsTooltip(lastLmStudioCatalog, lastOllamaCatalog, nativeCatalogError);
+                providerModelsStatus.ToolTip = FormatProviderModelsTooltip(
+                    lastLmStudioCatalog,
+                    lastOllamaCatalog,
+                    nativeCatalogError,
+                    CurrentProviderApiTokenText());
                 isUpdatingRoleModelEditor = true;
                 try
                 {
@@ -1847,13 +1939,19 @@ internal sealed class ProviderSettingsCoordinator
         return $"{advertisedCount} advertised models found. Refreshes every 5s while settings are open.";
     }
 
-    private static string FormatProviderModelsTooltip(LmStudioModelCatalog catalog, OllamaModelCatalog ollamaCatalog, string fallbackError)
+    private static string FormatProviderModelsTooltip(
+        LmStudioModelCatalog catalog,
+        OllamaModelCatalog ollamaCatalog,
+        string fallbackError,
+        string apiToken)
     {
         if (catalog.Ok && catalog.Models.Count > 0)
         {
             var highlights = catalog.ChatModels
                 .Take(8)
-                .Select(model => $"{model.PreferredIdentifier}: {model.CapabilitySummary}")
+                .Select(model => ProviderModelCatalogProjectionService.SafeStatusForDisplay(
+                    $"{model.PreferredIdentifier}: {model.CapabilitySummary}",
+                    apiToken))
                 .ToArray();
             return highlights.Length == 0
                 ? "LM Studio native catalog is available, but no chat models were found."
@@ -1864,11 +1962,13 @@ internal sealed class ProviderSettingsCoordinator
         {
             var highlights = ollamaCatalog.Models
                 .Take(8)
-                .Select(model => $"{model.PreferredIdentifier}: {model.CapabilitySummary}")
+                .Select(model => ProviderModelCatalogProjectionService.SafeStatusForDisplay(
+                    $"{model.PreferredIdentifier}: {model.CapabilitySummary}",
+                    apiToken))
                 .ToArray();
             var runningWarning = ollamaCatalog.RunningModelsOk || string.IsNullOrWhiteSpace(ollamaCatalog.RunningModelsError)
                 ? ""
-                : $"{Environment.NewLine}Running model state unavailable: {ollamaCatalog.RunningModelsError}";
+                : $"{Environment.NewLine}Running model state unavailable: {ProviderModelCatalogProjectionService.SafeStatusForDisplay(ollamaCatalog.RunningModelsError, apiToken)}";
             return highlights.Length == 0
                 ? $"Ollama native catalog is available, but no local models were found.{runningWarning}"
                 : string.Join(Environment.NewLine, highlights) + runningWarning;
@@ -1876,7 +1976,7 @@ internal sealed class ProviderSettingsCoordinator
 
         return string.IsNullOrWhiteSpace(fallbackError)
             ? "OpenAI-compatible model list is available. LM Studio native metadata was not detected."
-            : fallbackError;
+            : ProviderModelCatalogProjectionService.SafeStatusForDisplay(fallbackError, apiToken);
     }
 
     private string FormatAutoConfigureCapabilitySummary(ProviderAutoConfigurePlan plan)
@@ -1923,24 +2023,32 @@ internal sealed class ProviderSettingsCoordinator
     {
         if (lastPreloadResults.TryGetValue(model, out var preload))
         {
-            return $"{preload.Status}: {preload.Detail}";
+            return ProviderModelCatalogProjectionService.SafeStatusForDisplay(
+                $"{preload.Status}: {preload.Detail}",
+                CurrentProviderApiTokenText());
         }
 
         var native = lastLmStudioCatalog.Find(model);
         if (native is not null)
         {
-            return native.Tooltip();
+            return ProviderModelCatalogProjectionService.SafeStatusForDisplay(
+                native.Tooltip(),
+                CurrentProviderApiTokenText());
         }
 
         var ollama = lastOllamaCatalog.Find(model);
         if (ollama is not null)
         {
-            return ollama.Tooltip();
+            return ProviderModelCatalogProjectionService.SafeStatusForDisplay(
+                ollama.Tooltip(),
+                CurrentProviderApiTokenText());
         }
 
-        return advertisedModels.Contains(model, StringComparer.OrdinalIgnoreCase)
+        return ProviderModelCatalogProjectionService.SafeStatusForDisplay(
+            advertisedModels.Contains(model, StringComparer.OrdinalIgnoreCase)
             ? $"{model}{Environment.NewLine}Advertised by the OpenAI-compatible provider."
-            : $"{model}{Environment.NewLine}Not present in the latest advertised model list.";
+            : $"{model}{Environment.NewLine}Not present in the latest advertised model list.",
+            CurrentProviderApiTokenText());
     }
 
     private void UpdateModelComboItems(ComboBox comboBox)
@@ -2037,6 +2145,11 @@ internal sealed class ProviderSettingsCoordinator
 
     private string ModelStateLabel(string model)
     {
+        if (lastPreloadResults.TryGetValue(model, out var unknown) && unknown.MutationOutcomeUnknown)
+        {
+            return "load state unknown";
+        }
+
         if (lastPreloadResults.TryGetValue(model, out var preload) && preload.IsFailure)
         {
             return "failed preload";
@@ -2070,6 +2183,7 @@ internal sealed class ProviderSettingsCoordinator
         return label switch
         {
             "failed preload" or "unavailable" => resourceBrush("DangerTextBrush"),
+            "load state unknown" => resourceBrush("BetaAccentBrush"),
             "loaded" => resourceBrush("PrimaryBorderBrush"),
             "available" or "selected" => resourceBrush("AlphaAccentBrush"),
             _ => resourceBrush("MutedTextBrush")
@@ -2180,7 +2294,9 @@ internal sealed class ProviderSettingsCoordinator
         preloadModelsItems.Children.Clear();
         foreach (var result in results)
         {
-            var accent = result.Status.ToLowerInvariant() switch
+            var accent = result.MutationOutcomeUnknown
+                ? resourceBrush("BetaAccentBrush")
+                : result.Status.ToLowerInvariant() switch
             {
                 "loaded" or "ready" or "reloaded" => resourceBrush("PrimaryBorderBrush"),
                 "unloaded" => resourceBrush("AlphaAccentBrush"),
@@ -2188,9 +2304,15 @@ internal sealed class ProviderSettingsCoordinator
                 "unsupported" or "missing" => resourceBrush("BetaAccentBrush"),
                 _ => resourceBrush("DangerTextBrush")
             };
+            var displayStatus = result.MutationOutcomeUnknown
+                ? "Unconfirmed"
+                : TitleCaseStatus(result.Status);
             var label = string.IsNullOrWhiteSpace(result.Model)
-                ? TitleCaseStatus(result.Status)
-                : $"{shortModelName(result.Model)} - {TitleCaseStatus(result.Status)}";
+                ? displayStatus
+                : $"{shortModelName(result.Model)} - {displayStatus}";
+            var safeTooltip = ProviderModelCatalogProjectionService.SafeStatusForDisplay(
+                $"{result.Model}{Environment.NewLine}{result.Detail}",
+                CurrentProviderApiTokenText());
 
             preloadModelsItems.Children.Add(new Border
             {
@@ -2200,7 +2322,7 @@ internal sealed class ProviderSettingsCoordinator
                 CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(7, 3, 7, 4),
                 Margin = new Thickness(0, 0, 6, 6),
-                ToolTip = $"{result.Model}{Environment.NewLine}{result.Detail}",
+                ToolTip = safeTooltip,
                 Child = new TextBlock
                 {
                     Text = label,
@@ -2388,6 +2510,91 @@ internal sealed class ProviderSettingsCoordinator
         };
     }
 
+    private ProviderSettingsLifecycleContext? CaptureLifecycleContext(string apiToken)
+    {
+        var session = activeSession();
+        if (session is null)
+        {
+            return null;
+        }
+
+        var config = new CoreModelProviderConfig
+        {
+            BaseUrl = providerBaseUrlText.Text.Trim(),
+            ApiMode = CurrentApiMode(),
+            ApiToken = apiToken
+        };
+        return new ProviderSettingsLifecycleContext(
+            session.Id,
+            ProviderModelCatalogProjectionService.ConnectionFingerprint(session.Id, config));
+    }
+
+    private bool LifecycleContextMatches(ProviderSettingsLifecycleContext expected)
+    {
+        var current = CaptureLifecycleContext(CurrentProviderApiTokenText());
+        return current is not null
+            && current.SessionId.Equals(expected.SessionId, StringComparison.Ordinal)
+            && current.ConnectionIdentity.Equals(expected.ConnectionIdentity, StringComparison.Ordinal);
+    }
+
+    private void EnsureLifecycleContext(ProviderSettingsLifecycleContext expected)
+    {
+        if (!LifecycleContextMatches(expected))
+        {
+            throw new ProviderSettingsLifecycleContextChangedException();
+        }
+    }
+
+    private void SetLifecycleContextStatus(string message)
+    {
+        preloadModelsStatusText.Foreground = resourceBrush("BetaAccentBrush");
+        preloadModelsStatusText.Text = message;
+        providerTestStatus.Text = message;
+    }
+
+    private async Task RunLifecycleLockedAsync(
+        string action,
+        CancellationToken cancellationToken,
+        Func<Task> operation)
+    {
+        if (isArenaBusy())
+        {
+            var message = $"Model {action} is unavailable while the arena is running.";
+            preloadModelsStatusText.Foreground = resourceBrush("MutedTextBrush");
+            preloadModelsStatusText.Text = message;
+            providerTestStatus.Text = message;
+            return;
+        }
+
+        var lockTaken = await arenaOperationLock.WaitAsync(0, cancellationToken);
+        if (!lockTaken)
+        {
+            var message = $"Model {action} is unavailable while another arena or provider operation is active.";
+            preloadModelsStatusText.Foreground = resourceBrush("MutedTextBrush");
+            preloadModelsStatusText.Text = message;
+            providerTestStatus.Text = message;
+            return;
+        }
+
+        try
+        {
+            if (isArenaBusy())
+            {
+                var message = $"Model {action} was not started because the arena began running.";
+                preloadModelsStatusText.Foreground = resourceBrush("MutedTextBrush");
+                preloadModelsStatusText.Text = message;
+                providerTestStatus.Text = message;
+                return;
+            }
+
+            await operation();
+        }
+        finally
+        {
+            arenaOperationLock.Release();
+        }
+    }
+
     private static async Task RunBusyAsync(Control control, Func<Task> action)
     {
         control.IsEnabled = false;
@@ -2404,5 +2611,13 @@ internal sealed class ProviderSettingsCoordinator
     private static Brush BlendBrush(Brush baseBrush, Brush accentBrush, double accentAmount)
     {
         return ShellUiHelpers.BlendBrush(baseBrush, accentBrush, accentAmount);
+    }
+
+    private sealed record ProviderSettingsLifecycleContext(
+        string SessionId,
+        string ConnectionIdentity);
+
+    private sealed class ProviderSettingsLifecycleContextChangedException : InvalidOperationException
+    {
     }
 }

@@ -6,6 +6,8 @@ using System.Reflection;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -149,6 +151,12 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     private IInputElement? _debugMenuFocusReturnTarget;
     private IInputElement? _providerHealthFocusReturnTarget;
     private IInputElement? _matchSetupFocusReturnTarget;
+    private IInputElement? _currentSetupTransferFocusReturnTarget;
+    private IInputElement? _generationCopyFocusReturnTarget;
+    private IInputElement? _agentComposerControlsFocusReturnTarget;
+    private IInputElement? _diagnosticDetailFocusReturnTarget;
+    private IInputElement? _agentPerformanceDetailFocusReturnTarget;
+    private IInputElement? _transcriptFiltersFocusReturnTarget;
     private ShellSurface _activeShellSurface = ShellSurface.Lab;
     private ShellSurface _matchSetupReturnSurface = ShellSurface.Lab;
     private string _matchSetupSection = "scenario";
@@ -449,13 +457,14 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             SaveSnapshotForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync,
             SetLoadStatus);
+        var sharedModelPreloadService = new ModelPreloadService();
         _providerSettingsCoordinator = new ProviderSettingsCoordinator(
             this,
             _coreSessionStore,
             _eventLogStore,
             _providerHealth,
             _providerRuntimeService,
-            new ModelPreloadService(),
+            sharedModelPreloadService,
             new LmStudioModelDownloadService(),
             new ProviderAutoConfigureService(_providerHealth),
             _arenaOperationLock,
@@ -517,6 +526,15 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             (force, cancellationToken) => ProviderReachability.RefreshAsync(force, cancellationToken),
             () => ProviderReachability.UpdatePopup(),
             RoleGenerationOverrideFor);
+        _providerModelsSurfaceCoordinator = new ProviderModelsSurfaceCoordinator(
+            ProviderModelsPanel,
+            _coreSessionStore,
+            _providerConfigurationControlService,
+            _providerHealth,
+            sharedModelPreloadService,
+            _arenaOperationLock,
+            () => _activeSession,
+            () => _arenaBusy);
         _llamaCppRuntimeCoordinator = new LlamaCppRuntimeCoordinator(
             new LlamaCppRuntimeService(),
             new LlamaCppRuntimeControls(
@@ -638,6 +656,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             TranscriptPanel,
             ExperimentLabPanel,
             CustomMatchPanel,
+            ProviderModelsPanel,
             AgentWorldPanel,
             AgentWorkspacePanel,
             CollaboratePanel,
@@ -1103,7 +1122,6 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             TranscriptDiagnosticsGrid,
             TranscriptTelemetryHost,
             TranscriptTelemetryGrid,
-            TranscriptFiltersHost,
             () => _lastRenderedMessages,
             () => _lastRenderedSnapshot,
             PopulateTranscript,
@@ -1255,6 +1273,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             ClearRivalryMatrixButton,
             RivalryMatrixPatternPicker,
             ApplyRivalryMatrixPatternButton,
+            ApplyMatchSetupToModelsCheckBox,
+            ApplyMatchSetupToModelsStatusText,
             () => _activeSession,
             ResourceBrush,
             AccentForSpeaker,
@@ -1262,7 +1282,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             BlendBrush,
             RunArenaBusyForCoordinatorAsync,
             SaveSnapshotForCoordinatorAsync,
-            RefreshActiveSessionForCoordinatorAsync);
+            RefreshActiveSessionForCoordinatorAsync,
+            (mode, message) => _controlPlaneEvents.Publish(
+                "match.model-behavior.changed",
+                message,
+                new { mode }));
         _matchLockCoordinator = new MatchLockCoordinator(
             this,
             _coreSessionStore,
@@ -1312,6 +1336,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             count => AgentRoster.ResizeAgentCountAsync(count),
             _rivalryMatrixControlService,
             _matchSetupPortabilityService,
+            (factoryMode, cancellationToken) => MatchSetup.SetModelBehaviorModeAsync(factoryMode, cancellationToken),
             _controlPlaneEvents);
         _collaborateControlHandler = new AIArenaCollaborateControlHandler(Collaborate, _controlPlaneEvents);
         _providerControlHandler = new AIArenaProviderControlHandler(
@@ -1395,6 +1420,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 // A run started or finished, so the polling cadence may change
                 // even though window focus did not.
                 ApplyPollingCadence();
+                RefreshProviderModelsPresentationIfVisible();
             },
             () => _arenaRunCoordinator?.IsAutoChatRunning == true,
             (busy, autoChatRunning) => ScenarioWorkflow.UpdateBusyState(busy, autoChatRunning),
@@ -1462,6 +1488,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             _voiceTtsSettingsSaveDebouncer.Dispose();
             TelemetryWorkflow.Stop();
             _transcriptSearchCoordinator?.Dispose();
+            DisposeProviderModelsHeartbeat();
+            _providerModelsSurfaceCoordinator?.Dispose();
             _agentImpactExplorerCoordinator?.Dispose();
             _agentInspectionLabCoordinator.Dispose();
             _faultInjectionLabCoordinator.Dispose();
@@ -1697,7 +1725,10 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             snapshot?.MatchType ?? "",
             snapshot?.ScenarioTopic ?? "",
             snapshot?.Agents.Count(agent => agent.Active) ?? 0,
-            _arenaBusy);
+            _arenaBusy)
+        {
+            ModelBehaviorMode = snapshot?.FactoryMode == true ? "factory" : "arena"
+        };
     }
 
     private AIArenaSettingsControlState BuildSettingsControlState()
@@ -1909,6 +1940,12 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             case "match":
                 OpenMatchSetupFromControlPlane();
                 return true;
+            case "models":
+            case "provider.models":
+                AppSettingsWorkflow.SetVisible(false);
+                CloseNamedTransientShellFlyouts();
+                ShowProviderModelsPanel();
+                return true;
             case "world":
             case "ai.world":
                 if (!IsWorldDebugEnabled(_wpfSettings))
@@ -1936,6 +1973,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             case "experiment":
             case "experiments":
             case "experiment.lab":
+                if (!IsExperimentLabEnabled(_wpfSettings))
+                {
+                    return false;
+                }
+
                 AppSettingsWorkflow.SetVisible(false);
                 ShowExperimentLabPanel();
                 return true;
@@ -1976,6 +2018,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         if (CustomMatchPanel.Visibility == Visibility.Visible)
         {
             return "custom-match";
+        }
+
+        if (ProviderModelsPanel.Visibility == Visibility.Visible)
+        {
+            return "models";
         }
 
         return AgentWorldPanel.Visibility == Visibility.Visible ? "world" : "arena";
@@ -2050,6 +2097,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
 
         ApplyWorldDebugVisibility(persistIfForcedOff: false);
+        ApplyExperimentLabVisibility();
         ApplyAgentWorkspaceVisibility();
         ApplyControlPlaneToggleState();
     }
@@ -2578,6 +2626,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     {
         _viewMenuFocusReturnTarget ??= Keyboard.FocusedElement ?? ViewMenuButton;
         DebugMenuPopup.IsOpen = false;
+        TranscriptFiltersPopup.IsOpen = false;
         ProviderReachability.ClosePopup();
         _transcriptSearchCoordinator?.CloseSearch();
         FocusOverlayEntry(ViewMenuPopup, ViewPresetFocusedButton);
@@ -2599,6 +2648,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     {
         _debugMenuFocusReturnTarget ??= Keyboard.FocusedElement ?? DebugMenuButton;
         ViewMenuPopup.IsOpen = false;
+        TranscriptFiltersPopup.IsOpen = false;
         ProviderReachability.ClosePopup();
         _transcriptSearchCoordinator?.CloseSearch();
         FocusOverlayEntry(DebugMenuPopup, DecisionCardCheckBox);
@@ -2616,7 +2666,38 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         ClosePopupOnEscape(DebugMenuPopup, e);
     }
 
-    private static void ClosePopupOnEscape(Popup popup, KeyEventArgs e)
+    private void TranscriptFiltersButton_Click(object sender, RoutedEventArgs e)
+    {
+        var opener = ArenaWorkspaceHeader.PrimaryAction;
+        _transcriptFiltersFocusReturnTarget = opener;
+        TranscriptFiltersPopup.PlacementTarget = opener;
+        TranscriptFiltersPopup.IsOpen = !TranscriptFiltersPopup.IsOpen;
+    }
+
+    private void TranscriptFiltersPopup_Opened(object? sender, EventArgs e)
+    {
+        _transcriptFiltersFocusReturnTarget ??=
+            TranscriptFiltersPopup.PlacementTarget ?? Keyboard.FocusedElement ?? ArenaWorkspaceHeader.PrimaryAction;
+        ViewMenuPopup.IsOpen = false;
+        DebugMenuPopup.IsOpen = false;
+        ProviderReachability.ClosePopup();
+        _transcriptSearchCoordinator?.CloseSearch();
+        FocusOverlayEntry(TranscriptFiltersPopup, SelectedTranscriptTurnFilterEntry());
+    }
+
+    private void TranscriptFiltersPopup_Closed(object? sender, EventArgs e)
+    {
+        var returnTarget = TranscriptFiltersPopup.PlacementTarget ?? _transcriptFiltersFocusReturnTarget;
+        _transcriptFiltersFocusReturnTarget = null;
+        RestoreOverlayFocus(returnTarget, ArenaWorkspaceHeader.PrimaryAction, () => !TranscriptFiltersPopup.IsOpen);
+    }
+
+    private void TranscriptFiltersPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        ClosePopupOnEscape(TranscriptFiltersPopup, e);
+    }
+
+    internal static void ClosePopupOnEscape(Popup popup, KeyEventArgs e)
     {
         if (e.Key != Key.Escape || !popup.IsOpen)
         {
@@ -2625,6 +2706,98 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
         popup.IsOpen = false;
         e.Handled = true;
+    }
+
+    private void CurrentSetupTransferPopup_Opened(object? sender, EventArgs e)
+    {
+        _currentSetupTransferFocusReturnTarget ??= Keyboard.FocusedElement ?? CurrentSetupTransferButton;
+        FocusOverlayEntry(CurrentSetupTransferPopup, CopyCurrentSetupBriefButton);
+    }
+
+    private void CurrentSetupTransferPopup_Closed(object? sender, EventArgs e)
+    {
+        var returnTarget = _currentSetupTransferFocusReturnTarget;
+        _currentSetupTransferFocusReturnTarget = null;
+        RestoreOverlayFocus(returnTarget, CurrentSetupTransferButton, () => !CurrentSetupTransferPopup.IsOpen);
+    }
+
+    private void CurrentSetupTransferPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        ClosePopupOnEscape(CurrentSetupTransferPopup, e);
+    }
+
+    private void GenerationCopyPopup_Opened(object? sender, EventArgs e)
+    {
+        _generationCopyFocusReturnTarget ??= Keyboard.FocusedElement ?? GenerationCopyButton;
+        FocusOverlayEntry(GenerationCopyPopup, CopyGenerationSeedButton);
+    }
+
+    private void GenerationCopyPopup_Closed(object? sender, EventArgs e)
+    {
+        var returnTarget = _generationCopyFocusReturnTarget;
+        _generationCopyFocusReturnTarget = null;
+        RestoreOverlayFocus(returnTarget, GenerationCopyButton, () => !GenerationCopyPopup.IsOpen);
+    }
+
+    private void GenerationCopyPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        ClosePopupOnEscape(GenerationCopyPopup, e);
+    }
+
+    private void AgentComposerControlsPopup_Opened(object? sender, EventArgs e)
+    {
+        _agentComposerControlsFocusReturnTarget ??= Keyboard.FocusedElement ?? AgentComposerMenuButton;
+        FocusOverlayEntry(AgentComposerControlsPopup, AgentPlanPromptButton);
+    }
+
+    private void AgentComposerControlsPopup_Closed(object? sender, EventArgs e)
+    {
+        var returnTarget = _agentComposerControlsFocusReturnTarget;
+        _agentComposerControlsFocusReturnTarget = null;
+        RestoreOverlayFocus(returnTarget, AgentComposerMenuButton, () => !AgentComposerControlsPopup.IsOpen);
+    }
+
+    private void AgentComposerControlsPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        ClosePopupOnEscape(AgentComposerControlsPopup, e);
+    }
+
+    private void DiagnosticDetailPopup_Opened(object? sender, EventArgs e)
+    {
+        _diagnosticDetailFocusReturnTarget ??=
+            DiagnosticDetailPopup.PlacementTarget ?? Keyboard.FocusedElement ?? TranscriptDiagnosticsScroller;
+        FocusOverlayEntry(DiagnosticDetailPopup, DiagnosticDetailCloseButton);
+    }
+
+    private void DiagnosticDetailPopup_Closed(object? sender, EventArgs e)
+    {
+        var returnTarget = DiagnosticDetailPopup.PlacementTarget ?? _diagnosticDetailFocusReturnTarget;
+        _diagnosticDetailFocusReturnTarget = null;
+        RestoreOverlayFocus(returnTarget, TranscriptDiagnosticsScroller, () => !DiagnosticDetailPopup.IsOpen);
+    }
+
+    private void DiagnosticDetailPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        ClosePopupOnEscape(DiagnosticDetailPopup, e);
+    }
+
+    private void AgentPerformanceDetailPopup_Opened(object? sender, EventArgs e)
+    {
+        _agentPerformanceDetailFocusReturnTarget ??=
+            AgentPerformanceDetailPopup.PlacementTarget ?? Keyboard.FocusedElement ?? AgentPerformanceExpander;
+        FocusOverlayEntry(AgentPerformanceDetailPopup, AgentPerformanceDetailCloseButton);
+    }
+
+    private void AgentPerformanceDetailPopup_Closed(object? sender, EventArgs e)
+    {
+        var returnTarget = AgentPerformanceDetailPopup.PlacementTarget ?? _agentPerformanceDetailFocusReturnTarget;
+        _agentPerformanceDetailFocusReturnTarget = null;
+        RestoreOverlayFocus(returnTarget, AgentPerformanceExpander, () => !AgentPerformanceDetailPopup.IsOpen);
+    }
+
+    private void AgentPerformanceDetailPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        ClosePopupOnEscape(AgentPerformanceDetailPopup, e);
     }
 
     private void AgentComposerMenuButton_Click(object sender, RoutedEventArgs e)
@@ -3405,6 +3578,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         PopulateTranscript(snapshot.Messages);
         AgentBoard.Populate(snapshot, CurrentTurnAgent(snapshot)?.Id);
         PopulateCustomMatch(snapshot);
+        RefreshProviderModelsPresentationIfVisible();
         _collaborateCoordinator?.RefreshProviderState();
         _arenaEvaluationCoordinator?.RefreshAvailability();
         OperatorTurn.UpdatePrivateTargetSummary();
@@ -3510,6 +3684,12 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         if (_activeSession is null)
         {
             LoadStatus.Text = "No active session.";
+            return;
+        }
+
+        if (_lastRenderedSnapshot?.FactoryMode == true)
+        {
+            ArenaRunStatus.Text = "Decision Card generation is unavailable in Factory mode. Turn Apply Match Setup to models on to use narrator guidance.";
             return;
         }
 
@@ -3900,6 +4080,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void RightRailToggleButton_Click(object sender, RoutedEventArgs e)
     {
+        CloseNamedTransientShellFlyouts();
         if (_rightRailAutoCollapseActive)
         {
             if (_wpfSettings.RightRailCollapsed)
@@ -3937,6 +4118,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private bool ControlSetRightRail(string state)
     {
+        CloseNamedTransientShellFlyouts();
         var requested = AIArenaControlPlaneProtocol.NormalizeCommand(state);
         var collapsed = IsRightRailEffectivelyCollapsed(
             _wpfSettings.RightRailCollapsed,
@@ -4101,6 +4283,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             case Key.M when !shift:
                 MatchSetupButton_Click(MatchSetupButton, new RoutedEventArgs());
                 return true;
+            case Key.M when shift:
+                ModelsButton_Click(ModelsButton, new RoutedEventArgs());
+                return true;
             case Key.OemComma when !shift:
                 AppSettingsButton_Click(AppSettingsButton, new RoutedEventArgs());
                 return true;
@@ -4166,6 +4351,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             return;
         }
 
+        CloseNamedTransientShellFlyouts();
         Dispatcher.BeginInvoke(new Action(OpenShortcutsOverlay), DispatcherPriority.Background);
     }
 
@@ -4219,6 +4405,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         ("Ctrl+K", "Open the command palette"),
         ("Ctrl+F", "Search the transcript"),
         ("Ctrl+M", "Open or close Match Setup"),
+        ("Ctrl+Shift+M", "Open or close Models and assignments"),
         ("Ctrl+Enter", "Run one arena turn"),
         ("Ctrl+E", "Export the transcript"),
         ("Ctrl+,", "Open App Settings"),
@@ -4248,6 +4435,12 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             return true;
         }
 
+        if (TranscriptFiltersPopup.IsOpen)
+        {
+            TranscriptFiltersPopup.IsOpen = false;
+            return true;
+        }
+
         if (DebugMenuPopup.IsOpen)
         {
             DebugMenuPopup.IsOpen = false;
@@ -4260,18 +4453,54 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             return true;
         }
 
+        if (CurrentSetupTransferPopup.IsOpen)
+        {
+            CurrentSetupTransferPopup.IsOpen = false;
+            return true;
+        }
+
+        if (GenerationCopyPopup.IsOpen)
+        {
+            GenerationCopyPopup.IsOpen = false;
+            return true;
+        }
+
+        if (AgentComposerControlsPopup.IsOpen)
+        {
+            AgentComposerControlsPopup.IsOpen = false;
+            return true;
+        }
+
+        if (DiagnosticDetailPopup.IsOpen)
+        {
+            DiagnosticsWorkflow.CloseDetail();
+            return true;
+        }
+
+        if (AgentPerformanceDetailPopup.IsOpen)
+        {
+            AgentPerformance.CloseDetail();
+            return true;
+        }
+
         if (CustomMatchPanel.Visibility == Visibility.Visible)
         {
             CloseMatchSetupFlyout();
             return true;
         }
 
+        if (ProviderModelsPanel.Visibility == Visibility.Visible)
+        {
+            CloseProviderModelsPanel();
+            return true;
+        }
+
         return false;
     }
 
-    private void FocusOverlayEntry(Popup popup, UIElement entry)
+    internal static void FocusOverlayEntry(Popup popup, UIElement entry)
     {
-        Dispatcher.BeginInvoke(() =>
+        popup.Dispatcher.BeginInvoke(() =>
         {
             if (popup.IsOpen && entry.IsVisible && entry.IsEnabled)
             {
@@ -4280,14 +4509,26 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }, DispatcherPriority.Input);
     }
 
-    private void RestoreOverlayFocus(
+    internal static void RestoreOverlayFocus(
         IInputElement? preferredTarget,
         UIElement fallbackTarget,
         Func<bool> overlayRemainsClosed)
     {
-        Dispatcher.BeginInvoke(() =>
+        fallbackTarget.Dispatcher.BeginInvoke(() =>
         {
             if (!overlayRemainsClosed())
+            {
+                return;
+            }
+
+            if (Keyboard.FocusedElement is UIElement
+                {
+                    IsVisible: true,
+                    IsEnabled: true,
+                    Focusable: true
+                } activeElement
+                && !ReferenceEquals(activeElement, preferredTarget)
+                && !ReferenceEquals(activeElement, fallbackTarget))
             {
                 return;
             }
@@ -5252,12 +5493,17 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         var opening = CustomMatchPanel.Visibility != Visibility.Visible;
         if (opening)
         {
-            _matchSetupReturnSurface = _activeShellSurface == ShellSurface.MatchSetup
-                ? ShellSurface.Lab
-                : _activeShellSurface;
+            _matchSetupReturnSurface = _activeShellSurface switch
+            {
+                ShellSurface.MatchSetup => ShellSurface.Lab,
+                ShellSurface.Models => _providerModelsReturnSurface,
+                _ => _activeShellSurface
+            };
             _matchSetupFocusReturnTarget = Keyboard.FocusedElement ?? MatchSetupButton;
         }
 
+        _providerModelsFocusReturnTarget = null;
+        _providerModelsReturnSurface = ShellSurface.Lab;
         ShellNavigation.ShowCustomMatchPanel();
         _activeShellSurface = ShellSurface.MatchSetup;
         ApplyShellCommandState(_activeShellSurface);
@@ -5299,6 +5545,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         _transcriptSearchCoordinator?.CloseSearch();
         ViewMenuPopup.IsOpen = false;
         DebugMenuPopup.IsOpen = false;
+        TranscriptFiltersPopup.IsOpen = false;
+        CurrentSetupTransferPopup.IsOpen = false;
+        GenerationCopyPopup.IsOpen = false;
         _diagnosticsWorkflowCoordinator?.CloseDetail();
         GenerationHelpPopup.IsOpen = false;
         AgentComposerControlsPopup.IsOpen = false;
@@ -5347,6 +5596,12 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void ShowExperimentLabPanel()
     {
+        if (!IsExperimentLabEnabled(_wpfSettings))
+        {
+            ApplyExperimentLabVisibility();
+            return;
+        }
+
         var previousSurface = _activeShellSurface;
         ShellNavigation.ShowExperimentLabPanel();
         _activeShellSurface = ShellSurface.ExperimentLab;
@@ -5393,6 +5648,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         var returnTarget = _matchSetupFocusReturnTarget;
         _matchSetupFocusReturnTarget = null;
         _matchSetupReturnSurface = ShellSurface.Lab;
+        CurrentSetupTransferPopup.IsOpen = false;
+        GenerationCopyPopup.IsOpen = false;
 
         switch (returnSurface)
         {
@@ -5405,7 +5662,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             case ShellSurface.Collaborate:
                 ShowCollaboratePanel();
                 break;
-            case ShellSurface.ExperimentLab:
+            case ShellSurface.ExperimentLab when IsExperimentLabEnabled(_wpfSettings):
                 ShowExperimentLabPanel();
                 break;
             default:
@@ -5459,6 +5716,10 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         // this is where navigation is announced. Callers set _activeShellSurface
         // before calling, which is what SelectedControlPlaneView reads.
         PublishNavigationChanged();
+        if (surface != ShellSurface.Lab)
+        {
+            TranscriptFiltersPopup.IsOpen = false;
+        }
 
         // Match Setup replaces the center canvas, but remains part of the Lab
         // workspace. Its command state deliberately mirrors Lab so opening setup
@@ -5467,6 +5728,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         SetMatchSetupButtonState(
             state.ShowMatchSetup,
             open: surface == ShellSurface.MatchSetup && state.ShowMatchSetup);
+        SetModelsButtonState(
+            state.ShowModels,
+            open: surface == ShellSurface.Models && state.ShowModels);
         SearchCommandHost.Visibility = state.ShowSearch ? Visibility.Visible : Visibility.Collapsed;
         ExportTranscriptBottomButton.Visibility = state.ShowExport ? Visibility.Visible : Visibility.Collapsed;
         ViewMenuHost.Visibility = state.ShowView ? Visibility.Visible : Visibility.Collapsed;
@@ -5506,7 +5770,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void ResetRightRailAfterSurfaceChange(ShellSurface previousSurface)
     {
-        if (previousSurface == _activeShellSurface || previousSurface == ShellSurface.MatchSetup)
+        if (previousSurface == _activeShellSurface
+            || previousSurface is ShellSurface.MatchSetup or ShellSurface.Models)
         {
             return;
         }
@@ -5530,6 +5795,28 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         AutomationProperties.SetHelpText(
             MatchSetupButton,
             open ? "Close the Match Setup flyout." : "Open the Match Setup flyout.");
+    }
+
+    private void SetModelsButtonState(bool visible, bool open)
+    {
+        ModelsButton.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        // Keep the visible label stable so the top rail never reflows when the
+        // surface opens. UIA and the selected chrome still expose the toggle.
+        ModelsButton.Content = "Models";
+        ModelsButton.ToolTip = open ? "Close Models" : "Open Models";
+        AutomationProperties.SetName(ModelsButton, open ? "Close Models" : "Open Models");
+        AutomationProperties.SetHelpText(
+            ModelsButton,
+            open
+                ? "Close model catalog and agent assignments."
+                : "Open model catalog and agent assignments.");
+        AutomationProperties.SetItemStatus(ModelsButton, open ? "open" : "closed");
+        ModelsButton.SetResourceReference(
+            Control.BackgroundProperty,
+            open ? "NavActiveBrush" : "InputBrush");
+        ModelsButton.SetResourceReference(
+            Control.BorderBrushProperty,
+            open ? "PrimaryBorderBrush" : "DisabledBorderBrush");
     }
 
     private void SetSearchContext(ShellSearchSurface surface, string placeholder, string tooltip)
@@ -5696,6 +5983,18 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         Dispatcher.BeginInvoke(() => TranscriptItems.ScrollToTop(), DispatcherPriority.Background);
     }
 
+    private void ResetTranscriptFiltersButton_Click(object sender, RoutedEventArgs e)
+    {
+        ClearTranscriptFilters();
+        SelectedTranscriptTurnFilterEntry().Focus();
+    }
+
+    private UIElement SelectedTranscriptTurnFilterEntry() =>
+        TranscriptTurnFilterPicker.SelectedItem as UIElement ?? TranscriptTurnFilterPicker;
+
+    private void TranscriptTurnFilter_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        TranscriptFilter_Changed(sender, e);
+
     private void TranscriptFilter_Changed(object sender, RoutedEventArgs e)
     {
         if (_transcriptSearchCoordinator is null || TranscriptItems is null)
@@ -5752,6 +6051,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         ProviderReachability.ClosePopup();
         ViewMenuPopup.IsOpen = false;
         DebugMenuPopup.IsOpen = false;
+        TranscriptFiltersPopup.IsOpen = false;
         _transcriptSearchCoordinator?.ToggleSearch();
     }
 
@@ -5780,6 +6080,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         _transcriptSearchCoordinator?.CloseSearch();
         ViewMenuPopup.IsOpen = false;
         DebugMenuPopup.IsOpen = false;
+        TranscriptFiltersPopup.IsOpen = false;
         ProviderReachability.ShowPopup();
     }
 
@@ -5908,6 +6209,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             _settingsFocusReturnTarget ??= Keyboard.FocusedElement ?? AppSettingsButton;
             ViewMenuPopup.IsOpen = false;
             DebugMenuPopup.IsOpen = false;
+            TranscriptFiltersPopup.IsOpen = false;
             ProviderReachability.ClosePopup();
             _transcriptSearchCoordinator?.CloseSearch();
             Dispatcher.BeginInvoke(() =>
@@ -5950,6 +6252,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     {
         _transcriptSearchCoordinator?.CloseSearch();
         ProviderReachability.ClosePopup();
+        TranscriptFiltersPopup.IsOpen = false;
         if (!_userGuideWindowHost.Show(this))
         {
             LoadStatus.Text = "User guide not found.";
@@ -6202,6 +6505,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     {
         _transcriptViewCoordinator?.OnVisualSettingsChanged();
         ApplyWorldDebugVisibility(persistIfForcedOff: true);
+        ApplyExperimentLabVisibility();
         ApplyAgentWorkspaceVisibility();
         await RefreshControlPlaneHostAsync();
     }
@@ -6267,6 +6571,25 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     internal static bool IsAgentWorkspaceEnabled(WpfSettings settings)
     {
         return settings.ShowAgentWorkspace;
+    }
+
+    internal static bool IsExperimentLabEnabled(WpfSettings settings)
+    {
+        return settings.AllowDebugControls;
+    }
+
+    private void ApplyExperimentLabVisibility()
+    {
+        var enabled = IsExperimentLabEnabled(_wpfSettings);
+        ExperimentLabNavButton.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+
+        if (!enabled && ExperimentLabPanel.Visibility == Visibility.Visible)
+        {
+            ShowTranscriptPanel(clearFilters: false);
+            return;
+        }
+
+        ShellNavigation.UpdateNavigationTheme();
     }
 
     private void ApplyAgentWorkspaceVisibility()
@@ -6642,4 +6965,86 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         return trimmed.Length <= 28 ? trimmed : string.Concat(trimmed.AsSpan(0, 25), "...");
     }
 
+}
+
+public sealed class ShellPopupSurface : Border
+{
+    protected override AutomationPeer OnCreateAutomationPeer() => new ShellPopupSurfaceAutomationPeer(this);
+
+    private sealed class ShellPopupSurfaceAutomationPeer(ShellPopupSurface owner)
+        : FrameworkElementAutomationPeer(owner)
+    {
+        protected override string GetClassNameCore() => nameof(ShellPopupSurface);
+
+        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Group;
+
+        protected override bool IsControlElementCore() => true;
+
+        protected override bool IsContentElementCore() => true;
+    }
+}
+
+public sealed class ShellPopupOpenerCard : Border
+{
+    public event EventHandler? Invoked;
+
+    protected override AutomationPeer OnCreateAutomationPeer() => new ShellPopupOpenerCardAutomationPeer(this);
+
+    protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonUp(e);
+        if (e.Handled || !IsEnabled)
+        {
+            return;
+        }
+
+        Focus();
+        RaiseInvoked();
+        e.Handled = true;
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.Handled || !IsEnabled || e.Key is not (Key.Enter or Key.Return or Key.Space))
+        {
+            return;
+        }
+
+        RaiseInvoked();
+        e.Handled = true;
+    }
+
+    private void RaiseInvoked()
+    {
+        if (IsEnabled)
+        {
+            Invoked?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private sealed class ShellPopupOpenerCardAutomationPeer(ShellPopupOpenerCard owner)
+        : FrameworkElementAutomationPeer(owner), IInvokeProvider
+    {
+        protected override string GetClassNameCore() => nameof(ShellPopupOpenerCard);
+
+        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Button;
+
+        protected override bool IsControlElementCore() => true;
+
+        protected override bool IsContentElementCore() => true;
+
+        public override object? GetPattern(PatternInterface patternInterface) =>
+            patternInterface == PatternInterface.Invoke ? this : base.GetPattern(patternInterface);
+
+        void IInvokeProvider.Invoke()
+        {
+            if (!owner.IsEnabled)
+            {
+                throw new ElementNotEnabledException();
+            }
+
+            owner.Dispatcher.BeginInvoke(owner.RaiseInvoked, DispatcherPriority.Input);
+        }
+    }
 }

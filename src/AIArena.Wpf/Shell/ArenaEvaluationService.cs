@@ -49,7 +49,12 @@ internal sealed record ArenaEvaluationEvidenceCounts(
     int TimeToFirstTokenSamples,
     int VoiceStyleSamples,
     int DiscourseTurns,
-    int InternetEvidenceTurns);
+    int InternetEvidenceTurns)
+{
+    public int ArenaPromptModeTurns { get; init; }
+
+    public int FactoryPromptModeTurns { get; init; }
+}
 
 internal sealed record ArenaEvaluationMetrics(
     double? SuccessRatePercent,
@@ -75,6 +80,14 @@ internal sealed record ArenaEvaluationModelAggregate(
     double? AverageGeneratedTokens,
     double? AverageTokensPerSecond);
 
+internal sealed record ArenaFactoryGroupContextEvidence(
+    string Contract,
+    string ContextFingerprint,
+    int CausalSampleCount,
+    int IncludedEntryCount,
+    int EligibleEntryCount,
+    int OmittedEntryCount);
+
 internal sealed record ArenaEvaluationRecord(
     string Schema,
     string RunId,
@@ -87,7 +100,10 @@ internal sealed record ArenaEvaluationRecord(
     string PortableSetupJson,
     ArenaEvaluationEvidenceCounts Evidence,
     ArenaEvaluationMetrics Metrics,
-    IReadOnlyList<ArenaEvaluationModelAggregate> Models);
+    IReadOnlyList<ArenaEvaluationModelAggregate> Models)
+{
+    public ArenaFactoryGroupContextEvidence? FactoryGroupContext { get; init; }
+}
 
 internal sealed record ArenaEvaluationMetricComparison(
     string Id,
@@ -150,7 +166,10 @@ internal sealed record ArenaEvaluationEvidenceExport(
     bool InternetEnabled,
     ArenaEvaluationEvidenceCounts Evidence,
     ArenaEvaluationMetrics Metrics,
-    IReadOnlyList<ArenaEvaluationModelAggregate> Models);
+    IReadOnlyList<ArenaEvaluationModelAggregate> Models)
+{
+    public ArenaFactoryGroupContextEvidence? FactoryGroupContext { get; init; }
+}
 
 /// <summary>
 /// Produces local, aggregate run evidence without retaining transcript bodies,
@@ -222,6 +241,25 @@ internal sealed class ArenaEvaluationService
         var modelMessages = messages
             .Where(message => HasModelEvidence(message, providerBackedSpeakerIds))
             .ToArray();
+        var factoryModelMessages = snapshot.Engine.Messages
+            .Select((message, index) => (Message: message, Index: index))
+            .Where(item => HasModelEvidence(item.Message, providerBackedSpeakerIds)
+                && IsFactoryPromptMode(item.Message))
+            .OrderBy(item => item.Message.Turn)
+            .ThenBy(item => item.Message.CreatedAt)
+            .ThenBy(item => item.Index)
+            .Select(item => item.Message)
+            .ToArray();
+        var factoryPromptModeTurns = Math.Clamp(
+            factoryModelMessages.Length,
+            0,
+            modelMessages.Length);
+        var arenaPromptModeTurns = Math.Max(0, modelMessages.Length - factoryPromptModeTurns);
+        var factoryGroupContext = CaptureFactoryGroupContext(
+            snapshot,
+            factoryModelMessages,
+            snapshot.Engine.FactoryMode || factoryPromptModeTurns > 0);
+        var matchSetupQualityAvailable = !snapshot.Engine.FactoryMode && factoryPromptModeTurns == 0;
         var successfulModelMessages = modelMessages.Where(IsSuccessful).ToArray();
         var failedModelMessages = modelMessages.Where(IsError).ToArray();
         var transcriptErrors = messages.Count(IsError);
@@ -243,10 +281,16 @@ internal sealed class ArenaEvaluationService
             .Select(message => (Message: message, Diagnostic: voiceStyleAdherence.Analyze(message.VoiceStyle, message.Text)))
             .Where(item => !item.Diagnostic.State.Equals("none", StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        var discourseTurns = messages.Count(message =>
-            !message.SpeakerId.Equals("system", StringComparison.OrdinalIgnoreCase)
-            && !message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase)
-            && message.Kind is "message" or "" or "internet");
+        if (!matchSetupQualityAvailable)
+        {
+            voiceSamples = [];
+        }
+
+        // Failed provider records and system/tool cards are durable runtime
+        // evidence, not model discourse. Keep them in failure counts while
+        // preventing their diagnostic text from becoming fabricated quality.
+        var discourseMessages = messages.Where(IsDiscourseEvidence).ToArray();
+        var discourseTurns = discourseMessages.Length;
         var internetEvidenceTurns = messages.Count(message =>
             message.InternetSources.Count > 0
             || message.Kind.StartsWith("internet", StringComparison.OrdinalIgnoreCase));
@@ -262,9 +306,11 @@ internal sealed class ArenaEvaluationService
             .GroupBy(agent => agent.Id, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First().Persona ?? "", StringComparer.OrdinalIgnoreCase);
         var diagnostics = discourseDiagnostics.Analyze(
-            messages.Select(DiagnosticsWorkflowCoordinator.ToDiscourseTurn),
+            discourseMessages.Select(DiagnosticsWorkflowCoordinator.ToDiscourseTurn),
             personas);
-        var battleReview = TranscriptAdjunctCoordinator.BuildBattleReview(messages, diagnostics);
+        var battleReviewScore = matchSetupQualityAvailable && discourseTurns > 0
+            ? TranscriptAdjunctCoordinator.BuildBattleReview(discourseMessages, diagnostics).Score
+            : (int?)null;
 
         var evidence = new ArenaEvaluationEvidenceCounts(
             messages.Length,
@@ -280,24 +326,34 @@ internal sealed class ArenaEvaluationService
             timeToFirstTokenSamples.Length,
             voiceSamples.Length,
             discourseTurns,
-            internetEvidenceTurns);
+            internetEvidenceTurns)
+        {
+            ArenaPromptModeTurns = arenaPromptModeTurns,
+            FactoryPromptModeTurns = factoryPromptModeTurns
+        };
         var metrics = new ArenaEvaluationMetrics(
             modelMessages.Length == 0
                 ? null
                 : Round(successfulModelMessages.Length * 100d / modelMessages.Length),
-            discourseTurns == 0 ? null : battleReview.Score,
+            battleReviewScore,
             AverageOrNull(latencySamples.Select(message => (double)message.LatencyMs)),
             Percentile95OrNull(latencySamples.Select(message => message.LatencyMs)),
             AverageOrNull(usageSamples.Select(tokens => (double)tokens)),
             AverageOrNull(throughputSamples.Select(message => message.TokensPerSecond)),
             AverageOrNull(voiceSamples.Select(item => (double)item.Diagnostic.Score)),
             discourseTurns == 0 ? null : diagnostics.ConsensusPercent,
-            discourseTurns == 0 ? null : diagnostics.RoleDriftPercent,
+            !matchSetupQualityAvailable || discourseTurns == 0 ? null : diagnostics.RoleDriftPercent,
             discourseTurns == 0 ? null : diagnostics.UnsupportedClaimCount,
             discourseTurns == 0 ? null : diagnostics.EvidencePressureScore,
             discourseTurns == 0 ? null : diagnostics.NarrativeHeatScore);
         var models = BuildModelAggregates(modelMessages);
-        var runFingerprint = RunFingerprint(exactSetupFingerprint, snapshot.Engine.Internet.UseInternet, evidence, metrics, models);
+        var runFingerprint = RunFingerprint(
+            exactSetupFingerprint,
+            snapshot.Engine.Internet.UseInternet,
+            evidence,
+            metrics,
+            models,
+            factoryGroupContext);
 
         return new ArenaEvaluationRecord(
             ArenaEvaluationSchemas.Evaluation,
@@ -311,7 +367,10 @@ internal sealed class ArenaEvaluationService
             portableSetupJson,
             evidence,
             metrics,
-            models);
+            models)
+        {
+            FactoryGroupContext = factoryGroupContext
+        };
     }
 
     public ArenaEvaluationComparison Compare(
@@ -334,6 +393,15 @@ internal sealed class ArenaEvaluationService
                 baseline.RunId,
                 candidate.RunId,
                 "Runs use different model-neutral Match Setup fingerprints and were not compared.");
+        }
+
+        if (FactoryGroupComparisonBlocker(baseline, candidate) is { } contextBlocker)
+        {
+            return EmptyComparison(
+                contextBlocker.Status,
+                baseline.RunId,
+                candidate.RunId,
+                contextBlocker.Summary);
         }
 
         var metrics = new List<ArenaEvaluationMetricComparison>
@@ -464,6 +532,36 @@ internal sealed class ArenaEvaluationService
                 : "The replay package is unavailable, invalid, or does not match the exact setup fingerprint.",
             packageMatches ? $"{Encoding.UTF8.GetByteCount(candidate.PortableSetupJson):N0} UTF-8 bytes" : "no valid replay evidence"));
 
+        var factoryGroupRequired = packageParse.Package?.Setup.FactoryMode == true
+            || candidate.Evidence.FactoryPromptModeTurns > 0
+            || candidate.FactoryGroupContext is not null;
+        var factoryGroupValid = IsValidFactoryGroupContext(
+            candidate.FactoryGroupContext,
+            candidate.Evidence.FactoryPromptModeTurns);
+        var factoryGroupMissing = candidate.FactoryGroupContext is null
+            || string.IsNullOrWhiteSpace(candidate.FactoryGroupContext.ContextFingerprint);
+        var factoryGroupStatus = !factoryGroupRequired
+            ? ArenaQaGateStatuses.Unavailable
+            : factoryGroupValid
+                ? ArenaQaGateStatuses.Pass
+                : factoryGroupMissing
+                    ? ArenaQaGateStatuses.Unavailable
+                    : ArenaQaGateStatuses.Fail;
+        gates.Add(Gate(
+            "factory.group-context",
+            factoryGroupStatus,
+            required: factoryGroupRequired,
+            factoryGroupStatus switch
+            {
+                ArenaQaGateStatuses.Pass => "Factory public-group context has a valid privacy-safe identity and bounded entry counts.",
+                ArenaQaGateStatuses.Fail => "Factory public-group context evidence is malformed or uses an unsupported prompt contract.",
+                _ when factoryGroupRequired => "Factory public-group context identity is unavailable; no repeatability claim is made.",
+                _ => "This Arena-only run does not require Factory public-group context evidence."
+            },
+            candidate.FactoryGroupContext is { } group
+                ? $"{group.CausalSampleCount} causal prompt sample(s); latest context {group.IncludedEntryCount}/{group.EligibleEntryCount} included; {group.OmittedEntryCount} omitted; contract {SafeLabel(group.Contract, "unavailable")}"
+                : "no Factory group context evidence"));
+
         var minimumTurnStatus = candidate.Evidence.ModelTurns == 0
             ? ArenaQaGateStatuses.Unavailable
             : candidate.Evidence.ModelTurns >= minimumTurns
@@ -544,7 +642,11 @@ internal sealed class ArenaEvaluationService
             candidate.Evidence.SuccessfulModelTurns,
             required: true));
 
-        var qualityStatus = candidate.Evidence.DiscourseTurns == 0
+        var matchSetupQualityUnavailable = packageParse.Package?.Setup.FactoryMode == true
+            || candidate.Evidence.FactoryPromptModeTurns > 0;
+        var qualityStatus = matchSetupQualityUnavailable
+            || candidate.Metrics.BattleReviewScore is null
+            || candidate.Evidence.DiscourseTurns == 0
             ? ArenaQaGateStatuses.Unavailable
             : candidate.Evidence.DiscourseTurns < minimumTurns
                 ? ArenaQaGateStatuses.Warn
@@ -552,14 +654,15 @@ internal sealed class ArenaEvaluationService
         gates.Add(Gate(
             "quality.sample",
             qualityStatus,
-            required: true,
+            required: !matchSetupQualityUnavailable,
             qualityStatus switch
             {
                 ArenaQaGateStatuses.Pass => "The Battle Review score has a multi-turn discourse sample.",
                 ArenaQaGateStatuses.Warn => "A quality score exists, but its discourse sample is smaller than the configured minimum.",
-                _ => "No discourse evidence is available; no quality claim is made."
+                _ when matchSetupQualityUnavailable => "Factory or mixed prompt modes do not apply Match Setup behavior; no Battle Review, role-drift, or voice-style claim is made.",
+                _ => "No successful participant discourse evidence is available; no quality claim is made."
             },
-            $"{candidate.Evidence.DiscourseTurns}/{minimumTurns} discourse turn(s)"));
+            $"{candidate.Evidence.DiscourseTurns}/{minimumTurns} discourse turn(s); {candidate.Evidence.FactoryPromptModeTurns} Factory turn(s)"));
 
         var internetStatus = !candidate.InternetEnabled || candidate.Evidence.InternetEvidenceTurns == 0
             ? ArenaQaGateStatuses.Unavailable
@@ -595,14 +698,29 @@ internal sealed class ArenaEvaluationService
             var comparison = Compare(baseline, candidate);
             var comparable = comparison.Status is not ArenaEvaluationStatuses.NotComparable
                 and not ArenaEvaluationStatuses.Unavailable;
+            var comparabilityStatus = comparable
+                ? ArenaQaGateStatuses.Pass
+                : comparison.Status == ArenaEvaluationStatuses.Unavailable
+                    ? ArenaQaGateStatuses.Unavailable
+                    : ArenaQaGateStatuses.Fail;
             gates.Add(Gate(
                 "baseline.comparable",
-                comparable ? ArenaQaGateStatuses.Pass : ArenaQaGateStatuses.Fail,
+                comparabilityStatus,
                 required: true,
                 comparable
-                    ? "Baseline and candidate share the model-neutral Match Setup fingerprint."
-                    : "Baseline and candidate do not share a comparable model-neutral setup.",
-                comparable ? "scenario fingerprints match" : "scenario fingerprints differ"));
+                    ? factoryGroupRequired
+                        ? "Baseline and candidate share the model-neutral Match Setup and Factory public-group context fingerprints."
+                        : "Baseline and candidate share the model-neutral Match Setup fingerprint."
+                    : comparison.Status == ArenaEvaluationStatuses.Unavailable
+                        ? "Baseline comparability evidence is unavailable; no setup or Factory group equivalence claim is made."
+                        : factoryGroupRequired
+                        ? "Baseline and candidate do not share comparable setup and Factory public-group context evidence."
+                        : "Baseline and candidate do not share a comparable model-neutral setup.",
+                comparable
+                    ? factoryGroupRequired ? "scenario and Factory context fingerprints match" : "scenario fingerprints match"
+                    : comparison.Status == ArenaEvaluationStatuses.Unavailable
+                        ? "required comparison identity unavailable"
+                        : factoryGroupRequired ? "scenario or Factory context fingerprints differ" : "scenario fingerprints differ"));
             var regressionStatus = comparison.Status switch
             {
                 ArenaEvaluationStatuses.Regressed => ArenaQaGateStatuses.Fail,
@@ -676,7 +794,10 @@ internal sealed class ArenaEvaluationService
             evaluation.InternetEnabled,
             evaluation.Evidence,
             evaluation.Metrics,
-            evaluation.Models);
+            evaluation.Models)
+        {
+            FactoryGroupContext = evaluation.FactoryGroupContext
+        };
     }
 
     internal ArenaEvaluationRecord? NormalizeForStorage(ArenaEvaluationRecord? evaluation)
@@ -704,6 +825,22 @@ internal sealed class ArenaEvaluationService
 
         var evidence = NormalizeEvidence(evaluation.Evidence);
         var metrics = NormalizeMetrics(evaluation.Metrics);
+        var factoryGroupRequired = package.Setup.FactoryMode
+            || evidence.FactoryPromptModeTurns > 0
+            || evaluation.FactoryGroupContext is not null;
+        if (!TryNormalizeFactoryGroupContext(
+                evaluation.FactoryGroupContext,
+                factoryGroupRequired,
+                evidence.FactoryPromptModeTurns,
+                out var factoryGroupContext))
+        {
+            return null;
+        }
+        if (package.Setup.FactoryMode || evidence.FactoryPromptModeTurns > 0)
+        {
+            evidence = evidence with { VoiceStyleSamples = 0 };
+            metrics = WithoutMatchSetupQuality(metrics);
+        }
         var models = evaluation.Models
             .Where(model => model is not null)
             .Select(NormalizeModel)
@@ -718,7 +855,8 @@ internal sealed class ArenaEvaluationService
             evaluation.InternetEnabled,
             evidence,
             metrics,
-            models);
+            models,
+            factoryGroupContext);
         var captureTime = evaluation.CapturedAt == default ? DateTimeOffset.UnixEpoch : evaluation.CapturedAt;
         return new ArenaEvaluationRecord(
             ArenaEvaluationSchemas.Evaluation,
@@ -732,7 +870,10 @@ internal sealed class ArenaEvaluationService
             portableSetupJson,
             evidence,
             metrics,
-            models);
+            models)
+        {
+            FactoryGroupContext = factoryGroupContext
+        };
     }
 
     private static string ModelNeutralSetupFingerprint(MatchSetupPackage package)
@@ -770,6 +911,231 @@ internal sealed class ArenaEvaluationService
 
         return alias;
     }
+
+    private static ArenaFactoryGroupContextEvidence? CaptureFactoryGroupContext(
+        ArenaSnapshot snapshot,
+        IReadOnlyList<DialogueMessage> factoryModelMessages,
+        bool required)
+    {
+        var inspection = new FactoryConversationService().Inspect(snapshot);
+        if (!required && !inspection.IsAnchored)
+        {
+            return null;
+        }
+
+        var groupAvailable = inspection.IsAnchored
+            && inspection.HasUsableRoot
+            && !inspection.IsOrphaned
+            && IsFingerprint(inspection.ContextFingerprint);
+        if (!groupAvailable)
+        {
+            return MissingFactoryGroupContext();
+        }
+
+        if (factoryModelMessages.Count == 0)
+        {
+            return new ArenaFactoryGroupContextEvidence(
+                FactoryConversationService.ContractVersion,
+                inspection.ContextFingerprint,
+                0,
+                inspection.IncludedEntryCount,
+                inspection.EligibleEntryCount,
+                inspection.OmittedEntryCount);
+        }
+
+        var observations = new List<FactoryCausalContextObservation>(factoryModelMessages.Count);
+        foreach (var message in factoryModelMessages)
+        {
+            var contract = MetadataString(message, FactoryConversationService.ContractMetadataKey);
+            var fingerprint = MetadataString(message, FactoryConversationService.ContextFingerprintMetadataKey)
+                .Trim()
+                .ToLowerInvariant();
+            var included = MetadataInteger(message, FactoryConversationService.ContextEntryCountMetadataKey);
+            var omitted = MetadataInteger(message, FactoryConversationService.ContextOmittedCountMetadataKey);
+            if (!contract.Equals(FactoryConversationService.ContractVersion, StringComparison.Ordinal)
+                || !IsFingerprint(fingerprint)
+                || included is null or < 1 or > FactoryConversationService.MaxContextEntries
+                || omitted is null or < 0)
+            {
+                return MissingFactoryGroupContext();
+            }
+
+            observations.Add(new FactoryCausalContextObservation(
+                message.SpeakerId.Trim().ToLowerInvariant(),
+                fingerprint,
+                included.Value,
+                omitted.Value));
+        }
+
+        var canonical = new StringBuilder()
+            .Append(FactoryConversationService.ContractVersion).Append('\n')
+            .Append("causal_context_profile_v1").Append('\n')
+            .Append(observations.Count).Append('\n');
+        foreach (var observation in observations)
+        {
+            canonical
+                .Append(observation.SpeakerId).Append('\n')
+                .Append(observation.ContextFingerprint).Append('\n')
+                .Append(observation.IncludedEntryCount).Append('|')
+                .Append(observation.OmittedEntryCount).Append('\n');
+        }
+
+        var aggregateFingerprint = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())))
+            .ToLowerInvariant();
+        var latest = observations[^1];
+        return new ArenaFactoryGroupContextEvidence(
+            FactoryConversationService.ContractVersion,
+            aggregateFingerprint,
+            observations.Count,
+            latest.IncludedEntryCount,
+            latest.IncludedEntryCount + latest.OmittedEntryCount,
+            latest.OmittedEntryCount);
+    }
+
+    private static ArenaFactoryGroupContextEvidence MissingFactoryGroupContext() => new(
+        FactoryConversationService.ContractVersion,
+        "",
+        0,
+        0,
+        0,
+        0);
+
+    private static string MetadataString(DialogueMessage message, string key)
+    {
+        return message.Metadata.TryGetValue(key, out var value)
+            && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? ""
+            : "";
+    }
+
+    private static int? MetadataInteger(DialogueMessage message, string key)
+    {
+        return message.Metadata.TryGetValue(key, out var value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetInt32(out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static FactoryGroupComparisonRestriction? FactoryGroupComparisonBlocker(
+        ArenaEvaluationRecord baseline,
+        ArenaEvaluationRecord candidate)
+    {
+        var required = baseline.FactoryGroupContext is not null
+            || candidate.FactoryGroupContext is not null
+            || baseline.Evidence.FactoryPromptModeTurns > 0
+            || candidate.Evidence.FactoryPromptModeTurns > 0
+            || PortableSetupUsesFactoryMode(baseline.PortableSetupJson)
+            || PortableSetupUsesFactoryMode(candidate.PortableSetupJson);
+        if (!required)
+        {
+            return null;
+        }
+
+        if (!IsValidFactoryGroupContext(
+                baseline.FactoryGroupContext,
+                baseline.Evidence.FactoryPromptModeTurns)
+            || !IsValidFactoryGroupContext(
+                candidate.FactoryGroupContext,
+                candidate.Evidence.FactoryPromptModeTurns))
+        {
+            return new FactoryGroupComparisonRestriction(
+                ArenaEvaluationStatuses.Unavailable,
+                "Factory or mixed-mode runs require valid privacy-safe public-group context evidence in both runs; comparison evidence is unavailable.");
+        }
+
+        if (!baseline.FactoryGroupContext!.ContextFingerprint.Equals(
+                candidate.FactoryGroupContext!.ContextFingerprint,
+                StringComparison.Ordinal)
+            || baseline.FactoryGroupContext.CausalSampleCount != candidate.FactoryGroupContext.CausalSampleCount
+            || baseline.FactoryGroupContext.IncludedEntryCount != candidate.FactoryGroupContext.IncludedEntryCount
+            || baseline.FactoryGroupContext.EligibleEntryCount != candidate.FactoryGroupContext.EligibleEntryCount
+            || baseline.FactoryGroupContext.OmittedEntryCount != candidate.FactoryGroupContext.OmittedEntryCount)
+        {
+            return new FactoryGroupComparisonRestriction(
+                ArenaEvaluationStatuses.NotComparable,
+                "Runs use different Factory public-group context fingerprints and were not compared.");
+        }
+
+        return null;
+    }
+
+    private static bool PortableSetupUsesFactoryMode(string json)
+    {
+        var parsed = MatchSetupPackageCodec.Parse(json);
+        return parsed.Ok && parsed.Package?.Setup.FactoryMode == true;
+    }
+
+    private static bool IsValidFactoryGroupContext(
+        ArenaFactoryGroupContextEvidence? context,
+        int expectedCausalSamples)
+    {
+        return context is not null
+            && context.Contract.Equals(FactoryConversationService.ContractVersion, StringComparison.Ordinal)
+            && IsFingerprint(context.ContextFingerprint)
+            && context.CausalSampleCount == Math.Max(0, expectedCausalSamples)
+            && context.IncludedEntryCount is >= 1 and <= FactoryConversationService.MaxContextEntries
+            && context.EligibleEntryCount >= context.IncludedEntryCount
+            && context.OmittedEntryCount == context.EligibleEntryCount - context.IncludedEntryCount;
+    }
+
+    private static bool TryNormalizeFactoryGroupContext(
+        ArenaFactoryGroupContextEvidence? context,
+        bool required,
+        int expectedCausalSamples,
+        out ArenaFactoryGroupContextEvidence? normalized)
+    {
+        if (context is null)
+        {
+            normalized = required
+                ? new ArenaFactoryGroupContextEvidence(
+                    FactoryConversationService.ContractVersion,
+                    "",
+                    0,
+                    0,
+                    0,
+                    0)
+                : null;
+            return true;
+        }
+
+        var contract = context.Contract?.Trim() ?? "";
+        var fingerprint = context.ContextFingerprint?.Trim().ToLowerInvariant() ?? "";
+        var causalSamples = Math.Max(0, context.CausalSampleCount);
+        var included = Math.Max(0, context.IncludedEntryCount);
+        var eligible = Math.Max(0, context.EligibleEntryCount);
+        var omitted = Math.Max(0, context.OmittedEntryCount);
+        if (!contract.Equals(FactoryConversationService.ContractVersion, StringComparison.Ordinal)
+            || (fingerprint.Length == 0 && (causalSamples != 0 || included != 0 || eligible != 0 || omitted != 0))
+            || (fingerprint.Length > 0
+                && (!IsFingerprint(fingerprint)
+                    || causalSamples != Math.Max(0, expectedCausalSamples)
+                    || included is < 1 or > FactoryConversationService.MaxContextEntries
+                    || eligible < included
+                    || omitted != eligible - included)))
+        {
+            normalized = null;
+            return false;
+        }
+
+        normalized = new ArenaFactoryGroupContextEvidence(
+            FactoryConversationService.ContractVersion,
+            fingerprint,
+            causalSamples,
+            included,
+            eligible,
+            omitted);
+        return true;
+    }
+
+    private sealed record FactoryCausalContextObservation(
+        string SpeakerId,
+        string ContextFingerprint,
+        int IncludedEntryCount,
+        int OmittedEntryCount);
+
+    private sealed record FactoryGroupComparisonRestriction(string Status, string Summary);
 
     private static ArenaEvaluationComparison EmptyComparison(
         string status,
@@ -1126,7 +1492,21 @@ internal sealed class ArenaEvaluationService
             NonNegative(evidence.TimeToFirstTokenSamples),
             NonNegative(evidence.VoiceStyleSamples),
             NonNegative(evidence.DiscourseTurns),
-            NonNegative(evidence.InternetEvidenceTurns));
+            NonNegative(evidence.InternetEvidenceTurns))
+        {
+            ArenaPromptModeTurns = NonNegative(evidence.ArenaPromptModeTurns),
+            FactoryPromptModeTurns = NonNegative(evidence.FactoryPromptModeTurns)
+        };
+    }
+
+    private static ArenaEvaluationMetrics WithoutMatchSetupQuality(ArenaEvaluationMetrics metrics)
+    {
+        return metrics with
+        {
+            BattleReviewScore = null,
+            AverageVoiceStyleScore = null,
+            RoleDriftPercent = null
+        };
     }
 
     private static ArenaEvaluationMetrics NormalizeMetrics(ArenaEvaluationMetrics metrics)
@@ -1164,7 +1544,8 @@ internal sealed class ArenaEvaluationService
         bool internetEnabled,
         ArenaEvaluationEvidenceCounts evidence,
         ArenaEvaluationMetrics metrics,
-        IReadOnlyList<ArenaEvaluationModelAggregate> models)
+        IReadOnlyList<ArenaEvaluationModelAggregate> models,
+        ArenaFactoryGroupContextEvidence? factoryGroupContext)
     {
         var canonical = JsonSerializer.Serialize(new
         {
@@ -1172,6 +1553,7 @@ internal sealed class ArenaEvaluationService
             internetEnabled,
             evidence,
             metrics,
+            factoryGroupContext,
             models = models.OrderBy(model => model.Model, StringComparer.OrdinalIgnoreCase).ToArray()
         });
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
@@ -1195,6 +1577,35 @@ internal sealed class ArenaEvaluationService
                 || message.Kind.Equals("message", StringComparison.OrdinalIgnoreCase))
             && !string.IsNullOrWhiteSpace(message.Model)
             && message.Model != "-";
+    }
+
+    private static bool HasModelEvidence(
+        DialogueMessage message,
+        IReadOnlySet<string> providerBackedSpeakerIds)
+    {
+        return providerBackedSpeakerIds.Contains(message.SpeakerId)
+            && (string.IsNullOrWhiteSpace(message.Kind)
+                || message.Kind.Equals("message", StringComparison.OrdinalIgnoreCase))
+            && !string.IsNullOrWhiteSpace(message.Model.Model);
+    }
+
+    private static bool IsFactoryPromptMode(DialogueMessage message)
+    {
+        return message.Metadata.TryGetValue("prompt_mode", out var value)
+            && value.ValueKind == JsonValueKind.String
+            && (value.GetString() ?? "").Equals("factory", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDiscourseEvidence(TranscriptMessage message)
+    {
+        return IsSuccessful(message)
+            && !message.SpeakerId.Equals("system", StringComparison.OrdinalIgnoreCase)
+            && !message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase)
+            && !message.SpeakerId.Equals("internet", StringComparison.OrdinalIgnoreCase)
+            && !message.SpeakerId.Equals("transcript", StringComparison.OrdinalIgnoreCase)
+            && !message.Kind.StartsWith("internet", StringComparison.OrdinalIgnoreCase)
+            && (string.IsNullOrWhiteSpace(message.Kind)
+                || message.Kind.Equals("message", StringComparison.OrdinalIgnoreCase));
     }
 
     private static int? GeneratedTokens(TranscriptMessage message)

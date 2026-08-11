@@ -55,6 +55,36 @@ public sealed record ArenaViewSnapshot(
     IReadOnlyList<AgentState> Agents)
 {
     /// <summary>
+    /// When enabled, participant turns bypass Match Setup behavior and use the
+    /// session's attributed public group conversation. Narration is unavailable.
+    /// </summary>
+    public bool FactoryMode { get; init; }
+
+    /// <summary>
+    /// True when the durable Factory conversation root still resolves to its
+    /// original public Operator message.
+    /// </summary>
+    public bool HasFactoryConversationRoot { get; init; }
+
+    /// <summary>
+    /// True after a Factory conversation has been anchored. This remains true
+    /// when its root message is missing so readiness cannot silently promote a
+    /// later Operator message to a replacement root.
+    /// </summary>
+    public bool FactoryConversationRootAssigned { get; init; }
+
+    /// <summary>
+    /// Eligible public entries currently associated with the Factory group.
+    /// This count is content-free and safe to surface in readiness summaries.
+    /// </summary>
+    public int FactoryConversationEntryCount { get; init; }
+
+    /// <summary>
+    /// Older whole entries omitted by the fixed 50-entry Factory context window.
+    /// </summary>
+    public int FactoryConversationOmittedCount { get; init; }
+
+    /// <summary>
     /// Per-role generation overrides keyed by role id (alpha..delta, narrator).
     /// A role appears here only when its persisted config differs from the shared
     /// temperature or max output tokens; absent roles inherit shared values.

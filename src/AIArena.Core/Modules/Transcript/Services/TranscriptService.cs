@@ -54,7 +54,10 @@ public sealed class TranscriptService
         };
     }
 
-    public DialogueMessage CreateOperatorMessage(string text, int nextTurn)
+    public DialogueMessage CreateOperatorMessage(
+        string text,
+        int nextTurn,
+        bool preserveOuterWhitespace = false)
     {
         return new DialogueMessage
         {
@@ -62,7 +65,9 @@ public sealed class TranscriptService
             Turn = nextTurn,
             Speaker = "Operator",
             SpeakerId = "operator",
-            Text = string.IsNullOrWhiteSpace(text) ? "(empty operator turn)" : text.Trim(),
+            Text = string.IsNullOrWhiteSpace(text)
+                ? "(empty operator turn)"
+                : preserveOuterWhitespace ? text : text.Trim(),
             Status = "ok",
             Kind = "message",
             CreatedAt = DateTimeOffset.Now.ToUnixTimeSeconds(),
@@ -153,7 +158,15 @@ public sealed class TranscriptService
     public bool DeleteMessage(ArenaSnapshot snapshot, int turn, string speakerId, double createdAt)
     {
         var message = FindMessage(snapshot, turn, speakerId, createdAt);
-        return message is not null && snapshot.Engine.Messages.Remove(message);
+        // The root is the only durable anchor when a Factory group has not yet
+        // produced another marked entry. Individual deletion would otherwise
+        // make a previously established group indistinguishable from a session
+        // that has never started and allow a later Operator turn to be promoted
+        // silently. Whole-arena reset and clean-session flows clear the message
+        // collection directly and intentionally remain available.
+        return message is not null
+            && !FactoryConversationService.IsConversationRoot(message)
+            && snapshot.Engine.Messages.Remove(message);
     }
 
     public bool TogglePinned(ArenaSnapshot snapshot, int turn, string speakerId, double createdAt, out bool pinned)

@@ -1,6 +1,7 @@
 <UserControl x:Class="AIArena.Wpf.Controls.InAppQaInspectorControl"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:AIArena.Wpf.Controls"
              x:Name="QaInspectorRoot"
              MinWidth="320"
              MinHeight="360"
@@ -33,6 +34,53 @@
                        TextTrimming="CharacterEllipsis"
                        ToolTip="{Binding Label}"
                        AutomationProperties.Name="{Binding Label}" />
+        </DataTemplate>
+        <DataTemplate x:Key="QaSummaryCardTemplate">
+            <controls:AccessibleCardBorder Width="300"
+                                           MinHeight="142"
+                                           Style="{DynamicResource Arena.StateCard}"
+                                           Tag="{Binding Kind}"
+                                           AutomationProperties.Name="{Binding AutomationName}"
+                                           AutomationProperties.HelpText="{Binding Reason}"
+                                           AutomationProperties.ItemStatus="{Binding Kind}">
+                <StackPanel>
+                    <DockPanel LastChildFill="True">
+                        <Border DockPanel.Dock="Right"
+                                Style="{DynamicResource Arena.StatusChip}"
+                                Tag="{Binding Kind}"
+                                Margin="{DynamicResource Arena.Gap.Inline.Before.Default}">
+                            <TextBlock Style="{DynamicResource Arena.Text.Label}"
+                                       Text="{Binding Kind}" />
+                        </Border>
+                        <TextBlock Style="{DynamicResource Arena.Text.Heading}"
+                                   Text="{Binding Title}"
+                                   TextWrapping="Wrap" />
+                    </DockPanel>
+                    <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.CompactPlus}"
+                               Style="{DynamicResource Arena.Text.Secondary}"
+                               Text="{Binding Reason}" />
+                    <Expander Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                               Header="Inspect evidence details"
+                               Style="{DynamicResource Arena.Expander.Section}"
+                               Expanded="EvidenceDetailsExpander_Expanded"
+                               AutomationProperties.Name="{Binding AutomationName}"
+                               AutomationProperties.HelpText="{Binding Reason}"
+                               AutomationProperties.ItemStatus="{Binding Kind}">
+                        <TextBox Text="{Binding Details}"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Disabled"
+                                 MaxHeight="190"
+                                 Padding="{DynamicResource Arena.Inset.Dense}"
+                                 Background="{DynamicResource InputBrush}"
+                                 Foreground="{DynamicResource TextBrush}"
+                                 BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                 AutomationProperties.Name="{Binding DetailsAutomationName}" />
+                    </Expander>
+                </StackPanel>
+            </controls:AccessibleCardBorder>
         </DataTemplate>
         <Style x:Key="QaEvidenceTabItem" TargetType="{x:Type TabItem}">
             <Setter Property="MinHeight" Value="{DynamicResource Arena.Target.Minimum}" />
@@ -136,34 +184,24 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <StackPanel Margin="{DynamicResource Arena.Gap.Stack.After.DefaultPlus}">
-            <TextBlock FontFamily="Segoe UI Variable Display, Segoe UI"
-                       FontSize="{DynamicResource Arena.Type.PageTitleSize}"
-                       FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextBrush}"
-                       Text="In-App QA Inspector" />
-            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                       Style="{StaticResource QaCaption}"
-                       Text="Evidence is local, bounded, hash-checked, and read-only. Focused runs never imply a complete seal." />
-        </StackPanel>
+        <controls:WorkspacePageHeaderControl x:Name="QaWorkspaceHeader"
+                                              Title="In-App QA Inspector"
+                                              Description="Inspect bounded local evidence, run focused checks, and explicitly accept only the exact current render manifest."
+                                              Status="{Binding Text, ElementName=QaStatusText}"
+                                              StatusKind="Unavailable"
+                                              PrimaryActionText="Refresh evidence"
+                                              PrimaryActionAutomationName="Refresh QA evidence"
+                                              PrimaryActionHelpText="Reload and revalidate the selected bounded local QA evidence bundle."
+                                              PrimaryActionRequested="RefreshEvidenceButton_Click" />
 
-        <Border Grid.Row="1"
-                Margin="{DynamicResource Arena.Gap.Stack.After.DefaultPlus}"
-                Padding="{DynamicResource Arena.Inset.StatusCard}"
-                Background="{DynamicResource InputBrush}"
-                BorderBrush="{DynamicResource DisabledBorderBrush}"
-                BorderThickness="1"
-                CornerRadius="{DynamicResource Arena.Radius.Small}">
-            <TextBlock x:Name="QaStatusText"
-                       Foreground="{DynamicResource MutedTextBrush}"
-                       Text="No QA evidence has been loaded."
-                       TextWrapping="Wrap"
-                       TextTrimming="CharacterEllipsis"
-                       MaxHeight="38"
-                       AutomationProperties.Name="QA Inspector status"
-                       AutomationProperties.HelpText="No QA evidence has been loaded."
-                       AutomationProperties.LiveSetting="Polite" />
-        </Border>
+        <!-- Coordinator-compatible status target; the shared header is its only visible presentation. -->
+        <TextBlock Grid.Row="1"
+                   x:Name="QaStatusText"
+                   Text="No QA evidence has been loaded."
+                   Visibility="Collapsed"
+                   AutomationProperties.Name="QA Inspector status"
+                   AutomationProperties.HelpText="No QA evidence has been loaded."
+                   AutomationProperties.LiveSetting="Polite" />
 
         <Grid Grid.Row="2" x:Name="CommandGrid" Margin="{DynamicResource Arena.Gap.Stack.After.DefaultPlus}">
             <Grid.ColumnDefinitions>
@@ -179,24 +217,21 @@
             <Border x:Name="EvidenceCommandPane" Style="{StaticResource QaCard}" Padding="{DynamicResource Arena.Inset.Dense}">
                 <StackPanel>
                     <TextBlock Style="{StaticResource QaSectionTitle}" Text="Evidence bundle" />
-                    <DockPanel LastChildFill="True">
-                        <Button x:Name="RefreshEvidenceButton"
-                                DockPanel.Dock="Right"
-                                MinWidth="82"
-                                MinHeight="34"
-                                Margin="{DynamicResource Arena.Gap.Inline.Before.CompactPlus}"
-                                Style="{DynamicResource Arena.Button.Secondary}"
-                                Content="Refresh"
-                                Click="RefreshEvidenceButton_Click"
-                                AutomationProperties.Name="Refresh QA evidence" />
-                        <ComboBox x:Name="EvidenceRunPicker"
-                                  MinHeight="34"
-                                  Style="{DynamicResource Arena.ComboBox}"
-                                  ItemTemplate="{StaticResource QaPickerLabelTemplate}"
-                                  FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
-                                  AutomationProperties.Name="QA evidence bundle"
-                                  AutomationProperties.HelpText="Selects one bounded local QA evidence bundle." />
-                    </DockPanel>
+                    <ComboBox x:Name="EvidenceRunPicker"
+                              MinHeight="34"
+                              Style="{DynamicResource Arena.ComboBox}"
+                              ItemTemplate="{StaticResource QaPickerLabelTemplate}"
+                              FocusVisualStyle="{DynamicResource Arena.FocusVisual}"
+                              AutomationProperties.Name="QA evidence bundle"
+                              AutomationProperties.HelpText="Selects one bounded local QA evidence bundle." />
+                    <Button x:Name="RefreshEvidenceButton"
+                            MinWidth="82"
+                            MinHeight="34"
+                            Style="{DynamicResource Arena.Button.Secondary}"
+                            Content="Refresh"
+                            Click="RefreshEvidenceButton_Click"
+                            Visibility="Collapsed"
+                            AutomationProperties.Name="Refresh QA evidence" />
                     <TextBlock x:Name="ReviewProgressText"
                                Margin="{DynamicResource Arena.Gap.Stack.Before.CompactPlus}"
                                Style="{StaticResource QaCaption}"
@@ -266,56 +301,67 @@
             </Border>
         </Grid>
 
-        <TabControl Grid.Row="3"
-                    x:Name="EvidenceTabs"
+        <Grid Grid.Row="3">
+        <TabControl x:Name="EvidenceTabs"
                     Style="{StaticResource QaEvidenceTabControl}"
                     AutomationProperties.Name="QA evidence sections">
             <TabItem Header="Overview" AutomationProperties.Name="QA overview">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Margin="{DynamicResource Arena.Inset.Panel}">
-                        <Border Style="{StaticResource QaCard}" Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
-                            <StackPanel>
-                                <TextBlock Style="{StaticResource QaSectionTitle}" Text="Verdict and provenance" />
-                                <TextBlock x:Name="VerdictText" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" TextWrapping="Wrap" />
-                                <TextBlock x:Name="ProvenanceText" Margin="{DynamicResource Arena.Gap.Stack.Before.TightPlus}" Style="{StaticResource QaCaption}" AutomationProperties.Name="QA source and tree provenance" />
-                                <TextBlock x:Name="EnvironmentText" Margin="{DynamicResource Arena.Gap.Stack.Before.TightPlus}" Style="{StaticResource QaCaption}" AutomationProperties.Name="QA environment" />
-                                <TextBlock x:Name="TestTotalsText" Margin="{DynamicResource Arena.Gap.Stack.Before.TightPlus}" Style="{StaticResource QaCaption}" AutomationProperties.Name="QA aggregate test counts" />
-                            </StackPanel>
-                        </Border>
-                        <Border Style="{StaticResource QaCard}" Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
-                            <StackPanel>
-                                <TextBlock Style="{StaticResource QaSectionTitle}" Text="Live-provider evidence" />
-                                <TextBlock x:Name="LiveProviderText" Style="{StaticResource QaCaption}" AutomationProperties.Name="Live-provider QA limitation" />
-                            </StackPanel>
-                        </Border>
-                        <Border Style="{StaticResource QaCard}" Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
-                            <StackPanel>
-                                <TextBlock Style="{StaticResource QaSectionTitle}" Text="Inspection state" />
-                                <TextBlock x:Name="InspectionText" Style="{StaticResource QaCaption}" AutomationProperties.Name="Rendered inspection state" />
-                            </StackPanel>
-                        </Border>
-                        <Border Style="{StaticResource QaCard}">
-                            <StackPanel>
-                                <TextBlock Style="{StaticResource QaSectionTitle}" Text="Accepted limitations" />
-                                <ListBox x:Name="LimitationsList"
-                                         Style="{DynamicResource Arena.ListBox}"
-                                         Background="Transparent"
-                                         BorderThickness="0"
-                                         Foreground="{DynamicResource TextBrush}"
-                                         HorizontalContentAlignment="Stretch"
-                                         AutomationProperties.Name="QA accepted limitations">
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <StackPanel Margin="{DynamicResource Arena.Gap.Stack.After.CompactPlus}">
-                                                <TextBlock Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" Text="{Binding Id}" />
-                                                <TextBlock Foreground="{DynamicResource MutedTextBrush}" Text="{Binding State}" />
-                                                <TextBlock Foreground="{DynamicResource MutedTextBrush}" Text="{Binding Summary}" TextWrapping="Wrap" />
-                                            </StackPanel>
-                                        </DataTemplate>
-                                    </ListBox.ItemTemplate>
-                                </ListBox>
-                            </StackPanel>
-                        </Border>
+                        <TextBlock Style="{StaticResource QaSectionTitle}"
+                                   Text="Evidence summary" />
+                        <TextBlock Margin="{DynamicResource Arena.Gap.Stack.After.CompactPlus}"
+                                   Style="{StaticResource QaCaption}"
+                                   Text="Unavailable evidence stays unavailable; expand any card to inspect and copy its complete privacy-safe reason." />
+                        <ItemsControl x:Name="SummaryCards"
+                                      ItemTemplate="{StaticResource QaSummaryCardTemplate}"
+                                      AutomationProperties.Name="QA evidence summary cards">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+
+                        <Expander Header="Full bundle details"
+                                  Style="{DynamicResource Arena.Expander.Section}"
+                                  Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                                  Expanded="EvidenceDetailsExpander_Expanded"
+                                  AutomationProperties.Name="Full QA bundle details"
+                                  AutomationProperties.HelpText="Expands the complete provenance, environment, counts, inspection state, and accepted limitations.">
+                            <Border Style="{DynamicResource Arena.Surface.Inset}">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource QaSectionTitle}" Text="Verdict and provenance" />
+                                    <TextBlock x:Name="VerdictText" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                    <TextBlock x:Name="ProvenanceText" Margin="{DynamicResource Arena.Gap.Stack.Before.TightPlus}" Style="{StaticResource QaCaption}" AutomationProperties.Name="QA source and tree provenance" />
+                                    <TextBlock x:Name="EnvironmentText" Margin="{DynamicResource Arena.Gap.Stack.Before.TightPlus}" Style="{StaticResource QaCaption}" AutomationProperties.Name="QA environment" />
+                                    <TextBlock x:Name="TestTotalsText" Margin="{DynamicResource Arena.Gap.Stack.Before.TightPlus}" Style="{StaticResource QaCaption}" AutomationProperties.Name="QA aggregate test counts" />
+                                    <Separator Style="{DynamicResource Arena.Separator}" />
+                                    <TextBlock Style="{StaticResource QaSectionTitle}" Text="Live-provider evidence" />
+                                    <TextBlock x:Name="LiveProviderText" Style="{StaticResource QaCaption}" AutomationProperties.Name="Live-provider QA limitation" />
+                                    <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" Style="{StaticResource QaSectionTitle}" Text="Inspection state" />
+                                    <TextBlock x:Name="InspectionText" Style="{StaticResource QaCaption}" AutomationProperties.Name="Rendered inspection state" />
+                                    <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" Style="{StaticResource QaSectionTitle}" Text="Accepted limitations" />
+                                    <ListBox x:Name="LimitationsList"
+                                             Style="{DynamicResource Arena.ListBox}"
+                                             Background="Transparent"
+                                             BorderThickness="0"
+                                             Foreground="{DynamicResource TextBrush}"
+                                             HorizontalContentAlignment="Stretch"
+                                             AutomationProperties.Name="QA accepted limitations">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Margin="{DynamicResource Arena.Gap.Stack.After.CompactPlus}">
+                                                    <TextBlock Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" Text="{Binding Id}" />
+                                                    <TextBlock Foreground="{DynamicResource MutedTextBrush}" Text="{Binding State}" />
+                                                    <TextBlock Foreground="{DynamicResource MutedTextBrush}" Text="{Binding Summary}" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </StackPanel>
+                            </Border>
+                        </Expander>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -456,15 +502,24 @@
                         <Grid>
                             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                             <TextBlock Style="{StaticResource QaSectionTitle}" Text="Before / after preview" />
-                            <Grid Grid.Row="1">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="8" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                <Border Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" CornerRadius="{DynamicResource Arena.Radius.Small}" Padding="{DynamicResource Arena.Inset.Micro}">
+                            <Grid Grid.Row="1" x:Name="PreviewComparisonGrid">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition x:Name="BaselinePreviewColumn" Width="*" />
+                                    <ColumnDefinition x:Name="PreviewGapColumn" Width="8" />
+                                    <ColumnDefinition x:Name="CurrentPreviewColumn" Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition x:Name="PreviewCompactGapRow" Height="0" />
+                                    <RowDefinition x:Name="CurrentPreviewCompactRow" Height="0" />
+                                </Grid.RowDefinitions>
+                                <Border x:Name="BaselinePreviewPane" MinHeight="150" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" CornerRadius="{DynamicResource Arena.Radius.Small}" Padding="{DynamicResource Arena.Inset.Micro}">
                                     <Grid>
                                         <Image x:Name="BaselinePreviewImage" Stretch="Uniform" AutomationProperties.Name="Baseline screenshot preview" />
                                         <TextBlock x:Name="BaselineEmptyText" Foreground="{DynamicResource MutedTextBrush}" Text="No baseline supplied" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                     </Grid>
                                 </Border>
-                                <Border Grid.Column="2" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" CornerRadius="{DynamicResource Arena.Radius.Small}" Padding="{DynamicResource Arena.Inset.Micro}">
+                                <Border x:Name="CurrentPreviewPane" Grid.Column="2" MinHeight="150" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" CornerRadius="{DynamicResource Arena.Radius.Small}" Padding="{DynamicResource Arena.Inset.Micro}">
                                     <Grid>
                                         <Image x:Name="CurrentPreviewImage" Stretch="Uniform" AutomationProperties.Name="Current screenshot preview" />
                                         <TextBlock x:Name="CurrentEmptyText" Foreground="{DynamicResource MutedTextBrush}" Text="Select a verified screenshot" HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -493,6 +548,56 @@
                          AutomationProperties.HelpText="Contains bounded aggregate evidence only; no raw command output, prompts, responses, credentials, or absolute paths." />
             </TabItem>
         </TabControl>
+
+        <Border x:Name="EvidenceRevalidationOverlay"
+                Visibility="Collapsed"
+                Background="{DynamicResource PanelBrush}"
+                BorderBrush="{DynamicResource Arena.Brush.Info}"
+                BorderThickness="1"
+                CornerRadius="{DynamicResource Arena.Radius.Medium}"
+                Panel.ZIndex="20"
+                AutomationProperties.Name="QA evidence revalidation state"
+                AutomationProperties.HelpText="Previously loaded evidence is hidden until the selected bundle has been revalidated."
+                AutomationProperties.LiveSetting="Polite">
+            <Border MaxWidth="560"
+                    Margin="{DynamicResource Arena.Inset.Panel}"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Style="{DynamicResource Arena.StateCard}"
+                    Tag="Revalidating">
+                <StackPanel>
+                    <DockPanel LastChildFill="True">
+                        <Border DockPanel.Dock="Right"
+                                Style="{DynamicResource Arena.StatusChip}"
+                                Tag="Revalidating"
+                                Margin="{DynamicResource Arena.Gap.Inline.Before.Default}">
+                            <TextBlock Style="{DynamicResource Arena.Text.Label}" Text="Revalidating" />
+                        </Border>
+                        <TextBlock Style="{DynamicResource Arena.Text.Heading}"
+                                   Text="Checking current evidence" />
+                    </DockPanel>
+                    <TextBlock x:Name="RevalidationProgressText"
+                               Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                               Style="{DynamicResource Arena.Text.Secondary}"
+                               Text="Loading and revalidating rendered screenshots."
+                               AutomationProperties.Name="QA revalidation progress" />
+                    <Border MaxWidth="360"
+                            Margin="{DynamicResource Arena.Layout.SkeletonLeadMargin}"
+                            HorizontalAlignment="Stretch"
+                            Style="{DynamicResource Arena.SkeletonBar}" />
+                    <Border MaxWidth="300"
+                            HorizontalAlignment="Stretch"
+                            Style="{DynamicResource Arena.SkeletonBar}" />
+                    <Border MaxWidth="334"
+                            HorizontalAlignment="Stretch"
+                            Style="{DynamicResource Arena.SkeletonBar}" />
+                    <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.CompactPlus}"
+                               Style="{DynamicResource Arena.Text.Caption}"
+                               Text="Review, copy, and acceptance remain unavailable until validation completes." />
+                </StackPanel>
+            </Border>
+        </Border>
+        </Grid>
 
         <Border Grid.Row="4" Margin="{DynamicResource Arena.Gap.Stack.Before.DefaultPlus}" Padding="{DynamicResource Arena.Inset.Dense}" Background="{DynamicResource InputBrush}" BorderBrush="{DynamicResource DisabledBorderBrush}" BorderThickness="1" CornerRadius="{DynamicResource Arena.Radius.Small}">
             <Grid>

@@ -103,6 +103,9 @@ internal static partial class Program
             var keys = control.RegisteredFeatures.Select(item => item.Key).ToArray();
             Require(keys.SequenceEqual(["matrix", "fork", "packs", "rubrics", "claims"]), "Experiment Lab exposed missing or unavailable feature placeholders");
             Require(control.RegisteredFeatures.All(item => item.Content is not null && !string.IsNullOrWhiteSpace(item.HelpText)), "registered feature lacks content or accessible help");
+            Require(control.RegisteredFeatures.Take(2).All(item => item.Group == "Run & replay")
+                    && control.RegisteredFeatures.Skip(2).All(item => item.Group == "Definitions & evidence"),
+                "Experiment Lab built-in features did not retain their compact grouped navigation contract");
             Require(AutomationProperties.GetName(control) == "Experiment Lab workspace", "Experiment Lab root automation name changed");
             control.ApplyResponsiveLayout(compact: true);
             control.ApplyResponsiveLayout(compact: false);
@@ -121,6 +124,168 @@ internal static partial class Program
             try
             {
                 host.Activate();
+                host.UpdateLayout();
+                Require(control.FeatureSelector.Items.Groups is { Count: 2 },
+                    "Experiment Lab did not materialize its two built-in navigation groups");
+                Require(VirtualizingPanel.GetIsVirtualizing(control.FeatureSelector)
+                        && VirtualizingPanel.GetVirtualizationMode(control.FeatureSelector) == VirtualizationMode.Recycling
+                        && VirtualizingPanel.GetIsVirtualizingWhenGrouping(control.FeatureSelector),
+                    "Experiment Lab grouped navigation disabled recycling virtualization");
+                var navigationPeer = new System.Windows.Automation.Peers.ListBoxAutomationPeer(control.FeatureSelector);
+                Require(navigationPeer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Selection)
+                        is System.Windows.Automation.Provider.ISelectionProvider,
+                    "Experiment Lab grouped navigation lost its UI Automation selection pattern");
+                var matrixFeatureItem = control.FeatureSelector.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem
+                    ?? throw new InvalidOperationException("Experiment Matrix navigation item was not realized.");
+                Require(AutomationProperties.GetName(matrixFeatureItem) == "Matrix Runner"
+                        && AutomationProperties.GetHelpText(matrixFeatureItem).Contains("durable run history", StringComparison.Ordinal)
+                        && AutomationProperties.GetItemStatus(matrixFeatureItem) == "Available",
+                    "Experiment Matrix navigation item lost its bounded UIA name, help, or visible status");
+                control.SetFeatureRefreshSummary("matrix", "refreshing");
+                host.UpdateLayout();
+                Require(AutomationProperties.GetItemStatus(matrixFeatureItem) == "Refreshing",
+                    "Experiment navigation did not expose a visible/UIA refreshing status");
+                Require(control.ExperimentWorkspaceHeader.Status == "Refreshing"
+                    && control.ExperimentWorkspaceHeader.StatusKind == "Revalidating",
+                    "Experiment page header did not expose the selected feature's truthful live refresh state");
+                control.SetFeatureRefreshSummary("matrix", "ready");
+                SystemMotionPreferences.SetQaAnimationsEnabledOverride(true);
+                try
+                {
+                    Require(control.TrySelectRegisteredFeature("fork", out var selectedFork) && selectedFork,
+                        "hosted Experiment navigation could not select a second real feature");
+                    var forkFeatureItem = control.FeatureSelector.ItemContainerGenerator.ContainerFromIndex(1) as ListBoxItem
+                        ?? throw new InvalidOperationException("Experiment Fork navigation item was not realized.");
+                    Require(forkFeatureItem.HasAnimatedProperties,
+                        "real Experiment navigation selection did not invoke the shared 120–180 ms comprehension cue");
+                }
+                finally
+                {
+                    SystemMotionPreferences.ClearQaOverride();
+                }
+                Require(control.TrySelectRegisteredFeature("matrix", out _),
+                    "hosted Experiment navigation could not restore Matrix Runner after motion verification");
+
+                var stages = new[]
+                {
+                    (control.MatrixConfigureStage, "Matrix stage 1 Configure"),
+                    (control.MatrixValidateStage, "Matrix stage 2 Validate"),
+                    (control.MatrixRunStage, "Matrix stage 3 Run"),
+                    (control.MatrixReviewStage, "Matrix stage 4 Review")
+                };
+                Require(stages.All(stage => AutomationProperties.GetName(stage.Item1) == stage.Item2),
+                    "Matrix Runner did not expose the Configure, Validate, Run, and Review automation stages");
+                Require(control.MatrixPreviewItems.Items.Count == 0
+                        && control.MatrixPreviewItems.Visibility == Visibility.Collapsed
+                        && control.MatrixPreviewEmptyState.Visibility == Visibility.Visible
+                        && control.RunHistoryItems.Items.Count == 0
+                        && control.RunHistoryItems.Visibility == Visibility.Collapsed
+                        && control.RunHistoryEmptyState.Visibility == Visibility.Visible,
+                    "Matrix Runner represented an honest empty preview/history as selectable evidence rows");
+                control.SetMatrixPreview(["cell:preview"]);
+                control.SetRunHistory(["run:persisted"]);
+                Require(control.MatrixPreviewItems.Items.Count == 1
+                        && control.MatrixPreviewEmptyState.Visibility == Visibility.Collapsed
+                        && control.RunHistoryItems.Items.Count == 1
+                        && control.RunHistoryEmptyState.Visibility == Visibility.Collapsed,
+                    "Matrix Runner did not replace its empty states with observed preview/history rows");
+                control.SetRunHistoryRefreshing();
+                Require(control.RunHistoryStateText.Text == "Revalidating"
+                        && control.RunHistoryItems.Visibility == Visibility.Visible
+                        && control.RunHistoryEmptyState.Visibility == Visibility.Collapsed,
+                    "Matrix history revalidation hid observed rows behind a false empty state");
+                control.SetRunHistoryRefreshFailed();
+                Require(control.RunHistoryStateText.Text == "Failed"
+                        && control.RunHistoryItems.Visibility == Visibility.Visible,
+                    "Matrix history refresh failure discarded or relabeled previously observed rows");
+                control.SetRunHistory([]);
+                control.SetRunHistoryRefreshing();
+                Require(control.RunHistoryStateText.Text == "Loading"
+                        && control.RunHistoryItems.Items.Count == 0
+                        && control.RunHistoryEmptyState.Visibility == Visibility.Visible
+                        && control.RunHistoryEmptyText.Text.Contains("Loading", StringComparison.Ordinal),
+                    "Matrix history initial load was represented as observed empty evidence");
+                control.SetRunHistoryRefreshFailed();
+                Require(control.RunHistoryStateText.Text == "Failed"
+                        && control.RunHistoryEmptyText.Text.Contains("not reinterpreted", StringComparison.Ordinal),
+                    "Matrix history failed state did not preserve evidence honesty");
+                control.SetMatrixExecutionAvailability(true, "Execution resolved.");
+                Require(control.ExecuteMatrixButton.IsEnabled
+                        && control.MatrixValidationStageStatusText.Text == "Ready"
+                        && control.MatrixRunStageStatusText.Text == "Ready",
+                    "Matrix validation did not advance the visual flow to a runnable state");
+                control.MatrixTitleText.Text += " edited";
+                Require(!control.ExecuteMatrixButton.IsEnabled
+                        && control.MatrixValidationStageStatusText.Text == "Needs validation"
+                        && control.MatrixRunStageStatusText.Text == "Blocked"
+                        && control.MatrixPreviewItems.Items.Count == 0
+                        && control.MatrixPreviewEmptyState.Visibility == Visibility.Visible,
+                    "editing a validated Matrix draft left stale runnable or expansion presentation enabled");
+
+                Require(control.TrySelectRegisteredFeature("claims", out var claimSelectionChanged)
+                        && claimSelectionChanged,
+                    "hosted Claim Ledger responsive verification could not select the registered feature");
+                const double wideExperimentWorkspaceWidth = 950;
+                host.Width = wideExperimentWorkspaceWidth;
+                host.UpdateLayout();
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+                    new Action(() => { }));
+                Require(!control.ClaimLedgerUsesStackedLayout
+                        && Grid.GetRow(control.ClaimMasterPane) == 0
+                        && Grid.GetColumn(control.ClaimMasterPane) == 0
+                        && Grid.GetColumnSpan(control.ClaimMasterPane) == 1
+                        && Grid.GetRow(control.ClaimDetailPane) == 0
+                        && Grid.GetColumn(control.ClaimDetailPane) == 2
+                        && Grid.GetColumnSpan(control.ClaimDetailPane) == 1
+                        && control.ClaimWorkspaceGrid.ActualWidth is >= 700 and <= 780,
+                    "Claim Ledger did not use its named master/detail tier in the approximately 746-DIP feature area of a 1500-DIP shell");
+                Require(control.ClaimScrollViewer.ViewportWidth > 0
+                        && control.ClaimScrollViewer.ExtentWidth <= control.ClaimScrollViewer.ViewportWidth + 1,
+                    "wide Claim Ledger master/detail layout introduced horizontal overflow");
+
+                const double narrowExperimentWorkspaceWidth = 754;
+                host.Width = narrowExperimentWorkspaceWidth;
+                host.UpdateLayout();
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+                    new Action(() => { }));
+                Require(control.ClaimLedgerUsesStackedLayout
+                        && Grid.GetRow(control.ClaimMasterPane) == 0
+                        && Grid.GetColumn(control.ClaimMasterPane) == 0
+                        && Grid.GetColumnSpan(control.ClaimMasterPane) == 3
+                        && Grid.GetRow(control.ClaimDetailPane) == 2
+                        && Grid.GetColumn(control.ClaimDetailPane) == 0
+                        && Grid.GetColumnSpan(control.ClaimDetailPane) == 3,
+                    "Claim Ledger did not stack master before detail in the center workspace of a 960-DIP shell");
+                Require(control.ClaimScrollViewer.ViewportWidth > 0
+                        && control.ClaimScrollViewer.ExtentWidth <= control.ClaimScrollViewer.ViewportWidth + 1,
+                    "stacked Claim Ledger layout introduced horizontal overflow");
+                Require(VirtualizingPanel.GetIsVirtualizing(control.ClaimItems)
+                        && VirtualizingPanel.GetVirtualizationMode(control.ClaimItems) == VirtualizationMode.Recycling
+                        && ScrollViewer.GetHorizontalScrollBarVisibility(control.ClaimItems) == ScrollBarVisibility.Disabled
+                        && AutomationProperties.GetName(control.ClaimMasterPane) == "Claim Ledger master controls"
+                        && AutomationProperties.GetName(control.ClaimDetailPane) == "Claim Ledger detail controls"
+                        && AutomationProperties.GetName(control.ClaimItems) == "Claims in selected ledger",
+                    "Claim Ledger responsive tiers weakened virtualization or the master/detail automation contract");
+
+                Require(control.TrySelectRegisteredFeature("matrix", out var matrixSelectionChanged)
+                        && matrixSelectionChanged,
+                    "hosted responsive verification could not restore Matrix Runner after inspecting Claim Ledger");
+
+                foreach (var width in new[] { 960d, 1500d })
+                {
+                    host.Width = width;
+                    host.UpdateLayout();
+                    System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                        System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+                        new Action(() => { }));
+                    Require(control.MatrixScrollViewer.ViewportWidth > 0
+                            && control.MatrixScrollViewer.ExtentWidth <= control.MatrixScrollViewer.ViewportWidth + 1,
+                        $"Matrix Runner introduced horizontal overflow at {width:0} DIP");
+                }
+
+                host.Width = 960;
                 host.UpdateLayout();
                 foreach (var themeId in new[] { "dark-blue", "light", "high-contrast" })
                 {
@@ -151,6 +316,10 @@ internal static partial class Program
         control.MatrixBenchmarkPicker.IsEnabled = false;
         control.ExecuteMatrixButton.IsEnabled = false;
         control.MatrixRetryApprovedCheckBox.IsEnabled = false;
+        control.MatrixDimensionParameterPicker.IsDropDownOpen = false;
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+            System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+            new Action(() => { }));
         control.MatrixDimensionParameterPicker.IsDropDownOpen = true;
         host.UpdateLayout();
         System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
@@ -388,7 +557,8 @@ internal static partial class Program
                  {
                      "UI/Theming/ThemeBrushes.xaml",
                      "UI/Theming/DesignTokens.xaml",
-                     "UI/Theming/ControlStyles.xaml"
+                     "UI/Theming/ControlStyles.xaml",
+                     "UI/Theming/SurfaceStyles.xaml"
                  })
         {
             element.Resources.MergedDictionaries.Add(new ResourceDictionary
@@ -433,6 +603,12 @@ internal static partial class Program
         element.Resources["NavPressedBrush"] = ThemeBrush(theme.NavPressed);
         element.Resources["PressedPrimaryBrush"] = ThemeBrush(theme.PressedPrimary);
         element.Resources["OverlayBrush"] = ThemeBrush(theme.Overlay);
+        element.Resources["Arena.Brush.FocusRing"] = ThemeBrush(theme.PrimaryBorder);
+        element.Resources["Arena.Brush.FocusRingInner"] = ThemeBrush(theme.Text);
+        element.Resources["Arena.Brush.Info"] = ThemeBrush(theme.StatusInfo);
+        element.Resources["Arena.Brush.Success"] = ThemeBrush(theme.StatusSuccess);
+        element.Resources["Arena.Brush.Warning"] = ThemeBrush(theme.StatusWarning);
+        element.Resources["Arena.Brush.Critical"] = ThemeBrush(theme.StatusCritical);
     }
 
     static T RequireExperimentTemplatePart<T>(Control control, string name)
@@ -581,6 +757,9 @@ internal static partial class Program
         var selectionCaseStart = adapter.IndexOf("case AIArenaControlCommands.ExperimentFeatureSelect:", StringComparison.Ordinal);
         var navigationCaseStart = adapter.IndexOf("case AIArenaControlCommands.NavigationSelect:", selectionCaseStart, StringComparison.Ordinal);
         var selectionCase = adapter[selectionCaseStart..navigationCaseStart];
+        Require(selectionCase.IndexOf("if (!IsExperimentLabEnabled(_wpfSettings))", StringComparison.Ordinal)
+                < selectionCase.IndexOf("TrySelectRegisteredFeature", StringComparison.Ordinal),
+            "Debug-off Experiment Lab selection should be rejected before changing or refreshing a feature");
         Require(!selectionCase.Contains("ExecuteMatrixAsync", StringComparison.Ordinal)
                 && !selectionCase.Contains("RunFaultProbe", StringComparison.Ordinal)
                 && !selectionCase.Contains("ApplyRoute", StringComparison.Ordinal)
@@ -651,8 +830,14 @@ internal static partial class Program
 
                     control.FeatureSelector.SelectedItem = control.RegisteredFeatures.Single(item => item.Key == "rubrics");
                     RunExperimentDispatcherTask(() => coordinator.DebugFeatureSelectionRefreshTask);
+                    Require(control.ReadControlPlaneState().Features.Single(item => item.Key == "rubrics").Status == "ready",
+                        "completed feature refresh did not become ready");
+                    Require(!coordinator.DebugFeatureSelectionRefreshActive,
+                        "completed feature refresh remained active after publishing ready");
                     control.FeatureSelector.SelectedItem = control.RegisteredFeatures.Single(item => item.Key == "packs");
                     RunExperimentDispatcherTask(() => staleRefreshStarted.Task);
+                    Require(control.ReadControlPlaneState().Features.Single(item => item.Key == "rubrics").Status == "ready",
+                        "a completed feature refresh was falsely relabeled as superseded by later navigation");
                     control.FeatureSelector.SelectedItem = control.RegisteredFeatures.Single(item => item.Key == "rubrics");
                     releaseStaleRefresh.TrySetResult(true);
                     RunExperimentDispatcherTask(() => coordinator.DebugFeatureSelectionRefreshTask);
@@ -735,6 +920,8 @@ internal static partial class Program
                     Require(control.SelectedFeatureKey == "packs", "routed pointer selection did not select the requested Experiment Lab feature");
                     Require(control.FeatureSelector.IsEnabled,
                         "a cancellable feature refresh disabled pointer and keyboard navigation");
+                    Require(AutomationProperties.GetItemStatus(packs) == "Refreshing",
+                        "the active Experiment Lab navigation item did not expose its refreshing status to UI Automation");
                     Require(!control.FeatureContentGrid.IsEnabled,
                         "feature content remained interactive while its refresh was incomplete");
 
@@ -879,6 +1066,12 @@ internal static partial class Program
                 var firstPreview = ExperimentLabCoordinator.BuildMatrixPreview(firstDraft, clock.GetUtcNow());
                 var firstResolution = coordinator.ResolveMatrixExecutionAsync(firstPreview.Contract).GetAwaiter().GetResult();
                 Require(firstResolution.IsAvailable, "locally authored benchmark did not resolve on the first validation attempt");
+                RunExperimentDispatcherTask(coordinator.ValidateMatrixAsync);
+                Require(control.ExecuteMatrixButton.IsEnabled
+                        && control.MatrixValidationStageStatusText.Text == "Ready"
+                        && control.MatrixRunStageStatusText.Text == "Ready"
+                        && control.MatrixPreviewItems.Items.Count == firstPreview.PreviewRows.Length,
+                    "successful Matrix validation was dirtied by its final source/history refresh");
                 RunExperimentDispatcherTask(coordinator.ExecuteMatrixAsync);
                 var firstRunHistory = coordinator.ListRunHistoryAsync().GetAwaiter().GetResult();
                 Require(firstRunHistory.Runs.Length == firstPreview.Expansion.Cells.Length
@@ -1965,9 +2158,10 @@ internal static partial class Program
                 && window.Contains("ExperimentLabNavigationRequested=\"ExperimentLabNavButton_Click\"", StringComparison.Ordinal),
             "Experiment Lab center/right shell chrome is not wired");
         Require(source.Contains("_activeShellSurface = ShellSurface.ExperimentLab", StringComparison.Ordinal)
-                && source.Contains("case ShellSurface.ExperimentLab:", StringComparison.Ordinal)
+                && source.Contains("case ShellSurface.ExperimentLab when IsExperimentLabEnabled(_wpfSettings):", StringComparison.Ordinal)
+                && source.Contains("ExperimentLabNavButton.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed", StringComparison.Ordinal)
                 && source.Contains("ShowExperimentLabPanel();", StringComparison.Ordinal),
-            "Experiment Lab navigation or Match Setup return path is incomplete");
+            "Experiment Lab navigation, debug visibility, or Match Setup return path is incomplete");
         var state = ShellCommandState.For(ShellSurface.ExperimentLab);
         Require(!state.ShowMatchSetup && !state.ShowSearch && !state.ShowExport && !state.ShowView,
             "Experiment Lab inherited misleading transcript-only commands");

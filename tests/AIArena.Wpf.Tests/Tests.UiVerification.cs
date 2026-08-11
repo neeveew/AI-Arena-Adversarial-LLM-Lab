@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using AIArena.Core.Persistence;
 using AIArena.Core.Models;
@@ -713,6 +714,30 @@ internal static partial class Program
         }
     }
 
+    static void SharedPointerFeedbackReleasesDeadStaMotionSubscriptions()
+    {
+        SystemMotionPreferences.ClearQaOverride();
+        RunStaTest(() =>
+        {
+            var strandedButton = new Button();
+            ArenaMotion.SetIsPointerFeedbackEnabled(strandedButton, true);
+            strandedButton.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent, strandedButton));
+        });
+
+        try
+        {
+            RunStaTest(() =>
+            {
+                SystemMotionPreferences.SetQaAnimationsEnabledOverride(true);
+                SystemMotionPreferences.SetQaAnimationsEnabledOverride(false);
+            });
+        }
+        finally
+        {
+            SystemMotionPreferences.ClearQaOverride();
+        }
+    }
+
     static void UiVerificationAdvancesPrivacySafeFocusAndOverridesMotionOnlyInIsolation()
     {
         var dataRoot = Path.Combine(Path.GetTempPath(), $"ai-arena-ui-matrix-{Guid.NewGuid():N}");
@@ -901,6 +926,20 @@ internal static partial class Program
                         Require(animatedOverlay.Visibility == Visibility.Visible
                             && animatedOverlay.HasAnimatedProperties, "normal QA motion should exercise the real reveal animation path");
                         ArenaMotion.CancelReveal(animatedOverlay);
+                        var normalFeedback = new[] { new Border(), new Border(), new Border(), new Border() };
+                        ArenaMotion.NavigationSelected(normalFeedback[0]);
+                        ArenaMotion.StatusChanged(normalFeedback[1]);
+                        ArenaMotion.DisclosureOpened(normalFeedback[2]);
+                        ArenaMotion.RevealCard(normalFeedback[3]);
+                        Require(normalFeedback.All(element => element.HasAnimatedProperties)
+                            && ArenaMotion.NavigationDuration >= TimeSpan.FromMilliseconds(120)
+                            && ArenaMotion.NavigationDuration <= TimeSpan.FromMilliseconds(180)
+                            && ArenaMotion.FeedbackDuration >= TimeSpan.FromMilliseconds(120)
+                            && ArenaMotion.FeedbackDuration <= TimeSpan.FromMilliseconds(180)
+                            && ArenaMotion.DisclosureDuration >= TimeSpan.FromMilliseconds(120)
+                            && ArenaMotion.DisclosureDuration <= TimeSpan.FromMilliseconds(180),
+                            "navigation, status, disclosure, and card feedback should use the shared restrained 120-180 ms motion contract");
+                        foreach (var element in normalFeedback) ArenaMotion.CancelReveal(element);
 
                         var reduced = service.SetMotionPreferenceAsync("reduced").GetAwaiter().GetResult();
                         Require(reduced.Ok
@@ -912,6 +951,13 @@ internal static partial class Program
                         Require(reducedOverlay.Visibility == Visibility.Visible
                             && !reducedOverlay.HasAnimatedProperties
                             && reducedOverlay.Opacity == 1, "reduced QA motion should reveal immediately with no animation clock");
+                        var reducedFeedback = new[] { new Border(), new Border(), new Border(), new Border() };
+                        ArenaMotion.NavigationSelected(reducedFeedback[0]);
+                        ArenaMotion.StatusChanged(reducedFeedback[1]);
+                        ArenaMotion.DisclosureOpened(reducedFeedback[2]);
+                        ArenaMotion.RevealCard(reducedFeedback[3]);
+                        Require(reducedFeedback.All(element => !element.HasAnimatedProperties && element.Opacity == 1),
+                            "reduced motion should remove all feedback clocks without changing layout, visibility, opacity, or interaction state");
 
                         var reducedEvidence = service.CaptureStructureAsync(
                             "motion/reduced.json",
@@ -1019,7 +1065,11 @@ internal static partial class Program
                 SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
                 var navigationRail = new ShellNavigationRailControl();
                 var anchor = navigationRail.ArenaNavigationButton;
-                var peer = navigationRail.ExperimentLabNavigationButton;
+                var hiddenExperiment = navigationRail.ExperimentLabNavigationButton;
+                hiddenExperiment.Visibility = MainWindow.IsExperimentLabEnabled(new WpfSettings())
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+                var peer = navigationRail.AgentNavigationButton;
                 var trailing = new Button
                 {
                     Name = "QaFocusTrailing",
@@ -1052,6 +1102,10 @@ internal static partial class Program
                 {
                     window.Show();
                     window.UpdateLayout();
+                    Require(hiddenExperiment.Visibility == Visibility.Collapsed
+                            && !hiddenExperiment.IsVisible
+                            && AIArenaUiVerificationControlService.IsFocusCapturePeerIdentity(peer.Name),
+                        "Debug-off focus verification should skip the hidden Experiment Lab route and retain a valid visible peer");
                     FocusManager.SetFocusedElement(window, trailing);
                     _ = Keyboard.Focus(trailing);
                     window.UpdateLayout();
@@ -1123,24 +1177,24 @@ internal static partial class Program
                         && captured.Anchor.BeforeIdentity == "QaFocusTrailing"
                         && captured.Anchor.AfterIdentity == AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity
                         && captured.Next.BeforeIdentity == AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity
-                        && captured.Next.AfterIdentity == AIArenaUiVerificationControlService.FocusCapturePeerIdentity
-                        && captured.Previous.BeforeIdentity == AIArenaUiVerificationControlService.FocusCapturePeerIdentity
+                        && captured.Next.AfterIdentity == peer.Name
+                        && captured.Previous.BeforeIdentity == peer.Name
                         && captured.Previous.AfterIdentity == AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity
                         && captured.Capture.BeforeIdentity == AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity
-                        && captured.Capture.AfterIdentity == AIArenaUiVerificationControlService.FocusCapturePeerIdentity
+                        && captured.Capture.AfterIdentity == peer.Name
                         && focusSequence.Take(4).SequenceEqual([
                             AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity,
-                            AIArenaUiVerificationControlService.FocusCapturePeerIdentity,
+                            peer.Name,
                             AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity,
-                            AIArenaUiVerificationControlService.FocusCapturePeerIdentity])
+                            peer.Name])
                         && published.Count(item => item.Type == "app.qa.focus.captured") == 1,
                         "one control-plane request should anchor and complete the exact contiguous next/previous/next shell focus cycle");
                     dispatcher.Invoke(() => { }, DispatcherPriority.Background);
                     Require(focusSequence.SequenceEqual([
                             AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity,
-                            AIArenaUiVerificationControlService.FocusCapturePeerIdentity,
+                            peer.Name,
                             AIArenaUiVerificationControlService.FocusCaptureAnchorIdentity,
-                            AIArenaUiVerificationControlService.FocusCapturePeerIdentity,
+                            peer.Name,
                             "interleaved-dispatch"]),
                         "a queued same-priority dispatcher callback interleaved with the UI-thread-atomic focus cycle");
 
@@ -1512,6 +1566,113 @@ internal static partial class Program
         }
     }
 
+    private static void WorkspacePageHeaderHostsResponsiveAccessibleContract()
+    {
+        RunStaTest(() =>
+        {
+            var requested = 0;
+            var header = new WorkspacePageHeaderControl
+            {
+                Title = "Context & Prompt Inspector",
+                Description = "Inspect bounded context assembly, prompt inputs, and current evidence without exposing private prompt content.",
+                Status = "Revalidating 12 current records",
+                StatusKind = "Revalidating",
+                PrimaryActionText = "Refresh evidence",
+                PrimaryActionAutomationName = "Refresh inspector evidence",
+                PrimaryActionHelpText = "Reload the current bounded inspector evidence."
+            };
+            header.PrimaryActionRequested += (_, _) => requested++;
+            var host = new Window
+            {
+                Width = 1500,
+                Height = 260,
+                ShowInTaskbar = false,
+                WindowStyle = WindowStyle.None,
+                Content = header
+            };
+            try
+            {
+                host.Show();
+                foreach (var width in new[] { 1500d, 960d })
+                {
+                    host.Width = width;
+                    host.UpdateLayout();
+                    Require(!header.UsesCompactLayout
+                        && Grid.GetRow(header.PrimaryActionButton) == 0
+                        && Grid.GetColumn(header.PrimaryActionButton) == 1
+                        && header.ActualWidth <= width
+                        && header.DescriptionText.ActualWidth <= header.ActualWidth,
+                        $"workspace header did not retain its wide title/purpose/status/action contract at {width:0} DIP");
+                }
+
+                header.Width = 746;
+                host.UpdateLayout();
+                Require(header.UsesCompactLayout
+                    && Grid.GetRow(header.PrimaryActionButton) == 1
+                    && Grid.GetColumn(header.PrimaryActionButton) == 0
+                    && header.PrimaryActionButton.HorizontalAlignment == HorizontalAlignment.Left
+                    && header.StatusText.TextWrapping == TextWrapping.NoWrap
+                    && header.StatusText.TextTrimming == TextTrimming.CharacterEllipsis
+                    && header.StatusChip.ActualWidth <= 300.5
+                    && ToolTipService.GetToolTip(header.StatusChip)?.ToString() == header.Status,
+                    "workspace header did not wrap its contextual action or constrain its visible status at the approximately 746-DIP hosted tier");
+                var statusPeer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(header.StatusText)
+                    ?? throw new InvalidOperationException("Workspace header status did not create a TextBlock automation peer.");
+                Require(AutomationProperties.GetName(header) == "Context & Prompt Inspector page header"
+                    && AutomationProperties.GetHelpText(header) == header.Description
+                    && statusPeer.GetName().Contains(header.Status, StringComparison.Ordinal)
+                    && statusPeer.GetHelpText() == header.Status
+                    && statusPeer.GetItemStatus() == "Revalidating"
+                    && statusPeer.GetLiveSetting() == AutomationLiveSetting.Polite
+                    && AutomationProperties.GetName(header.PrimaryActionButton) == "Refresh inspector evidence"
+                    && AutomationProperties.GetHelpText(header.PrimaryActionButton) == "Reload the current bounded inspector evidence.",
+                    "workspace header automation did not expose title, purpose, truthful peer-backed live status, and contextual action");
+                Require(header.PrimaryActionButton.Focus(), "workspace header primary action was not keyboard focusable");
+                header.PrimaryActionButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Require(requested == 1, "workspace header did not route its contextual primary action");
+
+                header.Status = "Ready for bounded inspection";
+                header.StatusKind = "Ready";
+                host.UpdateLayout();
+                Require(statusPeer.GetName().Contains("Ready for bounded inspection", StringComparison.Ordinal)
+                    && statusPeer.GetHelpText() == "Ready for bounded inspection"
+                    && statusPeer.GetItemStatus() == "Ready"
+                    && statusPeer.GetLiveSetting() == AutomationLiveSetting.Polite,
+                    "workspace header status updates did not remain available through the live TextBlock automation peer");
+
+                header.Status = "";
+                header.PrimaryActionText = "";
+                host.UpdateLayout();
+                Require(header.StatusChip.Visibility == Visibility.Collapsed
+                    && header.PrimaryActionButton.Visibility == Visibility.Collapsed
+                    && header.CompactActionRow.Height.Value == 0,
+                    "workspace header optional status and action left duplicate or empty chrome behind");
+
+                header.IsCompactPresentation = true;
+                header.AnnounceStatusChanges = false;
+                header.PrimaryActionText = "Transcript filters";
+                header.Status = "12 shown";
+                header.Width = 746;
+                host.UpdateLayout();
+                header.Measure(new Size(746, double.PositiveInfinity));
+                Require(!header.UsesCompactLayout
+                    && Grid.GetRow(header.DescriptionText) == 0
+                    && Grid.GetColumn(header.DescriptionText) == 1
+                    && Grid.GetRow(header.PrimaryActionButton) == 0
+                    && Grid.GetColumn(header.PrimaryActionButton) == 1
+                    && header.DescriptionText.TextWrapping == TextWrapping.NoWrap
+                    && header.DescriptionText.TextTrimming == TextTrimming.CharacterEllipsis
+                    && statusPeer.GetLiveSetting() == AutomationLiveSetting.Off
+                    && header.DesiredSize.Height <= 48,
+                    "compact workspace headers should keep purpose, count, and action on one bounded row to preserve dense workspace height");
+            }
+            finally
+            {
+                host.Close();
+            }
+        });
+    }
+
     private static System.Collections.Immutable.ImmutableArray<ArenaQaAcceptedLimitation> QaRequiredLimitations() =>
         [.. ArenaQaSealManifestV1.RequiredLimitations.Select(requirement => new ArenaQaAcceptedLimitation(
             requirement.Id,
@@ -1542,5 +1703,348 @@ internal static partial class Program
         }
 
         return task.GetAwaiter().GetResult();
+    }
+
+    private static void SharedMenuPopupHostsThemeFocusAndDisabledContracts()
+    {
+        var processPath = Environment.ProcessPath
+            ?? throw new InvalidOperationException("The test process executable path is unavailable.");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = processPath,
+            WorkingDirectory = Path.GetDirectoryName(FindWorkspaceFile("AI Arena - WPF.sln"))!,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        if (Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            startInfo.ArgumentList.Add(System.Reflection.Assembly.GetExecutingAssembly().Location);
+        }
+        startInfo.ArgumentList.Add("--shared-popup-theme-fixture");
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("The shared popup theme fixture did not start.");
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(60_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new InvalidOperationException("The shared popup theme fixture timed out.");
+        }
+
+        var output = standardOutput.GetAwaiter().GetResult();
+        var error = standardError.GetAwaiter().GetResult();
+        Require(process.ExitCode == 0,
+            $"shared popup theme fixture failed with exit code {process.ExitCode}:{Environment.NewLine}{output}{error}");
+    }
+
+    private static int RunSharedPopupThemeFixture()
+    {
+        try
+        {
+            RunStaTest(SharedPopupThemeFixtureCore);
+            Console.WriteLine("PASS hosted shared popup theme fixture");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex);
+            return 1;
+        }
+    }
+
+    private static void SharedPopupThemeFixtureCore()
+    {
+        Require(Application.Current is null,
+            "the isolated popup fixture should own the only WPF Application in its process");
+        var application = new App();
+        application.InitializeComponent();
+
+        var target = new Button { Content = "Open menu", Width = 120, Height = 36 };
+        target.SetResourceReference(FrameworkElement.StyleProperty, "Arena.Button.Base");
+        var enabled = new MenuItem { Header = "Enabled action" };
+        var checkedItem = new MenuItem
+        {
+            Header = "Pinned action",
+            InputGestureText = "Ctrl+P",
+            IsCheckable = true,
+            IsChecked = true
+        };
+        var icon = new TextBlock { Text = "!" };
+        var iconItem = new MenuItem { Header = "Icon action", Icon = icon };
+        var nestedChild = new MenuItem { Header = "Nested action" };
+        var nested = new MenuItem { Header = "More actions", Items = { nestedChild } };
+        var disabled = new MenuItem { Header = "Unavailable action", IsEnabled = false };
+        var separator = new Separator();
+        var menu = new ContextMenu
+        {
+            PlacementTarget = target,
+            Items = { enabled, checkedItem, iconItem, nested, separator, disabled }
+        };
+        target.ContextMenu = menu;
+
+        var toolTip = new ToolTip
+        {
+            Content = "Theme-aware help",
+            PlacementTarget = target
+        };
+        target.ToolTip = toolTip;
+        var combo = new ComboBox
+        {
+            Width = 220,
+            Items = { "Current model", "Alternate model" },
+            SelectedIndex = 0
+        };
+        var list = new ListBox
+        {
+            Width = 220,
+            Items = { "Current run", "Previous run" },
+            SelectedIndex = 0
+        };
+        var topLevelChild = new MenuItem { Header = "Top-level nested action" };
+        var topLevelHeader = new MenuItem { Header = "Actions", Items = { topLevelChild } };
+        var topLevelItem = new MenuItem { Header = "Direct action" };
+        var menuBar = new Menu { Items = { topLevelHeader, topLevelItem } };
+        var content = new StackPanel { Margin = new Thickness(12) };
+        content.Children.Add(menuBar);
+        content.Children.Add(target);
+        content.Children.Add(combo);
+        content.Children.Add(list);
+        var host = new Window
+        {
+            Content = content,
+            Width = 420,
+            Height = 300,
+            WindowStyle = WindowStyle.None,
+            ShowInTaskbar = false,
+            Opacity = 0,
+            Left = -10000,
+            Top = -10000
+        };
+
+        host.Show();
+        try
+        {
+            Require(menu.ReadLocalValue(FrameworkElement.StyleProperty) == DependencyProperty.UnsetValue
+                    && toolTip.ReadLocalValue(FrameworkElement.StyleProperty) == DependencyProperty.UnsetValue
+                    && combo.ReadLocalValue(FrameworkElement.StyleProperty) == DependencyProperty.UnsetValue,
+                "the hosted popup controls should consume implicit application styles without test-only style injection");
+
+            foreach (var themeId in new[] { "dark-blue", "light", "high-contrast" })
+            {
+                var theme = ThemePalette.Resolve(themeId);
+                ShellNavigationCoordinator.ApplyThemeResources(host.Resources, theme);
+                Require(ExperimentBrushMatches(application.Resources["CardBrush"] as Brush, theme.Card)
+                        && ExperimentBrushMatches(application.Resources["TextBrush"] as Brush, theme.Text),
+                    $"production theme application did not synchronize the {themeId} application popup scope");
+                Require(ThemePalette.ContrastRatio(theme.PrimaryBorder, theme.Primary) >= 3.0
+                        && ThemePalette.ContrastRatio(theme.HoverBorder, theme.NavHover) >= 3.0,
+                    $"{themeId} selected and hover item boundaries did not retain 3:1 non-text contrast");
+                if (themeId == "light")
+                {
+                    Require(ThemePalette.ContrastRatio(theme.DisabledText, theme.Disabled) >= 3.0,
+                        "Light unavailable/disabled chrome did not retain a 3:1 perceivable boundary");
+                }
+
+                menu.IsOpen = true;
+                FlushSharedPopupDispatcher(host);
+                menu.ApplyTemplate();
+                foreach (var item in new[] { enabled, checkedItem, iconItem, nested, disabled })
+                {
+                    item.ApplyTemplate();
+                }
+
+                var menuChrome = RequireSharedPopupPart<Border>(menu, "MenuChrome");
+                var enabledChrome = RequireSharedPopupPart<Border>(enabled, "MenuItemChrome");
+                var disabledChrome = RequireSharedPopupPart<Border>(disabled, "MenuItemChrome");
+                Require(ExperimentBrushMatches(menuChrome.Background, theme.Card)
+                        && ExperimentBrushMatches(menuChrome.BorderBrush, theme.Border),
+                    $"shared context menu fell through the {themeId} application palette");
+                Require(ExperimentBrushMatches(disabledChrome.Background, theme.Disabled)
+                        && ExperimentBrushMatches(disabledChrome.BorderBrush, theme.DisabledBorder)
+                        && ExperimentBrushMatches(disabled.Foreground, theme.DisabledText),
+                    $"shared disabled menu item fell through the {themeId} palette");
+                Require(enabled.Focus(), $"shared menu item was not keyboard focusable under {themeId}");
+                FlushSharedPopupDispatcher(host);
+                Require(ExperimentBrushMatches(enabledChrome.Background, theme.NavActive)
+                        && ExperimentBrushMatches(enabledChrome.BorderBrush, theme.PrimaryBorder),
+                    $"shared menu item focus was not visible under {themeId}");
+
+                nested.IsSubmenuOpen = true;
+                FlushSharedPopupDispatcher(host);
+                var nestedPopup = RequireSharedPopupPart<System.Windows.Controls.Primitives.Popup>(nested, "PART_Popup");
+                var nestedChrome = RequireSharedPopupPart<Border>(nested, "SubmenuChrome");
+                nestedChild.ApplyTemplate();
+                Require(nested.Role == MenuItemRole.SubmenuHeader
+                        && nestedPopup.IsOpen
+                        && ExperimentBrushMatches(nestedChrome.Background, theme.Card)
+                        && ExperimentBrushMatches(nestedChrome.BorderBrush, theme.Border)
+                        && RequireSharedPopupPart<System.Windows.Shapes.Path>(nested, "SubmenuArrow").Visibility == Visibility.Visible,
+                    $"nested menu behavior or chrome was not preserved under {themeId}");
+                Require(nestedChild.Focus(), $"nested menu item was not keyboard focusable under {themeId}");
+                nested.IsSubmenuOpen = false;
+                menu.IsOpen = false;
+                FlushSharedPopupDispatcher(host);
+
+                combo.IsDropDownOpen = true;
+                FlushSharedPopupDispatcher(host);
+                combo.ApplyTemplate();
+                var dropDown = RequireSharedPopupPart<Border>(combo, "DropDown");
+                var selectedComboItem = combo.ItemContainerGenerator.ContainerFromIndex(0) as ComboBoxItem
+                    ?? throw new InvalidOperationException("Hosted ComboBox did not realize its selected item.");
+                selectedComboItem.ApplyTemplate();
+                var selectedComboChrome = RequireSharedPopupPart<Border>(selectedComboItem, "ItemChrome");
+                var highlightTrigger = selectedComboItem.Template.Triggers
+                    .OfType<Trigger>()
+                    .SingleOrDefault(trigger => trigger.Property == ComboBoxItem.IsHighlightedProperty
+                        && Equals(trigger.Value, true));
+                Require(ExperimentBrushMatches(dropDown.Background, theme.Input)
+                        && ExperimentBrushMatches(dropDown.BorderBrush, theme.Border)
+                        && ExperimentBrushMatches(selectedComboChrome.Background, theme.Primary)
+                        && ExperimentBrushMatches(selectedComboChrome.BorderBrush, theme.PrimaryBorder),
+                    $"ComboBox popup or selected item fell through the {themeId} palette");
+                Require(highlightTrigger is not null
+                        && highlightTrigger.Setters.OfType<Setter>().Any(setter =>
+                            setter.TargetName == "ItemChrome" && setter.Property == Border.BorderBrushProperty),
+                    "ComboBoxItem highlight did not retain a concrete hover-border contract in the hosted template");
+                combo.IsDropDownOpen = false;
+                FlushSharedPopupDispatcher(host);
+
+                toolTip.IsOpen = true;
+                FlushSharedPopupDispatcher(host);
+                toolTip.ApplyTemplate();
+                var toolTipChrome = RequireSharedPopupPart<Border>(toolTip, "ToolTipChrome");
+                Require(ExperimentBrushMatches(toolTipChrome.Background, theme.Card)
+                        && ExperimentBrushMatches(toolTipChrome.BorderBrush, theme.Border)
+                        && ExperimentBrushMatches(toolTip.Foreground, theme.Text),
+                    $"shared ToolTip fell through the {themeId} application palette");
+                toolTip.IsOpen = false;
+                FlushSharedPopupDispatcher(host);
+            }
+
+            menu.IsOpen = true;
+            FlushSharedPopupDispatcher(host);
+            foreach (var item in new[] { checkedItem, iconItem, nested })
+            {
+                item.ApplyTemplate();
+            }
+            Require(RequireSharedPopupPart<System.Windows.Shapes.Path>(checkedItem, "CheckMark").Visibility == Visibility.Visible
+                    && RequireSharedPopupPart<TextBlock>(checkedItem, "InputGestureText").Text == "Ctrl+P",
+                "checkable menu items did not expose their checked marker and input gesture");
+            Require(ReferenceEquals(RequireSharedPopupPart<ContentPresenter>(iconItem, "IconPresenter").Content, icon),
+                "menu item icons were dropped by the shared role-aware template");
+            Require(new System.Windows.Automation.Peers.MenuItemAutomationPeer(checkedItem)
+                        .GetPattern(System.Windows.Automation.Peers.PatternInterface.Toggle) is not null
+                    && new System.Windows.Automation.Peers.MenuItemAutomationPeer(nested)
+                        .GetPattern(System.Windows.Automation.Peers.PatternInterface.ExpandCollapse) is not null
+                    && new System.Windows.Automation.Peers.MenuItemAutomationPeer(enabled).GetAutomationControlType()
+                        == System.Windows.Automation.Peers.AutomationControlType.MenuItem
+                    && !disabled.IsEnabled,
+                "shared menu popup lost check, expansion, automation type, or disabled semantics");
+
+            menu.IsOpen = false;
+            topLevelHeader.IsSubmenuOpen = true;
+            FlushSharedPopupDispatcher(host);
+            topLevelHeader.ApplyTemplate();
+            topLevelItem.ApplyTemplate();
+            var topLevelPopup = RequireSharedPopupPart<System.Windows.Controls.Primitives.Popup>(topLevelHeader, "PART_Popup");
+            Require(topLevelHeader.Role == MenuItemRole.TopLevelHeader
+                    && topLevelItem.Role == MenuItemRole.TopLevelItem
+                    && topLevelPopup.IsOpen
+                    && topLevelPopup.Placement == System.Windows.Controls.Primitives.PlacementMode.Bottom
+                    && RequireSharedPopupPart<System.Windows.Shapes.Path>(topLevelHeader, "SubmenuArrow").Visibility == Visibility.Collapsed,
+                "shared MenuItem template did not preserve top-level header/item roles and bottom submenu placement");
+            topLevelHeader.IsSubmenuOpen = false;
+
+            FlushSharedPopupDispatcher(host);
+            var listItem = list.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem
+                ?? throw new InvalidOperationException("Hosted ListBox did not realize its first item.");
+            AssertSharedPointerMotion(target, host, "Arena.Button.Base");
+            AssertSharedPointerMotion(listItem, host, "Arena.ListBoxItem");
+
+            combo.IsDropDownOpen = true;
+            FlushSharedPopupDispatcher(host);
+            var comboItem = combo.ItemContainerGenerator.ContainerFromIndex(0) as ComboBoxItem
+                ?? throw new InvalidOperationException("Hosted ComboBox did not realize its first popup item for pointer feedback.");
+            AssertSharedPointerMotion(comboItem, host, "Arena.ComboBoxItem");
+            combo.IsDropDownOpen = false;
+
+            menu.IsOpen = true;
+            FlushSharedPopupDispatcher(host);
+            AssertSharedPointerMotion(enabled, host, "Arena.MenuItem");
+        }
+        finally
+        {
+            SystemMotionPreferences.ClearQaOverride();
+            toolTip.IsOpen = false;
+            menu.IsOpen = false;
+            combo.IsDropDownOpen = false;
+            host.Close();
+            application.Shutdown();
+        }
+    }
+
+    private static T RequireSharedPopupPart<T>(Control control, string name)
+        where T : DependencyObject
+    {
+        control.ApplyTemplate();
+        return control.Template.FindName(name, control) as T
+            ?? throw new InvalidOperationException(
+                $"{control.GetType().Name} did not realize shared template part '{name}'.");
+    }
+
+    private static void FlushSharedPopupDispatcher(Window host)
+    {
+        host.UpdateLayout();
+    }
+
+    private static void AssertSharedPointerMotion(FrameworkElement element, Window host, string label)
+    {
+        Require(element.IsLoaded && ArenaMotion.GetIsPointerFeedbackEnabled(element),
+            $"{label} did not load with the shared pointer-feedback behavior");
+        var width = element.ActualWidth;
+        var height = element.ActualHeight;
+        element.BeginAnimation(UIElement.OpacityProperty, null);
+        element.Opacity = 1;
+
+        SystemMotionPreferences.SetQaAnimationsEnabledOverride(true);
+        element.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, Environment.TickCount)
+        {
+            RoutedEvent = Mouse.MouseEnterEvent
+        });
+        element.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+        {
+            RoutedEvent = UIElement.PreviewMouseLeftButtonDownEvent
+        });
+        Require(element.HasAnimatedProperties
+                && Math.Abs((double)element.GetAnimationBaseValue(UIElement.OpacityProperty) - 0.82) < 0.001
+                && ArenaMotion.FeedbackDuration >= TimeSpan.FromMilliseconds(120)
+                && ArenaMotion.FeedbackDuration <= TimeSpan.FromMilliseconds(180),
+            $"{label} did not use the shared 120-180 ms normal-motion pressed cue");
+
+        SystemMotionPreferences.SetQaAnimationsEnabledOverride(false);
+        host.UpdateLayout();
+        Require(!element.HasAnimatedProperties
+                && Math.Abs(element.Opacity - 0.82) < 0.001
+                && Math.Abs(element.ActualWidth - width) < 0.01
+                && Math.Abs(element.ActualHeight - height) < 0.01,
+            $"{label} reduced motion did not preserve the same pressed opacity and layout without an animation clock");
+
+        element.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+        {
+            RoutedEvent = UIElement.PreviewMouseLeftButtonUpEvent
+        });
+        Require(!element.HasAnimatedProperties
+                && (Math.Abs(element.Opacity - 0.94) < 0.001 || Math.Abs(element.Opacity - 1) < 0.001),
+            $"{label} reduced-motion pointer release did not restore the equivalent hover/rest state immediately "
+            + $"(opacity {element.Opacity:F2}, over {element.IsMouseOver}, animated {element.HasAnimatedProperties})");
+        element.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, Environment.TickCount)
+        {
+            RoutedEvent = Mouse.MouseLeaveEvent
+        });
+        Require(!element.HasAnimatedProperties && Math.Abs(element.Opacity - 1) < 0.001,
+            $"{label} reduced-motion pointer leave did not restore full opacity immediately");
     }
 }

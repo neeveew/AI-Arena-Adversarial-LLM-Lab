@@ -26,6 +26,11 @@ internal static class ArenaTokens
     public static double BodyFontSize => Number("Arena.Type.BodySize", 12.5);
     public static double HeadingFontSize => Number("Arena.Type.HeadingSize", 14);
     public static double TitleFontSize => Number("Arena.Type.TitleSize", 17);
+    public static double PageTitleFontSize => Number("Arena.Type.PageTitleSize", 20);
+
+    public static TimeSpan QuickMotionDuration => TimeSpan.FromMilliseconds(120);
+    public static TimeSpan FeedbackMotionDuration => TimeSpan.FromMilliseconds(140);
+    public static TimeSpan DisclosureMotionDuration => TimeSpan.FromMilliseconds(160);
 
     public static double SmallRadiusValue => RadiusValue("Arena.Radius.Small", 6);
     public static double MediumRadiusValue => RadiusValue("Arena.Radius.Medium", 8);

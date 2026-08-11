@@ -46,6 +46,7 @@ public partial class MainWindow
             return;
         }
 
+        CloseNamedTransientShellFlyouts();
         Dispatcher.BeginInvoke(new Action(OpenCommandPalette), DispatcherPriority.Background);
     }
 
@@ -171,6 +172,14 @@ public partial class MainWindow
                 "F2",
                 "scenario cast matrix seed persona",
                 () => MatchSetupButton_Click(MatchSetupButton, new RoutedEventArgs())),
+            new(
+                "provider.models",
+                "Open Models and assignments",
+                "Provider",
+                "Ctrl+Shift+M",
+                "loaded available catalog routing agents",
+                () => ModelsButton_Click(ModelsButton, new RoutedEventArgs()),
+                () => ModelsButton.Visibility == Visibility.Visible),
             new(
                 "match.turn",
                 "Run one turn",

@@ -23,7 +23,7 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
     private readonly StackPanel recentSearchItems;
     private readonly TextBlock resultCountText;
     private readonly TextBlock? resultListHeaderText;
-    private readonly ComboBox turnFilterPicker;
+    private readonly Selector turnFilterPicker;
     private readonly CheckBox systemFilter;
     private readonly CheckBox agentsFilter;
     private readonly CheckBox narratorFilter;
@@ -58,7 +58,7 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
         FrameworkElement dragHandle,
         StackPanel recentSearchItems,
         TextBlock resultCountText,
-        ComboBox turnFilterPicker,
+        Selector turnFilterPicker,
         CheckBox systemFilter,
         CheckBox agentsFilter,
         CheckBox narratorFilter,
@@ -143,17 +143,44 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
     public void UpdateResultCount(int visibleCount, int totalCount)
     {
         var search = CurrentTranscriptSearch;
-        var filter = (turnFilterPicker.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "All Turns";
+        var filter = SelectedTurnFilterContent();
+        var selectedTurnTag = SelectedTurnFilterTag();
+        var turnFilterActive = !selectedTurnTag.Equals("all", StringComparison.OrdinalIgnoreCase);
         if (timelineTurnFilter() is int turn)
         {
             filter = $"Turn {turn}";
+            turnFilterActive = true;
         }
 
-        resultCountText.Text = string.IsNullOrWhiteSpace(search)
-            ? visibleCount == totalCount
-                ? $"{visibleCount} shown"
-                : $"{visibleCount} of {totalCount} - {filter}"
-            : $"{visibleCount} {(visibleCount == 1 ? "match" : "matches")} \"{TrimSearchForDisplay(search)}\"";
+        var speakerFilterActive = systemFilter.IsChecked != true
+            || agentsFilter.IsChecked != true
+            || narratorFilter.IsChecked != true
+            || operatorFilter.IsChecked != true;
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var activeFilterSuffix = turnFilterActive || speakerFilterActive ? " • Filters active" : "";
+            resultCountText.Text = $"{visibleCount} {(visibleCount == 1 ? "match" : "matches")} \"{TrimSearchForDisplay(search)}\"{activeFilterSuffix}";
+            return;
+        }
+
+        if (!turnFilterActive && !speakerFilterActive && visibleCount == totalCount)
+        {
+            resultCountText.Text = $"{visibleCount} shown";
+            return;
+        }
+
+        var activeFilters = new List<string>();
+        if (turnFilterActive)
+        {
+            activeFilters.Add(filter);
+        }
+
+        if (speakerFilterActive)
+        {
+            activeFilters.Add("Speakers filtered");
+        }
+
+        resultCountText.Text = $"{visibleCount} of {totalCount} • {string.Join(" + ", activeFilters)}";
     }
 
     public void UpdateSearchState()
@@ -189,7 +216,7 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
 
         searchPopup.IsOpen = false;
         PopulateRecentSearches();
-        ShellUiHelpers.SelectComboTag(turnFilterPicker, "all");
+        SelectTurnFilterTag("all");
         systemFilter.IsChecked = true;
         agentsFilter.IsChecked = true;
         narratorFilter.IsChecked = true;
@@ -399,7 +426,7 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
 
     private IEnumerable<TranscriptMessage> ApplyTurnFilter(IEnumerable<TranscriptMessage> messages)
     {
-        var filter = (turnFilterPicker.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "all";
+        var filter = SelectedTurnFilterTag();
         var filtered = filter switch
         {
             "latest10" => messages.OrderByDescending(message => message.Turn).Take(10),
@@ -411,6 +438,27 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
         return timelineTurnFilter() is int turn
             ? filtered.Where(message => message.Turn == turn)
             : filtered;
+    }
+
+    private string SelectedTurnFilterContent() =>
+        (turnFilterPicker.SelectedItem as ContentControl)?.Content?.ToString() ?? "All Turns";
+
+    private string SelectedTurnFilterTag() =>
+        (turnFilterPicker.SelectedItem as FrameworkElement)?.Tag?.ToString() ?? "all";
+
+    private void SelectTurnFilterTag(string tag)
+    {
+        foreach (var item in turnFilterPicker.Items)
+        {
+            if (item is FrameworkElement element
+                && string.Equals(element.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase))
+            {
+                turnFilterPicker.SelectedItem = item;
+                return;
+            }
+        }
+
+        turnFilterPicker.SelectedIndex = turnFilterPicker.Items.Count > 0 ? 0 : -1;
     }
 
     private bool TranscriptSourceEnabled(TranscriptMessage message)
