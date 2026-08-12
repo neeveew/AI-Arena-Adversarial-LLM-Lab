@@ -190,6 +190,7 @@ var tests = new List<(string Name, Action Test)>
     ("main window skips hidden world snapshot refresh", MainWindowSkipsHiddenWorldSnapshotRefresh),
     ("arena operation coordinator selects operation mode", ArenaOperationCoordinatorSelectsOperationMode),
     ("factory mode readiness requires eligible public Operator input", FactoryModeReadinessRequiresEligiblePublicOperatorInput),
+    ("arena readiness honors optional default routing", ArenaReadinessHonorsOptionalDefaultRouting),
     ("stale provider projection cannot undo factory Operator readiness", StaleProviderProjectionCannotUndoFactoryOperatorReadiness),
     ("control plane Factory prerequisites use the durable snapshot", ControlPlaneFactoryPrerequisitesUseDurableSnapshot),
     ("factory mode toggle persists across concurrency with safe audit payload", FactoryModeTogglePersistsAcrossConcurrencyWithSafeAuditPayload),

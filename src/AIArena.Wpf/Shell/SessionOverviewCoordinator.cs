@@ -137,12 +137,20 @@ internal sealed class SessionOverviewCoordinator
 
     internal static string CurrentTurnModel(ArenaViewSnapshot snapshot, AgentState? current)
     {
-        if (!string.IsNullOrWhiteSpace(current?.Model))
+        if (!string.IsNullOrWhiteSpace(current?.Model) && current.Model != "-")
         {
             return current.Model;
         }
 
-        return !string.IsNullOrWhiteSpace(snapshot.ProviderModel)
+        // The shared provider model is also used by Agent Workspace and provider
+        // diagnostics, so its presence is not proof that an Arena role can use it.
+        // Only treat it as the current role's model while fallback is enabled.
+        // With no current participant, retaining the shared model in shell status
+        // remains useful and cannot enable an Arena action because the cast gate
+        // is evaluated first.
+        return (current is null || snapshot.DefaultForUnassignedAgentsEnabled)
+            && !string.IsNullOrWhiteSpace(snapshot.ProviderModel)
+            && snapshot.ProviderModel != "-"
             ? snapshot.ProviderModel
             : "-";
     }

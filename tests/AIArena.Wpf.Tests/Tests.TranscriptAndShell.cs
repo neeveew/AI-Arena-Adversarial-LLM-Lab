@@ -250,6 +250,111 @@ static void FactoryModeReadinessRequiresEligiblePublicOperatorInput()
     Require(!deletedRootState.CanRun && deletedRootState.Message.Contains("root is missing", StringComparison.Ordinal), "a missing Factory root should block with reset-or-fork guidance");
 }
 
+static void ArenaReadinessHonorsOptionalDefaultRouting()
+{
+    var unassignedAgent = new AgentState(
+        "alpha",
+        "Alpha",
+        "waiting",
+        "persona",
+        "default",
+        "default",
+        "",
+        "-",
+        true,
+        false,
+        []);
+    var sharedOnly = SnapshotForOverviewTest(
+        providerOnline: true,
+        providerModel: "model-a",
+        providerLastError: "",
+        turnIndex: 0,
+        messages: [],
+        agents: [unassignedAgent]);
+
+    Require(
+        SessionOverviewCoordinator.CurrentTurnModel(sharedOnly, unassignedAgent) == "model-a"
+        && ArenaOperationCoordinator.EvaluateReadiness(sharedOnly).CanRun,
+        "the established default-on route should continue resolving an unassigned active role through the shared provider model");
+
+    var defaultOffArena = sharedOnly with { DefaultForUnassignedAgentsEnabled = false };
+    var arenaBlocked = ArenaOperationCoordinator.EvaluateReadiness(defaultOffArena);
+    Require(
+        SessionOverviewCoordinator.CurrentTurnModel(defaultOffArena, unassignedAgent) == "-",
+        "a shared provider model must not be projected as the current Arena route while Default for unassigned agents is off");
+    Require(
+        !arenaBlocked.CanRun
+        && arenaBlocked.Message.Contains("Assign a model to Alpha", StringComparison.Ordinal)
+        && arenaBlocked.Message.Contains("Default for unassigned agents", StringComparison.Ordinal)
+        && arenaBlocked.Message.Contains("Loading a model does not assign", StringComparison.Ordinal),
+        "Arena mode should block an unassigned current role with routing guidance that distinguishes assignment from model residency");
+
+    var publicOperatorTurn = TranscriptForTest(1, "Operator", "operator", "message", "ok") with
+    {
+        Text = "Begin the shared Factory conversation."
+    };
+    var defaultOffFactoryWithoutRoot = defaultOffArena with { FactoryMode = true };
+    var factoryWithoutRootBlocked = ArenaOperationCoordinator.EvaluateReadiness(defaultOffFactoryWithoutRoot);
+    Require(
+        !factoryWithoutRootBlocked.CanRun
+        && factoryWithoutRootBlocked.Message.Contains("Assign a model to Alpha", StringComparison.Ordinal)
+        && !factoryWithoutRootBlocked.Message.Contains("public Operator turn", StringComparison.Ordinal),
+        "Factory readiness should surface the missing model route before asking for conversation input");
+
+    var defaultOffFactoryWithRoot = defaultOffFactoryWithoutRoot with { Messages = [publicOperatorTurn] };
+    var factoryWithRootBlocked = ArenaOperationCoordinator.EvaluateReadiness(defaultOffFactoryWithRoot);
+    Require(
+        ArenaOperationCoordinator.HasFactoryInput(defaultOffFactoryWithRoot)
+        && !factoryWithRootBlocked.CanRun
+        && factoryWithRootBlocked.Message.Contains("Loading a model does not assign", StringComparison.Ordinal),
+        "a valid Factory root must not make a residency-only shared model runnable while fallback is off");
+
+    var explicitlyAssignedAgent = unassignedAgent with { Model = "model-a" };
+    var explicitSameAsShared = defaultOffFactoryWithRoot with
+    {
+        Agents = [explicitlyAssignedAgent],
+        ExplicitRoleModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["alpha"] = "model-a"
+        }
+    };
+    var explicitReadiness = ArenaOperationCoordinator.EvaluateReadiness(explicitSameAsShared);
+    Require(
+        SessionOverviewCoordinator.CurrentTurnModel(explicitSameAsShared, explicitlyAssignedAgent) == "model-a"
+        && explicitReadiness.CanRun,
+        "an explicit role assignment equal to the shared model should remain runnable while fallback is off");
+
+    var unassignedBeta = unassignedAgent with { Id = "beta", Name = "Beta" };
+    var partiallyExplicitRoster = defaultOffFactoryWithRoot with
+    {
+        Agents = [explicitlyAssignedAgent, unassignedBeta],
+        ExplicitRoleModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["alpha"] = "model-a"
+        }
+    };
+    var partialReadiness = ArenaOperationCoordinator.EvaluateReadiness(partiallyExplicitRoster);
+    Require(
+        !partialReadiness.CanRun
+        && partialReadiness.Message.Contains("Assign a model to Beta", StringComparison.Ordinal)
+        && partialReadiness.Message.Contains("Default for unassigned agents", StringComparison.Ordinal),
+        "a partial explicit roster should block both 1 Turn and Auto Chat before the loop reaches an unassigned participant");
+
+    var explicitlyAssignedBeta = unassignedBeta with { Model = "model-b" };
+    var fullyExplicitRoster = partiallyExplicitRoster with
+    {
+        Agents = [explicitlyAssignedAgent, explicitlyAssignedBeta],
+        ExplicitRoleModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["alpha"] = "model-a",
+            ["beta"] = "model-b"
+        }
+    };
+    Require(
+        ArenaOperationCoordinator.EvaluateReadiness(fullyExplicitRoster).CanRun,
+        "a fully explicit roster should be runnable with Default off, including a role explicitly assigned to the shared model");
+}
+
 static void StaleProviderProjectionCannotUndoFactoryOperatorReadiness()
 {
     RunStaTest(() =>

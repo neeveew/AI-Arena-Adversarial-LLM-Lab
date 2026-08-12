@@ -383,11 +383,11 @@ internal sealed class ArenaOperationCoordinator
                 NarrationMessage: "Narration is unavailable after End Match. Reset or fork the session to continue.");
         }
 
-        var current = SessionOverviewCoordinator.CurrentTurnAgent(snapshot);
-        var currentModel = SessionOverviewCoordinator.CurrentTurnModel(snapshot, current);
         var providerReachable = snapshot.ProviderOnline;
-        var modelSelected = !string.IsNullOrWhiteSpace(currentModel) && currentModel != "-";
-        if (activeAgentCount == 0 && (!providerReachable || !modelSelected))
+        var activeAgentsWithoutRoute = snapshot.Agents
+            .Where(agent => agent.Active && !HasEffectiveModelRoute(snapshot, agent))
+            .ToArray();
+        if (activeAgentCount == 0 && !providerReachable)
         {
             return Readiness(false, "Finish provider, model, and cast setup before running the arena.");
         }
@@ -402,9 +402,9 @@ internal sealed class ArenaOperationCoordinator
             return Readiness(false, "Connect the configured provider before running the arena.");
         }
 
-        if (!modelSelected)
+        if (activeAgentsWithoutRoute.Length > 0)
         {
-            return Readiness(false, "Select a model before running the arena.");
+            return Readiness(false, MissingModelRouteMessage(snapshot, activeAgentsWithoutRoute));
         }
 
         var factoryInput = FactoryInputState(snapshot);
@@ -429,6 +429,33 @@ internal sealed class ArenaOperationCoordinator
 
         return new ArenaActionReadiness(true, "Arena actions ready.");
     }
+
+    private static bool HasEffectiveModelRoute(ArenaViewSnapshot snapshot, AgentState agent)
+    {
+        if (snapshot.ExplicitRoleModels.TryGetValue(agent.Id, out var explicitModel)
+            && HasModel(explicitModel))
+        {
+            return true;
+        }
+
+        return snapshot.DefaultForUnassignedAgentsEnabled && HasModel(snapshot.ProviderModel);
+    }
+
+    private static string MissingModelRouteMessage(
+        ArenaViewSnapshot snapshot,
+        IReadOnlyList<AgentState> agentsWithoutRoute)
+    {
+        var assignment = agentsWithoutRoute.Count == 1
+            ? $"Assign a model to {agentsWithoutRoute[0].Name}"
+            : "Assign models to all active agents";
+        var alternative = snapshot.DefaultForUnassignedAgentsEnabled
+            ? "select a shared Default model"
+            : "turn on Default for unassigned agents";
+        return $"{assignment} or {alternative} before running the arena. Loading a model does not assign it to an Arena role.";
+    }
+
+    private static bool HasModel(string? model) =>
+        !string.IsNullOrWhiteSpace(model) && model.Trim() != "-";
 
     internal static bool HasFactoryInput(ArenaViewSnapshot snapshot)
     {
