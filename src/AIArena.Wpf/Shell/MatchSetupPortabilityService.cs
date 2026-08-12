@@ -52,6 +52,7 @@ internal sealed class MatchSetupPortabilityService
     private readonly Func<string?, CancellationToken, Task> loadSessionsAsync;
     private readonly SemaphoreSlim importGate = new(1, 1);
     private readonly SemaphoreSlim? arenaOperationLock;
+    private readonly Func<IReadOnlyList<WpfProviderModelSettings>> portableModelSettings;
 
     public MatchSetupPortabilityService(
         SessionStore sessionStore,
@@ -59,7 +60,8 @@ internal sealed class MatchSetupPortabilityService
         Func<CoreSessionSummary?> activeSession,
         Func<bool> isArenaBusy,
         Func<string?, CancellationToken, Task> loadSessionsAsync,
-        SemaphoreSlim? arenaOperationLock = null)
+        SemaphoreSlim? arenaOperationLock = null,
+        Func<IReadOnlyList<WpfProviderModelSettings>>? portableModelSettings = null)
     {
         this.sessionStore = sessionStore;
         this.eventLogStore = eventLogStore;
@@ -67,6 +69,7 @@ internal sealed class MatchSetupPortabilityService
         this.isArenaBusy = isArenaBusy;
         this.loadSessionsAsync = loadSessionsAsync;
         this.arenaOperationLock = arenaOperationLock;
+        this.portableModelSettings = portableModelSettings ?? (() => []);
     }
 
     public async Task<AIArenaMatchSetupPackageResult> ExportAsync(CancellationToken cancellationToken = default)
@@ -83,7 +86,7 @@ internal sealed class MatchSetupPortabilityService
             return Failure("not_available", $"Session '{session.Id}' has no snapshot to export.");
         }
 
-        var package = MatchSetupPackageCodec.FromSnapshot(session.Id, snapshot);
+        var package = MatchSetupPackageCodec.FromSnapshot(session.Id, snapshot, portableModelSettings());
         var validation = MatchSetupPackageCodec.Parse(MatchSetupPackageCodec.Serialize(package));
         if (!validation.Ok || validation.Package is null)
         {
@@ -190,7 +193,18 @@ internal sealed class MatchSetupPortabilityService
             return Failure("conflict", "A collision-free session id could not be reserved; retry the import.");
         }
 
-        var importedPackage = MatchSetupPackageCodec.FromSnapshot(targetSessionId, target);
+        var importedPortableSettings = parsed.Package.Setup.ModelSettings
+            .Select(setting => new WpfProviderModelSettings
+            {
+                Model = setting.Model,
+                ConfiguredContextWindow = setting.ConfiguredContextWindow,
+                HistoryPolicy = setting.HistoryPolicy,
+                ResponseTone = setting.ResponseTone,
+                CustomTone = setting.CustomTone,
+                PendingApply = setting.PendingApply
+            })
+            .ToArray();
+        var importedPackage = MatchSetupPackageCodec.FromSnapshot(targetSessionId, target, importedPortableSettings);
         var state = MatchSetupPackageCodec.ToState(targetSessionId, importedPackage);
         var warnings = parsed.Warnings.Concat(apply.Warnings).Distinct(StringComparer.Ordinal).ToList();
         if (state.FactoryMode)
@@ -317,6 +331,10 @@ internal sealed class MatchSetupPortabilityService
         Temperature = config.Temperature,
         MaxOutputTokens = config.MaxOutputTokens,
         ContextLength = config.ContextLength,
+        ConfiguredContextWindow = config.ConfiguredContextWindow,
+        HistoryPolicy = config.HistoryPolicy,
+        ResponseTone = config.ResponseTone,
+        CustomTone = config.CustomTone,
         Reasoning = config.Reasoning,
         NativeStatefulChat = config.NativeStatefulChat,
         NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
@@ -334,7 +352,8 @@ internal sealed class MatchSetupPortabilityService
 
 internal static class MatchSetupPackageCodec
 {
-    public const string Schema = "ai_arena.match_setup.v3";
+    public const string Schema = "ai_arena.match_setup.v4";
+    public const string LegacySchemaV3 = "ai_arena.match_setup.v3";
     public const string LegacySchema = "ai_arena.match_setup.v2";
     public const string FactoryConversationContract = FactoryConversationService.ContractVersion;
     public const int MaxPackageBytes = 512 * 1024;
@@ -363,7 +382,10 @@ internal static class MatchSetupPackageCodec
 
     internal sealed record ApplyResult(bool Ok, string Message, IReadOnlyList<string> Warnings);
 
-    public static MatchSetupPackage FromSnapshot(string sessionId, ArenaSnapshot snapshot)
+    public static MatchSetupPackage FromSnapshot(
+        string sessionId,
+        ArenaSnapshot snapshot,
+        IReadOnlyList<WpfProviderModelSettings>? portableModelSettings = null)
     {
         var activeAgents = snapshot.Engine.Agents
             .Where(agent => agent.Active && AgentRosterService.IsParticipantId(agent.Id))
@@ -390,12 +412,13 @@ internal static class MatchSetupPackageCodec
 
         var providers = new SortedDictionary<string, MatchSetupProviderPackage>(StringComparer.OrdinalIgnoreCase);
         var sharedModel = snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var sharedConfig)
-            ? sharedConfig.Model.Trim()
+            ? PortableModelIdentifier(sharedConfig.Model)
             : "";
         foreach (var (key, config) in snapshot.Configs
                      .Where(item => IsSupportedProviderKey(item.Key, activeIds))
                      .OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
         {
+            var resolvedConfig = ModelRuntimeSettingsRegistry.Resolve(snapshot, config);
             var normalizedKey = key.Trim().ToLowerInvariant();
             var assignmentMode = normalizedKey.Equals(ModelProviderRouting.SharedConfigKey, StringComparison.OrdinalIgnoreCase)
                 ? MatchSetupProviderAssignmentModes.Inherit
@@ -410,17 +433,82 @@ internal static class MatchSetupPackageCodec
                 ApiMode = ModelProviderApiModes.Normalize(config.ApiMode),
                 Model = assignmentMode.Equals(MatchSetupProviderAssignmentModes.Explicit, StringComparison.Ordinal)
                     || normalizedKey.Equals(ModelProviderRouting.SharedConfigKey, StringComparison.OrdinalIgnoreCase)
-                        ? config.Model
+                        ? PortableModelIdentifier(config.Model)
                         : sharedModel,
                 TimeoutSeconds = ArenaSessionMutationCoordinator.ClampTimeout(config.Timeout),
                 Temperature = ArenaSessionMutationCoordinator.ClampTemperature(config.Temperature),
                 MaxOutputTokens = ArenaSessionMutationCoordinator.ClampMaxOutput(config.MaxOutputTokens),
                 ContextLength = ArenaSessionMutationCoordinator.ClampProviderContextLength(config.ContextLength),
+                ConfiguredContextWindow = NormalizeConfiguredContextWindow(resolvedConfig.ConfiguredContextWindow),
+                HistoryPolicy = ModelHistoryPolicies.NormalizeHistoryPolicy(resolvedConfig.HistoryPolicy),
+                ResponseTone = ModelResponseTones.NormalizeResponseTone(resolvedConfig.ResponseTone),
+                CustomTone = ModelResponseTones.NormalizeResponseTone(resolvedConfig.ResponseTone) == ModelResponseTones.Custom
+                    ? ModelResponseTones.NormalizeCustomTone(resolvedConfig.CustomTone)
+                    : "",
                 Reasoning = ModelProviderReasoningModes.Normalize(config.Reasoning),
                 NativeStatefulChat = config.NativeStatefulChat,
                 NativeIdleTtlSeconds = ArenaSessionMutationCoordinator.ClampProviderNativeIdleTtlSeconds(config.NativeIdleTtlSeconds),
                 AssignmentMode = assignmentMode
             };
+        }
+
+        var portableSettingsByIdentity = new SortedDictionary<string, MatchSetupModelSettingsPackage>(StringComparer.Ordinal);
+        void AddPortableModelSettings(
+            string model,
+            int configuredContextWindow,
+            string historyPolicy,
+            string responseTone,
+            string customTone,
+            bool pendingApply)
+        {
+            var safeModel = PortableModelIdentifier(model);
+            if (!IsPortableModelIdentifier(safeModel))
+            {
+                return;
+            }
+
+            var identity = ModelRuntimeSettingsRegistry.Identity(new ModelProviderConfig
+            {
+                BaseUrl = sharedConfig?.BaseUrl ?? ModelProviderDefaults.BaseUrl,
+                ApiMode = sharedConfig?.ApiMode ?? ModelProviderApiModes.OpenAiCompatible,
+                Model = safeModel
+            });
+            var normalizedTone = ModelResponseTones.NormalizeResponseTone(responseTone);
+            var existingPending = portableSettingsByIdentity.TryGetValue(identity, out var existing)
+                && existing.PendingApply;
+            portableSettingsByIdentity[identity] = new MatchSetupModelSettingsPackage
+            {
+                Model = safeModel,
+                ConfiguredContextWindow = NormalizeConfiguredContextWindow(configuredContextWindow),
+                HistoryPolicy = ModelHistoryPolicies.NormalizeHistoryPolicy(historyPolicy),
+                ResponseTone = normalizedTone,
+                CustomTone = normalizedTone == ModelResponseTones.Custom
+                    ? ModelResponseTones.NormalizeCustomTone(customTone)
+                    : "",
+                PendingApply = pendingApply || existingPending
+            };
+        }
+
+        foreach (var config in snapshot.Configs.Values.Where(config => !string.IsNullOrWhiteSpace(config.Model)))
+        {
+            var resolved = ModelRuntimeSettingsRegistry.Resolve(snapshot, config);
+            AddPortableModelSettings(
+                config.Model,
+                resolved.ConfiguredContextWindow,
+                resolved.HistoryPolicy,
+                resolved.ResponseTone,
+                resolved.CustomTone,
+                snapshot.PendingModelConfigurationApplies.Contains(ModelRuntimeSettingsRegistry.Identity(config)));
+        }
+        foreach (var setting in (portableModelSettings ?? []).Take(256))
+        {
+            AddPortableModelSettings(
+                setting.Model,
+                setting.ConfiguredContextWindow,
+                setting.HistoryPolicy,
+                setting.ResponseTone,
+                setting.CustomTone,
+                setting.PendingApply);
         }
 
         return new MatchSetupPackage
@@ -480,7 +568,8 @@ internal static class MatchSetupPackageCodec
                     MaxResults = Math.Clamp(snapshot.Engine.Internet.MaxResults, 1, 10),
                     SourceFreshnessMinutes = Math.Clamp(snapshot.Engine.Internet.SourceFreshnessMinutes, 1, 1440)
                 },
-                Providers = providers
+                Providers = providers,
+                ModelSettings = portableSettingsByIdentity.Values.ToList()
             }
         };
     }
@@ -551,11 +640,12 @@ internal static class MatchSetupPackageCodec
         }
 
         var legacyV2 = string.Equals(package.Schema, LegacySchema, StringComparison.Ordinal);
-        if (!legacyV2 && !string.Equals(package.Schema, Schema, StringComparison.Ordinal))
+        var legacyV3 = string.Equals(package.Schema, LegacySchemaV3, StringComparison.Ordinal);
+        if (!legacyV2 && !legacyV3 && !string.Equals(package.Schema, Schema, StringComparison.Ordinal))
         {
             return Invalid(
                 "unsupported_schema",
-                $"Unsupported Match Setup schema '{package.Schema}'. Expected '{Schema}' or legacy '{LegacySchema}'.");
+                $"Unsupported Match Setup schema '{package.Schema}'. Expected '{Schema}' or legacy '{LegacySchemaV3}'/'{LegacySchema}'.");
         }
 
         var errors = new List<string>();
@@ -564,7 +654,13 @@ internal static class MatchSetupPackageCodec
         {
             UpgradeLegacyV2(package);
             warnings.Add(
-                "Legacy Match Setup v2 was upgraded to v3. Default-for-unassigned remains enabled, and role assignment modes were inferred from the legacy model values.");
+                "Legacy Match Setup v2 was upgraded to v4. Default-for-unassigned remains enabled, role assignment modes were inferred, and model behavior keeps strict history with the legacy context window.");
+        }
+        else if (legacyV3)
+        {
+            UpgradeLegacyV3(package);
+            warnings.Add(
+                "Legacy Match Setup v3 was upgraded to v4. Model behavior keeps strict history with the legacy context window and default response tone.");
         }
         Validate(package, errors, warnings);
         if (errors.Count > 0)
@@ -730,6 +826,10 @@ internal static class MatchSetupPackageCodec
                 Temperature = ArenaSessionMutationCoordinator.ClampTemperature(definition.Temperature),
                 MaxOutputTokens = ArenaSessionMutationCoordinator.ClampMaxOutput(definition.MaxOutputTokens),
                 ContextLength = ArenaSessionMutationCoordinator.ClampProviderContextLength(definition.ContextLength),
+                ConfiguredContextWindow = NormalizeConfiguredContextWindow(definition.ConfiguredContextWindow),
+                HistoryPolicy = ModelHistoryPolicies.NormalizeHistoryPolicy(definition.HistoryPolicy),
+                ResponseTone = ModelResponseTones.NormalizeResponseTone(definition.ResponseTone),
+                CustomTone = ModelResponseTones.NormalizeCustomTone(definition.CustomTone),
                 Reasoning = ModelProviderReasoningModes.Normalize(definition.Reasoning),
                 NativeStatefulChat = definition.NativeStatefulChat,
                 NativeIdleTtlSeconds = ArenaSessionMutationCoordinator.ClampProviderNativeIdleTtlSeconds(definition.NativeIdleTtlSeconds),
@@ -750,6 +850,10 @@ internal static class MatchSetupPackageCodec
                     Temperature = shared.Temperature,
                     MaxOutputTokens = shared.MaxOutputTokens,
                     ContextLength = shared.ContextLength,
+                    ConfiguredContextWindow = shared.ConfiguredContextWindow,
+                    HistoryPolicy = shared.HistoryPolicy,
+                    ResponseTone = shared.ResponseTone,
+                    CustomTone = shared.CustomTone,
                     Reasoning = shared.Reasoning,
                     NativeStatefulChat = shared.NativeStatefulChat,
                     NativeIdleTtlSeconds = shared.NativeIdleTtlSeconds,
@@ -759,6 +863,41 @@ internal static class MatchSetupPackageCodec
             warnings.Add("The package had no shared provider definition; the trusted local shared provider was retained.");
         }
 
+        target.ModelSettings.Clear();
+        target.PendingModelConfigurationApplies.Clear();
+        foreach (var config in target.Configs.Values.Where(config => !string.IsNullOrWhiteSpace(config.Model)))
+        {
+            var registered = ModelRuntimeSettingsRegistry.Register(
+                target,
+                config,
+                NormalizeConfiguredContextWindow(config.ConfiguredContextWindow),
+                ModelHistoryPolicies.NormalizeHistoryPolicy(config.HistoryPolicy),
+                ModelResponseTones.NormalizeResponseTone(config.ResponseTone),
+                config.CustomTone);
+        }
+        var importedShared = target.Configs[ModelProviderRouting.SharedConfigKey];
+        foreach (var setting in setup.ModelSettings)
+        {
+            var registered = ModelRuntimeSettingsRegistry.Register(
+                target,
+                new ModelProviderConfig
+                {
+                    BaseUrl = importedShared.BaseUrl,
+                    ApiMode = importedShared.ApiMode,
+                    Model = setting.Model
+                },
+                NormalizeConfiguredContextWindow(setting.ConfiguredContextWindow),
+                ModelHistoryPolicies.NormalizeHistoryPolicy(setting.HistoryPolicy),
+                ModelResponseTones.NormalizeResponseTone(setting.ResponseTone),
+                setting.CustomTone);
+            if (setting.PendingApply)
+            {
+                target.PendingModelConfigurationApplies.Add(registered.ModelIdentity);
+            }
+        }
+        target.ModelSettingsVersion = ModelRuntimeSettingsRegistry.CurrentSchemaVersion;
+        ModelRuntimeSettingsRegistry.Normalize(target);
+
         target.GenerationHistory.Clear();
         target.Engine.Messages.Clear();
         target.Engine.Narration.Clear();
@@ -766,6 +905,9 @@ internal static class MatchSetupPackageCodec
         target.Engine.ResearchItems.Clear();
         target.Engine.TurnCount = 0;
         target.Engine.TurnIndex = 0;
+        target.Engine.MatchEnded = false;
+        target.Engine.MatchEndedAt = null;
+        target.Engine.MatchEndReason = "";
         target.Engine.LastError = "";
         target.Engine.DecisionCard.Text = "";
         target.Engine.DecisionCard.UpdatedAt = 0;
@@ -789,6 +931,7 @@ internal static class MatchSetupPackageCodec
         setup.Context ??= new MatchSetupContextPackage();
         setup.Internet ??= new MatchSetupInternetPackage();
         setup.Providers ??= new SortedDictionary<string, MatchSetupProviderPackage>(StringComparer.OrdinalIgnoreCase);
+        setup.ModelSettings ??= [];
         package.Metadata.Name ??= "";
         setup.MatchType ??= "";
         setup.Scenario.Topic ??= "";
@@ -825,6 +968,9 @@ internal static class MatchSetupPackageCodec
             provider.Model ??= "";
             provider.Reasoning ??= "";
             provider.AssignmentMode ??= "";
+            provider.HistoryPolicy ??= "";
+            provider.ResponseTone ??= "";
+            provider.CustomTone ??= "";
         }
 
         RequireText("setup.matchType", setup.MatchType, 1, 64, errors);
@@ -1047,6 +1193,29 @@ internal static class MatchSetupPackageCodec
             {
                 errors.Add($"setup.providers.{key}.contextLength must be between 0 and 1048576.");
             }
+            if (provider.ConfiguredContextWindow != 0
+                && provider.ConfiguredContextWindow is < 512 or > 1048576)
+            {
+                errors.Add($"setup.providers.{key}.configuredContextWindow must be 0 (provider default) or between 512 and 1048576.");
+            }
+            if (ModelHistoryPolicies.NormalizeHistoryPolicy(provider.HistoryPolicy) != provider.HistoryPolicy.Trim().ToLowerInvariant())
+            {
+                errors.Add($"setup.providers.{key}.historyPolicy must be strict, rolling_80, or chaptered.");
+            }
+            if (ModelResponseTones.NormalizeResponseTone(provider.ResponseTone) != provider.ResponseTone.Trim().ToLowerInvariant())
+            {
+                errors.Add($"setup.providers.{key}.responseTone must be default, neutral, concise, analytical, creative, direct, or custom.");
+            }
+            if (provider.CustomTone.Length > ModelResponseTones.MaximumCustomToneCharacters
+                || provider.CustomTone.Any(char.IsControl))
+            {
+                errors.Add($"setup.providers.{key}.customTone must be at most {ModelResponseTones.MaximumCustomToneCharacters} characters and contain no control characters.");
+            }
+            if (provider.ResponseTone.Equals(ModelResponseTones.Custom, StringComparison.Ordinal)
+                && string.IsNullOrWhiteSpace(ModelResponseTones.NormalizeCustomTone(provider.CustomTone)))
+            {
+                errors.Add($"setup.providers.{key}.customTone is required when responseTone is custom.");
+            }
             if (provider.NativeIdleTtlSeconds is < 0 or > 86400)
             {
                 errors.Add($"setup.providers.{key}.nativeIdleTtlSeconds must be between 0 and 86400.");
@@ -1086,6 +1255,111 @@ internal static class MatchSetupPackageCodec
                 errors.Add($"setup.providers.{key}.model must be blank or match the shared model when assignmentMode is inherit.");
             }
         }
+
+        if (setup.ModelSettings.Count > 256)
+        {
+            errors.Add("setup.modelSettings cannot contain more than 256 entries.");
+        }
+        if (setup.ModelSettings.Any(setting => setting is null))
+        {
+            errors.Add("setup.modelSettings cannot contain null entries.");
+        }
+        var portableSettingIdentities = new HashSet<string>(StringComparer.Ordinal);
+        var portableShared = setup.Providers.TryGetValue(ModelProviderRouting.SharedConfigKey, out var portableSharedProvider)
+            ? portableSharedProvider
+            : null;
+        foreach (var (setting, index) in setup.ModelSettings.Select((setting, index) => (setting, index)))
+        {
+            if (setting is null)
+            {
+                continue;
+            }
+            setting.Model ??= "";
+            setting.HistoryPolicy ??= "";
+            setting.ResponseTone ??= "";
+            setting.CustomTone ??= "";
+            if (!IsPortableModelIdentifier(setting.Model))
+            {
+                errors.Add($"setup.modelSettings[{index}].model must be a safe non-path model identifier.");
+                continue;
+            }
+            if (setting.ConfiguredContextWindow != 0
+                && setting.ConfiguredContextWindow is < 512 or > 1048576)
+            {
+                errors.Add($"setup.modelSettings[{index}].configuredContextWindow must be 0 or between 512 and 1048576.");
+            }
+            if (ModelHistoryPolicies.NormalizeHistoryPolicy(setting.HistoryPolicy) != setting.HistoryPolicy.Trim().ToLowerInvariant())
+            {
+                errors.Add($"setup.modelSettings[{index}].historyPolicy is unsupported.");
+            }
+            if (ModelResponseTones.NormalizeResponseTone(setting.ResponseTone) != setting.ResponseTone.Trim().ToLowerInvariant())
+            {
+                errors.Add($"setup.modelSettings[{index}].responseTone is unsupported.");
+            }
+            if (setting.CustomTone.Length > ModelResponseTones.MaximumCustomToneCharacters
+                || setting.CustomTone.Any(char.IsControl)
+                || setting.ResponseTone.Equals(ModelResponseTones.Custom, StringComparison.Ordinal)
+                && string.IsNullOrWhiteSpace(ModelResponseTones.NormalizeCustomTone(setting.CustomTone)))
+            {
+                errors.Add($"setup.modelSettings[{index}].customTone is invalid.");
+            }
+            if (portableShared is not null)
+            {
+                var identity = ModelRuntimeSettingsRegistry.Identity(new ModelProviderConfig
+                {
+                    BaseUrl = portableShared.BaseUrl,
+                    ApiMode = portableShared.ApiMode,
+                    Model = setting.Model
+                });
+                if (!portableSettingIdentities.Add(identity))
+                {
+                    errors.Add("setup.modelSettings contains duplicate canonical model identities.");
+                }
+            }
+        }
+
+
+        var canonicalSettings = new Dictionary<string, MatchSetupProviderPackage>(StringComparer.Ordinal);
+        foreach (var provider in setup.Providers.Values.Where(provider => provider is not null && !string.IsNullOrWhiteSpace(provider.Model)))
+        {
+            var identity = ModelRuntimeSettingsRegistry.Identity(new ModelProviderConfig
+            {
+                BaseUrl = provider.BaseUrl,
+                ApiMode = provider.ApiMode,
+                Model = provider.Model
+            });
+            if (canonicalSettings.TryGetValue(identity, out var prior)
+                && (prior.ConfiguredContextWindow != provider.ConfiguredContextWindow
+                    || !prior.HistoryPolicy.Equals(provider.HistoryPolicy, StringComparison.Ordinal)
+                    || !prior.ResponseTone.Equals(provider.ResponseTone, StringComparison.Ordinal)
+                    || !prior.CustomTone.Equals(provider.CustomTone, StringComparison.Ordinal)))
+            {
+                errors.Add("setup.providers contains conflicting runtime settings for the same provider model identity.");
+                break;
+            }
+            canonicalSettings[identity] = provider;
+        }
+        if (portableShared is not null)
+        {
+            foreach (var setting in setup.ModelSettings.Where(setting => setting is not null))
+            {
+                var identity = ModelRuntimeSettingsRegistry.Identity(new ModelProviderConfig
+                {
+                    BaseUrl = portableShared.BaseUrl,
+                    ApiMode = portableShared.ApiMode,
+                    Model = setting.Model
+                });
+                if (canonicalSettings.TryGetValue(identity, out var provider)
+                    && (provider.ConfiguredContextWindow != setting.ConfiguredContextWindow
+                        || !provider.HistoryPolicy.Equals(setting.HistoryPolicy, StringComparison.Ordinal)
+                        || !provider.ResponseTone.Equals(setting.ResponseTone, StringComparison.Ordinal)
+                        || !provider.CustomTone.Equals(setting.CustomTone, StringComparison.Ordinal)))
+                {
+                    errors.Add("setup.modelSettings conflicts with routed provider settings for the same canonical model.");
+                    break;
+                }
+            }
+        }
     }
 
     private static void UpgradeLegacyV2(MatchSetupPackage package)
@@ -1093,6 +1367,9 @@ internal static class MatchSetupPackageCodec
         package.Schema = Schema;
         package.Setup ??= new MatchSetupDefinitionPackage();
         package.Setup.DefaultForUnassignedAgentsEnabled = true;
+        // v2 had no portable per-model registry. Do not reinterpret v4-only
+        // members grafted onto a legacy envelope as historical settings.
+        package.Setup.ModelSettings = [];
         package.Setup.Providers ??= new SortedDictionary<string, MatchSetupProviderPackage>(StringComparer.OrdinalIgnoreCase);
         var sharedModel = package.Setup.Providers.TryGetValue(ModelProviderRouting.SharedConfigKey, out var shared)
             ? shared?.Model?.Trim() ?? ""
@@ -1110,7 +1387,45 @@ internal static class MatchSetupPackageCodec
                                       && !model.Equals(sharedModel, StringComparison.Ordinal)
                 ? MatchSetupProviderAssignmentModes.Explicit
                 : MatchSetupProviderAssignmentModes.Inherit;
+            UpgradeLegacyProviderSettings(provider);
         }
+    }
+
+    private static void UpgradeLegacyV3(MatchSetupPackage package)
+    {
+        package.Schema = Schema;
+        package.Setup ??= new MatchSetupDefinitionPackage();
+        // v3 likewise predates the canonical per-model settings registry.
+        package.Setup.ModelSettings = [];
+        package.Setup.Providers ??= new SortedDictionary<string, MatchSetupProviderPackage>(StringComparer.OrdinalIgnoreCase);
+        foreach (var provider in package.Setup.Providers.Values.Where(provider => provider is not null))
+        {
+            UpgradeLegacyProviderSettings(provider);
+        }
+    }
+
+    private static void UpgradeLegacyProviderSettings(MatchSetupProviderPackage provider)
+    {
+        provider.ConfiguredContextWindow = NormalizeConfiguredContextWindow(provider.ContextLength);
+        provider.HistoryPolicy = ModelHistoryPolicies.Strict;
+        provider.ResponseTone = ModelResponseTones.Default;
+        provider.CustomTone = "";
+    }
+
+    private static int NormalizeConfiguredContextWindow(int value) => value == 0
+        ? 0
+        : Math.Clamp(value, ModelRuntimeSettingsRegistry.MinimumConfiguredContextWindow, ModelRuntimeSettingsRegistry.MaximumConfiguredContextWindow);
+
+    private static string PortableModelIdentifier(string? value) =>
+        ProviderModelCatalogProjectionService.SafeModelIdentifier(value ?? "").Trim();
+
+    private static bool IsPortableModelIdentifier(string? value)
+    {
+        var normalized = value?.Trim() ?? "";
+        return normalized.Length is > 0 and <= MaxShortTextChars
+            && !normalized.Any(char.IsControl)
+            && !Path.IsPathRooted(normalized)
+            && !(Uri.TryCreate(normalized, UriKind.Absolute, out _));
     }
 
     private static bool IsSupportedProviderKey(string key, IEnumerable<string> participantIds)
@@ -1242,6 +1557,17 @@ internal sealed class MatchSetupDefinitionPackage
     public MatchSetupContextPackage Context { get; set; } = new();
     public MatchSetupInternetPackage Internet { get; set; } = new();
     public SortedDictionary<string, MatchSetupProviderPackage> Providers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public List<MatchSetupModelSettingsPackage> ModelSettings { get; set; } = [];
+}
+
+internal sealed class MatchSetupModelSettingsPackage
+{
+    public string Model { get; set; } = "";
+    public int ConfiguredContextWindow { get; set; }
+    public string HistoryPolicy { get; set; } = ModelHistoryPolicies.Strict;
+    public string ResponseTone { get; set; } = ModelResponseTones.Default;
+    public string CustomTone { get; set; } = "";
+    public bool PendingApply { get; set; }
 }
 
 internal sealed class MatchSetupScenarioPackage
@@ -1318,6 +1644,10 @@ internal sealed class MatchSetupProviderPackage
     public double Temperature { get; set; } = 0.7;
     public int MaxOutputTokens { get; set; } = 1024;
     public int ContextLength { get; set; }
+    public int ConfiguredContextWindow { get; set; }
+    public string HistoryPolicy { get; set; } = ModelHistoryPolicies.Strict;
+    public string ResponseTone { get; set; } = ModelResponseTones.Default;
+    public string CustomTone { get; set; } = "";
     public string Reasoning { get; set; } = "";
     public bool NativeStatefulChat { get; set; } = true;
     public int NativeIdleTtlSeconds { get; set; }

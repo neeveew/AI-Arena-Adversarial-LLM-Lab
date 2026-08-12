@@ -105,6 +105,12 @@ internal static class AIArenaControlCapabilityCatalog
                 "defaultForUnassignedAgentsEnabled",
                 "refreshModels"
             ]),
+        Capability(
+            AIArenaControlCommands.ProviderModelConfigSet,
+            "provider",
+            "Atomically update durable behavior settings for one provider model without changing routing or residency.",
+            ["model", "expectedConfigurationIdentity"],
+            ["configuredContextWindow", "historyPolicy", "responseTone", "customTone"]),
         Capability(AIArenaControlCommands.ProviderModelSet, "provider", "Set all arena role models.", ["model"], ["refreshModels"]),
         Capability(AIArenaControlCommands.ProviderTest, "provider", "Run a completion probe and persist provider readiness.", optional: ["allRoles"]),
         Capability(AIArenaControlCommands.ProviderModelsRefresh, "provider", "Force-refresh the advertised provider model catalog."),

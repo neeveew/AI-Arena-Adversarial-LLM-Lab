@@ -21,6 +21,55 @@ using System.Windows.Media.Imaging;
 
 internal static partial class Program
 {
+static void AgentWorkspaceResolvesCanonicalModelSettingsAndTone()
+{
+    const string model = "publisher/workspace-model";
+    var baseSnapshot = SnapshotForOverviewTest(true, model, "", 0, [], []);
+    var identity = ModelRuntimeSettingsRegistry.Identity(new ModelProviderConfig
+    {
+        BaseUrl = baseSnapshot.ProviderBaseUrl,
+        ApiMode = baseSnapshot.ProviderApiMode,
+        Model = model
+    });
+    var snapshot = baseSnapshot with
+    {
+        ModelSettings =
+        [
+            new ProviderModelRuntimeSettingsView(
+                identity,
+                16_384,
+                ModelHistoryPolicies.Rolling80,
+                ModelResponseTones.Custom,
+                "Use terse, evidence-led prose.",
+                model)
+        ]
+    };
+
+    var config = AgentWorkspaceCoordinator.Config(snapshot, model, 1_024);
+    Require(config.ConfiguredContextWindow == 16_384
+            && config.HistoryPolicy == ModelHistoryPolicies.Rolling80
+            && config.ResponseTone == ModelResponseTones.Custom
+            && config.CustomTone == "Use terse, evidence-led prose.",
+        "Agent Workspace dropped the canonical per-model context, history, or tone settings.");
+
+    var withoutReasoning = AgentWorkspaceCoordinator.WithReasoningDisabled(config);
+    Require(withoutReasoning.Reasoning == "off"
+            && withoutReasoning.ConfiguredContextWindow == config.ConfiguredContextWindow
+            && withoutReasoning.HistoryPolicy == config.HistoryPolicy
+            && withoutReasoning.ResponseTone == config.ResponseTone
+            && withoutReasoning.CustomTone == config.CustomTone,
+        "Agent Workspace reasoning fallback dropped canonical model settings.");
+
+    var toned = AgentWorkspaceCoordinator.ApplyWorkspaceTone(
+        config,
+        [new ModelChatMessage("user", "Build it.")]);
+    Require(toned.Count == 2
+            && toned[0].Role == "system"
+            && toned[0].Content.Contains("Use terse, evidence-led prose.", StringComparison.Ordinal)
+            && ReferenceEquals(AgentWorkspaceCoordinator.ApplyWorkspaceTone(config, toned), toned),
+        "Agent Workspace did not inject the saved tone exactly once at its completion seam.");
+}
+
 static void AgentRunbookPersistsStableWorkflowAndRecoversInterruptions()
 {
     var now = new DateTimeOffset(2026, 7, 14, 8, 0, 0, TimeSpan.Zero);

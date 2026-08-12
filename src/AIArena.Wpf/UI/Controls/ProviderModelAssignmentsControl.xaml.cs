@@ -8,6 +8,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using AIArena.Core.Services;
 
 namespace AIArena.Wpf.Controls;
 
@@ -54,6 +55,44 @@ public enum ProviderModelLifecycleActionState
     Failed
 }
 
+public enum ProviderModelHistoryPolicy
+{
+    Strict,
+    Rolling80Percent,
+    Chaptered
+}
+
+public enum ProviderModelResponseTone
+{
+    Default,
+    Neutral,
+    Concise,
+    Analytical,
+    Creative,
+    Direct,
+    Custom
+}
+
+public enum ProviderModelConfigurationSaveState
+{
+    Ready,
+    Saving,
+    Saved,
+    Failed,
+    Unavailable
+}
+
+public enum ProviderModelConfigurationReloadState
+{
+    NotRequired,
+    Required,
+    Running,
+    Unconfirmed,
+    Succeeded,
+    Failed,
+    Unavailable
+}
+
 public sealed record ProviderAssignmentTargetPresentation(
     string Id,
     string DisplayName,
@@ -75,7 +114,23 @@ public sealed record ProviderModelAssignmentPresentation(
     bool CanLoad = false,
     bool CanUnload = false,
     string LifecycleHelp = "",
-    bool IsResidencyStale = false);
+    bool IsResidencyStale = false,
+    ProviderModelConfigurationPresentation? Configuration = null);
+
+public sealed record ProviderModelConfigurationPresentation(
+    int ContextWindow = 0,
+    int EffectiveContextWindow = 0,
+    string ContextEvidence = "Effective context is not reported.",
+    ProviderModelHistoryPolicy HistoryPolicy = ProviderModelHistoryPolicy.Strict,
+    ProviderModelResponseTone ResponseTone = ProviderModelResponseTone.Default,
+    string CustomTone = "",
+    bool CanEdit = true,
+    bool ChapteredAvailable = false,
+    bool RequiresReload = false,
+    string ConfigurationIdentity = "",
+    string Status = "Ready to configure.",
+    int MinimumContextWindow = 512,
+    int MaximumContextWindow = 1_048_576);
 
 public sealed record ProviderModelAssignmentsPresentation(
     string ProviderName,
@@ -121,6 +176,34 @@ public sealed class ProviderModelLifecycleRequestedEventArgs(
     public bool Load { get; } = load;
 }
 
+public sealed class ProviderModelConfigurationChangedEventArgs(
+    Guid changeId,
+    string modelId,
+    int contextWindow,
+    ProviderModelHistoryPolicy historyPolicy,
+    ProviderModelResponseTone responseTone,
+    string customTone,
+    string configurationIdentity) : EventArgs
+{
+    public Guid ChangeId { get; } = changeId;
+    public string ModelId { get; } = modelId;
+    public int ContextWindow { get; } = contextWindow;
+    public ProviderModelHistoryPolicy HistoryPolicy { get; } = historyPolicy;
+    public ProviderModelResponseTone ResponseTone { get; } = responseTone;
+    public string CustomTone { get; } = customTone;
+    public string ConfigurationIdentity { get; } = configurationIdentity;
+}
+
+public sealed class ProviderModelConfigurationReloadRequestedEventArgs(
+    Guid operationId,
+    string modelId,
+    string configurationIdentity) : EventArgs
+{
+    public Guid OperationId { get; } = operationId;
+    public string ModelId { get; } = modelId;
+    public string ConfigurationIdentity { get; } = configurationIdentity;
+}
+
 public partial class ProviderModelAssignmentsControl : UserControl
 {
     internal const double CompactContentThreshold = 1100;
@@ -134,6 +217,14 @@ public partial class ProviderModelAssignmentsControl : UserControl
     private readonly ListCollectionView modelRowsView;
     private readonly DispatcherTimer searchDebounceTimer;
     private readonly bool usesIncrementalLiveShaping;
+    // These detached probes retain causal state for rollback logic and focused
+    // tests without adding another status surface or live region to the pane.
+    private readonly TextBlock AssignmentSaveStatusText = new();
+    private readonly Border AssignmentSaveStatusCard = new();
+    private readonly TextBlock LifecycleStatusText = new();
+    private readonly Border LifecycleStatusCard = new();
+    private readonly TextBlock ConfigurationStatusText = new();
+    private readonly Border ConfigurationStatusCard = new();
     private IReadOnlyList<ProviderAssignmentTargetPresentation> targets = [];
     private IReadOnlyDictionary<string, ProviderAssignmentTargetPresentation> targetsById =
         new Dictionary<string, ProviderAssignmentTargetPresentation>(StringComparer.Ordinal);
@@ -141,7 +232,10 @@ public partial class ProviderModelAssignmentsControl : UserControl
     private ProviderModelAssignmentsPresentation? currentPresentation;
     private PendingAssignment? pendingAssignment;
     private PendingLifecycle? pendingLifecycle;
+    private PendingConfiguration? pendingConfiguration;
+    private PendingConfigurationReload? pendingConfigurationReload;
     private bool pendingLifecycleMutationStarted;
+    private bool pendingConfigurationReloadMutationStarted;
     private string lastResolvedModelId = "";
     private ProviderAssignmentSaveState lastSaveState = ProviderAssignmentSaveState.Ready;
     private string lastSaveMessage = "Ready to assign.";
@@ -161,11 +255,23 @@ public partial class ProviderModelAssignmentsControl : UserControl
     private string lastPublishedSearchQuery = "";
     private ProviderModelFacet selectedFacet = ProviderModelFacet.All;
     private int catalogContinuityGeneration;
+    private bool applyingConfigurationControls;
+    private string lastConfigurationModelId = "";
+    private ProviderModelConfigurationSaveState lastConfigurationState = ProviderModelConfigurationSaveState.Ready;
+    private string lastConfigurationMessage = "Ready to configure.";
+    private string lastReloadModelId = "";
+    private ProviderModelConfigurationReloadState lastReloadState = ProviderModelConfigurationReloadState.NotRequired;
+    private string lastReloadMessage = "Configuration is active.";
+    private string lastReloadConnectionIdentity = "";
 
     public ProviderModelAssignmentsControl()
     {
         InitializeComponent();
+        InitializeDetachedStatusProbes();
         AssignmentTargetsItems.ItemsSource = selectedTargetRows;
+        HistoryPolicyCombo.ItemsSource = HistoryPolicyOption.Options;
+        HistoryPolicyCombo.ItemContainerGenerator.StatusChanged += HistoryPolicyItemContainers_StatusChanged;
+        ResponseToneCombo.ItemsSource = ResponseToneOption.Options;
         searchDebounceTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
         {
             Interval = SearchDebounceInterval
@@ -204,17 +310,37 @@ public partial class ProviderModelAssignmentsControl : UserControl
         UpdateEmptyState();
     }
 
+    private void InitializeDetachedStatusProbes()
+    {
+        AssignmentSaveStatusText.Text = lastSaveMessage;
+        LifecycleStatusText.Text = lastLifecycleMessage;
+        ConfigurationStatusText.Text = lastConfigurationMessage;
+        AutomationProperties.SetName(AssignmentSaveStatusText, "Assignment save state");
+        AutomationProperties.SetName(LifecycleStatusText, "LM Studio lifecycle state");
+        AutomationProperties.SetName(ConfigurationStatusText, "Model configuration save state");
+        AutomationProperties.SetLiveSetting(AssignmentSaveStatusText, AutomationLiveSetting.Off);
+        AutomationProperties.SetLiveSetting(LifecycleStatusText, AutomationLiveSetting.Off);
+        AutomationProperties.SetLiveSetting(ConfigurationStatusText, AutomationLiveSetting.Off);
+        SetAssignmentStatus(lastSaveState, lastSaveMessage);
+        SetLifecycleStatus(lastLifecycleState, lastLifecycleMessage);
+        SetConfigurationStatus(lastConfigurationState, lastConfigurationMessage);
+    }
+
     public event EventHandler? CloseRequested;
     public event EventHandler? RefreshRequested;
     public event EventHandler? ConnectionSettingsRequested;
     public event EventHandler<ProviderModelSearchChangedEventArgs>? SearchChanged;
     public event EventHandler<ProviderModelAssignmentChangedEventArgs>? AssignmentChanged;
     public event EventHandler<ProviderModelLifecycleRequestedEventArgs>? LifecycleRequested;
+    public event EventHandler<ProviderModelConfigurationChangedEventArgs>? ConfigurationChanged;
+    public event EventHandler<ProviderModelConfigurationReloadRequestedEventArgs>? ConfigurationReloadRequested;
 
     public string SearchQuery => ModelSearchText.Text;
     public string SelectedModelId => selectedModel?.Id ?? "";
     public bool HasPendingAssignment => pendingAssignment is not null;
     public bool HasPendingLifecycle => pendingLifecycle is not null;
+    public bool HasPendingConfiguration => pendingConfiguration is not null;
+    public bool HasPendingConfigurationReload => pendingConfigurationReload is not null;
 
     public bool HasUnconfirmedLifecycleReceipt =>
         lastLifecycleState == ProviderModelLifecycleActionState.Unconfirmed
@@ -248,12 +374,41 @@ public partial class ProviderModelAssignmentsControl : UserControl
     internal ComboBox FacetFilter => ModelFacetCombo;
     internal TextBlock AssignmentAvailability => AssignmentAvailabilityText;
     internal TextBlock SelectedAssignmentSummary => SelectedModelAssignmentsText;
+    internal TextBox ContextWindowInput => ModelContextWindowText;
+    internal CheckBox ProviderDefaultContextToggle => UseProviderDefaultContextCheckBox;
+    internal ComboBox HistoryPolicySelector => HistoryPolicyCombo;
+    internal ComboBox ResponseToneSelector => ResponseToneCombo;
+    internal TextBox CustomToneInput => CustomToneText;
+    internal TextBlock ConfigurationValidation => ConfigurationValidationText;
+    internal TextBlock ConfigurationStatus => ConfigurationStatusText;
+    internal Border ConfigurationStatusSurface => ConfigurationStatusCard;
+    internal Button ConfigurationReloadAction => ConfigurationReloadButton;
+    internal TextBlock ConfiguredContextEvidence => ConfiguredContextText;
+    internal TextBlock EffectiveContextEvidence => EffectiveContextText;
+    internal ScrollViewer DetailScroller => ModelDetailScrollViewer;
+    internal int AssignmentGridColumns => AssignmentColumnCount;
     internal bool UsesIncrementalLiveShaping => usesIncrementalLiveShaping;
     internal int CatalogRowCount => modelRows.Count;
     internal int LoadedRowCount => LoadedRows().Count();
     internal int AvailableCatalogRowCount => modelRows.Count - LoadedRowCount;
     internal int VisibleCatalogRowCount => VisibleCatalogRows().Count();
     internal int PresentationApplyCount { get; private set; }
+
+    public int AssignmentColumnCount
+    {
+        get => (int)GetValue(AssignmentColumnCountProperty);
+        private set => SetValue(AssignmentColumnCountPropertyKey, value);
+    }
+
+    private static readonly DependencyPropertyKey AssignmentColumnCountPropertyKey =
+        DependencyProperty.RegisterReadOnly(
+            nameof(AssignmentColumnCount),
+            typeof(int),
+            typeof(ProviderModelAssignmentsControl),
+            new PropertyMetadata(3));
+
+    public static readonly DependencyProperty AssignmentColumnCountProperty =
+        AssignmentColumnCountPropertyKey.DependencyProperty;
 
     public void ApplyPresentation(ProviderModelAssignmentsPresentation presentation)
     {
@@ -267,6 +422,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
         {
             CancelPendingAssignmentWhenIdentityChanges(presentation);
             CancelPendingLifecycleWhenIdentityChanges(presentation);
+            CancelPendingConfigurationWhenIdentityChanges(presentation);
+            CancelPendingConfigurationReloadWhenIdentityChanges(presentation);
             ClearUnconfirmedLifecycleForConnectionChange(presentation);
             currentPresentation = presentation;
             var priorSelection = SelectedModelId;
@@ -307,7 +464,10 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 }
 
                 CaptureLatestPendingAssignmentAuthority(presentedModels);
+                CaptureLatestPendingConfigurationAuthority(presentedModels);
                 ReconcileModelRows(presentedModels);
+                ApplyPendingConfigurationDraft();
+                ReconcileUnconfirmedConfigurationReload(presentation);
             }
             else
             {
@@ -453,6 +613,96 @@ public partial class ProviderModelAssignmentsControl : UserControl
         return true;
     }
 
+    public bool SetConfigurationState(
+        Guid changeId,
+        ProviderModelConfigurationSaveState state,
+        string? message = null)
+    {
+        Dispatcher.VerifyAccess();
+        var pending = pendingConfiguration;
+        if (pending is null || pending.ChangeId != changeId)
+        {
+            return false;
+        }
+
+        lastConfigurationModelId = pending.ModelId;
+        if (state == ProviderModelConfigurationSaveState.Saving)
+        {
+            lastConfigurationState = state;
+            lastConfigurationMessage = DisplayOrFallback(message, $"Saving configuration for {pending.ModelDisplayName}…");
+            SetConfigurationStatus(state, lastConfigurationMessage);
+            return true;
+        }
+
+        var row = FindModel(pending.ModelId);
+        if (state is ProviderModelConfigurationSaveState.Failed or ProviderModelConfigurationSaveState.Ready)
+        {
+            row?.SetConfiguration(pending.Previous);
+        }
+        else if (state == ProviderModelConfigurationSaveState.Saved)
+        {
+            row?.SetConfiguration(pending.Requested);
+        }
+
+        pendingConfiguration = null;
+        lastConfigurationState = state;
+        lastConfigurationMessage = state switch
+        {
+            ProviderModelConfigurationSaveState.Saved => DisplayOrFallback(message, "Model configuration saved."),
+            ProviderModelConfigurationSaveState.Failed => $"Failed: {DisplayOrFallback(message, "Could not save model configuration.")}",
+            ProviderModelConfigurationSaveState.Unavailable => DisplayOrFallback(message, "Model configuration is unavailable."),
+            _ => DisplayOrFallback(message, "Ready to configure.")
+        };
+        RebuildSelectedDetail();
+        return true;
+    }
+
+    public bool SetConfigurationReloadState(
+        Guid operationId,
+        ProviderModelConfigurationReloadState state,
+        string? message = null)
+    {
+        Dispatcher.VerifyAccess();
+        var pending = pendingConfigurationReload;
+        if (pending is null || pending.OperationId != operationId)
+        {
+            return false;
+        }
+
+        lastReloadModelId = pending.ModelId;
+        if (state == ProviderModelConfigurationReloadState.Running)
+        {
+            lastReloadState = state;
+            lastReloadMessage = DisplayOrFallback(message, $"Reloading {pending.ModelDisplayName}…");
+            SetConfigurationReloadStatus(FindModel(pending.ModelId), state, lastReloadMessage);
+            return true;
+        }
+
+        pendingConfigurationReload = null;
+        pendingConfigurationReloadMutationStarted = false;
+        lastReloadState = state;
+        lastReloadConnectionIdentity = state == ProviderModelConfigurationReloadState.Unconfirmed
+            ? pending.ConnectionIdentity
+            : "";
+        lastReloadMessage = state switch
+        {
+            ProviderModelConfigurationReloadState.Succeeded => DisplayOrFallback(message, "Reload confirmed; the configured context is active."),
+            ProviderModelConfigurationReloadState.Unconfirmed => DisplayOrFallback(message, "Reload request accepted; waiting for effective context evidence."),
+            ProviderModelConfigurationReloadState.Failed => $"Failed: {DisplayOrFallback(message, "Could not reload the model configuration.")}",
+            ProviderModelConfigurationReloadState.Required => DisplayOrFallback(message, "Reload required to apply the configured context."),
+            ProviderModelConfigurationReloadState.Unavailable => DisplayOrFallback(message, "Reload is unavailable for this model."),
+            _ => DisplayOrFallback(message, "Configuration is active.")
+        };
+        if (state == ProviderModelConfigurationReloadState.Succeeded
+            && FindModel(pending.ModelId) is { } row)
+        {
+            row.SetConfiguration(row.Configuration with { RequiresReload = false });
+        }
+
+        RebuildSelectedDetail();
+        return true;
+    }
+
     public bool MarkLifecycleMutationStarted(Guid operationId)
     {
         Dispatcher.VerifyAccess();
@@ -462,6 +712,18 @@ public partial class ProviderModelAssignmentsControl : UserControl
         }
 
         pendingLifecycleMutationStarted = true;
+        return true;
+    }
+
+    public bool MarkConfigurationReloadMutationStarted(Guid operationId)
+    {
+        Dispatcher.VerifyAccess();
+        if (pendingConfigurationReload is null || pendingConfigurationReload.OperationId != operationId)
+        {
+            return false;
+        }
+
+        pendingConfigurationReloadMutationStarted = true;
         return true;
     }
 
@@ -488,6 +750,62 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
     public bool FocusSearch() => ModelSearchText.Focus();
 
+    public bool SelectModel(string modelId, bool focusConfiguration = false)
+    {
+        Dispatcher.VerifyAccess();
+        var requested = modelId?.Trim() ?? "";
+        if (requested.Length == 0)
+        {
+            return false;
+        }
+
+        var model = ResolveModel(requested);
+        if (model is null)
+        {
+            return false;
+        }
+
+        if (model.Availability != ProviderModelAvailability.Loaded)
+        {
+            AvailableCatalogExpander.IsExpanded = true;
+            var typedQuery = ModelSearchText.Text.Trim();
+            var pendingQueryWouldHideModel = typedQuery.Length > 0
+                && !model.SearchText.Contains(typedQuery, StringComparison.OrdinalIgnoreCase);
+            if (!MatchesCurrentSearch(model) || pendingQueryWouldHideModel)
+            {
+                searchDebounceTimer.Stop();
+                ModelSearchText.Clear();
+                ModelFacetCombo.SelectedIndex = 0;
+                selectedFacet = ProviderModelFacet.All;
+                committedSearchQuery = "";
+                modelRowsView.Refresh();
+                UpdateSearchChrome();
+                UpdateSearchResults();
+                UpdateEmptyState();
+            }
+        }
+
+        SelectModel(model);
+        RebuildSelectedDetail();
+        var list = model.Availability == ProviderModelAvailability.Loaded
+            ? LoadedModelsList
+            : ModelsList;
+        list.ScrollIntoView(model);
+        list.UpdateLayout();
+        if (focusConfiguration)
+        {
+            ModelContextWindowText.BringIntoView();
+            Dispatcher.BeginInvoke(() =>
+            {
+                ModelContextWindowText.BringIntoView();
+                ModelContextWindowText.Focus();
+                ModelContextWindowText.SelectAll();
+            }, DispatcherPriority.Input);
+        }
+
+        return true;
+    }
+
     internal static bool UsesCompactLayoutAt(
         double contentWidth,
         double hostWindowWidth = double.NaN,
@@ -502,6 +820,21 @@ public partial class ProviderModelAssignmentsControl : UserControl
         }
 
         return contentWidth > 0 && contentWidth <= CompactContentThreshold;
+    }
+
+    internal static int AssignmentColumnsAt(bool compact, double contentWidth, bool contentIsScaled = false)
+    {
+        if (contentIsScaled)
+        {
+            return 1;
+        }
+
+        if (!compact)
+        {
+            return 3;
+        }
+
+        return contentWidth >= 720 ? 3 : contentWidth >= 480 ? 2 : 1;
     }
 
     internal void ApplyResponsiveLayout(bool compact)
@@ -530,7 +863,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             WorkspaceScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
             MasterColumn.Width = new GridLength(1, GridUnitType.Star);
             WorkspaceGapColumn.Width = new GridLength(12);
-            DetailColumn.Width = new GridLength(360);
+            DetailColumn.Width = new GridLength(380);
             MasterRow.Height = new GridLength(1, GridUnitType.Star);
             CompactWorkspaceGapRow.Height = new GridLength(0);
             DetailRow.Height = new GridLength(0);
@@ -557,6 +890,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         HeaderActionsPanel.Margin = compactHeader
             ? new Thickness(0, 10, 0, 0)
             : new Thickness(0);
+        AssignmentColumnCount = AssignmentColumnsAt(compact, ActualWidth, HasScaledLayoutTransform());
     }
 
     private void ProviderModelAssignmentsControl_Loaded(object sender, RoutedEventArgs e)
@@ -733,6 +1067,140 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 operationId,
                 ProviderModelLifecycleActionState.Failed,
                 "The LM Studio lifecycle handler could not accept the request.");
+        }
+    }
+
+    private void ModelContextWindowText_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        _ = TryRequestConfigurationChange();
+    }
+
+    private void ModelContextWindowText_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) =>
+        _ = TryRequestConfigurationChange();
+
+    private void CustomToneText_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            e.Handled = true;
+            _ = TryRequestConfigurationChange();
+        }
+    }
+
+    private void CustomToneText_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) =>
+        _ = TryRequestConfigurationChange();
+
+    private void UseProviderDefaultContextCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (applyingConfigurationControls)
+        {
+            return;
+        }
+
+        ModelContextWindowText.IsEnabled = UseProviderDefaultContextCheckBox.IsChecked != true
+            && CanEditConfiguration();
+        ModelContextWindowText.Text = UseProviderDefaultContextCheckBox.IsChecked == true
+            ? "Provider default"
+            : SelectedConfiguration().ContextWindow > 0
+                ? SelectedConfiguration().ContextWindow.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : Math.Max(SelectedConfiguration().MinimumContextWindow, 512).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        UpdateConfigurationValidation();
+        _ = TryRequestConfigurationChange();
+    }
+
+    private void HistoryPolicyCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (applyingConfigurationControls)
+        {
+            return;
+        }
+
+        if (HistoryPolicyCombo.SelectedItem is HistoryPolicyOption { IsEnabled: true })
+        {
+            _ = TryRequestConfigurationChange();
+        }
+    }
+
+    private void ResponseToneCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (applyingConfigurationControls)
+        {
+            return;
+        }
+
+        CustomTonePanel.Visibility = SelectedResponseTone() == ProviderModelResponseTone.Custom
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        CustomToneText.IsEnabled = SelectedResponseTone() == ProviderModelResponseTone.Custom
+            && CanEditConfiguration();
+        UpdateConfigurationValidation();
+        _ = TryRequestConfigurationChange();
+    }
+
+    private void ModelConfigurationInput_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!applyingConfigurationControls)
+        {
+            UpdateConfigurationValidation();
+        }
+    }
+
+    private void ConfigurationReloadButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (selectedModel is not { } model
+            || pendingConfigurationReload is not null
+            || pendingConfiguration is not null
+            || pendingAssignment is not null
+            || pendingLifecycle is not null
+            || !model.Configuration.RequiresReload
+            || model.Availability != ProviderModelAvailability.Loaded)
+        {
+            return;
+        }
+
+        var operationId = Guid.NewGuid();
+        pendingConfigurationReload = new PendingConfigurationReload(
+            operationId,
+            model.Id,
+            model.DisplayName,
+            model.Configuration.ConfigurationIdentity,
+            EffectiveConnectionIdentity(currentPresentation));
+        pendingConfigurationReloadMutationStarted = false;
+        lastReloadModelId = model.Id;
+        lastReloadState = ProviderModelConfigurationReloadState.Running;
+        lastReloadMessage = $"Reloading {model.DisplayName} to apply its context window…";
+        RebuildSelectedDetail();
+        var handler = ConfigurationReloadRequested;
+        if (handler is null)
+        {
+            SetConfigurationReloadState(
+                operationId,
+                ProviderModelConfigurationReloadState.Failed,
+                "No configuration reload handler is connected.");
+            return;
+        }
+
+        try
+        {
+            handler.Invoke(
+                this,
+                new ProviderModelConfigurationReloadRequestedEventArgs(
+                    operationId,
+                    model.Id,
+                    model.Configuration.ConfigurationIdentity));
+        }
+        catch
+        {
+            SetConfigurationReloadState(
+                operationId,
+                ProviderModelConfigurationReloadState.Failed,
+                "The configuration reload handler could not accept the request.");
         }
     }
 
@@ -1040,6 +1508,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         ApplyLifecycleAction(model);
         ReconcileSelectedTargetRows(model);
         RefreshSelectedAssignmentText();
+        ApplyConfigurationDetail(model);
         ModelDetailContent.Visibility = Visibility.Visible;
         ModelDetailEmptyState.Visibility = Visibility.Collapsed;
         AssignmentAvailabilityText.Text = AssignmentAvailabilityMessage();
@@ -1083,6 +1552,323 @@ public partial class ProviderModelAssignmentsControl : UserControl
         ApplyInteractionState();
     }
 
+    private void ApplyConfigurationDetail(ModelRowState model)
+    {
+        var configuration = model.Configuration;
+        applyingConfigurationControls = true;
+        try
+        {
+            var providerDefault = configuration.ContextWindow == 0;
+            UseProviderDefaultContextCheckBox.IsChecked = providerDefault;
+            ModelContextWindowText.Text = providerDefault
+                ? "Provider default"
+                : configuration.ContextWindow.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            SelectHistoryPolicy(configuration.HistoryPolicy, configuration.ChapteredAvailable);
+            SelectResponseTone(configuration.ResponseTone);
+            CustomToneText.Text = configuration.CustomTone;
+            CustomTonePanel.Visibility = configuration.ResponseTone == ProviderModelResponseTone.Custom
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+        finally
+        {
+            applyingConfigurationControls = false;
+        }
+
+        var editable = CanEditConfiguration();
+        UseProviderDefaultContextCheckBox.IsEnabled = editable;
+        ModelContextWindowText.IsEnabled = editable && configuration.ContextWindow != 0;
+        HistoryPolicyCombo.IsEnabled = editable;
+        ResponseToneCombo.IsEnabled = editable;
+        CustomToneText.IsEnabled = editable && configuration.ResponseTone == ProviderModelResponseTone.Custom;
+        ConfiguredContextText.Text = configuration.ContextWindow == 0
+            ? "Provider default"
+            : $"{configuration.ContextWindow:n0} tokens";
+        EffectiveContextText.Text = configuration.EffectiveContextWindow > 0
+            ? $"{configuration.EffectiveContextWindow:n0} tokens. {DisplayOrFallback(configuration.ContextEvidence, "Provider-reported evidence.")}"
+            : DisplayOrFallback(configuration.ContextEvidence, "Effective context is not reported.");
+        AutomationProperties.SetItemStatus(
+            EffectiveContextText,
+            configuration.EffectiveContextWindow > 0 ? "Observed" : "Unavailable");
+        UpdateConfigurationValidation();
+
+        if (pendingConfiguration is { } pending
+            && string.Equals(pending.ModelId, model.Id, StringComparison.Ordinal))
+        {
+            SetConfigurationStatus(ProviderModelConfigurationSaveState.Saving, lastConfigurationMessage);
+        }
+        else if (string.Equals(lastConfigurationModelId, model.Id, StringComparison.Ordinal))
+        {
+            SetConfigurationStatus(lastConfigurationState, lastConfigurationMessage);
+        }
+        else
+        {
+            SetConfigurationStatus(
+                configuration.CanEdit ? ProviderModelConfigurationSaveState.Ready : ProviderModelConfigurationSaveState.Unavailable,
+                DisplayOrFallback(configuration.Status, configuration.CanEdit ? "Ready to configure." : "Model configuration is unavailable."));
+        }
+
+        var reloadState = pendingConfigurationReload is { } reload
+            && string.Equals(reload.ModelId, model.Id, StringComparison.Ordinal)
+                ? ProviderModelConfigurationReloadState.Running
+                : string.Equals(lastReloadModelId, model.Id, StringComparison.Ordinal)
+                  && (lastReloadState == ProviderModelConfigurationReloadState.Failed
+                      || lastReloadState == ProviderModelConfigurationReloadState.Unconfirmed)
+                    ? lastReloadState
+                : configuration.RequiresReload
+                    ? ProviderModelConfigurationReloadState.Required
+                : string.Equals(lastReloadModelId, model.Id, StringComparison.Ordinal)
+                    ? lastReloadState
+                    : ProviderModelConfigurationReloadState.NotRequired;
+        var reloadMessage = reloadState == ProviderModelConfigurationReloadState.Running
+            ? lastReloadMessage
+            : reloadState == ProviderModelConfigurationReloadState.Required
+                ? "Reload required to apply the configured context window. Routing assignments remain unchanged."
+                : string.Equals(lastReloadModelId, model.Id, StringComparison.Ordinal)
+                    ? lastReloadMessage
+                    : "Configuration is active; no reload is required.";
+        SetConfigurationReloadStatus(model, reloadState, reloadMessage);
+    }
+
+    private ProviderModelConfigurationPresentation SelectedConfiguration() =>
+        selectedModel?.Configuration ?? UnavailableConfiguration();
+
+    private bool CanEditConfiguration() =>
+        selectedModel?.Configuration.CanEdit == true
+        && currentPresentation?.IsRefreshing == false
+        && pendingAssignment is null
+        && pendingLifecycle is null
+        && pendingConfiguration is null
+        && pendingConfigurationReload is null;
+
+    private void SelectHistoryPolicy(ProviderModelHistoryPolicy policy, bool chapteredAvailable)
+    {
+        HistoryPolicyCombo.ItemsSource = HistoryPolicyOption.OptionsFor(chapteredAvailable);
+        HistoryPolicyCombo.SelectedItem = HistoryPolicyCombo.Items
+            .Cast<HistoryPolicyOption>()
+            .FirstOrDefault(option => option.Policy == policy)
+            ?? HistoryPolicyCombo.Items.Cast<HistoryPolicyOption>().First();
+        ApplyHistoryPolicyItemContainers();
+        Dispatcher.BeginInvoke(ApplyHistoryPolicyItemContainers, DispatcherPriority.Loaded);
+    }
+
+    private void HistoryPolicyItemContainers_StatusChanged(object? sender, EventArgs e) =>
+        ApplyHistoryPolicyItemContainers();
+
+    private void ApplyHistoryPolicyItemContainers()
+    {
+        foreach (var option in HistoryPolicyCombo.Items.Cast<HistoryPolicyOption>())
+        {
+            if (HistoryPolicyCombo.ItemContainerGenerator.ContainerFromItem(option) is not ComboBoxItem container)
+            {
+                continue;
+            }
+
+            container.IsEnabled = option.IsEnabled;
+            AutomationProperties.SetName(container, option.AutomationName);
+            AutomationProperties.SetHelpText(container, option.HelpText);
+        }
+    }
+
+    private void SelectResponseTone(ProviderModelResponseTone tone)
+    {
+        ResponseToneCombo.SelectedItem = ResponseToneOption.Options
+            .FirstOrDefault(option => option.Tone == tone)
+            ?? ResponseToneOption.Options[0];
+    }
+
+    private ProviderModelHistoryPolicy SelectedHistoryPolicy() =>
+        HistoryPolicyCombo.SelectedItem is HistoryPolicyOption option
+            ? option.Policy
+            : ProviderModelHistoryPolicy.Strict;
+
+    private ProviderModelResponseTone SelectedResponseTone() =>
+        ResponseToneCombo.SelectedItem is ResponseToneOption option
+            ? option.Tone
+            : ProviderModelResponseTone.Default;
+
+    private bool TryConfigurationDraft(out ProviderModelConfigurationPresentation draft, out string error)
+    {
+        var current = SelectedConfiguration();
+        var providerDefault = UseProviderDefaultContextCheckBox.IsChecked == true;
+        var contextWindow = 0;
+        if (!providerDefault
+            && (!int.TryParse(
+                    ModelContextWindowText.Text.Trim(),
+                    System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out contextWindow)
+                || contextWindow < current.MinimumContextWindow
+                || contextWindow > current.MaximumContextWindow))
+        {
+            draft = current;
+            error = $"Enter a whole number from {current.MinimumContextWindow:n0} through {current.MaximumContextWindow:n0}, or turn on Provider default.";
+            return false;
+        }
+
+        var tone = SelectedResponseTone();
+        var customTone = CustomToneText.Text.Trim();
+        if (tone == ProviderModelResponseTone.Custom && customTone.Length == 0)
+        {
+            draft = current;
+            error = "Enter a custom tone instruction or choose another response tone.";
+            return false;
+        }
+
+        draft = NormalizeConfiguration(current with
+        {
+            ContextWindow = providerDefault ? 0 : contextWindow,
+            HistoryPolicy = SelectedHistoryPolicy(),
+            ResponseTone = tone,
+            CustomTone = tone == ProviderModelResponseTone.Custom ? customTone : "",
+            RequiresReload = current.RequiresReload
+                || (selectedModel?.Availability == ProviderModelAvailability.Loaded
+                    && current.ContextWindow != (providerDefault ? 0 : contextWindow))
+        });
+        error = "";
+        return true;
+    }
+
+    private bool TryRequestConfigurationChange()
+    {
+        if (applyingConfigurationControls
+            || selectedModel is not { } model
+            || !CanEditConfiguration()
+            || !TryConfigurationDraft(out var draft, out _))
+        {
+            UpdateConfigurationValidation();
+            return false;
+        }
+
+        if (ConfigurationEquivalent(model.Configuration, draft))
+        {
+            UpdateConfigurationValidation();
+            return false;
+        }
+
+        var changeId = Guid.NewGuid();
+        pendingConfiguration = new PendingConfiguration(
+            changeId,
+            model.Id,
+            model.DisplayName,
+            model.Configuration,
+            draft,
+            model.Configuration.ConfigurationIdentity,
+            EffectiveConnectionIdentity(currentPresentation));
+        model.SetConfiguration(draft);
+        lastConfigurationModelId = model.Id;
+        lastConfigurationState = ProviderModelConfigurationSaveState.Saving;
+        lastConfigurationMessage = $"Saving configuration for {model.DisplayName}…";
+        ApplyConfigurationDetail(model);
+        ApplyInteractionState();
+
+        var handler = ConfigurationChanged;
+        if (handler is null)
+        {
+            SetConfigurationState(
+                changeId,
+                ProviderModelConfigurationSaveState.Failed,
+                "No model configuration handler is connected.");
+            return false;
+        }
+
+        try
+        {
+            handler.Invoke(
+                this,
+                new ProviderModelConfigurationChangedEventArgs(
+                    changeId,
+                    model.Id,
+                    draft.ContextWindow,
+                    draft.HistoryPolicy,
+                    draft.ResponseTone,
+                    draft.CustomTone,
+                    model.Configuration.ConfigurationIdentity));
+            return true;
+        }
+        catch
+        {
+            SetConfigurationState(
+                changeId,
+                ProviderModelConfigurationSaveState.Failed,
+                "The model configuration handler could not accept the change.");
+            return false;
+        }
+    }
+
+    private void UpdateConfigurationValidation()
+    {
+        if (applyingConfigurationControls || selectedModel is null)
+        {
+            return;
+        }
+
+        var valid = TryConfigurationDraft(out _, out var error);
+        ConfigurationValidationText.Text = error;
+        ConfigurationValidationText.Visibility = valid ? Visibility.Collapsed : Visibility.Visible;
+        AutomationProperties.SetItemStatus(ConfigurationValidationText, valid ? "Valid" : "Invalid");
+    }
+
+    private static bool ConfigurationEquivalent(
+        ProviderModelConfigurationPresentation left,
+        ProviderModelConfigurationPresentation right) =>
+        left.ContextWindow == right.ContextWindow
+        && left.HistoryPolicy == right.HistoryPolicy
+        && left.ResponseTone == right.ResponseTone
+        && string.Equals(left.CustomTone, right.CustomTone, StringComparison.Ordinal);
+
+    private void SetConfigurationStatus(ProviderModelConfigurationSaveState state, string message)
+    {
+        var safe = NormalizeStatus(message);
+        ConfigurationStatusText.Text = safe;
+        AutomationProperties.SetItemStatus(ConfigurationStatusText, state.ToString());
+        AutomationProperties.SetHelpText(ConfigurationStatusText, safe);
+        var borderKey = state switch
+        {
+            ProviderModelConfigurationSaveState.Saving => "Arena.Brush.Info",
+            ProviderModelConfigurationSaveState.Saved => "Arena.Brush.Success",
+            ProviderModelConfigurationSaveState.Failed => "DangerBorderBrush",
+            _ => "DisabledBorderBrush"
+        };
+        var textKey = state switch
+        {
+            ProviderModelConfigurationSaveState.Saving => "Arena.Brush.Info",
+            ProviderModelConfigurationSaveState.Saved => "Arena.Brush.Success",
+            ProviderModelConfigurationSaveState.Failed => "DangerTextBrush",
+            _ => "MutedTextBrush"
+        };
+        ConfigurationStatusCard.SetResourceReference(Border.BorderBrushProperty, borderKey);
+        ConfigurationStatusText.SetResourceReference(TextBlock.ForegroundProperty, textKey);
+    }
+
+    private void SetConfigurationReloadStatus(
+        ModelRowState? model,
+        ProviderModelConfigurationReloadState state,
+        string message)
+    {
+        var label = state switch
+        {
+            ProviderModelConfigurationReloadState.Required => "Reload to apply",
+            ProviderModelConfigurationReloadState.Running => "Reloading…",
+            ProviderModelConfigurationReloadState.Unconfirmed => "Awaiting confirmation",
+            ProviderModelConfigurationReloadState.Failed => "Retry reload",
+            ProviderModelConfigurationReloadState.Unavailable => "Reload unavailable",
+            _ => "Configuration is active"
+        };
+        var enabled = model is not null
+            && model.Availability == ProviderModelAvailability.Loaded
+            && pendingAssignment is null
+            && pendingLifecycle is null
+            && pendingConfiguration is null
+            && pendingConfigurationReload is null
+            && state is ProviderModelConfigurationReloadState.Required or ProviderModelConfigurationReloadState.Failed;
+        ConfigurationReloadButton.Content = label;
+        ConfigurationReloadButton.IsEnabled = enabled;
+        AutomationProperties.SetName(ConfigurationReloadButton, model is null ? label : $"{label} for {model.DisplayName}");
+        AutomationProperties.SetHelpText(ConfigurationReloadButton, NormalizeStatus(message));
+        AutomationProperties.SetItemStatus(ConfigurationReloadButton, state.ToString());
+    }
+
     private void ReconcileSelectedTargetRows(ModelRowState model)
     {
         var defaultTargetIds = targets
@@ -1092,6 +1878,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
             .ToArray();
         var selectedIsDefault = defaultTargetIds.Any(model.IsAssigned);
         var modelTargets = targets
+            .OrderBy(TargetDisplayOrder)
+            .ThenBy(target => target.DisplayName, StringComparer.OrdinalIgnoreCase)
             .Select(target => TargetPresentationForModel(model, target, selectedIsDefault))
             .ToArray();
         var targetIdsMatch = selectedTargetRows.Count == modelTargets.Length
@@ -1121,6 +1909,22 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 target,
                 model.IsAssigned(target.Id));
         }
+    }
+
+    private static int TargetDisplayOrder(ProviderAssignmentTargetPresentation target)
+    {
+        if (target.IsDefault || target.AssignmentState == ProviderTargetAssignmentState.Default)
+        {
+            return 0;
+        }
+
+        if (target.Id.Equals("narrator", StringComparison.OrdinalIgnoreCase)
+            || target.DisplayName.Equals("narrator", StringComparison.OrdinalIgnoreCase))
+        {
+            return 1;
+        }
+
+        return 2 + AgentRosterService.ParticipantOrder(target.Id);
     }
 
     private ProviderAssignmentTargetPresentation TargetPresentationForModel(
@@ -1165,6 +1969,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         };
         return target with
         {
+            DisplayName = isDefaultTarget ? "Default" : target.DisplayName,
             HelpText = help,
             IsEnabled = enabled,
             AssignmentState = assignmentState,
@@ -1216,7 +2021,10 @@ public partial class ProviderModelAssignmentsControl : UserControl
         if (TryLifecycleAction(model, out var load))
         {
             var canRun = currentPresentation?.CanRunLifecycle == true
-                && currentPresentation.IsRefreshing == false;
+                && currentPresentation.IsRefreshing == false
+                && pendingAssignment is null
+                && pendingConfiguration is null
+                && pendingConfigurationReload is null;
             LifecycleButton.Content = load ? "Load model" : "Unload model";
             LifecycleButton.SetResourceReference(
                 FrameworkElement.StyleProperty,
@@ -1367,6 +2175,119 @@ public partial class ProviderModelAssignmentsControl : UserControl
         ApplyLifecycleActivityMarkers();
     }
 
+    private void CancelPendingConfigurationWhenIdentityChanges(
+        ProviderModelAssignmentsPresentation presentation)
+    {
+        var pending = pendingConfiguration;
+        if (pending is null
+            || string.Equals(
+                pending.ConnectionIdentity,
+                EffectiveConnectionIdentity(presentation),
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        pendingConfiguration = null;
+        lastConfigurationModelId = pending.ModelId;
+        lastConfigurationState = ProviderModelConfigurationSaveState.Failed;
+        lastConfigurationMessage = "Failed: The provider or session changed before the model configuration finished saving.";
+        SetConfigurationStatus(lastConfigurationState, lastConfigurationMessage);
+    }
+
+    private void CancelPendingConfigurationReloadWhenIdentityChanges(
+        ProviderModelAssignmentsPresentation presentation)
+    {
+        var pending = pendingConfigurationReload;
+        if (pending is null
+            || string.Equals(
+                pending.ConnectionIdentity,
+                EffectiveConnectionIdentity(presentation),
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var mutationStarted = pendingConfigurationReloadMutationStarted;
+        pendingConfigurationReload = null;
+        pendingConfigurationReloadMutationStarted = false;
+        lastReloadModelId = pending.ModelId;
+        lastReloadState = mutationStarted
+            ? ProviderModelConfigurationReloadState.Unconfirmed
+            : ProviderModelConfigurationReloadState.Failed;
+        lastReloadConnectionIdentity = mutationStarted ? pending.ConnectionIdentity : "";
+        lastReloadMessage = mutationStarted
+            ? "The provider or session changed after the reload request started. Effective context is unconfirmed; refresh the original connection."
+            : "Failed: The provider or session changed before a configuration reload request was sent.";
+        SetConfigurationReloadStatus(FindModel(pending.ModelId), lastReloadState, lastReloadMessage);
+    }
+
+    private void ReconcileUnconfirmedConfigurationReload(
+        ProviderModelAssignmentsPresentation presentation)
+    {
+        var hasUnresolvedReloadReceipt = lastReloadState == ProviderModelConfigurationReloadState.Unconfirmed
+            || (lastReloadState == ProviderModelConfigurationReloadState.Failed
+                && lastReloadConnectionIdentity.Length > 0);
+        if (!hasUnresolvedReloadReceipt
+            || lastReloadConnectionIdentity.Length == 0
+            || !lastReloadConnectionIdentity.Equals(
+                EffectiveConnectionIdentity(presentation),
+                StringComparison.Ordinal)
+            || FindModel(lastReloadModelId) is not { } model)
+        {
+            return;
+        }
+
+        if (model.Availability == ProviderModelAvailability.Loaded)
+        {
+            lastReloadState = model.Configuration.RequiresReload
+                ? ProviderModelConfigurationReloadState.Required
+                : ProviderModelConfigurationReloadState.Succeeded;
+            lastReloadConnectionIdentity = "";
+            lastReloadMessage = model.Configuration.RequiresReload
+                ? "Provider evidence confirms the model is loaded, but the desired context is not active. Retry reload."
+                : "Provider evidence now confirms the configured model residency.";
+        }
+        else if (model.Availability == ProviderModelAvailability.Available)
+        {
+            lastReloadState = ProviderModelConfigurationReloadState.Failed;
+            lastReloadMessage = "Failed: Provider evidence confirms the prior instance was unloaded and no replacement is loaded. Use Load model to retry.";
+        }
+        else
+        {
+            return;
+        }
+
+    }
+
+    private void CaptureLatestPendingConfigurationAuthority(
+        IReadOnlyList<ProviderModelAssignmentPresentation> presentedModels)
+    {
+        var pending = pendingConfiguration;
+        if (pending is null)
+        {
+            return;
+        }
+
+        var authority = presentedModels.FirstOrDefault(model =>
+            string.Equals(model.Id, pending.ModelId, StringComparison.Ordinal));
+        if (authority?.Configuration is not null)
+        {
+            pendingConfiguration = pending with
+            {
+                Previous = NormalizeConfiguration(authority.Configuration)
+            };
+        }
+    }
+
+    private void ApplyPendingConfigurationDraft()
+    {
+        if (pendingConfiguration is { } pending)
+        {
+            FindModel(pending.ModelId)?.SetConfiguration(pending.Requested);
+        }
+    }
+
     private void ClearUnconfirmedLifecycleForConnectionChange(
         ProviderModelAssignmentsPresentation presentation)
     {
@@ -1410,7 +2331,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
             CanLoad: false,
             CanUnload: false,
             LifecycleHelp: $"LM Studio has not yet confirmed that this model is {desiredState}. Refresh or wait for the next residency check.",
-            IsResidencyStale: true);
+            IsResidencyStale: true,
+            Configuration: current?.Configuration);
     }
 
     private void EnsureUnconfirmedLifecycleReceiptRow()
@@ -1501,7 +2423,9 @@ public partial class ProviderModelAssignmentsControl : UserControl
         var canAssign = currentPresentation?.CanAssign == true
             && currentPresentation.IsRefreshing == false
             && pendingAssignment is null
-            && pendingLifecycle is null;
+            && pendingLifecycle is null
+            && pendingConfiguration is null
+            && pendingConfigurationReload is null;
         foreach (var target in selectedTargetRows)
         {
             target.SetInteractionEnabled(canAssign, canAssign ? "" : AssignmentAvailabilityMessage());
@@ -1511,7 +2435,10 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 && string.Equals(target.TargetId, pendingAssignment.TargetId, StringComparison.Ordinal));
         }
 
-        var hasPendingChange = pendingAssignment is not null || pendingLifecycle is not null;
+        var hasPendingChange = pendingAssignment is not null
+            || pendingLifecycle is not null
+            || pendingConfiguration is not null
+            || pendingConfigurationReload is not null;
         // Keep catalog inspection and scrolling available while a save or LM Studio
         // lifecycle request is running. Only controls that can start a conflicting
         // mutation are disabled below.
@@ -1539,6 +2466,20 @@ public partial class ProviderModelAssignmentsControl : UserControl
             AutomationProperties.SetHelpText(
                 LifecycleButton,
                 $"Wait for the assignment for {pendingAssignment.ModelDisplayName} to finish before changing LM Studio residency.");
+        }
+        else if (pendingConfiguration is not null)
+        {
+            AutomationProperties.SetItemStatus(LifecycleButton, "Unavailable");
+            AutomationProperties.SetHelpText(
+                LifecycleButton,
+                $"Wait for the configuration for {pendingConfiguration.ModelDisplayName} to finish saving before changing LM Studio residency.");
+        }
+        else if (pendingConfigurationReload is not null)
+        {
+            AutomationProperties.SetItemStatus(LifecycleButton, "Unavailable");
+            AutomationProperties.SetHelpText(
+                LifecycleButton,
+                $"Wait for the configuration reload for {pendingConfigurationReload.ModelDisplayName} to finish before changing LM Studio residency.");
         }
     }
 
@@ -1753,6 +2694,40 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
     private ModelRowState? FindModel(string modelId) =>
         modelRows.FirstOrDefault(model => string.Equals(model.Id, modelId, StringComparison.Ordinal));
+
+    private ModelRowState? ResolveModel(string modelId)
+    {
+        var exact = modelRows.FirstOrDefault(model =>
+            string.Equals(model.Id, modelId, StringComparison.OrdinalIgnoreCase));
+        if (exact is not null)
+        {
+            return exact;
+        }
+
+        var display = modelRows
+            .Where(model => string.Equals(model.DisplayName, modelId, StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToArray();
+        if (display.Length == 1)
+        {
+            return display[0];
+        }
+
+        var leaf = ModelIdentityLeaf(modelId);
+        var aliases = modelRows
+            .Where(model => string.Equals(ModelIdentityLeaf(model.Id), leaf, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(ModelIdentityLeaf(model.DisplayName), leaf, StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToArray();
+        return aliases.Length == 1 ? aliases[0] : null;
+    }
+
+    private static string ModelIdentityLeaf(string value)
+    {
+        var normalized = (value ?? "").Trim().Replace('\\', '/');
+        var slash = normalized.LastIndexOf('/');
+        return slash >= 0 ? normalized[(slash + 1)..] : normalized;
+    }
 
     private void UpdateEmptyState()
     {
@@ -2156,6 +3131,16 @@ public partial class ProviderModelAssignmentsControl : UserControl
             return $"Assignments are paused while LM Studio {activity} {pendingLifecycle.ModelDisplayName}. You can keep browsing models.";
         }
 
+        if (pendingConfiguration is not null)
+        {
+            return $"Assignments are paused while the configuration for {pendingConfiguration.ModelDisplayName} saves. You can keep browsing models.";
+        }
+
+        if (pendingConfigurationReload is not null)
+        {
+            return $"Assignments are paused while {pendingConfigurationReload.ModelDisplayName} reloads. You can keep browsing models.";
+        }
+
         if (currentPresentation?.IsRefreshing == true)
         {
             return "Assignments are paused while provider evidence refreshes.";
@@ -2183,6 +3168,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 Id = group.Key,
                 DisplayName = DisplayOrFallback(group.First().DisplayName, group.Key)
             })
+            .OrderBy(TargetDisplayOrder)
+            .ThenBy(target => target.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
 
@@ -2203,6 +3190,37 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
     private static string DisplayOrFallback(string? value, string fallback) =>
         string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+
+    private static ProviderModelConfigurationPresentation UnavailableConfiguration() => new(
+        CanEdit: false,
+        Status: "Model configuration evidence is unavailable.");
+
+    private static ProviderModelConfigurationPresentation NormalizeConfiguration(
+        ProviderModelConfigurationPresentation source)
+    {
+        var minimum = Math.Clamp(source.MinimumContextWindow, 512, 1_048_576);
+        var maximum = Math.Clamp(source.MaximumContextWindow, minimum, 1_048_576);
+        var contextWindow = source.ContextWindow == 0
+            ? 0
+            : Math.Clamp(source.ContextWindow, minimum, maximum);
+        return source with
+        {
+            ContextWindow = contextWindow,
+            EffectiveContextWindow = Math.Max(0, source.EffectiveContextWindow),
+            ContextEvidence = NormalizeStatus(source.ContextEvidence),
+            CustomTone = (source.CustomTone ?? "").Trim() is { Length: > 240 } custom
+                ? custom[..240]
+                : (source.CustomTone ?? "").Trim(),
+            ConfigurationIdentity = (source.ConfigurationIdentity ?? "").Trim(),
+            Status = NormalizeStatus(source.Status),
+            MinimumContextWindow = minimum,
+            MaximumContextWindow = maximum,
+            ChapteredAvailable = source.ChapteredAvailable,
+            HistoryPolicy = source.HistoryPolicy == ProviderModelHistoryPolicy.Chaptered && !source.ChapteredAvailable
+                ? ProviderModelHistoryPolicy.Strict
+                : source.HistoryPolicy
+        };
+    }
 
     private static string EffectivePresentationIdentity(
         ProviderModelAssignmentsPresentation? presentation)
@@ -2289,6 +3307,56 @@ public partial class ProviderModelAssignmentsControl : UserControl
         public override string ToString() => DisplayName;
     }
 
+    private sealed record HistoryPolicyOption(
+        ProviderModelHistoryPolicy Policy,
+        string DisplayName,
+        bool IsEnabled,
+        string HelpText)
+    {
+        public string AutomationName => IsEnabled ? DisplayName : $"{DisplayName}, unavailable";
+
+        public static IReadOnlyList<HistoryPolicyOption> Options { get; } = OptionsFor(false);
+
+        public static IReadOnlyList<HistoryPolicyOption> OptionsFor(bool chapteredAvailable) =>
+        [
+            new(
+                ProviderModelHistoryPolicy.Strict,
+                "Strict",
+                true,
+                "Preserve the exact selected history and surface a truthful context-limit failure when it does not fit."),
+            new(
+                ProviderModelHistoryPolicy.Rolling80Percent,
+                "Rolling 80%",
+                true,
+                "Keep recent whole history entries within an 80 percent input budget and report every omission."),
+            new(
+                ProviderModelHistoryPolicy.Chaptered,
+                chapteredAvailable ? "Chaptered" : "Chaptered — Coming later",
+                chapteredAvailable,
+                chapteredAvailable
+                    ? "Use durable chapter boundaries and receipts."
+                    : "Chaptered history is visible for planning but is not available yet.")
+        ];
+
+        public override string ToString() => DisplayName;
+    }
+
+    private sealed record ResponseToneOption(ProviderModelResponseTone Tone, string DisplayName)
+    {
+        public static IReadOnlyList<ResponseToneOption> Options { get; } =
+        [
+            new(ProviderModelResponseTone.Default, "Default"),
+            new(ProviderModelResponseTone.Neutral, "Neutral"),
+            new(ProviderModelResponseTone.Concise, "Concise"),
+            new(ProviderModelResponseTone.Analytical, "Analytical"),
+            new(ProviderModelResponseTone.Creative, "Creative"),
+            new(ProviderModelResponseTone.Direct, "Direct"),
+            new(ProviderModelResponseTone.Custom, "Custom")
+        ];
+
+        public override string ToString() => DisplayName;
+    }
+
     private sealed class ModelRowState : INotifyPropertyChanged
     {
         private readonly HashSet<string> assignedTargetIds = new(StringComparer.Ordinal);
@@ -2305,6 +3373,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         private string assignmentSummary = "Not assigned";
         private string automationHelp = "";
         private string searchText = "";
+        private ProviderModelConfigurationPresentation configuration = UnavailableConfiguration();
 
         public ModelRowState(ProviderModelAssignmentPresentation source)
         {
@@ -2327,6 +3396,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         public bool HasLifecycleActivity => lifecycleActivity.Length > 0;
         public string SearchText => searchText;
         public IReadOnlyCollection<string> AssignedTargetIds => assignedTargetIds.ToArray();
+        public ProviderModelConfigurationPresentation Configuration => configuration;
         public int GroupOrder => Availability switch
         {
             ProviderModelAvailability.Loaded => 0,
@@ -2412,6 +3482,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
                     source.LifecycleHelp,
                     "LM Studio residency changes do not change model assignments."),
                 nameof(LifecycleHelp));
+            SetConfiguration(source.Configuration ?? UnavailableConfiguration());
 
             var nextAssignments = source.AssignedTargetIds
                 .Where(value => !string.IsNullOrWhiteSpace(value))
@@ -2451,6 +3522,18 @@ public partial class ProviderModelAssignmentsControl : UserControl
             {
                 Raise(nameof(AssignedTargetIds));
             }
+        }
+
+        public void SetConfiguration(ProviderModelConfigurationPresentation value)
+        {
+            var normalized = NormalizeConfiguration(value);
+            if (Equals(configuration, normalized))
+            {
+                return;
+            }
+
+            configuration = normalized;
+            Raise(nameof(Configuration));
         }
 
         public bool RefreshAssignmentSummary(
@@ -2507,6 +3590,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         private string displayName;
         private string helpText;
         private bool targetEnabled;
+        private bool isDefaultTarget;
         private bool isAssigned;
         private bool interactionEnabled;
         private bool saving;
@@ -2527,6 +3611,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             displayName = target.DisplayName;
             helpText = target.HelpText;
             targetEnabled = target.IsEnabled;
+            isDefaultTarget = target.IsDefault;
             isAssigned = assigned;
             assignedState = target.AssignmentState == ProviderTargetAssignmentState.Unassigned
                 ? target.AssignedState
@@ -2569,7 +3654,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         }
 
         public bool CanAssign => TargetEnabled && interactionEnabled;
-        public string AutomationName => $"Assign {ModelDisplayName} to {DisplayName}";
+        public string AutomationName => $"Assign {ModelDisplayName} to {(isDefaultTarget ? "Default for unassigned agents" : DisplayName)}";
         public string AutomationHelp => string.Join(
             " ",
             new[]
@@ -2591,6 +3676,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             displayName = target.DisplayName;
             helpText = target.HelpText;
             targetEnabled = target.IsEnabled;
+            isDefaultTarget = target.IsDefault;
             assignedState = target.AssignmentState == ProviderTargetAssignmentState.Unassigned
                 ? target.AssignedState
                 : target.AssignmentState;
@@ -2685,6 +3771,22 @@ public partial class ProviderModelAssignmentsControl : UserControl
         string ModelId,
         string ModelDisplayName,
         bool Load,
+        string ConnectionIdentity);
+
+    private sealed record PendingConfiguration(
+        Guid ChangeId,
+        string ModelId,
+        string ModelDisplayName,
+        ProviderModelConfigurationPresentation Previous,
+        ProviderModelConfigurationPresentation Requested,
+        string ConfigurationIdentity,
+        string ConnectionIdentity);
+
+    private sealed record PendingConfigurationReload(
+        Guid OperationId,
+        string ModelId,
+        string ModelDisplayName,
+        string ConfigurationIdentity,
         string ConnectionIdentity);
 
     private sealed record CatalogViewportAnchor(string ModelId, double RelativeY);

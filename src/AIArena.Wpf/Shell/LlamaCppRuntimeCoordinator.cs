@@ -16,6 +16,8 @@ internal sealed class LlamaCppRuntimeCoordinator
     private readonly Func<ModelProviderConfig> captureConfig;
     private readonly Func<bool> isArenaBusy;
     private readonly Func<string, Brush> resourceBrush;
+    private readonly ApplicationStatusCenter statusCenter;
+    private readonly Func<ModelProviderConfig, ApplicationStatusIdentity> captureStatusIdentity;
 
     private RuntimeIdentity configurationIdentity = RuntimeIdentity.Empty;
     private LlamaCppRuntimeSnapshot? snapshot;
@@ -31,20 +33,24 @@ internal sealed class LlamaCppRuntimeCoordinator
         LlamaCppRuntimeControls controls,
         Func<ModelProviderConfig> captureConfig,
         Func<bool> isArenaBusy,
-        Func<string, Brush> resourceBrush)
+        Func<string, Brush> resourceBrush,
+        ApplicationStatusCenter statusCenter,
+        Func<ModelProviderConfig, ApplicationStatusIdentity> captureStatusIdentity)
     {
         this.runtimeService = runtimeService;
         this.controls = controls;
         this.captureConfig = captureConfig;
         this.isArenaBusy = isArenaBusy;
         this.resourceBrush = resourceBrush;
+        this.statusCenter = statusCenter;
+        this.captureStatusIdentity = captureStatusIdentity;
         ConfigurationChanged();
     }
 
     public void ConfigurationChanged()
     {
         var config = captureConfig();
-        var identity = RuntimeIdentity.From(config);
+        var identity = RuntimeIdentity.From(config, captureStatusIdentity(config));
         if (identity != configurationIdentity)
         {
             configurationIdentity = identity;
@@ -93,8 +99,16 @@ internal sealed class LlamaCppRuntimeCoordinator
             return;
         }
 
-        var identity = RuntimeIdentity.From(config);
+        var statusIdentity = captureStatusIdentity(config);
+        var identity = RuntimeIdentity.From(config, statusIdentity);
         var version = configurationVersion;
+        var operation = reconnect ? "reconnect" : "inspection";
+        var receipt = BeginStatus(
+            reconnect ? "provider.llamacpp.reconnect" : "provider.llamacpp.inspect",
+            reconnect
+                ? "Reconnecting to llama.cpp runtime..."
+                : "Inspecting llama.cpp runtime...",
+            statusIdentity);
         operationRunning = true;
         operationStatus = reconnect
             ? "Reconnecting to llama-server and refreshing runtime evidence..."
@@ -109,12 +123,74 @@ internal sealed class LlamaCppRuntimeCoordinator
         actionNotice = "";
         actionNoticeIsFailure = false;
         ApplyCurrent(config);
-        LlamaCppRuntimeSnapshot? result = null;
         try
         {
-            result = reconnect
+            var result = reconnect
                 ? await runtimeService.ReconnectAsync(config, cancellationToken)
                 : await runtimeService.InspectAsync(config, cancellationToken);
+
+            if (!IsCurrent(identity, version))
+            {
+                CancelStaleStatus(receipt, operation);
+                return;
+            }
+
+            snapshot = result;
+            if (result.Available)
+            {
+                CompleteStatus(
+                    receipt,
+                    reconnect
+                        ? "llama.cpp runtime reconnected."
+                        : "llama.cpp runtime inspection completed.",
+                    RuntimeResultDetail(result));
+            }
+            else
+            {
+                FailStatus(
+                    receipt,
+                    reconnect
+                        ? "Could not reconnect to llama.cpp runtime."
+                        : "Could not inspect llama.cpp runtime.",
+                    RuntimeResultDetail(result));
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (IsCurrent(identity, version))
+            {
+                CancelStatus(
+                    receipt,
+                    reconnect
+                        ? "llama.cpp runtime reconnect cancelled."
+                        : "llama.cpp runtime inspection cancelled.");
+            }
+            else
+            {
+                CancelStaleStatus(receipt, operation);
+            }
+
+            throw;
+        }
+        catch (Exception exception)
+        {
+            var safeError = ProviderModelCatalogProjectionService.SafeStatusForDisplay(
+                exception.Message,
+                config.ApiToken);
+            if (IsCurrent(identity, version))
+            {
+                snapshot = LlamaCppRuntimeSnapshot.Unavailable(safeError, DateTimeOffset.Now);
+                FailStatus(
+                    receipt,
+                    reconnect
+                        ? "Could not reconnect to llama.cpp runtime."
+                        : "Could not inspect llama.cpp runtime.",
+                    safeError);
+            }
+            else
+            {
+                CancelStaleStatus(receipt, operation);
+            }
         }
         finally
         {
@@ -122,13 +198,6 @@ internal sealed class LlamaCppRuntimeCoordinator
             operationStatus = "";
             ApplyCurrent(captureConfig());
         }
-
-        if (IsCurrent(identity, version))
-        {
-            snapshot = result;
-        }
-
-        ApplyCurrent(captureConfig());
     }
 
     private async Task RunLifecycleAsync(bool load, CancellationToken cancellationToken)
@@ -145,37 +214,46 @@ internal sealed class LlamaCppRuntimeCoordinator
         var model = !string.IsNullOrWhiteSpace(inspected!.Model)
             ? inspected.Model.Trim()
             : config.Model.Trim();
-        var identity = RuntimeIdentity.From(config);
+        var displayModel = ProviderModelCatalogProjectionService.SafeModelIdentifier(model);
+        if (string.IsNullOrWhiteSpace(displayModel))
+        {
+            displayModel = "selected model";
+        }
+        var statusIdentity = captureStatusIdentity(config);
+        var identity = RuntimeIdentity.From(config, statusIdentity);
         var version = configurationVersion;
+        var operation = load ? "preload" : "unload";
+        var receipt = BeginStatus(
+            load ? "provider.llamacpp.preload" : "provider.llamacpp.unload",
+            load
+                ? $"Preloading {displayModel} with llama.cpp..."
+                : $"Unloading {displayModel} from llama.cpp...",
+            statusIdentity);
         operationRunning = true;
         operationStatus = load
-            ? $"Requesting llama.cpp router preload for {model}..."
-            : $"Requesting llama.cpp router unload for {model}...";
+            ? $"Requesting llama.cpp router preload for {displayModel}..."
+            : $"Requesting llama.cpp router unload for {displayModel}...";
         actionNotice = "";
         actionNoticeIsFailure = false;
         ApplyCurrent(config);
 
-        LlamaCppRuntimeActionResult? actionResult = null;
-        LlamaCppRuntimeSnapshot? refreshed = null;
         try
         {
-            actionResult = load
+            var actionResult = load
                 ? await runtimeService.LoadAsync(config, model, cancellationToken)
                 : await runtimeService.UnloadAsync(config, model, cancellationToken);
+            LlamaCppRuntimeSnapshot? refreshed = null;
             if (actionResult.Supported)
             {
                 refreshed = await runtimeService.InspectAsync(config, cancellationToken);
             }
-        }
-        finally
-        {
-            operationRunning = false;
-            operationStatus = "";
-            ApplyCurrent(captureConfig());
-        }
 
-        if (IsCurrent(identity, version) && actionResult is not null)
-        {
+            if (!IsCurrent(identity, version))
+            {
+                CancelStaleStatus(receipt, operation);
+                return;
+            }
+
             if (refreshed is not null)
             {
                 snapshot = refreshed;
@@ -184,9 +262,76 @@ internal sealed class LlamaCppRuntimeCoordinator
             lifecycleKnownUnsupported = !actionResult.Supported;
             actionNoticeIsFailure = !actionResult.Ok;
             actionNotice = DisplayActionResult(actionResult);
+            if (actionResult.Ok)
+            {
+                CompleteStatus(
+                    receipt,
+                    load
+                        ? $"Preload completed for {actionResult.Model}."
+                        : $"Unload completed for {actionResult.Model}.",
+                    refreshed is { Available: true }
+                        ? RuntimeResultDetail(refreshed)
+                        : "llama.cpp accepted the lifecycle request.");
+            }
+            else
+            {
+                FailStatus(
+                    receipt,
+                    load
+                        ? $"Could not preload {actionResult.Model}."
+                        : $"Could not unload {actionResult.Model}.",
+                    ActionResultDetail(actionResult));
+            }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (IsCurrent(identity, version))
+            {
+                actionNotice = load ? "Preload cancelled." : "Unload cancelled.";
+                actionNoticeIsFailure = false;
+                CancelStatus(
+                    receipt,
+                    load
+                        ? $"Preload cancelled for {displayModel}."
+                        : $"Unload cancelled for {displayModel}.",
+                    "Inspect the runtime before retrying if the request may have reached llama-server.");
+            }
+            else
+            {
+                CancelStaleStatus(receipt, operation);
+            }
 
-        ApplyCurrent(captureConfig());
+            throw;
+        }
+        catch (Exception exception)
+        {
+            var safeError = ProviderModelCatalogProjectionService.SafeStatusForDisplay(
+                exception.Message,
+                config.ApiToken);
+            if (IsCurrent(identity, version))
+            {
+                actionNotice = load
+                    ? $"Preload failed for {displayModel}: {safeError}"
+                    : $"Unload failed for {displayModel}: {safeError}";
+                actionNoticeIsFailure = true;
+                FailStatus(
+                    receipt,
+                    load
+                        ? $"Could not preload {displayModel}."
+                        : $"Could not unload {displayModel}.",
+                    safeError);
+            }
+            else
+            {
+                CancelStaleStatus(receipt, operation);
+            }
+        }
+        finally
+        {
+            operationRunning = false;
+            operationStatus = "";
+            ApplyCurrent(captureConfig());
+        }
     }
 
     private bool CanRunLifecycle(ModelProviderConfig config, LlamaCppRuntimeSnapshot? inspected)
@@ -200,14 +345,15 @@ internal sealed class LlamaCppRuntimeCoordinator
 
     private bool IsCurrent(RuntimeIdentity identity, int version)
     {
+        var currentConfig = captureConfig();
         return version == configurationVersion
             && identity == configurationIdentity
-            && identity == RuntimeIdentity.From(captureConfig());
+            && identity == RuntimeIdentity.From(currentConfig, captureStatusIdentity(currentConfig));
     }
 
     private void ApplyCurrent(ModelProviderConfig config)
     {
-        var identity = RuntimeIdentity.From(config);
+        var identity = RuntimeIdentity.From(config, captureStatusIdentity(config));
         if (identity != configurationIdentity)
         {
             configurationIdentity = identity;
@@ -413,6 +559,76 @@ internal sealed class LlamaCppRuntimeCoordinator
             : $"{action} is unsupported: {detail}";
     }
 
+    private ApplicationStatusReceipt BeginStatus(
+        string key,
+        string summary,
+        ApplicationStatusIdentity identity) =>
+        statusCenter.Begin(
+            key,
+            "Provider",
+            summary,
+            navigationTarget: "provider",
+            identity: identity);
+
+    private void CompleteStatus(ApplicationStatusReceipt receipt, string summary, string detail)
+    {
+        if (!receipt.IsEmpty)
+        {
+            statusCenter.Complete(receipt, summary, detail);
+        }
+    }
+
+    private void FailStatus(ApplicationStatusReceipt receipt, string summary, string detail)
+    {
+        if (!receipt.IsEmpty)
+        {
+            statusCenter.Fail(receipt, summary, detail);
+        }
+    }
+
+    private void CancelStatus(ApplicationStatusReceipt receipt, string summary, string? detail = null)
+    {
+        if (!receipt.IsEmpty)
+        {
+            statusCenter.Cancel(receipt, summary, detail);
+        }
+    }
+
+    private void CancelStaleStatus(ApplicationStatusReceipt receipt, string operation)
+    {
+        CancelStatus(
+            receipt,
+            $"llama.cpp {operation} cancelled after configuration changed.",
+            "The active session, provider, or selected model changed before the operation finished.");
+    }
+
+    private static string RuntimeResultDetail(LlamaCppRuntimeSnapshot result)
+    {
+        if (!result.Available)
+        {
+            return !string.IsNullOrWhiteSpace(result.Error)
+                ? result.Error
+                : "No usable llama.cpp runtime evidence was returned.";
+        }
+
+        var readiness = result.Ready ? "ready" : "available with partial readiness";
+        return result.Warnings.Count == 0
+            ? $"llama.cpp reported {readiness}."
+            : $"llama.cpp reported {readiness} with {result.Warnings.Count} warning(s).";
+    }
+
+    private static string ActionResultDetail(LlamaCppRuntimeActionResult result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.Error))
+        {
+            return result.Error;
+        }
+
+        return !string.IsNullOrWhiteSpace(result.Status)
+            ? result.Status
+            : "llama-server did not confirm the lifecycle request.";
+    }
+
     private static string AppendLine(string current, string value)
     {
         if (string.IsNullOrWhiteSpace(current))
@@ -441,17 +657,27 @@ internal sealed class LlamaCppRuntimeCoordinator
         AutomationProperties.SetHelpText(button, help);
     }
 
-    private sealed record RuntimeIdentity(string BaseUrl, string ApiMode, string Model, string TokenFingerprint)
+    private sealed record RuntimeIdentity(
+        string SessionId,
+        string ProviderIdentity,
+        string BaseUrl,
+        string ApiMode,
+        string Model,
+        string TokenFingerprint)
     {
-        public static RuntimeIdentity Empty { get; } = new("", "", "", "");
+        public static RuntimeIdentity Empty { get; } = new("", "", "", "", "", "");
 
-        public static RuntimeIdentity From(ModelProviderConfig config)
+        public static RuntimeIdentity From(
+            ModelProviderConfig config,
+            ApplicationStatusIdentity statusIdentity)
         {
             var token = config.ApiToken?.Trim() ?? "";
             var fingerprint = token.Length == 0
                 ? ""
                 : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
             return new RuntimeIdentity(
+                statusIdentity.SessionId?.Trim() ?? "",
+                statusIdentity.ProviderIdentity?.Trim() ?? "",
                 (config.BaseUrl ?? "").Trim().TrimEnd('/').ToLowerInvariant(),
                 ModelProviderApiModes.Normalize(config.ApiMode),
                 (config.Model ?? "").Trim(),

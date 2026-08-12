@@ -22,7 +22,9 @@ public partial class MainWindow
 {
     bool IAIArenaControlTarget.IsControlPlaneEnabled => IsControlPlaneEnabled;
 
-    private bool IsControlPlaneEnabled => _wpfSettings.EnableControlPlane;
+    private bool IsControlPlaneEnabled =>
+        _wpfSettings.EnableControlPlane
+        && string.IsNullOrWhiteSpace(_controlPlaneInitializationError);
 
     async Task<AIArenaControlResponse> IAIArenaControlTarget.ExecuteControlCommandAsync(
         AIArenaControlRequest request,
@@ -603,6 +605,14 @@ public partial class MainWindow
                 }
             case AIArenaControlCommands.ArenaNarrate:
                 {
+                    if (await EndedMatchPrerequisiteResponseAsync(
+                            request,
+                            "asking the narrator",
+                            cancellationToken) is { } endedFailure)
+                    {
+                        return endedFailure;
+                    }
+
                     if (_lastRenderedSnapshot?.FactoryMode == true)
                     {
                         return AIArenaControlResponse.Error(
@@ -651,6 +661,15 @@ public partial class MainWindow
                             request,
                             "invalid_argument",
                             "arena.operator.send args.route must be public, private, or narrator.");
+                    }
+
+                    if (route.Equals("narrator", StringComparison.OrdinalIgnoreCase)
+                        && await EndedMatchPrerequisiteResponseAsync(
+                            request,
+                            "asking the narrator",
+                            cancellationToken) is { } endedFailure)
+                    {
+                        return endedFailure;
                     }
 
                     await OperatorTurn.ControlSendAsync(prompt, route);
@@ -714,13 +733,16 @@ public partial class MainWindow
 
     private AIArenaControlSnapshot BuildControlPlaneSnapshot()
     {
+        var applicationStatus = AIArenaApplicationStatusControlProjection.Project(
+            ShellTopBar.Presentation.StatusCenter.Snapshot);
         return new AIArenaControlSnapshot(
-            ArenaRunStatus.Text,
+            applicationStatus.Primary.Summary,
             SelectedControlPlaneView(),
             _wpfSettings.ThemeId,
             IsControlPlaneEnabled,
             AgentWorkspace.ControlState,
-            BuildProviderControlState());
+            BuildProviderControlState(),
+            applicationStatus);
     }
 
     internal static ExperimentLabFeatureControlState? ResolveExperimentFeatureSelectionTarget(
@@ -804,6 +826,38 @@ public partial class MainWindow
                 message,
                 BuildControlPlaneSnapshot());
     }
+
+    private async Task<AIArenaControlResponse?> EndedMatchPrerequisiteResponseAsync(
+        AIArenaControlRequest request,
+        string action,
+        CancellationToken cancellationToken)
+    {
+        var sessionId = _activeSession?.Id?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return null;
+        }
+
+        var snapshot = await _coreSessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
+        if (!sessionId.Equals(_activeSession?.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var message = EndedMatchPrerequisiteMessage(snapshot, action);
+        return message is null
+            ? null
+            : AIArenaControlResponse.Error(
+                request,
+                "match_ended",
+                message,
+                BuildControlPlaneSnapshot());
+    }
+
+    internal static string? EndedMatchPrerequisiteMessage(ArenaSnapshot? snapshot, string action) =>
+        snapshot?.Engine.MatchEnded == true
+            ? $"This match has ended. Reset or fork the session before {action}."
+            : null;
 
     internal static string? FactoryConversationPrerequisiteMessage(ArenaSnapshot? snapshot, string action)
     {

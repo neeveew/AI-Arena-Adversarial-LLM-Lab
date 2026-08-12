@@ -68,6 +68,7 @@ internal sealed class ScenarioWorkflowCoordinator
     private readonly Func<string?, Task> loadSessionsAsync;
     private readonly Action<string> setLoadStatus;
     private readonly Action<string> setArenaRunStatus;
+    private readonly Action<string> setTransferStatus;
 
     private bool isUpdating;
     private bool isAutoChatRunning;
@@ -116,7 +117,8 @@ internal sealed class ScenarioWorkflowCoordinator
         Func<string?, Task> loadSessionsAsync,
         Action<string> setLoadStatus,
         Action<string> setArenaRunStatus,
-        Func<string, Button?, Func<CancellationToken, Task>, bool, Task>? runCancelableArenaBusyAsync = null)
+        Func<string, Button?, Func<CancellationToken, Task>, bool, Task>? runCancelableArenaBusyAsync = null,
+        Action<string>? setTransferStatus = null)
     {
         this.owner = owner;
         this.matchGeneration = matchGeneration;
@@ -162,6 +164,7 @@ internal sealed class ScenarioWorkflowCoordinator
         this.loadSessionsAsync = loadSessionsAsync;
         this.setLoadStatus = setLoadStatus;
         this.setArenaRunStatus = setArenaRunStatus;
+        this.setTransferStatus = setTransferStatus ?? setArenaRunStatus;
     }
 
     public GenerationHistoryItem? SelectedGenerationHistory =>
@@ -478,7 +481,7 @@ internal sealed class ScenarioWorkflowCoordinator
         var item = SelectedGenerationHistory;
         if (item is null)
         {
-            SetBothStatuses("No generated match selected.");
+            SetTransferStatus("Select a generated match before copying.");
             return;
         }
 
@@ -487,7 +490,7 @@ internal sealed class ScenarioWorkflowCoordinator
             : item.ScenarioSeed;
         if (string.IsNullOrWhiteSpace(seed) || seed == "-")
         {
-            SetBothStatuses("Selected generation has no seed to copy.");
+            SetTransferStatus("Selected generation has no seed to copy.");
             return;
         }
 
@@ -496,12 +499,12 @@ internal sealed class ScenarioWorkflowCoordinator
             var sourceLabel = CapturedGenerationLabel(item.Kind);
             CopyTextToClipboard(
                 item.Id,
-                $"{sourceLabel} has no deterministic seed. Copied replay id: {item.Id}",
+                $"{sourceLabel} has no deterministic seed. Copied replay id.",
                 "Copy seed failed");
         }
         else
         {
-            CopyTextToClipboard(seed, $"Copied generation seed: {seed}", "Copy seed failed");
+            CopyTextToClipboard(seed, "Copied generation seed.", "Copy seed failed");
         }
     }
 
@@ -510,12 +513,13 @@ internal sealed class ScenarioWorkflowCoordinator
         var item = SelectedGenerationHistory;
         if (item is null)
         {
+            SetTransferStatus("Select a generated match before copying.");
             return;
         }
 
         CopyTextToClipboard(
             GenerationHistoryBrief(item),
-            $"Copied generated match brief: {ShortHistoryText(item.Label, 48)}",
+            "Copied generated match brief.",
             "Copy brief failed");
     }
 
@@ -524,13 +528,13 @@ internal sealed class ScenarioWorkflowCoordinator
         var item = SelectedGenerationHistory;
         if (item is null)
         {
-            SetBothStatuses("No generated match selected.");
+            SetTransferStatus("Select a generated match before copying.");
             return;
         }
 
         CopyTextToClipboard(
             GenerationHistorySpec(item, lastSetupSnapshot),
-            $"Copied generated setup spec: {ShortHistoryText(item.Label, 48)}",
+            "Copied generated setup spec.",
             "Copy spec failed");
     }
 
@@ -539,13 +543,13 @@ internal sealed class ScenarioWorkflowCoordinator
         var item = SelectedGenerationHistory;
         if (item is null)
         {
-            SetBothStatuses("No generated match selected.");
+            SetTransferStatus("Select a generated match before copying.");
             return;
         }
 
         CopyTextToClipboard(
             GenerationHistoryDiff(item, lastSetupSnapshot),
-            $"Copied generated setup diff: {ShortHistoryText(item.Label, 48)}",
+            "Copied generated setup diff.",
             "Copy diff failed");
     }
 
@@ -554,13 +558,13 @@ internal sealed class ScenarioWorkflowCoordinator
         var item = SelectedGenerationHistory;
         if (item is null)
         {
-            SetBothStatuses("No generated match selected.");
+            SetTransferStatus("Select a generated match before copying.");
             return;
         }
 
         CopyTextToClipboard(
             GenerationHistoryRubric(item, lastSetupSnapshot),
-            $"Copied generated match rubric: {ShortHistoryText(item.Label, 48)}",
+            "Copied generated match rubric.",
             "Copy rubric failed");
     }
 
@@ -568,7 +572,7 @@ internal sealed class ScenarioWorkflowCoordinator
     {
         if (lastSetupSnapshot is null)
         {
-            SetBothStatuses("No current setup snapshot to copy.");
+            SetTransferStatus("Select or load a Match Setup before copying.");
             return;
         }
 
@@ -582,7 +586,7 @@ internal sealed class ScenarioWorkflowCoordinator
     {
         if (lastSetupSnapshot is null)
         {
-            SetBothStatuses("No current setup snapshot to copy.");
+            SetTransferStatus("Select or load a Match Setup before copying.");
             return;
         }
 
@@ -946,15 +950,21 @@ internal sealed class ScenarioWorkflowCoordinator
         setArenaRunStatus(status);
     }
 
+    private void SetTransferStatus(string status)
+    {
+        setLoadStatus(status);
+        setTransferStatus(status);
+    }
+
     private void CopyTextToClipboard(string text, string successStatus, string failurePrefix)
     {
         if (TrySetClipboardText(text))
         {
-            SetBothStatuses(successStatus);
+            SetTransferStatus(successStatus);
             return;
         }
 
-        SetBothStatuses($"{failurePrefix}: clipboard is unavailable. Try again.");
+        SetTransferStatus($"{failurePrefix}: clipboard is unavailable. Try again.");
     }
 
     internal static bool TrySetClipboardText(string text, Action<string>? setText = null)
@@ -1376,9 +1386,13 @@ internal sealed class ScenarioWorkflowCoordinator
                 lockCount == 0 ? "Generated setups can replace scenario and cast fields." : $"{lockCount} setup lock(s) will preserve current fields."),
             new SetupReadinessBadge(
                 "History",
-                snapshot.GenerationHistory.Count == 0 ? "None" : snapshot.GenerationHistory.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                snapshot.FactoryMode ? "Public group" : snapshot.ProviderHistoryPolicy.Equals("rolling_80", StringComparison.Ordinal) ? "Rolling 80%" : "Strict",
                 "neutral",
-                snapshot.GenerationHistory.Count == 0 ? "No replayable generated setup history yet." : $"{snapshot.GenerationHistory.Count} replayable setup(s) are available.")
+                snapshot.FactoryMode
+                    ? "Factory uses its fixed attributed public-group contract; Arena history-budget settings do not alter Factory context."
+                    : snapshot.ProviderHistoryPolicy.Equals("rolling_80", StringComparison.Ordinal)
+                        ? "Arena retains the newest whole history entries within an 80% input budget and records a causal receipt."
+                        : "Arena sends strict eligible history and surfaces a truthful provider context-limit failure if it does not fit.")
         ];
     }
 

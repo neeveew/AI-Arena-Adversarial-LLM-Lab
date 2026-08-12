@@ -71,6 +71,11 @@ public sealed class NarratorService : IDisposable
             return DecisionCardResult.Failed($"No snapshot found for session {sessionId}.");
         }
 
+        if (snapshot.Engine.MatchEnded)
+        {
+            return DecisionCardResult.Failed("This match has ended. Reset or fork the session before generating a Decision Card.");
+        }
+
         if (snapshot.Engine.FactoryMode)
         {
             return DecisionCardResult.Failed(FactoryNarrationUnavailableError);
@@ -94,7 +99,9 @@ public sealed class NarratorService : IDisposable
                 snapshot,
                 config,
                 fallbackConfig,
-                BuildDecisionCardPrompt(snapshot),
+                (includedMessageIds, additionalMessage) => BuildPromptWithAdditionalMessage(
+                    BuildDecisionCardPrompt(snapshot, includedMessageIds),
+                    additionalMessage),
                 "native_decision_card",
                 "operator-facing decision card",
                 cancellationToken);
@@ -104,6 +111,7 @@ public sealed class NarratorService : IDisposable
             snapshot.Engine.DecisionCard.UpdatedAt = DateTimeOffset.Now.ToUnixTimeSeconds();
             snapshot.Engine.DecisionCard.InternetRequest = completion.Request;
             snapshot.Engine.DecisionCard.InternetResult = completion.ToolResult;
+            StampHistoryReceipt(snapshot.Engine.DecisionCard.Metadata, completion.Receipt);
             snapshot.Engine.Narrator.Status = result.Ok ? "spoke" : "error";
             snapshot.Engine.Narrator.LastError = result.Ok ? "" : result.Error;
             snapshot.Engine.LastError = result.Ok ? "" : result.Error;
@@ -144,6 +152,11 @@ public sealed class NarratorService : IDisposable
             return NarratorResult.Failed($"No snapshot found for session {sessionId}.");
         }
 
+        if (snapshot.Engine.MatchEnded)
+        {
+            return NarratorResult.Failed("This match has ended. Reset or fork the session before asking the narrator.");
+        }
+
         if (snapshot.Engine.FactoryMode)
         {
             return NarratorResult.Failed(FactoryNarrationUnavailableError);
@@ -171,7 +184,9 @@ public sealed class NarratorService : IDisposable
                 snapshot,
                 config,
                 fallbackConfig,
-                BuildNarratorPrompt(snapshot, operatorRequest),
+                (includedMessageIds, additionalMessage) => BuildPromptWithAdditionalMessage(
+                    BuildNarratorPrompt(snapshot, operatorRequest, includedMessageIds),
+                    additionalMessage),
                 "native_narrator",
                 "public narrator note",
                 cancellationToken);
@@ -195,6 +210,7 @@ public sealed class NarratorService : IDisposable
                 snapshot.Engine.TurnCount + 1,
                 completion.Request,
                 completion.ToolResult);
+            ArenaHistoryBudgetService.Stamp(message, completion.Receipt);
             snapshot.Engine.Messages.Add(message);
             snapshot.Engine.TurnCount = message.Turn;
             snapshot.Engine.Narrator.Status = result.Ok ? "spoke" : "error";
@@ -305,22 +321,25 @@ public sealed class NarratorService : IDisposable
         ArenaSnapshot snapshot,
         ModelProviderConfig config,
         ModelProviderConfig? fallbackConfig,
-        IReadOnlyList<ModelChatMessage> prompt,
+        NarratorPromptFactory promptFactory,
         string eventPrefix,
         string responseKind,
         CancellationToken cancellationToken)
     {
-        var result = await CompleteWithFallbackAsync(
+        var attempt = await CompleteWithFallbackAsync(
             sessionId,
+            snapshot,
             config,
             fallbackConfig,
-            prompt,
+            promptFactory,
+            additionalMessage: null,
             $"{eventPrefix}_fallback_to_default",
             cancellationToken);
+        var result = attempt.Result;
         if (!result.Ok
             || !InternetToolService.CanExecute(snapshot.Engine.Internet, "narrator", out _))
         {
-            return new NarratorCompletion(result, null, null);
+            return new NarratorCompletion(result, null, null, attempt.Receipt);
         }
 
         var parsedToolRequest = InternetToolContract.TryParseRequest(result.Text, out var toolRequest, out _);
@@ -329,7 +348,7 @@ public sealed class NarratorService : IDisposable
             && InternetRequestSafety.ContainsSensitivePayload(result.Text);
         if (!parsedToolRequest && !sensitiveUnparsedToolRequest)
         {
-            return new NarratorCompletion(result, null, null);
+            return new NarratorCompletion(result, null, null, attempt.Receipt);
         }
 
         var candidateRequest = parsedToolRequest
@@ -390,31 +409,41 @@ public sealed class NarratorService : IDisposable
                 },
             cancellationToken);
 
-        var continuationPrompt = prompt
-            .Concat([BuildInternetEvidenceMessage(persistedRequest, toolResult, responseKind)])
-            .ToArray();
-        result = await CompleteWithFallbackAsync(
+        attempt = await CompleteWithFallbackAsync(
             sessionId,
+            snapshot,
             config,
             fallbackConfig,
-            continuationPrompt,
+            promptFactory,
+            BuildInternetEvidenceMessage(persistedRequest, toolResult, responseKind),
             $"{eventPrefix}_fallback_to_default",
             cancellationToken);
-        return new NarratorCompletion(result, persistedRequest, toolResult);
+        return new NarratorCompletion(attempt.Result, persistedRequest, toolResult, attempt.Receipt);
     }
 
-    private async Task<ModelCompletionResult> CompleteWithFallbackAsync(
+    private async Task<NarratorAttempt> CompleteWithFallbackAsync(
         string sessionId,
+        ArenaSnapshot snapshot,
         ModelProviderConfig config,
         ModelProviderConfig? fallbackConfig,
-        IReadOnlyList<ModelChatMessage> prompt,
+        NarratorPromptFactory promptFactory,
+        ModelChatMessage? additionalMessage,
         string fallbackEvent,
         CancellationToken cancellationToken)
     {
-        var result = await _modelClient.CompleteChatAsync(config, prompt, cancellationToken);
-        if (result.Ok || fallbackConfig is null)
+        var primaryPrompt = BuildBudgetedNarratorPrompt(snapshot, config, promptFactory, additionalMessage);
+        if (!primaryPrompt.Ok)
         {
-            return result;
+            return new NarratorAttempt(HistoryPreflightFailure(config, primaryPrompt), primaryPrompt.Receipt);
+        }
+
+        var result = await _modelClient.CompleteChatAsync(config, primaryPrompt.Messages, cancellationToken);
+        result = ModelCompletionOutcomeClassifier.Normalize(result);
+        if (result.Ok
+            || result.FailureKind == ModelCompletionFailureKind.ContextLimitExceeded
+            || fallbackConfig is null)
+        {
+            return new NarratorAttempt(result, primaryPrompt.Receipt);
         }
 
         await _eventLogStore.AppendAsync(
@@ -422,7 +451,15 @@ public sealed class NarratorService : IDisposable
             fallbackEvent,
             new { failedModel = config.Model, fallbackModel = fallbackConfig.Model, error = result.Error },
             cancellationToken);
-        return await _modelClient.CompleteChatAsync(fallbackConfig, prompt, cancellationToken);
+        var fallbackPrompt = BuildBudgetedNarratorPrompt(snapshot, fallbackConfig, promptFactory, additionalMessage);
+        if (!fallbackPrompt.Ok)
+        {
+            return new NarratorAttempt(HistoryPreflightFailure(fallbackConfig, fallbackPrompt), fallbackPrompt.Receipt);
+        }
+
+        var fallbackResult = ModelCompletionOutcomeClassifier.Normalize(
+            await _modelClient.CompleteChatAsync(fallbackConfig, fallbackPrompt.Messages, cancellationToken));
+        return new NarratorAttempt(fallbackResult, fallbackPrompt.Receipt);
     }
 
     private static ModelChatMessage BuildInternetEvidenceMessage(
@@ -516,16 +553,23 @@ public sealed class NarratorService : IDisposable
             .Replace('\0', ' ');
     }
 
-    private static IReadOnlyList<ModelChatMessage> BuildNarratorPrompt(ArenaSnapshot snapshot, string operatorRequest)
+    private static IReadOnlyList<ModelChatMessage> BuildNarratorPrompt(
+        ArenaSnapshot snapshot,
+        string operatorRequest,
+        IReadOnlySet<string>? includedMessageIds = null)
     {
+        var history = NarratorHistoryMessages(snapshot, includedMessageIds);
+        var dialogueHistory = history.Where(item => item.Kind is "message" or "");
+        if (includedMessageIds is null)
+        {
+            dialogueHistory = dialogueHistory.TakeLast(Math.Clamp(snapshot.Engine.TranscriptWindow, 1, 60));
+        }
+
         var transcript = string.Join(
             Environment.NewLine,
-            snapshot.Engine.Messages
-                .Where(item => item.Kind is "message" or "")
-                .OrderBy(item => item.Turn)
-                .TakeLast(Math.Clamp(snapshot.Engine.TranscriptWindow, 1, 60))
+            dialogueHistory
                 .Select(item => $"Turn {item.Turn} {item.Speaker}: {NarratorPromptTranscriptText(item)}"));
-        var arenaContext = NarratorContextBlock(snapshot, 8);
+        var arenaContext = NarratorContextBlock(history, 8, preserveEntryText: includedMessageIds is not null);
         var topic = string.IsNullOrWhiteSpace(snapshot.Engine.Steering.Topic) ? "Open arena discussion" : snapshot.Engine.Steering.Topic;
         var persona = string.IsNullOrWhiteSpace(snapshot.Engine.Narrator.Persona)
             ? "Careful observer. Concise, concrete, and useful."
@@ -571,11 +615,12 @@ public sealed class NarratorService : IDisposable
             || item.SpeakerId.Equals("internet", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string FormatNarratorContextCard(DialogueMessage item)
+    private static string FormatNarratorContextCard(DialogueMessage item, bool preserveEntryText)
     {
         var source = string.IsNullOrWhiteSpace(item.Speaker) ? item.SpeakerId : item.Speaker;
         var kind = string.IsNullOrWhiteSpace(item.Kind) ? "context" : item.Kind;
-        return $"Turn {item.Turn} {source} [{kind}]: {CompactNarratorContextText(item.Text, 520)}";
+        var text = preserveEntryText ? item.Text : CompactNarratorContextText(item.Text, 520);
+        return $"Turn {item.Turn} {source} [{kind}]: {text}";
     }
 
     private static string NarratorPromptTranscriptText(DialogueMessage message)
@@ -585,15 +630,20 @@ public sealed class NarratorService : IDisposable
             : message.Text;
     }
 
-    private static string NarratorContextBlock(ArenaSnapshot snapshot, int maxCards)
+    private static string NarratorContextBlock(
+        IReadOnlyList<DialogueMessage> history,
+        int maxCards,
+        bool preserveEntryText)
     {
+        IEnumerable<DialogueMessage> cards = history.Where(IsNarratorContextCard);
+        if (!preserveEntryText)
+        {
+            cards = cards.TakeLast(Math.Clamp(maxCards, 1, 16));
+        }
+
         return string.Join(
             Environment.NewLine,
-            snapshot.Engine.Messages
-                .Where(IsNarratorContextCard)
-                .OrderBy(item => item.Turn)
-                .TakeLast(Math.Clamp(maxCards, 1, 16))
-                .Select(FormatNarratorContextCard));
+            cards.Select(item => FormatNarratorContextCard(item, preserveEntryText)));
     }
 
     private static string CompactNarratorContextText(string text, int maxLength)
@@ -631,16 +681,22 @@ public sealed class NarratorService : IDisposable
             : $"Available arena context already in the transcript. Use it if relevant; do not fetch new data:{Environment.NewLine}{arenaContext}";
     }
 
-    private static IReadOnlyList<ModelChatMessage> BuildDecisionCardPrompt(ArenaSnapshot snapshot)
+    private static IReadOnlyList<ModelChatMessage> BuildDecisionCardPrompt(
+        ArenaSnapshot snapshot,
+        IReadOnlySet<string>? includedMessageIds = null)
     {
+        var history = NarratorHistoryMessages(snapshot, includedMessageIds);
+        var dialogueHistory = history.Where(item => item.Kind is "message" or "");
+        if (includedMessageIds is null)
+        {
+            dialogueHistory = dialogueHistory.TakeLast(Math.Clamp(snapshot.Engine.TranscriptWindow, 1, 60));
+        }
+
         var transcript = string.Join(
             Environment.NewLine,
-            snapshot.Engine.Messages
-                .Where(item => item.Kind is "message" or "")
-                .OrderBy(item => item.Turn)
-                .TakeLast(Math.Clamp(snapshot.Engine.TranscriptWindow, 1, 60))
+            dialogueHistory
                 .Select(item => $"Turn {item.Turn} {item.Speaker}: {NarratorPromptTranscriptText(item)}"));
-        var arenaContext = NarratorContextBlock(snapshot, 8);
+        var arenaContext = NarratorContextBlock(history, 8, preserveEntryText: includedMessageIds is not null);
         var topic = string.IsNullOrWhiteSpace(snapshot.Engine.Steering.Topic) ? "Open arena discussion" : snapshot.Engine.Steering.Topic;
         return
         [
@@ -666,10 +722,100 @@ public sealed class NarratorService : IDisposable
         ];
     }
 
+    private static IReadOnlyList<DialogueMessage> NarratorHistoryMessages(
+        ArenaSnapshot snapshot,
+        IReadOnlySet<string>? includedMessageIds)
+    {
+        var eligible = snapshot.Engine.Messages
+            .Where(IsNarratorHistoryEligible)
+            .Where(item => item.Status.Equals("ok", StringComparison.OrdinalIgnoreCase))
+            .Where(item => !string.IsNullOrWhiteSpace(item.Text))
+            .OrderBy(item => item.Turn)
+            .ThenBy(item => item.CreatedAt)
+            .ToList();
+        return includedMessageIds is null
+            ? eligible
+            : ArenaHistoryBudgetService.SelectIncluded(eligible, includedMessageIds);
+    }
+
+    private static IReadOnlyList<ModelChatMessage> BuildPromptWithAdditionalMessage(
+        IReadOnlyList<ModelChatMessage> prompt,
+        ModelChatMessage? additionalMessage)
+    {
+        if (additionalMessage is null)
+        {
+            return prompt;
+        }
+
+        return prompt.Concat([additionalMessage]).ToArray();
+    }
+
+    private static ArenaBudgetedPrompt BuildBudgetedNarratorPrompt(
+        ArenaSnapshot snapshot,
+        ModelProviderConfig config,
+        NarratorPromptFactory promptFactory,
+        ModelChatMessage? additionalMessage) =>
+        ArenaHistoryBudgetService.Build(
+            snapshot,
+            config,
+            beforeTurn: null,
+            transcriptAfterTurn: null,
+            includedMessageIds => ModelResponseToneInstructions.Apply(
+                config,
+                promptFactory(includedMessageIds, additionalMessage),
+                factoryMode: false),
+            frozenReceipt: null,
+            eligibility: IsNarratorHistoryEligible);
+
+    private static bool IsNarratorHistoryEligible(DialogueMessage message) =>
+        message.Kind is "message" or "internet" or "internet_tool" or "";
+
+    private static ModelCompletionResult HistoryPreflightFailure(
+        ModelProviderConfig config,
+        ArenaBudgetedPrompt prompt) =>
+        ModelCompletionOutcomeClassifier.Normalize(new ModelCompletionResult(
+            false,
+            config.BaseUrl,
+            config.Model,
+            "",
+            "",
+            0,
+            0,
+            0,
+            0,
+            prompt.Error,
+            DateTimeOffset.Now,
+            FailureKind: prompt.FailureKind == ModelCompletionFailureKind.None
+                ? ModelCompletionFailureKind.InvalidResponse
+                : prompt.FailureKind,
+            StopReason: ModelCompletionStopReason.ProviderError));
+
+    private static void StampHistoryReceipt(
+        Dictionary<string, JsonElement> metadata,
+        ArenaHistoryBudgetReceipt? receipt)
+    {
+        if (receipt is null)
+        {
+            metadata.Remove(ArenaHistoryBudgetReceipt.MetadataKey);
+            return;
+        }
+
+        metadata[ArenaHistoryBudgetReceipt.MetadataKey] = JsonSerializer.SerializeToElement(receipt);
+    }
+
+    private delegate IReadOnlyList<ModelChatMessage> NarratorPromptFactory(
+        IReadOnlySet<string>? includedMessageIds,
+        ModelChatMessage? additionalMessage);
+
+    private sealed record NarratorAttempt(
+        ModelCompletionResult Result,
+        ArenaHistoryBudgetReceipt? Receipt);
+
     private sealed record NarratorCompletion(
         ModelCompletionResult Result,
         InternetToolRequest? Request,
-        InternetToolResult? ToolResult);
+        InternetToolResult? ToolResult,
+        ArenaHistoryBudgetReceipt? Receipt);
 
 }
 

@@ -279,7 +279,11 @@ internal sealed class ArenaSessionMutationCoordinator
             snapshot.Engine.Narration.Clear();
             snapshot.Engine.TurnCount = 0;
             snapshot.Engine.TurnIndex = 0;
+            snapshot.Engine.MatchEnded = false;
+            snapshot.Engine.MatchEndedAt = null;
+            snapshot.Engine.MatchEndReason = "";
             snapshot.Engine.LastError = "";
+            snapshot.PendingModelConfigurationApplies.Clear();
             snapshot.Engine.Narrator.Status = "idle";
             snapshot.Engine.Narrator.LastError = "";
             foreach (var agent in snapshot.Engine.Agents)

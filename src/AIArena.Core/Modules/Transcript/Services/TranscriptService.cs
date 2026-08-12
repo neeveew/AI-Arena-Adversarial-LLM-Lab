@@ -261,6 +261,21 @@ public sealed class TranscriptService
             metadata["provider_response_id"] = JsonSerializer.SerializeToElement(result.ResponseId.Trim());
         }
 
+        var normalizedOutcome = ModelCompletionOutcomeClassifier.Normalize(result);
+        metadata["completion_failure_kind"] = JsonSerializer.SerializeToElement(
+            ModelCompletionOutcomeClassifier.FailureKindWire(normalizedOutcome.FailureKind));
+        metadata["completion_stop_reason"] = JsonSerializer.SerializeToElement(
+            ModelCompletionOutcomeClassifier.StopReasonWire(normalizedOutcome.StopReason));
+        if (normalizedOutcome.ProviderStatusCode is { } statusCode)
+        {
+            metadata["provider_status_code"] = JsonSerializer.SerializeToElement(statusCode);
+        }
+
+        if (!string.IsNullOrWhiteSpace(normalizedOutcome.ProviderErrorCode))
+        {
+            metadata["provider_error_code"] = JsonSerializer.SerializeToElement(normalizedOutcome.ProviderErrorCode.Trim());
+        }
+
         if (internetRequest is not null)
         {
             metadata["tool_request"] = JsonSerializer.SerializeToElement(internetRequest);

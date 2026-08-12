@@ -251,21 +251,25 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         CancellationToken cancellationToken = default)
     {
         var apiMode = ModelProviderApiModes.Normalize(config.ApiMode);
+        ModelCompletionResult result;
         if (apiMode.Equals(ModelProviderApiModes.LmStudioNative, StringComparison.OrdinalIgnoreCase))
         {
-            return await CompleteNativeChatAsync(config, messages, cancellationToken);
+            result = await CompleteNativeChatAsync(config, messages, cancellationToken);
         }
-
-        if (apiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
+        else if (apiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
         {
-            return await CompleteOllamaNativeChatAsync(config, messages, requestedStreaming: false, cancellationToken);
+            result = await CompleteOllamaNativeChatAsync(config, messages, requestedStreaming: false, cancellationToken);
+        }
+        else
+        {
+            result = await CompleteOpenAiCompatibleChatAsync(
+                config,
+                messages,
+                retryLlamaCppTransientFailures: apiMode.Equals(ModelProviderApiModes.LlamaCppNative, StringComparison.OrdinalIgnoreCase),
+                cancellationToken);
         }
 
-        return await CompleteOpenAiCompatibleChatAsync(
-            config,
-            messages,
-            retryLlamaCppTransientFailures: apiMode.Equals(ModelProviderApiModes.LlamaCppNative, StringComparison.OrdinalIgnoreCase),
-            cancellationToken);
+        return ModelCompletionOutcomeClassifier.Normalize(result);
     }
 
     private async Task<ModelCompletionResult> CompleteOpenAiCompatibleChatAsync(
@@ -339,7 +343,9 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         0,
                         0,
                         FriendlyProviderHttpError(body, response.ReasonPhrase, baseUrl, config.ApiToken),
-                        DateTimeOffset.Now);
+                        DateTimeOffset.Now,
+                        ProviderStatusCode: (int)response.StatusCode,
+                        ProviderErrorCode: ExtractProviderErrorCode(body, config.ApiToken));
                     return CompleteObservation(activeObservationId, failed, "provider_error");
                 }
 
@@ -368,7 +374,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     telemetry.TokensPerSecond,
                     telemetry.TimeToFirstTokenMs,
                     telemetry.ResponseId,
-                    telemetry.ModelLoadTimeMs);
+                    telemetry.ModelLoadTimeMs,
+                    StopReason: ModelCompletionOutcomeClassifier.ExtractStopReason(completionRoot));
                 return CompleteObservation(
                     activeObservationId,
                     completed,
@@ -440,7 +447,9 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     0,
                     0,
                     FriendlyProviderHttpError(body, response.ReasonPhrase, baseUrl, config.ApiToken),
-                    DateTimeOffset.Now);
+                    DateTimeOffset.Now,
+                    ProviderStatusCode: (int)response.StatusCode,
+                    ProviderErrorCode: ExtractProviderErrorCode(body, config.ApiToken));
                 return CompleteObservation(activeObservationId, failed, "provider_error");
             }
 
@@ -487,7 +496,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             telemetry.TokensPerSecond,
             telemetry.TimeToFirstTokenMs,
             telemetry.ResponseId,
-            telemetry.ModelLoadTimeMs);
+            telemetry.ModelLoadTimeMs,
+            StopReason: ModelCompletionOutcomeClassifier.ExtractStopReason(completionRoot));
     }
 
     public async Task<ModelCompletionResult> CompleteChatStreamingAsync(
@@ -497,22 +507,26 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         CancellationToken cancellationToken = default)
     {
         var apiMode = ModelProviderApiModes.Normalize(config.ApiMode);
+        ModelCompletionResult result;
         if (apiMode.Equals(ModelProviderApiModes.LmStudioNative, StringComparison.OrdinalIgnoreCase))
         {
-            return await CompleteNativeChatStreamingAsync(config, messages, progress, cancellationToken);
+            result = await CompleteNativeChatStreamingAsync(config, messages, progress, cancellationToken);
         }
-
-        if (apiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
+        else if (apiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
         {
-            return await CompleteOllamaNativeChatAsync(config, messages, requestedStreaming: true, cancellationToken);
+            result = await CompleteOllamaNativeChatAsync(config, messages, requestedStreaming: true, cancellationToken);
+        }
+        else
+        {
+            result = await CompleteOpenAiChatStreamingAsync(
+                config,
+                messages,
+                progress,
+                retryLlamaCppTransientFailures: apiMode.Equals(ModelProviderApiModes.LlamaCppNative, StringComparison.OrdinalIgnoreCase),
+                cancellationToken);
         }
 
-        return await CompleteOpenAiChatStreamingAsync(
-            config,
-            messages,
-            progress,
-            retryLlamaCppTransientFailures: apiMode.Equals(ModelProviderApiModes.LlamaCppNative, StringComparison.OrdinalIgnoreCase),
-            cancellationToken);
+        return ModelCompletionOutcomeClassifier.Normalize(result);
     }
 
     private async Task<ModelCompletionResult> CompleteNativeChatStreamingAsync(
@@ -565,7 +579,9 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     0,
                     0,
                     FriendlyProviderHttpError(errorBody, response.ReasonPhrase, baseUrl, config.ApiToken),
-                    DateTimeOffset.Now);
+                    DateTimeOffset.Now,
+                    ProviderStatusCode: (int)response.StatusCode,
+                    ProviderErrorCode: ExtractProviderErrorCode(errorBody, config.ApiToken));
                 return CompleteObservation(activeObservationId, failed, "provider_error");
             }
 
@@ -750,7 +766,9 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         0,
                         0,
                         FriendlyProviderHttpError(errorBody, response.ReasonPhrase, baseUrl, config.ApiToken),
-                        DateTimeOffset.Now);
+                        DateTimeOffset.Now,
+                        ProviderStatusCode: (int)response.StatusCode,
+                        ProviderErrorCode: ExtractProviderErrorCode(errorBody, config.ApiToken));
                     return CompleteObservation(activeObservationId, failed, "provider_error");
                 }
 
@@ -762,6 +780,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 var responseModel = "";
                 var usage = new ModelTokenUsage(0, 0, 0);
                 var telemetry = new ModelProviderTelemetry(0, 0, "");
+                var completionStopReason = ModelCompletionStopReason.Unknown;
                 var firstTokenMs = 0;
                 await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
                 using var reader = new StreamReader(stream);
@@ -789,6 +808,12 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         if (string.IsNullOrWhiteSpace(responseModel))
                         {
                             responseModel = FirstString(doc.RootElement, "model");
+                        }
+
+                        var chunkStopReason = ModelCompletionOutcomeClassifier.ExtractStopReason(doc.RootElement);
+                        if (chunkStopReason != ModelCompletionStopReason.Unknown)
+                        {
+                            completionStopReason = chunkStopReason;
                         }
 
                         if (retryLlamaCppTransientFailures)
@@ -861,7 +886,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     telemetry.TokensPerSecond,
                     firstTokenMs,
                     telemetry.ResponseId,
-                    telemetry.ModelLoadTimeMs);
+                    telemetry.ModelLoadTimeMs,
+                    StopReason: completionStopReason);
                 return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
             }
         }
@@ -931,7 +957,9 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     0,
                     0,
                     FriendlyProviderHttpError(body, response.ReasonPhrase, baseUrl, config.ApiToken),
-                    DateTimeOffset.Now);
+                    DateTimeOffset.Now,
+                    ProviderStatusCode: (int)response.StatusCode,
+                    ProviderErrorCode: ExtractProviderErrorCode(body, config.ApiToken));
                 return CompleteObservation(activeObservationId, failed, "provider_error");
             }
 
@@ -956,7 +984,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 telemetry.TokensPerSecond,
                 telemetry.TimeToFirstTokenMs,
                 telemetry.ResponseId,
-                telemetry.ModelLoadTimeMs);
+                telemetry.ModelLoadTimeMs,
+                StopReason: ModelCompletionOutcomeClassifier.ExtractStopReason(completionRoot));
             return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1026,6 +1055,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         ModelCompletionResult result,
         string outcome)
     {
+        result = ModelCompletionOutcomeClassifier.Normalize(result);
         if (string.IsNullOrWhiteSpace(requestId) || _requestObserver is null)
         {
             return result;
@@ -1503,9 +1533,10 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             payload["system_prompt"] = systemPrompt;
         }
 
-        if (config.ContextLength > 0)
+        var effectiveContextWindow = ModelRuntimeSettingsRegistry.EffectiveConfiguredContextWindow(config);
+        if (effectiveContextWindow > 0)
         {
-            payload["context_length"] = config.ContextLength;
+            payload["context_length"] = effectiveContextWindow;
         }
 
         var reasoning = ModelProviderReasoningModes.Normalize(config.Reasoning);
@@ -1538,9 +1569,10 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             ["temperature"] = config.Temperature,
             ["num_predict"] = config.MaxOutputTokens
         };
-        if (config.ContextLength > 0)
+        var effectiveContextWindow = ModelRuntimeSettingsRegistry.EffectiveConfiguredContextWindow(config);
+        if (effectiveContextWindow > 0)
         {
-            options["num_ctx"] = config.ContextLength;
+            options["num_ctx"] = effectiveContextWindow;
         }
 
         payload["options"] = options;
@@ -1895,6 +1927,74 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         {
             return ShortenProviderError(body.Trim());
         }
+    }
+
+    public static string ExtractProviderErrorCode(string body, string apiToken = "")
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return "";
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var code = FindProviderErrorCode(doc.RootElement, 0);
+            if (!string.IsNullOrWhiteSpace(apiToken)
+                && code.Contains(apiToken.Trim(), StringComparison.Ordinal))
+            {
+                return "";
+            }
+
+            return ModelCompletionOutcomeClassifier.PrivacySafeProviderErrorCode(code);
+        }
+        catch (JsonException)
+        {
+            return "";
+        }
+    }
+
+    private static string FindProviderErrorCode(JsonElement value, int depth)
+    {
+        if (depth > 5)
+        {
+            return "";
+        }
+
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            if (value.TryGetProperty("code", out var code))
+            {
+                return code.ValueKind switch
+                {
+                    JsonValueKind.String => ShortenProviderError(code.GetString()?.Trim() ?? ""),
+                    JsonValueKind.Number => code.GetRawText(),
+                    _ => ""
+                };
+            }
+
+            foreach (var property in value.EnumerateObject())
+            {
+                var nested = FindProviderErrorCode(property.Value, depth + 1);
+                if (nested.Length > 0)
+                {
+                    return nested;
+                }
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray())
+            {
+                var nested = FindProviderErrorCode(item, depth + 1);
+                if (nested.Length > 0)
+                {
+                    return nested;
+                }
+            }
+        }
+
+        return "";
     }
 
     private static string ExtractProviderErrorMessage(JsonElement value)

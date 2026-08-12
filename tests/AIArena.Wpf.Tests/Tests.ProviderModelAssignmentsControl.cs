@@ -74,9 +74,14 @@ internal static partial class Program
                         && AutomationProperties.GetName(control.CatalogList) == "Available provider model catalog"
                         && AutomationProperties.GetName(control.MasterSurface) == "Provider models master list"
                         && AutomationProperties.GetName(control.DetailSurface) == "Selected model residency and assignment details"
-                        && AutomationProperties.GetLiveSetting(control.CatalogStatus) == AutomationLiveSetting.Polite
-                        && AutomationProperties.GetLiveSetting(control.LifecycleStatus) == AutomationLiveSetting.Polite,
-                    "Models surface did not expose its master/detail and live-status automation contract");
+                        && AutomationProperties.GetLiveSetting(control.CatalogStatus) == AutomationLiveSetting.Off
+                        && AutomationProperties.GetLiveSetting(control.LifecycleStatus) == AutomationLiveSetting.Off
+                        && AutomationProperties.GetLiveSetting(control.AssignmentStatus) == AutomationLiveSetting.Off
+                        && AutomationProperties.GetLiveSetting(control.ConfigurationStatus) == AutomationLiveSetting.Off
+                        && control.LifecycleStatus.Parent is null
+                        && control.AssignmentStatus.Parent is null
+                        && control.ConfigurationStatus.Parent is null,
+                    "Models surface did not preserve master/detail semantics while removing duplicate local status cards and live announcements");
                 Require(control.LifecycleAction.Content?.ToString() == "Unload model"
                         && control.LifecycleAction.IsEnabled
                         && AutomationProperties.GetName(control.LifecycleAction).StartsWith("Unload ", StringComparison.Ordinal)
@@ -104,7 +109,7 @@ internal static partial class Program
                 FlushProviderModelsDispatcher(host);
                 Require(control.AssignmentTargets.Items.Count == 3,
                     "Models surface did not materialize dynamic assignment targets");
-                var assignmentCheckBoxes = FindProviderModelsDescendants<CheckBox>(control.DetailSurface).ToArray();
+                var assignmentCheckBoxes = FindProviderModelsDescendants<ProviderAssignmentCheckBox>(control.DetailSurface).ToArray();
                 Require(assignmentCheckBoxes.Length == 3
                         && assignmentCheckBoxes.All(checkBox =>
                             !string.IsNullOrWhiteSpace(AutomationProperties.GetName(checkBox))
@@ -240,7 +245,7 @@ internal static partial class Program
                     .Single(item => item.GetType().GetProperty("Id")?.GetValue(item)?.ToString() == "available-001");
                 FlushProviderModelsDispatcher(host);
 
-                var alpha = FindProviderModelsDescendants<CheckBox>(control.DetailSurface)
+                var alpha = FindProviderModelsDescendants<ProviderAssignmentCheckBox>(control.DetailSurface)
                     .Single(checkBox => AutomationProperties.GetName(checkBox).EndsWith("Alpha", StringComparison.Ordinal));
                 ToggleProviderModelsCheckBox(alpha);
                 Require(assignment is not null,
@@ -269,15 +274,17 @@ internal static partial class Program
                 var light = ThemePalette.Resolve("light");
                 ApplyExperimentSurfaceTheme(control, light);
                 FlushProviderModelsDispatcher(host);
-                Require(ExperimentBrushMatches(control.AssignmentStatusSurface.BorderBrush, light.StatusSuccess)
-                        && ExperimentBrushMatches(control.AssignmentStatus.Foreground, light.StatusSuccess),
-                    "Saved assignment state did not follow the active theme's semantic success brushes");
+                Require(control.AssignmentStatus.Parent is null
+                        && AutomationProperties.GetLiveSetting(control.AssignmentStatus) == AutomationLiveSetting.Off,
+                    "Saved assignment state reintroduced a local visual or live-announcement surface");
                 Require(!control.SetAssignmentState(Guid.NewGuid(), ProviderAssignmentSaveState.Saved),
                     "stale assignment completion mutated the current Models surface");
 
                 assignment = null;
-                var defaultTarget = FindProviderModelsDescendants<CheckBox>(control.DetailSurface)
-                    .Single(checkBox => AutomationProperties.GetName(checkBox).EndsWith("Default", StringComparison.Ordinal));
+                var defaultTarget = FindProviderModelsDescendants<ProviderAssignmentCheckBox>(control.DetailSurface)
+                    .Single(checkBox => AutomationProperties.GetName(checkBox).EndsWith(
+                        "Default for unassigned agents",
+                        StringComparison.Ordinal));
                 ToggleProviderModelsCheckBox(defaultTarget);
                 Require(assignment is not null
                         && assignment.TargetId == "default"
@@ -293,7 +300,7 @@ internal static partial class Program
 
                 assignment = null;
                 FlushProviderModelsDispatcher(host);
-                var beta = FindProviderModelsDescendants<CheckBox>(control.DetailSurface)
+                var beta = FindProviderModelsDescendants<ProviderAssignmentCheckBox>(control.DetailSurface)
                     .Single(checkBox => AutomationProperties.GetName(checkBox).EndsWith("Beta", StringComparison.Ordinal));
                 ToggleProviderModelsCheckBox(beta);
                 Require(assignment is not null && control.HasPendingAssignment,
@@ -310,12 +317,12 @@ internal static partial class Program
                 var highContrast = ThemePalette.Resolve("high-contrast");
                 ApplyExperimentSurfaceTheme(control, highContrast);
                 FlushProviderModelsDispatcher(host);
-                Require(ExperimentBrushMatches(control.AssignmentStatusSurface.BorderBrush, highContrast.DangerBorder)
-                        && ExperimentBrushMatches(control.AssignmentStatus.Foreground, highContrast.DangerText),
-                    "Failed assignment state did not follow the active theme's semantic danger brushes");
+                Require(control.AssignmentStatus.Parent is null
+                        && AutomationProperties.GetLiveSetting(control.AssignmentStatus) == AutomationLiveSetting.Off,
+                    "Failed assignment state reintroduced a local visual or live-announcement surface");
 
                 assignment = null;
-                var staleBeta = FindProviderModelsDescendants<CheckBox>(control.DetailSurface)
+                var staleBeta = FindProviderModelsDescendants<ProviderAssignmentCheckBox>(control.DetailSurface)
                     .Single(checkBox => AutomationProperties.GetName(checkBox).EndsWith("Beta", StringComparison.Ordinal));
                 ToggleProviderModelsCheckBox(staleBeta);
                 Require(assignment is not null && control.HasPendingAssignment,
@@ -356,7 +363,7 @@ internal static partial class Program
                 });
                 FlushProviderModelsDispatcher(host);
                 assignment = null;
-                var aliasAlpha = FindProviderModelsDescendants<CheckBox>(control.DetailSurface)
+                var aliasAlpha = FindProviderModelsDescendants<ProviderAssignmentCheckBox>(control.DetailSurface)
                     .Single(checkBox => AutomationProperties.GetName(checkBox).EndsWith("Alpha", StringComparison.Ordinal));
                 Require(aliasAlpha.IsChecked == true && aliasAlpha.IsEnabled,
                     "an explicit alias-equivalent route was not actionable on the selected Default row");
@@ -382,7 +389,7 @@ internal static partial class Program
                         && control.CatalogList.Items.Count == 1
                         && control.LoadedList.Items.Count == 1
                         && control.AssignmentTargets.Items.Count == 3
-                        && FindProviderModelsDescendants<CheckBox>(control.DetailSurface).All(checkBox => !checkBox.IsEnabled)
+                        && FindProviderModelsDescendants<ProviderAssignmentCheckBox>(control.DetailSurface).All(checkBox => !checkBox.IsEnabled)
                         && control.AssignmentStatus.Text.Contains("unavailable", StringComparison.OrdinalIgnoreCase)
                         && AutomationProperties.GetItemStatus(control.CatalogStatus) == "Refreshing",
                     "catalog refresh disabled inspection, enabled stale assignments, or replaced loaded content with a misleading empty state");
@@ -588,7 +595,7 @@ internal static partial class Program
                 FlushProviderModelsDispatcher(host);
                 assignment = null;
                 Select("available-001");
-                ToggleProviderModelsCheckBox(Target("Default"));
+                ToggleProviderModelsCheckBox(Target("Default for unassigned agents"));
                 Require(assignment is { TargetId: "default", IsAssigned: true }
                         && OwnerCount("default") == 1
                         && IsAssigned("available-001", "default")
@@ -673,7 +680,7 @@ internal static partial class Program
                         && !control.RefreshAction.IsEnabled
                         && control.LifecycleProgress.Visibility == Visibility.Visible
                         && AutomationProperties.GetItemStatus(control.AssignmentStatus) == "Unavailable"
-                        && FindProviderModelsDescendants<CheckBox>(control.DetailSurface).All(checkBox => !checkBox.IsEnabled)
+                        && FindProviderModelsDescendants<ProviderAssignmentCheckBox>(control.DetailSurface).All(checkBox => !checkBox.IsEnabled)
                         && groupsBeforeRequest.SequenceEqual(
                             CollectionViewSource.GetDefaultView(control.CatalogList.ItemsSource)
                                 .Groups?.Cast<CollectionViewGroup>().Select(group => group.Name?.ToString()).ToArray() ?? []),
@@ -714,7 +721,7 @@ internal static partial class Program
                         && AutomationProperties.GetItemStatus(control.LifecycleStatus) == "Running"
                         && control.LifecycleStatus.Text.Contains("Loaded model 000", StringComparison.Ordinal)
                         && control.LifecycleProgress.Visibility == Visibility.Collapsed
-                        && FindProviderModelsDescendants<CheckBox>(control.DetailSurface).All(checkBox => !checkBox.IsEnabled),
+                        && FindProviderModelsDescendants<ProviderAssignmentCheckBox>(control.DetailSurface).All(checkBox => !checkBox.IsEnabled),
                     "keyboard catalog inspection hid the original pending model or re-enabled conflicting actions");
                 control.LoadedList.SelectedIndex = 0;
                 control.LoadedList.ScrollIntoView(control.LoadedList.SelectedItem);
@@ -725,9 +732,9 @@ internal static partial class Program
                             "LM Studio is unloading the selected model.")
                         && AutomationProperties.GetItemStatus(control.LifecycleStatus) == "Running"
                         && AutomationProperties.GetItemStatus(control.LifecycleAction) == "Running"
-                        && ExperimentBrushMatches(control.LifecycleStatusSurface.BorderBrush, dark.StatusInfo)
-                        && ExperimentBrushMatches(control.LifecycleStatus.Foreground, dark.StatusInfo),
-                    "Running lifecycle state was not exposed through themed live status evidence");
+                        && control.LifecycleStatus.Parent is null
+                        && AutomationProperties.GetLiveSetting(control.LifecycleStatus) == AutomationLiveSetting.Off,
+                    "Running lifecycle state was not retained causally without a duplicate local live surface");
 
                 Require(control.SetLifecycleState(
                             unloadOperation.OperationId,
@@ -742,9 +749,9 @@ internal static partial class Program
                 var light = ThemePalette.Resolve("light");
                 ApplyExperimentSurfaceTheme(control, light);
                 FlushProviderModelsDispatcher(host);
-                Require(ExperimentBrushMatches(control.LifecycleStatusSurface.BorderBrush, light.StatusSuccess)
-                        && ExperimentBrushMatches(control.LifecycleStatus.Foreground, light.StatusSuccess),
-                    "Succeeded lifecycle state did not follow Light theme semantic success brushes");
+                Require(control.LifecycleStatus.Parent is null
+                        && AutomationProperties.GetLiveSetting(control.LifecycleStatus) == AutomationLiveSetting.Off,
+                    "Succeeded lifecycle state reintroduced a local visual or live-announcement surface");
                 Require(!control.SetLifecycleState(
                             Guid.NewGuid(),
                             ProviderModelLifecycleActionState.Failed,
@@ -793,9 +800,9 @@ internal static partial class Program
                 var highContrast = ThemePalette.Resolve("high-contrast");
                 ApplyExperimentSurfaceTheme(control, highContrast);
                 FlushProviderModelsDispatcher(host);
-                Require(ExperimentBrushMatches(control.LifecycleStatusSurface.BorderBrush, highContrast.DangerBorder)
-                        && ExperimentBrushMatches(control.LifecycleStatus.Foreground, highContrast.DangerText),
-                    "Failed lifecycle state did not follow High Contrast semantic danger brushes");
+                Require(control.LifecycleStatus.Parent is null
+                        && AutomationProperties.GetLiveSetting(control.LifecycleStatus) == AutomationLiveSetting.Off,
+                    "Failed lifecycle state reintroduced a local visual or live-announcement surface");
 
                 lifecycle = null;
                 InvokeProviderModelsButtonByKeyboard(control.LifecycleAction, host);
@@ -813,8 +820,8 @@ internal static partial class Program
                         && control.LifecycleAction.Content?.ToString() == "Awaiting confirmation"
                         && !control.LifecycleAction.IsEnabled
                         && AutomationProperties.GetItemStatus(control.LifecycleAction) == "Unconfirmed"
-                        && ExperimentBrushMatches(control.LifecycleStatusSurface.BorderBrush, highContrast.StatusWarning)
-                        && ExperimentBrushMatches(control.LifecycleStatus.Foreground, highContrast.StatusWarning),
+                        && control.LifecycleStatus.Parent is null
+                        && AutomationProperties.GetLiveSetting(control.LifecycleStatus) == AutomationLiveSetting.Off,
                     "accepted but unconfirmed lifecycle evidence was rendered as failure or left actionable");
 
                 control.ApplyPresentation(afterUnload with

@@ -116,6 +116,24 @@ public partial class MainWindow
             cancellationToken => ProviderModelsSurface.RunLifecycleAsync(e, cancellationToken));
     }
 
+    private async void ProviderModelsPanel_ConfigurationChanged(
+        object? sender,
+        ProviderModelConfigurationChangedEventArgs e)
+    {
+        await RunTrackedBackgroundOperationSafelyAsync(
+            "Model configuration",
+            cancellationToken => ProviderModelsSurface.SaveConfigurationAsync(e, cancellationToken));
+    }
+
+    private async void ProviderModelsPanel_ConfigurationReloadRequested(
+        object? sender,
+        ProviderModelConfigurationReloadRequestedEventArgs e)
+    {
+        await RunTrackedBackgroundOperationSafelyAsync(
+            "LM Studio context reload",
+            cancellationToken => ProviderModelsSurface.RunConfigurationReloadAsync(e, cancellationToken));
+    }
+
     private void ProviderModelsPanel_IsVisibleChanged(
         object sender,
         DependencyPropertyChangedEventArgs e)
@@ -164,6 +182,146 @@ public partial class MainWindow
     {
         _providerModelsHeartbeat?.Dispose();
         _providerModelsHeartbeat = null;
+    }
+
+    private async Task OpenModelsRecoveryAsync(string modelId, bool focusConfiguration)
+    {
+        ShowProviderModelsPanel();
+        await RunTrackedBackgroundOperationSafelyAsync(
+            "Context recovery model refresh",
+            cancellationToken => ProviderModelsSurface.RefreshAsync(
+                refreshCatalog: true,
+                cancellationToken));
+        if (ProviderModelsPanel.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+
+        if (focusConfiguration)
+        {
+            if (!ProviderModelsPanel.SelectModel(modelId, focusConfiguration: true))
+            {
+                ProviderModelsPanel.FocusSearch();
+            }
+            return;
+        }
+
+        ProviderModelsPanel.FocusSearch();
+    }
+
+    private async Task EndMatchAfterContextLimitAsync()
+    {
+        await ArenaRun.StopAutoChatAsync();
+        var session = _activeSession;
+        if (session is null)
+        {
+            SetArenaRunStatus("No active session is available to end.");
+            return;
+        }
+
+        var ran = await RunArenaBusyForCoordinatorAsync(
+            "Ending the match after its context-limit stop…",
+            operationButton: null,
+            async cancellationToken =>
+            {
+                var result = await _contextRecoveryService.EndMatchAsync(
+                    session.Id,
+                    "operator_context_limit_end",
+                    cancellationToken);
+                if (!result.Ok)
+                {
+                    throw new InvalidOperationException(result.Error);
+                }
+
+                await RefreshActiveSessionAsync(
+                    "Match ended by the operator after a context-limit stop.",
+                    cancellationToken);
+            },
+            allowDuringAutoChat: false);
+        if (!ran)
+        {
+            SetArenaRunStatus("The match could not end while another arena operation was active.");
+        }
+    }
+
+    private Task OpenOutputSettingsRecoveryAsync()
+    {
+        OpenModelProviderSettings();
+        Dispatcher.BeginInvoke(() =>
+        {
+            ProviderMaxOutputText.BringIntoView();
+            ProviderMaxOutputText.Focus();
+            ProviderMaxOutputText.SelectAll();
+        }, DispatcherPriority.Input);
+        return Task.CompletedTask;
+    }
+
+    private async Task SkipContextBlockedTurnAsync(Models.TranscriptMessage message)
+    {
+        var session = _activeSession;
+        if (session is null)
+        {
+            SetArenaRunStatus("No active session is available for context recovery.");
+            return;
+        }
+
+        var ran = await RunArenaBusyForCoordinatorAsync(
+            "Skipping the context-blocked turn…",
+            operationButton: null,
+            async cancellationToken =>
+            {
+                var result = await _contextRecoveryService.SkipBlockedTurnAsync(
+                    session.Id,
+                    message.Turn,
+                    message.SpeakerId,
+                    message.CreatedAt,
+                    cancellationToken);
+                if (!result.Ok)
+                {
+                    throw new InvalidOperationException(result.Error);
+                }
+
+                await RefreshActiveSessionAsync("Skipped the blocked turn. Auto Chat remains stopped.", cancellationToken);
+            },
+            allowDuringAutoChat: false);
+        if (!ran)
+        {
+            SetArenaRunStatus("Context recovery is unavailable while another arena operation is active.");
+        }
+    }
+
+    private async Task ContinueTruncatedOutputAsync(Models.TranscriptMessage message)
+    {
+        var session = _activeSession;
+        if (session is null)
+        {
+            SetArenaRunStatus("No active session is available for output continuation.");
+            return;
+        }
+
+        var ran = await RunArenaBusyForCoordinatorAsync(
+            "Continuing the output-limited response…",
+            operationButton: null,
+            async cancellationToken =>
+            {
+                var result = await _contextRecoveryService.ContinueOutputAsync(
+                    session.Id,
+                    message.Turn,
+                    message.SpeakerId,
+                    message.CreatedAt,
+                    cancellationToken);
+                if (!result.Ok)
+                {
+                    throw new InvalidOperationException(result.Error);
+                }
+
+                await RefreshActiveSessionAsync("Continued the output-limited response.", cancellationToken);
+            },
+            allowDuringAutoChat: false);
+        if (!ran)
+        {
+            SetArenaRunStatus("Output continuation is unavailable while another arena operation is active.");
+        }
     }
 
     private void CloseProviderModelsPanel()

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -62,6 +63,7 @@ public enum ShellTopBarAction
     VoiceDriftChanged,
     InternetDetailsChanged,
     WorldDebugChanged,
+    StatusCenterRequested,
     RightRailToggleRequested,
     AppSettingsRequested
 }
@@ -107,6 +109,7 @@ public partial class ShellTopBarControl : UserControl
     private readonly TextBlock topCurrentTurnValue = new() { Text = "-" };
     private readonly TextBlock topTurnsValue = new() { Text = "0" };
     private readonly TextBlock arenaRunStatus = new() { Text = "Ready." };
+    private bool suppressArenaStatusPresentation;
 
     public ShellTopBarControl()
     {
@@ -117,7 +120,13 @@ public partial class ShellTopBarControl : UserControl
         MirrorText(topProviderValue, value => Presentation.ProviderValue = value);
         MirrorText(topCurrentTurnValue, value => Presentation.CurrentTurnValue = value);
         MirrorText(topTurnsValue, value => Presentation.TurnCountValue = value);
-        MirrorText(arenaRunStatus, value => Presentation.ArenaStatus = value);
+        MirrorText(arenaRunStatus, value =>
+        {
+            if (!suppressArenaStatusPresentation)
+            {
+                Presentation.ArenaStatus = value;
+            }
+        });
         MirrorText(ViewActivePresetText, value => Presentation.ViewButtonLabel = ViewButtonLabel(value));
         Loaded += AttachCaptionStateTracking;
     }
@@ -235,6 +244,19 @@ public partial class ShellTopBarControl : UserControl
     public Button ProviderHealthTestButtonTarget => ProviderHealthTestButton;
     public Button ProviderHealthRefreshModelsButtonTarget => ProviderHealthRefreshModelsButton;
     public TextBlock ArenaRunStatusTarget => arenaRunStatus;
+
+    public void SetArenaRunStatusCompatibilityText(string value)
+    {
+        suppressArenaStatusPresentation = true;
+        try
+        {
+            arenaRunStatus.Text = value ?? string.Empty;
+        }
+        finally
+        {
+            suppressArenaStatusPresentation = false;
+        }
+    }
     public TextBlock SaveStatusTextTarget => SaveStatusText;
     public WrapPanel CommandPanelTarget => TopBarCommandPanel;
     public TextBlock ExportStatusTextTarget => ExportStatusText;
@@ -283,9 +305,41 @@ public partial class ShellTopBarControl : UserControl
     public CheckBox WorldDebugCheckBoxTarget => WorldDebugCheckBox;
     public Button RightRailToggleButtonTarget => RightRailToggleButton;
     public TextBlock RightRailToggleGlyphTarget => RightRailToggleGlyph;
+    public Button CollapsedStatusCenterButtonTarget => CollapsedStatusCenterButton;
+    public Ellipse CollapsedStatusCenterStateDotTarget => CollapsedStatusCenterStateDot;
+    public TextBlock CollapsedStatusCenterStateTextTarget => CollapsedStatusCenterStateText;
     public Button AppSettingsButtonTarget => AppSettingsButton;
     public Path SettingsGearIconTarget => SettingsGearIcon;
     public RotateTransform SettingsGearRotateTarget => SettingsGearRotate;
+
+    internal void UpdateCollapsedStatusCenterPresentation(
+        string state,
+        string summary,
+        string activeCountLabel)
+    {
+        var normalizedState = string.IsNullOrWhiteSpace(state) ? "Information" : state.Trim();
+        var normalizedSummary = string.IsNullOrWhiteSpace(summary) ? "Ready" : summary.Trim();
+        var brushKey = normalizedState switch
+        {
+            "Running" => "Arena.Brush.Info",
+            "Succeeded" => "Arena.Brush.Success",
+            "Warning" or "Unconfirmed" => "Arena.Brush.Warning",
+            "Failed" or "Blocked" => "DangerTextBrush",
+            "Cancelled" => "MutedTextBrush",
+            _ => "Arena.Brush.Info"
+        };
+        CollapsedStatusCenterStateDot.SetResourceReference(Shape.FillProperty, brushKey);
+        CollapsedStatusCenterStateText.SetResourceReference(TextBlock.ForegroundProperty, brushKey);
+        CollapsedStatusCenterStateText.Text = normalizedState;
+        CollapsedStatusCenterButton.ToolTip = $"Status: {normalizedSummary}";
+        AutomationProperties.SetName(
+            CollapsedStatusCenterButton,
+            $"Open application status history, {normalizedSummary}");
+        AutomationProperties.SetHelpText(
+            CollapsedStatusCenterButton,
+            $"The supporting rail is hidden. Open status history without resizing the workspace. {activeCountLabel}.");
+        AutomationProperties.SetItemStatus(CollapsedStatusCenterButton, normalizedState);
+    }
 
     private static void MirrorText(TextBlock source, Action<string> update)
     {
@@ -361,6 +415,7 @@ public partial class ShellTopBarControl : UserControl
     private void VoiceDriftChanged(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.VoiceDriftChanged, sender, e);
     private void InternetDetailsChanged(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.InternetDetailsChanged, sender, e);
     private void WorldDebugChanged(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.WorldDebugChanged, sender, e);
+    private void StatusCenterRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.StatusCenterRequested, sender, e);
     private void RightRailToggleRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.RightRailToggleRequested, sender, e);
     private void AppSettingsRequested(object sender, RoutedEventArgs e) => Forward(ShellTopBarAction.AppSettingsRequested, sender, e);
 }

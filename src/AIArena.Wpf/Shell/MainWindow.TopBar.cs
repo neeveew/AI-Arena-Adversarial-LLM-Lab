@@ -90,6 +90,7 @@ public partial class MainWindow
     private CheckBox VoiceDriftEnforcementCheckBox => ShellTopBar.VoiceDriftEnforcementCheckBoxTarget;
     private CheckBox TranscriptInternetDetailsCheckBox => ShellTopBar.TranscriptInternetDetailsCheckBoxTarget;
     private CheckBox WorldDebugCheckBox => ShellTopBar.WorldDebugCheckBoxTarget;
+    private Button CollapsedStatusCenterButton => ShellTopBar.CollapsedStatusCenterButtonTarget;
     private Button RightRailToggleButton => ShellTopBar.RightRailToggleButtonTarget;
     private TextBlock RightRailToggleGlyph => ShellTopBar.RightRailToggleGlyphTarget;
     private Button AppSettingsButton => ShellTopBar.AppSettingsButtonTarget;
@@ -252,6 +253,9 @@ public partial class MainWindow
                 break;
             case ShellTopBarAction.WorldDebugChanged:
                 WorldDebugCheckBox_Changed(e.SourceElement, Args<RoutedEventArgs>(e));
+                break;
+            case ShellTopBarAction.StatusCenterRequested:
+                UniversalStatusCenter.OpenDashboard(CollapsedStatusCenterButton);
                 break;
             case ShellTopBarAction.RightRailToggleRequested:
                 RightRailToggleButton_Click(e.SourceElement, Args<RoutedEventArgs>(e));

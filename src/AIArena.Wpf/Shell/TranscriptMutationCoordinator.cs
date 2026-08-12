@@ -16,6 +16,7 @@ internal sealed class TranscriptMutationCoordinator
     private readonly Func<CoreArenaSnapshot, string, Task> saveSnapshotAsync;
     private readonly Func<string, Task> refreshActiveSessionAsync;
     private readonly Action<string> setLoadStatus;
+    private readonly Action<string>? setMutationStatus;
 
     public TranscriptMutationCoordinator(
         SessionStore sessionStore,
@@ -25,7 +26,8 @@ internal sealed class TranscriptMutationCoordinator
         Func<bool> isArenaBusy,
         Func<CoreArenaSnapshot, string, Task> saveSnapshotAsync,
         Func<string, Task> refreshActiveSessionAsync,
-        Action<string> setLoadStatus)
+        Action<string> setLoadStatus,
+        Action<string>? setMutationStatus = null)
     {
         this.sessionStore = sessionStore;
         this.eventLogStore = eventLogStore;
@@ -35,6 +37,7 @@ internal sealed class TranscriptMutationCoordinator
         this.saveSnapshotAsync = saveSnapshotAsync;
         this.refreshActiveSessionAsync = refreshActiveSessionAsync;
         this.setLoadStatus = setLoadStatus;
+        this.setMutationStatus = setMutationStatus;
     }
 
     public async Task DeleteMessageAsync(TranscriptMessage message)
@@ -50,14 +53,14 @@ internal sealed class TranscriptMutationCoordinator
             var storedMessage = TranscriptService.FindMessage(snapshot, message.Turn, message.SpeakerId, message.CreatedAt);
             if (storedMessage is not null && FactoryConversationService.IsConversationRoot(storedMessage))
             {
-                setLoadStatus(FactoryRootDeleteBlockedStatus(message));
+                SetStatus(FactoryRootDeleteBlockedStatus(message));
                 return false;
             }
 
             var deleted = transcriptService.DeleteMessage(snapshot, message.Turn, message.SpeakerId, message.CreatedAt);
             if (!deleted)
             {
-                setLoadStatus($"Could not find turn {message.Turn} to delete.");
+                SetStatus($"Could not find turn {message.Turn} to delete.");
                 return false;
             }
 
@@ -79,7 +82,7 @@ internal sealed class TranscriptMutationCoordinator
             var changed = transcriptService.TogglePinned(snapshot, message.Turn, message.SpeakerId, message.CreatedAt, out var pinned);
             if (!changed)
             {
-                setLoadStatus($"Could not find turn {message.Turn} to pin.");
+                SetStatus($"Could not find turn {message.Turn} to pin.");
                 return false;
             }
 
@@ -121,7 +124,7 @@ internal sealed class TranscriptMutationCoordinator
         var snapshot = await sessionStore.LoadSnapshotAsync(session.Id);
         if (snapshot is null)
         {
-            setLoadStatus($"No snapshot found for session {session.Id}.");
+            SetStatus($"No snapshot found for session {session.Id}.");
             return;
         }
 
@@ -132,5 +135,12 @@ internal sealed class TranscriptMutationCoordinator
 
         await saveSnapshotAsync(snapshot, session.Id);
         await refreshActiveSessionAsync(successStatus);
+        setMutationStatus?.Invoke(successStatus);
+    }
+
+    private void SetStatus(string status)
+    {
+        setLoadStatus(status);
+        setMutationStatus?.Invoke(status);
     }
 }

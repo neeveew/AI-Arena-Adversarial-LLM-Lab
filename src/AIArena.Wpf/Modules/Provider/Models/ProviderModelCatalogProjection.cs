@@ -27,7 +27,9 @@ internal sealed record ProviderModelCatalogItem(
     string CapabilitySummary,
     IReadOnlyList<string> Aliases,
     bool IsConfiguredOnly = false,
-    bool IsResidencyStale = false);
+    bool IsResidencyStale = false,
+    int? MaximumContextLength = null,
+    int? EffectiveContextLength = null);
 
 internal sealed record ProviderModelCatalogSnapshot(
     long Generation,
@@ -85,4 +87,35 @@ internal sealed record ProviderModelAssignmentControlResult(
     string ErrorCode,
     string Message,
     ProviderModelAssignmentProjection Assignment,
+    IReadOnlyList<string> ChangedFields);
+
+internal sealed record ProviderModelConfigurationRequest(
+    string Model,
+    int ConfiguredContextWindow,
+    string HistoryPolicy,
+    string ResponseTone,
+    string CustomTone,
+    string ExpectedConfigurationIdentity,
+    IReadOnlyList<string>? EquivalentModelIds = null,
+    bool? ContextApplyRequired = null);
+
+internal sealed record ProviderModelConfigurationProjection(
+    string SessionId,
+    string Model,
+    int ConfiguredContextWindow,
+    string HistoryPolicy,
+    string ResponseTone,
+    string CustomTone,
+    string ConfigurationIdentity,
+    long PersistenceRevision)
+{
+    public static ProviderModelConfigurationProjection Empty(string model = "") =>
+        new("", model, 0, "strict", "default", "", "", 0);
+}
+
+internal sealed record ProviderModelConfigurationControlResult(
+    bool Ok,
+    string ErrorCode,
+    string Message,
+    ProviderModelConfigurationProjection Configuration,
     IReadOnlyList<string> ChangedFields);

@@ -374,6 +374,15 @@ internal sealed class ArenaOperationCoordinator
             NarrationMessage: snapshot.FactoryMode ? factoryNarrationUnavailable : "");
 
         var activeAgentCount = snapshot.Agents.Count(agent => agent.Active);
+        if (snapshot.MatchEnded)
+        {
+            return new ArenaActionReadiness(
+                false,
+                "This match has ended. Reset or fork the session to continue with new turns.",
+                CanNarrate: false,
+                NarrationMessage: "Narration is unavailable after End Match. Reset or fork the session to continue.");
+        }
+
         var current = SessionOverviewCoordinator.CurrentTurnAgent(snapshot);
         var currentModel = SessionOverviewCoordinator.CurrentTurnModel(snapshot, current);
         var providerReachable = snapshot.ProviderOnline;

@@ -28,4 +28,26 @@ public sealed record TranscriptMessage(
     double TokensPerSecond = 0,
     int TimeToFirstTokenMs = 0,
     string ProviderResponseId = "",
-    int ModelLoadTimeMs = 0);
+    int ModelLoadTimeMs = 0)
+{
+    public string CompletionFailureKind { get; init; } = "none";
+    public string CompletionStopReason { get; init; } = "unknown";
+    public int? ProviderStatusCode { get; init; }
+    public string ProviderErrorCode { get; init; } = "";
+    public ArenaHistoryBudgetReceiptView? HistoryBudgetReceipt { get; init; }
+}
+
+public sealed record ArenaHistoryBudgetReceiptView(
+    string Contract,
+    string HistoryPolicy,
+    int ConfiguredContextWindow,
+    int TargetPercent,
+    int InputTokenBudget,
+    int OutputTokenReserve,
+    int EstimatedPromptTokens,
+    int EligibleEntryCount,
+    int IncludedEntryCount,
+    int OmittedEntryCount,
+    string ContextFingerprint,
+    int BeforeTurn,
+    string TokenEvidence);

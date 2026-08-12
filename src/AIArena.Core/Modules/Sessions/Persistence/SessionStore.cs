@@ -96,6 +96,7 @@ public sealed class SessionStore
             {
                 ScrubRemovedLegacyInternetData(snapshot);
                 StructuredMemoryService.NormalizeSnapshot(snapshot);
+                ModelRuntimeSettingsRegistry.Normalize(snapshot);
                 TransformConfigTokens(snapshot, UnprotectSecret);
             }
 
@@ -152,6 +153,10 @@ public sealed class SessionStore
             Temperature = config.Temperature,
             MaxOutputTokens = config.MaxOutputTokens,
             ContextLength = config.ContextLength,
+            ConfiguredContextWindow = config.ConfiguredContextWindow,
+            HistoryPolicy = config.HistoryPolicy,
+            ResponseTone = config.ResponseTone,
+            CustomTone = config.CustomTone,
             Reasoning = config.Reasoning,
             NativeStatefulChat = config.NativeStatefulChat,
             NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
@@ -199,6 +204,7 @@ public sealed class SessionStore
     {
         ScrubRemovedLegacyInternetData(snapshot);
         StructuredMemoryService.NormalizeSnapshot(snapshot);
+        ModelRuntimeSettingsRegistry.Normalize(snapshot);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         var currentRevision = await ReadPersistenceRevisionAsync(fullPath, cancellationToken);
         var expectedRevision = Math.Max(0, snapshot.PersistenceRevision);
@@ -421,6 +427,9 @@ public sealed class SessionStore
         clone.Engine.Narration.Clear();
         clone.Engine.TurnCount = 0;
         clone.Engine.TurnIndex = 0;
+        clone.Engine.MatchEnded = false;
+        clone.Engine.MatchEndedAt = null;
+        clone.Engine.MatchEndReason = "";
         clone.Engine.LastError = "";
         clone.Engine.Narrator.Status = "idle";
         clone.Engine.Narrator.LastError = "";
@@ -653,6 +662,7 @@ public sealed class SessionStore
             RebaseRetainedMemory(child, sourceSnapshot.BranchReceipt?.Id ?? "", receipt.Id);
             child.Configs.Clear();
             child.Configs[ModelProviderRouting.SharedConfigKey] = ExperimentProviderSetup(replacementConfig);
+            ModelRuntimeSettingsRegistry.Normalize(child);
             child.PersistenceRevision = 0;
             var childSetupFingerprint = SetupFingerprint(child);
             if (!await TryCreateSnapshotFileAsync(child, targetPath, cancellationToken))
@@ -940,6 +950,7 @@ public sealed class SessionStore
             snapshot.Engine.DecisionCard.UpdatedAt = 0;
             snapshot.Engine.DecisionCard.InternetRequest = null;
             snapshot.Engine.DecisionCard.InternetResult = null;
+            snapshot.Engine.DecisionCard.Metadata.Clear();
             snapshot.Engine.Summary = "";
             snapshot.GenerationHistory.RemoveAll(entry => cursor.CreatedAt <= 0 || entry.CreatedAt > cursor.CreatedAt);
             foreach (var key in snapshot.Configs.Keys.ToArray())
@@ -1018,6 +1029,8 @@ public sealed class SessionStore
         {
             $"match|{snapshot.MatchType}",
             $"model-behavior|{(snapshot.Engine.FactoryMode ? "factory" : "arena")}",
+            $"model-settings-schema|{snapshot.ModelSettingsVersion}",
+            $"pending-model-configuration-applies|{string.Join(",", snapshot.PendingModelConfigurationApplies.OrderBy(value => value, StringComparer.Ordinal))}",
             $"default-for-unassigned-agents|{snapshot.Engine.DefaultForUnassignedAgentsEnabled}",
             $"steering.mode|{snapshot.Engine.Steering.Mode}",
             $"steering.topic|{snapshot.Engine.Steering.Topic}",
@@ -1058,9 +1071,23 @@ public sealed class SessionStore
                 pair.Value.Temperature.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
                 pair.Value.MaxOutputTokens,
                 pair.Value.ContextLength,
+                pair.Value.ConfiguredContextWindow,
+                ModelHistoryPolicies.NormalizeHistoryPolicy(pair.Value.HistoryPolicy),
+                ModelResponseTones.NormalizeResponseTone(pair.Value.ResponseTone),
+                ModelResponseTones.NormalizeCustomTone(pair.Value.CustomTone),
                 pair.Value.Reasoning,
                 pair.Value.NativeStatefulChat,
                 pair.Value.NativeIdleTtlSeconds)));
+        canonical.AddRange(snapshot.ModelSettings
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => string.Join(
+                "|",
+                "model-settings",
+                pair.Key,
+                pair.Value.ConfiguredContextWindow,
+                ModelHistoryPolicies.NormalizeHistoryPolicy(pair.Value.HistoryPolicy),
+                ModelResponseTones.NormalizeResponseTone(pair.Value.ResponseTone),
+                ModelResponseTones.NormalizeCustomTone(pair.Value.CustomTone))));
         return Sha256(string.Join("\n", canonical));
     }
 
@@ -1078,6 +1105,10 @@ public sealed class SessionStore
         Temperature = config.Temperature,
         MaxOutputTokens = config.MaxOutputTokens,
         ContextLength = config.ContextLength,
+        ConfiguredContextWindow = config.ConfiguredContextWindow,
+        HistoryPolicy = config.HistoryPolicy,
+        ResponseTone = config.ResponseTone,
+        CustomTone = config.CustomTone,
         Reasoning = config.Reasoning,
         NativeStatefulChat = config.NativeStatefulChat,
         NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
@@ -1095,6 +1126,10 @@ public sealed class SessionStore
         Temperature = config.Temperature,
         MaxOutputTokens = config.MaxOutputTokens,
         ContextLength = config.ContextLength,
+        ConfiguredContextWindow = config.ConfiguredContextWindow,
+        HistoryPolicy = config.HistoryPolicy,
+        ResponseTone = config.ResponseTone,
+        CustomTone = config.CustomTone,
         Reasoning = config.Reasoning,
         NativeStatefulChat = config.NativeStatefulChat,
         NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
@@ -1211,6 +1246,9 @@ public sealed class SessionStore
             ForkedAt = forkedAt
         };
         snapshot.Engine.LastError = "";
+        snapshot.Engine.MatchEnded = false;
+        snapshot.Engine.MatchEndedAt = null;
+        snapshot.Engine.MatchEndReason = "";
         snapshot.Engine.Narrator.Status = "idle";
         snapshot.Engine.Narrator.LastError = "";
         foreach (var agent in snapshot.Engine.Agents)
@@ -1287,7 +1325,8 @@ public sealed class SessionStore
     {
         var snapshot = new ArenaSnapshot
         {
-            MatchType = "balanced"
+            MatchType = "balanced",
+            ModelSettingsVersion = ModelRuntimeSettingsRegistry.CurrentSchemaVersion
         };
 
         snapshot.Configs["shared"] = new ModelProviderConfig();

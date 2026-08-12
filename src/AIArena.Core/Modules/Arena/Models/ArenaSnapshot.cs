@@ -18,6 +18,31 @@ public sealed class ArenaSnapshot
     [JsonPropertyName("configs")]
     public Dictionary<string, ModelProviderConfig> Configs { get; init; } = new();
 
+    /// <summary>
+    /// Canonical per-model behavior settings. Unlike role routes, this registry
+    /// can retain settings for catalog models that are not currently assigned.
+    /// Keys are opaque provider/model identities produced by
+    /// <see cref="ModelRuntimeSettingsRegistry.Identity(ModelProviderConfig)"/>.
+    /// </summary>
+    [JsonPropertyName("model_settings")]
+    public Dictionary<string, ModelRuntimeSettings> ModelSettings { get; init; } = new();
+
+    /// <summary>
+    /// Zero identifies snapshots created before canonical model settings existed.
+    /// Current clean sessions explicitly use the current registry schema so their
+    /// first newly selected model can adopt the Rolling 80 default safely.
+    /// </summary>
+    [JsonPropertyName("model_settings_version")]
+    public int ModelSettingsVersion { get; set; }
+
+    /// <summary>
+    /// Opaque model-settings identities whose saved context configuration has
+    /// not yet been authoritatively applied to a loaded provider instance.
+    /// This is durable configuration intent, never residency evidence.
+    /// </summary>
+    [JsonPropertyName("pending_model_configuration_applies")]
+    public HashSet<string> PendingModelConfigurationApplies { get; init; } = new(StringComparer.Ordinal);
+
     [JsonPropertyName("engine")]
     public EngineSnapshot Engine { get; init; } = new();
 
@@ -103,6 +128,16 @@ public sealed class EngineSnapshot
 
     [JsonPropertyName("turn_index")]
     public int TurnIndex { get; set; }
+
+    [JsonPropertyName("match_ended")]
+    public bool MatchEnded { get; set; }
+
+    [JsonPropertyName("match_ended_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? MatchEndedAt { get; set; }
+
+    [JsonPropertyName("match_end_reason")]
+    public string MatchEndReason { get; set; } = "";
 
     [JsonPropertyName("steering")]
     public Steering Steering { get; init; } = new();
@@ -276,6 +311,9 @@ public sealed class DecisionCardState
 
     [JsonPropertyName("internet_result")]
     public InternetToolResult? InternetResult { get; set; }
+
+    [JsonPropertyName("metadata")]
+    public Dictionary<string, JsonElement> Metadata { get; init; } = new();
 }
 
 public sealed class DialogueMessage

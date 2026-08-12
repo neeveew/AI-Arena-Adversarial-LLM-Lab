@@ -97,7 +97,9 @@ internal static partial class Program
                     "a confirmed catalog-to-Loaded move lost row identity, selection, or keyboard focus");
 
                 var defaultSwitch = FindProviderModelsDescendants<ProviderAssignmentCheckBox>(control.DetailSurface)
-                    .Single(toggle => AutomationProperties.GetName(toggle).EndsWith("Default", StringComparison.Ordinal));
+                    .Single(toggle => AutomationProperties.GetName(toggle).EndsWith(
+                        "Default for unassigned agents",
+                        StringComparison.Ordinal));
                 var togglePeer = new CheckBoxAutomationPeer(defaultSwitch);
                 var togglePattern = togglePeer.GetPattern(PatternInterface.Toggle) as IToggleProvider
                     ?? throw new InvalidOperationException("the Default assignment switch did not expose UIA TogglePattern");

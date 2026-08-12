@@ -132,8 +132,11 @@
     <Thickness x:Key="Arena.Layout.FeatureGroupHeaderMargin">4,10,4,5</Thickness>
     <Thickness x:Key="Arena.Layout.HeaderStatusMargin">10,1,0,0</Thickness>
     <sys:Double x:Key="Arena.Layout.HeaderStatusMaxWidth">300</sys:Double>
+    <GridLength x:Key="Arena.Layout.StatusCenterStateColumnWidth">72</GridLength>
     <Thickness x:Key="Arena.Layout.MenuSeparatorMargin">8,4</Thickness>
     <Thickness x:Key="Arena.Layout.SkeletonLeadMargin">0,16,0,8</Thickness>
+    <Thickness x:Key="Arena.Layout.StatusCenterSectionMargin">0,8,0,8</Thickness>
+    <Thickness x:Key="Arena.Layout.CollapsedStatusButtonMargin">0,-3,4,-3</Thickness>
 
     <!-- Compatibility keys retained until their existing consumers migrate. -->
     <Thickness x:Key="Arena.Gap.Inline">6,0,0,0</Thickness>

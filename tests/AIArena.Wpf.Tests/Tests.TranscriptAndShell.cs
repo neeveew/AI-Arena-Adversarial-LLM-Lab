@@ -41,6 +41,30 @@ static void ArenaOperationCoordinatorSelectsOperationMode()
     Require(!ArenaOperationCoordinator.EvaluateReadiness(offlineNoCast).CanRun, "arena actions should remain gated while provider and cast setup are both incomplete");
     Require(ArenaOperationCoordinator.EvaluateReadiness(offlineWithCast).Message.Contains("provider", StringComparison.OrdinalIgnoreCase), "readiness feedback should identify provider setup as the blocker");
     Require(ArenaOperationCoordinator.EvaluateReadiness(readySnapshot).CanRun, "an online provider, selected model, and active agent should enable arena actions");
+    Require(MainWindow.ArenaReadinessStatusState(offlineNoCast, ArenaOperationCoordinator.EvaluateReadiness(offlineNoCast)) == ApplicationStatusState.Warning
+            && MainWindow.ArenaReadinessStatusState(offlineWithCast, ArenaOperationCoordinator.EvaluateReadiness(offlineWithCast)) == ApplicationStatusState.Warning,
+        "ordinary provider, model, and cast setup requirements should remain typed warnings rather than expiring prose");
+    var endedSnapshot = readySnapshot with { MatchEnded = true, MatchEndReason = "operator ended after context limit" };
+    var endedReadiness = ArenaOperationCoordinator.EvaluateReadiness(endedSnapshot);
+    Require(!endedReadiness.CanRun
+            && !endedReadiness.CanNarrate
+            && endedReadiness.Message.Contains("Reset or fork", StringComparison.Ordinal),
+        "a durably ended match should block participant, auto-chat, and narrator actions with reset-or-fork guidance");
+    Require(SessionOverviewCoordinator.TopRunStateSummary(endedSnapshot, cast, value => value)
+            .Contains("Match ended", StringComparison.Ordinal),
+        "the top run summary should not present an ended match as ready");
+    Require(MainWindow.ArenaReadinessStatusState(endedSnapshot, endedReadiness) == ApplicationStatusState.Blocked,
+        "an ended match should remain a typed unresolved blocker");
+    var missingFactoryRoot = readySnapshot with
+    {
+        FactoryMode = true,
+        FactoryConversationRootAssigned = true,
+        HasFactoryConversationRoot = false
+    };
+    Require(MainWindow.ArenaReadinessStatusState(
+                missingFactoryRoot,
+                ArenaOperationCoordinator.EvaluateReadiness(missingFactoryRoot)) == ApplicationStatusState.Blocked,
+        "a missing assigned Factory root should remain a typed unresolved blocker");
 
     RunStaTest(() =>
     {
@@ -224,6 +248,104 @@ static void FactoryModeReadinessRequiresEligiblePublicOperatorInput()
     Require(ArenaOperationCoordinator.FactoryInputState(deletedRoot) == FactoryConversationInputState.MissingRoot, "surviving conversation markers with no resolvable root should be distinguished from an unanchored session");
     Require(!ArenaOperationCoordinator.HasFactoryInput(deletedRoot), "a later eligible Operator row must not silently replace a missing anchored root");
     Require(!deletedRootState.CanRun && deletedRootState.Message.Contains("root is missing", StringComparison.Ordinal), "a missing Factory root should block with reset-or-fork guidance");
+}
+
+static void StaleProviderProjectionCannotUndoFactoryOperatorReadiness()
+{
+    RunStaTest(() =>
+    {
+        var agent = new AgentState("alpha", "Alpha", "waiting", "persona", "default", "default", "", "model-a", true, false, []);
+        var noRootSnapshot = SnapshotForOverviewTest(
+            providerOnline: true,
+            providerModel: "model-a",
+            providerLastError: "",
+            turnIndex: 0,
+            messages: [],
+            agents: [agent]) with
+        {
+            FactoryMode = true
+        };
+        var operatorTurn = TranscriptForTest(1, "Operator", "operator", "message", "ok") with
+        {
+            Text = "Start the shared Factory conversation."
+        };
+        var savedOperatorSnapshot = noRootSnapshot with { Messages = [operatorTurn] };
+
+        var busy = false;
+        var autoChatButton = new Button();
+        var oneTurnButton = new Button();
+        var arenaOperations = new ArenaOperationCoordinator(
+            new SemaphoreSlim(1, 1),
+            new TextBlock(),
+            new TextBlock(),
+            autoChatButton,
+            oneTurnButton,
+            new Button(),
+            new Button(),
+            new Button(),
+            [],
+            () => busy,
+            value => busy = value,
+            () => false,
+            (_, _) => { },
+            (_, _) => { },
+            (_, _) => { },
+            _ => { },
+            () => { },
+            _ => { },
+            _ => { },
+            _ => { },
+            _ => { },
+            () => { });
+
+        var renderedSnapshot = noRootSnapshot;
+        arenaOperations.UpdateReadiness(ArenaOperationCoordinator.EvaluateReadiness(renderedSnapshot));
+        Require(!autoChatButton.IsEnabled && !oneTurnButton.IsEnabled,
+            "Factory actions should preserve the intentional no-root gate before public Operator input is saved");
+
+        // First, the Operator save completes and its authoritative refresh renders.
+        var providerReadStartedAt = new DateTimeOffset(2026, 8, 12, 17, 44, 29, TimeSpan.Zero).AddTicks(10);
+        var operatorSaveCompletedAt = providerReadStartedAt.AddTicks(1);
+        renderedSnapshot = savedOperatorSnapshot;
+        arenaOperations.UpdateReadiness(ArenaOperationCoordinator.EvaluateReadiness(renderedSnapshot));
+        Require(autoChatButton.IsEnabled && oneTurnButton.IsEnabled,
+            "a valid public Operator save should enable Auto Chat and 1 Turn in Factory mode");
+
+        // Then, an already-running provider heartbeat completes with the older,
+        // no-root snapshot. MainWindow must reject this generation rather than
+        // replacing the authoritative transcript and readiness projection.
+        if (!MainWindow.ProviderProjectionIsStale(providerReadStartedAt, operatorSaveCompletedAt))
+        {
+            renderedSnapshot = noRootSnapshot;
+            arenaOperations.UpdateReadiness(ArenaOperationCoordinator.EvaluateReadiness(renderedSnapshot));
+        }
+
+        Require(autoChatButton.IsEnabled && oneTurnButton.IsEnabled,
+            "an older provider projection must not re-disable Factory actions after the Operator save refresh");
+        Require(renderedSnapshot.Messages.Any(message =>
+                message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase)
+                && message.Kind.Equals("message", StringComparison.OrdinalIgnoreCase)
+                && message.Status.Equals("ok", StringComparison.OrdinalIgnoreCase)),
+            "rejecting the stale provider projection should retain the public Operator row");
+
+        var oneTurnExecuted = false;
+        var oneTurnAccepted = arenaOperations.RunAsync("Running one turn...", oneTurnButton, () =>
+        {
+            oneTurnExecuted = true;
+            return Task.CompletedTask;
+        }).GetAwaiter().GetResult();
+        Require(oneTurnAccepted && oneTurnExecuted,
+            "the enabled 1 Turn action should reach its operation after the stale provider completion");
+
+        var autoChatExecuted = false;
+        var autoChatAccepted = arenaOperations.RunAsync("Starting Auto Chat...", autoChatButton, () =>
+        {
+            autoChatExecuted = true;
+            return Task.CompletedTask;
+        }).GetAwaiter().GetResult();
+        Require(autoChatAccepted && autoChatExecuted,
+            "the enabled Auto Chat action should reach its operation after the stale provider completion");
+    });
 }
 
 static void FactoryModeTogglePersistsAcrossConcurrencyWithSafeAuditPayload()
@@ -488,6 +610,13 @@ static void FactoryModeUiActionsRemainUnavailableAndHonest()
         var decisionText = DescendantTextBlocks(decisionPanel).Select(block => block.Text).ToArray();
         Require(decisionText.Any(text => text.Contains("retained from an earlier Arena-mode run", StringComparison.Ordinal)), "Factory mode should label retained Decision Card evidence without presenting it as newly generated");
         Require(decisionText.Any(text => text.Contains("Retained Arena-mode decision evidence", StringComparison.Ordinal)), "Factory mode should preserve inspectable prior Decision Card evidence");
+
+        var endedPanel = adjunct.CreateDecisionCardPanel(readyFactory with { FactoryMode = false, MatchEnded = true });
+        var endedGenerateDecision = DescendantButtons(endedPanel).Single(button => AutomationProperties.GetName(button) == "Generate");
+        Require(!endedGenerateDecision.IsEnabled,
+            "Decision Card generation should remain unavailable after End Match");
+        Require(AutomationProperties.GetHelpText(endedGenerateDecision).Contains("Reset or fork", StringComparison.Ordinal),
+            "the ended Decision Card action should expose reset-or-fork guidance to UI Automation");
     });
 }
 
@@ -1343,6 +1472,47 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
             && TranscriptCardRenderer.SafeModelLabel("https://private.example/model") == "external model reference",
             "model labels should preserve ordinary IDs while redacting absolute local and external references");
 
+        var contextFailure = message with
+        {
+            Turn = 18,
+            Status = "error",
+            Text = "Model call failed: context_length_exceeded.",
+            CompletionFailureKind = "context_limit_exceeded",
+            HistoryBudgetReceipt = new ArenaHistoryBudgetReceiptView(
+                "arena_history_budget_v1",
+                "rolling_80",
+                32_768,
+                80,
+                24_166,
+                2_000,
+                24_900,
+                20,
+                14,
+                6,
+                "receipt-fingerprint",
+                18,
+                "estimated_v1")
+        };
+        Require(
+            TranscriptCardRenderer.IsSystemEvent(contextFailure, isInternet: false),
+            "typed context exhaustion should use the System-event visual contract without parsing provider prose");
+        Require(
+            TranscriptCardRenderer.DisplayBody(contextFailure).StartsWith("Context limit reached for Alpha.", StringComparison.Ordinal),
+            "typed context exhaustion should replace raw provider prose with a clear user-facing summary");
+        var contextCard = renderer.CreateCard(contextFailure, retryable: true, searchMatch: false, isLatest: true);
+        var recoveryActions = LogicalDescendants<WrapPanel>(contextCard)
+            .SingleOrDefault(panel => AutomationProperties.GetName(panel) == "Context recovery actions");
+        Require(recoveryActions is not null,
+            "context exhaustion should render its recovery actions inside the transcript card");
+        Require(
+            recoveryActions!.Children.OfType<Button>().Select(AutomationProperties.GetName).SequenceEqual(
+                ["Increase context", "Choose larger model", "Start fork", "Skip turn", "End match"],
+                StringComparer.Ordinal),
+            "the context recovery card should keep the approved action order");
+        Require(
+            LogicalDescendants<Expander>(contextCard).Any(expander => expander.Header?.ToString() == "Provider error details"),
+            "raw bounded provider detail should remain available behind an accessible disclosure");
+
         var sharedActionCoordinator = new TranscriptActionCoordinator(() => false, () => false, AccentResourceBrush);
         var sharedIconButton = sharedActionCoordinator.CreateButton("Shared", null, true, iconGlyph: "\uE8C8");
         var sharedLabeledButton = sharedActionCoordinator.CreateLabeledButton("Shared label", null, true, TranscriptActionKind.Primary, "\uE8C8");
@@ -1538,6 +1708,7 @@ static void TranscriptMutationCoordinatorFormatsStatuses()
         var saveCalls = 0;
         var refreshes = 0;
         var status = "";
+        var universalStatuses = new List<string>();
         var coordinator = new TranscriptMutationCoordinator(
             sessionStore,
             eventLogStore,
@@ -1554,7 +1725,8 @@ static void TranscriptMutationCoordinatorFormatsStatuses()
                 refreshes++;
                 return Task.CompletedTask;
             },
-            value => status = value);
+            value => status = value,
+            value => universalStatuses.Add(value));
 
         var rootView = TranscriptForTest(rootMessage.Turn, rootMessage.Speaker, rootMessage.SpeakerId, rootMessage.Kind, rootMessage.Status) with
         {
@@ -1563,6 +1735,7 @@ static void TranscriptMutationCoordinatorFormatsStatuses()
         };
         coordinator.DeleteMessageAsync(rootView).GetAwaiter().GetResult();
         Require(status == TranscriptMutationCoordinator.FactoryRootDeleteBlockedStatus(rootView), "a protected root delete should report the dedicated actionable status instead of claiming the turn was not found");
+        Require(universalStatuses.SequenceEqual([status]), "a blocked transcript mutation should publish exactly one source-specific universal status");
         Require(status.Contains("Reset Arena", StringComparison.Ordinal) && status.Contains("clean session", StringComparison.Ordinal), "the protected-root status should explain both supported ways to begin a new group");
         Require(saveCalls == 0 && refreshes == 0, "a blocked root deletion must not save, refresh, or announce a successful deletion");
         var afterBlockedRoot = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
@@ -1576,6 +1749,8 @@ static void TranscriptMutationCoordinatorFormatsStatuses()
         };
         coordinator.DeleteMessageAsync(participantView).GetAwaiter().GetResult();
         Require(saveCalls == 1 && refreshes == 1, "ordinary transcript deletion should retain its established save and refresh path");
+        Require(universalStatuses.Count == 2 && universalStatuses[^1] == TranscriptMutationCoordinator.DeleteStatus(participantView),
+            "a successful transcript mutation should publish one source-specific universal outcome after persistence");
         var afterOrdinaryDelete = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
             ?? throw new InvalidOperationException("ordinary-delete fixture should reload");
         Require(afterOrdinaryDelete.Engine.Messages.Count == 1 && FactoryConversationService.IsConversationRoot(afterOrdinaryDelete.Engine.Messages.Single()), "ordinary deletion should remove only the selected reply and preserve the Factory root");
@@ -1605,6 +1780,20 @@ static void ArenaRunCoordinatorFormatsStatuses()
     Require(ArenaRunCoordinator.RetryStatus(original, completed) == "Retry replaced turn 5: Alpha (model-a, 321 ms)", "retry success status should remain stable");
     Require(ArenaRunCoordinator.NarratorStatus(NarratorResult.Completed(message)) == "Narrator added turn 5 (model-a, 321 ms)", "narrator success status should remain stable");
     Require(ArenaRunCoordinator.AutoChatStatus(OneTurnResult.Failed("offline")) == "Auto Chat stopped: offline", "auto-chat failure status should include error");
+
+    var outputLimitedCompletion = completed.Completion! with
+    {
+        StopReason = ModelCompletionStopReason.OutputLimitReached
+    };
+    var outputLimited = OneTurnResult.Completed(
+        new OneTurnPlan(true, "alpha", "Alpha", new ModelProviderConfig { Model = "model-a" }, null, ""),
+        message,
+        outputLimitedCompletion);
+    Require(!ArenaRunCoordinator.ShouldContinueAutoChat(outputLimited), "Auto Chat must pause before future turns can invalidate an output-continuation receipt");
+    Require(
+        ArenaRunCoordinator.AutoChatStatus(outputLimited).StartsWith("Auto Chat paused:", StringComparison.Ordinal)
+        && ArenaRunCoordinator.OneTurnStatus(outputLimited).Contains("partial response was preserved", StringComparison.Ordinal),
+        "output-limit statuses should preserve the partial response without claiming a complete turn");
 }
 
 static void ArenaRunCoordinatorDrainsAutoChatOnStop()
@@ -3119,6 +3308,7 @@ static void InternetDiagnosticsCleanUpTemporaryBackendWhileOff()
             new InternetFetchDiagnostic(true, TimeSpan.Zero, new Uri("https://example.com/"), ""));
 
         var offStopCalls = 0;
+        var successStatuses = new ApplicationStatusCenter();
         using (var offCoordinator = new InternetWorkflowCoordinator(
             new CheckBox { IsChecked = false },
             new TextBlock(),
@@ -3127,12 +3317,43 @@ static void InternetDiagnosticsCleanUpTemporaryBackendWhileOff()
             new TextBlock(),
             _ => Brushes.Black,
             runDiagnosticsAsync: _ => Task.FromResult(report),
-            stopBackend: () => Interlocked.Increment(ref offStopCalls)))
+            stopBackend: () => Interlocked.Increment(ref offStopCalls),
+            statusCenter: successStatuses,
+            statusIdentity: () => new ApplicationStatusIdentity("internet-session")))
         {
             offCoordinator.TestInternetAsync().GetAwaiter().GetResult();
         }
 
         Require(offStopCalls == 1, "an off-state diagnostic should stop its temporary backend after completion");
+        var completedStatus = successStatuses.History.Single(entry => entry.Key == "app.internet-test");
+        Require(completedStatus.State == ApplicationStatusState.Succeeded
+                && completedStatus.Summary == "Internet test passed.",
+            "a successful user-triggered Internet diagnostic should complete one causal universal status");
+
+        var failedReport = new InternetDiagnosticsReport(
+            report.Backend,
+            new InternetSearchDiagnostic(false, TimeSpan.Zero, 0, 0, 0, "Bearer internet-secret-value"),
+            report.Fetch);
+        var failureStatuses = new ApplicationStatusCenter();
+        using (var failedCoordinator = new InternetWorkflowCoordinator(
+            new CheckBox { IsChecked = true },
+            new TextBlock(),
+            new TextBlock(),
+            new Button(),
+            new TextBlock(),
+            _ => Brushes.Black,
+            runDiagnosticsAsync: _ => Task.FromResult(failedReport),
+            statusCenter: failureStatuses,
+            statusIdentity: () => new ApplicationStatusIdentity("internet-session")))
+        {
+            failedCoordinator.TestInternetAsync().GetAwaiter().GetResult();
+        }
+
+        var failedStatus = failureStatuses.History.Single(entry => entry.Key == "app.internet-test");
+        Require(failedStatus.State == ApplicationStatusState.Failed
+                && failedStatus.Summary == "Internet test needs attention."
+                && !failedStatus.Detail.Contains("internet-secret-value", StringComparison.Ordinal),
+            "a failed Internet diagnostic should publish one sanitized causal failure");
 
         var internetToggle = new CheckBox { IsChecked = false };
         var enabledStopCalls = 0;
@@ -3774,12 +3995,33 @@ static void ProviderReachabilityProjectsOneCoherentUiGeneration()
 
     var windowSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
     var projection = CSharpMethodBlock(windowSource, "private void ApplyProviderStatusProjection(");
-    var stateIndex = projection.IndexOf("_lastRenderedSnapshot = snapshot", StringComparison.Ordinal);
-    var topIndex = projection.IndexOf("UpdateTopBarStatus(snapshot)", StringComparison.Ordinal);
-    var overviewIndex = projection.IndexOf("SessionOverview.UpdateSessionOverview(snapshot)", StringComparison.Ordinal);
-    var transcriptIndex = projection.IndexOf("PopulateTranscript(snapshot.Messages)", StringComparison.Ordinal);
-    Require(stateIndex >= 0 && topIndex > stateIndex && overviewIndex > topIndex && transcriptIndex > overviewIndex,
-        "the coherent provider projection should publish state before refreshing top, rail/settings, and transcript readiness in one dispatcher turn");
+    Require(projection.Contains("ProviderProjectionIsStale(session.LastModified, _activeSnapshotWriteUtc)", StringComparison.Ordinal),
+        "provider reachability should reject a snapshot generation captured before a newer Operator save was rendered");
+    Require(projection.Contains("ApplyArenaActionProjection(snapshot)", StringComparison.Ordinal),
+        "provider reachability should reuse the authoritative arena-action projection instead of publishing a partial UI generation");
+    var arenaProjection = CSharpMethodBlock(windowSource, "private void ApplyArenaActionProjection(");
+    var stateIndex = arenaProjection.IndexOf("_lastRenderedSnapshot = snapshot", StringComparison.Ordinal);
+    var operatorIndex = arenaProjection.IndexOf("OperatorTurn.ApplySnapshot(snapshot)", StringComparison.Ordinal);
+    var readinessIndex = arenaProjection.IndexOf("ArenaOperations.UpdateReadiness(arenaReadiness)", StringComparison.Ordinal);
+    var topIndex = arenaProjection.IndexOf("UpdateTopBarStatus(snapshot)", StringComparison.Ordinal);
+    var overviewIndex = arenaProjection.IndexOf("SessionOverview.UpdateSessionOverview(snapshot)", StringComparison.Ordinal);
+    var transcriptIndex = arenaProjection.IndexOf("PopulateTranscript(snapshot.Messages)", StringComparison.Ordinal);
+    Require(stateIndex >= 0
+            && operatorIndex > stateIndex
+            && readinessIndex > operatorIndex
+            && topIndex > readinessIndex
+            && overviewIndex > topIndex
+            && transcriptIndex > overviewIndex,
+        "the coherent provider projection should update Operator state and action readiness from one snapshot before refreshing top, overview, and transcript");
+
+    var beforeOperatorSave = new DateTimeOffset(2026, 8, 12, 17, 44, 29, TimeSpan.Zero).AddTicks(10);
+    var afterOperatorSave = beforeOperatorSave.AddTicks(1);
+    Require(MainWindow.ProviderProjectionIsStale(beforeOperatorSave, afterOperatorSave),
+        "a provider projection captured before the authoritative public Operator save must be rejected");
+    Require(!MainWindow.ProviderProjectionIsStale(afterOperatorSave, afterOperatorSave),
+        "an equal write generation should remain eligible so timestamp equality does not suppress a coherent provider update");
+    Require(!MainWindow.ProviderProjectionIsStale(afterOperatorSave.AddTicks(1), afterOperatorSave),
+        "a genuinely newer provider projection should remain eligible");
 }
 
 static void TruncateRespectsItsLimitAndSuffix()
@@ -3872,7 +4114,7 @@ static void SessionTokenAccountingReportsTotalsAndPressure()
     }
 
     var messages = new[] { Turn(1, 1000, 200), Turn(2, 3000, 400) };
-    var snapshot = SnapshotForOverviewTest(true, "model", "", 2, messages, []) with { ProviderContextLength = 4000 };
+    var snapshot = SnapshotForOverviewTest(true, "model", "", 2, messages, []) with { ProviderConfiguredContextWindow = 4000 };
 
     Require(SessionOverviewCoordinator.TotalCompletionTokens(snapshot) == 600, "generated tokens should sum completion counts only");
     Require(SessionOverviewCoordinator.TotalSessionTokens(snapshot) == 4600, "session total should include prompt and completion tokens");
@@ -3883,14 +4125,39 @@ static void SessionTokenAccountingReportsTotalsAndPressure()
     Require(SessionOverviewCoordinator.ContextPressureLabel(snapshot, value => value.ToString()).Contains("75%", StringComparison.Ordinal), "context label should surface the pressure percentage");
 
     // An unknown window must read as unknown rather than as no pressure.
-    var unknownWindow = snapshot with { ProviderContextLength = 0 };
+    var unknownWindow = snapshot with { ProviderConfiguredContextWindow = 0, ProviderContextLength = 0 };
     Require(SessionOverviewCoordinator.ContextPressure(unknownWindow) is null, "an unset context window should report unknown pressure");
     Require(!SessionOverviewCoordinator.ContextPressureLabel(unknownWindow, value => value.ToString()).Contains("%", StringComparison.Ordinal), "an unknown window should not claim a percentage");
 
-    // Pressure is capped so an over-limit prompt cannot exceed 100%.
-    var overLimit = snapshot with { ProviderContextLength = 1000 };
-    Require(SessionOverviewCoordinator.ContextPressure(overLimit) == 1.0, "pressure should cap at the full window");
+    // A truthful context rejection can exceed 100%; do not hide the overflow.
+    var overLimit = snapshot with { ProviderConfiguredContextWindow = 1000 };
+    Require(SessionOverviewCoordinator.ContextPressure(overLimit) == 3.0, "pressure should preserve over-limit evidence above 100 percent");
     Require(SessionOverviewCoordinator.ContextPressure(overLimit) >= SessionOverviewCoordinator.ContextPressureWarningThreshold, "an over-limit prompt should cross the warning threshold");
+
+    var receiptMessages = messages.ToArray();
+    receiptMessages[1] = receiptMessages[1] with
+    {
+        HistoryBudgetReceipt = new ArenaHistoryBudgetReceiptView(
+            "arena_history_budget_v1",
+            "rolling_80",
+            4000,
+            80,
+            3200,
+            800,
+            4500,
+            30,
+            18,
+            12,
+            new string('b', 64),
+            3,
+            "estimated_v1")
+    };
+    var receiptSnapshot = snapshot with { Messages = receiptMessages, ProviderConfiguredContextWindow = 64000 };
+    Require(SessionOverviewCoordinator.MaxPromptContext(receiptSnapshot) == 4500,
+        "latest causal Arena receipt estimate should supersede unrelated historical provider prompt-token maxima");
+    Require(Math.Abs(SessionOverviewCoordinator.ContextPressure(receiptSnapshot)!.Value - 1.125) < 0.001
+            && SessionOverviewCoordinator.ContextPressureLabel(receiptSnapshot, value => value.ToString()).Contains("113%", StringComparison.Ordinal),
+        "receipt pressure should use its own estimated prompt and configured context, preserving truthful overflow above 100 percent");
 
     var empty = SnapshotForOverviewTest(true, "model", "", 0, [], []);
     Require(SessionOverviewCoordinator.TotalSessionTokens(empty) == 0, "an empty session should report no tokens");

@@ -100,9 +100,19 @@ function Get-ConstructorDependencies {
 }
 
 $excludedPathPattern = '[\\/](bin|obj|dist|map|\.git)[\\/]'
-$projects = @(Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.csproj" -File |
-    Where-Object { $_.FullName -notmatch $excludedPathPattern } |
-    Sort-Object FullName)
+# Project sources live under src/tests. Restrict traversal to those durable
+# roots so ignored QA runtimes, package caches, and long-path artifacts cannot
+# make dependency indexing fail before the exclusion filter is applied.
+$projectSearchRoots = @(
+    (Join-Path $Root 'src'),
+    (Join-Path $Root 'tests')
+) | Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+$projects = @(
+    Get-ChildItem -LiteralPath $Root -Filter "*.csproj" -File
+    foreach ($projectSearchRoot in $projectSearchRoots) {
+        Get-ChildItem -LiteralPath $projectSearchRoot -Recurse -Filter "*.csproj" -File
+    }
+) | Where-Object { $_.FullName -notmatch $excludedPathPattern } | Sort-Object FullName
 
 $projectRows = @(foreach ($project in $projects) {
     [xml]$projectXml = Get-Content -LiteralPath $project.FullName -Raw

@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AIArena.Core.Models;
 using AIArena.Core.Persistence;
 using AIArena.Core.Services;
 
@@ -10,6 +11,7 @@ public sealed class WpfSettingsStore
 {
     private const int MaxAgentWorkspaceMessages = 80;
     private const int MaxAgentWorkspaceMessageChars = 8000;
+    private const int MaxProviderProfileModelSettings = 256;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -234,6 +236,28 @@ public sealed class WpfSettingsStore
         profile.GammaModel = roleModels.GetValueOrDefault("gamma", "");
         profile.DeltaModel = roleModels.GetValueOrDefault("delta", "");
         profile.NarratorModel = roleModels.GetValueOrDefault("narrator", "");
+        profile.ModelSettings = (profile.ModelSettings ?? [])
+            .Where(setting => IsSafeProfileModel(setting?.Model) || IsOpaqueModelIdentity(setting?.ModelIdentity))
+            .GroupBy(setting => IsSafeProfileModel(setting.Model)
+                ? $"model:{setting.Model.Trim()}"
+                : setting.ModelIdentity.Trim().ToLowerInvariant(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.Last())
+            .Take(MaxProviderProfileModelSettings)
+            .Select(setting => new WpfProviderModelSettings
+            {
+                Model = IsSafeProfileModel(setting.Model) ? setting.Model.Trim() : "",
+                ModelIdentity = IsOpaqueModelIdentity(setting.ModelIdentity)
+                    ? setting.ModelIdentity.Trim().ToLowerInvariant()
+                    : "",
+                ConfiguredContextWindow = NormalizeConfiguredContextWindow(setting.ConfiguredContextWindow),
+                HistoryPolicy = ModelHistoryPolicies.NormalizeHistoryPolicy(setting.HistoryPolicy),
+                ResponseTone = ModelResponseTones.NormalizeResponseTone(setting.ResponseTone),
+                CustomTone = ModelResponseTones.NormalizeResponseTone(setting.ResponseTone) == ModelResponseTones.Custom
+                    ? ModelResponseTones.NormalizeCustomTone(setting.CustomTone)
+                    : "",
+                PendingApply = setting.PendingApply
+            })
+            .ToList();
         return profile;
 
         void AddLegacy(string role, string? model)
@@ -244,6 +268,27 @@ public sealed class WpfSettingsStore
                 roleModels[role] = normalizedModel;
             }
         }
+    }
+
+    private static int NormalizeConfiguredContextWindow(int value) => value == 0
+        ? 0
+        : Math.Clamp(value, 512, ModelRuntimeSettingsRegistry.MaximumConfiguredContextWindow);
+
+    private static bool IsOpaqueModelIdentity(string? value)
+    {
+        var normalized = value?.Trim() ?? "";
+        return normalized.Length == 79
+            && normalized.StartsWith("model-settings:", StringComparison.OrdinalIgnoreCase)
+            && normalized[15..].All(Uri.IsHexDigit);
+    }
+
+    private static bool IsSafeProfileModel(string? value)
+    {
+        var normalized = value?.Trim() ?? "";
+        return normalized.Length is > 0 and <= 1024
+            && !normalized.Any(char.IsControl)
+            && !Path.IsPathRooted(normalized)
+            && !(Uri.TryCreate(normalized, UriKind.Absolute, out _));
     }
 
     private static string NormalizeLongText(string? value, int maxChars)
@@ -331,6 +376,18 @@ public sealed class WpfProviderProfile
     public string NarratorModel { get; set; } = "";
     public Dictionary<string, string> RoleModels { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool DefaultForUnassignedAgentsEnabled { get; set; } = true;
+    public List<WpfProviderModelSettings> ModelSettings { get; set; } = [];
+}
+
+public sealed class WpfProviderModelSettings
+{
+    public string Model { get; set; } = "";
+    public string ModelIdentity { get; set; } = "";
+    public int ConfiguredContextWindow { get; set; }
+    public string HistoryPolicy { get; set; } = ModelHistoryPolicies.Strict;
+    public string ResponseTone { get; set; } = ModelResponseTones.Default;
+    public string CustomTone { get; set; } = "";
+    public bool PendingApply { get; set; }
 }
 
 public sealed class WpfAgentWorkspaceMessage

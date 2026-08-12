@@ -1,0 +1,512 @@
+<UserControl x:Class="AIArena.Wpf.Controls.UniversalStatusCenterControl"
+             x:Name="Root"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Height="184"
+             MinWidth="196"
+             Focusable="False"
+             AutomationProperties.Name="Universal Status Center">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+
+        <Style x:Key="StatusCenterButtonBase" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+            <Setter Property="MinHeight" Value="44" />
+            <Setter Property="MinWidth" Value="44" />
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{DynamicResource Arena.Radius.Medium}">
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource NavHoverBrush}" />
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource HoverBorderBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="StatusCenterSecondaryButton"
+               TargetType="Button"
+               BasedOn="{StaticResource StatusCenterButtonBase}">
+            <Setter Property="Background" Value="{DynamicResource InputBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Action}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style x:Key="StatusCenterIconButton"
+               TargetType="Button"
+               BasedOn="{StaticResource StatusCenterButtonBase}">
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.None}" />
+        </Style>
+
+        <Style x:Key="StatusCenterCardButton"
+               TargetType="Button"
+               BasedOn="{StaticResource StatusCenterButtonBase}">
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.None}" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
+        </Style>
+
+        <Style x:Key="StatusCenterRowButton"
+               TargetType="Button"
+               BasedOn="{StaticResource StatusCenterButtonBase}">
+            <Setter Property="Height" Value="44" />
+            <Setter Property="MinHeight" Value="44" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.StatusChipCompact}" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
+            <Setter Property="BorderThickness" Value="0,1,0,0" />
+            <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.48" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="StatusHistoryFilterButton" TargetType="RadioButton">
+            <Setter Property="MinHeight" Value="44" />
+            <Setter Property="MinWidth" Value="76" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.Tab}" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Gap.Inline.Before.Nano}" />
+            <Setter Property="Background" Value="{DynamicResource InputBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{DynamicResource Arena.Radius.Medium}">
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource HoverBorderBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource NavActiveBrush}" />
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource PrimaryBorderBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="StatusCenterStateText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="FontSize" Value="{DynamicResource Arena.Type.MicroSize}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Style.Triggers>
+                <Trigger Property="Tag" Value="Running">
+                    <Setter Property="Foreground" Value="{DynamicResource Arena.Brush.Info}" />
+                </Trigger>
+                <Trigger Property="Tag" Value="Succeeded">
+                    <Setter Property="Foreground" Value="{DynamicResource Arena.Brush.Success}" />
+                </Trigger>
+                <Trigger Property="Tag" Value="Warning">
+                    <Setter Property="Foreground" Value="{DynamicResource Arena.Brush.Warning}" />
+                </Trigger>
+                <Trigger Property="Tag" Value="Failed">
+                    <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
+                </Trigger>
+                <Trigger Property="Tag" Value="Blocked">
+                    <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
+                </Trigger>
+                <Trigger Property="Tag" Value="Unconfirmed">
+                    <Setter Property="Foreground" Value="{DynamicResource Arena.Brush.Warning}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <DataTemplate x:Key="CompactStatusRowTemplate">
+            <Button Style="{StaticResource StatusCenterRowButton}"
+                    Tag="{Binding Id}"
+                    IsEnabled="{Binding IsInteractive}"
+                    Click="CompactStatusRow_Click"
+                    AutomationProperties.Name="{Binding AutomationName}"
+                    AutomationProperties.HelpText="{Binding AutomationHelpText}"
+                    AutomationProperties.ItemStatus="{Binding StateText}"
+                    ToolTip="{Binding ToolTip}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="18" />
+                        <ColumnDefinition Width="{DynamicResource Arena.Layout.StatusCenterStateColumnWidth}" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding Icon}"
+                               Tag="{Binding StateKey}"
+                               Style="{StaticResource StatusCenterStateText}"
+                               FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                               FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
+                               AutomationProperties.Name="{Binding StateText}" />
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Source}"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="{DynamicResource Arena.Type.MicroSize}"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding StateText}"
+                                   Tag="{Binding StateKey}"
+                                   Style="{StaticResource StatusCenterStateText}"
+                                   FontSize="{DynamicResource Arena.Type.MicroSize}"
+                                   TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="2"
+                               Text="{Binding Summary}"
+                               Foreground="{DynamicResource TextBrush}"
+                               FontSize="{DynamicResource Arena.Type.MicroSize}"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center"
+                               Margin="{DynamicResource Arena.Gap.Inline.Before.Tight}" />
+                    <TextBlock Grid.Column="3"
+                               Text="{Binding RelativeTime}"
+                               Foreground="{DynamicResource MutedTextBrush}"
+                               FontSize="{DynamicResource Arena.Type.MicroSize}"
+                               VerticalAlignment="Center"
+                               Margin="{DynamicResource Arena.Gap.Inline.Before.Tight}" />
+                    <ProgressBar Grid.Column="0"
+                                 Grid.ColumnSpan="4"
+                                 Height="2"
+                                 VerticalAlignment="Bottom"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Value="{Binding ProgressPercent, Mode=OneWay}"
+                                 Visibility="{Binding HasProgress, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                 IsHitTestVisible="False"
+                                 AutomationProperties.Name="{Binding ProgressAutomationName}" />
+                </Grid>
+            </Button>
+        </DataTemplate>
+
+        <DataTemplate x:Key="HistoryStatusRowTemplate">
+            <Grid MinHeight="58" Margin="{DynamicResource Arena.Inset.Micro}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="22" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding Icon}"
+                           Tag="{Binding StateKey}"
+                           Style="{StaticResource StatusCenterStateText}"
+                           FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                           FontSize="{DynamicResource Arena.Type.BodySize}"
+                           VerticalAlignment="Top"
+                           Margin="{DynamicResource Arena.Gap.Stack.Before.CompactPlus}" />
+                <StackPanel Grid.Column="1" Margin="{DynamicResource Arena.Inset.Micro}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding Source}"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text=" · " Foreground="{DynamicResource MutedTextBrush}" />
+                        <TextBlock Text="{Binding StateText}"
+                                   Tag="{Binding StateKey}"
+                                   Style="{StaticResource StatusCenterStateText}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding Summary}"
+                               Foreground="{DynamicResource TextBrush}"
+                               FontSize="{DynamicResource Arena.Type.CompactBodySize}"
+                               TextTrimming="CharacterEllipsis"
+                               Margin="{DynamicResource Arena.Gap.Stack.Before.Nano}" />
+                </StackPanel>
+                <TextBlock Grid.Column="2"
+                           Text="{Binding RelativeTime}"
+                           Foreground="{DynamicResource MutedTextBrush}"
+                           FontSize="{DynamicResource Arena.Type.MicroSize}"
+                           VerticalAlignment="Top"
+                           Margin="{DynamicResource Arena.Gap.Stack.Before.Compact}" />
+            </Grid>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid>
+    <Border x:Name="StatusCenterCard"
+            Background="{DynamicResource CardBrush}"
+            BorderBrush="{DynamicResource DisabledBorderBrush}"
+            BorderThickness="1"
+            CornerRadius="{DynamicResource Arena.Radius.Large}"
+            Padding="{DynamicResource Arena.Inset.Micro}"
+            PreviewMouseLeftButtonUp="StatusCenterCard_PreviewMouseLeftButtonUp"
+            AutomationProperties.Name="Universal Status Center, four recent updates"
+            AutomationProperties.HelpText="Shows the four latest meaningful application updates. Click the card or a row to open status history for details and recovery actions.">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="176" />
+            </Grid.RowDefinitions>
+
+            <Button x:Name="OpenHistoryButton"
+                    Panel.ZIndex="0"
+                    Style="{StaticResource StatusCenterCardButton}"
+                    IsHitTestVisible="False"
+                    Click="OpenHistoryButton_Click"
+                    AutomationProperties.Name="Open application status history"
+                    AutomationProperties.HelpText="Open the complete current-run status dashboard to the left without resizing the workspace."
+                    AutomationProperties.ItemStatus="{Binding PrimaryStateText, ElementName=Root}"
+                    ToolTip="Open complete status history" />
+
+            <ItemsControl x:Name="CompactStatusItems"
+                          Panel.ZIndex="1"
+                          ItemsSource="{Binding CompactRowsBinding, ElementName=Root}"
+                          ItemTemplate="{StaticResource CompactStatusRowTemplate}"
+                          AutomationProperties.Name="Four latest application updates" />
+
+            <!-- This is the only shell-level announcement surface. It remains in the
+                 automation tree without contributing layout or accepting focus. -->
+            <TextBlock x:Name="LiveAnnouncementText"
+                       Width="1"
+                       Height="1"
+                       Opacity="0"
+                       IsHitTestVisible="False"
+                       Focusable="False"
+                       AutomationProperties.Name="Application status announcement"
+                       AutomationProperties.LiveSetting="Polite" />
+        </Grid>
+    </Border>
+
+    <Popup x:Name="HistoryPopup"
+           Placement="Left"
+           PlacementTarget="{Binding ElementName=StatusCenterCard}"
+           HorizontalOffset="-8"
+           StaysOpen="False"
+           AllowsTransparency="True"
+           PopupAnimation="None"
+           Opened="HistoryPopup_Opened"
+           Closed="HistoryPopup_Closed">
+        <Border x:Name="HistoryDashboard"
+                Width="380"
+                MaxHeight="{Binding DashboardMaximumHeight, ElementName=Root}"
+                Background="{DynamicResource PanelBrush}"
+                BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="{DynamicResource Arena.Radius.Large}"
+                Padding="{DynamicResource Arena.Inset.Panel}"
+                FocusManager.IsFocusScope="True"
+                KeyboardNavigation.TabNavigation="Cycle"
+                KeyboardNavigation.ControlTabNavigation="Cycle"
+                KeyboardNavigation.DirectionalNavigation="Contained"
+                PreviewKeyDown="HistoryDashboard_PreviewKeyDown"
+                AutomationProperties.Name="Application status history dashboard"
+                AutomationProperties.HelpText="Inspect and filter current-run application status history. This dashboard overlays the workspace and does not resize it.">
+            <Border.Effect>
+                <DropShadowEffect Color="#000000" BlurRadius="24" ShadowDepth="6" Opacity="0.45" />
+            </Border.Effect>
+            <Border.RenderTransform>
+                <TranslateTransform x:Name="HistoryDashboardTransform" X="24" />
+            </Border.RenderTransform>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="44" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Status history"
+                                   Foreground="{DynamicResource TextBrush}"
+                                   FontSize="{DynamicResource Arena.Type.TitleSize}"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="Current run · newest first"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
+                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Nano}" />
+                    </StackPanel>
+                    <Button x:Name="CloseHistoryButton"
+                            Grid.Column="1"
+                            Content="&#xE8BB;"
+                            FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                            Style="{StaticResource StatusCenterIconButton}"
+                            Width="44"
+                            Height="44"
+                            Click="CloseHistoryButton_Click"
+                            AutomationProperties.Name="Close status history"
+                            AutomationProperties.HelpText="Close status history and return focus to the control that opened it."
+                            ToolTip="Close status history" />
+                </Grid>
+
+                <UniformGrid Grid.Row="1" Columns="4" Margin="{DynamicResource Arena.Gap.Stack.After.Default}">
+                    <RadioButton x:Name="AllFilterButton"
+                                 Content="All"
+                                 Tag="All"
+                                 GroupName="StatusHistoryFilter"
+                                 IsChecked="True"
+                                 Style="{StaticResource StatusHistoryFilterButton}"
+                                 Checked="HistoryFilter_Checked"
+                                 AutomationProperties.Name="Show all status history" />
+                    <RadioButton x:Name="RunningFilterButton"
+                                 Content="Running"
+                                 Tag="Running"
+                                 GroupName="StatusHistoryFilter"
+                                 Style="{StaticResource StatusHistoryFilterButton}"
+                                 Checked="HistoryFilter_Checked"
+                                 AutomationProperties.Name="Show running status history" />
+                    <RadioButton x:Name="WarningsFilterButton"
+                                 Content="Warnings"
+                                 Tag="Warnings"
+                                 GroupName="StatusHistoryFilter"
+                                 Style="{StaticResource StatusHistoryFilterButton}"
+                                 Checked="HistoryFilter_Checked"
+                                 AutomationProperties.Name="Show warning status history" />
+                    <RadioButton x:Name="FailedFilterButton"
+                                 Content="Failed"
+                                 Tag="Failed"
+                                 GroupName="StatusHistoryFilter"
+                                 Style="{StaticResource StatusHistoryFilterButton}"
+                                 Checked="HistoryFilter_Checked"
+                                 AutomationProperties.Name="Show failed status history" />
+                </UniformGrid>
+
+                <ListBox x:Name="HistoryList"
+                         Grid.Row="2"
+                         MinHeight="150"
+                         MaxHeight="310"
+                         ItemsSource="{Binding FilteredHistoryRowsBinding, ElementName=Root}"
+                         ItemTemplate="{StaticResource HistoryStatusRowTemplate}"
+                         SelectionChanged="HistoryList_SelectionChanged"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         AutomationProperties.Name="Application status history">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+                            <Setter Property="BorderThickness" Value="0,0,0,1" />
+                            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                            <Setter Property="FocusVisualStyle" Value="{DynamicResource Arena.FocusVisual}" />
+                            <Setter Property="MinHeight" Value="58" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                            <Setter Property="AutomationProperties.HelpText" Value="{Binding AutomationHelpText}" />
+                            <Setter Property="AutomationProperties.ItemStatus" Value="{Binding StateText}" />
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                </ListBox>
+
+                <Border Grid.Row="3"
+                        Background="{DynamicResource InputBrush}"
+                        BorderBrush="{DynamicResource DisabledBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="{DynamicResource Arena.Radius.Medium}"
+                        Padding="{DynamicResource Arena.Inset.Card}"
+                        Margin="{DynamicResource Arena.Layout.StatusCenterSectionMargin}"
+                        DataContext="{Binding SelectedHistoryRowBinding, ElementName=Root}"
+                        AutomationProperties.Name="Selected status details">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding SourceAndState}"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
+                                       FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding TimestampText}"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       FontSize="{DynamicResource Arena.Type.MicroSize}"
+                                       Margin="{DynamicResource Arena.Gap.Inline.Before.Default}" />
+                        </Grid>
+                        <TextBlock Text="{Binding Summary}"
+                                   Foreground="{DynamicResource TextBrush}"
+                                   FontWeight="SemiBold"
+                                   TextWrapping="Wrap"
+                                   Margin="{DynamicResource Arena.Gap.Stack.Before.TightPlus}" />
+                        <TextBlock Text="{Binding Detail}"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
+                                   TextWrapping="Wrap"
+                                   MaxHeight="76"
+                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}" />
+                        <ProgressBar Height="4"
+                                     Minimum="0"
+                                     Maximum="100"
+                                     Value="{Binding ProgressPercent, Mode=OneWay}"
+                                     Visibility="{Binding HasProgress, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                     Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                                     AutomationProperties.Name="{Binding ProgressAutomationName}" />
+                        <Button x:Name="NavigateStatusButton"
+                                Content="View"
+                                Style="{StaticResource StatusCenterSecondaryButton}"
+                                HorizontalAlignment="Left"
+                                MinHeight="44"
+                                Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                                Visibility="{Binding CanNavigate, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                Click="NavigateStatusButton_Click"
+                                AutomationProperties.Name="Open the source of this status"
+                                AutomationProperties.HelpText="Navigate to the application surface associated with the selected status." />
+                    </StackPanel>
+                </Border>
+
+                <Grid Grid.Row="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding HistoryCountLabel, ElementName=Root}"
+                               Foreground="{DynamicResource MutedTextBrush}"
+                               FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
+                               VerticalAlignment="Center" />
+                    <Button x:Name="ClearCompletedButton"
+                            Grid.Column="1"
+                            Content="Clear completed"
+                            Style="{StaticResource StatusCenterSecondaryButton}"
+                            MinHeight="44"
+                            IsEnabled="{Binding CanClearCompleted, ElementName=Root}"
+                            Click="ClearCompletedButton_Click"
+                            AutomationProperties.Name="Clear completed status history"
+                            AutomationProperties.HelpText="Remove completed current-run notices. Active operations and unresolved blockers remain." />
+                </Grid>
+            </Grid>
+        </Border>
+    </Popup>
+    </Grid>
+</UserControl>

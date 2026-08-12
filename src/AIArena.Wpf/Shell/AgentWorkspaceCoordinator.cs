@@ -2483,7 +2483,10 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 """)
         };
 
-        var result = await modelClient.CompleteChatAsync(config, messages, cancellationToken);
+        var result = await modelClient.CompleteChatAsync(
+            config,
+            ApplyWorkspaceTone(config, messages),
+            cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (!CompletionHasUsableText(result))
         {
@@ -2511,16 +2514,17 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         string roleName,
         CancellationToken cancellationToken)
     {
+        var effectivePrompt = ApplyWorkspaceTone(config, prompt);
         if (!settings().StreamModelResponses || modelClient is not IStreamingModelProviderClient streamingClient)
         {
-            return await modelClient.CompleteChatAsync(config, prompt, cancellationToken);
+            return await modelClient.CompleteChatAsync(config, effectivePrompt, cancellationToken);
         }
 
         var liveCard = BeginLiveStreamCard(roleName);
         try
         {
             var progress = new Progress<string>(delta => AppendLiveStreamText(liveCard, delta, roleId, roleName));
-            return await streamingClient.CompleteChatStreamingAsync(config, prompt, progress, cancellationToken);
+            return await streamingClient.CompleteChatStreamingAsync(config, effectivePrompt, progress, cancellationToken);
         }
         finally
         {
@@ -5837,20 +5841,41 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         return missing;
     }
 
-    private static ModelProviderConfig Config(ArenaViewSnapshot current, string model, int maxTokens)
+    internal static ModelProviderConfig Config(ArenaViewSnapshot current, string model, int maxTokens)
     {
+        var baseUrl = string.IsNullOrWhiteSpace(current.ProviderBaseUrl) || current.ProviderBaseUrl == "-"
+            ? ModelProviderDefaults.BaseUrl
+            : current.ProviderBaseUrl;
+        var apiMode = ModelProviderApiModes.Normalize(current.ProviderApiMode);
+        var identity = ModelRuntimeSettingsRegistry.Identity(new ModelProviderConfig
+        {
+            BaseUrl = baseUrl,
+            ApiMode = apiMode,
+            Model = model
+        });
+        var settings = current.ModelSettings.FirstOrDefault(setting =>
+            setting.ModelIdentity.Equals(identity, StringComparison.Ordinal));
+        var responseTone = ModelResponseTones.NormalizeResponseTone(settings?.ResponseTone);
         return new ModelProviderConfig
         {
-            BaseUrl = string.IsNullOrWhiteSpace(current.ProviderBaseUrl) || current.ProviderBaseUrl == "-"
-                ? ModelProviderDefaults.BaseUrl
-                : current.ProviderBaseUrl,
-            ApiMode = ModelProviderApiModes.Normalize(current.ProviderApiMode),
+            BaseUrl = baseUrl,
+            ApiMode = apiMode,
             Model = model,
             ApiToken = current.ProviderApiToken,
             Timeout = Math.Clamp(current.ProviderTimeout, 1, 3600),
             Temperature = current.ProviderTemperature <= 0 ? ModelProviderDefaults.Temperature : current.ProviderTemperature,
             MaxOutputTokens = maxTokens,
             ContextLength = current.ProviderContextLength,
+            ConfiguredContextWindow = settings is null
+                ? 0
+                : ModelRuntimeSettingsRegistry.ClampConfiguredContextWindow(settings.ConfiguredContextWindow),
+            HistoryPolicy = settings is null
+                ? ModelHistoryPolicies.Strict
+                : ModelHistoryPolicies.NormalizeHistoryPolicy(settings.HistoryPolicy),
+            ResponseTone = responseTone,
+            CustomTone = responseTone == ModelResponseTones.Custom
+                ? ModelResponseTones.NormalizeCustomTone(settings?.CustomTone)
+                : "",
             Reasoning = current.ProviderReasoning,
             NativeStatefulChat = current.ProviderNativeStatefulChat,
             NativeIdleTtlSeconds = current.ProviderNativeIdleTtlSeconds
@@ -5867,7 +5892,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         return result.Ok && string.IsNullOrWhiteSpace(result.Text);
     }
 
-    private static ModelProviderConfig WithReasoningDisabled(ModelProviderConfig config)
+    internal static ModelProviderConfig WithReasoningDisabled(ModelProviderConfig config)
     {
         return new ModelProviderConfig
         {
@@ -5879,6 +5904,10 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             Temperature = config.Temperature,
             MaxOutputTokens = config.MaxOutputTokens,
             ContextLength = config.ContextLength,
+            ConfiguredContextWindow = config.ConfiguredContextWindow,
+            HistoryPolicy = config.HistoryPolicy,
+            ResponseTone = config.ResponseTone,
+            CustomTone = config.CustomTone,
             Reasoning = "off",
             NativeStatefulChat = config.NativeStatefulChat,
             NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
@@ -5888,6 +5917,21 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             LastTestOk = config.LastTestOk,
             Extra = config.Extra
         };
+    }
+
+    internal static IReadOnlyList<ModelChatMessage> ApplyWorkspaceTone(
+        ModelProviderConfig config,
+        IReadOnlyList<ModelChatMessage> prompt)
+    {
+        var instruction = ModelResponseToneInstructions.Instruction(config.ResponseTone, config.CustomTone);
+        if (instruction.Length == 0
+            || prompt.Any(message => message.Role.Equals("system", StringComparison.OrdinalIgnoreCase)
+                && message.Content.Contains(instruction, StringComparison.Ordinal)))
+        {
+            return prompt;
+        }
+
+        return ModelResponseToneInstructions.Apply(config, prompt, factoryMode: false);
     }
 
     internal static bool PromptLikelyRequiresCommand(string prompt)

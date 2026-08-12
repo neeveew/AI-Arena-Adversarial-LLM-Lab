@@ -171,7 +171,9 @@ internal sealed partial class ProviderModelCatalogProjectionService
                 model.LoadedContextLength ?? model.MaxContextLength,
                 model.SizeBytes,
                 LmStudioCapabilitySummary(model),
-                SafeAliases(model.Aliases));
+                SafeAliases(model.Aliases),
+                MaximumContextLength: model.MaxContextLength,
+                EffectiveContextLength: model.Loaded ? model.LoadedContextLength : null);
         }).ToArray();
         var evidenceCount = chatModels.Count(model => model.HasResidencyEvidence);
         var catalogEvidence = source.OmittedModelCount > 0
@@ -248,7 +250,8 @@ internal sealed partial class ProviderModelCatalogProjectionService
                 model.ContextLength,
                 model.SizeBytes,
                 OllamaCapabilitySummary(model),
-                SafeAliases(model.Aliases));
+                SafeAliases(model.Aliases),
+                EffectiveContextLength: model.Loaded ? model.ContextLength : null);
         }).ToArray();
         var status = source.RunningModelsOk
             ? $"{items.Count(item => item.LoadState == ProviderModelLoadState.Loaded)} loaded; {items.Count(item => item.LoadState != ProviderModelLoadState.Loaded)} available."
@@ -302,7 +305,8 @@ internal sealed partial class ProviderModelCatalogProjectionService
                 model.ContextLength,
                 model.ModelSizeBytes,
                 LlamaCppCapabilitySummary(model),
-                SafeAliases([model.Id]));
+                SafeAliases([model.Id]),
+                EffectiveContextLength: model.Loaded == true ? model.ContextLength : null);
         }).ToArray();
         return Build(
             lease,
@@ -721,13 +725,18 @@ internal sealed partial class ProviderModelCatalogProjectionService
 
     internal static string SafeStatusForDisplay(string value, string apiToken = "")
     {
-        var normalized = SafeText(
-            ProviderConfigurationControlService.SanitizeError(value, apiToken),
-            MaximumStatusLength);
+        var normalized = ProviderConfigurationControlService.SanitizeError(value, apiToken);
+        normalized = AuthorizationCredentialRegex().Replace(normalized, "$1[redacted]");
+        normalized = StandaloneCredentialSchemeRegex().Replace(normalized, "[credential redacted]");
+        normalized = StandaloneCredentialValueRegex().Replace(normalized, "[credential redacted]");
+        normalized = SensitiveValueRegex().Replace(normalized, "$1[redacted]");
         normalized = InstanceIdentifierRegex().Replace(normalized, "$1[redacted]");
+        normalized = HttpUrlRegex().Replace(normalized, "[remote URL]");
         normalized = FileUriRegex().Replace(normalized, "[local path]");
+        normalized = QuotedAbsolutePathRegex().Replace(normalized, "[local path]");
         normalized = WindowsPathRegex().Replace(normalized, "[local path]");
-        return UnixPathRegex().Replace(normalized, "[local path]");
+        normalized = UnixPathRegex().Replace(normalized, "[local path]");
+        return SafeText(normalized, MaximumStatusLength);
     }
 
     private static string SafeStatus(string value) => SafeStatusForDisplay(value);
@@ -772,12 +781,30 @@ internal sealed partial class ProviderModelCatalogProjectionService
     [GeneratedRegex(@"(?i)file:///?[^\s]+", RegexOptions.CultureInvariant)]
     private static partial Regex FileUriRegex();
 
+    [GeneratedRegex("""(?i)(\bauthorization\b["']?\s*[:=]\s*["']?)(?:basic|bearer|\[redacted\])\s+[^"'\s,;}\]]+""", RegexOptions.CultureInvariant)]
+    private static partial Regex AuthorizationCredentialRegex();
+
+    [GeneratedRegex(@"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9+/_=.-]{6,}", RegexOptions.CultureInvariant)]
+    private static partial Regex StandaloneCredentialSchemeRegex();
+
+    [GeneratedRegex(@"(?i)\b(?:sk-(?:proj-)?|sk_|hf_|github_pat_|ghp_)[A-Za-z0-9_-]{8,}\b", RegexOptions.CultureInvariant)]
+    private static partial Regex StandaloneCredentialValueRegex();
+
+    [GeneratedRegex("""(?i)(["']?\b(?:api[\s_-]?key|access[\s_-]?token|refresh[\s_-]?token|token|password|secret)["']?\s*(?::|=|\s)\s*["']?)[^"'\s,;}\]]+""", RegexOptions.CultureInvariant)]
+    private static partial Regex SensitiveValueRegex();
+
     [GeneratedRegex("""(?i)(\b"?instance(?:_id)?"?\s*[:=]\s*"?)[^"\s,;}\]]+""", RegexOptions.CultureInvariant)]
     private static partial Regex InstanceIdentifierRegex();
 
-    [GeneratedRegex(@"(?i)(?:[A-Z]:[\\/]|\\\\)[^\s,;]*", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("""(?i)\bhttps?://[^\s<>"']+""", RegexOptions.CultureInvariant)]
+    private static partial Regex HttpUrlRegex();
+
+    [GeneratedRegex("""(?i)["'](?:[A-Z]:[\\/]|\\\\|/)[^"'\r\n]+["']""", RegexOptions.CultureInvariant)]
+    private static partial Regex QuotedAbsolutePathRegex();
+
+    [GeneratedRegex("""(?i)(?:[A-Z]:[\\/]|\\\\)[^"'\r\n,;|]+""", RegexOptions.CultureInvariant)]
     private static partial Regex WindowsPathRegex();
 
-    [GeneratedRegex(@"(?<![:/\w])/(?:[^/\s]+/)*[^/\s,;]+", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("""(?<![:/\w])/(?=[A-Za-z0-9._~-])[^"'\r\n,;|]+""", RegexOptions.CultureInvariant)]
     private static partial Regex UnixPathRegex();
 }

@@ -10,6 +10,7 @@ namespace AIArena.Core.Services;
 public sealed class TurnRunnerService
 {
     internal const string FactoryInputRequiredError = FactoryConversationService.MissingRootError;
+    public const string ContextRecoveryRequiredError = "Resolve the pending input-context failure before starting another turn (retry, skip, or end the match).";
 
     private const int MaxPrivateMemoryNotes = 60;
     private const int ProactiveInternetMaxResults = 5;
@@ -50,6 +51,16 @@ public sealed class TurnRunnerService
 
     public OneTurnPlan PlanOneTurn(ArenaSnapshot snapshot)
     {
+        if (snapshot.Engine.MatchEnded)
+        {
+            return new OneTurnPlan(false, "", "", null, null, "This match has ended.");
+        }
+
+        if (UnresolvedContextFailure(snapshot) is not null)
+        {
+            return new OneTurnPlan(false, "", "", null, null, ContextRecoveryRequiredError);
+        }
+
         var agent = _transcriptService.NextActiveAgent(snapshot);
         if (agent is null)
         {
@@ -67,6 +78,21 @@ public sealed class TurnRunnerService
 
     public OneTurnPlan PlanAgentTurn(ArenaSnapshot snapshot, string agentId)
     {
+        return PlanAgentTurnCore(snapshot, agentId, allowContextRecoveryRetry: false);
+    }
+
+    private OneTurnPlan PlanAgentTurnCore(ArenaSnapshot snapshot, string agentId, bool allowContextRecoveryRetry)
+    {
+        if (snapshot.Engine.MatchEnded)
+        {
+            return new OneTurnPlan(false, agentId, agentId, null, null, "This match has ended.");
+        }
+
+        if (!allowContextRecoveryRetry && UnresolvedContextFailure(snapshot) is not null)
+        {
+            return new OneTurnPlan(false, agentId, agentId, null, null, ContextRecoveryRequiredError);
+        }
+
         var agent = snapshot.Engine.Agents.FirstOrDefault(item => string.Equals(item.Id, agentId, StringComparison.OrdinalIgnoreCase));
         if (agent is null)
         {
@@ -145,7 +171,13 @@ public sealed class TurnRunnerService
             return OneTurnResult.Failed($"No transcript message found for turn {turn}.");
         }
 
-        var plan = PlanAgentTurn(snapshot, original.SpeakerId);
+        var blocker = UnresolvedContextFailure(snapshot);
+        if (blocker is not null && !SameMessage(blocker, original))
+        {
+            return OneTurnResult.Failed(ContextRecoveryRequiredError);
+        }
+
+        var plan = PlanAgentTurnCore(snapshot, original.SpeakerId, allowContextRecoveryRetry: blocker is not null);
         if (!plan.Ok || plan.Config is null)
         {
             return OneTurnResult.Failed(plan.Error);
@@ -217,6 +249,8 @@ public sealed class TurnRunnerService
         var modelMayChooseTool = !factoryMode
             && CanRequestInternetTool(snapshot, plan.AgentId)
             && (proactiveInternet is null || !proactiveInternet.Result.Ok);
+        var historyBudget = new HistoryBudgetCapture();
+        var completionRoute = new CompletionRouteCapture();
         var result = await CompleteWithFallbackAsync(
             sessionId,
             snapshot,
@@ -228,7 +262,9 @@ public sealed class TurnRunnerService
             cancellationToken,
             internetContextMessage,
             compactForInternetEvidence: internetContextMessage is not null,
-            factoryPromptContext: factoryPromptContext);
+            factoryPromptContext: factoryPromptContext,
+            historyBudgetCapture: historyBudget,
+            routeCapture: completionRoute);
         var toolRequest = new InternetToolRequest();
         var parsedToolRequest = !factoryMode
             && result.Ok
@@ -282,11 +318,13 @@ public sealed class TurnRunnerService
                 enforceVoiceDrift: enforceVoiceDrift,
                 cancellationToken,
                 internetContextMessage,
-                compactForInternetEvidence: true);
+                compactForInternetEvidence: true,
+                historyBudgetCapture: historyBudget,
+                routeCapture: completionRoute);
         }
         if (!factoryMode)
         {
-            result = await RepairEmptyContentAsync(sessionId, snapshot, plan, result, eventPrefix, enforceVoiceDrift, null, internetContextMessage, cancellationToken);
+            result = await RepairEmptyContentAsync(sessionId, snapshot, plan, result, eventPrefix, enforceVoiceDrift, null, internetContextMessage, cancellationToken, historyBudgetCapture: historyBudget, routeCapture: completionRoute);
         }
 
         var text = result.Ok
@@ -308,6 +346,8 @@ public sealed class TurnRunnerService
         else
         {
             message.Metadata["prompt_mode"] = JsonSerializer.SerializeToElement("arena");
+            ArenaHistoryBudgetService.Stamp(message, historyBudget.Receipt);
+            CompletionRouteReceipt.Stamp(message, completionRoute.Receipt);
             _factoryConversationService.StampPublicParticipant(snapshot, message);
         }
         snapshot.Engine.Messages.Add(message);
@@ -317,7 +357,7 @@ public sealed class TurnRunnerService
             UpdatePrivateMemory(snapshot, agent, message);
         }
 
-        if (advanceTurnIndex)
+        if (advanceTurnIndex && result.FailureKind != ModelCompletionFailureKind.ContextLimitExceeded)
         {
             snapshot.Engine.TurnIndex = AdvanceTurnIndex(snapshot);
         }
@@ -385,6 +425,11 @@ public sealed class TurnRunnerService
                 cancellationToken);
             await MarkAgentThinkingAsync(snapshot, sessionId, agent, cancellationToken);
         ModelCompletionResult result;
+        var frozenHistoryReceipt = ArenaHistoryBudgetService.TryReadReceipt(original, out var savedReceipt)
+            ? savedReceipt
+            : null;
+        var historyBudget = new HistoryBudgetCapture();
+        var completionRoute = new CompletionRouteCapture();
         try
         {
             snapshot.Engine.FactoryMode = factoryMode;
@@ -397,10 +442,13 @@ public sealed class TurnRunnerService
                 allowInternetTool: false,
                 enforceVoiceDrift: !factoryMode && enforceVoiceDrift,
                 cancellationToken,
-                factoryPromptContext: factoryPromptContext);
+                factoryPromptContext: factoryPromptContext,
+                frozenHistoryReceipt: frozenHistoryReceipt,
+                historyBudgetCapture: historyBudget,
+                routeCapture: completionRoute);
             if (!factoryMode)
             {
-                result = await RepairEmptyContentAsync(sessionId, snapshot, plan, result, "native_retry_message", enforceVoiceDrift, original.Turn, null, cancellationToken);
+                result = await RepairEmptyContentAsync(sessionId, snapshot, plan, result, "native_retry_message", enforceVoiceDrift, original.Turn, null, cancellationToken, frozenHistoryReceipt, historyBudget, completionRoute);
             }
         }
         finally
@@ -421,6 +469,8 @@ public sealed class TurnRunnerService
         else
         {
             replacement.Metadata["prompt_mode"] = JsonSerializer.SerializeToElement("arena");
+            ArenaHistoryBudgetService.Stamp(replacement, historyBudget.Receipt);
+            CompletionRouteReceipt.Stamp(replacement, completionRoute.Receipt);
             _factoryConversationService.StampPublicParticipant(snapshot, replacement);
         }
         var index = snapshot.Engine.Messages.FindIndex(message => TranscriptService.SameMessageIdentity(message, original.Turn, original.SpeakerId, original.CreatedAt));
@@ -438,6 +488,12 @@ public sealed class TurnRunnerService
         if (result.Ok && !factoryMode)
         {
             UpdatePrivateMemory(snapshot, agent, replacement);
+        }
+
+        if (result.Ok && IsUnresolvedContextFailure(original))
+        {
+            replacement.Metadata[ContextRecoveryService.RecoveryDispositionMetadataKey] = JsonSerializer.SerializeToElement("retried");
+            snapshot.Engine.TurnIndex = AdvancePastAgent(snapshot, original.SpeakerId);
         }
 
         agent.Status = result.Ok ? "spoke" : "error";
@@ -469,7 +525,7 @@ public sealed class TurnRunnerService
         }
     }
 
-    private static void UpdatePrivateMemory(ArenaSnapshot snapshot, DialogueAgent agent, DialogueMessage message)
+    internal static void UpdatePrivateMemory(ArenaSnapshot snapshot, DialogueAgent agent, DialogueMessage message)
     {
         var note = BuildPrivateMemoryNote(message);
         if (string.IsNullOrWhiteSpace(note))
@@ -486,6 +542,32 @@ public sealed class TurnRunnerService
             agent.PrivateNotes.RemoveRange(0, agent.PrivateNotes.Count - MaxPrivateMemoryNotes);
         }
     }
+
+    /// <summary>Returns the newest input-context failure that still requires an explicit recovery action.</summary>
+    public static DialogueMessage? UnresolvedContextFailure(ArenaSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return snapshot.Engine.Messages
+            .Where(IsUnresolvedContextFailure)
+            .OrderByDescending(message => message.Turn)
+            .ThenByDescending(message => message.CreatedAt)
+            .FirstOrDefault();
+    }
+
+    private static bool IsUnresolvedContextFailure(DialogueMessage message) =>
+        message.Status.Equals("error", StringComparison.OrdinalIgnoreCase)
+        && MetadataString(message, "completion_failure_kind").Equals("context_limit_exceeded", StringComparison.Ordinal)
+        && !MetadataString(message, ContextRecoveryService.RecoveryDispositionMetadataKey).Equals("skipped", StringComparison.Ordinal)
+        && !MetadataString(message, ContextRecoveryService.RecoveryDispositionMetadataKey).Equals("retried", StringComparison.Ordinal);
+
+    private static string MetadataString(DialogueMessage message, string key) =>
+        message.Metadata.TryGetValue(key, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? ""
+            : "";
+
+    private static bool SameMessage(DialogueMessage left, DialogueMessage right) =>
+        DialogueMessageIdentity.Resolve(left).Equals(DialogueMessageIdentity.Resolve(right), StringComparison.Ordinal)
+        || TranscriptService.SameMessageIdentity(left, right.Turn, right.SpeakerId, right.CreatedAt);
 
     private static string BuildPrivateMemoryNote(DialogueMessage message)
     {
@@ -1156,7 +1238,8 @@ public sealed class TurnRunnerService
         int? beforeTurn = null,
         bool allowInternetTool = true,
         bool enforceVoiceDrift = false,
-        int? transcriptAfterTurn = null)
+        int? transcriptAfterTurn = null,
+        IReadOnlySet<string>? includedTranscriptMessageIds = null)
     {
         if (snapshot.Engine.FactoryMode)
         {
@@ -1166,8 +1249,10 @@ public sealed class TurnRunnerService
 
         var active = snapshot.Engine.Agents.Where(agent => agent.Active).ToArray();
         var agent = active.FirstOrDefault(item => item.Id == plan.AgentId);
-        var transcriptMessages = snapshot.Engine.Messages
-            .Where(item => item.Kind is "message" or "internet" or "");
+        IEnumerable<DialogueMessage> transcriptMessages = snapshot.Engine.Messages
+            .Where(item => item.Kind is "message" or "internet" or "")
+            .Where(item => item.Status.Equals("ok", StringComparison.OrdinalIgnoreCase))
+            .Where(item => !string.IsNullOrWhiteSpace(item.Text));
         if (beforeTurn is not null)
         {
             transcriptMessages = transcriptMessages.Where(item => item.Turn < beforeTurn.Value);
@@ -1178,14 +1263,27 @@ public sealed class TurnRunnerService
             transcriptMessages = transcriptMessages.Where(item => item.Turn > transcriptAfterTurn.Value);
         }
 
+        var orderedTranscriptMessages = transcriptMessages
+            .OrderBy(item => item.Turn)
+            .ThenBy(item => item.CreatedAt)
+            .ToList();
+        if (includedTranscriptMessageIds is not null)
+        {
+            orderedTranscriptMessages = ArenaHistoryBudgetService
+                .SelectIncluded(orderedTranscriptMessages, includedTranscriptMessageIds)
+                .ToList();
+        }
+
+        transcriptMessages = orderedTranscriptMessages;
+
         var transcriptScope = transcriptAfterTurn is null
             ? "Transcript"
             : $"Transcript since your previous LM Studio response after turn {transcriptAfterTurn.Value}";
         var transcript = string.Join(
             Environment.NewLine,
-            transcriptMessages
-                .OrderBy(item => item.Turn)
-                .TakeLast(Math.Clamp(snapshot.Engine.TranscriptWindow, 1, 60))
+            (includedTranscriptMessageIds is null
+                ? transcriptMessages.TakeLast(Math.Clamp(snapshot.Engine.TranscriptWindow, 1, 60))
+                : transcriptMessages)
                 .Select(item => $"Turn {item.Turn} {item.Speaker}: {ArenaPromptTranscriptText(item)}"));
         var latestOperatorRequest = transcriptMessages
             .Where(item => (item.Kind is "message" or "") && item.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase))
@@ -1458,9 +1556,14 @@ public sealed class TurnRunnerService
         bool enforceVoiceDrift,
         int? beforeTurn,
         ModelChatMessage? internetEvidenceMessage,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ArenaHistoryBudgetReceipt? frozenHistoryReceipt = null,
+        HistoryBudgetCapture? historyBudgetCapture = null,
+        CompletionRouteCapture? routeCapture = null)
     {
-        if (!result.Ok || (!string.IsNullOrWhiteSpace(result.Text)
+        if (!result.Ok
+            || result.StopReason == ModelCompletionStopReason.OutputLimitReached
+            || (!string.IsNullOrWhiteSpace(result.Text)
             && !IsFragmentaryPublicContent(result.Text)
             && !LeaksInternetToolStatus(result.Text)))
         {
@@ -1479,7 +1582,10 @@ public sealed class TurnRunnerService
             cancellationToken,
             RepairMessage(internetEvidenceMessage),
             disableReasoning: true,
-            compactForInternetEvidence: internetEvidenceMessage is not null);
+            compactForInternetEvidence: internetEvidenceMessage is not null,
+            frozenHistoryReceipt: frozenHistoryReceipt,
+            historyBudgetCapture: historyBudgetCapture,
+            routeCapture: routeCapture);
         if (!repaired.Ok || !string.IsNullOrWhiteSpace(repaired.Text))
         {
             return repaired;
@@ -1496,7 +1602,9 @@ public sealed class TurnRunnerService
             repaired.CompletionTokens,
             repaired.TotalTokens,
             "Model returned no public content after retry.",
-            DateTimeOffset.Now);
+            DateTimeOffset.Now,
+            FailureKind: ModelCompletionFailureKind.EmptyPublicContent,
+            StopReason: ModelCompletionStopReason.ProviderError);
     }
 
     private static ModelChatMessage RepairMessage(ModelChatMessage? internetEvidenceMessage)
@@ -1588,6 +1696,18 @@ public sealed class TurnRunnerService
         return activeCount == 0 ? 0 : (snapshot.Engine.TurnIndex + 1) % activeCount;
     }
 
+    internal static int AdvancePastAgent(ArenaSnapshot snapshot, string agentId)
+    {
+        var active = snapshot.Engine.Agents.Where(agent => agent.Active).ToArray();
+        if (active.Length == 0)
+        {
+            return 0;
+        }
+
+        var index = Array.FindIndex(active, agent => agent.Id.Equals(agentId, StringComparison.OrdinalIgnoreCase));
+        return index < 0 ? snapshot.Engine.TurnIndex : (index + 1) % active.Length;
+    }
+
     private async Task<ModelCompletionResult> CompleteWithFallbackAsync(
         string sessionId,
         ArenaSnapshot snapshot,
@@ -1600,10 +1720,17 @@ public sealed class TurnRunnerService
         ModelChatMessage? extraUserMessage = null,
         bool disableReasoning = false,
         bool compactForInternetEvidence = false,
-        FactoryPromptContext? factoryPromptContext = null)
+        FactoryPromptContext? factoryPromptContext = null,
+        ArenaHistoryBudgetReceipt? frozenHistoryReceipt = null,
+        HistoryBudgetCapture? historyBudgetCapture = null,
+        CompletionRouteCapture? routeCapture = null)
     {
         var inspectionCorrelationId = Guid.NewGuid().ToString("N");
         var primaryConfig = WithNativeContinuation(plan.Config!, snapshot, plan.AgentId, beforeTurn);
+        if (routeCapture is not null)
+        {
+            routeCapture.Receipt = CompletionRouteReceipt.Create(primaryConfig, CompletionRouteReceipt.PrimaryPhase);
+        }
         var primaryFastModeApplied = compactForInternetEvidence && InternetFastMode(snapshot, primaryConfig);
         if (primaryFastModeApplied)
         {
@@ -1615,7 +1742,7 @@ public sealed class TurnRunnerService
             primaryConfig = WithReasoningDisabled(primaryConfig);
         }
 
-        var messages = BuildPromptForConfig(
+        var prompt = BuildPromptForConfig(
             snapshot,
             plan,
             primaryConfig,
@@ -1623,7 +1750,33 @@ public sealed class TurnRunnerService
             allowInternetTool,
             enforceVoiceDrift,
             extraUserMessage,
-            factoryPromptContext);
+            factoryPromptContext,
+            frozenHistoryReceipt);
+        if (historyBudgetCapture is not null)
+        {
+            historyBudgetCapture.Receipt = prompt.Receipt;
+        }
+        if (!prompt.Ok)
+        {
+            return ModelCompletionOutcomeClassifier.Normalize(new ModelCompletionResult(
+                false,
+                primaryConfig.BaseUrl,
+                primaryConfig.Model,
+                "",
+                "",
+                0,
+                0,
+                0,
+                0,
+                prompt.Error,
+                DateTimeOffset.Now,
+                FailureKind: prompt.FailureKind == ModelCompletionFailureKind.None
+                    ? ModelCompletionFailureKind.InvalidResponse
+                    : prompt.FailureKind,
+                StopReason: ModelCompletionStopReason.ProviderError));
+        }
+
+        var messages = prompt.Messages;
         primaryConfig.RequestInspectionContext = BuildProviderRequestInspectionContext(
             inspectionCorrelationId,
             "primary",
@@ -1636,8 +1789,12 @@ public sealed class TurnRunnerService
             disableReasoning,
             primaryFastModeApplied,
             factoryPromptContext);
-        var result = await _modelClient.CompleteChatAsync(primaryConfig, messages, cancellationToken);
-        if (result.Ok || plan.FallbackConfig is null || snapshot.Engine.FactoryMode)
+        var result = ModelCompletionOutcomeClassifier.Normalize(
+            await _modelClient.CompleteChatAsync(primaryConfig, messages, cancellationToken));
+        if (result.Ok
+            || result.FailureKind == ModelCompletionFailureKind.ContextLimitExceeded
+            || plan.FallbackConfig is null
+            || snapshot.Engine.FactoryMode)
         {
             return result;
         }
@@ -1648,6 +1805,10 @@ public sealed class TurnRunnerService
             new { speaker = plan.AgentId, failedModel = plan.Config!.Model, fallbackModel = plan.FallbackConfig.Model, error = result.Error },
             cancellationToken);
         var fallbackConfig = WithNativeContinuation(plan.FallbackConfig, snapshot, plan.AgentId, beforeTurn);
+        if (routeCapture is not null)
+        {
+            routeCapture.Receipt = CompletionRouteReceipt.Create(fallbackConfig, CompletionRouteReceipt.FallbackPhase);
+        }
         var fallbackFastModeApplied = compactForInternetEvidence && InternetFastMode(snapshot, fallbackConfig);
         if (fallbackFastModeApplied)
         {
@@ -1659,7 +1820,7 @@ public sealed class TurnRunnerService
             fallbackConfig = WithReasoningDisabled(fallbackConfig);
         }
 
-        var fallbackMessages = BuildPromptForConfig(
+        var fallbackPrompt = BuildPromptForConfig(
             snapshot,
             plan,
             fallbackConfig,
@@ -1667,7 +1828,33 @@ public sealed class TurnRunnerService
             allowInternetTool,
             enforceVoiceDrift,
             extraUserMessage,
-            factoryPromptContext);
+            factoryPromptContext,
+            frozenHistoryReceipt);
+        if (historyBudgetCapture is not null)
+        {
+            historyBudgetCapture.Receipt = fallbackPrompt.Receipt;
+        }
+        if (!fallbackPrompt.Ok)
+        {
+            return ModelCompletionOutcomeClassifier.Normalize(new ModelCompletionResult(
+                false,
+                fallbackConfig.BaseUrl,
+                fallbackConfig.Model,
+                "",
+                "",
+                0,
+                0,
+                0,
+                0,
+                fallbackPrompt.Error,
+                DateTimeOffset.Now,
+                FailureKind: fallbackPrompt.FailureKind == ModelCompletionFailureKind.None
+                    ? ModelCompletionFailureKind.InvalidResponse
+                    : fallbackPrompt.FailureKind,
+                StopReason: ModelCompletionStopReason.ProviderError));
+        }
+
+        var fallbackMessages = fallbackPrompt.Messages;
         fallbackConfig.RequestInspectionContext = BuildProviderRequestInspectionContext(
             inspectionCorrelationId,
             "fallback",
@@ -1680,7 +1867,8 @@ public sealed class TurnRunnerService
             disableReasoning,
             fallbackFastModeApplied,
             factoryPromptContext);
-        return await _modelClient.CompleteChatAsync(fallbackConfig, fallbackMessages, cancellationToken);
+        return ModelCompletionOutcomeClassifier.Normalize(
+            await _modelClient.CompleteChatAsync(fallbackConfig, fallbackMessages, cancellationToken));
     }
 
     private static ProviderRequestInspectionContext BuildProviderRequestInspectionContext(
@@ -1822,6 +2010,10 @@ public sealed class TurnRunnerService
             Temperature = config.Temperature,
             MaxOutputTokens = config.MaxOutputTokens,
             ContextLength = config.ContextLength,
+            ConfiguredContextWindow = config.ConfiguredContextWindow,
+            HistoryPolicy = config.HistoryPolicy,
+            ResponseTone = config.ResponseTone,
+            CustomTone = config.CustomTone,
             Reasoning = "off",
             NativeStatefulChat = config.NativeStatefulChat,
             NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
@@ -1843,7 +2035,7 @@ public sealed class TurnRunnerService
         var model = config.Model.ToLowerInvariant();
         var smallModelMarkers = new[] { "1b", "2b", "3b", "4b", "7b", "8b", "gemma", "phi", "qwen2.5-3b", "qwen3-4b", "mini" };
         return config.MaxOutputTokens is > 0 and <= 1200
-            || config.ContextLength is > 0 and <= 8192
+            || ModelRuntimeSettingsRegistry.EffectiveConfiguredContextWindow(config) is > 0 and <= 8192
             || config.LastLatencyMs >= 25000
             || ModelProviderReasoningModes.Normalize(config.Reasoning) is "off" or "low"
             || smallModelMarkers.Any(marker => model.Contains(marker, StringComparison.OrdinalIgnoreCase));
@@ -1865,6 +2057,10 @@ public sealed class TurnRunnerService
             Temperature = config.Temperature,
             MaxOutputTokens = cappedOutput,
             ContextLength = config.ContextLength,
+            ConfiguredContextWindow = config.ConfiguredContextWindow,
+            HistoryPolicy = config.HistoryPolicy,
+            ResponseTone = config.ResponseTone,
+            CustomTone = config.CustomTone,
             Reasoning = config.Reasoning,
             NativeStatefulChat = config.NativeStatefulChat,
             NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
@@ -1876,7 +2072,7 @@ public sealed class TurnRunnerService
         };
     }
 
-    private IReadOnlyList<ModelChatMessage> BuildPromptForConfig(
+    private ArenaBudgetedPrompt BuildPromptForConfig(
         ArenaSnapshot snapshot,
         OneTurnPlan plan,
         ModelProviderConfig config,
@@ -1884,7 +2080,8 @@ public sealed class TurnRunnerService
         bool allowInternetTool,
         bool enforceVoiceDrift,
         ModelChatMessage? extraUserMessage = null,
-        FactoryPromptContext? factoryPromptContext = null)
+        FactoryPromptContext? factoryPromptContext = null,
+        ArenaHistoryBudgetReceipt? frozenHistoryReceipt = null)
     {
         if (snapshot.Engine.FactoryMode && factoryPromptContext is { Ok: true })
         {
@@ -1893,17 +2090,43 @@ public sealed class TurnRunnerService
                 throw new InvalidOperationException("Factory provider messages cannot be extended after causal fingerprinting.");
             }
 
-            return factoryPromptContext.ProviderMessages;
+            return new ArenaBudgetedPrompt(factoryPromptContext.ProviderMessages, null, "");
         }
 
         var transcriptAfterTurn = NativeContinuationTranscriptAfterTurn(config, snapshot, plan.AgentId, beforeTurn);
-        var messages = BuildPrompt(snapshot, plan, beforeTurn, allowInternetTool, enforceVoiceDrift, transcriptAfterTurn).ToList();
-        if (extraUserMessage is not null)
-        {
-            messages.Add(extraUserMessage);
-        }
+        return ArenaHistoryBudgetService.Build(
+            snapshot,
+            config,
+            beforeTurn,
+            transcriptAfterTurn,
+            includedMessageIds =>
+            {
+                var messages = BuildPrompt(
+                    snapshot,
+                    plan,
+                    beforeTurn,
+                    allowInternetTool,
+                    enforceVoiceDrift,
+                    transcriptAfterTurn,
+                    includedMessageIds).ToList();
+                if (extraUserMessage is not null)
+                {
+                    messages.Add(extraUserMessage);
+                }
 
-        return messages;
+                return ModelResponseToneInstructions.Apply(config, messages, factoryMode: false);
+            },
+            frozenHistoryReceipt);
+    }
+
+    private sealed class HistoryBudgetCapture
+    {
+        public ArenaHistoryBudgetReceipt? Receipt { get; set; }
+    }
+
+    private sealed class CompletionRouteCapture
+    {
+        public CompletionRouteReceipt? Receipt { get; set; }
     }
 
     private static ModelProviderConfig WithNativeContinuation(
@@ -1912,6 +2135,8 @@ public sealed class TurnRunnerService
         string agentId,
         int? beforeTurn)
     {
+        var rollingHistory = ModelHistoryPolicies.NormalizeHistoryPolicy(config.HistoryPolicy)
+            .Equals(ModelHistoryPolicies.Rolling80, StringComparison.Ordinal);
         return new ModelProviderConfig
         {
             BaseUrl = config.BaseUrl,
@@ -1923,11 +2148,16 @@ public sealed class TurnRunnerService
             Temperature = config.Temperature,
             MaxOutputTokens = config.MaxOutputTokens,
             ContextLength = config.ContextLength,
+            ConfiguredContextWindow = config.ConfiguredContextWindow,
+            HistoryPolicy = config.HistoryPolicy,
+            ResponseTone = config.ResponseTone,
+            CustomTone = config.CustomTone,
             Reasoning = config.Reasoning,
-            NativeStatefulChat = !snapshot.Engine.FactoryMode && config.NativeStatefulChat,
+            NativeStatefulChat = !snapshot.Engine.FactoryMode && !rollingHistory && config.NativeStatefulChat,
             NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
             PreserveNativeInputWhitespace = snapshot.Engine.FactoryMode,
             PreviousResponseId = !snapshot.Engine.FactoryMode
+                && !rollingHistory
                 && PreviousNativeResponseMessage(config, snapshot, agentId, beforeTurn) is { } previous
                 ? NativeResponseIdForMessage(previous, config.Model)
                 : "",

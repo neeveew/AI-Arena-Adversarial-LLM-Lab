@@ -38,15 +38,26 @@ $result.state
 | Command | PowerShell example | Notes |
 | --- | --- | --- |
 | `capabilities` | `Get-AIArenaCapabilities` | Returns every supported command, category, argument contract, and destructive-action flag. |
-| `status` | `Invoke-AIArena status` | Returns the full app snapshot. |
+| `status` | `Invoke-AIArena status` | Returns the full app snapshot, including the compatibility `AppStatus` string and structured `Status` center state. |
 | `snapshot` | `Invoke-AIArena snapshot` | Same structured snapshot as `status`. |
 | `events.watch` | `Watch-AIArena events` | Streams JSON event lines until disconnected. |
 | `app.screenshot` | `Save-AIArenaScreenshot` | Saves the current AI Arena window visual as PNG and returns its absolute path, byte size, pixel dimensions, and current app state. Optional `.png` path. |
 | `provider.state` | `Get-AIArenaProvider` | Returns non-secret provider configuration, readiness, role routing, health timestamps, and advertised models. |
 | `provider.config.set` | `Set-AIArenaProviderConfig -Model "google/gemma-4-e2b" -DefaultForUnassignedAgentsEnabled $false` | Atomically updates one or more active-session provider fields. Optional `-RefreshModels`. |
+| `provider.model.config.set` | `Set-AIArenaProviderModelConfig -Model "google/gemma-4-e2b" -ExpectedConfigurationIdentity $identity -HistoryPolicy rolling_80` | Atomically updates one model's durable context/history/tone settings. Routing and residency stay unchanged. |
 | `provider.model.set` | `Set-AIArenaProviderModel "google/gemma-4-e2b"` | Sets the shared provider model and all role-specific models. Optional `-RefreshModels`. |
 | `provider.test` | `Test-AIArenaProvider [-AllRoles]` | Runs a real completion probe and persists readiness, latency, and error state. `-AllRoles` tests every distinct effective role model. |
 | `provider.models.refresh` | `Update-AIArenaProviderModels` | Force-refreshes and returns the advertised model catalog. |
+
+### Application status compatibility
+
+The snapshot keeps `AppStatus` as a string for existing clients. Its append-only
+`Status` object exposes `Primary`, no more than four `Items`, and
+`AdditionalCount`. Each item is typed with a stable operation `Id`, `Source`,
+`State`, safe summary/detail, optional progress and navigation target,
+timestamps, lifetime, scoped identities, repeat count, and active/unresolved
+flags. This is bounded current-run application feedback, not durable session
+history. Text and identities are privacy-scrubbed before they cross the pipe.
 
 ## Screenshots
 
@@ -69,6 +80,8 @@ Save-AIArenaScreenshot "C:\Screenshots\AI-Arena-provider.png"
 ## Provider control
 
 `Set-AIArenaProviderConfig` only sends parameters that were explicitly supplied, so omitted fields are preserved. Explicit `$false`, numeric `0`, and empty role-model strings are retained rather than being mistaken for missing values. An empty role-model value clears that role's explicit route; it inherits the shared model only while `-DefaultForUnassignedAgentsEnabled` is true. A nonblank role route remains explicit even when it equals the shared model. `-RefreshModels` alone is not a configuration change; use `Update-AIArenaProviderModels` for a refresh-only operation.
+
+`provider.state` returns bounded, privacy-safe `modelSettings` entries for routed models and for advertised models after discovery. Pass that entry's opaque `configurationIdentity` to `provider.model.config.set`; stale session, connection, or settings identities are rejected atomically. `configuredContextWindow` is `0` for explicit Provider default or 512-1,048,576. `historyPolicy` is `strict` or `rolling_80`; `chaptered` is reserved and currently rejected. `responseTone` is `default`, `neutral`, `concise`, `analytical`, `creative`, `direct`, or `custom` with a bounded `customTone`. These identities disclose neither credentials nor provider URLs.
 
 Supported configuration fields and bounds:
 
@@ -130,7 +143,7 @@ Save-AIArenaScreenshot "experiment/qa-inspector.png"
 | `match.setup.state` | `Get-AIArenaMatchSetup` | Returns overlay visibility, selected section, return view, session, match type, scenario, active cast, model-behavior mode (`arena` or `factory`), and busy state. |
 | `match.setup.open` | `Open-AIArenaMatchSetup matrix` | Closes Settings and transient shell flyouts, then opens `scenario`, `cast`, `matrix`, or `saved` while preserving the workspace to return to. |
 | `match.setup.close` | `Close-AIArenaMatchSetup` | Closes Match Setup using the same return/focus path as the UI. |
-| `match.setup.export` | `Export-AIArenaMatchSetup ".\review.json"` | Returns the exact active setup as `ai_arena.match_setup.v3` JSON and optionally writes it as UTF-8. V3 includes the shared-fallback flag and explicit/inherit role assignment modes. Provider API tokens, transcript data, and Factory public-group history are excluded. |
+| `match.setup.export` | `Export-AIArenaMatchSetup ".\review.json"` | Returns the exact active setup as `ai_arena.match_setup.v4` JSON and optionally writes it as UTF-8. V4 includes shared fallback, explicit/inherit routing, and per-model context/history/tone. Provider API tokens, transcript data, residency, and Factory public-group history are excluded. |
 | `match.setup.import` | `Import-AIArenaMatchSetup ".\review.json" -Name review-copy` | Validates JSON from `args.json` or a local `.json` `args.path`, creates a collision-free clean session, and selects it. It never overwrites the active run. |
 | `match.model-behavior.set` | `Set-AIArenaModelBehavior factory` | Requires `mode`: `arena` or `factory`. Uses the same busy gate, durable save, concurrency handling, UI refresh, and safe change event as the Match Setup toggle. Invalid modes return `invalid_argument`, active work returns `busy`, and a missing active session returns `session_unavailable`. |
 | `match.roster.set` | `Set-AIArenaMatchRoster 6` | Resizes the active cast to 1-8 agents through the same bounded session-save, event-log, busy-state, and refresh path as Match Setup. |
@@ -153,7 +166,7 @@ Every authenticated command response includes a fresh post-command `state` summa
 
 `match.setup.open` and `navigation.select -View custom-match` share the same overlay transition. Both dismiss Settings, provider health, transcript search, View, Debug, diagnostic detail, generation help, Agent composer controls, and Agent performance detail before showing Match Setup. Their successful post-command state therefore reports `View = custom-match`, `MatchSetupOpen = true`, and `SettingsOpen = false`; closing Match Setup still returns to the workspace that was active before the transition.
 
-Portable Match Setup v3 packages contain exact scenario text, generator recipe, active cast personas/styles/colors, narrator behavior, locks, normalized relationship links, context windows, Internet policy, Factory/Arena model-behavior mode, the shared-model fallback policy, explicit/inherit role assignment modes, and non-secret provider configuration. Import also accepts v2 packages, defaults their fallback on, and infers a differing nonblank legacy role model as explicit while a same-as-shared role inherits. Factory setup identity is salted with the `public_group_v1` prompt contract. API-token fields are omitted, and credentials, query strings, or fragments embedded in provider URLs are stripped. The canonical setup fingerprint excludes metadata such as the source session name. Import starts from a clean runtime: transcript, Factory public-group history, narration, attachments, research items, decision card, and generation history are not copied. A Factory import therefore needs a new public Operator turn to establish its conversation root. A local provider token is reused only when the imported endpoint and API mode exactly match the trusted active-session configuration; otherwise the token is cleared and the receipt reports a warning. Import is unavailable while the arena is busy.
+Portable Match Setup v4 packages contain exact scenario text, generator recipe, active cast personas/styles/colors, narrator behavior, locks, normalized relationship links, context windows, Internet policy, Factory/Arena model-behavior mode, shared fallback, explicit/inherit routes, and non-secret provider/model behavior settings. Import also accepts v2/v3; both migrate legacy context to configured context with strict history and default tone, while v2 additionally enables fallback and infers role modes. Factory setup identity is salted with the `public_group_v1` prompt contract. API tokens, effective residency/context evidence, transcript, Factory public-group history, and generation history are excluded.
 
 ```powershell
 $export = Export-AIArenaMatchSetup ".\portable-review.json"
@@ -273,6 +286,12 @@ same events.
 ## Events
 
 The event stream emits line-delimited JSON.
+
+`status.changed` carries the same bounded structured `status` projection in its
+`data`, along with the source `surface`; status-center events also include
+`announcementKind` and `expiredOnly`. This lets new clients react to concurrent
+operations while older clients continue reading the event message and snapshot
+`AppStatus` string.
 
 Most shell events are reported whichever way the change happened. Opening Match
 Setup with `F2` or the top bar emits the same `shell.overlay.changed` as the

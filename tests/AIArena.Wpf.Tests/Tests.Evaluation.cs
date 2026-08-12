@@ -109,8 +109,9 @@ internal static partial class Program
             && separatedRecord.PortableSetupJson.Contains(sessionMarker, StringComparison.Ordinal)
             && separatedRecord.PortableSetupJson.Contains(steeringMarker, StringComparison.Ordinal)
             && separatedRecord.PortableSetupJson.Contains(personaMarker, StringComparison.Ordinal)
-            && separatedRecord.PortableSetupJson.Contains(modelPathMarker, StringComparison.Ordinal),
-            "aggregate evidence should retain only the safe model basename while the separate Copy Replay Setup payload retains the intended setup");
+            && separatedRecord.PortableSetupJson.Contains("qwen3-safe.gguf", StringComparison.Ordinal)
+            && !separatedRecord.PortableSetupJson.Contains(modelPathMarker, StringComparison.Ordinal),
+            "aggregate evidence and replay setup should retain the safe model basename without disclosing a local model path");
         var pathModel = @"C:\Models\private\qwen3-8b-q4.gguf";
         var pathModelRecord = service.Capture(
             "path-model",

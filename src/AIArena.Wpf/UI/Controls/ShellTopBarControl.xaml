@@ -389,7 +389,7 @@
                                     <TextBlock x:Name="ProviderHealthStatusText"
                                                Text="Status unavailable"
                                                Style="{StaticResource Arena.Text.Caption}"
-                                               AutomationProperties.LiveSetting="Polite"
+                                               AutomationProperties.LiveSetting="Off"
                                                Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}" />
                                 </StackPanel>
                                 <Button x:Name="ProviderHealthCloseButton"
@@ -469,7 +469,7 @@
             </Grid>
 
             <!-- Compatibility target for existing persistence coordinators. Visible
-                 shell status is presented by the navigation-rail status dock. -->
+                 shell feedback is presented once by the Universal Status Center. -->
             <TextBlock x:Name="SaveStatusText"
                        Text="Saved"
                        Visibility="Collapsed"
@@ -486,24 +486,12 @@
                        Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                 <TextBlock x:Name="ExportStatusText"
                            Text=""
-                           AutomationProperties.LiveSetting="Polite"
-                           MaxWidth="118"
-                           Margin="0,0,10,0"
-                           VerticalAlignment="Center"
-                           TextAlignment="Right"
+                           Visibility="Collapsed"
+                           IsHitTestVisible="False"
+                           Focusable="False"
+                           AutomationProperties.LiveSetting="Off"
                            TextTrimming="CharacterEllipsis"
-                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock" BasedOn="{StaticResource Arena.Text.Caption}">
-                            <Setter Property="Visibility" Value="Visible" />
-                            <Style.Triggers>
-                                <Trigger Property="Text" Value="">
-                                    <Setter Property="Visibility" Value="Collapsed" />
-                                </Trigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
+                           AutomationProperties.Name="Export status compatibility target" />
 
                 <Border x:Name="LabViewToggleGroup" Style="{StaticResource ToolbarGroup}" Visibility="Collapsed">
                     <StackPanel Orientation="Horizontal">
@@ -853,6 +841,54 @@
                         </Grid>
                     </StackPanel>
                 </Border>
+
+                <Button x:Name="CollapsedStatusCenterButton"
+                        Visibility="Collapsed"
+                        Click="StatusCenterRequested"
+                        Style="{StaticResource Arena.Button.Quiet}"
+                        MinWidth="88"
+                        Height="44"
+                        Padding="{DynamicResource Arena.Inset.StatusChipCompact}"
+                        Margin="{DynamicResource Arena.Layout.CollapsedStatusButtonMargin}"
+                        AutomationProperties.Name="Open application status history"
+                        AutomationProperties.HelpText="The supporting rail is hidden. Open the application status dashboard without resizing the workspace."
+                        AutomationProperties.ItemStatus="Ready"
+                        ToolTip="Status: Ready">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Grid Width="28" Height="28">
+                            <TextBlock Text="&#xE9D9;"
+                                       FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                                       FontSize="{DynamicResource Arena.Type.HeadingSize}"
+                                       Foreground="{DynamicResource TextBrush}"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                            <Ellipse x:Name="CollapsedStatusCenterStateDot"
+                                     Width="7"
+                                     Height="7"
+                                     Fill="{DynamicResource Arena.Brush.Info}"
+                                     Stroke="{DynamicResource TopBarBrush}"
+                                     StrokeThickness="1"
+                                     HorizontalAlignment="Right"
+                                     VerticalAlignment="Bottom"
+                                     IsHitTestVisible="False" />
+                        </Grid>
+                        <Border Margin="{DynamicResource Arena.Gap.Inline.Before.Tight}"
+                                Padding="{DynamicResource Arena.Inset.StatusChipCompact}"
+                                Background="{DynamicResource InputBrush}"
+                                BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="{DynamicResource Arena.Radius.Pill}"
+                                VerticalAlignment="Center">
+                            <TextBlock x:Name="CollapsedStatusCenterStateText"
+                                       Text="Ready"
+                                       Foreground="{DynamicResource Arena.Brush.Info}"
+                                       FontSize="{DynamicResource Arena.Type.MicroSize}"
+                                       FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis"
+                                       MaxWidth="74" />
+                        </Border>
+                    </StackPanel>
+                </Button>
 
                 <Border Style="{StaticResource ToolbarGroup}" Margin="0">
                     <StackPanel Orientation="Horizontal">

@@ -67,7 +67,20 @@ static void SaveReloadVisualGenerationSettings()
                         ["alpha"] = "shared-model",
                         ["epsilon"] = "epsilon-model"
                     },
-                    DefaultForUnassignedAgentsEnabled = false
+                    DefaultForUnassignedAgentsEnabled = false,
+                    ModelSettings =
+                    [
+                        new WpfProviderModelSettings
+                        {
+                            Model = "portable-model",
+                            ModelIdentity = "model-settings:" + new string('a', 64),
+                            ConfiguredContextWindow = 128,
+                            HistoryPolicy = ModelHistoryPolicies.Rolling80,
+                            ResponseTone = ModelResponseTones.Custom,
+                            CustomTone = "  terse   but clear  ",
+                            PendingApply = true
+                        }
+                    ]
                 }
             ],
             OperatorTemplates = ["one", "two"]
@@ -104,7 +117,13 @@ static void SaveReloadVisualGenerationSettings()
                 && !loaded.ProviderProfiles.Single().DefaultForUnassignedAgentsEnabled
                 && loaded.ProviderProfiles.Single().AlphaModel == "shared-model"
                 && loaded.ProviderProfiles.Single().RoleModels["alpha"] == "shared-model"
-                && loaded.ProviderProfiles.Single().RoleModels["epsilon"] == "epsilon-model",
+                && loaded.ProviderProfiles.Single().RoleModels["epsilon"] == "epsilon-model"
+                && loaded.ProviderProfiles.Single().ModelSettings.Single().Model == "portable-model"
+                && loaded.ProviderProfiles.Single().ModelSettings.Single().ConfiguredContextWindow == 512
+                && loaded.ProviderProfiles.Single().ModelSettings.Single().HistoryPolicy == ModelHistoryPolicies.Rolling80
+                && loaded.ProviderProfiles.Single().ModelSettings.Single().ResponseTone == ModelResponseTones.Custom
+                && loaded.ProviderProfiles.Single().ModelSettings.Single().CustomTone == "terse but clear"
+                && loaded.ProviderProfiles.Single().ModelSettings.Single().PendingApply,
             "saved provider profiles did not round-trip the optional default policy, explicit same-model route, and dynamic role route");
         Require(loaded.OperatorTemplates.SequenceEqual(["one", "two"]), "operator templates did not persist");
     });

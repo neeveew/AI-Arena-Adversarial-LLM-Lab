@@ -128,6 +128,13 @@ static void SnapshotViewMapperPreservesProviderTelemetry()
     var session = new SessionSummary("session", "snapshot.json", true, 1, 0, 0, DateTimeOffset.UtcNow);
     var snapshot = new ArenaSnapshot();
     snapshot.Configs["shared"] = new ModelProviderConfig { Model = "shared-model", ApiToken = "secret-token", NativeStatefulChat = false, NativeIdleTtlSeconds = 1200 };
+    ModelRuntimeSettingsRegistry.Register(
+        snapshot,
+        snapshot.Configs["shared"],
+        32768,
+        ModelHistoryPolicies.Rolling80,
+        ModelResponseTones.Concise,
+        "");
     snapshot.Engine.Internet.UseInternet = true;
     snapshot.Configs["alpha"] = new ModelProviderConfig { Model = "   " };
     snapshot.Engine.Agents.Add(new DialogueAgent
@@ -158,7 +165,28 @@ static void SnapshotViewMapperPreservesProviderTelemetry()
         },
         Metadata = new Dictionary<string, JsonElement>
         {
-            ["provider_response_id"] = JsonSerializer.SerializeToElement("resp_native")
+            ["provider_response_id"] = JsonSerializer.SerializeToElement("resp_native"),
+            ["completion_failure_kind"] = JsonSerializer.SerializeToElement("context_limit_exceeded"),
+            ["completion_stop_reason"] = JsonSerializer.SerializeToElement("provider_error"),
+            ["provider_status_code"] = JsonSerializer.SerializeToElement(400),
+            ["provider_error_code"] = JsonSerializer.SerializeToElement("context_length_exceeded"),
+            ["arena_history_budget_receipt"] = JsonSerializer.SerializeToElement(new
+            {
+                contract = "arena_history_budget_v1",
+                history_policy = "rolling_80",
+                configured_context_window = 32768,
+                target_percent = 80,
+                input_token_budget = 24000,
+                output_token_reserve = 4096,
+                estimated_prompt_tokens = 23800,
+                eligible_entry_count = 52,
+                included_entry_count = 31,
+                omitted_entry_count = 21,
+                included_message_ids = new[] { "private-id-must-not-project" },
+                context_fingerprint = new string('a', 64),
+                before_turn = 7,
+                token_evidence = "estimated_v1"
+            })
         }
     });
     snapshot.GenerationHistory.Add(new GenerationHistoryEntry
@@ -232,11 +260,40 @@ static void SnapshotViewMapperPreservesProviderTelemetry()
     Require(message.TimeToFirstTokenMs == 246, "rendered transcript should preserve TTFT");
     Require(message.ProviderResponseId == "resp_native", "rendered transcript should preserve provider response id");
     Require(message.ModelLoadTimeMs == 1750, "rendered transcript should preserve model load time");
+    Require(message.CompletionFailureKind == "context_limit_exceeded"
+            && message.CompletionStopReason == "provider_error"
+            && message.ProviderStatusCode == 400
+            && message.ProviderErrorCode == "context_length_exceeded",
+        "rendered transcript should project structured privacy-safe provider completion failure evidence");
+    Require(message.HistoryBudgetReceipt is
+        {
+            Contract: "arena_history_budget_v1",
+            HistoryPolicy: "rolling_80",
+            ConfiguredContextWindow: 32768,
+            IncludedEntryCount: 31,
+            OmittedEntryCount: 21,
+            BeforeTurn: 7,
+            TokenEvidence: "estimated_v1"
+        }
+        && message.HistoryBudgetReceipt.ContextFingerprint == new string('a', 64),
+        "rendered transcript should project the causal bounded history receipt without exposing included message ids");
     Require(alpha.Model == "shared-model", "whitespace agent model override should fall back to shared model");
     Require(worldAlpha.Model == "shared-model", "world avatars should inherit the shared model when an agent override is blank");
     Require(rendered.ProviderApiToken == "secret-token", "rendered snapshot should preserve provider API token for settings UI");
     Require(!rendered.ProviderNativeStatefulChat, "rendered snapshot should preserve native stateful chat setting");
     Require(rendered.ProviderNativeIdleTtlSeconds == 1200, "rendered snapshot should preserve native idle TTL setting");
+    Require(rendered.ProviderConfiguredContextWindow == 32768
+            && rendered.ProviderHistoryPolicy == ModelHistoryPolicies.Rolling80
+            && rendered.ProviderResponseTone == ModelResponseTones.Concise
+            && rendered.ModelSettings.Count == 1,
+        "rendered snapshot should project canonical per-model behavior settings without transient residency fields");
+
+    snapshot.Engine.MatchEnded = true;
+    snapshot.Engine.MatchEndReason = "operator ended after context limit";
+    var endedProjection = SnapshotViewMapper.FromCore(session, snapshot);
+    Require(endedProjection.MatchEnded
+            && endedProjection.MatchEndReason == "operator ended after context limit",
+        "snapshot mapping should project the durable privacy-safe End Match state for readiness gating");
     Require(rendered.InternetEnabled, "rendered snapshot should preserve the direct internet setting");
     Require(rendered.GenerationHistory.Count == 2, "rendered history should skip invalid blank-id entries");
     Require(history.Id == "history-newer", "rendered history should show newest entries first");
@@ -244,6 +301,41 @@ static void SnapshotViewMapperPreservesProviderTelemetry()
     Require(history.NarratorBrief == "Newer narrator brief", "rendered history should preserve narrator brief");
     Require(history.PersonaCount == 1, "rendered history should count participant personas only");
     Require(history.PersonaPreview.Contains("alpha: Chair", StringComparison.OrdinalIgnoreCase), "rendered history should include persona preview");
+
+    var typedFailureSnapshot = SessionStore.CreateDefaultSnapshot();
+    var typedFailureKinds = new[]
+    {
+        "empty_public_content",
+        "native_state_exhausted",
+        "provider_loading"
+    };
+    for (var index = 0; index < typedFailureKinds.Length; index++)
+    {
+        typedFailureSnapshot.Engine.Messages.Add(new DialogueMessage
+        {
+            Turn = index + 1,
+            Speaker = "Alpha",
+            SpeakerId = "alpha",
+            Kind = "error",
+            Status = "error",
+            Text = "Typed provider outcome.",
+            Metadata = new Dictionary<string, JsonElement>
+            {
+                ["completion_failure_kind"] = JsonSerializer.SerializeToElement(typedFailureKinds[index])
+            }
+        });
+    }
+    var projectedFailureKinds = SnapshotViewMapper.FromCore(session, typedFailureSnapshot).Messages
+        .Select(item => item.CompletionFailureKind)
+        .ToArray();
+    Require(projectedFailureKinds.SequenceEqual(typedFailureKinds),
+        "snapshot mapping should retain empty-content, native-state exhaustion, and provider-loading outcomes");
+
+    typedFailureSnapshot.Engine.Messages[0].Metadata["provider_error_code"] =
+        JsonSerializer.SerializeToElement("sk-proj-1234567890abcdefghijklmnopqrstuvwxyz");
+    var redactedProviderCode = SnapshotViewMapper.FromCore(session, typedFailureSnapshot).Messages[0].ProviderErrorCode;
+    Require(redactedProviderCode.Length == 0,
+        "snapshot mapping should reject token-shaped provider error metadata even when it is otherwise code-shaped");
 
     var groupSnapshot = SessionStore.CreateDefaultSnapshot();
     groupSnapshot.Engine.FactoryMode = true;
@@ -1503,7 +1595,9 @@ static void MainWindowExportButtonSwitchesContext()
 
     Require(button.Contains("Click=\"TranscriptExportRequested\"", StringComparison.Ordinal), "top export button should route through the reusable control's single interaction contract");
     Require(button.Contains("AutomationProperties.Name=\"Export transcript\"", StringComparison.Ordinal), "top export button should expose a transcript fallback automation name");
-    Require(status.Contains("TextTrimming=\"CharacterEllipsis\"", StringComparison.Ordinal), "export status should stay compact in the top bar");
+    Require(status.Contains("Visibility=\"Collapsed\"", StringComparison.Ordinal)
+            && status.Contains("AutomationProperties.LiveSetting=\"Off\"", StringComparison.Ordinal),
+        "the migrated export status compatibility target should not occupy or announce from the top bar");
     Require(code.Contains("CollaboratePanel.Visibility == Visibility.Visible", StringComparison.Ordinal), "export handler should detect the visible Collaborate surface");
     Require(code.Contains("Collaborate.ExportCurrentConversation(this);", StringComparison.Ordinal), "export handler should route Collaborate exports through the Collaborate coordinator");
     Require(code.Contains("SetExportContext(collaborate: true);", StringComparison.Ordinal), "Collaborate navigation should switch export labels");
@@ -2166,18 +2260,26 @@ static void MainWindowOverlaysPreserveKeyboardAndAccessibilityContracts()
 
     foreach (var name in new[]
     {
-        "ShellStatusTextElement",
+        "VoiceTtsStatusText"
+    })
+    {
+        var status = XamlStartTag(xaml, name, "TextBlock");
+        Require(status.Contains("AutomationProperties.LiveSetting=\"Polite\"", StringComparison.Ordinal), $"{name} should announce asynchronous status changes politely");
+    }
+
+    foreach (var name in new[]
+    {
         "AgentStatusText",
         "CollaborateStatusText",
         "ProviderTestStatus",
-        "VoiceTtsStatusText",
         "InternetBackendStatusText",
         "InternetDiagnosticResultText",
         "SettingsTransferStatusText"
     })
     {
         var status = XamlStartTag(xaml, name, "TextBlock");
-        Require(status.Contains("AutomationProperties.LiveSetting=\"Polite\"", StringComparison.Ordinal), $"{name} should announce asynchronous status changes politely");
+        Require(status.Contains("AutomationProperties.LiveSetting=\"Off\"", StringComparison.Ordinal),
+            $"{name} should remain contextual while the universal status center owns its live announcement");
     }
 
     Require(source.Contains("protected override void OnPreviewKeyDown", StringComparison.Ordinal), "the main shell should route Escape to the topmost overlay");
@@ -2453,8 +2555,9 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
     var topBarStatus = XamlStartTag(topBarXaml, "TopBarStatus", "Grid");
     var topBarCommands = XamlStartTag(topBarXaml, "TopBarCommandPanel", "WrapPanel");
     var saveStatusProxy = XamlStartTag(topBarXaml, "SaveStatusText", "TextBlock");
-    var statusDock = XamlStartTag(railXaml, "ShellStatusDockElement", "Border");
-    var statusText = XamlStartTag(railXaml, "ShellStatusTextElement", "TextBlock");
+    var statusCenterXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/UniversalStatusCenterControl.xaml"));
+    var statusCard = XamlStartTag(statusCenterXaml, "StatusCenterCard", "Border");
+    var statusText = XamlStartTag(statusCenterXaml, "LiveAnnouncementText", "TextBlock");
     var transcriptSearchPopup = XamlStartTag(topBarXaml, "TranscriptSearchPopup", "Popup");
     var matchSetupButton = XamlStartTag(topBarXaml, "MatchSetupButton", "Button");
     var viewMenuButton = XamlStartTag(topBarXaml, "ViewMenuButton", "Button");
@@ -2498,23 +2601,20 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
     Require(topBarCommands.Contains("VerticalAlignment=\"Center\"", StringComparison.Ordinal), "inline top-bar commands should share the primary-row centerline with the metrics");
     var mainWindowSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
     Require(mainWindowSource.Contains("Grid.SetRow(TopBarCommandPanel, stacked ? 1 : 0);", StringComparison.Ordinal), "the adaptive shell should move commands between the narrow command row and shared primary row");
-    Require(mainWindowSource.Contains("ShellNavigationRail.Presentation = ShellTopBar.Presentation;", StringComparison.Ordinal), "the top bar and navigation status dock should share the exact presentation model instance");
+    Require(mainWindowSource.Contains("ShellNavigationRail.Presentation = ShellTopBar.Presentation;", StringComparison.Ordinal), "the navigation rail and top bar should share the exact shell presentation model instance");
     Require(transcriptSearchPopup.Contains("PlacementTarget=\"{Binding ElementName=TopBarLayoutGrid}\"", StringComparison.Ordinal), "the transcript search popup should open below the complete multi-row top bar");
     Require(matchSetupButton.Contains("Style=\"{StaticResource Arena.Button.Primary}\"", StringComparison.Ordinal), "Match Setup should retain primary emphasis in the top rail");
     Require(matchSetupButton.Contains("Height=\"38\"", StringComparison.Ordinal) && matchSetupButton.Contains("VerticalAlignment=\"Center\"", StringComparison.Ordinal), "Match Setup should match the 38-DIP top-rail command-group height");
     Require(matchSetupButton.Contains("Width=\"104\"", StringComparison.Ordinal), "Match Setup and Close Setup should share a fixed width so toggling does not shift neighboring commands");
     Require(matchSetupButton.Contains("Padding=\"{DynamicResource Arena.Inset.ToolbarAction}\"", StringComparison.Ordinal), "Match Setup should use the compact horizontal-only toolbar padding token");
     Require(viewMenuButton.Contains("Content=\"{Binding ViewButtonLabel}\"", StringComparison.Ordinal), "the closed View control should keep the active preset visible");
-    Require(statusDock.Contains("Grid.Row=\"3\"", StringComparison.Ordinal), "the visible status dock should occupy the navigation rail's previously unused bottom row");
-    Require(statusDock.Contains("Visibility=\"{Binding ShowStatusDock", StringComparison.Ordinal), "routine status should release the bottom-rail space");
-    Require(statusDock.Contains("ToolTip=\"{Binding DisplayStatusToolTip}\"", StringComparison.Ordinal), "the bottom status dock should expose deterministic pointer detail");
-    Require(statusDock.Contains("AutomationProperties.HelpText=\"{Binding DisplayStatusHelpText}\"", StringComparison.Ordinal), "the bottom status dock should expose deterministic automation help");
-    Require(statusText.Contains("Text=\"{Binding DisplayStatus}\"", StringComparison.Ordinal), "the bottom status text should bind to the shared display projection");
-    Require(statusText.Contains("AutomationProperties.LiveSetting=\"Polite\"", StringComparison.Ordinal), "the bottom status dock should be the polite live announcement surface");
-    Require(statusText.Contains("LineHeight=\"16\"", StringComparison.Ordinal)
-        && statusText.Contains("LineStackingStrategy=\"BlockLineHeight\"", StringComparison.Ordinal)
-        && statusText.Contains("MaxHeight=\"32\"", StringComparison.Ordinal),
-        "the bottom status dock should reserve exactly two deterministic text lines");
+    Require(statusCard.Contains("AutomationProperties.Name=\"Universal Status Center, four recent updates\"", StringComparison.Ordinal),
+        "the universal status card should expose its fixed four-row purpose");
+    Require(statusText.Contains("AutomationProperties.LiveSetting=\"Polite\"", StringComparison.Ordinal),
+        "the universal status center should own the one polite shell live announcer");
+    Require(!railXaml.Contains("ShellStatusDockElement", StringComparison.Ordinal)
+            && !railXaml.Contains("ShellStatusTextElement", StringComparison.Ordinal),
+        "the legacy bottom-left status dock should be removed after universal-center migration");
     Require(saveStatusProxy.Contains("Visibility=\"Collapsed\"", StringComparison.Ordinal), "the legacy save-status target should stay permanently nonvisual");
     Require(!saveStatusProxy.Contains("AutomationProperties.LiveSetting", StringComparison.Ordinal), "the compatibility save target should not duplicate live announcements");
 
@@ -2530,44 +2630,54 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
         }
     };
     topBarPresentation.ArenaStatus = "Provider online.";
-    Require(!topBarPresentation.ShowStatusDock, "routine provider health should stay inside the provider metric instead of repeating in the bottom dock");
+    Require(topBarPresentation.StatusCenter.AppStatus == "Ready"
+            && topBarPresentation.ShowStatusDock,
+        "routine provider health should stay silent while the fixed status center remains reserved");
     changedPropertyOrder.Clear();
     topBarPresentation.ArenaStatus = "Select a model before running the arena.";
-    Require(topBarPresentation.ShowStatusDock, "actionable arena status should reveal the bottom status dock");
-    Require(topBarPresentation.DisplayStatus == "Select a model before running the arena.", "persistent actionable status should be the visible projection");
-    Require(topBarPresentation.DisplayStatusToolTip == topBarPresentation.DisplayStatus, "persistent status should use its exact text as the tooltip");
+    Require(topBarPresentation.ShowStatusDock, "the compatibility visibility flag should keep the fixed four-row center reserved");
+    Require(topBarPresentation.DisplayStatus == "Select a model before running the arena.", "persistent actionable status should feed the typed visible projection");
+    Require(topBarPresentation.DisplayStatusToolTip == topBarPresentation.DisplayStatus, "persistent status should expose its concise detail");
     Require(topBarPresentation.DisplayStatusHelpText.Contains(topBarPresentation.DisplayStatus, StringComparison.Ordinal), "persistent status help should include the exact actionable state");
-    Require(
-        changedPropertyOrder.IndexOf("ShowStatusDock") < changedPropertyOrder.IndexOf("DisplayStatus"),
-        "the live status dock should become visible before actionable text is projected");
+    Require(topBarPresentation.StatusCenter.History.Count == 1,
+        "an actionable compatibility status should publish exactly one typed history entry");
 
     var firstGeneration = topBarPresentation.ShowTransientStatus(
         "Screenshot saved: first.png",
         @"C:\captures\first.png",
         "AI Arena saved the first screenshot.");
-    Require(topBarPresentation.ShowStatusDock, "a transient receipt should reveal the bottom status dock");
-    Require(topBarPresentation.DisplayStatus == "Screenshot saved: first.png", "transient status should temporarily override the persistent status");
-    Require(topBarPresentation.DisplayStatusToolTip == @"C:\captures\first.png", "transient status should preserve its detailed path tooltip");
-    Require(topBarPresentation.DisplayStatusHelpText == "AI Arena saved the first screenshot.", "transient status should preserve its automation help");
+    var firstTransient = topBarPresentation.StatusCenter.History.Single(entry =>
+        entry.Summary.Equals("Screenshot saved: first.png", StringComparison.Ordinal));
+    Require(topBarPresentation.DisplayStatus == "Select a model before running the arena.",
+        "a foreground arena operation should retain primary priority over a recent success receipt");
+    Require(firstTransient.State == ApplicationStatusState.Succeeded
+            && !firstTransient.Detail.Contains(@"C:\captures", StringComparison.OrdinalIgnoreCase)
+            && firstTransient.Detail.Contains("[local path]", StringComparison.Ordinal),
+        "transient status history should retain the success while redacting absolute filesystem paths");
 
     topBarPresentation.ArenaStatus = "Select a provider model.";
-    Require(topBarPresentation.DisplayStatus == "Screenshot saved: first.png", "persistent changes should not interrupt an active transient receipt");
+    Require(topBarPresentation.DisplayStatus == "Select a provider model.",
+        "a new action-required warning should outrank a recent success receipt");
     var secondGeneration = topBarPresentation.ShowTransientStatus(
         "Screenshot saved: second.png",
         @"C:\captures\second.png",
         "AI Arena saved the second screenshot.");
-    Require(!topBarPresentation.ClearTransientStatus(firstGeneration), "a stale receipt timer must not clear a newer transient status");
-    Require(topBarPresentation.DisplayStatus == "Screenshot saved: second.png", "rejecting a stale clear should retain the newest receipt");
+    Require(topBarPresentation.ClearTransientStatus(firstGeneration), "an older receipt should resolve only its own causal entry");
+    Require(topBarPresentation.DisplayStatus == "Select a provider model.",
+        "a newer success receipt should remain in history without displacing an action-required warning");
+    Require(topBarPresentation.StatusCenter.History.Any(entry =>
+            entry.Summary.Equals("Screenshot saved: second.png", StringComparison.Ordinal)
+            && entry.State == ApplicationStatusState.Succeeded),
+        "the newer success receipt should remain available in status history");
     Require(topBarPresentation.ClearTransientStatus(secondGeneration), "the current transient generation should clear successfully");
     Require(topBarPresentation.DisplayStatus == "Select a provider model.", "clearing the current receipt should restore the latest persistent status");
-    Require(topBarPresentation.ShowStatusDock, "restored actionable status should keep the bottom dock visible");
+    Require(topBarPresentation.ShowStatusDock, "restored actionable status should keep the fixed center reserved");
     changedPropertyOrder.Clear();
     topBarPresentation.ArenaStatus = "Ready.";
-    Require(!topBarPresentation.ShowStatusDock, "routine status should collapse the bottom dock after a transient receipt expires");
-    Require(
-        changedPropertyOrder.IndexOf("DisplayStatus") < changedPropertyOrder.IndexOf("ShowStatusDock"),
-        "the visible live region should project routine status before the dock collapses");
-    foreach (var propertyName in new[] { "DisplayStatus", "DisplayStatusToolTip", "DisplayStatusHelpText", "ShowStatusDock" })
+    Require(topBarPresentation.ShowStatusDock
+            && topBarPresentation.DisplayStatus == "Ready",
+        "routine status should return to Ready without collapsing the stable center footprint");
+    foreach (var propertyName in new[] { "DisplayStatus", "DisplayStatusToolTip", "DisplayStatusHelpText" })
     {
         Require(changedProperties.Contains(propertyName), $"{propertyName} should notify the shared status binding when its projection changes");
     }
@@ -2578,7 +2688,8 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
     Require(!screenshotSource.Contains("SetTransientStatusVisible", StringComparison.Ordinal), "screenshot receipts should not use the retired visibility-only status API");
     Require(!screenshotSource.Contains("SaveStatusText.Visibility", StringComparison.Ordinal), "the compatibility save target should never become visual");
     Require(!screenshotSource.Contains("SaveStatusText.Text.Equals", StringComparison.Ordinal), "screenshot receipt expiry should not rely on text equality for stale-clear protection");
-    Require(screenshotSource.Contains("ArenaRunStatus.Text", StringComparison.Ordinal), "the control-plane snapshot should retain the persistent arena-status compatibility target");
+    Require(screenshotSource.Contains("applicationStatus.Primary.Summary", StringComparison.Ordinal),
+        "the control-plane AppStatus compatibility field should project the universal center's primary summary");
     foreach (var presetButtonName in new[] { "ViewPresetFocusedButton", "ViewPresetDiagnosticsButton", "ViewPresetCompactButton", "ViewPresetReviewButton" })
     {
         var presetButton = XamlStartTag(topBarXaml, presetButtonName, "Button");
@@ -2695,34 +2806,13 @@ static void MainWindowEmptyExportStatusReleasesToolbarSpace()
             && string.Equals((string?)element.Attribute(xamlNamespace + "Name"), "ExportStatusText", StringComparison.Ordinal))
         ?? throw new InvalidOperationException("the export status should remain present in the top command bar");
 
-    Require(exportStatus.Attribute("Width") is null, "an empty export status must not reserve a fixed toolbar width");
-    Require((string?)exportStatus.Attribute("MaxWidth") == "118", "populated export status text should remain bounded without reserving empty space");
-
-    var style = exportStatus
-        .Elements()
-        .SelectMany(element => element.Elements())
-        .SingleOrDefault(element => element.Name.LocalName == "Style")
-        ?? throw new InvalidOperationException("the export status should define visibility behavior for its empty state");
-    Require(
-        style.Elements().Any(element =>
-            element.Name.LocalName == "Setter"
-            && (string?)element.Attribute("Property") == "Visibility"
-            && (string?)element.Attribute("Value") == "Visible"),
-        "populated export status text should remain visible");
-
-    var emptyTextTrigger = style
-        .Descendants()
-        .SingleOrDefault(element =>
-            element.Name.LocalName == "Trigger"
-            && (string?)element.Attribute("Property") == "Text"
-            && (string?)element.Attribute("Value") == "")
-        ?? throw new InvalidOperationException("empty export status text should have an explicit collapse trigger");
-    Require(
-        emptyTextTrigger.Elements().Any(element =>
-            element.Name.LocalName == "Setter"
-            && (string?)element.Attribute("Property") == "Visibility"
-            && (string?)element.Attribute("Value") == "Collapsed"),
-        "empty export status text should collapse out of toolbar measurement");
+    Require(exportStatus.Attribute("Width") is null
+            && exportStatus.Attribute("MaxWidth") is null
+            && (string?)exportStatus.Attribute("Visibility") == "Collapsed"
+            && (string?)exportStatus.Attribute("IsHitTestVisible") == "False"
+            && (string?)exportStatus.Attribute("Focusable") == "False"
+            && (string?)exportStatus.Attribute("AutomationProperties.LiveSetting") == "Off",
+        "the migrated export status compatibility target should never reserve toolbar space or duplicate announcements");
 }
 
 static void MainWindowRightRailCollapsePreservesKeyboardContext()
@@ -2735,14 +2825,17 @@ static void MainWindowRightRailCollapsePreservesKeyboardContext()
 
     var focusCapture = method.IndexOf("RightRailScrollViewer.IsKeyboardFocusWithin", StringComparison.Ordinal);
     var visibilityChange = method.IndexOf("RightRailScrollViewer.Visibility =", StringComparison.Ordinal);
-    var focusHandoff = method.IndexOf("Keyboard.Focus(RightRailToggleButton)", StringComparison.Ordinal);
+    var focusHandoff = method.IndexOf("Keyboard.Focus(focusTarget)", StringComparison.Ordinal);
     Require(focusCapture >= 0, "right-rail collapse should detect keyboard focus within the rail");
     Require(visibilityChange > focusCapture, "right-rail focus state must be captured before the rail is collapsed");
     Require(focusHandoff > visibilityChange, "right-rail collapse should hand focus off only after hiding the focused subtree");
     Require(method.Contains("collapsed && RightRailScrollViewer.IsKeyboardFocusWithin", StringComparison.Ordinal), "focus handoff should run only for an effective collapse with focus inside the rail");
     Require(method.Contains("RightRailScrollViewer.Visibility == Visibility.Collapsed", StringComparison.Ordinal), "the deferred focus handoff should verify that the rail is still collapsed");
-    Require(method.Contains("RightRailToggleButton.IsVisible", StringComparison.Ordinal), "the focus handoff should require a visible toggle target");
-    Require(method.Contains("RightRailToggleButton.IsEnabled", StringComparison.Ordinal), "the focus handoff should require an enabled toggle target");
+    Require(method.Contains("focusTarget.IsVisible", StringComparison.Ordinal), "the focus handoff should require a visible shell target");
+    Require(method.Contains("focusTarget.IsEnabled", StringComparison.Ordinal), "the focus handoff should require an enabled shell target");
+    Require(method.Contains("statusCenterHadFocus", StringComparison.Ordinal)
+            && method.Contains("CollapsedStatusCenterButton", StringComparison.Ordinal),
+        "collapsing the rail should preserve status-center context through the compact top-bar affordance");
     Require(method.Contains("Dispatcher.BeginInvoke", StringComparison.Ordinal), "right-rail focus should move after WPF completes the visibility transition");
     Require(method.Contains("DispatcherPriority.Input", StringComparison.Ordinal), "right-rail focus restoration should run at input priority");
 

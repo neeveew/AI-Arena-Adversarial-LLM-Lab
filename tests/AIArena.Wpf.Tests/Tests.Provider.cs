@@ -21,6 +21,132 @@ using System.Windows.Media.Imaging;
 
 internal static partial class Program
 {
+static void ProviderOperationsPublishCausalUniversalStatuses()
+{
+    var center = new ApplicationStatusCenter();
+    var identity = new ApplicationStatusIdentity("session-provider", "connection-provider");
+    center.SetContext(identity);
+    var publisher = new ProviderOperationStatusPublisher(center, () => identity);
+
+    var test = publisher.Begin("provider.test", "Testing provider...");
+    Require(center.Primary.Key == "provider.test", "provider operation status should use its stable operation key");
+    Require(center.Primary.Source == "Provider", "provider operation status should identify the Provider source");
+    Require(center.Primary.State == ApplicationStatusState.Running, "provider operation status should begin as running");
+    Require(center.Primary.Identity == identity, "provider operation status should retain session and connection identity");
+    Require(center.Primary.NavigationTarget == "provider", "provider operation status should navigate back to provider settings");
+    Require(test.Update("Waiting for completion...", progress: 50), "current provider receipt should accept causal progress");
+    Require(test.Complete("Provider test passed."), "current provider receipt should complete");
+    Require(!test.Fail("Late provider failure."), "terminal provider operation wrappers should reject a second outcome");
+    Require(center.History.Single(entry => entry.Key == "provider.test").State == ApplicationStatusState.Succeeded, "provider completion should project a typed success");
+
+    var routingTransitions = new List<ApplicationStatusState>();
+    center.Changed += (_, change) =>
+    {
+        var routing = change.Snapshot.History.FirstOrDefault(entry => entry.Key == "provider.routing-save");
+        if (routing is not null)
+        {
+            routingTransitions.Add(routing.State);
+        }
+    };
+    var routingSave = publisher.BeginIf(
+        true,
+        "provider.routing-save",
+        "Saving provider routing...",
+        identity: new ApplicationStatusIdentity(identity.SessionId));
+    Require(routingSave.Complete("Provider routing saved."), "direct routing save should complete its causal status");
+    Require(
+        routingTransitions.SequenceEqual([ApplicationStatusState.Running, ApplicationStatusState.Succeeded]),
+        "direct routing save should publish one Running to Succeeded status sequence");
+
+    var changingProviderSave = publisher.BeginIf(
+        true,
+        "provider.routing-save",
+        "Saving a replacement provider...",
+        identity: new ApplicationStatusIdentity(identity.SessionId));
+    center.SetContext(new ApplicationStatusIdentity(identity.SessionId, "replacement-provider"));
+    Require(changingProviderSave.Complete("Replacement provider saved."),
+        "provider-mutating saves should use session-only identity and survive the provider fingerprint change they cause");
+
+    var historyBeforeSuppressedSave = center.History.Count;
+    var suppressedRoutingSave = publisher.BeginIf(
+        false,
+        "provider.routing-save",
+        "Saving provider routing...");
+    Require(suppressedRoutingSave.Complete("Provider routing saved."), "suppressed nested routing status should remain a harmless causal scope");
+    Require(
+        center.History.Count == historyBeforeSuppressedSave,
+        "nested quick-setup and auto-config routing saves should not add a duplicate status entry");
+
+    var failedRoutingSave = publisher.BeginIf(
+        true,
+        "provider.routing-save",
+        "Saving provider routing...",
+        identity: new ApplicationStatusIdentity(identity.SessionId));
+    Require(failedRoutingSave.Fail("Provider routing save failed."), "routing save failures should terminate the current receipt");
+    Require(center.Primary.State == ApplicationStatusState.Failed, "routing save exceptions and validation failures should project Failed");
+    center.Resolve("provider.routing-save");
+
+    var cancelledRoutingSave = publisher.BeginIf(
+        true,
+        "provider.routing-save",
+        "Saving provider routing...",
+        identity: new ApplicationStatusIdentity(identity.SessionId));
+    Require(cancelledRoutingSave.Cancel("Provider routing save cancelled."), "routing save cancellation should terminate the current receipt");
+    Require(
+        center.History.Where(entry => entry.Key == "provider.routing-save")
+            .MaxBy(entry => entry.Generation)?.State == ApplicationStatusState.Cancelled,
+        "routing save cancellation should project Cancelled rather than Failed");
+
+    var preload = publisher.Begin("provider.models.preload", "Preloading models...");
+    center.SetContext(new ApplicationStatusIdentity("replacement-session", "replacement-connection"));
+    Require(!preload.Fail("Late preload failure."), "session/provider replacement should reject stale provider completion");
+
+    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    foreach (var name in new[] { "ProviderTestStatus", "AutoConfigureStatusText", "PreloadModelsStatusText", "DownloadModelStatusText" })
+    {
+        Require(
+            XamlStartTag(xaml, name, "TextBlock").Contains("AutomationProperties.LiveSetting=\"Off\"", StringComparison.Ordinal),
+            $"{name} should keep detailed local output without duplicating the universal live announcement");
+    }
+
+    var mainWindowSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    Require(
+        mainWindowSource.Contains("statusCenter: ShellTopBar.Presentation.StatusCenter", StringComparison.Ordinal),
+        "MainWindow should inject the canonical application status center into provider settings");
+
+    var coordinatorSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ProviderSettingsCoordinator.cs"));
+    foreach (var key in new[]
+    {
+        "provider.test",
+        "provider.quick-setup",
+        "provider.models.preload",
+        "provider.models.unload",
+        "provider.model.download",
+        "provider.model.download-status",
+        "provider.auto-configure.scan",
+        "provider.auto-configure.apply",
+        "provider.routing-save"
+    })
+    {
+        Require(
+            coordinatorSource.Contains($"\"{key}\"", StringComparison.Ordinal),
+            $"provider settings should publish the stable {key} operation key");
+    }
+
+    Require(
+        coordinatorSource.Split("suppressOperationStatus: true", StringSplitOptions.None).Length - 1 == 2,
+        "only quick setup and auto-configure should suppress their nested routing-save status");
+    Require(
+        coordinatorSource.Contains("parentOperationStatus: status", StringComparison.Ordinal)
+        && coordinatorSource.Split("if (status.IsTerminal)", StringSplitOptions.None).Length - 1 >= 2,
+        "nested quick setup and auto-configure should stop truthfully when routing persistence reports an early failure");
+    Require(
+        coordinatorSource.Contains("FailRouting(\"Provider routing was not saved.\"", StringComparison.Ordinal)
+        && coordinatorSource.Contains("? \"Provider routing was saved; follow-up work was cancelled.\"", StringComparison.Ordinal)
+        && coordinatorSource.Contains("? \"Provider routing was saved, but follow-up work failed.\"", StringComparison.Ordinal),
+        "routing persistence should terminate validation, cancellation, and exception outcomes truthfully");
+}
+
 static void ProviderReachabilityClampsProbeTimeout()
 {
     var source = new ModelProviderConfig
@@ -1174,6 +1300,210 @@ static void LlamaCppRuntimePresentationGatesRouterLifecycleActions()
     Require(!LlamaCppRuntimePresentation.IsVisible(ModelProviderApiModes.OpenAiCompatible), "runtime card should stay hidden in generic compatible mode");
 }
 
+static void LlamaCppRuntimePublishesCausalUniversalStatuses()
+{
+    RunStaTest(() =>
+    {
+        var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        SynchronizationContext.SetSynchronizationContext(
+            new System.Windows.Threading.DispatcherSynchronizationContext(dispatcher));
+        var config = LlamaRuntimeConfig("router-model.gguf");
+        var center = new ApplicationStatusCenter();
+        ApplicationStatusIdentity StatusIdentity(ModelProviderConfig value) => new(
+            "llama-session",
+            ProviderModelCatalogProjectionService.ConnectionFingerprint("llama-session", value));
+        center.SetContext(StatusIdentity(config));
+        var loaded = false;
+        var handler = new AsyncProbeHttpMessageHandler((request, _) =>
+        {
+            var path = request.RequestUri?.AbsolutePath ?? "";
+            if (request.Method == HttpMethod.Post && path == "/models/load")
+            {
+                loaded = true;
+                return Task.FromResult(JsonResponse("""{"success":true}"""));
+            }
+
+            if (request.Method == HttpMethod.Post && path == "/models/unload")
+            {
+                loaded = false;
+                return Task.FromResult(JsonResponse("""{"success":true}"""));
+            }
+
+            return Task.FromResult(path switch
+            {
+                "/health" => JsonResponse("""{"status":"ok"}"""),
+                "/models" => JsonResponse(JsonSerializer.Serialize(new
+                {
+                    data = new[]
+                    {
+                        new
+                        {
+                            id = "router-model.gguf",
+                            status = new { value = loaded ? "loaded" : "unloaded" }
+                        }
+                    }
+                })),
+                "/v1/models" => JsonResponse("""{"data":[]}"""),
+                "/props" => JsonResponse("""{"build_info":"llama.cpp status-test","total_slots":2,"default_generation_settings":{"n_ctx":8192}}"""),
+                "/slots" => JsonResponse("[]"),
+                _ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+            });
+        });
+        var controls = RuntimeControls();
+        var coordinator = new LlamaCppRuntimeCoordinator(
+            new LlamaCppRuntimeService(new HttpClient(handler)),
+            controls,
+            () => config,
+            () => false,
+            _ => Brushes.White,
+            center,
+            StatusIdentity);
+
+        AwaitOnDispatcher(coordinator.InspectAsync());
+        var inspection = Latest("provider.llamacpp.inspect");
+        Require(inspection.State == ApplicationStatusState.Succeeded
+                && inspection.Source == "Provider"
+                && inspection.Identity == StatusIdentity(config)
+                && inspection.NavigationTarget == "provider",
+            "llama.cpp inspection should complete one provider-scoped causal universal status");
+        Require(controls.Preload.IsEnabled && !controls.Unload.IsEnabled,
+            "successful inspection should retain detailed local lifecycle truth");
+
+        AwaitOnDispatcher(coordinator.PreloadAsync());
+        Require(Latest("provider.llamacpp.preload").State == ApplicationStatusState.Succeeded
+                && controls.Unload.IsEnabled,
+            "confirmed llama.cpp preload should complete universally and refresh local residency evidence");
+        AwaitOnDispatcher(coordinator.UnloadAsync());
+        Require(Latest("provider.llamacpp.unload").State == ApplicationStatusState.Succeeded
+                && controls.Preload.IsEnabled,
+            "confirmed llama.cpp unload should complete universally and refresh local residency evidence");
+
+        var staleStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseStale = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstHealth = 0;
+        var staleHandler = new AsyncProbeHttpMessageHandler(async (request, cancellationToken) =>
+        {
+            var path = request.RequestUri?.AbsolutePath ?? "";
+            if (path == "/health" && Interlocked.Exchange(ref firstHealth, 1) == 0)
+            {
+                staleStarted.TrySetResult(true);
+                await releaseStale.Task.WaitAsync(cancellationToken);
+            }
+
+            return path switch
+            {
+                "/health" => JsonResponse("""{"status":"ok"}"""),
+                "/models" => JsonResponse("""{"data":[{"id":"router-model.gguf","status":{"value":"unloaded"}}]}"""),
+                "/v1/models" => JsonResponse("""{"data":[]}"""),
+                "/props" => JsonResponse("""{"build_info":"llama.cpp stale-test"}"""),
+                "/slots" => JsonResponse("[]"),
+                _ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+            };
+        });
+        var staleControls = RuntimeControls();
+        var staleCoordinator = new LlamaCppRuntimeCoordinator(
+            new LlamaCppRuntimeService(new HttpClient(staleHandler)),
+            staleControls,
+            () => config,
+            () => false,
+            _ => Brushes.White,
+            center,
+            StatusIdentity);
+        var staleInspection = staleCoordinator.InspectAsync();
+        Require(staleStarted.Task.Wait(TimeSpan.FromSeconds(2)), "stale llama.cpp inspection did not start");
+        config = LlamaRuntimeConfig("replacement-model.gguf");
+        staleCoordinator.ConfigurationChanged();
+        releaseStale.TrySetResult(true);
+        AwaitOnDispatcher(staleInspection);
+        Require(Latest("provider.llamacpp.inspect").State == ApplicationStatusState.Cancelled,
+            "a model/configuration change should cancel rather than apply a late llama.cpp inspection outcome");
+        Require(staleControls.Model.Text == LlamaCppRuntimePresentation.NotReported,
+            "late llama.cpp evidence must not overwrite the reset local view after a configuration change");
+
+        var cancellationCenter = new ApplicationStatusCenter();
+        var cancellationConfig = LlamaRuntimeConfig("cancel-model.gguf");
+        ApplicationStatusIdentity CancellationIdentity(ModelProviderConfig value) => new(
+            "llama-cancel-session",
+            ProviderModelCatalogProjectionService.ConnectionFingerprint("llama-cancel-session", value));
+        cancellationCenter.SetContext(CancellationIdentity(cancellationConfig));
+        var cancellationHandler = new CancellationBlockingHttpMessageHandler();
+        var cancellationCoordinator = new LlamaCppRuntimeCoordinator(
+            new LlamaCppRuntimeService(new HttpClient(cancellationHandler)),
+            RuntimeControls(),
+            () => cancellationConfig,
+            () => false,
+            _ => Brushes.White,
+            cancellationCenter,
+            CancellationIdentity);
+        using var cancellation = new CancellationTokenSource();
+        var pendingCancellation = cancellationCoordinator.InspectAsync(cancellation.Token);
+        Require(cancellationHandler.Started.Task.Wait(TimeSpan.FromSeconds(2)), "cancelable llama.cpp status operation did not start");
+        cancellation.Cancel();
+        try
+        {
+            AwaitOnDispatcher(pendingCancellation);
+            throw new InvalidOperationException("cancelled llama.cpp inspection unexpectedly completed");
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
+
+        Require(cancellationCenter.History
+                .Where(entry => entry.Key == "provider.llamacpp.inspect")
+                .MaxBy(entry => entry.Generation)?.State == ApplicationStatusState.Cancelled,
+            "caller cancellation should close the causal llama.cpp receipt as Cancelled");
+
+        ApplicationStatusEntry Latest(string key) => center.History
+            .Where(entry => entry.Key == key)
+            .MaxBy(entry => entry.Generation)
+            ?? throw new InvalidOperationException($"Missing llama.cpp status '{key}'.");
+
+        void AwaitOnDispatcher(Task task)
+        {
+            if (task.IsCompleted)
+            {
+                task.GetAwaiter().GetResult();
+                return;
+            }
+
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            _ = task.ContinueWith(
+                _ => dispatcher.BeginInvoke(
+                    System.Windows.Threading.DispatcherPriority.Background,
+                    new Action(() => frame.Continue = false)),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
+            task.GetAwaiter().GetResult();
+        }
+
+        static LlamaCppRuntimeControls RuntimeControls() => new(
+            new Border(),
+            new TextBlock(),
+            new TextBlock(),
+            new TextBlock(),
+            new TextBlock(),
+            new TextBlock(),
+            new TextBlock(),
+            new TextBlock(),
+            new TextBlock(),
+            new TextBlock(),
+            new TextBlock(),
+            new Border(),
+            new TextBlock(),
+            new Button(),
+            new Button(),
+            new Button(),
+            new Button());
+
+        static HttpResponseMessage JsonResponse(string body) => new(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
+        };
+    });
+}
+
 static void LlamaCppSettingsSurfaceStaysCapabilityDrivenAndAccessible()
 {
     var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
@@ -1218,6 +1548,18 @@ static void LlamaCppSettingsSurfaceStaysCapabilityDrivenAndAccessible()
     Require(coordinator.Contains("AI Arena does not start or restart the llama-server process", StringComparison.Ordinal), "reconnect help should truthfully preserve user ownership of llama-server");
     Require(coordinator.Contains("AutomationProperties.SetHelpText", StringComparison.Ordinal), "runtime evidence and actions should expose dynamic automation help");
     Require(coordinator.Contains("Model load and unload endpoints are unsupported", StringComparison.Ordinal), "unsupported lifecycle endpoints should remain explicit instead of silently failing");
+    Require(coordinator.Contains("ApplicationStatusCenter statusCenter", StringComparison.Ordinal)
+            && coordinator.Contains("captureStatusIdentity", StringComparison.Ordinal)
+            && coordinator.Contains("provider.llamacpp.inspect", StringComparison.Ordinal)
+            && coordinator.Contains("provider.llamacpp.reconnect", StringComparison.Ordinal)
+            && coordinator.Contains("provider.llamacpp.preload", StringComparison.Ordinal)
+            && coordinator.Contains("provider.llamacpp.unload", StringComparison.Ordinal),
+        "llama.cpp user operations should publish through the canonical causal status center");
+    foreach (var name in new[] { "LlamaCppRuntimeStatusText", "LlamaCppRuntimeCapacityWarningText" })
+    {
+        Require(XamlStartTag(xaml, name, "TextBlock").Contains("AutomationProperties.LiveSetting=\"Off\"", StringComparison.Ordinal),
+            $"{name} should preserve local runtime truth without duplicating the shell status announcement");
+    }
 }
 
 static void AutoConfigureLowVramSingleModel()
@@ -2670,6 +3012,116 @@ static void ProviderConfigurationControlAppliesAtomicSecretSafePatches()
         Require(afterClear.Configs.Values.All(config => config.ApiToken.Length == 0), "provider token clear should remove credentials from shared and role configurations");
         Require(refreshFlags.SequenceEqual([true, false]), "provider set and clear should each refresh the host exactly once");
         Require(!AIArenaControlPlaneProtocol.Serialize(cleared).Contains(newToken, StringComparison.Ordinal), "provider clear response must not echo the removed credential");
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+}
+
+static void ProviderModelConfigurationPersistsAliasesCausallyWithoutRoutingOrResidency()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-model-runtime-settings", Guid.NewGuid().ToString("N"));
+    const string rawModel = @"C:\private-model-library\Yi-Coder.gguf";
+    const string safeModel = "Yi-Coder.gguf";
+    try
+    {
+        var sessionStore = new SessionStore(root);
+        var eventLogStore = new EventLogStore(root);
+        var snapshot = SessionStore.CreateDefaultSnapshot();
+        var shared = new ModelProviderConfig
+        {
+            BaseUrl = "http://127.0.0.1:1234/v1",
+            ApiMode = ModelProviderApiModes.LmStudioNative,
+            ApiToken = "model-settings-secret",
+            Model = rawModel,
+            Timeout = 60,
+            Temperature = 0.4,
+            MaxOutputTokens = 2048
+        };
+        snapshot.Configs[ModelProviderRouting.SharedConfigKey] = shared;
+        ProviderConfigurationControlService.SaveRoleModelConfig(
+            snapshot.Configs,
+            "alpha",
+            rawModel,
+            shared,
+            explicitAssignment: true);
+        sessionStore.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+        SessionSummary? active = sessionStore.ListSessionsAsync().GetAwaiter().GetResult().Single();
+        var refreshes = 0;
+        using var operationLock = new SemaphoreSlim(1, 1);
+        var service = new ProviderConfigurationControlService(
+            sessionStore,
+            eventLogStore,
+            operationLock,
+            () => active,
+            () => false,
+            (_, refreshModels, _) =>
+            {
+                Require(!refreshModels, "ordinary model behavior saves must not request catalog or residency refresh");
+                refreshes++;
+                return Task.CompletedTask;
+            });
+
+        var before = service.CaptureModelConfigurationAsync(safeModel, [safeModel], CancellationToken.None).GetAwaiter().GetResult();
+        var revision = sessionStore.LoadSnapshotAsync().GetAwaiter().GetResult()!.PersistenceRevision;
+        var saved = service.SetModelConfigurationAsync(new ProviderModelConfigurationRequest(
+                safeModel,
+                32768,
+                ModelHistoryPolicies.Rolling80,
+                ModelResponseTones.Analytical,
+                "",
+                before.ConfigurationIdentity,
+                [safeModel]))
+            .GetAwaiter()
+            .GetResult();
+        var persisted = sessionStore.LoadSnapshotAsync().GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("model settings snapshot should persist");
+        var rawIdentity = ModelRuntimeSettingsRegistry.Identity(shared);
+        var safeIdentity = ModelRuntimeSettingsRegistry.Identity(new ModelProviderConfig
+        {
+            BaseUrl = shared.BaseUrl,
+            ApiMode = shared.ApiMode,
+            Model = safeModel
+        });
+        var resolved = ModelRuntimeSettingsRegistry.Resolve(persisted, persisted.Configs[ModelProviderRouting.SharedConfigKey]);
+        Require(saved.Ok && persisted.PersistenceRevision == revision + 1 && refreshes == 1,
+            "one causal model behavior save should produce one revision and one host refresh");
+        Require(persisted.ModelSettings.ContainsKey(rawIdentity)
+            && persisted.ModelSettings.ContainsKey(safeIdentity),
+            "a catalog-safe alias save should register both safe and raw routed identities using opaque keys");
+        Require(resolved.ConfiguredContextWindow == 32768
+            && resolved.HistoryPolicy == ModelHistoryPolicies.Rolling80
+            && resolved.ResponseTone == ModelResponseTones.Analytical,
+            "provider routing should resolve the saved canonical settings through the raw configured path after restart");
+        Require(persisted.Configs[ModelProviderRouting.SharedConfigKey].Model == rawModel
+            && persisted.Configs["alpha"].Model == rawModel
+            && persisted.Configs["alpha"].ExplicitModelAssignment,
+            "model behavior saves must not mutate shared or explicit role routing");
+        var audit = File.ReadAllText(eventLogStore.EventPath());
+        Require(!audit.Contains(rawModel, StringComparison.Ordinal)
+            && !audit.Contains("model-settings-secret", StringComparison.Ordinal),
+            "model behavior audit evidence must not disclose raw paths or credentials");
+
+        var stale = service.SetModelConfigurationAsync(new ProviderModelConfigurationRequest(
+                safeModel,
+                65536,
+                ModelHistoryPolicies.Strict,
+                ModelResponseTones.Direct,
+                "",
+                before.ConfigurationIdentity,
+                [safeModel]))
+            .GetAwaiter()
+            .GetResult();
+        var afterStale = sessionStore.LoadSnapshotAsync().GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("stale model settings snapshot should reload");
+        Require(!stale.Ok && stale.ErrorCode == "conflict"
+            && afterStale.PersistenceRevision == persisted.PersistenceRevision
+            && refreshes == 1,
+            "a stale per-model configuration identity must fail without saving, refreshing, routing, or residency mutation");
     }
     finally
     {

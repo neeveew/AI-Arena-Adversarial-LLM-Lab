@@ -116,6 +116,95 @@ internal static partial class Program
         Require(missingCommandError.Contains("Command is required", StringComparison.Ordinal), "missing command errors should be stable");
     }
 
+    static void ControlPlaneStatusProjectionPreservesLegacyAndBoundsTypedState()
+    {
+        var now = new DateTimeOffset(2026, 8, 12, 16, 0, 0, TimeSpan.Zero);
+        var center = new ApplicationStatusCenter(() => now, historyCapacity: 20);
+        for (var index = 0; index < 5; index++)
+        {
+            center.PublishNotice(
+                $"control.status.{index}",
+                index == 4 ? "Models" : "App",
+                index == 4 ? ApplicationStatusState.Blocked : ApplicationStatusState.Info,
+                $"Status {index}",
+                navigationTarget: index == 4 ? "models:catalog-model" : null,
+                identity: new ApplicationStatusIdentity("session-a", "provider-fingerprint"),
+                lifetime: index == 4
+                    ? ApplicationStatusLifetime.UntilResolved
+                    : ApplicationStatusLifetime.UntilSuperseded);
+            now = now.AddSeconds(1);
+        }
+
+        var projected = AIArenaApplicationStatusControlProjection.Project(center.Snapshot);
+        Require(projected.Items.Count == ApplicationStatusCenter.CompactEntryCount,
+            "control-plane status projection must expose at most the four compact visible items");
+        Require(projected.AdditionalCount == 1,
+            "control-plane status projection must preserve the count hidden beyond the four compact items");
+        Require(projected.Primary.State == "blocked"
+                && projected.Primary.Source == "Models"
+                && projected.Primary.NavigationTarget == "models:catalog-model"
+                && projected.Primary.IsUnresolved,
+            "control-plane status projection lost typed primary severity, source, navigation, or unresolved state");
+
+        var snapshot = new AIArenaControlSnapshot(
+            "Legacy arena status.",
+            "arena",
+            "dark-blue",
+            true,
+            null!,
+            null!,
+            projected);
+        var json = AIArenaControlPlaneProtocol.Serialize(snapshot);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Require(root.GetProperty("AppStatus").GetString() == "Legacy arena status.",
+            "adding structured status state must preserve the legacy AppStatus string");
+        Require(root.GetProperty("Status").GetProperty("Items").GetArrayLength() == 4
+                && root.GetProperty("Status").GetProperty("AdditionalCount").GetInt32() == 1,
+            "snapshot JSON did not append the bounded structured status projection");
+
+        var mainWindow = ReadMainWindowSource();
+        var snapshotBuilder = CSharpMethodBlock(
+            mainWindow,
+            "private AIArenaControlSnapshot BuildControlPlaneSnapshot()");
+        Require(snapshotBuilder.Contains("applicationStatus.Primary.Summary", StringComparison.Ordinal)
+                && !snapshotBuilder.Contains("ArenaRunStatus.Text,", StringComparison.Ordinal),
+            "the compatibility AppStatus slot must project the universal center primary summary instead of the retired arena-only text");
+    }
+
+    static void ControlPlaneStatusChangedPublishesPrivacySafeTypedState()
+    {
+        var now = new DateTimeOffset(2026, 8, 12, 17, 0, 0, TimeSpan.Zero);
+        var center = new ApplicationStatusCenter(() => now, historyCapacity: 20);
+        var hub = new AIArenaControlPlaneEventHub();
+        var events = new List<AIArenaControlEvent>();
+        using var subscription = hub.Subscribe(events.Add);
+        using var publisher = new AIArenaApplicationStatusControlPublisher(center, hub.Publish);
+
+        center.PublishNotice(
+            "models.load",
+            "Models",
+            ApplicationStatusState.Unconfirmed,
+            "Model load needs confirmation.",
+            "Inspect C:\\private\\models\\secret.gguf and file:///home/private/other.gguf.",
+            navigationTarget: "models:catalog-model",
+            identity: new ApplicationStatusIdentity("session-a", "provider-fingerprint"));
+
+        Require(events.Count == 1 && events[0].Type == "status.changed",
+            "a typed status-center mutation must publish exactly one status.changed event");
+        Require(events[0].Data is AIArenaApplicationStatusChangedControlState changed
+                && changed.Surface == "models"
+                && changed.Status.Primary.State == "unconfirmed"
+                && changed.Status.Primary.IsUnresolved,
+            "status.changed did not carry the typed primary state and source surface");
+        var serialized = events[0].ToJsonLine();
+        Require(serialized.Contains("\"status\":", StringComparison.OrdinalIgnoreCase)
+                && serialized.Contains("\"announcementKind\":", StringComparison.OrdinalIgnoreCase)
+                && !serialized.Contains("secret.gguf", StringComparison.OrdinalIgnoreCase)
+                && !serialized.Contains("other.gguf", StringComparison.OrdinalIgnoreCase),
+            "status.changed omitted structured state or disclosed a local model path");
+    }
+
     static void ControlPlaneRequiresSessionToken()
     {
         var pipeName = $"ai-arena-test-{Guid.NewGuid():N}";
@@ -185,6 +274,8 @@ internal static partial class Program
                 "distinct QA owners must not share a token file");
             Require(ControlPlaneRejectsInvalidOwnerNamespace(),
                 "the app accepted an unsafe control-plane owner namespace");
+            Require(ControlPlaneContainsInvalidOwnerAtDesktopBoundary(),
+                "an invalid optional QA owner should disable the control plane without crashing the desktop shell");
 
             firstProcess = StartControlPlaneOwnerFixture(firstOwner, firstDataRoot, firstStopPath);
             secondProcess = StartControlPlaneOwnerFixture(secondOwner, secondDataRoot, secondStopPath);
@@ -311,6 +402,26 @@ internal static partial class Program
         catch (InvalidOperationException)
         {
             return true;
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable, previous);
+        }
+    }
+
+    private static bool ControlPlaneContainsInvalidOwnerAtDesktopBoundary()
+    {
+        var previous = Environment.GetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable, "invalid-owner");
+            return !AIArenaControlPlaneProtocol.TryCurrentEndpoint(
+                    out var pipeName,
+                    out var tokenPath,
+                    out var error)
+                && pipeName.Length == 0
+                && tokenPath.Length == 0
+                && error.Contains(AIArenaControlPlaneProtocol.OwnerEnvironmentVariable, StringComparison.Ordinal);
         }
         finally
         {
@@ -807,8 +918,9 @@ internal static partial class Program
         Require(AIArenaControlCommands.IsKnown("app.qa.motion.set"), "control-plane registry should include isolated process motion control");
         Require(AIArenaControlCommands.IsKnown("experiment.state"), "control-plane registry should include privacy-safe Experiment Lab state");
         Require(AIArenaControlCommands.IsKnown("experiment.feature.select"), "control-plane registry should include registered Experiment Lab feature selection");
+        Require(AIArenaControlCommands.IsKnown("provider.model.config.set"), "control-plane registry should include causal per-model behavior configuration");
         Require(!AIArenaControlCommands.IsKnown("not.real"), "control-plane registry should reject unknown commands");
-        Require(AIArenaControlCapabilityCatalog.All.Count == 89, "capability catalog should expose the complete 89-command surface");
+        Require(AIArenaControlCapabilityCatalog.All.Count == 90, "capability catalog should expose the complete 90-command surface");
         Require(AIArenaControlCapabilityCatalog.All.Select(item => item.Command).Distinct(StringComparer.OrdinalIgnoreCase).Count() == AIArenaControlCapabilityCatalog.All.Count, "capability catalog commands should be unique");
         var reset = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == "arena.reset");
         Require(reset.Destructive && reset.RequiredArguments.Contains("confirm", StringComparer.OrdinalIgnoreCase), "capability catalog should mark arena reset as destructive and confirmation-gated");
@@ -832,6 +944,11 @@ internal static partial class Program
             && providerConfig.OptionalArguments.Contains("defaultForUnassignedAgentsEnabled", StringComparer.OrdinalIgnoreCase), "provider configuration capability should describe secret, role-routing, and optional-default inputs without marking the patch destructive");
         var providerTest = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.ProviderTest);
         Require(providerTest.OptionalArguments.Contains("allRoles", StringComparer.OrdinalIgnoreCase), "provider diagnostic capability should advertise its all-role probe");
+        var providerModelConfig = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.ProviderModelConfigSet);
+        Require(!providerModelConfig.Destructive
+            && providerModelConfig.RequiredArguments.SequenceEqual(["model", "expectedConfigurationIdentity"])
+            && providerModelConfig.OptionalArguments.Contains("historyPolicy", StringComparer.OrdinalIgnoreCase),
+            "per-model provider configuration should require a causal identity and remain routing/residency neutral");
         var qaSize = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.AppQaWindowSize);
         Require(qaSize.Category == "qa"
             && !qaSize.Destructive
@@ -897,7 +1014,8 @@ internal static partial class Program
         var functionCount = script
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Count(line => line.TrimStart().StartsWith("function ", StringComparison.OrdinalIgnoreCase));
-        Require(functionCount == 64, "PowerShell client should expose the complete 64-function surface");
+        Require(functionCount == 65, "PowerShell client should expose the complete 65-function surface");
+        Require(script.Contains("function Set-AIArenaProviderModelConfig", StringComparison.Ordinal), "PowerShell client should expose typed per-model context, history, and tone configuration");
         Require(script.Contains("function Get-AIArenaControlEndpoint", StringComparison.Ordinal)
             && script.Contains("AI_ARENA_CONTROL_OWNER", StringComparison.Ordinal)
             && script.Contains("$endpoint.PipeName", StringComparison.Ordinal)
@@ -2045,8 +2163,7 @@ internal static partial class Program
                     .Select(AIArenaControlPlaneProtocol.Serialize))
                 + AIArenaControlPlaneProtocol.Serialize(published);
             Require(!publicJson.Contains(apiToken, StringComparison.Ordinal), "provider handler responses and events must never serialize the configured API token");
-            Require(!publicJson.Contains("ConfigurationIdentity", StringComparison.OrdinalIgnoreCase)
-                && !publicJson.Contains(internalState.ConfigurationIdentity, StringComparison.Ordinal), "provider handler JSON and events must not disclose the internal configuration fingerprint");
+            Require(!publicJson.Contains(internalState.ConfigurationIdentity, StringComparison.Ordinal), "provider handler JSON and events must not disclose the internal provider-wide configuration fingerprint; per-model causal identities are intentionally public and opaque");
         }
         finally
         {
@@ -2203,8 +2320,7 @@ internal static partial class Program
                 new[] { switchedDiscovery, freshModels, switchedTest, timeoutEdit }
                     .Select(AIArenaControlPlaneProtocol.Serialize))
                 + AIArenaControlPlaneProtocol.Serialize(published);
-            Require(!publicJson.Contains("ConfigurationIdentity", StringComparison.OrdinalIgnoreCase)
-                && !publicJson.Contains(sessionBIdentity, StringComparison.Ordinal)
+            Require(!publicJson.Contains(sessionBIdentity, StringComparison.Ordinal)
                 && !publicJson.Contains(editedState.ConfigurationIdentity, StringComparison.Ordinal), "session/configuration fingerprints must remain internal across provider responses and events");
         }
         finally
@@ -2311,7 +2427,8 @@ internal static partial class Program
         var settingsHandler = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaSettingsControlHandler.cs"));
         var agentWorkspace = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/AgentWorkspaceCoordinator.cs"));
         var host = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaControlPlaneHost.cs"));
-        var combined = string.Concat(mainWindow, matchSetupHandler, settingsHandler, agentWorkspace, host);
+        var statusPublisher = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaControlPlaneProtocol.cs"));
+        var combined = string.Concat(mainWindow, matchSetupHandler, settingsHandler, agentWorkspace, host, statusPublisher);
         Require(combined.Contains("\"status.changed\"", StringComparison.Ordinal), "control-plane should publish status changed events");
         Require(combined.Contains("\"shell.overlay.changed\"", StringComparison.Ordinal), "control-plane should publish shell overlay changes");
         Require(combined.Contains("\"match.matrix.changed\"", StringComparison.Ordinal), "control-plane should publish relationship matrix changes");
@@ -2331,6 +2448,36 @@ internal static partial class Program
         Require(combined.Contains("\"agent.runbook.started\"", StringComparison.Ordinal), "control-plane should publish runbook start events");
         Require(combined.Contains("\"agent.runbook.resumed\"", StringComparison.Ordinal), "control-plane should publish runbook resume events");
         Require(combined.Contains("\"agent.runbook.checkpointed\"", StringComparison.Ordinal), "control-plane should publish operator checkpoint events");
+    }
+
+    static void ControlPlaneEndedMatchRejectsNarratorCommands()
+    {
+        var ended = SessionStore.CreateDefaultSnapshot();
+        ended.Engine.MatchEnded = true;
+        Require(MainWindow.EndedMatchPrerequisiteMessage(ended, "asking the narrator")
+                == "This match has ended. Reset or fork the session before asking the narrator.",
+            "durable terminal state should produce stable reset-or-fork guidance");
+        Require(MainWindow.EndedMatchPrerequisiteMessage(SessionStore.CreateDefaultSnapshot(), "asking the narrator") is null
+                && MainWindow.EndedMatchPrerequisiteMessage(null, "asking the narrator") is null,
+            "an active or unavailable snapshot must not invent an ended-match prerequisite");
+
+        var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+        var narrateStart = dispatch.IndexOf("case AIArenaControlCommands.ArenaNarrate", StringComparison.Ordinal);
+        var narrateEnd = dispatch.IndexOf("case AIArenaControlCommands.ArenaReset", narrateStart, StringComparison.Ordinal);
+        Require(narrateStart >= 0 && narrateEnd > narrateStart, "arena.narrate dispatch block should remain discoverable");
+        var narrateBody = dispatch[narrateStart..narrateEnd];
+        Require(narrateBody.Contains("EndedMatchPrerequisiteResponseAsync", StringComparison.Ordinal)
+                && narrateBody.IndexOf("EndedMatchPrerequisiteResponseAsync", StringComparison.Ordinal) < narrateBody.IndexOf("ArenaRun.NarrateNowAsync", StringComparison.Ordinal),
+            "arena.narrate must check authoritative durable terminal state before invoking the narrator runner");
+
+        var operatorStart = dispatch.IndexOf("case AIArenaControlCommands.ArenaOperatorSend", StringComparison.Ordinal);
+        var operatorEnd = dispatch.IndexOf("case AIArenaControlCommands.InternetState", operatorStart, StringComparison.Ordinal);
+        Require(operatorStart >= 0 && operatorEnd > operatorStart, "arena.operator.send dispatch block should remain discoverable");
+        var operatorBody = dispatch[operatorStart..operatorEnd];
+        Require(operatorBody.Contains("route.Equals(\"narrator\"", StringComparison.Ordinal)
+                && operatorBody.Contains("EndedMatchPrerequisiteResponseAsync", StringComparison.Ordinal)
+                && operatorBody.IndexOf("EndedMatchPrerequisiteResponseAsync", StringComparison.Ordinal) < operatorBody.IndexOf("OperatorTurn.ControlSendAsync", StringComparison.Ordinal),
+            "control-plane narrator-routed Operator requests must check authoritative durable terminal state before dispatch");
     }
 
     static void ControlPlaneNavigationClosesSettingsForMainViews()

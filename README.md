@@ -2,7 +2,7 @@
 
 A native Windows lab for running adversarial multi-agent conversations and collaborative AI team chats between local or OpenAI-compatible LLMs.
 
-[Download 0.4.130-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.130-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
+[Download 0.4.131-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.131-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
 
 AI Arena is not a chatbot and not just a model comparison board. It is a local multi-agent LLM lab where agents can debate, collaborate, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
 
@@ -41,7 +41,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 - Context-aware top-rail export for AI Lab transcripts and AI Collaborate chats.
 - Surface-aware top commands that hide transcript-only Search, Export, and View actions outside the workspaces they control.
 - Match Setup returns to the workspace and keyboard focus that opened it; Escape closes it without clearing transcript filters.
-- Top-rail **Models** opens a wide, searchable model catalog with observed loaded models first and provider-available models below. Provider inventories are bounded to 4 MiB and 1,024 source entries before the 256-row display projection; omitted entries are reported as Partial evidence. While the surface is open, LM Studio residency is rechecked every five seconds. Selecting a model exposes a narrow pane with one evidence-driven **Load model** or **Unload model** action plus immediate routing assignments; neither workflow claims to choose GPU placement.
+- Top-rail **Models** opens a wide, searchable model catalog with observed loaded models first and provider-available models below. Provider inventories are bounded to 4 MiB and 1,024 source entries before the 256-row display projection; omitted entries are reported as Partial evidence. While the surface is open, LM Studio residency is rechecked every five seconds. Selecting a model exposes a narrow pane for its durable context window, Arena history policy, response tone, one evidence-driven **Load model** or **Unload model** action, and immediate routing assignments. Saving behavior never changes routing or residency; a loaded LM Studio model offers a separate confirmed reload when its context must change.
 - Narrow-window right rail opens as an overlay drawer so the main workspace keeps its usable width.
 - Default-on, token-authenticated local PowerShell control plane with a normal Settings toggle, typed commands for navigation, secret-free portable Match Setup export/import, cast sizing/relationship patterns/generation/history/replay, searchable and safely mutable Settings, full-state current-match forks with parent lineage, saved-session and checkpoint recovery, provider/Agent/Collaborate state, Collaborate run-review/trace inspection, arena turn/narration/reset, Internet state/toggle/diagnostics, self-screenshots, exports, live events, and an authoritative post-command state snapshot on every response.
 - Configurable AI Collaborate rounds for deeper team drafting, critique, and hardening passes.
@@ -150,6 +150,9 @@ The local, token-authenticated WPF control plane is enabled by default. Its togg
 $provider = Get-AIArenaProvider
 Set-AIArenaProviderConfig -BaseUrl "http://127.0.0.1:1234/v1" -ApiMode lmstudio_native -Model "google/gemma-4-e2b" -DefaultForUnassignedAgentsEnabled $true
 Update-AIArenaProviderModels
+$provider = Get-AIArenaProvider
+$modelConfig = $provider.Data.ModelSettings | Where-Object Model -eq "google/gemma-4-e2b"
+Set-AIArenaProviderModelConfig -Model $modelConfig.Model -ExpectedConfigurationIdentity $modelConfig.ConfigurationIdentity -ConfiguredContextWindow 32768 -HistoryPolicy rolling_80 -ResponseTone concise
 Test-AIArenaProvider
 ```
 

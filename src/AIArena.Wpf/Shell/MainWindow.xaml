@@ -2398,7 +2398,7 @@
                                                        Text="Ready." />
                                             <TextBlock x:Name="LoadStatus"
                                                        Foreground="{DynamicResource MutedTextBrush}"
-                                                       AutomationProperties.LiveSetting="Polite"
+                                                       AutomationProperties.LiveSetting="Off"
                                                        TextWrapping="Wrap"
                                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}" />
                                         </StackPanel>
@@ -2450,7 +2450,9 @@
                                                        RefreshRequested="ProviderModelsPanel_RefreshRequested"
                                                        ConnectionSettingsRequested="ProviderModelsPanel_ConnectionSettingsRequested"
                                                        AssignmentChanged="ProviderModelsPanel_AssignmentChanged"
-                                                       LifecycleRequested="ProviderModelsPanel_LifecycleRequested" />
+                                                       LifecycleRequested="ProviderModelsPanel_LifecycleRequested"
+                                                       ConfigurationChanged="ProviderModelsPanel_ConfigurationChanged"
+                                                       ConfigurationReloadRequested="ProviderModelsPanel_ConfigurationReloadRequested" />
 
             <controls:ExperimentLabControl x:Name="ExperimentLabPanel"
                                            Visibility="Collapsed"
@@ -2472,8 +2474,6 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <controls:WorkspacePageHeaderControl x:Name="AgentWorkspaceHeader"
-                                                      Status="{Binding Text, ElementName=AgentStatusText}"
-                                                      StatusKind="Status"
                                                       Title="Agent"
                                                       Description="Plan, execute, and review repository work inside the explicitly selected workspace boundary."
                                                       PrimaryActionText="Clear history"
@@ -2485,7 +2485,7 @@
                 <TextBlock x:Name="AgentStatusText"
                            Text="Ready."
                            Visibility="Collapsed"
-                           AutomationProperties.LiveSetting="Polite" />
+                           AutomationProperties.LiveSetting="Off" />
                 <Button x:Name="AgentClearHistoryButton"
                         Content="Clear History"
                         Click="AgentClearHistoryButton_Click"
@@ -2792,8 +2792,6 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <controls:WorkspacePageHeaderControl x:Name="CollaborateWorkspaceHeader"
-                                                      Status="{Binding Text, ElementName=CollaborateStatusText}"
-                                                      StatusKind="Status"
                                                       Title="AI Collaborate"
                                                       Description="Coordinate a bounded team response, inspect its run plan, and preserve the conversation receipt."
                                                       PrimaryActionText="Clear chat"
@@ -2803,7 +2801,7 @@
                 <TextBlock x:Name="CollaborateStatusText"
                            Text="Ready."
                            Visibility="Collapsed"
-                           AutomationProperties.LiveSetting="Polite" />
+                           AutomationProperties.LiveSetting="Off" />
                 <Button x:Name="CollaborateClearButton"
                         Content="Clear"
                         Click="CollaborateClearButton_Click"
@@ -2936,15 +2934,19 @@
 
         </Grid>
 
-        <ScrollViewer x:Name="RightRailScrollViewer"
-                      Grid.Row="1"
-                      Grid.Column="2"
-                      Margin="0,14,14,14"
-                       VerticalScrollBarVisibility="Auto"
-                       HorizontalScrollBarVisibility="Disabled">
-            <StackPanel>
-                <StackPanel x:Name="ArenaRightRailPanel">
-                <Border Style="{StaticResource RightRailCard}">
+        <Grid x:Name="RightRailHost"
+              Grid.Row="1"
+              Grid.Column="2"
+              Margin="0,14,14,14">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Border x:Name="ArenaControlsCard"
+                    Style="{StaticResource RightRailCard}"
+                    Visibility="{Binding Visibility, ElementName=ArenaRightRailPanel}">
                     <StackPanel>
                         <TextBlock Text="Arena Controls"
                                    Style="{StaticResource RightRailSectionTitle}"
@@ -3025,223 +3027,27 @@
                                 </StackPanel>
                             </Button>
                         </UniformGrid>
+                        <!-- Compatibility target for readiness coordinators. The universal
+                             status center now presents the actionable message once. -->
                         <TextBlock x:Name="ArenaControlReadinessText"
-                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
-                                   Style="{StaticResource HintText}"
-                                   Foreground="{DynamicResource DangerTextBrush}"
                                    Visibility="Collapsed"
-                                   AutomationProperties.Name="Arena action readiness"
-                                   AutomationProperties.LiveSetting="Polite" />
+                                   IsHitTestVisible="False"
+                                   Focusable="False"
+                                   AutomationProperties.Name="Arena action readiness compatibility target" />
                     </StackPanel>
-                </Border>
+            </Border>
 
-                <Expander x:Name="AgentPerformanceExpander"
-                          Header="Agent Performance"
-                          Style="{StaticResource SettingsExpander}"
-                          Tag="&#xE9D2;"
-                          IsExpanded="False"
-                          AutomationProperties.Name="Agent performance details"
-                          AutomationProperties.HelpText="Expand to compare agent turns, speed, context use, and quality signals.">
-                    <Border x:Name="AgentPerformanceCard"
-                            Background="Transparent"
-                            BorderThickness="0"
-                            Padding="0"
-                            Margin="0">
-                        <StackPanel x:Name="AgentPerformanceItems" />
-                    </Border>
-                </Expander>
-                <Popup x:Name="AgentPerformanceDetailPopup"
-                       Placement="Left"
-                       HorizontalOffset="-8"
-                       StaysOpen="False"
-                       AllowsTransparency="True"
-                       PopupAnimation="None"
-                       Opened="AgentPerformanceDetailPopup_Opened"
-                       Closed="AgentPerformanceDetailPopup_Closed">
-                    <shell:ShellPopupSurface x:Name="AgentPerformanceDetailPopupContent"
-                            Width="380"
-                            MaxHeight="540"
-                            Style="{StaticResource FlyoutCard}"
-                            BorderBrush="{DynamicResource ControlBorderBrush}"
-                            PreviewKeyDown="AgentPerformanceDetailPopup_PreviewKeyDown"
-                            FocusManager.IsFocusScope="True"
-                            KeyboardNavigation.TabNavigation="Cycle"
-                            KeyboardNavigation.ControlTabNavigation="Cycle"
-                            KeyboardNavigation.DirectionalNavigation="Contained"
-                            AutomationProperties.Name="Agent performance detail">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                            </Grid.RowDefinitions>
-                            <Grid Margin="{DynamicResource Arena.Gap.Stack}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="34" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="Agent Detail"
-                                           Foreground="{DynamicResource TextBrush}"
-                                           FontWeight="SemiBold"
-                                           FontSize="{DynamicResource Arena.Type.HeadingSize}"
-                                           VerticalAlignment="Center" />
-                                <Button x:Name="AgentPerformanceDetailCloseButton"
-                                        Grid.Column="1"
-                                        Click="AgentPerformanceDetailCloseButton_Click"
-                                        Style="{StaticResource CloseIconButton}"
-                                        AutomationProperties.Name="Close agent performance detail"
-                                        ToolTip="Close performance detail" />
-                            </Grid>
-                            <ScrollViewer Grid.Row="1"
-                                          VerticalScrollBarVisibility="Auto"
-                                          HorizontalScrollBarVisibility="Disabled">
-                                <StackPanel x:Name="AgentPerformanceDetailContent" />
-                            </ScrollViewer>
-                        </Grid>
-                    </shell:ShellPopupSurface>
-                </Popup>
+            <controls:UniversalStatusCenterControl x:Name="UniversalStatusCenter"
+                                                   Grid.Row="1"
+                                                   Margin="{DynamicResource Arena.Layout.StatusCenterSectionMargin}" />
 
-                <Expander x:Name="ArenaEvaluationExpander"
-                          Header="Model Comparison &amp; QA"
-                          Style="{StaticResource SettingsExpander}"
-                          Tag="&#xE9D9;"
-                          IsExpanded="False"
-                          AutomationProperties.Name="Model comparison and runtime QA"
-                          AutomationProperties.HelpText="Expand to capture a repeatable baseline, compare the current run, inspect evidence gates, and copy a secret-free replay setup.">
-                    <Border Background="Transparent"
-                            BorderThickness="0">
-                        <StackPanel>
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock x:Name="ArenaEvaluationStatusText"
-                                           Text="Capture a baseline, then replay the same setup with another model to compare it."
-                                           Style="{StaticResource HintText}"
-                                           TextWrapping="Wrap"
-                                           AutomationProperties.Name="Evaluation and QA status"
-                                           AutomationProperties.LiveSetting="Polite" />
-                                <TextBlock x:Name="ArenaEvaluationHistoryText"
-                                           Grid.Column="1"
-                                           Text="No local evaluation history"
-                                           Style="{StaticResource SettingsInlineStatusText}"
-                                           Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
-                                           TextTrimming="CharacterEllipsis"
-                                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
-                                           AutomationProperties.Name="Local evaluation history count" />
-                            </Grid>
-
-                            <TextBlock x:Name="ArenaEvaluationBaselineText"
-                                       Text="Baseline: not selected"
-                                       Style="{StaticResource HintText}"
-                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
-                                       TextWrapping="Wrap"
-                                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
-                            <TextBlock x:Name="ArenaEvaluationCandidateText"
-                                       Text="Current: not captured"
-                                       Style="{StaticResource HintText}"
-                                       TextWrapping="Wrap"
-                                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
-
-                            <TextBlock Text="Comparison"
-                                       Style="{StaticResource FieldLabel}"
-                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
-                            <TextBlock x:Name="ArenaEvaluationComparisonSummaryText"
-                                       Text="No comparison evidence."
-                                       Style="{StaticResource HintText}"
-                                       TextWrapping="Wrap" />
-                            <StackPanel x:Name="ArenaEvaluationComparisonItems" />
-
-                            <TextBlock Text="Model evidence"
-                                       Style="{StaticResource FieldLabel}"
-                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
-                            <StackPanel x:Name="ArenaEvaluationModelItems" />
-
-                            <TextBlock Text="Runtime QA"
-                                       Style="{StaticResource FieldLabel}"
-                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
-                            <TextBlock x:Name="ArenaEvaluationQaSummaryText"
-                                       Text="QA has not run."
-                                       Style="{StaticResource HintText}"
-                                       TextWrapping="Wrap"
-                                       AutomationProperties.Name="Runtime QA summary" />
-                            <StackPanel x:Name="ArenaEvaluationQaItems" />
-
-                            <Grid Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Button x:Name="ArenaEvaluationCaptureBaselineButton"
-                                        Click="ArenaEvaluationCaptureBaselineButton_Click"
-                                        Style="{StaticResource RightRailActionButton}"
-                                        AutomationProperties.Name="Capture evaluation baseline"
-                                        AutomationProperties.HelpText="Capture aggregate evidence and make this run the baseline for its model-neutral Match Setup."
-                                        ToolTip="Capture this run as the comparison baseline">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="&#xE74E;" Style="{StaticResource RightRailActionIcon}" />
-                                        <TextBlock Text="Baseline" Style="{StaticResource RightRailActionLabel}" />
-                                    </StackPanel>
-                                </Button>
-                                <Button x:Name="ArenaEvaluationCompareCurrentButton"
-                                        Grid.Column="1"
-                                        Click="ArenaEvaluationCompareCurrentButton_Click"
-                                        Style="{StaticResource RightRailActionButton}"
-                                        AutomationProperties.Name="Compare current arena run"
-                                        AutomationProperties.HelpText="Compare this run only with a baseline that has the same model-neutral Match Setup fingerprint."
-                                        ToolTip="Compare current run with its matching baseline">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="&#xE8AB;" Style="{StaticResource RightRailActionIcon}" />
-                                        <TextBlock Text="Compare" Style="{StaticResource RightRailActionLabel}" />
-                                    </StackPanel>
-                                </Button>
-                                <Button x:Name="ArenaEvaluationRunQaButton"
-                                        Grid.Row="1"
-                                        Click="ArenaEvaluationRunQaButton_Click"
-                                        Style="{StaticResource RightRailActionButton}"
-                                        AutomationProperties.Name="Run local arena QA inspection"
-                                        AutomationProperties.HelpText="Inspect replay identity, runtime errors, stuck states, telemetry completeness, quality evidence, and comparable-baseline regressions."
-                                        ToolTip="Run evidence-based local QA gates">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="&#xE73E;" Style="{StaticResource RightRailActionIcon}" />
-                                        <TextBlock Text="Run QA" Style="{StaticResource RightRailActionLabel}" />
-                                    </StackPanel>
-                                </Button>
-                                <Button x:Name="ArenaEvaluationCopyEvidenceButton"
-                                        Grid.Row="1"
-                                        Grid.Column="1"
-                                        Click="ArenaEvaluationCopyEvidenceButton_Click"
-                                        Style="{StaticResource RightRailActionButton}"
-                                        AutomationProperties.Name="Copy aggregate evaluation evidence"
-                                        AutomationProperties.HelpText="Copy aggregate evaluation, comparison, and QA evidence without transcript bodies, raw provider responses, or credentials."
-                                        ToolTip="Copy secret-free aggregate evaluation evidence">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="&#xE8C8;" Style="{StaticResource RightRailActionIcon}" />
-                                        <TextBlock Text="Evidence" Style="{StaticResource RightRailActionLabel}" />
-                                    </StackPanel>
-                                </Button>
-                                <Button x:Name="ArenaEvaluationCopyReplaySetupButton"
-                                        Grid.Row="2"
-                                        Grid.ColumnSpan="2"
-                                        Click="ArenaEvaluationCopyReplaySetupButton_Click"
-                                        Style="{StaticResource RightRailActionButton}"
-                                        AutomationProperties.Name="Copy exact evaluation replay setup"
-                                        AutomationProperties.HelpText="Copy the exact secret-free Match Setup JSON used by the captured run for import into a clean session."
-                                        ToolTip="Copy the exact secret-free Match Setup JSON for replay">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="&#xE72C;" Style="{StaticResource RightRailActionIcon}" />
-                                        <TextBlock Text="Copy replay setup" Style="{StaticResource RightRailActionLabel}" />
-                                    </StackPanel>
-                                </Button>
-                            </Grid>
-                        </StackPanel>
-                    </Border>
-                </Expander>
+            <ScrollViewer x:Name="RightRailScrollViewer"
+                          Grid.Row="2"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          AutomationProperties.Name="Supporting right rail panels">
+                <StackPanel>
+                <StackPanel x:Name="ArenaRightRailPanel">
 
                 <Border Style="{StaticResource RightRailCard}">
                     <StackPanel>
@@ -3436,6 +3242,214 @@
                                 Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                     </StackPanel>
                 </Border>
+
+                <Expander x:Name="AgentPerformanceExpander"
+                          Header="Agent Performance"
+                          Style="{StaticResource SettingsExpander}"
+                          Tag="&#xE9D2;"
+                          IsExpanded="False"
+                          AutomationProperties.Name="Agent performance details"
+                          AutomationProperties.HelpText="Expand to compare agent turns, speed, context use, and quality signals.">
+                    <Border x:Name="AgentPerformanceCard"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="0"
+                            Margin="0">
+                        <StackPanel x:Name="AgentPerformanceItems" />
+                    </Border>
+                </Expander>
+                <Popup x:Name="AgentPerformanceDetailPopup"
+                       Placement="Left"
+                       HorizontalOffset="-8"
+                       StaysOpen="False"
+                       AllowsTransparency="True"
+                       PopupAnimation="None"
+                       Opened="AgentPerformanceDetailPopup_Opened"
+                       Closed="AgentPerformanceDetailPopup_Closed">
+                    <shell:ShellPopupSurface x:Name="AgentPerformanceDetailPopupContent"
+                            Width="380"
+                            MaxHeight="540"
+                            Style="{StaticResource FlyoutCard}"
+                            BorderBrush="{DynamicResource ControlBorderBrush}"
+                            PreviewKeyDown="AgentPerformanceDetailPopup_PreviewKeyDown"
+                            FocusManager.IsFocusScope="True"
+                            KeyboardNavigation.TabNavigation="Cycle"
+                            KeyboardNavigation.ControlTabNavigation="Cycle"
+                            KeyboardNavigation.DirectionalNavigation="Contained"
+                            AutomationProperties.Name="Agent performance detail">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Grid Margin="{DynamicResource Arena.Gap.Stack}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="34" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Agent Detail"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontWeight="SemiBold"
+                                           FontSize="{DynamicResource Arena.Type.HeadingSize}"
+                                           VerticalAlignment="Center" />
+                                <Button x:Name="AgentPerformanceDetailCloseButton"
+                                        Grid.Column="1"
+                                        Click="AgentPerformanceDetailCloseButton_Click"
+                                        Style="{StaticResource CloseIconButton}"
+                                        AutomationProperties.Name="Close agent performance detail"
+                                        ToolTip="Close performance detail" />
+                            </Grid>
+                            <ScrollViewer Grid.Row="1"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel x:Name="AgentPerformanceDetailContent" />
+                            </ScrollViewer>
+                        </Grid>
+                    </shell:ShellPopupSurface>
+                </Popup>
+
+                <Expander x:Name="ArenaEvaluationExpander"
+                          Header="Model Comparison &amp; QA"
+                          Style="{StaticResource SettingsExpander}"
+                          Tag="&#xE9D9;"
+                          IsExpanded="False"
+                          AutomationProperties.Name="Model comparison and runtime QA"
+                          AutomationProperties.HelpText="Expand to capture a repeatable baseline, compare the current run, inspect evidence gates, and copy a secret-free replay setup.">
+                    <Border Background="Transparent"
+                            BorderThickness="0">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="ArenaEvaluationStatusText"
+                                           Text="Capture a baseline, then replay the same setup with another model to compare it."
+                                           Style="{StaticResource HintText}"
+                                           TextWrapping="Wrap"
+                                           AutomationProperties.Name="Evaluation and QA status"
+                                           AutomationProperties.LiveSetting="Off" />
+                                <TextBlock x:Name="ArenaEvaluationHistoryText"
+                                           Grid.Column="1"
+                                           Text="No local evaluation history"
+                                           Style="{StaticResource SettingsInlineStatusText}"
+                                           Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
+                                           AutomationProperties.Name="Local evaluation history count" />
+                            </Grid>
+
+                            <TextBlock x:Name="ArenaEvaluationBaselineText"
+                                       Text="Baseline: not selected"
+                                       Style="{StaticResource HintText}"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                                       TextWrapping="Wrap"
+                                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                            <TextBlock x:Name="ArenaEvaluationCandidateText"
+                                       Text="Current: not captured"
+                                       Style="{StaticResource HintText}"
+                                       TextWrapping="Wrap"
+                                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+
+                            <TextBlock Text="Comparison"
+                                       Style="{StaticResource FieldLabel}"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
+                            <TextBlock x:Name="ArenaEvaluationComparisonSummaryText"
+                                       Text="No comparison evidence."
+                                       Style="{StaticResource HintText}"
+                                       TextWrapping="Wrap" />
+                            <StackPanel x:Name="ArenaEvaluationComparisonItems" />
+
+                            <TextBlock Text="Model evidence"
+                                       Style="{StaticResource FieldLabel}"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
+                            <StackPanel x:Name="ArenaEvaluationModelItems" />
+
+                            <TextBlock Text="Runtime QA"
+                                       Style="{StaticResource FieldLabel}"
+                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
+                            <TextBlock x:Name="ArenaEvaluationQaSummaryText"
+                                       Text="QA has not run."
+                                       Style="{StaticResource HintText}"
+                                       TextWrapping="Wrap"
+                                       AutomationProperties.Name="Runtime QA summary" />
+                            <StackPanel x:Name="ArenaEvaluationQaItems" />
+
+                            <Grid Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Button x:Name="ArenaEvaluationCaptureBaselineButton"
+                                        Click="ArenaEvaluationCaptureBaselineButton_Click"
+                                        Style="{StaticResource RightRailActionButton}"
+                                        AutomationProperties.Name="Capture evaluation baseline"
+                                        AutomationProperties.HelpText="Capture aggregate evidence and make this run the baseline for its model-neutral Match Setup."
+                                        ToolTip="Capture this run as the comparison baseline">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE74E;" Style="{StaticResource RightRailActionIcon}" />
+                                        <TextBlock Text="Baseline" Style="{StaticResource RightRailActionLabel}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="ArenaEvaluationCompareCurrentButton"
+                                        Grid.Column="1"
+                                        Click="ArenaEvaluationCompareCurrentButton_Click"
+                                        Style="{StaticResource RightRailActionButton}"
+                                        AutomationProperties.Name="Compare current arena run"
+                                        AutomationProperties.HelpText="Compare this run only with a baseline that has the same model-neutral Match Setup fingerprint."
+                                        ToolTip="Compare current run with its matching baseline">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE8AB;" Style="{StaticResource RightRailActionIcon}" />
+                                        <TextBlock Text="Compare" Style="{StaticResource RightRailActionLabel}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="ArenaEvaluationRunQaButton"
+                                        Grid.Row="1"
+                                        Click="ArenaEvaluationRunQaButton_Click"
+                                        Style="{StaticResource RightRailActionButton}"
+                                        AutomationProperties.Name="Run local arena QA inspection"
+                                        AutomationProperties.HelpText="Inspect replay identity, runtime errors, stuck states, telemetry completeness, quality evidence, and comparable-baseline regressions."
+                                        ToolTip="Run evidence-based local QA gates">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE73E;" Style="{StaticResource RightRailActionIcon}" />
+                                        <TextBlock Text="Run QA" Style="{StaticResource RightRailActionLabel}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="ArenaEvaluationCopyEvidenceButton"
+                                        Grid.Row="1"
+                                        Grid.Column="1"
+                                        Click="ArenaEvaluationCopyEvidenceButton_Click"
+                                        Style="{StaticResource RightRailActionButton}"
+                                        AutomationProperties.Name="Copy aggregate evaluation evidence"
+                                        AutomationProperties.HelpText="Copy aggregate evaluation, comparison, and QA evidence without transcript bodies, raw provider responses, or credentials."
+                                        ToolTip="Copy secret-free aggregate evaluation evidence">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE8C8;" Style="{StaticResource RightRailActionIcon}" />
+                                        <TextBlock Text="Evidence" Style="{StaticResource RightRailActionLabel}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="ArenaEvaluationCopyReplaySetupButton"
+                                        Grid.Row="2"
+                                        Grid.ColumnSpan="2"
+                                        Click="ArenaEvaluationCopyReplaySetupButton_Click"
+                                        Style="{StaticResource RightRailActionButton}"
+                                        AutomationProperties.Name="Copy exact evaluation replay setup"
+                                        AutomationProperties.HelpText="Copy the exact secret-free Match Setup JSON used by the captured run for import into a clean session."
+                                        ToolTip="Copy the exact secret-free Match Setup JSON for replay">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE72C;" Style="{StaticResource RightRailActionIcon}" />
+                                        <TextBlock Text="Copy replay setup" Style="{StaticResource RightRailActionLabel}" />
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </Expander>
 
                 </StackPanel>
                 <StackPanel x:Name="AgentRightRailPanel"
@@ -3659,7 +3673,7 @@
                             </Border>
                             <TextBlock x:Name="AgentCommandStatusText"
                                        Text="Preview required before any command can run."
-                                       AutomationProperties.LiveSetting="Polite"
+                                       AutomationProperties.LiveSetting="Off"
                                        Style="{StaticResource HintText}" />
                         </StackPanel>
                     </Border>
@@ -3956,8 +3970,9 @@
                     </Border>
                 </StackPanel>
 
-            </StackPanel>
-        </ScrollViewer>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
 
         <Border x:Name="AppSettingsScrim"
                 Grid.RowSpan="2"
@@ -4013,7 +4028,7 @@
                             <TextBlock x:Name="SettingsProviderStatusText"
                                        Foreground="{DynamicResource MutedTextBrush}"
                                        FontWeight="SemiBold"
-                                       AutomationProperties.LiveSetting="Polite"
+                                       AutomationProperties.LiveSetting="Off"
                                        TextWrapping="Wrap"
                                        Text="Provider status unavailable." />
                         </Border>
@@ -4103,7 +4118,7 @@
                         </Grid>
                         <TextBlock x:Name="ProviderPresetStatusText"
                                    Style="{StaticResource HintText}"
-                                   AutomationProperties.LiveSetting="Polite"
+                                   AutomationProperties.LiveSetting="Off"
                                    Margin="{DynamicResource Arena.Gap.Stack}"
                                    Text="A preset fills the server address and connection type. Your model choice stays unchanged." />
                         <Expander x:Name="ProviderCustomConnectionExpander"
@@ -4174,7 +4189,7 @@
                         </Grid>
                         <TextBlock x:Name="ProviderTestStatus"
                                    Style="{StaticResource CollapsibleHintText}"
-                                   AutomationProperties.LiveSetting="Polite"
+                                   AutomationProperties.LiveSetting="Off"
                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                         <TextBlock x:Name="ProviderModelsStatus"
                                    Style="{StaticResource HintText}"
@@ -4238,7 +4253,7 @@
                                 </Grid>
                                 <TextBlock x:Name="ProviderProfileStatusText"
                                            Style="{StaticResource HintText}"
-                                           AutomationProperties.LiveSetting="Polite"
+                                           AutomationProperties.LiveSetting="Off"
                                            Text="Saved setups include provider and role routing. Access tokens are never included." />
                             </StackPanel>
                         </Expander>
@@ -4429,7 +4444,7 @@
                                     <StackPanel>
                                         <TextBlock x:Name="AutoConfigureStatusText"
                                                    Text="No recommendation yet."
-                                                   AutomationProperties.LiveSetting="Polite"
+                                                   AutomationProperties.LiveSetting="Off"
                                                    Style="{StaticResource HintText}" />
                                         <TextBlock x:Name="AutoConfigureHardwareText"
                                                    Style="{StaticResource CollapsibleHintText}"
@@ -4481,7 +4496,7 @@
                                                    Text="Inspect the configured llama-server to load runtime evidence."
                                                    Style="{StaticResource HintText}"
                                                    TextWrapping="Wrap"
-                                                   AutomationProperties.LiveSetting="Polite" />
+                                                   AutomationProperties.LiveSetting="Off" />
                                     </StackPanel>
                                     <TextBlock x:Name="LlamaCppRuntimeCheckedAtText"
                                                Grid.Column="1"
@@ -4560,7 +4575,7 @@
                                                Foreground="{DynamicResource DangerTextBrush}"
                                                Style="{StaticResource HintText}"
                                                TextWrapping="Wrap"
-                                               AutomationProperties.LiveSetting="Polite" />
+                                               AutomationProperties.LiveSetting="Off" />
                                 </Border>
 
                                 <Grid Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
@@ -4653,7 +4668,7 @@
                                    Text="Load plan preview appears after selecting models." />
                         <TextBlock x:Name="PreloadModelsStatusText"
                                    Style="{StaticResource HintText}"
-                                   AutomationProperties.LiveSetting="Polite"
+                                   AutomationProperties.LiveSetting="Off"
                                    Margin="{DynamicResource Arena.Gap.Stack}"
                                    Text="Preload telemetry appears here." />
                         <WrapPanel x:Name="PreloadModelsItems"
@@ -4711,7 +4726,7 @@
                         </Grid>
                         <TextBlock x:Name="DownloadModelStatusText"
                                    Style="{StaticResource HintText}"
-                                   AutomationProperties.LiveSetting="Polite"
+                                   AutomationProperties.LiveSetting="Off"
                                    Margin="{DynamicResource Arena.Gap.Stack}"
                                    Text="Downloads use LM Studio native jobs or Ollama native /api/pull." />
                             </StackPanel>
@@ -5146,7 +5161,7 @@
                         <TextBlock x:Name="InternetBackendStatusText"
                                    Text="Local search: checking..."
                                    Style="{StaticResource HintText}"
-                                   AutomationProperties.LiveSetting="Polite"
+                                   AutomationProperties.LiveSetting="Off"
                                    Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
                         <Button x:Name="TestInternetButton"
                                 Content="Test Internet"
@@ -5160,7 +5175,7 @@
                                    Text="Run Test Internet to verify search, direct page access, and the installed search payload."
                                    Style="{StaticResource HintText}"
                                    TextWrapping="Wrap"
-                                   AutomationProperties.LiveSetting="Polite"
+                                   AutomationProperties.LiveSetting="Off"
                                    AutomationProperties.Name="Internet test result"
                                    Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
                         <TextBlock Text="Search context is gathered quietly and folded into the same agent reply."
@@ -5275,7 +5290,7 @@
                         </Grid>
                         <TextBlock x:Name="SettingsTransferStatusText"
                                    Style="{StaticResource CollapsibleHintText}"
-                                   AutomationProperties.LiveSetting="Polite"
+                                   AutomationProperties.LiveSetting="Off"
                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
                                    Text="" />
                     </StackPanel>
@@ -5295,7 +5310,7 @@
                         <TextBlock x:Name="SettingsPendingChangesText"
                                    Text="No session-scoped changes pending."
                                    Style="{StaticResource CollapsibleHintText}"
-                                   AutomationProperties.LiveSetting="Polite"
+                                   AutomationProperties.LiveSetting="Off"
                                    Margin="{DynamicResource Arena.Gap.Stack}"
                                    TextWrapping="Wrap" />
                         <Button x:Name="ApplySettingsButton"

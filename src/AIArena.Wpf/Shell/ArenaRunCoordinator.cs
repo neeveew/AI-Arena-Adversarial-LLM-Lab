@@ -117,7 +117,7 @@ internal sealed class ArenaRunCoordinator
                 var status = AutoChatStatus(result);
                 finalStatus = status;
                 await refreshActiveSessionAsync(status);
-                if (!ModelTurnSucceeded(result))
+                if (!ShouldContinueAutoChat(result))
                 {
                     break;
                 }
@@ -305,6 +305,11 @@ internal sealed class ArenaRunCoordinator
 
     internal static string AutoChatStatus(OneTurnResult result)
     {
+        if (OutputLimitReached(result))
+        {
+            return $"Auto Chat paused: {result.Message!.Speaker} reached the output limit; the partial response was preserved.";
+        }
+
         return ModelTurnSucceeded(result)
             ? $"Auto Chat: {result.Message!.Speaker} spoke ({result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms)"
             : $"Auto Chat stopped: {TurnFailureDetail(result)}";
@@ -312,6 +317,11 @@ internal sealed class ArenaRunCoordinator
 
     internal static string OneTurnStatus(OneTurnResult result)
     {
+        if (OutputLimitReached(result))
+        {
+            return $"1 TURN reached the output limit: {result.Message!.Speaker}; the partial response was preserved.";
+        }
+
         return ModelTurnSucceeded(result)
             ? $"1 TURN complete: {result.Message!.Speaker} ({result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms)"
             : $"1 TURN failed: {TurnFailureDetail(result)}";
@@ -326,6 +336,11 @@ internal sealed class ArenaRunCoordinator
 
     internal static string AgentTurnStatus(AgentState agent, OneTurnResult result)
     {
+        if (OutputLimitReached(result))
+        {
+            return $"{agent.Name} reached the output limit; the partial response was preserved.";
+        }
+
         return ModelTurnSucceeded(result)
             ? $"{agent.Name} one-shot complete: {result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms"
             : $"{agent.Name} one-shot failed: {TurnFailureDetail(result)}";
@@ -333,10 +348,18 @@ internal sealed class ArenaRunCoordinator
 
     internal static string RetryStatus(TranscriptMessage originalMessage, OneTurnResult result)
     {
+        if (OutputLimitReached(result))
+        {
+            return $"Retry replaced turn {originalMessage.Turn} with a partial response stopped at the output limit.";
+        }
+
         return ModelTurnSucceeded(result)
             ? $"Retry replaced turn {originalMessage.Turn}: {result.Message!.Speaker} ({result.Message!.Model.Model}, {result.Message!.Model.LatencyMs} ms)"
             : $"Retry failed: {TurnFailureDetail(result)}";
     }
+
+    internal static bool ShouldContinueAutoChat(OneTurnResult result) =>
+        ModelTurnSucceeded(result) && !OutputLimitReached(result);
 
     internal static bool ModelTurnSucceeded(OneTurnResult result)
     {
@@ -345,6 +368,10 @@ internal sealed class ArenaRunCoordinator
             && result.Completion?.Ok == true
             && !result.Message.Status.Equals("error", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool OutputLimitReached(OneTurnResult result) =>
+        ModelTurnSucceeded(result)
+        && result.Completion?.StopReason == ModelCompletionStopReason.OutputLimitReached;
 
     private static string TurnFailureDetail(OneTurnResult result)
     {

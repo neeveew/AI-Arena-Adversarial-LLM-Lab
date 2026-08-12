@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -77,6 +78,7 @@ internal sealed class ProviderSettingsCoordinator
     private readonly Func<string, CancellationToken, Task> refreshActiveSessionAsync;
     private readonly Func<bool, CancellationToken, Task> refreshProviderReachabilityAsync;
     private readonly Action updateProviderHealthPopup;
+    private readonly ProviderOperationStatusPublisher operationStatuses;
 
     private readonly Dictionary<string, string> roleModels = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ModelPreloadResult> lastPreloadResults = new(StringComparer.OrdinalIgnoreCase);
@@ -163,7 +165,8 @@ internal sealed class ProviderSettingsCoordinator
         Func<string, CancellationToken, Task> refreshActiveSessionAsync,
         Func<bool, CancellationToken, Task> refreshProviderReachabilityAsync,
         Action updateProviderHealthPopup,
-        Func<string, (double? Temperature, int? MaxOutputTokens)>? roleGenerationOverride = null)
+        Func<string, (double? Temperature, int? MaxOutputTokens)>? roleGenerationOverride = null,
+        ApplicationStatusCenter? statusCenter = null)
     {
         this.roleGenerationOverride = roleGenerationOverride ?? (_ => (null, null));
         this.owner = owner;
@@ -238,6 +241,7 @@ internal sealed class ProviderSettingsCoordinator
         this.refreshActiveSessionAsync = refreshActiveSessionAsync;
         this.refreshProviderReachabilityAsync = refreshProviderReachabilityAsync;
         this.updateProviderHealthPopup = updateProviderHealthPopup;
+        operationStatuses = new ProviderOperationStatusPublisher(statusCenter, CurrentStatusIdentity);
     }
 
     public IReadOnlyList<string> AdvertisedModels => advertisedModels;
@@ -330,39 +334,57 @@ internal sealed class ProviderSettingsCoordinator
             return;
         }
 
-        await RunBusyAsync(busyControl, async () =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            providerTestStatus.Text = "Testing provider...";
-            var result = await providerRuntime.TestAsync(session.Id, allRoles: false, cancellationToken);
-            if (!result.Available)
-            {
-                providerTestStatus.Text = result.Status;
-                return;
-            }
+        await RunBusyAsync(
+            busyControl,
+            () => RunProviderOperationAsync(
+                "provider.test",
+                "Testing provider...",
+                "Provider test ended without a confirmed result.",
+                async status =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    providerTestStatus.Text = "Testing provider...";
+                    var result = await providerRuntime.TestAsync(session.Id, allRoles: false, cancellationToken);
+                    if (!result.Available)
+                    {
+                        providerTestStatus.Text = result.Status;
+                        status.Fail("Provider test unavailable.", result.Status, blocked: true);
+                        return;
+                    }
 
-            if (result.Busy)
-            {
-                providerTestStatus.Text = result.Status;
-                return;
-            }
+                    if (result.Busy)
+                    {
+                        providerTestStatus.Text = result.Status;
+                        status.Fail("Provider test is blocked.", result.Status, blocked: true);
+                        return;
+                    }
 
-            lastProviderHealthCheckedAt = result.CheckedAt;
-            if (result.ModelCount.HasValue)
-            {
-                lastProviderModelCount = result.ModelCount.Value;
-            }
+                    lastProviderHealthCheckedAt = result.CheckedAt;
+                    if (result.ModelCount.HasValue)
+                    {
+                        lastProviderModelCount = result.ModelCount.Value;
+                    }
 
-            if (result.Persisted)
-            {
-                await refreshActiveSessionAsync(result.Status, cancellationToken);
-            }
+                    if (result.Persisted)
+                    {
+                        await refreshActiveSessionAsync(result.Status, cancellationToken);
+                    }
 
-            providerTestStatus.Text = result.Ok
-                ? $"Provider ok: {result.Model} at {result.BaseUrl}; {result.LatencyMs} ms; reply: {result.Reply}"
-                : result.Status;
-            updateProviderHealthPopup();
-        });
+                    providerTestStatus.Text = result.Ok
+                        ? $"Provider ok: {result.Model} at {result.BaseUrl}; {result.LatencyMs} ms; reply: {result.Reply}"
+                        : result.Status;
+                    updateProviderHealthPopup();
+                    if (result.Ok)
+                    {
+                        status.Complete(
+                            "Provider test passed.",
+                            $"{result.Model} responded in {result.LatencyMs} ms.");
+                    }
+                    else
+                    {
+                        status.Fail("Provider test failed.", result.Status);
+                    }
+                }));
     }
 
     public async Task SaveAndTestProviderQuickSetupAsync(
@@ -393,48 +415,73 @@ internal sealed class ProviderSettingsCoordinator
         providerBaseUrlText.Text = baseUrl;
         ShellUiHelpers.SelectComboTag(providerApiModePicker, ApiModeForBaseUrl(baseUrl));
         providerModelText.Text = model;
-        await PersistModelRoutingAsync("Provider quick setup saved.", refreshModels: true, cancellationToken);
+        await RunProviderOperationAsync(
+            "provider.quick-setup",
+            "Saving and testing provider setup...",
+            "Provider quick setup ended without a confirmed result.",
+            async status =>
+            {
+                await PersistModelRoutingAsync(
+                    "Provider quick setup saved.",
+                    refreshModels: true,
+                    cancellationToken,
+                    suppressOperationStatus: true,
+                    parentOperationStatus: status);
+                if (status.IsTerminal)
+                {
+                    return;
+                }
 
-        statusText.Text = "Testing provider completion...";
-        var result = await providerRuntime.TestAsync(session.Id, allRoles: false, cancellationToken);
-        if (!result.Available)
-        {
-            statusText.Foreground = resourceBrush("DangerTextBrush");
-            statusText.Text = result.Status;
-            return;
-        }
+                status.Update("Testing provider completion...");
+                statusText.Text = "Testing provider completion...";
+                var result = await providerRuntime.TestAsync(session.Id, allRoles: false, cancellationToken);
+                if (!result.Available)
+                {
+                    statusText.Foreground = resourceBrush("DangerTextBrush");
+                    statusText.Text = result.Status;
+                    status.Fail("Provider quick setup test unavailable.", result.Status, blocked: true);
+                    return;
+                }
 
-        if (result.Busy)
-        {
-            statusText.Foreground = resourceBrush("MutedTextBrush");
-            statusText.Text = result.Status;
-            return;
-        }
+                if (result.Busy)
+                {
+                    statusText.Foreground = resourceBrush("MutedTextBrush");
+                    statusText.Text = result.Status;
+                    status.Fail("Provider quick setup test is blocked.", result.Status, blocked: true);
+                    return;
+                }
 
-        lastProviderHealthCheckedAt = result.CheckedAt;
-        if (result.ModelCount.HasValue)
-        {
-            lastProviderModelCount = result.ModelCount.Value;
-        }
+                lastProviderHealthCheckedAt = result.CheckedAt;
+                if (result.ModelCount.HasValue)
+                {
+                    lastProviderModelCount = result.ModelCount.Value;
+                }
 
-        if (result.Ok)
-        {
-            statusText.Foreground = resourceBrush("AlphaAccentBrush");
-            statusText.Text = $"Provider online: {result.Model}, {result.LatencyMs} ms.";
-            providerTestStatus.Text = $"Provider ok: {result.Model} at {result.BaseUrl}; {result.LatencyMs} ms; reply: {result.Reply}";
-            await refreshActiveSessionAsync("Provider quick setup complete.", cancellationToken);
-            return;
-        }
+                if (result.Ok)
+                {
+                    statusText.Foreground = resourceBrush("AlphaAccentBrush");
+                    statusText.Text = $"Provider online: {result.Model}, {result.LatencyMs} ms.";
+                    providerTestStatus.Text = $"Provider ok: {result.Model} at {result.BaseUrl}; {result.LatencyMs} ms; reply: {result.Reply}";
+                    await refreshActiveSessionAsync("Provider quick setup complete.", cancellationToken);
+                    status.Complete(
+                        "Provider quick setup complete.",
+                        $"{result.Model} responded in {result.LatencyMs} ms.");
+                    return;
+                }
 
-        statusText.Foreground = result.Reachable ? resourceBrush("BetaAccentBrush") : resourceBrush("DangerTextBrush");
-        statusText.Text = result.Reachable
-            ? $"Provider responded, but completion failed: {result.Error}"
-            : $"Provider offline: {result.Error}";
-        providerTestStatus.Text = result.Status;
-        if (result.Persisted)
-        {
-            await refreshActiveSessionAsync(result.Status, cancellationToken);
-        }
+                statusText.Foreground = result.Reachable ? resourceBrush("BetaAccentBrush") : resourceBrush("DangerTextBrush");
+                statusText.Text = result.Reachable
+                    ? $"Provider responded, but completion failed: {result.Error}"
+                    : $"Provider offline: {result.Error}";
+                providerTestStatus.Text = result.Status;
+                if (result.Persisted)
+                {
+                    await refreshActiveSessionAsync(result.Status, cancellationToken);
+                }
+
+                status.Fail("Provider quick setup test failed.", result.Status);
+            },
+            identity: new ApplicationStatusIdentity(session.Id));
     }
 
     public async Task PreloadSelectedModelsAsync(CancellationToken cancellationToken = default)
@@ -496,64 +543,102 @@ internal sealed class ProviderSettingsCoordinator
                 return;
             }
 
-            IReadOnlyList<ModelPreloadResult> results;
-            var mutationStarted = false;
-            try
-            {
-                results = await modelPreloadService.PreloadAsync(
-                    providerBaseUrlText.Text.Trim(),
-                    models,
-                    CurrentApiMode(),
-                    apiToken,
-                    contextLength,
-                    nativeIdleTtlSeconds,
-                    cancellationToken,
-                    mutationStarting: () =>
+            await RunProviderOperationAsync(
+                "provider.models.preload",
+                $"Preloading {models.Count} selected model(s)...",
+                "Model preload ended without a confirmed result.",
+                async status =>
+                {
+                    IReadOnlyList<ModelPreloadResult> results;
+                    var mutationStarted = false;
+                    try
                     {
-                        EnsureLifecycleContext(lifecycleContext);
-                        mutationStarted = true;
-                    });
-            }
-            catch (ProviderSettingsLifecycleContextChangedException)
-            {
-                SetLifecycleContextStatus(mutationStarted
-                    ? "The provider or session changed after preload mutation began. The model load state is unknown; refresh to verify it."
-                    : "The provider or session changed before mutation; no preload request was sent.");
-                return;
-            }
+                        results = await modelPreloadService.PreloadAsync(
+                            providerBaseUrlText.Text.Trim(),
+                            models,
+                            CurrentApiMode(),
+                            apiToken,
+                            contextLength,
+                            nativeIdleTtlSeconds,
+                            cancellationToken,
+                            mutationStarting: () =>
+                            {
+                                EnsureLifecycleContext(lifecycleContext);
+                                mutationStarted = true;
+                            });
+                    }
+                    catch (ProviderSettingsLifecycleContextChangedException)
+                    {
+                        var message = mutationStarted
+                            ? "The provider or session changed after preload mutation began. The model load state is unknown; refresh to verify it."
+                            : "The provider or session changed before mutation; no preload request was sent.";
+                        SetLifecycleContextStatus(message);
+                        if (mutationStarted)
+                        {
+                            status.MarkUnconfirmed("Model preload outcome is unconfirmed.", message);
+                        }
+                        else
+                        {
+                            status.Cancel("Model preload was not started.", message);
+                        }
 
-            if (!LifecycleContextMatches(lifecycleContext))
-            {
-                SetLifecycleContextStatus("The provider or session changed while preloading. The model load state is unknown; refresh to verify it.");
-                return;
-            }
+                        return;
+                    }
 
-            lastPreloadResults.Clear();
-            foreach (var result in results)
-            {
-                lastPreloadResults[result.Model] = result;
-            }
+                    if (!LifecycleContextMatches(lifecycleContext))
+                    {
+                        const string message = "The provider or session changed while preloading. The model load state is unknown; refresh to verify it.";
+                        SetLifecycleContextStatus(message);
+                        status.MarkUnconfirmed("Model preload outcome is unconfirmed.", message);
+                        return;
+                    }
 
-            var failures = results.Count(result => result.IsFailure);
-            var unknown = results.Count(result => result.MutationOutcomeUnknown);
-            preloadModelsStatusText.Foreground = unknown > 0
-                ? resourceBrush("BetaAccentBrush")
-                : failures > 0
-                    ? resourceBrush("DangerTextBrush")
-                : resourceBrush("AlphaAccentBrush");
-            preloadModelsStatusText.Text = unknown > 0
-                ? $"Last preload: {DateTime.Now:h:mm:ss tt} - {unknown} outcome(s) unconfirmed; refresh LM Studio state."
-                : $"Last preload: {DateTime.Now:h:mm:ss tt} - {results.Count} model(s), {failures} warning(s).";
-            PopulatePreloadModelBadges(results);
-            UpdateLoadPlanPreview();
-            providerTestStatus.Text = unknown > 0
-                ? "A model preload request started without a definite outcome. Refresh to verify residency."
-                : failures > 0
-                ? "Model preload finished with warnings. See preload telemetry."
-                : "Selected models preloaded or already available.";
+                    lastPreloadResults.Clear();
+                    foreach (var result in results)
+                    {
+                        lastPreloadResults[result.Model] = result;
+                    }
 
-            await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
-            UpdateModelStateLabels();
+                    var failures = results.Count(result => result.IsFailure);
+                    var unknown = results.Count(result => result.MutationOutcomeUnknown);
+                    preloadModelsStatusText.Foreground = unknown > 0
+                        ? resourceBrush("BetaAccentBrush")
+                        : failures > 0
+                            ? resourceBrush("DangerTextBrush")
+                        : resourceBrush("AlphaAccentBrush");
+                    preloadModelsStatusText.Text = unknown > 0
+                        ? $"Last preload: {DateTime.Now:h:mm:ss tt} - {unknown} outcome(s) unconfirmed; refresh LM Studio state."
+                        : $"Last preload: {DateTime.Now:h:mm:ss tt} - {results.Count} model(s), {failures} warning(s).";
+                    PopulatePreloadModelBadges(results);
+                    UpdateLoadPlanPreview();
+                    providerTestStatus.Text = unknown > 0
+                        ? "A model preload request started without a definite outcome. Refresh to verify residency."
+                        : failures > 0
+                        ? "Model preload finished with warnings. See preload telemetry."
+                        : "Selected models preloaded or already available.";
+
+                    await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
+                    UpdateModelStateLabels();
+                    if (unknown > 0)
+                    {
+                        status.MarkUnconfirmed(
+                            "Model preload outcome is unconfirmed.",
+                            $"{unknown} of {results.Count} model outcomes require residency verification.");
+                    }
+                    else if (failures > 0)
+                    {
+                        status.Fail(
+                            "Model preload finished with failures.",
+                            $"{failures} of {results.Count} model operations failed. See provider telemetry for details.");
+                    }
+                    else
+                    {
+                        status.Complete(
+                            "Selected models preloaded.",
+                            $"{results.Count} model(s) are loaded or already available.");
+                    }
+                },
+                StatusIdentity(lifecycleContext));
             }));
     }
 
@@ -584,61 +669,99 @@ internal sealed class ProviderSettingsCoordinator
                 return;
             }
 
-            IReadOnlyList<ModelPreloadResult> results;
-            var mutationStarted = false;
-            try
-            {
-                results = await modelPreloadService.UnloadAsync(
-                    providerBaseUrlText.Text.Trim(),
-                    models,
-                    CurrentApiMode(),
-                    apiToken,
-                    cancellationToken,
-                    mutationStarting: () =>
+            await RunProviderOperationAsync(
+                "provider.models.unload",
+                $"Unloading {models.Count} selected model(s)...",
+                "Model unload ended without a confirmed result.",
+                async status =>
+                {
+                    IReadOnlyList<ModelPreloadResult> results;
+                    var mutationStarted = false;
+                    try
                     {
-                        EnsureLifecycleContext(lifecycleContext);
-                        mutationStarted = true;
-                    });
-            }
-            catch (ProviderSettingsLifecycleContextChangedException)
-            {
-                SetLifecycleContextStatus(mutationStarted
-                    ? "The provider or session changed after unload mutation began. The model load state is unknown; refresh to verify it."
-                    : "The provider or session changed before mutation; no unload request was sent.");
-                return;
-            }
+                        results = await modelPreloadService.UnloadAsync(
+                            providerBaseUrlText.Text.Trim(),
+                            models,
+                            CurrentApiMode(),
+                            apiToken,
+                            cancellationToken,
+                            mutationStarting: () =>
+                            {
+                                EnsureLifecycleContext(lifecycleContext);
+                                mutationStarted = true;
+                            });
+                    }
+                    catch (ProviderSettingsLifecycleContextChangedException)
+                    {
+                        var message = mutationStarted
+                            ? "The provider or session changed after unload mutation began. The model load state is unknown; refresh to verify it."
+                            : "The provider or session changed before mutation; no unload request was sent.";
+                        SetLifecycleContextStatus(message);
+                        if (mutationStarted)
+                        {
+                            status.MarkUnconfirmed("Model unload outcome is unconfirmed.", message);
+                        }
+                        else
+                        {
+                            status.Cancel("Model unload was not started.", message);
+                        }
 
-            if (!LifecycleContextMatches(lifecycleContext))
-            {
-                SetLifecycleContextStatus("The provider or session changed while unloading. The model load state is unknown; refresh to verify it.");
-                return;
-            }
+                        return;
+                    }
 
-            lastPreloadResults.Clear();
-            foreach (var result in results)
-            {
-                lastPreloadResults[result.Model] = result;
-            }
+                    if (!LifecycleContextMatches(lifecycleContext))
+                    {
+                        const string message = "The provider or session changed while unloading. The model load state is unknown; refresh to verify it.";
+                        SetLifecycleContextStatus(message);
+                        status.MarkUnconfirmed("Model unload outcome is unconfirmed.", message);
+                        return;
+                    }
 
-            var failures = results.Count(result => result.IsFailure);
-            var unknown = results.Count(result => result.MutationOutcomeUnknown);
-            preloadModelsStatusText.Foreground = unknown > 0
-                ? resourceBrush("BetaAccentBrush")
-                : failures > 0
-                    ? resourceBrush("DangerTextBrush")
-                : resourceBrush("AlphaAccentBrush");
-            preloadModelsStatusText.Text = unknown > 0
-                ? $"Last unload: {DateTime.Now:h:mm:ss tt} - {unknown} outcome(s) unconfirmed; refresh LM Studio state."
-                : $"Last unload: {DateTime.Now:h:mm:ss tt} - {results.Count} model(s), {failures} warning(s).";
-            PopulatePreloadModelBadges(results);
-            providerTestStatus.Text = unknown > 0
-                ? "A model unload request started without a definite outcome. Refresh to verify residency."
-                : failures > 0
-                ? "Model unload finished with warnings. See unload telemetry."
-                : "Selected models unloaded or already idle.";
+                    lastPreloadResults.Clear();
+                    foreach (var result in results)
+                    {
+                        lastPreloadResults[result.Model] = result;
+                    }
 
-            await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
-            UpdateModelStateLabels();
+                    var failures = results.Count(result => result.IsFailure);
+                    var unknown = results.Count(result => result.MutationOutcomeUnknown);
+                    preloadModelsStatusText.Foreground = unknown > 0
+                        ? resourceBrush("BetaAccentBrush")
+                        : failures > 0
+                            ? resourceBrush("DangerTextBrush")
+                        : resourceBrush("AlphaAccentBrush");
+                    preloadModelsStatusText.Text = unknown > 0
+                        ? $"Last unload: {DateTime.Now:h:mm:ss tt} - {unknown} outcome(s) unconfirmed; refresh LM Studio state."
+                        : $"Last unload: {DateTime.Now:h:mm:ss tt} - {results.Count} model(s), {failures} warning(s).";
+                    PopulatePreloadModelBadges(results);
+                    providerTestStatus.Text = unknown > 0
+                        ? "A model unload request started without a definite outcome. Refresh to verify residency."
+                        : failures > 0
+                        ? "Model unload finished with warnings. See unload telemetry."
+                        : "Selected models unloaded or already idle.";
+
+                    await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
+                    UpdateModelStateLabels();
+                    if (unknown > 0)
+                    {
+                        status.MarkUnconfirmed(
+                            "Model unload outcome is unconfirmed.",
+                            $"{unknown} of {results.Count} model outcomes require residency verification.");
+                    }
+                    else if (failures > 0)
+                    {
+                        status.Fail(
+                            "Model unload finished with failures.",
+                            $"{failures} of {results.Count} model operations failed. See provider telemetry for details.");
+                    }
+                    else
+                    {
+                        status.Complete(
+                            "Selected models unloaded.",
+                            $"{results.Count} model(s) are unloaded or already idle.");
+                    }
+                },
+                StatusIdentity(lifecycleContext));
             }));
     }
 
@@ -655,109 +778,129 @@ internal sealed class ProviderSettingsCoordinator
             }
 
             var apiMode = CurrentApiMode();
-            if (ModelProviderApiModes.IsOllamaNative(apiMode))
-            {
-                ClearDownloadJob();
-                downloadModelStatusText.Foreground = resourceBrush("MutedTextBrush");
-                downloadModelStatusText.Text = $"Pulling {model} with Ollama...";
-
-                var pullResult = await ollamaModelPullService.PullAsync(
-                    providerBaseUrlText.Text.Trim(),
-                    model,
-                    await CurrentProviderApiTokenAsync(),
-                    cancellationToken);
-                downloadModelStatusText.Foreground = pullResult.Ok
-                    ? resourceBrush("AlphaAccentBrush")
-                    : resourceBrush("DangerTextBrush");
-                downloadModelStatusText.Text = FormatOllamaPullStatusText(pullResult);
-                providerTestStatus.Text = downloadModelStatusText.Text;
-                if (activeSession() is { } ollamaSession)
-                {
-                    await eventLogStore.AppendAsync(ollamaSession.Id, "ollama_model_pull_requested", new
-                    {
-                        pullResult.Model,
-                        pullResult.Status,
-                        pullResult.Digest,
-                        pullResult.CompletedBytes,
-                        pullResult.TotalBytes,
-                        pullResult.Ok
-                    }, cancellationToken);
-                }
-
-                if (pullResult.Ok)
-                {
-                    await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
-                    UpdateModelStateLabels();
-                }
-
-                return;
-            }
-
-            if (!ModelProviderApiModes.IsLmStudioNative(apiMode))
+            if (!ModelProviderApiModes.IsOllamaNative(apiMode)
+                && !ModelProviderApiModes.IsLmStudioNative(apiMode))
             {
                 downloadModelStatusText.Foreground = resourceBrush("DangerTextBrush");
                 downloadModelStatusText.Text = "Switch API mode to LM Studio native or Ollama native before downloading.";
                 return;
             }
 
-            var quantization = ShellUiHelpers.SelectedComboTag(downloadQuantizationPicker, "");
-            ClearDownloadJob();
-            downloadModelStatusText.Foreground = resourceBrush("MutedTextBrush");
-            downloadModelStatusText.Text = $"Starting download for {model}...";
-
-            var apiToken = await CurrentProviderApiTokenAsync();
-            var result = await modelDownloadService.StartDownloadAsync(
-                providerBaseUrlText.Text.Trim(),
-                model,
-                quantization,
-                CurrentApiMode(),
-                apiToken,
-                cancellationToken);
-            if (!result.Ok)
-            {
-                downloadModelStatusText.Foreground = resourceBrush("DangerTextBrush");
-                downloadModelStatusText.Text = $"Download failed: {result.Error}";
-                providerTestStatus.Text = downloadModelStatusText.Text;
-                return;
-            }
-
-            var displayed = result;
-            RememberDownloadJob(result);
-            if (!result.IsComplete && !string.IsNullOrWhiteSpace(result.JobId))
-            {
-                var status = await modelDownloadService.GetStatusAsync(
-                    providerBaseUrlText.Text.Trim(),
-                    result.JobId,
-                    result.Model,
-                    result.Quantization,
-                    apiToken,
-                    cancellationToken);
-                if (status.Ok)
+            await RunProviderOperationAsync(
+                "provider.model.download",
+                ModelProviderApiModes.IsOllamaNative(apiMode)
+                    ? $"Pulling {model} with Ollama..."
+                    : $"Starting download for {model}...",
+                "Model download ended without a confirmed result.",
+                async status =>
                 {
-                    displayed = status;
-                    RememberDownloadJob(status);
-                }
-            }
+                    if (ModelProviderApiModes.IsOllamaNative(apiMode))
+                    {
+                        ClearDownloadJob();
+                        downloadModelStatusText.Foreground = resourceBrush("MutedTextBrush");
+                        downloadModelStatusText.Text = $"Pulling {model} with Ollama...";
 
-            downloadModelStatusText.Foreground = displayed.IsComplete
-                ? resourceBrush("AlphaAccentBrush")
-                : resourceBrush("BetaAccentBrush");
-            downloadModelStatusText.Text = FormatDownloadStatusText(displayed);
-            providerTestStatus.Text = downloadModelStatusText.Text;
-            if (activeSession() is { } session)
-            {
-                await eventLogStore.AppendAsync(session.Id, "native_model_download_requested", new
-                {
-                    displayed.Model,
-                    displayed.Quantization,
-                    displayed.JobId,
-                    displayed.Status,
-                    displayed.IsComplete
-                }, cancellationToken);
-            }
+                        var pullResult = await ollamaModelPullService.PullAsync(
+                            providerBaseUrlText.Text.Trim(),
+                            model,
+                            await CurrentProviderApiTokenAsync(),
+                            cancellationToken);
+                        downloadModelStatusText.Foreground = pullResult.Ok
+                            ? resourceBrush("AlphaAccentBrush")
+                            : resourceBrush("DangerTextBrush");
+                        downloadModelStatusText.Text = FormatOllamaPullStatusText(pullResult);
+                        providerTestStatus.Text = downloadModelStatusText.Text;
+                        if (activeSession() is { } ollamaSession)
+                        {
+                            await eventLogStore.AppendAsync(ollamaSession.Id, "ollama_model_pull_requested", new
+                            {
+                                pullResult.Model,
+                                pullResult.Status,
+                                pullResult.Digest,
+                                pullResult.CompletedBytes,
+                                pullResult.TotalBytes,
+                                pullResult.Ok
+                            }, cancellationToken);
+                        }
 
-            await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
-            UpdateModelStateLabels();
+                        if (pullResult.Ok)
+                        {
+                            await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
+                            UpdateModelStateLabels();
+                            status.Complete("Ollama model pull complete.", $"{model} is ready.");
+                        }
+                        else
+                        {
+                            status.Fail("Ollama model pull failed.", pullResult.Error);
+                        }
+
+                        return;
+                    }
+
+                    var quantization = ShellUiHelpers.SelectedComboTag(downloadQuantizationPicker, "");
+                    ClearDownloadJob();
+                    downloadModelStatusText.Foreground = resourceBrush("MutedTextBrush");
+                    downloadModelStatusText.Text = $"Starting download for {model}...";
+
+                    var apiToken = await CurrentProviderApiTokenAsync();
+                    var result = await modelDownloadService.StartDownloadAsync(
+                        providerBaseUrlText.Text.Trim(),
+                        model,
+                        quantization,
+                        CurrentApiMode(),
+                        apiToken,
+                        cancellationToken);
+                    if (!result.Ok)
+                    {
+                        downloadModelStatusText.Foreground = resourceBrush("DangerTextBrush");
+                        downloadModelStatusText.Text = $"Download failed: {result.Error}";
+                        providerTestStatus.Text = downloadModelStatusText.Text;
+                        status.Fail("Model download failed.", result.Error);
+                        return;
+                    }
+
+                    var displayed = result;
+                    RememberDownloadJob(result);
+                    if (!result.IsComplete && !string.IsNullOrWhiteSpace(result.JobId))
+                    {
+                        status.Update($"Checking download for {model}...");
+                        var downloadStatus = await modelDownloadService.GetStatusAsync(
+                            providerBaseUrlText.Text.Trim(),
+                            result.JobId,
+                            result.Model,
+                            result.Quantization,
+                            apiToken,
+                            cancellationToken);
+                        if (downloadStatus.Ok)
+                        {
+                            displayed = downloadStatus;
+                            RememberDownloadJob(downloadStatus);
+                        }
+                    }
+
+                    downloadModelStatusText.Foreground = displayed.IsComplete
+                        ? resourceBrush("AlphaAccentBrush")
+                        : resourceBrush("BetaAccentBrush");
+                    downloadModelStatusText.Text = FormatDownloadStatusText(displayed);
+                    providerTestStatus.Text = downloadModelStatusText.Text;
+                    if (activeSession() is { } session)
+                    {
+                        await eventLogStore.AppendAsync(session.Id, "native_model_download_requested", new
+                        {
+                            displayed.Model,
+                            displayed.Quantization,
+                            displayed.JobId,
+                            displayed.Status,
+                            displayed.IsComplete
+                        }, cancellationToken);
+                    }
+
+                    await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
+                    UpdateModelStateLabels();
+                    status.Complete(
+                        displayed.IsComplete ? "Model download complete." : "Model download started.",
+                        downloadModelStatusText.Text);
+                });
         });
     }
 
@@ -786,37 +929,48 @@ internal sealed class ProviderSettingsCoordinator
             return;
         }
 
-        await RunBusyAsync(checkDownloadStatusButton, async () =>
-        {
-            downloadModelStatusText.Foreground = resourceBrush("MutedTextBrush");
-            downloadModelStatusText.Text = $"Checking download job {lastDownloadJobId}...";
-            var status = await modelDownloadService.GetStatusAsync(
-                providerBaseUrlText.Text.Trim(),
-                lastDownloadJobId,
-                lastDownloadModel,
-                lastDownloadQuantization,
-                await CurrentProviderApiTokenAsync(),
-                cancellationToken);
-            if (!status.Ok)
-            {
-                downloadModelStatusText.Foreground = resourceBrush("DangerTextBrush");
-                downloadModelStatusText.Text = $"Download status failed: {status.Error}";
-                providerTestStatus.Text = downloadModelStatusText.Text;
-                return;
-            }
+        await RunBusyAsync(
+            checkDownloadStatusButton,
+            () => RunProviderOperationAsync(
+                "provider.model.download-status",
+                $"Checking download for {lastDownloadModel}...",
+                "Download status check ended without a confirmed result.",
+                async operationStatus =>
+                {
+                    downloadModelStatusText.Foreground = resourceBrush("MutedTextBrush");
+                    downloadModelStatusText.Text = $"Checking download job {lastDownloadJobId}...";
+                    var status = await modelDownloadService.GetStatusAsync(
+                        providerBaseUrlText.Text.Trim(),
+                        lastDownloadJobId,
+                        lastDownloadModel,
+                        lastDownloadQuantization,
+                        await CurrentProviderApiTokenAsync(),
+                        cancellationToken);
+                    if (!status.Ok)
+                    {
+                        downloadModelStatusText.Foreground = resourceBrush("DangerTextBrush");
+                        downloadModelStatusText.Text = $"Download status failed: {status.Error}";
+                        providerTestStatus.Text = downloadModelStatusText.Text;
+                        operationStatus.Fail("Download status check failed.", status.Error);
+                        return;
+                    }
 
-            RememberDownloadJob(status);
-            downloadModelStatusText.Foreground = status.IsComplete
-                ? resourceBrush("AlphaAccentBrush")
-                : resourceBrush("BetaAccentBrush");
-            downloadModelStatusText.Text = FormatDownloadStatusText(status);
-            providerTestStatus.Text = downloadModelStatusText.Text;
-            if (status.IsComplete)
-            {
-                await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
-                UpdateModelStateLabels();
-            }
-        });
+                    RememberDownloadJob(status);
+                    downloadModelStatusText.Foreground = status.IsComplete
+                        ? resourceBrush("AlphaAccentBrush")
+                        : resourceBrush("BetaAccentBrush");
+                    downloadModelStatusText.Text = FormatDownloadStatusText(status);
+                    providerTestStatus.Text = downloadModelStatusText.Text;
+                    if (status.IsComplete)
+                    {
+                        await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
+                        UpdateModelStateLabels();
+                    }
+
+                    operationStatus.Complete(
+                        status.IsComplete ? "Model download complete." : "Model download is still running.",
+                        downloadModelStatusText.Text);
+                }));
     }
 
     internal static string FormatDownloadStatusText(LmStudioModelDownloadResult result)
@@ -1038,47 +1192,66 @@ internal sealed class ProviderSettingsCoordinator
 
     public async Task AutoConfigureAsync(CancellationToken cancellationToken = default)
     {
-        await RunBusyAsync(autoConfigureButton, async () =>
-        {
-            applyAutoConfigureButton.IsEnabled = false;
-            autoConfigureRecommendationItems.Children.Clear();
-            autoConfigureStatusText.Foreground = resourceBrush("MutedTextBrush");
-            autoConfigureStatusText.Text = "Detecting GPU setup, provider capability, and advertised models...";
-            autoConfigureHardwareText.Text = "";
-            autoConfigureProviderText.Text = "";
-
-            var strategy = ShellUiHelpers.SelectedComboTag(autoConfigureStrategyPicker, "auto");
-            var plan = await providerAutoConfigureService.DetectAsync(
-                providerBaseUrlText.Text.Trim(),
-                strategy,
-                CurrentApiMode(),
-                CurrentProviderApiTokenText(),
-                cancellationToken);
-            lastAutoConfigurePlan = plan;
-            PopulateAutoConfigurePlan(plan);
-
-            if (plan.ProviderOnline)
-            {
-                advertisedModels = plan.Models.Select(model => model.Name).ToArray();
-                lastProviderModelCount = advertisedModels.Count;
-                lastModelListCheckedAt = DateTimeOffset.Now;
-                isUpdatingRoleModelEditor = true;
-                try
+        await RunBusyAsync(
+            autoConfigureButton,
+            () => RunProviderOperationAsync(
+                "provider.auto-configure.scan",
+                "Scanning provider and hardware...",
+                "Provider recommendation scan ended without a confirmed result.",
+                async status =>
                 {
-                    UpdateModelComboItems(providerModelText);
-                    foreach (var comboBox in RoleModelComboBoxes())
+                    applyAutoConfigureButton.IsEnabled = false;
+                    autoConfigureRecommendationItems.Children.Clear();
+                    autoConfigureStatusText.Foreground = resourceBrush("MutedTextBrush");
+                    autoConfigureStatusText.Text = "Detecting GPU setup, provider capability, and advertised models...";
+                    autoConfigureHardwareText.Text = "";
+                    autoConfigureProviderText.Text = "";
+
+                    var strategy = ShellUiHelpers.SelectedComboTag(autoConfigureStrategyPicker, "auto");
+                    var plan = await providerAutoConfigureService.DetectAsync(
+                        providerBaseUrlText.Text.Trim(),
+                        strategy,
+                        CurrentApiMode(),
+                        CurrentProviderApiTokenText(),
+                        cancellationToken);
+                    lastAutoConfigurePlan = plan;
+                    PopulateAutoConfigurePlan(plan);
+
+                    if (plan.ProviderOnline)
                     {
-                        UpdateModelComboItems(comboBox);
+                        advertisedModels = plan.Models.Select(model => model.Name).ToArray();
+                        lastProviderModelCount = advertisedModels.Count;
+                        lastModelListCheckedAt = DateTimeOffset.Now;
+                        isUpdatingRoleModelEditor = true;
+                        try
+                        {
+                            UpdateModelComboItems(providerModelText);
+                            foreach (var comboBox in RoleModelComboBoxes())
+                            {
+                                UpdateModelComboItems(comboBox);
+                            }
+                        }
+                        finally
+                        {
+                            isUpdatingRoleModelEditor = false;
+                        }
                     }
-                }
-                finally
-                {
-                    isUpdatingRoleModelEditor = false;
-                }
-            }
 
-            updateProviderHealthPopup();
-        });
+                    updateProviderHealthPopup();
+                    if (plan.ProviderOnline && plan.Assignments.Count > 0)
+                    {
+                        status.Complete(
+                            "Provider recommendation ready.",
+                            $"Detected {plan.Models.Count} chat model(s) and {plan.Assignments.Count} role assignment(s).");
+                    }
+                    else
+                    {
+                        status.Fail(
+                            "Provider recommendation unavailable.",
+                            autoConfigureStatusText.Text,
+                            blocked: !plan.ProviderOnline);
+                    }
+                }));
     }
 
     public async Task ApplyAutoConfigureAsync(CancellationToken cancellationToken = default)
@@ -1089,58 +1262,78 @@ internal sealed class ProviderSettingsCoordinator
             return;
         }
 
-        await RunBusyAsync(applyAutoConfigureButton, async () =>
-        {
-            var plan = lastAutoConfigurePlan;
-            if (!plan.ProviderOnline || string.IsNullOrWhiteSpace(plan.DefaultModel) || plan.Assignments.Count == 0)
-            {
-                autoConfigureStatusText.Foreground = resourceBrush("DangerTextBrush");
-                autoConfigureStatusText.Text = "No usable recommendation to apply.";
-                return;
-            }
-
-            if (activeSession() is null)
-            {
-                await sessionStore.EnsureDefaultSessionAsync(cancellationToken);
-                await loadSessionsAsync("default", cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-
-            isUpdatingRoleModelEditor = true;
-            try
-            {
-                providerBaseUrlText.Text = plan.ProviderBaseUrl;
-                ShellUiHelpers.SelectComboTag(
-                    providerApiModePicker,
-                    ModelProviderApiModes.Normalize(plan.ApiMode));
-                providerModelText.Text = plan.DefaultModel;
-                var uniqueModels = plan.Assignments
-                    .Select(item => item.Model)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Count();
-                foreach (var assignment in plan.Assignments)
+        await RunBusyAsync(
+            applyAutoConfigureButton,
+            () => RunProviderOperationAsync(
+                "provider.auto-configure.apply",
+                "Applying provider recommendation...",
+                "Provider recommendation apply ended without a confirmed result.",
+                async status =>
                 {
-                    var key = assignment.Role.ToLowerInvariant();
-                    var model = uniqueModels <= 1 || assignment.Model.Equals(plan.DefaultModel, StringComparison.OrdinalIgnoreCase)
-                        ? ""
-                        : assignment.Model;
-                    SetRoleModelText(key, model);
-                    roleModels[key] = model;
-                }
-            }
-            finally
-            {
-                isUpdatingRoleModelEditor = false;
-            }
+                    var plan = lastAutoConfigurePlan;
+                    if (!plan.ProviderOnline || string.IsNullOrWhiteSpace(plan.DefaultModel) || plan.Assignments.Count == 0)
+                    {
+                        autoConfigureStatusText.Foreground = resourceBrush("DangerTextBrush");
+                        autoConfigureStatusText.Text = "No usable recommendation to apply.";
+                        status.Fail("Provider recommendation cannot be applied.", autoConfigureStatusText.Text, blocked: true);
+                        return;
+                    }
 
-            SaveRoleModelDrafts();
-            UpdateRoleModelSummary();
-            await PersistModelRoutingAsync("Auto configuration applied.", refreshModels: true, cancellationToken);
-            preloadModelsStatusText.Foreground = resourceBrush("MutedTextBrush");
-            preloadModelsStatusText.Text = plan.PreloadGuidance;
-            autoConfigureStatusText.Foreground = resourceBrush("AlphaAccentBrush");
-            autoConfigureStatusText.Text = "Applied recommended model routing.";
-        });
+                    if (activeSession() is null)
+                    {
+                        await sessionStore.EnsureDefaultSessionAsync(cancellationToken);
+                        await loadSessionsAsync("default", cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+
+                    isUpdatingRoleModelEditor = true;
+                    try
+                    {
+                        providerBaseUrlText.Text = plan.ProviderBaseUrl;
+                        ShellUiHelpers.SelectComboTag(
+                            providerApiModePicker,
+                            ModelProviderApiModes.Normalize(plan.ApiMode));
+                        providerModelText.Text = plan.DefaultModel;
+                        var uniqueModels = plan.Assignments
+                            .Select(item => item.Model)
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .Count();
+                        foreach (var assignment in plan.Assignments)
+                        {
+                            var key = assignment.Role.ToLowerInvariant();
+                            var model = uniqueModels <= 1 || assignment.Model.Equals(plan.DefaultModel, StringComparison.OrdinalIgnoreCase)
+                                ? ""
+                                : assignment.Model;
+                            SetRoleModelText(key, model);
+                            roleModels[key] = model;
+                        }
+                    }
+                    finally
+                    {
+                        isUpdatingRoleModelEditor = false;
+                    }
+
+                    SaveRoleModelDrafts();
+                    UpdateRoleModelSummary();
+                    await PersistModelRoutingAsync(
+                        "Auto configuration applied.",
+                        refreshModels: true,
+                        cancellationToken,
+                        suppressOperationStatus: true,
+                        parentOperationStatus: status);
+                    if (status.IsTerminal)
+                    {
+                        return;
+                    }
+                    preloadModelsStatusText.Foreground = resourceBrush("MutedTextBrush");
+                    preloadModelsStatusText.Text = plan.PreloadGuidance;
+                    autoConfigureStatusText.Foreground = resourceBrush("AlphaAccentBrush");
+                    autoConfigureStatusText.Text = "Applied recommended model routing.";
+                    status.Complete(
+                        "Provider recommendation applied.",
+                        $"Default model {plan.DefaultModel}; {plan.Assignments.Count} role assignment(s) updated.");
+                },
+                identity: SessionOnlyStatusIdentity()));
     }
 
     public async Task ProviderBaseUrlCommittedAsync(CancellationToken cancellationToken = default)
@@ -1192,60 +1385,94 @@ internal sealed class ProviderSettingsCoordinator
         bool refreshModels = false,
         CancellationToken cancellationToken = default,
         bool? defaultForUnassignedAgentsEnabled = null,
-        IReadOnlyDictionary<string, string>? profileRoleModelsByKey = null)
+        IReadOnlyDictionary<string, string>? profileRoleModelsByKey = null,
+        IReadOnlyList<WpfProviderModelSettings>? profileModelSettings = null,
+        bool suppressOperationStatus = false,
+        ProviderOperationStatus? parentOperationStatus = null)
     {
+        if (isRenderingSnapshot() || isUpdatingRoleModelEditor)
+        {
+            return;
+        }
+
         var session = activeSession();
-        if (isRenderingSnapshot() || isUpdatingRoleModelEditor || session is null)
+        var routingStatus = operationStatuses.BeginIf(
+            !suppressOperationStatus,
+            "provider.routing-save",
+            "Saving provider routing...",
+            identity: session is null
+                ? ApplicationStatusIdentity.Empty
+                : new ApplicationStatusIdentity(session.Id));
+        void FailRouting(string summary, string detail)
         {
-            return;
+            routingStatus.Fail(summary, detail);
+            if (suppressOperationStatus)
+            {
+                parentOperationStatus?.Fail(summary, detail);
+            }
         }
 
-        var baseUrl = providerBaseUrlText.Text.Trim();
-        var apiMode = CurrentApiMode();
-        UpdateNativeLifecycleControls();
-        var apiToken = CurrentProviderApiTokenText();
-        var defaultModel = providerModelText.Text.Trim();
-        SaveRoleModelDrafts();
-        UpdateRoleModelSummary();
-        var roleModelsToSave = RoleModelKeys()
-            .ToDictionary(key => key, RoleModel, StringComparer.OrdinalIgnoreCase);
-        var roleOverridesToSave = RoleModelKeys()
-            .ToDictionary(key => key, roleGenerationOverride, StringComparer.OrdinalIgnoreCase);
-        if (ShouldClearDownloadJob(
-            lastDownloadJobId,
-            lastDownloadProviderBaseUrl,
-            lastDownloadApiMode,
-            lastDownloadApiToken,
-            baseUrl,
-            apiMode,
-            apiToken))
-        {
-            ClearDownloadJob();
-        }
-
-        if (string.IsNullOrWhiteSpace(baseUrl))
-        {
-            providerTestStatus.Text = "Server address is required.";
-            return;
-        }
-
-        if (!TryCurrentProviderContextLength(out var providerContextLength))
-        {
-            return;
-        }
-
-        if (!TryCurrentProviderNativeIdleTtl(out var nativeIdleTtlSeconds))
-        {
-            return;
-        }
-
-        await arenaOperationLock.WaitAsync(cancellationToken);
+        var routingPersisted = false;
         try
         {
+            if (session is null)
+            {
+                const string message = "No active session is available; provider routing was not saved.";
+                providerTestStatus.Text = message;
+                FailRouting("Provider routing was not saved.", message);
+                return;
+            }
+
+            var baseUrl = providerBaseUrlText.Text.Trim();
+            var apiMode = CurrentApiMode();
+            UpdateNativeLifecycleControls();
+            var apiToken = CurrentProviderApiTokenText();
+            var defaultModel = providerModelText.Text.Trim();
+            SaveRoleModelDrafts();
+            UpdateRoleModelSummary();
+            var roleModelsToSave = RoleModelKeys()
+                .ToDictionary(key => key, RoleModel, StringComparer.OrdinalIgnoreCase);
+            var roleOverridesToSave = RoleModelKeys()
+                .ToDictionary(key => key, roleGenerationOverride, StringComparer.OrdinalIgnoreCase);
+            if (ShouldClearDownloadJob(
+                lastDownloadJobId,
+                lastDownloadProviderBaseUrl,
+                lastDownloadApiMode,
+                lastDownloadApiToken,
+                baseUrl,
+                apiMode,
+                apiToken))
+            {
+                ClearDownloadJob();
+            }
+
+            if (string.IsNullOrWhiteSpace(baseUrl))
+            {
+                providerTestStatus.Text = "Server address is required.";
+                FailRouting("Provider routing was not saved.", providerTestStatus.Text);
+                return;
+            }
+
+            if (!TryCurrentProviderContextLength(out var providerContextLength))
+            {
+                FailRouting("Provider routing was not saved.", providerTestStatus.Text);
+                return;
+            }
+
+            if (!TryCurrentProviderNativeIdleTtl(out var nativeIdleTtlSeconds))
+            {
+                FailRouting("Provider routing was not saved.", providerTestStatus.Text);
+                return;
+            }
+
+            await arenaOperationLock.WaitAsync(cancellationToken);
+            try
+            {
             var snapshot = await sessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
             if (snapshot is null)
             {
                 providerTestStatus.Text = $"No snapshot found for session {session.Id}.";
+                FailRouting("Provider routing was not saved.", providerTestStatus.Text);
                 return;
             }
 
@@ -1268,6 +1495,17 @@ internal sealed class ProviderSettingsCoordinator
                 ShellUiHelpers.SelectedComboTag(providerReasoningPicker, ""),
                 providerNativeStatefulChatCheckBox.IsChecked == true,
                 nativeIdleTtlSeconds);
+
+            var connectionChanged = !ModelProviderHealthService.NormalizeBaseUrl(existingShared.BaseUrl)
+                    .Equals(normalizedBaseUrl, StringComparison.OrdinalIgnoreCase)
+                || !ModelProviderApiModes.Normalize(existingShared.ApiMode)
+                    .Equals(ModelProviderApiModes.Normalize(updatedShared.ApiMode), StringComparison.Ordinal);
+            if (connectionChanged)
+            {
+                // Pending apply identities are connection-scoped. A new endpoint
+                // has no causal relationship to an unconfirmed mutation on the old one.
+                snapshot.PendingModelConfigurationApplies.Clear();
+            }
 
             snapshot.Configs["shared"] = updatedShared;
             var roleKeysToSave = profileRoleModelsByKey is null
@@ -1296,8 +1534,61 @@ internal sealed class ProviderSettingsCoordinator
                 SaveRoleModelConfig(snapshot.Configs, roleKey, modelToSave, updatedShared, temperatureOverride, maxOutputTokensOverride);
             }
 
+            if (profileModelSettings is not null)
+            {
+                foreach (var setting in profileModelSettings)
+                {
+                    var safeModel = setting.Model?.Trim() ?? "";
+                    if (IsSafeProfileModel(safeModel))
+                    {
+                        var registered = ModelRuntimeSettingsRegistry.Register(
+                            snapshot,
+                            new CoreModelProviderConfig
+                            {
+                                BaseUrl = updatedShared.BaseUrl,
+                                ApiMode = updatedShared.ApiMode,
+                                Model = safeModel
+                            },
+                            NormalizeConfiguredContextWindow(setting.ConfiguredContextWindow),
+                            ModelHistoryPolicies.NormalizeHistoryPolicy(setting.HistoryPolicy),
+                            ModelResponseTones.NormalizeResponseTone(setting.ResponseTone),
+                            setting.CustomTone);
+                        if (setting.PendingApply)
+                        {
+                            snapshot.PendingModelConfigurationApplies.Add(registered.ModelIdentity);
+                        }
+                        else
+                        {
+                            snapshot.PendingModelConfigurationApplies.Remove(registered.ModelIdentity);
+                        }
+                        continue;
+                    }
+
+                    var identity = setting.ModelIdentity?.Trim().ToLowerInvariant() ?? "";
+                    if (!IsOpaqueModelSettingsIdentity(identity))
+                    {
+                        continue;
+                    }
+
+                    snapshot.ModelSettings[identity] = new ModelRuntimeSettings
+                    {
+                        ModelIdentity = identity,
+                        ConfiguredContextWindow = NormalizeConfiguredContextWindow(setting.ConfiguredContextWindow),
+                        HistoryPolicy = ModelHistoryPolicies.NormalizeHistoryPolicy(setting.HistoryPolicy),
+                        ResponseTone = ModelResponseTones.NormalizeResponseTone(setting.ResponseTone),
+                        CustomTone = ModelResponseTones.NormalizeCustomTone(setting.CustomTone)
+                    };
+                    // Opaque legacy entries cannot be safely rebound to a changed
+                    // endpoint, so they never manufacture pending provider work.
+                    snapshot.PendingModelConfigurationApplies.Remove(identity);
+                }
+            }
+
+            ModelRuntimeSettingsRegistry.Normalize(snapshot);
+
             cancellationToken.ThrowIfCancellationRequested();
             await saveSnapshotWithFeedbackAsync(snapshot, session.Id, cancellationToken);
+            routingPersisted = true;
             cancellationToken.ThrowIfCancellationRequested();
             await eventLogStore.AppendAsync(session.Id, "native_model_routing_applied", new
             {
@@ -1312,22 +1603,40 @@ internal sealed class ProviderSettingsCoordinator
                 NarratorModel = roleModelsToSave["narrator"],
                 snapshot.Engine.DefaultForUnassignedAgentsEnabled
             }, cancellationToken);
-        }
-        finally
-        {
-            arenaOperationLock.Release();
-        }
+            }
+            finally
+            {
+                arenaOperationLock.Release();
+            }
 
-        await refreshActiveSessionAsync(successStatus, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        providerTestStatus.Text = successStatus;
-        if (refreshModels)
-        {
-            await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
-        }
+            await refreshActiveSessionAsync(successStatus, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            providerTestStatus.Text = successStatus;
+            if (refreshModels)
+            {
+                await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
+            }
 
-        await refreshProviderReachabilityAsync(true, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
+            await refreshProviderReachabilityAsync(true, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            routingStatus.Complete(successStatus);
+        }
+        catch (OperationCanceledException)
+        {
+            routingStatus.Cancel(routingPersisted
+                ? "Provider routing was saved; follow-up work was cancelled."
+                : "Provider routing save cancelled.");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            routingStatus.Fail(
+                routingPersisted
+                    ? "Provider routing was saved, but follow-up work failed."
+                    : "Provider routing save failed.",
+                ProviderModelCatalogProjectionService.SafeStatusForDisplay(ex.Message, CurrentProviderApiTokenText()));
+            throw;
+        }
     }
 
     public async Task RefreshAdvertisedModelsAsync(
@@ -1534,7 +1843,8 @@ internal sealed class ProviderSettingsCoordinator
         string ApiMode,
         string Model,
         IReadOnlyDictionary<string, string> RoleModels,
-        bool DefaultForUnassignedAgentsEnabled) CaptureProviderProfile()
+        bool DefaultForUnassignedAgentsEnabled,
+        IReadOnlyList<WpfProviderModelSettings> ModelSettings) CaptureProviderProfile()
     {
         SaveRoleModelDrafts();
         var roleModelsByKey = lastRenderedSnapshot()?.ExplicitRoleModels
@@ -1565,7 +1875,19 @@ internal sealed class ProviderSettingsCoordinator
             CurrentApiMode(),
             providerModelText.Text.Trim(),
             roleModelsByKey,
-            lastRenderedSnapshot()?.DefaultForUnassignedAgentsEnabled ?? true);
+            lastRenderedSnapshot()?.DefaultForUnassignedAgentsEnabled ?? true,
+            lastRenderedSnapshot()?.ModelSettings
+                .Select(setting => new WpfProviderModelSettings
+                {
+                    ModelIdentity = setting.ModelIdentity,
+                    Model = setting.Model,
+                    ConfiguredContextWindow = setting.ConfiguredContextWindow,
+                    HistoryPolicy = setting.HistoryPolicy,
+                    ResponseTone = setting.ResponseTone,
+                    CustomTone = setting.CustomTone,
+                    PendingApply = setting.PendingApply
+                })
+                .ToArray() ?? []);
     }
 
     public async Task ApplyProviderProfileAsync(
@@ -1574,6 +1896,7 @@ internal sealed class ProviderSettingsCoordinator
         string model,
         IReadOnlyDictionary<string, string> roleModelsByKey,
         bool defaultForUnassignedAgentsEnabled,
+        IReadOnlyList<WpfProviderModelSettings> modelSettings,
         string profileName,
         CancellationToken cancellationToken = default)
     {
@@ -1599,7 +1922,8 @@ internal sealed class ProviderSettingsCoordinator
             refreshModels: true,
             cancellationToken: cancellationToken,
             defaultForUnassignedAgentsEnabled: defaultForUnassignedAgentsEnabled,
-            profileRoleModelsByKey: roleModelsByKey);
+            profileRoleModelsByKey: roleModelsByKey,
+            profileModelSettings: modelSettings);
     }
 
     public async Task TestAllRolesAsync(CancellationToken cancellationToken = default)
@@ -1778,6 +2102,10 @@ internal sealed class ProviderSettingsCoordinator
             Temperature = existingShared.Temperature,
             MaxOutputTokens = existingShared.MaxOutputTokens,
             ContextLength = normalizedContextLength,
+            ConfiguredContextWindow = existingShared.ConfiguredContextWindow,
+            HistoryPolicy = existingShared.HistoryPolicy,
+            ResponseTone = existingShared.ResponseTone,
+            CustomTone = existingShared.CustomTone,
             Reasoning = normalizedReasoning,
             NativeStatefulChat = nativeStatefulChat,
             NativeIdleTtlSeconds = normalizedNativeIdleTtlSeconds,
@@ -1787,6 +2115,19 @@ internal sealed class ProviderSettingsCoordinator
             Extra = existingShared.Extra
         };
     }
+
+    private static int NormalizeConfiguredContextWindow(int value) => value == 0
+        ? 0
+        : Math.Clamp(value, ModelRuntimeSettingsRegistry.MinimumConfiguredContextWindow, ModelRuntimeSettingsRegistry.MaximumConfiguredContextWindow);
+
+    private static bool IsOpaqueModelSettingsIdentity(string value) => value.Length == 79
+        && value.StartsWith("model-settings:", StringComparison.Ordinal)
+        && value[15..].All(Uri.IsHexDigit);
+
+    private static bool IsSafeProfileModel(string value) => value.Length is > 0 and <= 1024
+        && !value.Any(char.IsControl)
+        && !Path.IsPathRooted(value)
+        && !(Uri.TryCreate(value, UriKind.Absolute, out _));
 
     internal static bool TryNormalizeProviderContextLength(string value, out int contextLength)
     {
@@ -2607,6 +2948,52 @@ internal sealed class ProviderSettingsCoordinator
             ProviderModelCatalogProjectionService.ConnectionFingerprint(session.Id, config));
     }
 
+    private ApplicationStatusIdentity CurrentStatusIdentity()
+    {
+        var context = CaptureLifecycleContext(CurrentProviderApiTokenText());
+        return context is null
+            ? ApplicationStatusIdentity.Empty
+            : new ApplicationStatusIdentity(context.SessionId, context.ConnectionIdentity);
+    }
+
+    private ApplicationStatusIdentity SessionOnlyStatusIdentity() =>
+        activeSession() is { } session
+            ? new ApplicationStatusIdentity(session.Id)
+            : ApplicationStatusIdentity.Empty;
+
+    private static ApplicationStatusIdentity StatusIdentity(ProviderSettingsLifecycleContext context) =>
+        new(context.SessionId, context.ConnectionIdentity);
+
+    private async Task RunProviderOperationAsync(
+        string key,
+        string runningSummary,
+        string unconfirmedSummary,
+        Func<ProviderOperationStatus, Task> operation,
+        ApplicationStatusIdentity? identity = null)
+    {
+        var status = operationStatuses.Begin(key, runningSummary, identity: identity);
+        try
+        {
+            await operation(status);
+            if (!status.IsTerminal)
+            {
+                status.MarkUnconfirmed(unconfirmedSummary);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            status.Cancel($"{runningSummary.TrimEnd('.', '\u2026')} cancelled.");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            status.Fail(
+                $"{runningSummary.TrimEnd('.', '\u2026')} failed.",
+                ProviderModelCatalogProjectionService.SafeStatusForDisplay(ex.Message, CurrentProviderApiTokenText()));
+            throw;
+        }
+    }
+
     private bool LifecycleContextMatches(ProviderSettingsLifecycleContext expected)
     {
         var current = CaptureLifecycleContext(CurrentProviderApiTokenText());
@@ -2697,5 +3084,87 @@ internal sealed class ProviderSettingsCoordinator
 
     private sealed class ProviderSettingsLifecycleContextChangedException : InvalidOperationException
     {
+    }
+}
+
+internal sealed class ProviderOperationStatusPublisher
+{
+    private readonly ApplicationStatusCenter? center;
+    private readonly Func<ApplicationStatusIdentity> identity;
+
+    public ProviderOperationStatusPublisher(
+        ApplicationStatusCenter? center,
+        Func<ApplicationStatusIdentity>? identity = null)
+    {
+        this.center = center;
+        this.identity = identity ?? (() => ApplicationStatusIdentity.Empty);
+    }
+
+    public ProviderOperationStatus Begin(
+        string key,
+        string summary,
+        string? detail = null,
+        ApplicationStatusIdentity? identity = null)
+    {
+        var operationIdentity = identity ?? this.identity();
+        var receipt = center?.Begin(
+            key,
+            "Provider",
+            summary,
+            detail,
+            navigationTarget: "provider",
+            identity: operationIdentity) ?? default;
+        return new ProviderOperationStatus(center, receipt);
+    }
+
+    public ProviderOperationStatus BeginIf(
+        bool publish,
+        string key,
+        string summary,
+        string? detail = null,
+        ApplicationStatusIdentity? identity = null) =>
+        publish
+            ? Begin(key, summary, detail, identity)
+            : new ProviderOperationStatus(center: null, receipt: default);
+}
+
+internal sealed class ProviderOperationStatus
+{
+    private readonly ApplicationStatusCenter? center;
+    private readonly ApplicationStatusReceipt receipt;
+
+    public ProviderOperationStatus(ApplicationStatusCenter? center, ApplicationStatusReceipt receipt)
+    {
+        this.center = center;
+        this.receipt = receipt;
+    }
+
+    public bool IsTerminal { get; private set; }
+
+    public bool Update(string summary, string? detail = null, double? progress = null) =>
+        !IsTerminal && (center is null || center.Update(receipt, summary, detail, progress));
+
+    public bool Complete(string summary, string? detail = null) =>
+        Transition(() => center?.Complete(receipt, summary, detail) ?? true);
+
+    public bool Fail(string summary, string? detail = null, bool blocked = false) =>
+        Transition(() => center?.Fail(receipt, summary, detail, blocked) ?? true);
+
+    public bool Cancel(string summary, string? detail = null) =>
+        Transition(() => center?.Cancel(receipt, summary, detail) ?? true);
+
+    public bool MarkUnconfirmed(string summary, string? detail = null) =>
+        Transition(() => center?.MarkUnconfirmed(receipt, summary, detail) ?? true);
+
+    private bool Transition(Func<bool> transition)
+    {
+        if (IsTerminal)
+        {
+            return false;
+        }
+
+        var applied = transition();
+        IsTerminal = applied;
+        return applied;
     }
 }

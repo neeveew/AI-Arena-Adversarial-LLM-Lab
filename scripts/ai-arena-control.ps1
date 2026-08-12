@@ -1683,6 +1683,66 @@ function Set-AIArenaProviderConfig {
     }
 }
 
+function Set-AIArenaProviderModelConfig {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [ValidateScript({
+            -not [string]::IsNullOrWhiteSpace($_) -and
+            -not [System.IO.Path]::IsPathRooted($_) -and
+            -not [System.Uri]::IsWellFormedUriString($_, [System.UriKind]::Absolute)
+        })]
+        [string]$Model,
+
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^[0-9A-Fa-f]{64}$')]
+        [string]$ExpectedConfigurationIdentity,
+
+        [Parameter()]
+        [ValidateScript({ $_ -eq 0 -or ($_ -ge 512 -and $_ -le 1048576) })]
+        [int]$ConfiguredContextWindow,
+
+        [Parameter()]
+        [ValidateSet('strict', 'rolling_80', 'chaptered')]
+        [string]$HistoryPolicy,
+
+        [Parameter()]
+        [ValidateSet('default', 'neutral', 'concise', 'analytical', 'creative', 'direct', 'custom')]
+        [string]$ResponseTone,
+
+        [Parameter()]
+        [ValidateLength(0, 240)]
+        [string]$CustomTone,
+
+        [Parameter()]
+        [int]$TimeoutMs = 60000,
+
+        [Parameter()]
+        [string]$Token
+    )
+
+    $modelArgs = @{
+        model = $Model
+        expectedConfigurationIdentity = $ExpectedConfigurationIdentity
+    }
+    $hasChange = $false
+    foreach ($parameter in @('ConfiguredContextWindow', 'HistoryPolicy', 'ResponseTone', 'CustomTone')) {
+        if ($PSBoundParameters.ContainsKey($parameter)) {
+            $wireName = $parameter.Substring(0, 1).ToLowerInvariant() + $parameter.Substring(1)
+            $modelArgs[$wireName] = $PSBoundParameters[$parameter]
+            $hasChange = $true
+        }
+    }
+    if (-not $hasChange) {
+        throw 'Set-AIArenaProviderModelConfig requires at least one model configuration parameter.'
+    }
+    if ($ResponseTone -eq 'custom' -and [string]::IsNullOrWhiteSpace($CustomTone)) {
+        throw 'CustomTone is required when ResponseTone is custom.'
+    }
+
+    Invoke-AIArena -Command 'provider.model.config.set' -Args $modelArgs -TimeoutMs $TimeoutMs -Token $Token
+}
+
 function Test-AIArenaProvider {
     [CmdletBinding()]
     param(

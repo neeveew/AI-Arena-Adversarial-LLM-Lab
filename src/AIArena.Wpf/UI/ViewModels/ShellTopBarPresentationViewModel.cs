@@ -1,12 +1,12 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using AIArena.Wpf.Services;
 
 namespace AIArena.Wpf.ViewModels;
 
 /// <summary>
-/// Presentation-only state for the persistent shell header. Compatibility targets in
-/// <see cref="Controls.ShellTopBarControl"/> mirror the existing coordinators into
-/// these bindable values while the shell completes its MVVM migration.
+/// Presentation state for the persistent shell header and the application-wide
+/// status center. Compatibility text targets feed the same typed status center.
 /// </summary>
 public sealed class ShellTopBarPresentationViewModel : INotifyPropertyChanged
 {
@@ -15,18 +15,25 @@ public sealed class ShellTopBarPresentationViewModel : INotifyPropertyChanged
     private string currentTurnValue = "-";
     private string turnCountValue = "0";
     private string arenaStatus = "Ready.";
-    private string displayStatus = "Ready.";
-    private string displayStatusToolTip = "Ready.";
-    private string displayStatusHelpText = "Current arena status: Ready.";
-    private bool showStatusDock;
+    private string displayStatus = "Ready";
+    private string displayStatusToolTip = "Ready";
+    private string displayStatusHelpText = "Current application status: Ready.";
+    private bool showStatusDock = true;
     private string viewButtonLabel = "View: Custom";
-    private string transientStatus = "";
-    private string transientStatusToolTip = "";
-    private string transientStatusHelpText = "";
-    private long nextTransientStatusGeneration;
-    private long activeTransientStatusGeneration;
+    private long nextLegacyTransientGeneration;
+    private readonly Dictionary<long, ApplicationStatusReceipt> legacyTransientReceipts = [];
+    private readonly Dictionary<string, ApplicationStatusReceipt> compatibilityReceipts = new(StringComparer.Ordinal);
+
+    public ShellTopBarPresentationViewModel(ApplicationStatusCenter? statusCenter = null)
+    {
+        StatusCenter = statusCenter ?? new ApplicationStatusCenter();
+        StatusCenter.Changed += StatusCenterChanged;
+        ApplyStatusSnapshot(StatusCenter.Snapshot);
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+
+    public ApplicationStatusCenter StatusCenter { get; }
 
     public string MatchValue
     {
@@ -76,6 +83,9 @@ public sealed class ShellTopBarPresentationViewModel : INotifyPropertyChanged
         private set => SetField(ref displayStatusHelpText, value);
     }
 
+    /// <summary>
+    /// Compatibility property. The new four-row center always reserves its space.
+    /// </summary>
     public bool ShowStatusDock
     {
         get => showStatusDock;
@@ -90,84 +100,224 @@ public sealed class ShellTopBarPresentationViewModel : INotifyPropertyChanged
 
     internal long ShowTransientStatus(string status, string? toolTip = null, string? helpText = null)
     {
-        var normalized = NormalizeStatus(status);
-        var generation = ++nextTransientStatusGeneration;
-        activeTransientStatusGeneration = generation;
-        transientStatus = normalized;
-        transientStatusToolTip = NormalizeDetail(toolTip, normalized);
-        transientStatusHelpText = NormalizeDetail(helpText, transientStatusToolTip);
-        UpdateDisplayStatus();
+        var generation = Interlocked.Increment(ref nextLegacyTransientGeneration);
+        var receipt = StatusCenter.PublishNotice(
+            $"legacy.transient.{generation}",
+            "App",
+            ApplicationStatusState.Succeeded,
+            NormalizeStatus(status),
+            toolTip ?? helpText,
+            lifetime: ApplicationStatusLifetime.Transient);
+        legacyTransientReceipts[generation] = receipt;
         return generation;
     }
 
     internal bool ClearTransientStatus(long generation)
     {
-        if (generation <= 0 || generation != activeTransientStatusGeneration)
+        if (generation <= 0 || !legacyTransientReceipts.Remove(generation, out var receipt))
         {
             return false;
         }
 
-        activeTransientStatusGeneration = 0;
-        transientStatus = "";
-        transientStatusToolTip = "";
-        transientStatusHelpText = "";
-        UpdateDisplayStatus();
-        return true;
+        return StatusCenter.Resolve(receipt);
+    }
+
+    /// <summary>
+    /// Bridges existing feature status callbacks into distinct typed operations
+    /// while their coordinators are migrated incrementally. Repeated progress for
+    /// one feature updates in place instead of replacing unrelated sources.
+    /// </summary>
+    internal void PublishCompatibilityStatus(
+        string key,
+        string source,
+        string? status,
+        string? detail = null,
+        string? navigationTarget = null,
+        ApplicationStatusIdentity? identity = null)
+    {
+        var normalizedKey = string.IsNullOrWhiteSpace(key) ? "legacy.app" : key.Trim();
+        var normalized = NormalizeStatus(status);
+        if (IsRoutineStatus(normalized))
+        {
+            if (compatibilityReceipts.Remove(normalizedKey, out var routineReceipt))
+            {
+                StatusCenter.Resolve(routineReceipt);
+            }
+            else
+            {
+                StatusCenter.Resolve(normalizedKey);
+            }
+
+            return;
+        }
+
+        var state = LegacyState(normalized);
+        if (state == ApplicationStatusState.Running)
+        {
+            if (compatibilityReceipts.TryGetValue(normalizedKey, out var active)
+                && StatusCenter.Update(active, normalized, detail))
+            {
+                return;
+            }
+
+            compatibilityReceipts[normalizedKey] = StatusCenter.Begin(
+                normalizedKey,
+                source,
+                normalized,
+                detail,
+                navigationTarget: navigationTarget,
+                identity: identity);
+            return;
+        }
+
+        if (compatibilityReceipts.Remove(normalizedKey, out var receipt))
+        {
+            var transitioned = state switch
+            {
+                ApplicationStatusState.Succeeded or ApplicationStatusState.Info =>
+                    StatusCenter.Complete(receipt, normalized, detail),
+                ApplicationStatusState.Cancelled =>
+                    StatusCenter.Cancel(receipt, normalized, detail),
+                ApplicationStatusState.Unconfirmed =>
+                    StatusCenter.MarkUnconfirmed(receipt, normalized, detail),
+                ApplicationStatusState.Blocked =>
+                    StatusCenter.Fail(receipt, normalized, detail, blocked: true),
+                ApplicationStatusState.Failed =>
+                    StatusCenter.Fail(receipt, normalized, detail),
+                _ => false
+            };
+            if (transitioned)
+            {
+                return;
+            }
+        }
+
+        StatusCenter.PublishNotice(
+            normalizedKey,
+            source,
+            state,
+            normalized,
+            detail,
+            navigationTarget,
+            identity,
+            lifetime: LegacyLifetime(normalized));
     }
 
     private void SetPersistentStatus(string? status)
     {
         var normalized = NormalizeStatus(status);
         SetField(ref arenaStatus, normalized, nameof(ArenaStatus));
-        if (activeTransientStatusGeneration == 0)
-        {
-            UpdateDisplayStatus();
-        }
+        PublishCompatibilityStatus(
+            "legacy.arena",
+            "Arena",
+            normalized,
+            navigationTarget: "arena");
     }
 
-    private void UpdateDisplayStatus()
+    private void StatusCenterChanged(object? sender, ApplicationStatusChangedEventArgs e) =>
+        ApplyStatusSnapshot(e.Snapshot);
+
+    private void ApplyStatusSnapshot(ApplicationStatusSnapshot snapshot)
     {
-        var transientActive = activeTransientStatusGeneration != 0;
-        var status = transientActive ? transientStatus : arenaStatus;
-        var toolTip = transientActive ? transientStatusToolTip : status;
-        var helpText = transientActive
-            ? transientStatusHelpText
-            : $"Current arena status: {status}";
-        var shouldShowStatusDock = transientActive || !IsRoutineStatus(status);
-        if (shouldShowStatusDock && !ShowStatusDock)
-        {
-            // Reveal first so a Polite live region is present when its text changes.
-            ShowStatusDock = true;
-        }
-
-        DisplayStatus = status;
-        DisplayStatusToolTip = toolTip;
-        DisplayStatusHelpText = helpText;
-        if (!shouldShowStatusDock && ShowStatusDock)
-        {
-            // Project the routine state before releasing the bottom-rail space.
-            ShowStatusDock = false;
-        }
+        DisplayStatus = snapshot.AppStatus;
+        DisplayStatusToolTip = string.IsNullOrWhiteSpace(snapshot.Primary.Detail)
+            ? snapshot.Primary.Summary
+            : snapshot.Primary.Detail;
+        DisplayStatusHelpText = $"Current application status: {snapshot.Primary.Source}, {snapshot.Primary.State}: {snapshot.Primary.Summary}";
+        ShowStatusDock = true;
     }
 
-    private static string NormalizeStatus(string? status)
-    {
-        return string.IsNullOrWhiteSpace(status) ? "Ready." : status.Trim();
-    }
-
-    private static string NormalizeDetail(string? detail, string fallback)
-    {
-        return string.IsNullOrWhiteSpace(detail) ? fallback : detail.Trim();
-    }
+    private static string NormalizeStatus(string? status) =>
+        string.IsNullOrWhiteSpace(status) ? "Ready." : status.Trim();
 
     internal static bool IsRoutineStatus(string? status)
     {
         var normalized = status?.Trim() ?? string.Empty;
         return normalized.Length == 0
             || normalized.Equals("Ready.", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("Ready", StringComparison.OrdinalIgnoreCase)
             || normalized.Equals("Provider online.", StringComparison.OrdinalIgnoreCase)
             || normalized.Equals("Provider online", StringComparison.OrdinalIgnoreCase);
     }
+
+    internal static ApplicationStatusState LegacyState(string status)
+    {
+        if (status.Contains("context recovery", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("action required", StringComparison.OrdinalIgnoreCase))
+        {
+            return ApplicationStatusState.Blocked;
+        }
+
+        if (status.Contains("unconfirmed", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("outcome is unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            return ApplicationStatusState.Unconfirmed;
+        }
+
+        if (status.Contains("cancelled", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("canceled", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("stopped", StringComparison.OrdinalIgnoreCase))
+        {
+            return ApplicationStatusState.Cancelled;
+        }
+
+        if (status.Contains("failed", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("error", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("could not", StringComparison.OrdinalIgnoreCase))
+        {
+            return ApplicationStatusState.Failed;
+        }
+
+        if (status.Contains("unavailable", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("offline", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("blocked", StringComparison.OrdinalIgnoreCase)
+            || status.StartsWith("Select ", StringComparison.OrdinalIgnoreCase)
+            || status.StartsWith("Choose ", StringComparison.OrdinalIgnoreCase)
+            || status.StartsWith("No active ", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("not selected", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("not loaded", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("no model", StringComparison.OrdinalIgnoreCase)
+            || status.Contains(" is required", StringComparison.OrdinalIgnoreCase))
+        {
+            return ApplicationStatusState.Warning;
+        }
+
+        if (status.EndsWith("...", StringComparison.Ordinal)
+            || status.Contains("running", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("loading", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("saving", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("stopping", StringComparison.OrdinalIgnoreCase))
+        {
+            return ApplicationStatusState.Running;
+        }
+
+        if (status.Contains("saved", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("completed", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("complete", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("copied", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("exported", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("loaded", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("sent", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("updated", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("applied", StringComparison.OrdinalIgnoreCase)
+            || status.Contains("restored", StringComparison.OrdinalIgnoreCase))
+        {
+            return ApplicationStatusState.Succeeded;
+        }
+
+        return ApplicationStatusState.Info;
+    }
+
+    private static ApplicationStatusLifetime LegacyLifetime(string status) =>
+        LegacyState(status) switch
+        {
+            ApplicationStatusState.Failed or
+            ApplicationStatusState.Warning or
+            ApplicationStatusState.Blocked or
+            ApplicationStatusState.Unconfirmed => ApplicationStatusLifetime.UntilResolved,
+            ApplicationStatusState.Running => ApplicationStatusLifetime.UntilSuperseded,
+            _ => ApplicationStatusLifetime.Transient
+        };
 
     private void SetField(ref string field, string? value, [CallerMemberName] string? propertyName = null)
     {

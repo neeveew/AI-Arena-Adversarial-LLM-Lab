@@ -91,8 +91,8 @@ internal sealed class SessionOverviewCoordinator
             ? resourceBrush("Arena.Brush.Warning")
             : resourceBrush("TextBrush");
         sessionOverviewContextText.ToolTip = pressure is null
-            ? "Largest prompt so far. Set a provider context length to see how close it is to the limit."
-            : $"Largest prompt is {pressure.Value * 100:0}% of the {formatCompactNumber(snapshot.ProviderContextLength)} token context window.";
+            ? "Context pressure is unknown until a causal Arena history receipt or configured model context is available."
+            : ContextPressureTooltip(snapshot, pressure.Value, formatCompactNumber);
         populateAgentPerformance(snapshot);
     }
 
@@ -111,11 +111,6 @@ internal sealed class SessionOverviewCoordinator
         topTurnsValue.Text = snapshot.TurnCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         topBarStatus.ToolTip = $"Session: {snapshot.SessionId}\nModel: {CurrentTurnModel(snapshot, current)}";
-        if (!isArenaBusy() && !isAutoChatRunning())
-        {
-            arenaRunStatus.Text = TopRunStateSummary(snapshot, current, shortModelName);
-        }
-
         UpdateSettingsProviderStatus(snapshot);
     }
 
@@ -161,6 +156,11 @@ internal sealed class SessionOverviewCoordinator
 
     internal static string TopRunStateSummary(ArenaViewSnapshot snapshot, AgentState? current, Func<string, string> shortModelName)
     {
+        if (snapshot.MatchEnded)
+        {
+            return "Match ended. Reset or fork the session to continue.";
+        }
+
         var provider = snapshot.ProviderOnline ? "provider online" : "provider offline";
         if (current is null)
         {
@@ -198,7 +198,10 @@ internal sealed class SessionOverviewCoordinator
 
     internal static int MaxPromptContext(ArenaViewSnapshot snapshot)
     {
-        return snapshot.Messages.Select(message => Math.Max(message.PromptTokens, 0)).DefaultIfEmpty(0).Max();
+        var latestReceipt = LatestHistoryReceipt(snapshot);
+        return latestReceipt is null
+            ? snapshot.Messages.Select(message => Math.Max(message.PromptTokens, 0)).DefaultIfEmpty(0).Max()
+            : Math.Max(0, latestReceipt.EstimatedPromptTokens);
     }
 
     /// <summary>
@@ -218,14 +221,19 @@ internal sealed class SessionOverviewCoordinator
     /// </summary>
     internal static double? ContextPressure(ArenaViewSnapshot snapshot)
     {
-        var limit = snapshot.ProviderContextLength;
+        var receipt = LatestHistoryReceipt(snapshot);
+        var limit = receipt?.ConfiguredContextWindow > 0
+            ? receipt.ConfiguredContextWindow
+            : snapshot.ProviderConfiguredContextWindow > 0
+                ? snapshot.ProviderConfiguredContextWindow
+                : snapshot.ProviderContextLength;
         if (limit <= 0)
         {
             return null;
         }
 
         var used = MaxPromptContext(snapshot);
-        return used <= 0 ? 0 : Math.Min(1.0, (double)used / limit);
+        return used <= 0 ? 0 : (double)used / limit;
     }
 
     /// <summary>Short label for the context cell, including pressure when known.</summary>
@@ -239,8 +247,36 @@ internal sealed class SessionOverviewCoordinator
 
         var pressure = ContextPressure(snapshot);
         return pressure is null
-            ? formatCompactNumber(context)
+            ? $"{formatCompactNumber(context)} (unknown)"
             : $"{formatCompactNumber(context)} ({pressure.Value * 100:0}%)";
+    }
+
+    private static ArenaHistoryBudgetReceiptView? LatestHistoryReceipt(ArenaViewSnapshot snapshot) =>
+        snapshot.Messages
+            .Where(message => message.HistoryBudgetReceipt is not null)
+            .OrderByDescending(message => message.Turn)
+            .ThenByDescending(message => message.CreatedAt)
+            .Select(message => message.HistoryBudgetReceipt)
+            .FirstOrDefault();
+
+    private static string ContextPressureTooltip(
+        ArenaViewSnapshot snapshot,
+        double pressure,
+        Func<int, string> formatCompactNumber)
+    {
+        var receipt = LatestHistoryReceipt(snapshot);
+        if (receipt is not null)
+        {
+            var omitted = receipt.OmittedEntryCount > 0
+                ? $" {receipt.OmittedEntryCount} older whole entries were omitted."
+                : "";
+            return $"Estimated Arena prompt is {pressure * 100:0}% of the {formatCompactNumber(receipt.ConfiguredContextWindow)} configured context; output reserve {formatCompactNumber(receipt.OutputTokenReserve)} tokens.{omitted}";
+        }
+
+        var limit = snapshot.ProviderConfiguredContextWindow > 0
+            ? snapshot.ProviderConfiguredContextWindow
+            : snapshot.ProviderContextLength;
+        return $"Largest provider-reported prompt is {pressure * 100:0}% of the {formatCompactNumber(limit)} configured context. No Arena history-budget receipt is available.";
     }
 
     /// <summary>Pressure at or above this fraction is worth flagging.</summary>

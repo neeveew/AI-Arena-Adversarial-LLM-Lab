@@ -3,6 +3,7 @@ using AIArena.Core.Persistence;
 using AIArena.Core.Providers;
 using AIArena.Core.Services;
 using AIArena.Wpf;
+using AIArena.Wpf.Services;
 
 internal static partial class Program
 {
@@ -84,20 +85,65 @@ internal static partial class Program
             NativeStatefulChat = false,
             NativeIdleTtlSeconds = 45
         };
+        ModelRuntimeSettingsRegistry.Register(
+            source,
+            source.Configs["shared"],
+            24576,
+            ModelHistoryPolicies.Rolling80,
+            ModelResponseTones.Concise,
+            "");
+        ModelRuntimeSettingsRegistry.Register(
+            source,
+            source.Configs["beta"],
+            16384,
+            ModelHistoryPolicies.Strict,
+            ModelResponseTones.Analytical,
+            "");
         source.Engine.Messages.Add(new DialogueMessage { Turn = 1, Speaker = "Alpha", SpeakerId = "alpha", Text = "Runtime text" });
         source.GenerationHistory.Add(new GenerationHistoryEntry { Id = "history", Kind = "random" });
 
-        var package = MatchSetupPackageCodec.FromSnapshot("portable-source", source);
+        var unassignedPortableSettings = new[]
+        {
+            new WpfProviderModelSettings
+            {
+                Model = "catalog-unassigned-model",
+                ConfiguredContextWindow = 65536,
+                HistoryPolicy = ModelHistoryPolicies.Rolling80,
+                ResponseTone = ModelResponseTones.Direct,
+                PendingApply = true
+            },
+            new WpfProviderModelSettings
+            {
+                Model = @"C:\private\models\path-only-model.gguf",
+                ConfiguredContextWindow = 8192,
+                HistoryPolicy = ModelHistoryPolicies.Strict,
+                ResponseTone = ModelResponseTones.Default
+            }
+        };
+        var package = MatchSetupPackageCodec.FromSnapshot("portable-source", source, unassignedPortableSettings);
         var json = MatchSetupPackageCodec.Serialize(package);
-        Require(json.Contains(MatchSetupPackageCodec.Schema, StringComparison.Ordinal), "portable JSON should declare the v3 setup schema");
+        Require(json.Contains(MatchSetupPackageCodec.Schema, StringComparison.Ordinal), "portable JSON should declare the v4 setup schema");
         Require(MatchSetupPackageCodec.FactoryConversationContract == "public_group_v1", "Factory setup identity should declare the public group prompt contract");
-        Require(package.Setup.FactoryMode && json.Contains("\"factoryMode\": true", StringComparison.Ordinal), "portable JSON should preserve Factory mode in the v3 schema");
+        Require(package.Setup.FactoryMode && json.Contains("\"factoryMode\": true", StringComparison.Ordinal), "portable JSON should preserve Factory mode in the v4 schema");
         Require(!package.Setup.DefaultForUnassignedAgentsEnabled
                 && json.Contains("\"defaultForUnassignedAgentsEnabled\": false", StringComparison.Ordinal)
                 && package.Setup.Providers["alpha"].AssignmentMode == MatchSetupProviderAssignmentModes.Explicit
                 && package.Setup.Providers["beta"].AssignmentMode == MatchSetupProviderAssignmentModes.Explicit
                 && json.Contains("\"assignmentMode\": \"explicit\"", StringComparison.Ordinal),
-            "portable v3 JSON should preserve the optional default policy, explicit-equal-to-shared routing, and legacy distinct role routing");
+            "portable v4 JSON should preserve the optional default policy, explicit-equal-to-shared routing, and legacy distinct role routing");
+        Require(package.Setup.Providers["shared"].ConfiguredContextWindow == 24576
+                && package.Setup.Providers["shared"].HistoryPolicy == ModelHistoryPolicies.Rolling80
+                && package.Setup.Providers["shared"].ResponseTone == ModelResponseTones.Concise,
+            "portable v4 JSON should project canonical per-model context, history, and tone settings");
+        Require(package.Setup.ModelSettings.Any(setting => setting.Model == "catalog-unassigned-model"
+                    && setting.ConfiguredContextWindow == 65536
+                    && setting.HistoryPolicy == ModelHistoryPolicies.Rolling80
+                    && setting.ResponseTone == ModelResponseTones.Direct
+                    && setting.PendingApply),
+            "portable v4 JSON should retain configured but currently unassigned catalog model settings by safe model id");
+        Require(!json.Contains(@"C:\private\models", StringComparison.OrdinalIgnoreCase)
+                && package.Setup.ModelSettings.Any(setting => setting.Model == "path-only-model.gguf"),
+            "portable per-model settings should reduce local paths to a bounded safe model identifier");
         var packageState = MatchSetupPackageCodec.ToState("portable-source", package);
         Require(packageState.FactoryMode, "portable package state should project Factory mode for control-plane consumers");
         var canonicalSetup = System.Text.Json.JsonSerializer.Serialize(
@@ -116,7 +162,7 @@ internal static partial class Program
             "Factory portable setup identity should be explicitly salted by the public-group prompt contract");
         Require(!json.Contains("top-secret-token", StringComparison.Ordinal), "portable JSON must never serialize provider API tokens");
         Require(!json.Contains("Runtime text", StringComparison.Ordinal), "portable JSON must not include transcript runtime state");
-        Require(!json.Contains("history", StringComparison.OrdinalIgnoreCase), "portable JSON must not include generation history");
+        Require(!json.Contains("generationHistory", StringComparison.OrdinalIgnoreCase), "portable JSON must not include generation history");
 
         var embeddedSecretSnapshot = SessionStore.CreateDefaultSnapshot();
         embeddedSecretSnapshot.Engine.Steering.Topic = "Credential redaction check";
@@ -151,9 +197,45 @@ internal static partial class Program
         Require(target.Engine.RivalryMatrix.Enabled && target.Engine.RivalryMatrix.Links.Single().Stance == "fact_check", "round trip should preserve normalized relationship pressure");
         Require(target.Engine.Internet.UseInternet && target.Engine.Internet.MaxResults == 7, "round trip should preserve Internet setup policy");
         Require(target.Configs["shared"].ApiToken == "top-secret-token", "a trusted token may be reused only for an unchanged endpoint and API mode");
+        var resolvedTargetShared = ModelRuntimeSettingsRegistry.Resolve(target, target.Configs["shared"]);
+        var resolvedUnassigned = ModelRuntimeSettingsRegistry.Resolve(
+            target,
+            new ModelProviderConfig
+            {
+                BaseUrl = target.Configs["shared"].BaseUrl,
+                ApiMode = target.Configs["shared"].ApiMode,
+                Model = "catalog-unassigned-model"
+            });
+        Require(target.ModelSettingsVersion == ModelRuntimeSettingsRegistry.CurrentSchemaVersion
+                && resolvedTargetShared.ConfiguredContextWindow == 24576
+                && resolvedTargetShared.HistoryPolicy == ModelHistoryPolicies.Rolling80
+                && resolvedTargetShared.ResponseTone == ModelResponseTones.Concise,
+            "v4 import should rebuild one canonical model-settings registry without transient provider evidence");
+        Require(resolvedUnassigned.ConfiguredContextWindow == 65536
+                && resolvedUnassigned.HistoryPolicy == ModelHistoryPolicies.Rolling80
+                && resolvedUnassigned.ResponseTone == ModelResponseTones.Direct
+                && target.PendingModelConfigurationApplies.Contains(
+                    ModelRuntimeSettingsRegistry.Identity(new ModelProviderConfig
+                    {
+                        BaseUrl = target.Configs["shared"].BaseUrl,
+                        ApiMode = target.Configs["shared"].ApiMode,
+                        Model = "catalog-unassigned-model"
+                    })),
+            "v4 import should re-key an unassigned portable model setting and pending apply intent against the destination provider connection");
         Require(target.Engine.Messages.Count == 0 && target.GenerationHistory.Count == 0, "applying a setup package should leave runtime transcript and history clean");
 
-        var recaptured = MatchSetupPackageCodec.FromSnapshot("portable-target", target);
+        var recaptured = MatchSetupPackageCodec.FromSnapshot(
+            "portable-target",
+            target,
+            package.Setup.ModelSettings.Select(setting => new WpfProviderModelSettings
+            {
+                Model = setting.Model,
+                ConfiguredContextWindow = setting.ConfiguredContextWindow,
+                HistoryPolicy = setting.HistoryPolicy,
+                ResponseTone = setting.ResponseTone,
+                CustomTone = setting.CustomTone,
+                PendingApply = setting.PendingApply
+            }).ToArray());
         Require(
             MatchSetupPackageCodec.Fingerprint(recaptured) == MatchSetupPackageCodec.Fingerprint(package),
             "canonical setup fingerprints should survive an export/import round trip");
@@ -223,6 +305,29 @@ internal static partial class Program
             "legacy v2 migration should enable the default and infer same-as-shared inheritance versus a differing explicit role model");
         Require(legacyV2.Warnings.Any(warning => warning.Contains("Legacy Match Setup v2", StringComparison.Ordinal)),
             "legacy v2 migration should disclose its default and assignment-mode inference");
+        Require(legacyV2.Package!.Setup.Providers["shared"].ConfiguredContextWindow == 32768
+                && legacyV2.Package.Setup.Providers["shared"].HistoryPolicy == ModelHistoryPolicies.Strict
+                && legacyV2.Package.Setup.Providers["shared"].ResponseTone == ModelResponseTones.Default,
+            "legacy v2 migration should map ContextLength to configured context and preserve strict/default behavior");
+
+        var legacyV3Node = System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject();
+        legacyV3Node["schema"] = MatchSetupPackageCodec.LegacySchemaV3;
+        foreach (var providerNode in legacyV3Node["setup"]!["providers"]!.AsObject()
+                     .Select(item => item.Value)
+                     .OfType<System.Text.Json.Nodes.JsonObject>())
+        {
+            providerNode.Remove("configuredContextWindow");
+            providerNode.Remove("historyPolicy");
+            providerNode.Remove("responseTone");
+            providerNode.Remove("customTone");
+        }
+        var legacyV3 = MatchSetupPackageCodec.Parse(legacyV3Node.ToJsonString());
+        Require(legacyV3.Ok
+                && legacyV3.Package?.Schema == MatchSetupPackageCodec.Schema
+                && legacyV3.Package.Setup.Providers["shared"].ConfiguredContextWindow == 32768
+                && legacyV3.Package.Setup.Providers["shared"].HistoryPolicy == ModelHistoryPolicies.Strict
+                && legacyV3.Package.Setup.Providers["shared"].ResponseTone == ModelResponseTones.Default,
+            "legacy v3 migration should preserve routing while assigning strict history and default tone");
         var legacyTarget = SessionStore.CreateDefaultSnapshot();
         Require(MatchSetupPackageCodec.Apply(legacyV2.Package!, legacyTarget, source.Configs).Ok
                 && legacyTarget.Engine.DefaultForUnassignedAgentsEnabled

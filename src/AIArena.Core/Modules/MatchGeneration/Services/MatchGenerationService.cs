@@ -231,10 +231,15 @@ public sealed class MatchGenerationService : IDisposable
         }
 
         var prompt = BuildAiChoicePrompt(snapshot, rolePack, intensity, absurdity, topicPrompt, topicPromptIsUntrustedInternetEvidence);
-        var result = await _modelClient.CompleteChatAsync(config, prompt, cancellationToken);
-        if (!result.Ok && fallbackConfig is not null)
+        var primaryPrompt = ModelResponseToneInstructions.Apply(config, prompt, snapshot.Engine.FactoryMode);
+        var result = await _modelClient.CompleteChatAsync(config, primaryPrompt, cancellationToken);
+        result = ModelCompletionOutcomeClassifier.Normalize(result);
+        if (!result.Ok
+            && result.FailureKind != ModelCompletionFailureKind.ContextLimitExceeded
+            && fallbackConfig is not null)
         {
-            result = await _modelClient.CompleteChatAsync(fallbackConfig, prompt, cancellationToken);
+            var fallbackPrompt = ModelResponseToneInstructions.Apply(fallbackConfig, prompt, snapshot.Engine.FactoryMode);
+            result = await _modelClient.CompleteChatAsync(fallbackConfig, fallbackPrompt, cancellationToken);
         }
         if (!result.Ok)
         {
@@ -457,7 +462,11 @@ public sealed class MatchGenerationService : IDisposable
             snapshot.Engine.DecisionCard.UpdatedAt = 0;
             snapshot.Engine.DecisionCard.InternetRequest = null;
             snapshot.Engine.DecisionCard.InternetResult = null;
+            snapshot.Engine.DecisionCard.Metadata.Clear();
             snapshot.Engine.TurnCount = 0;
+            snapshot.Engine.MatchEnded = false;
+            snapshot.Engine.MatchEndedAt = null;
+            snapshot.Engine.MatchEndReason = "";
             snapshot.Engine.TurnIndex = 0;
             snapshot.Engine.LastError = "";
             snapshot.Engine.Narrator.Status = "idle";

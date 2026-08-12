@@ -12,6 +12,18 @@ internal static partial class Program
 {
 static void ProviderCatalogProjectionSeparatesLoadedAndAvailableEvidence()
 {
+    Require(ProviderModelsSurfaceCoordinator.ConfigurationStatus(
+                requiresReload: false,
+                configuredContextWindow: 0,
+                ModelHistoryPolicies.Rolling80)
+            .Contains("saved but inactive", StringComparison.OrdinalIgnoreCase)
+            && ProviderModelsSurfaceCoordinator.ConfigurationContextEvidence(
+                    "Unknown: provider default.",
+                    0,
+                    ModelHistoryPolicies.Rolling80)
+                .Contains("cannot budget history", StringComparison.OrdinalIgnoreCase),
+        "Provider default plus Rolling 80 should disclose that bounded history is saved but inactive rather than claim protection is active");
+
     var snapshot = SessionStore.CreateDefaultSnapshot();
     snapshot.Configs[ModelProviderRouting.SharedConfigKey] = new ModelProviderConfig
     {
@@ -1024,6 +1036,9 @@ static void ProviderModelsDefaultAssignmentSurvivesHostRefresh()
             using var handler = new ProviderModelsLifecycleHttpHandler(requestedDefault);
             using var httpClient = new HttpClient(handler);
             var catalogService = new LmStudioModelCatalogService(httpClient);
+            var providerHealth = new ModelProviderHealthService(httpClient);
+            var modelLifecycle = new ModelPreloadService(httpClient, catalogService);
+            var statusCenter = new ApplicationStatusCenter();
             var control = new ProviderModelAssignmentsControl();
             AttachArenaPresentationResources(control);
             ApplyExperimentSurfaceTheme(control, ThemePalette.Resolve("dark-blue"));
@@ -1031,8 +1046,8 @@ static void ProviderModelsDefaultAssignmentSurvivesHostRefresh()
                 control,
                 sessionStore,
                 providerConfig,
-                new ModelProviderHealthService(httpClient),
-                new ModelPreloadService(httpClient, catalogService),
+                providerHealth,
+                modelLifecycle,
                 operationLock,
                 () => active,
                 () => false,
@@ -1096,7 +1111,7 @@ static void ProviderModelsDefaultAssignmentSurvivesHostRefresh()
                         && savedDefaultTarget.IsChecked == true
                         && AutomationProperties.GetItemStatus(control.AssignmentStatus) == "Saved"
                         && control.AssignmentStatus.Text.Contains(
-                            "Changed Default for unassigned agents to Provider observed model",
+                            "Changed Default to Provider observed model",
                             StringComparison.Ordinal)
                         && !control.AssignmentStatus.Text.Contains("provider or session changed", StringComparison.OrdinalIgnoreCase),
                     $"The host refresh before service completion did not retain the completed Default transfer "
@@ -1277,6 +1292,9 @@ static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
             using var handler = new ProviderModelsLifecycleHttpHandler(modelId);
             using var httpClient = new HttpClient(handler);
             var catalogService = new LmStudioModelCatalogService(httpClient);
+            var providerHealth = new ModelProviderHealthService(httpClient);
+            var modelLifecycle = new ModelPreloadService(httpClient, catalogService);
+            var statusCenter = new ApplicationStatusCenter();
             var control = new ProviderModelAssignmentsControl();
             AttachArenaPresentationResources(control);
             ApplyExperimentSurfaceTheme(control, ThemePalette.Resolve("dark-blue"));
@@ -1284,12 +1302,13 @@ static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
                 control,
                 sessionStore,
                 providerConfig,
-                new ModelProviderHealthService(httpClient),
-                new ModelPreloadService(httpClient, catalogService),
+                providerHealth,
+                modelLifecycle,
                 operationLock,
                 () => active,
                 () => busy,
-                catalogService);
+                catalogService,
+                statusCenter);
             var host = new System.Windows.Window
             {
                 Content = control,
@@ -1313,6 +1332,8 @@ static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
                     $"LM Studio available evidence did not expose the selected Load action and five-second heartbeat contract "
                     + $"(selected='{control.SelectedModelId}', rows={control.CatalogRowCount}, visible={control.VisibleCatalogRowCount}, "
                     + $"action='{control.LifecycleAction.Content}', status='{control.CatalogStatus.Text}')");
+                Require(statusCenter.History.Count == 0,
+                    "opening Models and its healthy catalog heartbeat should not create universal status noise");
 
                 Task? lifecycleTask = null;
                 control.LifecycleRequested += (_, args) =>
@@ -1389,6 +1410,11 @@ static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
                         && loadBody.Contains("45", StringComparison.Ordinal)
                         && !loadBody.Contains("gpu", StringComparison.OrdinalIgnoreCase),
                     "LM Studio load payload changed model/context/TTL or introduced GPU placement");
+                Require(statusCenter.History.Any(entry =>
+                        entry.Source == "Models"
+                        && entry.State == ApplicationStatusState.Succeeded
+                        && entry.Summary.Contains("load confirmed", StringComparison.OrdinalIgnoreCase)),
+                    "confirmed model load did not publish a typed Models success to the universal center");
 
                 lifecycleTask = null;
                 Pump(() =>
@@ -1409,12 +1435,15 @@ static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
 
                 handler.Loaded = true;
                 var requestsBeforeHeartbeat = handler.Requests.Count;
+                var statusHistoryBeforeHeartbeat = statusCenter.History.Count;
                 Pump(() => coordinator.HeartbeatAsync());
                 Require(control.LifecycleAction.Content?.ToString() == "Unload model"
                         && handler.Requests.Count == requestsBeforeHeartbeat + 1
                         && handler.Requests[^1] == "/api/v1/models"
                         && ProviderModelsSurfaceCoordinator.HeartbeatInterval == TimeSpan.FromSeconds(5),
                     "heartbeat did not reclassify externally changed LM Studio residency using one catalog-only probe");
+                Require(statusCenter.History.Count == statusHistoryBeforeHeartbeat,
+                    "routine five-second Models heartbeat created universal status history");
 
                 handler.ApplyMutations = false;
                 handler.FailConfirmationAfterMutation = true;
@@ -1605,6 +1634,260 @@ static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
     });
 }
 
+static void ProviderModelsConfigurationReloadHandlesProviderDefaultAndUncertainMutations()
+{
+    static void Pump(Func<Task> start)
+    {
+        var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        var previousContext = SynchronizationContext.Current;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(
+                new System.Windows.Threading.DispatcherSynchronizationContext(dispatcher));
+            var task = start();
+            if (!task.IsCompleted)
+            {
+                var frame = new System.Windows.Threading.DispatcherFrame();
+                _ = task.ContinueWith(
+                    _ => dispatcher.BeginInvoke(
+                        new Action(() => frame.Continue = false),
+                        System.Windows.Threading.DispatcherPriority.Send),
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+            }
+            task.GetAwaiter().GetResult();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+        }
+    }
+
+    RunStaTest(() =>
+    {
+        var root = CreateProviderCatalogTestRoot("configuration-reload-evidence");
+        try
+        {
+            const string sessionId = "configuration-reload-session";
+            const string modelId = "provider-observed-model";
+            var sessionStore = new SessionStore(root);
+            var eventLogStore = new EventLogStore(root);
+            var snapshot = SessionStore.CreateDefaultSnapshot();
+            snapshot.Configs[ModelProviderRouting.SharedConfigKey] = new ModelProviderConfig
+            {
+                BaseUrl = "http://127.0.0.1:1234/v1",
+                ApiMode = ModelProviderApiModes.LmStudioNative,
+                Model = modelId,
+                NativeIdleTtlSeconds = 45
+            };
+            ModelRuntimeSettingsRegistry.Register(
+                snapshot,
+                snapshot.Configs[ModelProviderRouting.SharedConfigKey],
+                4096,
+                ModelHistoryPolicies.Rolling80,
+                ModelResponseTones.Default,
+                "");
+            sessionStore.SaveSnapshotAsync(snapshot, sessionId).GetAwaiter().GetResult();
+            SessionSummary? active = sessionStore.ListSessionsAsync().GetAwaiter().GetResult()
+                .Single(session => session.Id == sessionId);
+            using var operationLock = new SemaphoreSlim(1, 1);
+            var providerConfig = new ProviderConfigurationControlService(
+                sessionStore,
+                eventLogStore,
+                operationLock,
+                () => active,
+                () => false,
+                (_, _, _) => Task.CompletedTask);
+            using var handler = new ProviderModelsLifecycleHttpHandler(modelId) { Loaded = true };
+            using var httpClient = new HttpClient(handler);
+            var catalogService = new LmStudioModelCatalogService(httpClient);
+            var providerHealth = new ModelProviderHealthService(httpClient);
+            var modelLifecycle = new ModelPreloadService(httpClient, catalogService);
+            var control = new ProviderModelAssignmentsControl();
+            AttachArenaPresentationResources(control);
+            ApplyExperimentSurfaceTheme(control, ThemePalette.Resolve("dark-blue"));
+            using var coordinator = new ProviderModelsSurfaceCoordinator(
+                control,
+                sessionStore,
+                providerConfig,
+                providerHealth,
+                modelLifecycle,
+                operationLock,
+                () => active,
+                () => false,
+                catalogService);
+            var host = new System.Windows.Window
+            {
+                Content = control,
+                Width = 1300,
+                Height = 800,
+                ShowInTaskbar = false,
+                WindowStyle = System.Windows.WindowStyle.None,
+                Opacity = 0,
+                Left = -10000,
+                Top = -10000
+            };
+            host.Show();
+            try
+            {
+                Pump(() => coordinator.RefreshAsync(refreshCatalog: true));
+                Task? configurationTask = null;
+                Task? reloadTask = null;
+                control.ConfigurationChanged += (_, args) =>
+                    configurationTask = coordinator.SaveConfigurationAsync(args);
+                control.ConfigurationReloadRequested += (_, args) =>
+                    reloadTask = coordinator.RunConfigurationReloadAsync(args);
+
+                Pump(() =>
+                {
+                    control.ProviderDefaultContextToggle.IsChecked = true;
+                    return configurationTask
+                        ?? throw new InvalidOperationException("Provider-default configuration save did not start.");
+                });
+                FlushProviderModelsDispatcher(host);
+                Require(control.ConfigurationReloadAction.IsEnabled
+                        && control.ConfigurationReloadAction.Content?.ToString() == "Reload to apply",
+                    "changing a loaded explicit context to Provider default lost its required reload during save refresh");
+                var savedPendingDefault = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()!;
+                Require(savedPendingDefault.PendingModelConfigurationApplies.Count > 0,
+                    "a loaded context edit did not persist opaque pending-apply intent for restart recovery");
+                var restartedControl = new ProviderModelAssignmentsControl();
+                AttachArenaPresentationResources(restartedControl);
+                ApplyExperimentSurfaceTheme(restartedControl, ThemePalette.Resolve("dark-blue"));
+                using (var restartedCoordinator = new ProviderModelsSurfaceCoordinator(
+                           restartedControl,
+                           sessionStore,
+                           providerConfig,
+                           providerHealth,
+                           modelLifecycle,
+                           operationLock,
+                           () => active,
+                           () => false,
+                           catalogService))
+                {
+                    var restartedHost = new System.Windows.Window
+                    {
+                        Content = restartedControl,
+                        Width = 1300,
+                        Height = 800,
+                        ShowInTaskbar = false,
+                        WindowStyle = System.Windows.WindowStyle.None,
+                        Opacity = 0,
+                        Left = -10000,
+                        Top = -10000
+                    };
+                    restartedHost.Show();
+                    try
+                    {
+                        Pump(() => restartedCoordinator.RefreshAsync(refreshCatalog: true));
+                        FlushProviderModelsDispatcher(restartedHost);
+                        Require(restartedControl.ConfigurationReloadAction.IsEnabled
+                                && restartedControl.ConfigurationReloadAction.Content?.ToString() == "Reload to apply",
+                            "restart/panel recreation dropped durable Provider-default apply intent");
+                    }
+                    finally
+                    {
+                        restartedHost.Close();
+                    }
+                }
+                var unloadsBeforeDefault = handler.Requests.Count(path => path == "/api/v1/models/unload");
+                var loadsBeforeDefault = handler.Requests.Count(path => path == "/api/v1/models/load");
+                Pump(() =>
+                {
+                    control.ConfigurationReloadAction.RaiseEvent(new System.Windows.RoutedEventArgs(
+                        System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    return reloadTask
+                        ?? throw new InvalidOperationException("Provider-default configuration reload did not start.");
+                });
+                FlushProviderModelsDispatcher(host);
+                var defaultLoadBody = handler.Requests
+                    .Select((path, index) => (path, Body: handler.Bodies[index]))
+                    .Last(item => item.path == "/api/v1/models/load").Body;
+                var persistedDefault = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()!;
+                var resolvedDefault = ModelRuntimeSettingsRegistry.Resolve(
+                    persistedDefault,
+                    persistedDefault.Configs[ModelProviderRouting.SharedConfigKey]);
+                Require(handler.Loaded
+                        && resolvedDefault.ConfiguredContextWindow == 0
+                        && handler.Requests.Count(path => path == "/api/v1/models/unload") == unloadsBeforeDefault + 1
+                        && handler.Requests.Count(path => path == "/api/v1/models/load") == loadsBeforeDefault + 1
+                        && !defaultLoadBody.Contains("context_length", StringComparison.OrdinalIgnoreCase)
+                        && persistedDefault.PendingModelConfigurationApplies.Count == 0
+                        && AutomationProperties.GetItemStatus(control.ConfigurationReloadAction) == "Succeeded",
+                    "Provider default did not perform one explicit unload/load without a context override and clear confirmed apply intent");
+
+                var current = ProviderConfigurationControlService.CaptureModelConfiguration(
+                    sessionId,
+                    persistedDefault,
+                    modelId,
+                    [modelId]);
+                Pump(async () =>
+                {
+                    var result = await providerConfig.SetModelConfigurationAsync(
+                        new ProviderModelConfigurationRequest(
+                            modelId,
+                            8192,
+                            ModelHistoryPolicies.Rolling80,
+                            ModelResponseTones.Default,
+                            "",
+                            current.ConfigurationIdentity,
+                            [modelId]));
+                    Require(result.Ok, $"explicit reload test configuration did not save: {result.Message}");
+                    await coordinator.RefreshAsync(refreshCatalog: false);
+                });
+                FlushProviderModelsDispatcher(host);
+                Require(control.ConfigurationReloadAction.IsEnabled,
+                    "provider-reported 4,096 context did not expose reload for the saved 8,192 context");
+
+                handler.DropUnloadResponseAfterRequest = true;
+                reloadTask = null;
+                Pump(() =>
+                {
+                    control.ConfigurationReloadAction.RaiseEvent(new System.Windows.RoutedEventArgs(
+                        System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    return reloadTask
+                        ?? throw new InvalidOperationException("Unknown-outcome configuration unload did not start.");
+                });
+                Require(AutomationProperties.GetItemStatus(control.ConfigurationReloadAction) == "Unconfirmed"
+                        && AutomationProperties.GetHelpText(control.ConfigurationReloadAction)
+                            .Contains("without a definite outcome", StringComparison.OrdinalIgnoreCase),
+                    "a dropped connection after the configuration unload POST was reinterpreted as a definite failure");
+
+                handler.Loaded = true;
+                Pump(() => coordinator.RefreshAsync(refreshCatalog: true));
+                Require(control.ConfigurationReloadAction.IsEnabled
+                        && control.ConfigurationReloadAction.Content?.ToString() == "Reload to apply",
+                    $"authoritative loaded-but-mismatched evidence did not release an unknown reload outcome for retry (state={AutomationProperties.GetItemStatus(control.ConfigurationReloadAction)}, content={control.ConfigurationReloadAction.Content}, help={AutomationProperties.GetHelpText(control.ConfigurationReloadAction)}, enabled={control.ConfigurationReloadAction.IsEnabled}, loadedRows={control.LoadedRowCount}, availableRows={control.AvailableCatalogRowCount}, handlerLoaded={handler.Loaded}, recentRequests={string.Join(',', handler.Requests.TakeLast(6))})");
+
+                handler.LoadFailureBody = "replacement load rejected";
+                reloadTask = null;
+                Pump(() =>
+                {
+                    control.ConfigurationReloadAction.RaiseEvent(new System.Windows.RoutedEventArgs(
+                        System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    return reloadTask
+                        ?? throw new InvalidOperationException("Rejected replacement load did not start.");
+                });
+                Require(!handler.Loaded
+                        && AutomationProperties.GetItemStatus(control.ConfigurationReloadAction) == "Failed"
+                        && AutomationProperties.GetHelpText(control.ConfigurationReloadAction)
+                            .Contains("currently unloaded", StringComparison.OrdinalIgnoreCase),
+                    "an accepted unload followed by a definite replacement-load rejection hid the now-unloaded model state");
+            }
+            finally
+            {
+                host.Close();
+            }
+        }
+        finally
+        {
+            DeleteProviderCatalogTestRoot(root);
+        }
+    });
+}
+
 static string CreateProviderCatalogTestRoot(string label)
 {
     var workspace = Path.GetFullPath(Environment.CurrentDirectory);
@@ -1648,8 +1931,10 @@ private sealed class ProviderModelsLifecycleHttpHandler(string modelId) : HttpMe
     public bool FailConfirmationAfterMutation { get; set; }
     public bool NativeCatalogUnavailable { get; set; }
     public string LifecycleFailureBody { get; set; } = "";
+    public string LoadFailureBody { get; set; } = "";
     public Action? BeforeNativeCatalogResponse { get; set; }
     public bool DropLoadResponseAfterRequest { get; set; }
+    public bool DropUnloadResponseAfterRequest { get; set; }
     public bool MalformedLoadSuccessBody { get; set; }
     public System.Net.HttpStatusCode LifecycleFailureStatusCode { get; set; } = System.Net.HttpStatusCode.BadRequest;
     public bool ApplyMutationOnLifecycleFailure { get; set; }
@@ -1673,6 +1958,12 @@ private sealed class ProviderModelsLifecycleHttpHandler(string modelId) : HttpMe
 
         if (path.EndsWith("/api/v1/models/load", StringComparison.Ordinal))
         {
+            if (LoadFailureBody.Length > 0)
+            {
+                var body = LoadFailureBody;
+                LoadFailureBody = "";
+                return Json(body, System.Net.HttpStatusCode.BadRequest);
+            }
             if (LifecycleFailureBody.Length > 0)
             {
                 if (ApplyMutationOnLifecycleFailure)
@@ -1729,6 +2020,12 @@ private sealed class ProviderModelsLifecycleHttpHandler(string modelId) : HttpMe
             if (ApplyMutations)
             {
                 Loaded = false;
+            }
+
+            if (DropUnloadResponseAfterRequest)
+            {
+                DropUnloadResponseAfterRequest = false;
+                throw new HttpRequestException("Connection closed after the unload request started.");
             }
 
             if (FailConfirmationAfterMutation)

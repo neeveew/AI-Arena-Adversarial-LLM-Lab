@@ -30,7 +30,7 @@ public static class ModelProviderRouting
             if (!snapshot.Engine.DefaultForUnassignedAgentsEnabled)
             {
                 fallbackConfig = null;
-                return specific;
+                return ModelRuntimeSettingsRegistry.Resolve(snapshot, specific);
             }
 
             if (fallbackConfig is not null && string.Equals(specific.Model, fallbackConfig.Model, StringComparison.Ordinal))
@@ -38,7 +38,10 @@ public static class ModelProviderRouting
                 fallbackConfig = null;
             }
 
-            return specific;
+            fallbackConfig = fallbackConfig is null
+                ? null
+                : ModelRuntimeSettingsRegistry.Resolve(snapshot, fallbackConfig);
+            return ModelRuntimeSettingsRegistry.Resolve(snapshot, specific);
         }
 
         fallbackConfig = null;
@@ -47,8 +50,9 @@ public static class ModelProviderRouting
             return null;
         }
 
-        return snapshot.Configs.TryGetValue(SharedConfigKey, out shared)
+        var resolved = snapshot.Configs.TryGetValue(SharedConfigKey, out shared)
             ? shared
             : snapshot.Configs.Values.FirstOrDefault();
+        return resolved is null ? null : ModelRuntimeSettingsRegistry.Resolve(snapshot, resolved);
     }
 }

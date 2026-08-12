@@ -2,6 +2,7 @@ using System.IO;
 using System.IO.Pipes;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AIArena.Wpf.Services;
 
 namespace AIArena.Wpf;
 
@@ -89,6 +90,32 @@ internal static class AIArenaControlPlaneProtocol
         }
 
         return Path.Combine(Path.GetTempPath(), $"ai-arena-wpf-control-{user}{CurrentOwnerSuffix()}.token");
+    }
+
+    internal static bool TryCurrentEndpoint(
+        out string pipeName,
+        out string tokenPath,
+        out string error)
+    {
+        try
+        {
+            pipeName = CurrentPipeName();
+            tokenPath = DefaultTokenPath();
+            error = "";
+            return true;
+        }
+        catch (InvalidOperationException ex) when (
+            ex.Message.StartsWith(OwnerEnvironmentVariable, StringComparison.Ordinal))
+        {
+            // Keep the protocol itself fail-closed: an invalid QA owner must
+            // never fall back to the unsuffixed production pipe. The desktop
+            // composition can disable only the optional control plane and keep
+            // the rest of the application available.
+            pipeName = "";
+            tokenPath = "";
+            error = ex.Message;
+            return false;
+        }
     }
 
     private static string CurrentOwnerSuffix()
@@ -187,6 +214,7 @@ internal static class AIArenaControlCommands
     public const string AgentWorkspaceSet = "agent.workspace.set";
     public const string ProviderState = "provider.state";
     public const string ProviderConfigSet = "provider.config.set";
+    public const string ProviderModelConfigSet = "provider.model.config.set";
     public const string ProviderModelSet = "provider.model.set";
     public const string ProviderTest = "provider.test";
     public const string ProviderModelsRefresh = "provider.models.refresh";
@@ -260,7 +288,134 @@ internal sealed record AIArenaControlSnapshot(
     string Theme,
     bool ControlPlaneEnabled,
     AIArenaAgentControlState Agent,
-    AIArenaProviderControlState Provider);
+    AIArenaProviderControlState Provider,
+    AIArenaApplicationStatusControlState? Status = null);
+
+internal sealed record AIArenaApplicationStatusItemControlState(
+    string Id,
+    string Source,
+    string State,
+    string Summary,
+    string Detail,
+    double? Progress,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    string Lifetime,
+    string SessionId,
+    string ProviderIdentity,
+    string? NavigationTarget,
+    int RepeatCount,
+    bool IsBackground,
+    bool IsActive,
+    bool IsUnresolved);
+
+internal sealed record AIArenaApplicationStatusControlState(
+    AIArenaApplicationStatusItemControlState Primary,
+    IReadOnlyList<AIArenaApplicationStatusItemControlState> Items,
+    int AdditionalCount);
+
+internal sealed record AIArenaApplicationStatusChangedControlState(
+    [property: JsonPropertyName("surface")] string Surface,
+    [property: JsonPropertyName("status")] AIArenaApplicationStatusControlState Status,
+    [property: JsonPropertyName("announcementKind")] string AnnouncementKind,
+    [property: JsonPropertyName("expiredOnly")] bool ExpiredOnly);
+
+internal static class AIArenaApplicationStatusControlProjection
+{
+    internal static AIArenaApplicationStatusControlState Project(ApplicationStatusSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        var visible = snapshot.VisibleEntries
+            .Take(ApplicationStatusCenter.CompactEntryCount)
+            .Select(ProjectEntry)
+            .ToArray();
+        var overflow = Math.Max(0, snapshot.VisibleEntries.Count - visible.Length);
+        return new AIArenaApplicationStatusControlState(
+            ProjectEntry(snapshot.Primary),
+            visible,
+            Math.Max(0, snapshot.AdditionalCount) + overflow);
+    }
+
+    private static AIArenaApplicationStatusItemControlState ProjectEntry(ApplicationStatusEntry entry) => new(
+        Safe(entry.Id),
+        Safe(entry.Source),
+        entry.State.ToString().ToLowerInvariant(),
+        Safe(entry.Summary),
+        Safe(entry.Detail),
+        entry.Progress,
+        entry.CreatedAt,
+        entry.UpdatedAt,
+        entry.Lifetime.ToString().ToLowerInvariant(),
+        Safe(entry.Identity.SessionId),
+        Safe(entry.Identity.ProviderIdentity),
+        entry.NavigationTarget,
+        Math.Max(1, entry.RepeatCount),
+        entry.IsBackground,
+        entry.IsActive,
+        entry.IsUnresolved);
+
+    private static string Safe(string? value) =>
+        ProviderModelCatalogProjectionService.SafeStatusForDisplay(value ?? "");
+}
+
+internal sealed class AIArenaApplicationStatusControlPublisher : IDisposable
+{
+    private readonly ApplicationStatusCenter statusCenter;
+    private readonly Action<string, string, object?> publish;
+    private bool disposed;
+
+    internal AIArenaApplicationStatusControlPublisher(
+        ApplicationStatusCenter statusCenter,
+        Action<string, string, object?> publish)
+    {
+        this.statusCenter = statusCenter ?? throw new ArgumentNullException(nameof(statusCenter));
+        this.publish = publish ?? throw new ArgumentNullException(nameof(publish));
+        statusCenter.Changed += StatusCenterChanged;
+    }
+
+    public void Dispose()
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        disposed = true;
+        statusCenter.Changed -= StatusCenterChanged;
+    }
+
+    private void StatusCenterChanged(object? sender, ApplicationStatusChangedEventArgs e)
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        publish(
+            "status.changed",
+            e.Snapshot.AppStatus,
+            new AIArenaApplicationStatusChangedControlState(
+                SurfaceFor(e.Snapshot),
+                AIArenaApplicationStatusControlProjection.Project(e.Snapshot),
+                e.AnnouncementKind.ToString().ToLowerInvariant(),
+                e.ExpiredOnly));
+    }
+
+    private static string SurfaceFor(ApplicationStatusSnapshot snapshot)
+    {
+        var changed = snapshot.History
+            .OrderByDescending(entry => entry.UpdatedAt)
+            .FirstOrDefault();
+        if (changed?.Key.Equals("legacy.arena", StringComparison.Ordinal) == true)
+        {
+            return "arena";
+        }
+
+        var source = (changed?.Source ?? snapshot.Primary.Source).Trim().ToLowerInvariant();
+        return source.Length == 0 ? "application" : source;
+    }
+}
 
 internal sealed record AIArenaAgentControlState(
     string Workspace,
@@ -309,6 +464,14 @@ internal sealed record AIArenaProviderRoleControlState(
     bool InheritsShared,
     double? TemperatureOverride,
     int? MaxOutputTokensOverride);
+
+internal sealed record AIArenaProviderModelSettingsControlState(
+    string Model,
+    int ConfiguredContextWindow,
+    string HistoryPolicy,
+    string ResponseTone,
+    string CustomTone,
+    string ConfigurationIdentity);
 
 internal sealed record AIArenaProviderControlState(
     bool Online,
@@ -368,6 +531,8 @@ internal sealed record AIArenaProviderControlState(
     public bool Busy { get; init; }
 
     public IReadOnlyList<AIArenaProviderRoleControlState> Roles { get; init; } = [];
+
+    public IReadOnlyList<AIArenaProviderModelSettingsControlState> ModelSettings { get; init; } = [];
 }
 
 internal sealed record AIArenaCollaborateControlState(
@@ -425,7 +590,8 @@ internal sealed record AIArenaSessionExportControlState(
     string ProviderModel,
     int TranscriptMessageCount,
     AIArenaAgentControlState Agent,
-    AIArenaCollaborateControlState Collaborate);
+    AIArenaCollaborateControlState Collaborate,
+    AIArenaApplicationStatusControlState? Status = null);
 
 internal sealed record AIArenaReceiptExportControlState(
     string SessionId,

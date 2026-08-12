@@ -138,7 +138,18 @@ internal sealed class ProviderConfigurationControlService
                     return Failure("not_available", $"No snapshot was found for session {session.Id}.", EmptyState(session.Id));
                 }
 
+                var beforeShared = SharedConfig(snapshot);
+                var beforeConnectionIdentity = ProviderModelCatalogProjectionService.ConnectionFingerprint(
+                    session.Id,
+                    beforeShared);
                 changedFields = ApplyPatch(snapshot, patch);
+                var afterConnectionIdentity = ProviderModelCatalogProjectionService.ConnectionFingerprint(
+                    session.Id,
+                    SharedConfig(snapshot));
+                if (!beforeConnectionIdentity.Equals(afterConnectionIdentity, StringComparison.Ordinal))
+                {
+                    snapshot.PendingModelConfigurationApplies.Clear();
+                }
                 if (changedFields.Count == 0)
                 {
                     savedState = CaptureState(session.Id, snapshot);
@@ -418,6 +429,252 @@ internal sealed class ProviderConfigurationControlService
             changedFields);
     }
 
+    public async Task<ProviderModelConfigurationControlResult> SetModelConfigurationAsync(
+        ProviderModelConfigurationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var validation = ValidateModelConfigurationRequest(request);
+        if (!validation.Ok)
+        {
+            return ModelConfigurationFailure(
+                validation.ErrorCode,
+                validation.Message,
+                await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, cancellationToken));
+        }
+
+        if (isArenaBusy())
+        {
+            return ModelConfigurationFailure(
+                "busy",
+                "Model configuration cannot change while the arena is running.",
+                await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, cancellationToken));
+        }
+
+        var session = activeSession();
+        if (session is null)
+        {
+            return ModelConfigurationFailure(
+                "not_available",
+                "No active session is available.",
+                ProviderModelConfigurationProjection.Empty(ProviderModelCatalogProjectionService.SafeModelIdentifier(request.Model)));
+        }
+
+        IReadOnlyList<string> changedFields = [];
+        var saved = ProviderModelConfigurationProjection.Empty(
+            ProviderModelCatalogProjectionService.SafeModelIdentifier(request.Model));
+        await arenaOperationLock.WaitAsync(cancellationToken);
+        try
+        {
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var snapshot = await sessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
+                if (snapshot is null)
+                {
+                    return ModelConfigurationFailure(
+                        "not_available",
+                        $"No snapshot was found for session {session.Id}.",
+                        saved);
+                }
+
+                var aliases = EquivalentModels(request.Model, request.EquivalentModelIds);
+                var before = CaptureModelConfiguration(session.Id, snapshot, request.Model, aliases);
+                if (!before.ConfigurationIdentity.Equals(request.ExpectedConfigurationIdentity, StringComparison.Ordinal))
+                {
+                    return ModelConfigurationFailure(
+                        "conflict",
+                        "This model configuration or provider connection changed; refresh and retry.",
+                        before);
+                }
+
+                var normalizedHistory = ModelHistoryPolicies.NormalizeHistoryPolicy(request.HistoryPolicy);
+                var normalizedTone = ModelResponseTones.NormalizeResponseTone(request.ResponseTone);
+                var normalizedCustomTone = normalizedTone == ModelResponseTones.Custom
+                    ? ModelResponseTones.NormalizeCustomTone(request.CustomTone)
+                    : "";
+                changedFields = ChangedModelConfigurationFields(
+                    before,
+                    request.ConfiguredContextWindow,
+                    normalizedHistory,
+                    normalizedTone,
+                    normalizedCustomTone).ToList();
+
+                var shared = SharedConfig(snapshot);
+                var rawRoutedAliases = snapshot.Configs.Values
+                    .Where(config => !string.IsNullOrWhiteSpace(config.Model)
+                        && aliases.Any(alias => ModelAliasesMatch(alias, config.Model)))
+                    .Select(config => config.Model.Trim());
+                var allAliases = aliases
+                    .Concat(rawRoutedAliases)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(128)
+                    .ToArray();
+                var aliasConfigs = allAliases.Select(model => ConfigForModel(shared, model)).ToArray();
+                var requiresAliasRepair = aliasConfigs.Any(config =>
+                {
+                    var identity = ModelRuntimeSettingsRegistry.Identity(config);
+                    return !snapshot.ModelSettings.TryGetValue(identity, out var current)
+                        || current.ConfiguredContextWindow != request.ConfiguredContextWindow
+                        || !ModelHistoryPolicies.NormalizeHistoryPolicy(current.HistoryPolicy).Equals(normalizedHistory, StringComparison.Ordinal)
+                        || !ModelResponseTones.NormalizeResponseTone(current.ResponseTone).Equals(normalizedTone, StringComparison.Ordinal)
+                        || !ModelResponseTones.NormalizeCustomTone(current.CustomTone).Equals(normalizedCustomTone, StringComparison.Ordinal);
+                });
+                if (requiresAliasRepair && changedFields.Count == 0)
+                {
+                    changedFields = ["equivalentModelAliases"];
+                }
+
+                if (changedFields.Count == 0)
+                {
+                    saved = before;
+                    break;
+                }
+
+                ModelRuntimeSettingsRegistry.RegisterAliases(
+                    snapshot,
+                    aliasConfigs,
+                    request.ConfiguredContextWindow,
+                    normalizedHistory,
+                    normalizedTone,
+                    normalizedCustomTone);
+                if (changedFields.Contains("configuredContextWindow", StringComparer.Ordinal)
+                    && request.ContextApplyRequired.HasValue)
+                {
+                    var pendingChanged = request.ContextApplyRequired.Value
+                        ? ModelRuntimeSettingsRegistry.MarkPendingConfigurationApplies(snapshot, aliasConfigs)
+                        : ModelRuntimeSettingsRegistry.ClearPendingConfigurationApplies(snapshot, aliasConfigs);
+                    if (pendingChanged)
+                    {
+                        changedFields = changedFields
+                            .Append("pendingConfigurationApply")
+                            .Distinct(StringComparer.Ordinal)
+                            .ToArray();
+                    }
+                }
+                try
+                {
+                    await sessionStore.SaveSnapshotAsync(snapshot, session.Id, cancellationToken);
+                    saved = CaptureModelConfiguration(session.Id, snapshot, request.Model, aliases);
+                    await eventLogStore.AppendAsync(session.Id, "provider_model_configuration_changed", new
+                    {
+                        Model = ProviderModelCatalogProjectionService.SafeModelIdentifier(request.Model),
+                        ChangedFields = changedFields,
+                        AliasCount = allAliases.Length,
+                        ConfiguredContextWindow = request.ConfiguredContextWindow,
+                        HistoryPolicy = normalizedHistory,
+                        ResponseTone = normalizedTone
+                    }, cancellationToken);
+                    break;
+                }
+                catch (SnapshotConcurrencyException) when (attempt == 0)
+                {
+                    // Reload once and require the original per-model identity again.
+                }
+                catch (SnapshotConcurrencyException)
+                {
+                    return ModelConfigurationFailure(
+                        "conflict",
+                        "Model configuration changed concurrently; refresh and retry.",
+                        await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, cancellationToken));
+                }
+            }
+        }
+        finally
+        {
+            arenaOperationLock.Release();
+        }
+
+        var message = changedFields.Count == 0
+            ? "Model configuration already matched the requested values."
+            : "Model configuration saved. Routing and model residency were unchanged.";
+        await refreshHostAsync(message, false, cancellationToken);
+        var refreshed = await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, cancellationToken);
+        return new ProviderModelConfigurationControlResult(
+            true,
+            "",
+            message,
+            refreshed.SessionId.Length == 0 ? saved : refreshed,
+            changedFields);
+    }
+
+    /// <summary>
+    /// Clears durable apply intent only after the caller has authoritatively
+    /// confirmed the loaded provider instance under the shared operation lock.
+    /// </summary>
+    internal async Task<bool> ConfirmModelConfigurationAppliedUnderLockAsync(
+        string model,
+        IReadOnlyList<string>? equivalentModelIds,
+        string expectedConfigurationIdentity,
+        CancellationToken cancellationToken)
+    {
+        var session = activeSession();
+        if (session is null)
+        {
+            return false;
+        }
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var currentSession = activeSession();
+            if (currentSession is null || !currentSession.Id.Equals(session.Id, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var snapshot = await sessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
+            if (snapshot is null)
+            {
+                return false;
+            }
+
+            var aliases = EquivalentModels(model, equivalentModelIds);
+            var projection = CaptureModelConfiguration(session.Id, snapshot, model, aliases);
+            if (!projection.ConfigurationIdentity.Equals(expectedConfigurationIdentity, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var shared = SharedConfig(snapshot);
+            var rawRoutedAliases = snapshot.Configs.Values
+                .Where(config => !string.IsNullOrWhiteSpace(config.Model)
+                    && aliases.Any(alias => ModelAliasesMatch(alias, config.Model)))
+                .Select(config => config.Model.Trim());
+            var aliasConfigs = aliases
+                .Concat(rawRoutedAliases)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(128)
+                .Select(alias => ConfigForModel(shared, alias))
+                .ToArray();
+            if (!ModelRuntimeSettingsRegistry.ClearPendingConfigurationApplies(snapshot, aliasConfigs))
+            {
+                return true;
+            }
+
+            try
+            {
+                await sessionStore.SaveSnapshotAsync(snapshot, session.Id, cancellationToken);
+                await eventLogStore.AppendAsync(session.Id, "provider_model_configuration_applied", new
+                {
+                    Model = ProviderModelCatalogProjectionService.SafeModelIdentifier(model),
+                    AliasCount = aliasConfigs.Length
+                }, cancellationToken);
+                return true;
+            }
+            catch (SnapshotConcurrencyException) when (attempt == 0)
+            {
+                // Reload once; the same expected configuration identity remains mandatory.
+            }
+            catch (SnapshotConcurrencyException)
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
     internal static (bool Ok, string ErrorCode, string Message) Validate(AIArenaProviderConfigurationPatch patch)
     {
         if (!patch.HasMutation)
@@ -502,6 +759,7 @@ internal sealed class ProviderConfigurationControlService
 
     internal static IReadOnlyList<string> ApplyPatch(ArenaSnapshot snapshot, AIArenaProviderConfigurationPatch patch)
     {
+        ModelRuntimeSettingsRegistry.Normalize(snapshot);
         var roleKeys = ConfigurationRoleKeys(snapshot)
             .Concat(patch.RoleModels.Keys)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -509,6 +767,7 @@ internal sealed class ProviderConfigurationControlService
         var existingShared = snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var shared)
             ? shared
             : new ModelProviderConfig();
+        var resolvedExistingShared = ModelRuntimeSettingsRegistry.Resolve(snapshot, existingShared);
         var existingRoleModels = roleKeys.ToDictionary(
             role => role,
             role => ConfiguredRoleModel(snapshot.Configs, role, existingShared),
@@ -545,6 +804,14 @@ internal sealed class ProviderConfigurationControlService
             reasoning,
             nativeStatefulChat,
             nativeIdleTtlSeconds);
+        var sameModelIdentity = ModelRuntimeSettingsRegistry.Identity(existingShared).Equals(
+            ModelRuntimeSettingsRegistry.Identity(ConfigForModel(new ModelProviderConfig
+            {
+                BaseUrl = baseUrl,
+                ApiMode = apiMode,
+                Model = model
+            }, model)),
+            StringComparison.Ordinal);
         var updatedShared = new ModelProviderConfig
         {
             BaseUrl = baseUrl,
@@ -556,6 +823,12 @@ internal sealed class ProviderConfigurationControlService
             Temperature = temperature,
             MaxOutputTokens = maxOutputTokens,
             ContextLength = contextLength,
+            ConfiguredContextWindow = sameModelIdentity ? resolvedExistingShared.ConfiguredContextWindow : 0,
+            HistoryPolicy = sameModelIdentity
+                ? resolvedExistingShared.HistoryPolicy
+                : ModelRuntimeSettingsRegistry.DefaultHistoryPolicy(snapshot),
+            ResponseTone = sameModelIdentity ? resolvedExistingShared.ResponseTone : ModelResponseTones.Default,
+            CustomTone = sameModelIdentity ? resolvedExistingShared.CustomTone : "",
             Reasoning = reasoning,
             NativeStatefulChat = nativeStatefulChat,
             NativeIdleTtlSeconds = nativeIdleTtlSeconds,
@@ -594,6 +867,8 @@ internal sealed class ProviderConfigurationControlService
                 maxOutputTokensOverride);
         }
 
+        ModelRuntimeSettingsRegistry.Normalize(snapshot);
+
         return changed.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
@@ -621,6 +896,7 @@ internal sealed class ProviderConfigurationControlService
         }
 
         var existing = configs.TryGetValue(role, out var current) ? current : null;
+        var sameAsSharedModel = model.Trim().Equals(shared.Model.Trim(), StringComparison.Ordinal);
         var readinessChanged = existing is null || ProviderReadinessChanged(
             existing,
             shared.BaseUrl,
@@ -642,6 +918,10 @@ internal sealed class ProviderConfigurationControlService
             Temperature = temperatureOverride ?? shared.Temperature,
             MaxOutputTokens = maxOutputTokensOverride ?? shared.MaxOutputTokens,
             ContextLength = shared.ContextLength,
+            ConfiguredContextWindow = sameAsSharedModel ? shared.ConfiguredContextWindow : 0,
+            HistoryPolicy = shared.HistoryPolicy,
+            ResponseTone = sameAsSharedModel ? shared.ResponseTone : ModelResponseTones.Default,
+            CustomTone = sameAsSharedModel ? shared.CustomTone : "",
             Reasoning = shared.Reasoning,
             NativeStatefulChat = shared.NativeStatefulChat,
             NativeIdleTtlSeconds = shared.NativeIdleTtlSeconds,
@@ -741,7 +1021,25 @@ internal sealed class ProviderConfigurationControlService
             DefaultForUnassignedAgentsEnabled = snapshot.Engine.DefaultForUnassignedAgentsEnabled,
             LastTestOk = shared.LastTestOk,
             LastLatencyMs = shared.LastLatencyMs,
-            Roles = roles
+            Roles = roles,
+            ModelSettings = snapshot.Configs.Values
+                .Where(config => !string.IsNullOrWhiteSpace(config.Model))
+                .GroupBy(config => ModelRuntimeSettingsRegistry.Identity(config), StringComparer.Ordinal)
+                .Select(group => group.First())
+                .Take(64)
+                .Select(config =>
+                {
+                    var model = ProviderModelCatalogProjectionService.SafeModelIdentifier(config.Model);
+                    var projected = CaptureModelConfiguration(sessionId, snapshot, model, [config.Model]);
+                    return new AIArenaProviderModelSettingsControlState(
+                        model,
+                        projected.ConfiguredContextWindow,
+                        projected.HistoryPolicy,
+                        projected.ResponseTone,
+                        projected.CustomTone,
+                        projected.ConfigurationIdentity);
+                })
+                .ToArray()
         };
     }
 
@@ -761,6 +1059,7 @@ internal sealed class ProviderConfigurationControlService
         ArgumentNullException.ThrowIfNull(snapshot);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         AppendIdentityValue(hash, snapshot.Engine.DefaultForUnassignedAgentsEnabled ? "1" : "0");
+        AppendIdentityValue(hash, snapshot.ModelSettingsVersion.ToString(CultureInfo.InvariantCulture));
         foreach (var key in new[] { ModelProviderRouting.SharedConfigKey }.Concat(ConfigurationRoleKeys(snapshot)))
         {
             AppendIdentityValue(hash, key);
@@ -782,6 +1081,15 @@ internal sealed class ProviderConfigurationControlService
             AppendIdentityValue(hash, ModelProviderReasoningModes.Normalize(config.Reasoning));
             AppendIdentityValue(hash, config.NativeStatefulChat ? "1" : "0");
             AppendIdentityValue(hash, config.NativeIdleTtlSeconds.ToString(CultureInfo.InvariantCulture));
+        }
+
+        foreach (var (identity, settings) in snapshot.ModelSettings.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            AppendIdentityValue(hash, identity);
+            AppendIdentityValue(hash, settings.ConfiguredContextWindow.ToString(CultureInfo.InvariantCulture));
+            AppendIdentityValue(hash, ModelHistoryPolicies.NormalizeHistoryPolicy(settings.HistoryPolicy));
+            AppendIdentityValue(hash, ModelResponseTones.NormalizeResponseTone(settings.ResponseTone));
+            AppendIdentityValue(hash, ModelResponseTones.NormalizeCustomTone(settings.CustomTone));
         }
 
         return Convert.ToHexString(hash.GetHashAndReset());
@@ -912,6 +1220,201 @@ internal sealed class ProviderConfigurationControlService
             ? ProviderModelAssignmentProjection.Empty(ProviderModelCatalogProjectionService.SafeModelIdentifier(model))
             : ProviderModelAssignmentProjectionService.Project(session.Id, snapshot, model);
     }
+
+    internal async Task<ProviderModelConfigurationProjection> CaptureModelConfigurationAsync(
+        string model,
+        IReadOnlyList<string>? equivalentModelIds,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var session = activeSession();
+        if (session is null)
+        {
+            return ProviderModelConfigurationProjection.Empty(
+                ProviderModelCatalogProjectionService.SafeModelIdentifier(model));
+        }
+
+        var snapshot = await sessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
+        return snapshot is null
+            ? ProviderModelConfigurationProjection.Empty(ProviderModelCatalogProjectionService.SafeModelIdentifier(model))
+            : CaptureModelConfiguration(
+                session.Id,
+                snapshot,
+                model,
+                EquivalentModels(model, equivalentModelIds));
+    }
+
+    internal static ProviderModelConfigurationProjection CaptureModelConfiguration(
+        string sessionId,
+        ArenaSnapshot snapshot,
+        string model,
+        IReadOnlyList<string>? equivalentModelIds = null)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var shared = SharedConfig(snapshot);
+        var aliases = EquivalentModels(model, equivalentModelIds);
+        ModelRuntimeSettings? settings = null;
+        foreach (var alias in aliases)
+        {
+            var identity = ModelRuntimeSettingsRegistry.Identity(ConfigForModel(shared, alias));
+            if (snapshot.ModelSettings.TryGetValue(identity, out settings))
+            {
+                break;
+            }
+        }
+
+        settings ??= new ModelRuntimeSettings
+        {
+            ConfiguredContextWindow = 0,
+            HistoryPolicy = ModelRuntimeSettingsRegistry.DefaultHistoryPolicy(snapshot),
+            ResponseTone = ModelResponseTones.Default,
+            CustomTone = ""
+        };
+        var history = ModelHistoryPolicies.NormalizeHistoryPolicy(settings.HistoryPolicy);
+        var tone = ModelResponseTones.NormalizeResponseTone(settings.ResponseTone);
+        var customTone = tone == ModelResponseTones.Custom
+            ? ModelResponseTones.NormalizeCustomTone(settings.CustomTone)
+            : "";
+        var contextWindow = ModelRuntimeSettingsRegistry.ClampConfiguredContextWindow(settings.ConfiguredContextWindow);
+        var identityHash = ModelConfigurationIdentity(
+            sessionId,
+            shared,
+            aliases,
+            contextWindow,
+            history,
+            tone,
+            customTone);
+        return new ProviderModelConfigurationProjection(
+            sessionId,
+            ProviderModelCatalogProjectionService.SafeModelIdentifier(model),
+            contextWindow,
+            history,
+            tone,
+            customTone,
+            identityHash,
+            snapshot.PersistenceRevision);
+    }
+
+    private static string ModelConfigurationIdentity(
+        string sessionId,
+        ModelProviderConfig shared,
+        IReadOnlyList<string> aliases,
+        int contextWindow,
+        string historyPolicy,
+        string responseTone,
+        string customTone)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendIdentityValue(hash, sessionId);
+        AppendIdentityValue(hash, ProviderModelCatalogProjectionService.ConnectionFingerprint(sessionId, shared));
+        foreach (var identity in aliases
+                     .Select(alias => ModelRuntimeSettingsRegistry.Identity(ConfigForModel(shared, alias)))
+                     .Distinct(StringComparer.Ordinal)
+                     .OrderBy(value => value, StringComparer.Ordinal))
+        {
+            AppendIdentityValue(hash, identity);
+        }
+        AppendIdentityValue(hash, contextWindow.ToString(CultureInfo.InvariantCulture));
+        AppendIdentityValue(hash, historyPolicy);
+        AppendIdentityValue(hash, responseTone);
+        AppendIdentityValue(hash, customTone);
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    private static IReadOnlyList<string> EquivalentModels(
+        string model,
+        IReadOnlyList<string>? equivalentModelIds)
+    {
+        return (equivalentModelIds ?? [])
+            .Append(model)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Where(value => TryValidateModel(value, allowEmpty: false))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(64)
+            .ToArray();
+    }
+
+    private static bool ModelAliasesMatch(string left, string right) =>
+        left.Trim().Equals(right.Trim(), StringComparison.OrdinalIgnoreCase)
+        || ProviderModelCatalogProjectionService.SafeModelIdentifier(left)
+            .Equals(ProviderModelCatalogProjectionService.SafeModelIdentifier(right), StringComparison.OrdinalIgnoreCase);
+
+    private static ModelProviderConfig SharedConfig(ArenaSnapshot snapshot) =>
+        snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var shared)
+            ? shared
+            : new ModelProviderConfig();
+
+    private static ModelProviderConfig ConfigForModel(ModelProviderConfig shared, string model) => new()
+    {
+        BaseUrl = shared.BaseUrl,
+        ApiMode = shared.ApiMode,
+        ApiToken = shared.ApiToken,
+        Model = model
+    };
+
+    private static IReadOnlyList<string> ChangedModelConfigurationFields(
+        ProviderModelConfigurationProjection before,
+        int contextWindow,
+        string historyPolicy,
+        string responseTone,
+        string customTone)
+    {
+        var changed = new List<string>();
+        if (before.ConfiguredContextWindow != contextWindow) changed.Add("configuredContextWindow");
+        if (!before.HistoryPolicy.Equals(historyPolicy, StringComparison.Ordinal)) changed.Add("historyPolicy");
+        if (!before.ResponseTone.Equals(responseTone, StringComparison.Ordinal)) changed.Add("responseTone");
+        if (!before.CustomTone.Equals(customTone, StringComparison.Ordinal)) changed.Add("customTone");
+        return changed;
+    }
+
+    private static (bool Ok, string ErrorCode, string Message) ValidateModelConfigurationRequest(
+        ProviderModelConfigurationRequest request)
+    {
+        if (!TryValidateModel(request.Model, allowEmpty: false))
+        {
+            return (false, "invalid_argument", "The selected model must be non-empty, at most 1024 characters, and contain no control characters.");
+        }
+        if (!IsOpaqueFingerprint(request.ExpectedConfigurationIdentity))
+        {
+            return (false, "invalid_argument", "Refresh the model configuration before changing it.");
+        }
+        if (request.ConfiguredContextWindow != 0
+            && request.ConfiguredContextWindow is < ModelRuntimeSettingsRegistry.MinimumConfiguredContextWindow
+                or > ModelRuntimeSettingsRegistry.MaximumConfiguredContextWindow)
+        {
+            return (false, "invalid_argument", "Configured context must be Provider default (0) or between 512 and 1048576.");
+        }
+        if (!request.HistoryPolicy.Trim().Equals(
+                ModelHistoryPolicies.NormalizeHistoryPolicy(request.HistoryPolicy),
+                StringComparison.Ordinal))
+        {
+            return (false, "invalid_argument", "History policy must be strict, rolling_80, or chaptered.");
+        }
+        if (request.HistoryPolicy.Equals(ModelHistoryPolicies.Chaptered, StringComparison.Ordinal))
+        {
+            return (false, "not_available", "Chaptered history is reserved for a later release.");
+        }
+        if (!request.ResponseTone.Trim().Equals(
+                ModelResponseTones.NormalizeResponseTone(request.ResponseTone),
+                StringComparison.Ordinal))
+        {
+            return (false, "invalid_argument", "Response tone is unsupported.");
+        }
+        var custom = ModelResponseTones.NormalizeCustomTone(request.CustomTone);
+        if (request.ResponseTone.Equals(ModelResponseTones.Custom, StringComparison.Ordinal)
+            && (custom.Length == 0 || !custom.Equals(request.CustomTone.Trim(), StringComparison.Ordinal)))
+        {
+            return (false, "invalid_argument", "Custom tone must be non-empty, single-line, and at most 240 characters.");
+        }
+        return (true, "", "");
+    }
+
+    private static ProviderModelConfigurationControlResult ModelConfigurationFailure(
+        string errorCode,
+        string message,
+        ProviderModelConfigurationProjection configuration) =>
+        new(false, errorCode, message, configuration, []);
 
     private static ProviderModelAssignmentControlResult AssignmentFailure(
         string errorCode,

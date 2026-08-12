@@ -889,6 +889,13 @@ internal sealed class ArenaEvaluationService
             provider.Model = IdentityAlias(provider.Model, "model", modelAliases);
         }
 
+        foreach (var setting in package.Setup.ModelSettings
+                     .Where(setting => setting is not null)
+                     .OrderBy(setting => setting.Model, StringComparer.OrdinalIgnoreCase))
+        {
+            setting.Model = IdentityAlias(setting.Model, "model", modelAliases);
+        }
+
         return MatchSetupPackageCodec.Fingerprint(package);
     }
 

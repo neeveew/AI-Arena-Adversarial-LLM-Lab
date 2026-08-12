@@ -99,6 +99,14 @@ public sealed record ArenaViewSnapshot(
     public int FactoryConversationOmittedCount { get; init; }
 
     /// <summary>
+    /// Durable terminal state set by an explicit End Match recovery action.
+    /// A reset or fork is required before any further Arena turn can run.
+    /// </summary>
+    public bool MatchEnded { get; init; }
+
+    public string MatchEndReason { get; init; } = "";
+
+    /// <summary>
     /// Per-role generation overrides keyed by role id (alpha..delta, narrator).
     /// A role appears here only when its persisted config differs from the shared
     /// temperature or max output tokens; absent roles inherit shared values.
@@ -107,9 +115,30 @@ public sealed record ArenaViewSnapshot(
         new Dictionary<string, RoleGenerationOverride>();
 
     public int ProviderLastLatencyMs { get; init; }
+
+    /// <summary>
+    /// Canonical, privacy-safe per-model runtime settings. Keys are opaque
+    /// connection-and-model identities; provider residency evidence is never
+    /// persisted in this projection.
+    /// </summary>
+    public IReadOnlyList<ProviderModelRuntimeSettingsView> ModelSettings { get; init; } = [];
+
+    public int ProviderConfiguredContextWindow { get; init; }
+    public string ProviderHistoryPolicy { get; init; } = "strict";
+    public string ProviderResponseTone { get; init; } = "default";
+    public string ProviderCustomTone { get; init; } = "";
 }
 
 public sealed record RoleGenerationOverride(double? Temperature, int? MaxOutputTokens);
+
+public sealed record ProviderModelRuntimeSettingsView(
+    string ModelIdentity,
+    int ConfiguredContextWindow,
+    string HistoryPolicy,
+    string ResponseTone,
+    string CustomTone,
+    string Model = "",
+    bool PendingApply = false);
 
 public sealed record RivalryMatrixItem(
     string Source,

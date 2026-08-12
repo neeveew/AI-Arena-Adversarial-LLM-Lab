@@ -39,6 +39,10 @@ public sealed class ModelProviderHealthService
             Temperature = 0,
             MaxOutputTokens = 16,
             ContextLength = config.ContextLength,
+            ConfiguredContextWindow = config.ConfiguredContextWindow,
+            HistoryPolicy = config.HistoryPolicy,
+            ResponseTone = config.ResponseTone,
+            CustomTone = config.CustomTone,
             Reasoning = config.Reasoning,
             NativeStatefulChat = config.NativeStatefulChat,
             NativeIdleTtlSeconds = config.NativeIdleTtlSeconds

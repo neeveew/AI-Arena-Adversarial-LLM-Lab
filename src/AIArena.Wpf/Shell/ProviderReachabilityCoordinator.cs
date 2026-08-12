@@ -37,7 +37,6 @@ internal sealed class ProviderReachabilityCoordinator
     private readonly Func<ProviderSettingsCoordinator?> providerSettings;
     private readonly Func<string, Brush> resourceBrush;
     private readonly Action<CoreSessionSummary, ArenaViewSnapshot> applyProviderStatusProjection;
-    private readonly Action<string> setArenaRunStatus;
     private readonly Func<bool, CancellationToken, Task> refreshAdvertisedModelsAsync;
     private readonly Action openModelProviderSettings;
 
@@ -64,7 +63,6 @@ internal sealed class ProviderReachabilityCoordinator
         Func<ProviderSettingsCoordinator?> providerSettings,
         Func<string, Brush> resourceBrush,
         Action<CoreSessionSummary, ArenaViewSnapshot> applyProviderStatusProjection,
-        Action<string> setArenaRunStatus,
         Func<bool, CancellationToken, Task> refreshAdvertisedModelsAsync,
         Action openModelProviderSettings)
     {
@@ -90,7 +88,6 @@ internal sealed class ProviderReachabilityCoordinator
         this.providerSettings = providerSettings;
         this.resourceBrush = resourceBrush;
         this.applyProviderStatusProjection = applyProviderStatusProjection;
-        this.setArenaRunStatus = setArenaRunStatus;
         this.refreshAdvertisedModelsAsync = refreshAdvertisedModelsAsync;
         this.openModelProviderSettings = openModelProviderSettings;
     }
@@ -122,11 +119,7 @@ internal sealed class ProviderReachabilityCoordinator
             providerHealthTimer.Interval = result.NextInterval;
             if (result.SnapshotChanged)
             {
-                await UpdateActiveProviderStatusOnlyAsync(result.Status, cancellationToken);
-            }
-            else if (!isArenaBusy())
-            {
-                setArenaRunStatus(result.Status);
+                await UpdateActiveProviderStatusOnlyAsync(cancellationToken);
             }
 
             UpdatePopup();
@@ -134,10 +127,6 @@ internal sealed class ProviderReachabilityCoordinator
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             providerHealthTimer.Interval = TimeSpan.FromSeconds(3);
-            if (!isArenaBusy())
-            {
-                setArenaRunStatus($"Provider health refresh failed: {ex.Message}");
-            }
         }
     }
 
@@ -173,11 +162,7 @@ internal sealed class ProviderReachabilityCoordinator
         providerHealthTimer.Interval = result.NextInterval;
         if (result.SnapshotChanged)
         {
-            await UpdateActiveProviderStatusOnlyAsync(result.Status, cancellationToken);
-        }
-        else if (!isArenaBusy())
-        {
-            setArenaRunStatus(result.Status);
+            await UpdateActiveProviderStatusOnlyAsync(cancellationToken);
         }
 
         UpdatePopup();
@@ -250,9 +235,7 @@ internal sealed class ProviderReachabilityCoordinator
         return $"Selected default model '{model}' is not in the advertised model list. Open settings to reselect or type it manually.";
     }
 
-    private async Task UpdateActiveProviderStatusOnlyAsync(
-        string status,
-        CancellationToken cancellationToken)
+    private async Task UpdateActiveProviderStatusOnlyAsync(CancellationToken cancellationToken)
     {
         var session = activeSession();
         if (session is null)
@@ -276,10 +259,6 @@ internal sealed class ProviderReachabilityCoordinator
         // One UI projection prevents top bar, navigation rail, Settings, and the
         // transcript empty state from presenting different provider generations.
         applyProviderStatusProjection(latest, snapshot);
-        if (!isArenaBusy())
-        {
-            setArenaRunStatus(status);
-        }
     }
 
     private static async Task RunBusyAsync(Control control, Func<Task> action)

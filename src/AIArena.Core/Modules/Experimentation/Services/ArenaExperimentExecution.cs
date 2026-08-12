@@ -163,6 +163,10 @@ public sealed class ArenaExperimentProviderProfileRegistry
             profile.Temperature.ToString("R", CultureInfo.InvariantCulture),
             profile.MaxOutputTokens.ToString(CultureInfo.InvariantCulture),
             profile.ContextLength.ToString(CultureInfo.InvariantCulture),
+            profile.ConfiguredContextWindow.ToString(CultureInfo.InvariantCulture),
+            ModelHistoryPolicies.NormalizeHistoryPolicy(profile.HistoryPolicy),
+            ModelResponseTones.NormalizeResponseTone(profile.ResponseTone),
+            ModelResponseTones.NormalizeCustomTone(profile.CustomTone),
             profile.Reasoning,
             profile.NativeStatefulChat ? "1" : "0",
             profile.NativeIdleTtlSeconds.ToString(CultureInfo.InvariantCulture));
@@ -206,6 +210,11 @@ public sealed class ArenaExperimentProviderProfileRegistry
         {
             return "provider_profile_context_limit_invalid";
         }
+        if (profile.ConfiguredContextWindow is > 0 and < ModelRuntimeSettingsRegistry.MinimumConfiguredContextWindow
+            || profile.ConfiguredContextWindow > ModelRuntimeSettingsRegistry.MaximumConfiguredContextWindow)
+        {
+            return "provider_profile_configured_context_limit_invalid";
+        }
         var reasoning = ModelProviderReasoningModes.Normalize(profile.Reasoning);
         if (!string.IsNullOrWhiteSpace(profile.Reasoning)
             && !reasoning.Equals(profile.Reasoning.Trim(), StringComparison.OrdinalIgnoreCase))
@@ -232,6 +241,10 @@ public sealed class ArenaExperimentProviderProfileRegistry
         Temperature = source.Temperature,
         MaxOutputTokens = source.MaxOutputTokens,
         ContextLength = source.ContextLength,
+        ConfiguredContextWindow = source.ConfiguredContextWindow,
+        HistoryPolicy = source.HistoryPolicy,
+        ResponseTone = source.ResponseTone,
+        CustomTone = source.CustomTone,
         Reasoning = source.Reasoning,
         NativeStatefulChat = source.NativeStatefulChat,
         NativeIdleTtlSeconds = source.NativeIdleTtlSeconds,
@@ -690,6 +703,10 @@ public sealed class ArenaExperimentExecutionResolver
             Temperature = temperature,
             MaxOutputTokens = maxOutputTokens,
             ContextLength = contextLength,
+            ConfiguredContextWindow = contextLength,
+            HistoryPolicy = profile.HistoryPolicy,
+            ResponseTone = profile.ResponseTone,
+            CustomTone = profile.CustomTone,
             Reasoning = reasoning,
             NativeStatefulChat = profile.NativeStatefulChat,
             NativeIdleTtlSeconds = profile.NativeIdleTtlSeconds

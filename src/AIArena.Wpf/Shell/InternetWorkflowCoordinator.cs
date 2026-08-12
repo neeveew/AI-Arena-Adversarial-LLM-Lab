@@ -22,6 +22,8 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
     private readonly Action stopBackend;
     private readonly Func<string, bool, CancellationToken, Task> persistInternetSettingAsync;
     private readonly LatestInternetDiagnosticsRunner diagnosticsRunner;
+    private readonly ApplicationStatusCenter? statusCenter;
+    private readonly Func<ApplicationStatusIdentity> statusIdentity;
 
     private int backendStatusVersion;
     private int diagnosticUiVersion;
@@ -46,7 +48,9 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
         Func<CancellationToken, Task<SearxngSupervisorStatus>>? ensureBackendAsync = null,
         Func<CancellationToken, Task<InternetDiagnosticsReport>>? runDiagnosticsAsync = null,
         Action? stopBackend = null,
-        Func<string, bool, CancellationToken, Task>? persistInternetSettingAsync = null)
+        Func<string, bool, CancellationToken, Task>? persistInternetSettingAsync = null,
+        ApplicationStatusCenter? statusCenter = null,
+        Func<ApplicationStatusIdentity>? statusIdentity = null)
     {
         this.useInternetCheckBox = useInternetCheckBox;
         this.internetHintText = internetHintText;
@@ -61,6 +65,8 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
             ?? (() => (Application.Current as App)?.StopInternetSearch());
         this.persistInternetSettingAsync = persistInternetSettingAsync
             ?? ((_, _, _) => Task.CompletedTask);
+        this.statusCenter = statusCenter;
+        this.statusIdentity = statusIdentity ?? (() => ApplicationStatusIdentity.Empty);
         lastPersistedInternetEnabled = useInternetCheckBox.IsChecked == true;
         diagnosticsRunner = new LatestInternetDiagnosticsRunner(
             runDiagnosticsAsync
@@ -231,6 +237,12 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
     public async Task TestInternetAsync()
     {
         var version = ++diagnosticUiVersion;
+        var statusReceipt = statusCenter?.Begin(
+            "app.internet-test",
+            "Internet",
+            "Testing Internet connectivity...",
+            navigationTarget: "settings",
+            identity: statusIdentity()) ?? default;
         testInternetButton.Content = "Testing... (click to restart)";
         diagnosticResultText.Text = "Testing local search and a safe public HTTPS page...";
         diagnosticResultText.Foreground = resourceBrush("MutedTextBrush");
@@ -239,6 +251,7 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
             var report = await diagnosticsRunner.RunAsync();
             if (report is null || version != diagnosticUiVersion)
             {
+                statusCenter?.Cancel(statusReceipt, "Internet test superseded.");
                 return;
             }
 
@@ -246,6 +259,19 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
             diagnosticResultText.Foreground = resourceBrush(DiagnosticStatusBrushKey(report));
             diagnosticResultText.ToolTip = diagnosticResultText.Text;
             ApplyBackendHealthStatus(report.Backend, useInternetCheckBox.IsChecked == true);
+            var summary = report.Ok
+                ? report.Search.UnresponsiveEngineCount > 0
+                    ? "Internet test passed with warnings."
+                    : "Internet test passed."
+                : "Internet test needs attention.";
+            if (report.Ok)
+            {
+                statusCenter?.Complete(statusReceipt, summary, diagnosticResultText.Text);
+            }
+            else
+            {
+                statusCenter?.Fail(statusReceipt, summary, diagnosticResultText.Text);
+            }
         }
         catch (Exception ex)
         {
@@ -254,6 +280,7 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
                 diagnosticResultText.Text = $"Internet test failed before completion: {ex.Message}{Environment.NewLine}Action: retry; if it persists, restart AI Arena and check firewall/DNS access.";
                 diagnosticResultText.Foreground = resourceBrush("DangerTextBrush");
                 diagnosticResultText.ToolTip = diagnosticResultText.Text;
+                statusCenter?.Fail(statusReceipt, "Internet test failed.", ex.Message);
             }
         }
         finally

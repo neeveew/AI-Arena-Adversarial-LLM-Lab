@@ -38,6 +38,23 @@ public sealed class ModelProviderConfig
     [JsonPropertyName("context_length")]
     public int ContextLength { get; init; }
 
+    /// <summary>
+    /// User-selected model context window. This coexists with the legacy native
+    /// ContextLength field; the canonical model-settings registry is
+    /// authoritative whenever a matching entry exists.
+    /// </summary>
+    [JsonPropertyName("configured_context_window")]
+    public int ConfiguredContextWindow { get; init; }
+
+    [JsonPropertyName("history_policy")]
+    public string HistoryPolicy { get; init; } = ModelHistoryPolicies.Strict;
+
+    [JsonPropertyName("response_tone")]
+    public string ResponseTone { get; init; } = ModelResponseTones.Default;
+
+    [JsonPropertyName("custom_tone")]
+    public string CustomTone { get; init; } = "";
+
     [JsonPropertyName("reasoning")]
     public string Reasoning { get; init; } = "";
 
@@ -131,6 +148,32 @@ public static class ModelProviderReasoningModes
     }
 }
 
+public enum ModelCompletionFailureKind
+{
+    None,
+    ContextLimitExceeded,
+    Timeout,
+    Capacity,
+    Transport,
+    ProviderRejected,
+    InvalidResponse,
+    EmptyPublicContent,
+    NativeStateExhausted,
+    ProviderLoading,
+    Cancelled,
+    Unknown
+}
+
+public enum ModelCompletionStopReason
+{
+    Unknown,
+    Completed,
+    OutputLimitReached,
+    ContentFiltered,
+    ToolCall,
+    ProviderError
+}
+
 public sealed class ModelMetadata
 {
     [JsonPropertyName("model")]
@@ -203,4 +246,8 @@ public sealed record ModelCompletionResult(
     double TokensPerSecond = 0,
     int TimeToFirstTokenMs = 0,
     string ResponseId = "",
-    int ModelLoadTimeMs = 0);
+    int ModelLoadTimeMs = 0,
+    ModelCompletionFailureKind FailureKind = ModelCompletionFailureKind.None,
+    ModelCompletionStopReason StopReason = ModelCompletionStopReason.Unknown,
+    int? ProviderStatusCode = null,
+    string ProviderErrorCode = "");

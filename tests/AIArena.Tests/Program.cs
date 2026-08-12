@@ -114,6 +114,25 @@ var tests = new List<(string Name, Action Test)>
     ("lists Ollama native tags endpoint", ListsOllamaNativeTagsEndpoint),
     ("surfaces provider HTTP error bodies", SurfacesProviderHttpErrorBodies),
     ("redacts secrets from provider errors", RedactsSecretsFromProviderErrors),
+    ("context settings distinguish clean and legacy defaults", ContextWindowTests.DistinguishesCleanAndLegacyModelDefaults),
+    ("context settings resolve canonical and raw aliases", ContextWindowTests.ResolvesCanonicalAndRawAliases),
+    ("rolling context budget drops only whole oldest entries", ContextWindowTests.RollingBudgetDropsOnlyWholeOldestEntries),
+    ("rolling context retry freezes causal entries", ContextWindowTests.FrozenReceiptExcludesFutureTurns),
+    ("Factory suppresses tone and Arena rolling budget", ContextWindowTests.FactorySuppressesToneAndRollingBudget),
+    ("provider outcomes classify context and output limits", ContextWindowTests.ClassifiesProviderOutcomes),
+    ("provider adapters expose typed context and output limits", ContextWindowTests.ProviderAdaptersExposeTypedContextAndOutputLimits),
+    ("rolling context rejects oversized mandatory prompt", ContextWindowTests.OversizedMandatoryPromptFailsPreflight),
+    ("rolling context preserves latest Operator and newest dialogue", ContextWindowTests.PreservesLatestOperatorAndNewestDialogue),
+    ("context failure does not call fallback", ContextWindowTests.ContextFailureDoesNotCallFallback),
+    ("rolling LM Studio reconstructs visible history without opaque continuation", ContextWindowTests.RollingLmStudioReconstructsVisibleHistory),
+    ("context failure gates turns until retry advances once", ContextWindowTests.ContextFailureGatesUntilRetryAndAdvancesOnce),
+    ("context recovery skips continues and ends causally", ContextWindowTests.RecoverySkipsContinuesAndEndsCausally),
+    ("continuation binds route rejects descendants and preserves bytes", ContextWindowTests.ContinuationBindsRouteRejectsDescendantsAndPreservesBytes),
+    ("duplicate continuation uses one provider call", ContextWindowTests.DuplicateContinuationUsesOneProviderCall),
+    ("narrator and Decision Card use per-model rolling budget", ContextWindowTests.NarratorAndDecisionCardUseRollingBudget),
+    ("narrator oversized mandatory input fails preflight", ContextWindowTests.NarratorOversizedMandatoryFailsPreflight),
+    ("cancelled output continuation clears busy marker", ContextWindowTests.CancelledContinuationClearsBusyMarker),
+    ("pre-provider output cancellation clears busy marker", ContextWindowTests.CancellationBeforeProviderClearsBusyMarker),
     ("prompt inspector hashes exact provider bytes and redacts aggregate views", PromptInspectorTests.HashesExactProviderBytesAndRedactsAggregateViews),
     ("prompt inspector traces streaming retries and native semantics", PromptInspectorTests.TracesStreamingRetriesAndNativeSemantics),
     ("prompt inspector bounds traces and isolates observer failures and cancellation", PromptInspectorTests.BoundsTracesAndIsolatesObserverFailuresAndCancellation),
@@ -239,6 +258,7 @@ var tests = new List<(string Name, Action Test)>
     ("narrator redacts unsafe internet tool requests", NarratorRedactsUnsafeInternetToolRequests),
     ("interrupted narrator notes repair thinking status", InterruptedNarratorNotesRepairThinkingStatus),
     ("interrupted decision cards repair thinking status", InterruptedDecisionCardsRepairThinkingStatus),
+    ("ended matches reject narrator and Decision Card calls", EndedMatchesRejectNarratorAndDecisionCardCalls),
     ("voice adherence scores evidence ledger strong", VoiceAdherenceScoresEvidenceLedgerStrong),
     ("voice adherence detects bullet-only drift", VoiceAdherenceDetectsBulletOnlyDrift),
     ("voice adherence scores figurative idioms", VoiceAdherenceScoresFigurativeIdioms),
@@ -995,6 +1015,7 @@ static void RunsLmStudioNativeChatEndpoint()
         Temperature = 0.2,
         MaxOutputTokens = 64,
         ContextLength = 8192,
+        ConfiguredContextWindow = 32768,
         Reasoning = "low",
         NativeIdleTtlSeconds = 300
     };
@@ -1011,7 +1032,7 @@ static void RunsLmStudioNativeChatEndpoint()
     Require(handler.Authorization == "Bearer secret-token", "native chat should include configured bearer token");
     Require(handler.Body.Contains("\"system_prompt\":\"System rule.\"", StringComparison.Ordinal), "native payload should include system_prompt");
     Require(handler.Body.Contains("\"input\":\"User request.\"", StringComparison.Ordinal), "default native payload formatting should retain its trimmed input contract");
-    Require(handler.Body.Contains("\"context_length\":8192", StringComparison.Ordinal), "native payload should include context_length");
+    Require(handler.Body.Contains("\"context_length\":32768", StringComparison.Ordinal), "native payload should prefer the canonical configured context window");
     Require(handler.Body.Contains("\"reasoning\":\"low\"", StringComparison.Ordinal), "native payload should include reasoning");
     Require(handler.Body.Contains("\"store\":true", StringComparison.Ordinal), "native payload should enable LM Studio stateful chat by default");
     Require(!handler.Body.Contains("\"ttl\"", StringComparison.Ordinal), "current LM Studio /api/v1/chat payload must omit unsupported ttl");
@@ -1204,6 +1225,7 @@ static void RunsOllamaNativeChatEndpoint()
             Temperature = 0.3,
             MaxOutputTokens = 96,
             ContextLength = 16384,
+            ConfiguredContextWindow = 32768,
             Reasoning = "high",
             NativeIdleTtlSeconds = 900,
             PreviousResponseId = "resp_lmstudio_only"
@@ -1218,7 +1240,7 @@ static void RunsOllamaNativeChatEndpoint()
     Require(handler.Authorization == "Bearer secret-token", "Ollama native chat should include configured bearer token");
     Require(handler.Body.Contains("\"messages\":[", StringComparison.Ordinal), "Ollama payload should include chat messages");
     Require(handler.Body.Contains("\"role\":\"system\"", StringComparison.Ordinal), "Ollama payload should keep system role");
-    Require(handler.Body.Contains("\"num_ctx\":16384", StringComparison.Ordinal), "Ollama payload should include options.num_ctx");
+    Require(handler.Body.Contains("\"num_ctx\":32768", StringComparison.Ordinal), "Ollama payload should prefer the canonical configured context window");
     Require(handler.Body.Contains("\"num_predict\":96", StringComparison.Ordinal), "Ollama payload should include options.num_predict");
     Require(handler.Body.Contains("\"think\":\"high\"", StringComparison.Ordinal), "Ollama payload should include thinking level");
     Require(handler.Body.Contains("\"keep_alive\":900", StringComparison.Ordinal), "Ollama payload should include keep_alive when configured");
@@ -2954,6 +2976,9 @@ static void ForkFullSessionStateWithoutMutatingSource()
         source.Engine.Steering.Global = "Keep the whole causal context.";
         source.Engine.TurnCount = 3;
         source.Engine.TurnIndex = 2;
+        source.Engine.MatchEnded = true;
+        source.Engine.MatchEndedAt = 1233;
+        source.Engine.MatchEndReason = "operator ended the source match";
         source.Engine.LastError = "transient engine failure";
         source.Engine.Narrator.Status = "speaking";
         source.Engine.Narrator.LastError = "transient narrator failure";
@@ -3038,6 +3063,10 @@ static void ForkFullSessionStateWithoutMutatingSource()
 
         Require(sourceAfterFork.ForkLineage is null, "forking should not add lineage to the source");
         Require(sourceAfterFork.Engine.LastError == "transient engine failure", "source engine state was normalized in place");
+        Require(sourceAfterFork.Engine.MatchEnded
+                && sourceAfterFork.Engine.MatchEndedAt == 1233
+                && sourceAfterFork.Engine.MatchEndReason == "operator ended the source match",
+            "forking should not clear the source match terminal state");
         Require(sourceAfterFork.Engine.Narrator.Status == "speaking", "source narrator state was normalized in place");
         Require(sourceAfterFork.Engine.Agents[0].Status == "thinking", "source agent state was normalized in place");
         Require(fork.PersistenceRevision == result.TargetPersistenceRevision, "fork target revision mismatch");
@@ -3048,6 +3077,10 @@ static void ForkFullSessionStateWithoutMutatingSource()
         Require(forkLineage.ParentMessageCount == 1, "fork lineage parent message count mismatch");
         Require(forkLineage.ForkedAt == result.ForkedAt, "fork lineage timestamp mismatch");
         Require(fork.Engine.LastError == "", "fork should clear transient engine errors");
+        Require(!fork.Engine.MatchEnded
+                && fork.Engine.MatchEndedAt is null
+                && string.IsNullOrEmpty(fork.Engine.MatchEndReason),
+            "a fork should clear terminal match state so the branch can continue");
         Require(fork.Engine.Narrator.Status == "idle" && fork.Engine.Narrator.LastError == "", "fork should normalize narrator runtime state");
         Require(fork.Engine.Agents.Where(agent => agent.Active).All(agent => agent.Status == "waiting"), "fork should normalize active agent runtime state");
         Require(fork.Engine.Agents.Where(agent => !agent.Active).All(agent => agent.Status == "muted"), "fork should normalize inactive agents to muted");
@@ -4427,6 +4460,51 @@ static void AskNarratorWithOperatorRequest()
     Require(requestText.Contains("Assess the debate", StringComparison.OrdinalIgnoreCase), "operator request text missing from prompt");
     Require(File.ReadAllText(log.EventPath()).Contains("native_narrator_operator_request_completed"), "operator narrator event was not logged");
     Directory.Delete(root, recursive: true);
+}
+
+static void EndedMatchesRejectNarratorAndDecisionCardCalls()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-native-tests", Guid.NewGuid().ToString("N"));
+    try
+    {
+        var store = new SessionStore(root);
+        var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
+        snapshot.Engine.MatchEnded = true;
+        snapshot.Engine.MatchEndedAt = 99;
+        snapshot.Engine.MatchEndReason = "operator ended after context exhaustion";
+        snapshot.Engine.DecisionCard.Text = "Retain this completed card.";
+        snapshot.Engine.DecisionCard.UpdatedAt = 42;
+        store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
+        var client = new FakeModelProviderClient("must not be called", "must not be called");
+        using var service = new NarratorService(client, store, new EventLogStore(root));
+
+        var narrated = service.NarrateNowAsync("default").GetAwaiter().GetResult();
+        var asked = service.AskNarratorAsync("default", "Comment after the end.").GetAwaiter().GetResult();
+        var decision = service.GenerateDecisionCardAsync("default").GetAwaiter().GetResult();
+
+        Require(!narrated.Ok && narrated.Error.Contains("ended", StringComparison.OrdinalIgnoreCase),
+            "Narrate now should reject a terminal match with reset-or-fork guidance");
+        Require(!asked.Ok && asked.Error.Contains("ended", StringComparison.OrdinalIgnoreCase),
+            "operator-routed narration should reject a terminal match");
+        Require(!decision.Ok && decision.Error.Contains("ended", StringComparison.OrdinalIgnoreCase),
+            "Decision Card generation should reject a terminal match");
+        Require(client.Requests.Count == 0,
+            "terminal narration and Decision Card calls must reject before contacting the provider");
+
+        var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
+        Require(loaded.Engine.MatchEnded
+                && loaded.Engine.Messages.Count == snapshot.Engine.Messages.Count
+                && loaded.Engine.DecisionCard.Text == "Retain this completed card."
+                && loaded.Engine.DecisionCard.UpdatedAt == 42,
+            "terminal request rejection must leave the ended snapshot unchanged");
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }
 
 static void NarratorPromptIncludesSelectedVoiceStyle()

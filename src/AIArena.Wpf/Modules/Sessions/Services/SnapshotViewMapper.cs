@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json;
 using AIArena.Core.Models;
 using AIArena.Core.Providers;
@@ -19,6 +20,7 @@ public static class SnapshotViewMapper
     public static RenderSnapshot FromCore(CoreSessionSummary session, CoreSnapshot snapshot)
     {
         var sharedConfig = Config(snapshot, "shared");
+        var resolvedSharedConfig = ModelRuntimeSettingsRegistry.Resolve(snapshot, sharedConfig);
         var factoryGroup = new FactoryConversationService().Inspect(snapshot);
         return new RenderSnapshot(
             session.Id,
@@ -81,8 +83,27 @@ public static class SnapshotViewMapper
             FactoryConversationRootAssigned = factoryGroup.IsAnchored,
             FactoryConversationEntryCount = factoryGroup.EligibleEntryCount,
             FactoryConversationOmittedCount = factoryGroup.OmittedEntryCount,
+            MatchEnded = snapshot.Engine.MatchEnded,
+            MatchEndReason = PrivacySafeText(snapshot.Engine.MatchEndReason, 240),
             RoleOverrides = RoleOverridesFrom(snapshot, sharedConfig),
-            ProviderLastLatencyMs = sharedConfig.LastLatencyMs
+            ProviderLastLatencyMs = sharedConfig.LastLatencyMs,
+            ModelSettings = snapshot.ModelSettings.Values
+                .Where(setting => !string.IsNullOrWhiteSpace(setting.ModelIdentity))
+                .OrderBy(setting => setting.ModelIdentity, StringComparer.Ordinal)
+                .Select(setting => new Models.ProviderModelRuntimeSettingsView(
+                    setting.ModelIdentity,
+                    NormalizeConfiguredContextWindow(setting.ConfiguredContextWindow),
+                    ModelHistoryPolicies.NormalizeHistoryPolicy(setting.HistoryPolicy),
+                    ModelResponseTones.NormalizeResponseTone(setting.ResponseTone),
+                    ModelResponseTones.NormalizeCustomTone(setting.CustomTone),
+                    SafeModelForIdentity(snapshot, setting.ModelIdentity),
+                    snapshot.PendingModelConfigurationApplies.Contains(setting.ModelIdentity)))
+                .ToArray(),
+            ProviderConfiguredContextWindow = NormalizeConfiguredContextWindow(
+                resolvedSharedConfig.ConfiguredContextWindow),
+            ProviderHistoryPolicy = ModelHistoryPolicies.NormalizeHistoryPolicy(resolvedSharedConfig.HistoryPolicy),
+            ProviderResponseTone = ModelResponseTones.NormalizeResponseTone(resolvedSharedConfig.ResponseTone),
+            ProviderCustomTone = ModelResponseTones.NormalizeCustomTone(resolvedSharedConfig.CustomTone)
         };
     }
 
@@ -219,6 +240,7 @@ public static class SnapshotViewMapper
             {
                 var request = MetadataObject(message, "tool_request");
                 var result = MetadataObject(message, "tool_result");
+                var receipt = ParseHistoryBudgetReceipt(MetadataObject(message, "arena_history_budget_receipt"));
                 return new TranscriptMessage(
                     message.Turn,
                     DisplayValue(string.IsNullOrWhiteSpace(message.Speaker) ? message.SpeakerId : message.Speaker),
@@ -247,9 +269,103 @@ public static class SnapshotViewMapper
                     message.Model.TokensPerSecond,
                     message.Model.TimeToFirstTokenMs,
                     MetadataString(message, "provider_response_id"),
-                    message.Model.ModelLoadTimeMs);
+                    message.Model.ModelLoadTimeMs)
+                {
+                    CompletionFailureKind = NormalizeCompletionFailureKind(
+                        MetadataString(message, "completion_failure_kind")),
+                    CompletionStopReason = NormalizeCompletionStopReason(
+                        MetadataString(message, "completion_stop_reason")),
+                    ProviderStatusCode = MetadataInt(message, "provider_status_code"),
+                    ProviderErrorCode = ModelCompletionOutcomeClassifier.PrivacySafeProviderErrorCode(
+                        MetadataString(message, "provider_error_code")),
+                    HistoryBudgetReceipt = receipt
+                };
             })
             .ToArray();
+    }
+
+    private static int NormalizeConfiguredContextWindow(int value) => value == 0
+        ? 0
+        : Math.Clamp(value, 512, ModelRuntimeSettingsRegistry.MaximumConfiguredContextWindow);
+
+    private static string PrivacySafeText(string? value, int maximumLength)
+    {
+        var normalized = (value ?? "").Trim();
+        if (normalized.Length == 0 || normalized.Any(char.IsControl))
+        {
+            return "";
+        }
+
+        return normalized.Length <= maximumLength ? normalized : normalized[..maximumLength];
+    }
+
+    private static string SafeModelForIdentity(CoreSnapshot snapshot, string identity)
+    {
+        var raw = snapshot.Configs.Values.FirstOrDefault(config =>
+            !string.IsNullOrWhiteSpace(config.Model)
+            && ModelRuntimeSettingsRegistry.Identity(config).Equals(identity, StringComparison.Ordinal))?.Model ?? "";
+        if (raw.Length == 0)
+        {
+            return "";
+        }
+        if (Path.IsPathRooted(raw) || Uri.TryCreate(raw, UriKind.Absolute, out var uri) && uri.IsFile)
+        {
+            return Path.GetFileName(raw.Replace('/', Path.DirectorySeparatorChar));
+        }
+        return raw.Length <= 1024 && !raw.Any(char.IsControl) ? raw.Trim() : "";
+    }
+
+    private static string NormalizeCompletionFailureKind(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "context_limit_exceeded" => "context_limit_exceeded",
+        "timeout" => "timeout",
+        "capacity" => "capacity",
+        "transport" => "transport",
+        "provider_rejected" => "provider_rejected",
+        "invalid_response" => "invalid_response",
+        "empty_public_content" => "empty_public_content",
+        "native_state_exhausted" => "native_state_exhausted",
+        "provider_loading" => "provider_loading",
+        "cancelled" => "cancelled",
+        "unknown" => "unknown",
+        _ => "none"
+    };
+
+    private static string NormalizeCompletionStopReason(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "completed" => "completed",
+        "output_limit_reached" => "output_limit_reached",
+        "content_filtered" => "content_filtered",
+        "tool_call" => "tool_call",
+        "provider_error" => "provider_error",
+        _ => "unknown"
+    };
+
+    private static Models.ArenaHistoryBudgetReceiptView? ParseHistoryBudgetReceipt(JsonElement receipt)
+    {
+        if (receipt.ValueKind != JsonValueKind.Object
+            || !JsonString(receipt, "contract").Equals("arena_history_budget_v1", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var fingerprint = PrivacySafeFingerprint(JsonString(receipt, "context_fingerprint"));
+        return new Models.ArenaHistoryBudgetReceiptView(
+            "arena_history_budget_v1",
+            ModelHistoryPolicies.NormalizeHistoryPolicy(JsonString(receipt, "history_policy")),
+            NormalizeConfiguredContextWindow(JsonInt(receipt, "configured_context_window")),
+            Math.Clamp(JsonInt(receipt, "target_percent"), 0, 100),
+            Math.Max(0, JsonInt(receipt, "input_token_budget")),
+            Math.Max(0, JsonInt(receipt, "output_token_reserve")),
+            Math.Max(0, JsonInt(receipt, "estimated_prompt_tokens")),
+            Math.Max(0, JsonInt(receipt, "eligible_entry_count")),
+            Math.Max(0, JsonInt(receipt, "included_entry_count")),
+            Math.Max(0, JsonInt(receipt, "omitted_entry_count")),
+            fingerprint,
+            Math.Max(0, JsonInt(receipt, "before_turn")),
+            JsonString(receipt, "token_evidence").Equals("estimated_v1", StringComparison.Ordinal)
+                ? "estimated_v1"
+                : "unknown");
     }
 
     private static string VoiceStyleForMessage(DialogueMessage message, CoreSnapshot snapshot)
@@ -399,6 +515,18 @@ public static class SnapshotViewMapper
             : "";
     }
 
+    private static int? MetadataInt(DialogueMessage message, string key)
+    {
+        if (!message.Metadata.TryGetValue(key, out var value)
+            || value.ValueKind != JsonValueKind.Number
+            || !value.TryGetInt32(out var parsed))
+        {
+            return null;
+        }
+
+        return parsed is >= 100 and <= 999 ? parsed : null;
+    }
+
     private static JsonElement JsonProperty(JsonElement element, string key)
     {
         return element.ValueKind == JsonValueKind.Object && element.TryGetProperty(key, out var value)
@@ -416,6 +544,22 @@ public static class SnapshotViewMapper
     {
         var value = JsonProperty(element, key);
         return value.ValueKind is JsonValueKind.True or JsonValueKind.False && value.GetBoolean();
+    }
+
+    private static int JsonInt(JsonElement element, string key)
+    {
+        var value = JsonProperty(element, key);
+        return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var parsed)
+            ? parsed
+            : 0;
+    }
+
+    private static string PrivacySafeFingerprint(string value)
+    {
+        var normalized = (value ?? "").Trim().ToLowerInvariant();
+        return normalized.Length is >= 16 and <= 128 && normalized.All(Uri.IsHexDigit)
+            ? normalized
+            : "";
     }
 
     private static string FormatCheckedAt(JsonElement checkedAt)

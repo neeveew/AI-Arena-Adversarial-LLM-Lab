@@ -189,6 +189,7 @@ internal sealed class CustomMatchSummaryCoordinator
             "",
             $"Narrator: {NarratorPersonaText(snapshot.NarratorPersona)}",
             $"Provider: {DisplayLabel(snapshot.ProviderModel, "no provider model")} / {DisplayLabel(snapshot.ProviderApiMode, "compatible mode")}",
+            $"Model context: {(snapshot.ProviderConfiguredContextWindow == 0 ? "Provider default" : $"{snapshot.ProviderConfiguredContextWindow:N0} tokens")} / {snapshot.ProviderHistoryPolicy} history / {snapshot.ProviderResponseTone} tone",
             snapshot.DefaultForUnassignedAgentsEnabled
                 ? "Arena routing: Default covers roles without an explicit model."
                 : "Arena routing: Default off; roles without an explicit model are unassigned.");
@@ -280,7 +281,13 @@ internal sealed class CustomMatchSummaryCoordinator
                 narratorAssignmentMode = RoleAssignmentMode(snapshot, "narrator"),
                 apiMode = DisplayLabel(snapshot.ProviderApiMode, "compatible mode"),
                 baseUrl = DisplayLabel(snapshot.ProviderBaseUrl, "no provider URL"),
-                online = snapshot.ProviderOnline
+                online = snapshot.ProviderOnline,
+                configuredContextWindow = snapshot.ProviderConfiguredContextWindow,
+                historyPolicy = snapshot.ProviderHistoryPolicy,
+                responseTone = snapshot.ProviderResponseTone,
+                customTone = snapshot.ProviderResponseTone.Equals("custom", StringComparison.Ordinal)
+                    ? snapshot.ProviderCustomTone
+                    : ""
             }
         };
 

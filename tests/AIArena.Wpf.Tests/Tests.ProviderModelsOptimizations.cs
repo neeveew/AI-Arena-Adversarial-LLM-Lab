@@ -293,8 +293,10 @@ internal static partial class Program
                     $"the 2x layout transform did not reflow through the compact policy (content width {control.ActualWidth:0.#} DIP)");
 
                 control.WorkspaceScroller.ScrollToEnd();
+                control.DetailScroller.ScrollToTop();
                 var assignmentScroller = FindProviderModelsDescendants<ScrollViewer>(control.DetailSurface)
                     .Single(scroll => AutomationProperties.GetName(scroll) == "Assignment targets");
+                assignmentScroller.BringIntoView();
                 assignmentScroller.ScrollToEnd();
                 FlushProviderModelsDispatcher(host);
                 var lastAssignment = FindProviderModelsDescendants<ProviderAssignmentCheckBox>(control.AssignmentTargets)

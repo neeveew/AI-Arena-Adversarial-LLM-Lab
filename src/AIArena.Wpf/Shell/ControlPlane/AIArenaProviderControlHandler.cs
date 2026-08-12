@@ -1,4 +1,6 @@
+using System.IO;
 using AIArena.Core.Models;
+using AIArena.Wpf.Models;
 using AIArena.Wpf.Services;
 
 namespace AIArena.Wpf;
@@ -13,6 +15,7 @@ internal sealed class AIArenaProviderControlHandler
     {
         AIArenaControlCommands.ProviderState,
         AIArenaControlCommands.ProviderConfigSet,
+        AIArenaControlCommands.ProviderModelConfigSet,
         AIArenaControlCommands.ProviderModelSet,
         AIArenaControlCommands.ProviderTest,
         AIArenaControlCommands.ProviderModelsRefresh
@@ -47,16 +50,46 @@ internal sealed class AIArenaProviderControlHandler
     {
         return request.Command switch
         {
-            AIArenaControlCommands.ProviderState => AIArenaControlResponse.Success(
-                request,
-                "Provider state captured.",
-                Enrich(await configuration.CaptureAsync(cancellationToken))),
+            AIArenaControlCommands.ProviderState => await CaptureStateResponseAsync(request, cancellationToken),
             AIArenaControlCommands.ProviderConfigSet => await ConfigureAsync(request, cancellationToken),
+            AIArenaControlCommands.ProviderModelConfigSet => await ConfigureModelAsync(request, cancellationToken),
             AIArenaControlCommands.ProviderModelSet => await SetAllModelsAsync(request, cancellationToken),
             AIArenaControlCommands.ProviderTest => await TestAsync(request, cancellationToken),
             AIArenaControlCommands.ProviderModelsRefresh => await RefreshModelsAsync(request, cancellationToken),
             _ => AIArenaControlResponse.Error(request, "unknown_command", $"Unsupported provider command '{request.Command}'.")
         };
+    }
+
+    private async Task<AIArenaControlResponse> CaptureStateResponseAsync(
+        AIArenaControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        var state = Enrich(await configuration.CaptureAsync(cancellationToken));
+        var models = state.ModelSettings.ToDictionary(item => item.Model, StringComparer.OrdinalIgnoreCase);
+        foreach (var model in state.AdvertisedModels
+                     .Select(ProviderModelCatalogProjectionService.SafeModelIdentifier)
+                     .Where(model => model.Length > 0)
+                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                     .Take(64))
+        {
+            var projected = await configuration.CaptureModelConfigurationAsync(model, [model], cancellationToken);
+            models[model] = new AIArenaProviderModelSettingsControlState(
+                model,
+                projected.ConfiguredContextWindow,
+                projected.HistoryPolicy,
+                projected.ResponseTone,
+                projected.CustomTone,
+                projected.ConfigurationIdentity);
+        }
+
+        state = state with
+        {
+            ModelSettings = models.Values
+                .OrderBy(item => item.Model, StringComparer.OrdinalIgnoreCase)
+                .Take(64)
+                .ToArray()
+        };
+        return AIArenaControlResponse.Success(request, "Provider state captured.", state);
     }
 
     private async Task<AIArenaControlResponse> ConfigureAsync(
@@ -141,6 +174,95 @@ internal sealed class AIArenaProviderControlHandler
 
         events.Publish("provider.model.changed", "Provider models changed.", new { model, Provider = state });
         return AIArenaControlResponse.Success(request, "Provider models changed.", state);
+    }
+
+    private async Task<AIArenaControlResponse> ConfigureModelAsync(
+        AIArenaControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!AIArenaControlArguments.TryOptionalString(request, "model", out var model, allowEmpty: false)
+            || string.IsNullOrWhiteSpace(model))
+        {
+            return AIArenaControlResponse.Error(
+                request,
+                "missing_argument",
+                "provider.model.config.set requires args.model.",
+                Enrich(await configuration.CaptureAsync(cancellationToken)));
+        }
+        model = model.Trim();
+        if (!IsSafeModelArgument(model))
+        {
+            return AIArenaControlResponse.Error(
+                request,
+                "invalid_argument",
+                "args.model must be a safe provider model identifier, not an absolute path or URL.",
+                Enrich(await configuration.CaptureAsync(cancellationToken)));
+        }
+        if (!AIArenaControlArguments.TryOptionalString(
+                request,
+                "expectedConfigurationIdentity",
+                out var expectedIdentity,
+                allowEmpty: false)
+            || string.IsNullOrWhiteSpace(expectedIdentity))
+        {
+            return AIArenaControlResponse.Error(
+                request,
+                "missing_argument",
+                "provider.model.config.set requires args.expectedConfigurationIdentity.",
+                Enrich(await configuration.CaptureAsync(cancellationToken)));
+        }
+        if (!TryInt(request, "configuredContextWindow", out var configuredContextWindow, out var error)
+            || !TryString(request, "historyPolicy", out var historyPolicy, out error)
+            || !TryString(request, "responseTone", out var responseTone, out error)
+            || !TryString(request, "customTone", out var customTone, out error))
+        {
+            return AIArenaControlResponse.Error(
+                request,
+                "invalid_argument",
+                error,
+                Enrich(await configuration.CaptureAsync(cancellationToken)));
+        }
+        if (!configuredContextWindow.HasValue
+            && historyPolicy is null
+            && responseTone is null
+            && customTone is null)
+        {
+            return AIArenaControlResponse.Error(
+                request,
+                "missing_argument",
+                "provider.model.config.set requires at least one model configuration value.",
+                Enrich(await configuration.CaptureAsync(cancellationToken)));
+        }
+
+        var current = await configuration.CaptureModelConfigurationAsync(model, null, cancellationToken);
+        var result = await configuration.SetModelConfigurationAsync(
+            new ProviderModelConfigurationRequest(
+                model,
+                configuredContextWindow ?? current.ConfiguredContextWindow,
+                historyPolicy ?? current.HistoryPolicy,
+                responseTone ?? current.ResponseTone,
+                customTone ?? current.CustomTone,
+                expectedIdentity,
+                [model]),
+            cancellationToken);
+        var providerState = Enrich(await configuration.CaptureAsync(cancellationToken));
+        if (!result.Ok)
+        {
+            return AIArenaControlResponse.Error(
+                request,
+                result.ErrorCode,
+                result.Message,
+                new { result.Configuration, Provider = providerState });
+        }
+
+        var data = new
+        {
+            Changed = result.ChangedFields,
+            result.Configuration,
+            Provider = providerState
+        };
+        events.Publish("provider.model.config.changed", result.Message, data);
+        return AIArenaControlResponse.Success(request, result.Message, data);
     }
 
     private async Task<AIArenaControlResponse> TestAsync(
@@ -456,6 +578,20 @@ internal sealed class AIArenaProviderControlHandler
 
         error = $"args.{name} must be a number.";
         return false;
+    }
+
+    private static bool IsSafeModelArgument(string value)
+    {
+        if (value.Length is 0 or > 1024
+            || value.Any(char.IsControl)
+            || Path.IsPathRooted(value)
+            || Uri.TryCreate(value, UriKind.Absolute, out _))
+        {
+            return false;
+        }
+
+        return ProviderModelCatalogProjectionService.SafeModelIdentifier(value)
+            .Equals(value, StringComparison.Ordinal);
     }
 
     private sealed record ProviderDiagnosticsCache(

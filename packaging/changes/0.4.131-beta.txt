@@ -1,0 +1,10 @@
+AI Arena 0.4.131-beta
+
+- Add per-model context-window, Rolling 80% history, and response-tone settings with durable profiles, Match Setup v4 portability, control-plane support, causal receipts, and truthful context-limit or output-limit outcomes.
+- Add explicit context recovery actions for blocked and partial turns, including causal skip, continue, end-match, reset, and fork behavior without silently changing Factory public-group prompts.
+- Add a universal four-row status center with causal operation history, priority and expiry rules, privacy-safe evidence, accessible live announcements, responsive collapsed-rail access, and a left-opening dashboard.
+- Compact the status center, make the whole card open history, and move Operator Turn above Agent Performance and Model Comparison & QA in the right rail.
+- Fix Factory-mode Auto Chat and 1 Turn readiness so a late provider heartbeat cannot overwrite a newer public Operator turn and disable valid controls.
+- Improve Models & assignments with pinned loaded models, collapsible virtualized catalog browsing, responsive assignment toggles, per-model configuration and reload evidence, exclusive assignment transfers, and bounded provider catalog discovery.
+- Harden startup, provider, llama.cpp, session, settings, transcript, and control-plane status paths with stale-operation rejection, single-announcer accessibility, bounded sanitization, and fail-soft optional automation initialization.
+- Expand Core, WPF, verification, accessibility, responsive-layout, causal-concurrency, and visual QA coverage for the new context, Models, routing, and status-center contracts.

@@ -286,10 +286,16 @@ internal sealed class TranscriptAdjunctCoordinator
         var generateButton = PanelActionButton(
             "Generate",
             async (_, _) => await generateDecisionCardAsync(),
-            !snapshot.FactoryMode,
+            !snapshot.FactoryMode && !snapshot.MatchEnded,
             TranscriptActionKind.Primary,
             "\uE9D2");
-        if (snapshot.FactoryMode)
+        if (snapshot.MatchEnded)
+        {
+            const string unavailable = "Decision Card generation is unavailable after End Match. Reset or fork the session to continue.";
+            generateButton.ToolTip = unavailable;
+            AutomationProperties.SetHelpText(generateButton, unavailable);
+        }
+        else if (snapshot.FactoryMode)
         {
             const string unavailable = "Decision Card generation is unavailable in Factory mode. Turn Apply Match Setup to models on to use narrator guidance.";
             generateButton.ToolTip = unavailable;

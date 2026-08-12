@@ -58,6 +58,12 @@ internal sealed class TranscriptCardRenderer
     private readonly Func<TranscriptMessage, bool> canSpeakTranscriptMessage;
     private readonly Action<TranscriptMessage> speakTranscriptMessage;
     private readonly Func<bool> showInternetDetails;
+    private readonly Func<string, bool, Task>? openModelsRecoveryAsync;
+    private readonly Func<Task>? startSessionForkAsync;
+    private readonly Func<TranscriptMessage, Task>? skipBlockedTurnAsync;
+    private readonly Func<TranscriptMessage, Task>? continueOutputAsync;
+    private readonly Func<Task>? endMatchAsync;
+    private readonly Func<Task>? openOutputSettingsAsync;
 
     public TranscriptCardRenderer(
         Func<bool> compactTranscriptMode,
@@ -85,7 +91,13 @@ internal sealed class TranscriptCardRenderer
         Action<TranscriptMessage> toggleTurnCompareMessage,
         Func<TranscriptMessage, bool>? canSpeakTranscriptMessage = null,
         Action<TranscriptMessage>? speakTranscriptMessage = null,
-        Func<bool>? showInternetDetails = null)
+        Func<bool>? showInternetDetails = null,
+        Func<string, bool, Task>? openModelsRecoveryAsync = null,
+        Func<Task>? startSessionForkAsync = null,
+        Func<TranscriptMessage, Task>? skipBlockedTurnAsync = null,
+        Func<TranscriptMessage, Task>? continueOutputAsync = null,
+        Func<Task>? endMatchAsync = null,
+        Func<Task>? openOutputSettingsAsync = null)
     {
         this.compactTranscriptMode = compactTranscriptMode;
         this.transcriptActions = transcriptActions;
@@ -113,6 +125,12 @@ internal sealed class TranscriptCardRenderer
         this.canSpeakTranscriptMessage = canSpeakTranscriptMessage ?? (_ => false);
         this.speakTranscriptMessage = speakTranscriptMessage ?? (_ => { });
         this.showInternetDetails = showInternetDetails ?? (() => true);
+        this.openModelsRecoveryAsync = openModelsRecoveryAsync;
+        this.startSessionForkAsync = startSessionForkAsync;
+        this.skipBlockedTurnAsync = skipBlockedTurnAsync;
+        this.continueOutputAsync = continueOutputAsync;
+        this.endMatchAsync = endMatchAsync;
+        this.openOutputSettingsAsync = openOutputSettingsAsync;
     }
 
     public Border CreateCard(TranscriptMessage message, bool retryable, bool searchMatch, bool isLatest)
@@ -120,7 +138,7 @@ internal sealed class TranscriptCardRenderer
         var hasInternetDetails = HasInternetDetails(message);
         var visibleInternetDetails = ShouldRenderInternetDetails(message, showInternetDetails());
         var isInternet = IsInternetMessage(message);
-        var body = string.IsNullOrWhiteSpace(message.Text) ? "(empty message)" : message.Text;
+        var body = DisplayBody(message);
         var isSystemEvent = IsSystemEvent(message, isInternet);
         var accent = isSystemEvent
             ? resourceBrush(message.Status.Equals("error", StringComparison.OrdinalIgnoreCase) ? "DangerBorderBrush" : "AssistBorderBrush")
@@ -196,7 +214,8 @@ internal sealed class TranscriptCardRenderer
                 });
         }
         var telemetry = CreateModelStatsHost(message);
-        var footer = CreateMessageFooter(message, actions, reasoning, telemetry, internetDetails);
+        var contextRecovery = CreateContextRecoveryCard(message);
+        var footer = CreateMessageFooter(message, actions, reasoning, telemetry, internetDetails, contextRecovery);
         return CreateCardLayout(message, body, accent, isInternet, searchMatch, isLatest, isSystemEvent, footer);
     }
 
@@ -291,7 +310,8 @@ internal sealed class TranscriptCardRenderer
         WrapPanel actions,
         Expander? reasoning,
         ContentControl? telemetry,
-        Expander? internetDetails)
+        Expander? internetDetails,
+        UIElement? contextRecovery)
     {
         var compact = compactTranscriptMode();
         var footer = new Grid
@@ -299,6 +319,7 @@ internal sealed class TranscriptCardRenderer
             Margin = new Thickness(0, compact ? 3 : 5, 0, 0)
         };
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         footer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         footer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         footer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -330,14 +351,180 @@ internal sealed class TranscriptCardRenderer
             footer.Children.Add(internetDetails);
         }
 
+        if (contextRecovery is not null)
+        {
+            Grid.SetRow(contextRecovery, 3);
+            Grid.SetColumn(contextRecovery, 0);
+            footer.Children.Add(contextRecovery);
+        }
+
         actions.HorizontalAlignment = HorizontalAlignment.Right;
         actions.VerticalAlignment = VerticalAlignment.Top;
         actions.Margin = new Thickness(0, compact ? 5 : 8, 0, 0);
-        Grid.SetRow(actions, 3);
+        Grid.SetRow(actions, contextRecovery is null ? 3 : 4);
         Grid.SetColumn(actions, 0);
         footer.Children.Add(actions);
         return footer;
     }
+
+    private Border? CreateContextRecoveryCard(TranscriptMessage message)
+    {
+        var inputLimit = message.CompletionFailureKind.Equals(
+            "context_limit_exceeded",
+            StringComparison.OrdinalIgnoreCase);
+        var outputLimit = message.CompletionStopReason.Equals(
+            "output_limit_reached",
+            StringComparison.OrdinalIgnoreCase);
+        if (!inputLimit && !outputLimit)
+        {
+            return null;
+        }
+
+        var panel = new StackPanel();
+        var heading = new TextBlock
+        {
+            Text = inputLimit ? "Context limit reached" : "Output limit reached",
+            Foreground = resourceBrush(inputLimit ? "DangerTextBrush" : "Arena.Brush.Warning"),
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap
+        };
+        AutomationProperties.SetHeadingLevel(heading, AutomationHeadingLevel.Level3);
+        panel.Children.Add(heading);
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = inputLimit
+                ? "The provider rejected this causal prompt. AI Arena stopped without silently trimming or switching models."
+                : "The provider stopped at its output allowance. The partial response is preserved.",
+            Margin = new Thickness(0, 4, 0, 0),
+            Foreground = resourceBrush("MutedTextBrush"),
+            TextWrapping = TextWrapping.Wrap
+        });
+
+        var receipt = message.HistoryBudgetReceipt;
+        if (receipt is not null)
+        {
+            var evidence = new TextBlock
+            {
+                Text = ContextReceiptSummary(receipt),
+                Margin = new Thickness(0, 6, 0, 0),
+                Foreground = resourceBrush("MutedTextBrush"),
+                FontSize = ArenaTokens.CaptionFontSize,
+                TextWrapping = TextWrapping.Wrap
+            };
+            AutomationProperties.SetName(evidence, "Context prompt receipt");
+            AutomationProperties.SetHelpText(evidence, ContextReceiptHelp(receipt));
+            panel.Children.Add(evidence);
+        }
+
+        var recovery = new RightAlignedWrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        Button RecoveryButton(
+            string label,
+            string glyph,
+            RoutedEventHandler? handler,
+            bool enabled,
+            TranscriptActionKind kind = TranscriptActionKind.Neutral)
+        {
+            var button = transcriptActions.CreateLabeledButton(label, handler, enabled, kind, glyph);
+            button.MinHeight = 44;
+            return button;
+        }
+
+        if (inputLimit)
+        {
+            recovery.Children.Add(RecoveryButton(
+                "Increase context",
+                "\uE70F",
+                openModelsRecoveryAsync is null
+                    ? null
+                    : async (_, _) => await openModelsRecoveryAsync(message.Model, true),
+                openModelsRecoveryAsync is not null,
+                TranscriptActionKind.Primary));
+            recovery.Children.Add(RecoveryButton(
+                "Choose larger model",
+                "\uE8B7",
+                openModelsRecoveryAsync is null
+                    ? null
+                    : async (_, _) => await openModelsRecoveryAsync(message.Model, false),
+                openModelsRecoveryAsync is not null));
+            recovery.Children.Add(RecoveryButton(
+                "Start fork",
+                "\uE8B0",
+                startSessionForkAsync is null ? null : async (_, _) => await startSessionForkAsync(),
+                startSessionForkAsync is not null));
+            recovery.Children.Add(RecoveryButton(
+                "Skip turn",
+                "\uE74E",
+                skipBlockedTurnAsync is null ? null : async (_, _) => await skipBlockedTurnAsync(message),
+                skipBlockedTurnAsync is not null));
+            recovery.Children.Add(RecoveryButton(
+                "End match",
+                "\uE711",
+                endMatchAsync is null ? null : async (_, _) => await endMatchAsync(),
+                endMatchAsync is not null,
+                TranscriptActionKind.Danger));
+        }
+        else
+        {
+            recovery.Children.Add(RecoveryButton(
+                "Continue",
+                "\uE768",
+                continueOutputAsync is null ? null : async (_, _) => await continueOutputAsync(message),
+                continueOutputAsync is not null,
+                TranscriptActionKind.Primary));
+            recovery.Children.Add(RecoveryButton(
+                "Increase output",
+                "\uE70F",
+                openOutputSettingsAsync is null
+                    ? null
+                    : async (_, _) => await openOutputSettingsAsync(),
+                openOutputSettingsAsync is not null));
+        }
+
+        AutomationProperties.SetName(recovery, inputLimit ? "Context recovery actions" : "Output recovery actions");
+        panel.Children.Add(recovery);
+
+        if (inputLimit && !string.IsNullOrWhiteSpace(message.Text))
+        {
+            panel.Children.Add(CreateExpander(
+                "Provider error details",
+                resourceBrush("DangerBorderBrush"),
+                new TextBlock
+                {
+                    Text = message.Text,
+                    Foreground = resourceBrush("MutedTextBrush"),
+                    TextWrapping = TextWrapping.Wrap
+                }));
+        }
+
+        AutomationProperties.SetLiveSetting(
+            panel,
+            inputLimit ? AutomationLiveSetting.Assertive : AutomationLiveSetting.Polite);
+        return new Border
+        {
+            Margin = new Thickness(0, 8, 0, 0),
+            Padding = new Thickness(10, 8, 10, 8),
+            Background = resourceBrush("InputBrush"),
+            BorderBrush = resourceBrush(inputLimit ? "DangerBorderBrush" : "Arena.Brush.Warning"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = ArenaTokens.SmallRadius,
+            Child = panel
+        };
+    }
+
+    internal static string ContextReceiptSummary(ArenaHistoryBudgetReceiptView receipt)
+    {
+        var evidence = receipt.TokenEvidence.Replace('_', ' ');
+        return $"{receipt.HistoryPolicy.Replace('_', ' ')} · {receipt.IncludedEntryCount} of {receipt.EligibleEntryCount} entries · {receipt.OmittedEntryCount} omitted · {evidence}";
+    }
+
+    internal static string ContextReceiptHelp(ArenaHistoryBudgetReceiptView receipt) =>
+        $"Context window {(receipt.ConfiguredContextWindow > 0 ? $"{receipt.ConfiguredContextWindow:n0} tokens" : "uses the provider default")}. Input budget {receipt.InputTokenBudget:n0}; output reserve {receipt.OutputTokenReserve:n0}; estimated prompt {receipt.EstimatedPromptTokens:n0}. Exact retained text fingerprint is recorded without exposing prompt content.";
 
     public UIElement CreateInternetDetails(TranscriptMessage message)
     {
@@ -440,9 +627,31 @@ internal sealed class TranscriptCardRenderer
             return false;
         }
 
+        if (message.CompletionFailureKind.Equals(
+                "context_limit_exceeded",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         return message.Text.Contains("Model call failed", StringComparison.OrdinalIgnoreCase)
             || message.Text.Contains("Provider unreachable", StringComparison.OrdinalIgnoreCase)
             || message.Text.Contains("provider", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static string DisplayBody(TranscriptMessage message)
+    {
+        if (message.CompletionFailureKind.Equals(
+                "context_limit_exceeded",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var speaker = string.IsNullOrWhiteSpace(message.Speaker)
+                ? "The selected model"
+                : message.Speaker.Trim();
+            return $"Context limit reached for {speaker}. The provider rejected the prompt before generating a response.";
+        }
+
+        return string.IsNullOrWhiteSpace(message.Text) ? "(empty message)" : message.Text;
     }
 
     public static string DisplayTime(double createdAt)
