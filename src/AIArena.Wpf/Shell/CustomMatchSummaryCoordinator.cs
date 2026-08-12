@@ -188,7 +188,10 @@ internal sealed class CustomMatchSummaryCoordinator
             ActiveCastBrief(snapshot),
             "",
             $"Narrator: {NarratorPersonaText(snapshot.NarratorPersona)}",
-            $"Provider: {DisplayLabel(snapshot.ProviderModel, "no provider model")} / {DisplayLabel(snapshot.ProviderApiMode, "compatible mode")}");
+            $"Provider: {DisplayLabel(snapshot.ProviderModel, "no provider model")} / {DisplayLabel(snapshot.ProviderApiMode, "compatible mode")}",
+            snapshot.DefaultForUnassignedAgentsEnabled
+                ? "Arena routing: Default covers roles without an explicit model."
+                : "Arena routing: Default off; roles without an explicit model are unassigned.");
     }
 
     internal static string CurrentSetupSpec(ArenaViewSnapshot snapshot)
@@ -264,6 +267,7 @@ internal sealed class CustomMatchSummaryCoordinator
                 id = agent.Id,
                 name = DisplayName(agent),
                 agent.Model,
+                assignmentMode = RoleAssignmentMode(snapshot, agent.Id),
                 locked = agent.Locked,
                 persona = AgentPersonaText(agent.Persona),
                 voiceStyle = DisplayLabel(agent.VoiceStyle, "default voice"),
@@ -272,6 +276,8 @@ internal sealed class CustomMatchSummaryCoordinator
             provider = new
             {
                 model = DisplayLabel(snapshot.ProviderModel, "no provider model"),
+                defaultForUnassignedAgentsEnabled = snapshot.DefaultForUnassignedAgentsEnabled,
+                narratorAssignmentMode = RoleAssignmentMode(snapshot, "narrator"),
                 apiMode = DisplayLabel(snapshot.ProviderApiMode, "compatible mode"),
                 baseUrl = DisplayLabel(snapshot.ProviderBaseUrl, "no provider URL"),
                 online = snapshot.ProviderOnline
@@ -279,6 +285,20 @@ internal sealed class CustomMatchSummaryCoordinator
         };
 
         return JsonSerializer.Serialize(spec, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static string RoleAssignmentMode(ArenaViewSnapshot snapshot, string roleId)
+    {
+        if (snapshot.ExplicitRoleModels.ContainsKey(roleId))
+        {
+            return "explicit";
+        }
+
+        return snapshot.DefaultForUnassignedAgentsEnabled
+            && !string.IsNullOrWhiteSpace(snapshot.ProviderModel)
+            && snapshot.ProviderModel != "-"
+                ? "inherit"
+                : "unassigned";
     }
 
     private static string FactoryConversationConstraintText(ArenaViewSnapshot snapshot)

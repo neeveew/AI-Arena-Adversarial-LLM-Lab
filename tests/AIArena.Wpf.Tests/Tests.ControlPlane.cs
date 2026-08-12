@@ -828,7 +828,8 @@ internal static partial class Program
         Require(!providerConfig.Destructive
             && providerConfig.OptionalArguments.Contains("apiToken", StringComparer.OrdinalIgnoreCase)
             && providerConfig.OptionalArguments.Contains("clearApiToken", StringComparer.OrdinalIgnoreCase)
-            && providerConfig.OptionalArguments.Contains("narratorModel", StringComparer.OrdinalIgnoreCase), "provider configuration capability should describe secret and role-routing inputs without marking the patch destructive");
+            && providerConfig.OptionalArguments.Contains("narratorModel", StringComparer.OrdinalIgnoreCase)
+            && providerConfig.OptionalArguments.Contains("defaultForUnassignedAgentsEnabled", StringComparer.OrdinalIgnoreCase), "provider configuration capability should describe secret, role-routing, and optional-default inputs without marking the patch destructive");
         var providerTest = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.ProviderTest);
         Require(providerTest.OptionalArguments.Contains("allRoles", StringComparer.OrdinalIgnoreCase), "provider diagnostic capability should advertise its all-role probe");
         var qaSize = AIArenaControlCapabilityCatalog.All.Single(item => item.Command == AIArenaControlCommands.AppQaWindowSize);
@@ -952,6 +953,9 @@ internal static partial class Program
         Require(script.Contains("SecureStringToBSTR($ApiToken)", StringComparison.Ordinal), "PowerShell provider configuration should unwrap SecureString only at the invocation boundary");
         Require(script.Contains("ZeroFreeBSTR($apiTokenBstr)", StringComparison.Ordinal), "PowerShell provider configuration should zero its temporary token buffer");
         Require(script.Contains("$providerArgs.Remove('apiToken')", StringComparison.Ordinal), "PowerShell provider configuration should remove plaintext token material after invocation");
+        Require(script.Contains("[bool]$DefaultForUnassignedAgentsEnabled", StringComparison.Ordinal)
+            && script.Contains("$providerArgs['defaultForUnassignedAgentsEnabled'] = $DefaultForUnassignedAgentsEnabled", StringComparison.Ordinal),
+            "PowerShell provider configuration should preserve explicit true and false values for the optional Arena default");
         Require(script.Contains("[switch]$AllRoles", StringComparison.Ordinal) && script.Contains("$providerArgs['allRoles']", StringComparison.Ordinal), "PowerShell provider diagnostics should expose the typed all-role switch");
         Require(script.Contains("-Command 'provider.config.set'", StringComparison.Ordinal)
             && script.Contains("-Command 'provider.test'", StringComparison.Ordinal)
@@ -1901,6 +1905,7 @@ internal static partial class Program
             var sessionStore = new SessionStore(root);
             var eventLogStore = new EventLogStore(root);
             var snapshot = SessionStore.CreateDefaultSnapshot();
+            AgentRosterService.EnsureParticipantCount(snapshot, 6);
             snapshot.Configs[ModelProviderRouting.SharedConfigKey] = new ModelProviderConfig
             {
                 BaseUrl = "http://127.0.0.1:1234/v1",
@@ -1992,7 +1997,8 @@ internal static partial class Program
                     apiToken,
                     model = "handler-model",
                     alphaModel = "alpha-handler",
-                    timeoutSeconds = 45
+                    timeoutSeconds = 45,
+                    defaultForUnassignedAgentsEnabled = false
                 }
             });
             var configResponse = handler.ExecuteAsync(ParseProviderRequest(configRequestJson)).GetAwaiter().GetResult();
@@ -2017,7 +2023,14 @@ internal static partial class Program
             var persisted = sessionStore.LoadSnapshotAsync().GetAwaiter().GetResult()
                 ?? throw new InvalidOperationException("provider handler snapshot should persist");
             Require(persisted.Configs[ModelProviderRouting.SharedConfigKey].Model == "unified-handler"
-                && ProviderConfigurationControlService.RoleKeys.All(role => persisted.Configs[role].Model == "unified-handler"), "provider.model.set should delegate one unified model through shared and role routing");
+                && new[] { "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "narrator" }
+                    .All(role => persisted.Configs[role].Model == "unified-handler"),
+                "provider.model.set should delegate one unified model through shared and every active dynamic role");
+            Require(!persisted.Engine.DefaultForUnassignedAgentsEnabled,
+                "provider.config.set should persist an explicit false optional-default policy and later model updates should preserve it");
+            Require(AIArenaControlPlaneProtocol.Serialize(configResponse)
+                    .Contains("\"DefaultForUnassignedAgentsEnabled\":false", StringComparison.Ordinal),
+                "provider.config.set should return the persisted optional-default policy in its public provider state");
             var enrichedJson = AIArenaControlPlaneProtocol.Serialize(enrichedStateResponse);
             Require(enrichedJson.Contains("catalog-a", StringComparison.Ordinal)
                 && enrichedJson.Contains("catalog-b", StringComparison.Ordinal), "provider state should retain handler-cached advertised models after discovery");

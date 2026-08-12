@@ -1190,7 +1190,9 @@ internal sealed class ProviderSettingsCoordinator
     public async Task PersistModelRoutingAsync(
         string successStatus,
         bool refreshModels = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool? defaultForUnassignedAgentsEnabled = null,
+        IReadOnlyDictionary<string, string>? profileRoleModelsByKey = null)
     {
         var session = activeSession();
         if (isRenderingSnapshot() || isUpdatingRoleModelEditor || session is null)
@@ -1247,6 +1249,11 @@ internal sealed class ProviderSettingsCoordinator
                 return;
             }
 
+            if (defaultForUnassignedAgentsEnabled.HasValue)
+            {
+                snapshot.Engine.DefaultForUnassignedAgentsEnabled = defaultForUnassignedAgentsEnabled.Value;
+            }
+
             var existingShared = snapshot.Configs.TryGetValue("shared", out var shared)
                 ? shared
                 : new CoreModelProviderConfig();
@@ -1263,10 +1270,30 @@ internal sealed class ProviderSettingsCoordinator
                 nativeIdleTtlSeconds);
 
             snapshot.Configs["shared"] = updatedShared;
-            foreach (var roleKey in RoleModelKeys())
+            var roleKeysToSave = profileRoleModelsByKey is null
+                ? RoleModelKeys().ToArray()
+                : snapshot.Engine.Agents
+                    .Select(agent => agent.Id.Trim().ToLowerInvariant())
+                    .Where(AgentRosterService.IsParticipantId)
+                    .Concat(snapshot.Configs.Keys
+                        .Select(key => key.Trim().ToLowerInvariant())
+                        .Where(AgentRosterService.IsParticipantId))
+                    .Concat(profileRoleModelsByKey.Keys
+                        .Select(key => key.Trim().ToLowerInvariant())
+                        .Where(key => AgentRosterService.IsParticipantId(key)
+                            || key.Equals("narrator", StringComparison.OrdinalIgnoreCase)))
+                    .Append("narrator")
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+            foreach (var roleKey in roleKeysToSave)
             {
-                var (temperatureOverride, maxOutputTokensOverride) = roleOverridesToSave[roleKey];
-                SaveRoleModelConfig(snapshot.Configs, roleKey, roleModelsToSave[roleKey], updatedShared, temperatureOverride, maxOutputTokensOverride);
+                var modelToSave = profileRoleModelsByKey is null
+                    ? roleModelsToSave[roleKey]
+                    : profileRoleModelsByKey.GetValueOrDefault(roleKey, "").Trim();
+                var (temperatureOverride, maxOutputTokensOverride) = roleOverridesToSave.TryGetValue(roleKey, out var knownOverride)
+                    ? knownOverride
+                    : roleGenerationOverride(roleKey);
+                SaveRoleModelConfig(snapshot.Configs, roleKey, modelToSave, updatedShared, temperatureOverride, maxOutputTokensOverride);
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -1282,7 +1309,8 @@ internal sealed class ProviderSettingsCoordinator
                 BetaModel = roleModelsToSave["beta"],
                 GammaModel = roleModelsToSave["gamma"],
                 DeltaModel = roleModelsToSave["delta"],
-                NarratorModel = roleModelsToSave["narrator"]
+                NarratorModel = roleModelsToSave["narrator"],
+                snapshot.Engine.DefaultForUnassignedAgentsEnabled
             }, cancellationToken);
         }
         finally
@@ -1501,16 +1529,43 @@ internal sealed class ProviderSettingsCoordinator
             || normalized.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase);
     }
 
-    public (string BaseUrl, string ApiMode, string Model, IReadOnlyDictionary<string, string> RoleModels) CaptureProviderProfile()
+    public (
+        string BaseUrl,
+        string ApiMode,
+        string Model,
+        IReadOnlyDictionary<string, string> RoleModels,
+        bool DefaultForUnassignedAgentsEnabled) CaptureProviderProfile()
     {
         SaveRoleModelDrafts();
-        var roleModelsByKey = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var roleModelsByKey = lastRenderedSnapshot()?.ExplicitRoleModels
+            .Where(item => !string.IsNullOrWhiteSpace(item.Key)
+                && !string.IsNullOrWhiteSpace(item.Value)
+                && (AgentRosterService.IsParticipantId(item.Key)
+                    || item.Key.Equals("narrator", StringComparison.OrdinalIgnoreCase)))
+            .ToDictionary(
+                item => item.Key.Trim().ToLowerInvariant(),
+                item => item.Value.Trim(),
+                StringComparer.OrdinalIgnoreCase)
+            ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var key in RoleModelKeys())
         {
-            roleModelsByKey[key] = RoleModel(key);
+            var model = RoleModel(key);
+            if (string.IsNullOrWhiteSpace(model))
+            {
+                roleModelsByKey.Remove(key);
+            }
+            else
+            {
+                roleModelsByKey[key] = model;
+            }
         }
 
-        return (providerBaseUrlText.Text.Trim(), CurrentApiMode(), providerModelText.Text.Trim(), roleModelsByKey);
+        return (
+            providerBaseUrlText.Text.Trim(),
+            CurrentApiMode(),
+            providerModelText.Text.Trim(),
+            roleModelsByKey,
+            lastRenderedSnapshot()?.DefaultForUnassignedAgentsEnabled ?? true);
     }
 
     public async Task ApplyProviderProfileAsync(
@@ -1518,6 +1573,7 @@ internal sealed class ProviderSettingsCoordinator
         string apiMode,
         string model,
         IReadOnlyDictionary<string, string> roleModelsByKey,
+        bool defaultForUnassignedAgentsEnabled,
         string profileName,
         CancellationToken cancellationToken = default)
     {
@@ -1538,13 +1594,19 @@ internal sealed class ProviderSettingsCoordinator
         }
 
         UpdateNativeLifecycleControls();
-        await PersistModelRoutingAsync($"Profile '{profileName}' applied.", refreshModels: true, cancellationToken);
+        await PersistModelRoutingAsync(
+            $"Profile '{profileName}' applied.",
+            refreshModels: true,
+            cancellationToken: cancellationToken,
+            defaultForUnassignedAgentsEnabled: defaultForUnassignedAgentsEnabled,
+            profileRoleModelsByKey: roleModelsByKey);
     }
 
     public async Task TestAllRolesAsync(CancellationToken cancellationToken = default)
     {
         SaveRoleModelDrafts();
         var defaultModel = providerModelText.Text.Trim();
+        var defaultForUnassignedAgentsEnabled = lastRenderedSnapshot()?.DefaultForUnassignedAgentsEnabled ?? true;
         var resultsByModel = new Dictionary<string, ModelProviderTestResult>(StringComparer.OrdinalIgnoreCase);
         providerTestStatus.Text = "Testing all role models...";
         foreach (var key in RoleModelKeys())
@@ -1555,7 +1617,10 @@ internal sealed class ProviderSettingsCoordinator
             }
 
             var model = RoleModel(key);
-            var effectiveModel = string.IsNullOrWhiteSpace(model) ? defaultModel : model;
+            var effectiveModel = ResolveRoleModelForDiagnostic(
+                model,
+                defaultModel,
+                defaultForUnassignedAgentsEnabled);
             if (string.IsNullOrWhiteSpace(effectiveModel))
             {
                 SetModelState(label, "no model", resourceBrush("MutedTextBrush"));
@@ -1899,6 +1964,19 @@ internal sealed class ProviderSettingsCoordinator
         {
             comboBox.Text = model;
         }
+    }
+
+    internal static string ResolveRoleModelForDiagnostic(
+        string roleModel,
+        string defaultModel,
+        bool defaultForUnassignedAgentsEnabled)
+    {
+        var explicitModel = roleModel?.Trim() ?? "";
+        return explicitModel.Length > 0
+            ? explicitModel
+            : defaultForUnassignedAgentsEnabled
+                ? defaultModel?.Trim() ?? ""
+                : "";
     }
 
     private static IReadOnlyList<string> AdvertisedModelNames(

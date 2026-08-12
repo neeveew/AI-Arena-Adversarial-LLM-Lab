@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AIArena.Core.Persistence;
+using AIArena.Core.Services;
 
 namespace AIArena.Wpf.Services;
 
@@ -88,6 +89,7 @@ public sealed class WpfSettingsStore
         settings.AgentCommandTimeoutSeconds = Math.Clamp(settings.AgentCommandTimeoutSeconds, 10, 3600);
         settings.ProviderProfiles = (settings.ProviderProfiles ?? [])
             .Where(profile => !string.IsNullOrWhiteSpace(profile?.Name))
+            .Select(NormalizeProviderProfile)
             .ToList();
         settings.AgentWorkspaceMessages = NormalizeAgentWorkspaceMessages(settings.AgentWorkspaceMessages).ToList();
         settings.AgentRunbook = NormalizeAgentRunbook(settings.AgentRunbook);
@@ -206,6 +208,44 @@ public sealed class WpfSettingsStore
         };
     }
 
+    private static WpfProviderProfile NormalizeProviderProfile(WpfProviderProfile profile)
+    {
+        var roleModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, model) in profile.RoleModels ?? new Dictionary<string, string>())
+        {
+            var normalizedKey = key?.Trim().ToLowerInvariant() ?? "";
+            var normalizedModel = model?.Trim() ?? "";
+            if ((AgentRosterService.IsParticipantId(normalizedKey)
+                 || normalizedKey.Equals("narrator", StringComparison.OrdinalIgnoreCase))
+                && normalizedModel.Length > 0)
+            {
+                roleModels[normalizedKey] = normalizedModel;
+            }
+        }
+
+        AddLegacy("alpha", profile.AlphaModel);
+        AddLegacy("beta", profile.BetaModel);
+        AddLegacy("gamma", profile.GammaModel);
+        AddLegacy("delta", profile.DeltaModel);
+        AddLegacy("narrator", profile.NarratorModel);
+        profile.RoleModels = roleModels;
+        profile.AlphaModel = roleModels.GetValueOrDefault("alpha", "");
+        profile.BetaModel = roleModels.GetValueOrDefault("beta", "");
+        profile.GammaModel = roleModels.GetValueOrDefault("gamma", "");
+        profile.DeltaModel = roleModels.GetValueOrDefault("delta", "");
+        profile.NarratorModel = roleModels.GetValueOrDefault("narrator", "");
+        return profile;
+
+        void AddLegacy(string role, string? model)
+        {
+            var normalizedModel = model?.Trim() ?? "";
+            if (!roleModels.ContainsKey(role) && normalizedModel.Length > 0)
+            {
+                roleModels[role] = normalizedModel;
+            }
+        }
+    }
+
     private static string NormalizeLongText(string? value, int maxChars)
     {
         var normalized = value?.Trim() ?? "";
@@ -289,6 +329,8 @@ public sealed class WpfProviderProfile
     public string GammaModel { get; set; } = "";
     public string DeltaModel { get; set; } = "";
     public string NarratorModel { get; set; } = "";
+    public Dictionary<string, string> RoleModels { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public bool DefaultForUnassignedAgentsEnabled { get; set; } = true;
 }
 
 public sealed class WpfAgentWorkspaceMessage

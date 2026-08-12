@@ -18,6 +18,14 @@ public sealed class ModelProviderConfig
     [JsonPropertyName("model")]
     public string Model { get; init; } = "";
 
+    /// <summary>
+    /// Distinguishes a deliberate role assignment from a role that merely
+    /// inherits the shared provider model. This is material when the Arena
+    /// default is disabled and must survive session persistence.
+    /// </summary>
+    [JsonPropertyName("explicit_model_assignment")]
+    public bool ExplicitModelAssignment { get; init; }
+
     [JsonPropertyName("timeout")]
     public int Timeout { get; init; } = ModelProviderDefaults.TimeoutSeconds;
 
@@ -166,7 +174,8 @@ public sealed record ModelProviderModels(
     string BaseUrl,
     IReadOnlyList<string> Models,
     string Error,
-    DateTimeOffset CheckedAt);
+    DateTimeOffset CheckedAt,
+    int OmittedModelCount = 0);
 
 public sealed record ModelProviderTestResult(
     bool Ok,

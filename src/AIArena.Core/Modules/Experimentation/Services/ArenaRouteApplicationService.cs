@@ -153,6 +153,7 @@ public sealed class ArenaRouteApplicationService
         ApiMode = source.ApiMode,
         ApiToken = source.ApiToken,
         Model = model,
+        ExplicitModelAssignment = true,
         Timeout = source.Timeout,
         Temperature = source.Temperature,
         MaxOutputTokens = source.MaxOutputTokens,

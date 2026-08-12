@@ -53,6 +53,23 @@ static void SaveReloadVisualGenerationSettings()
             VoiceTtsRate = 4,
             VoiceTtsVolume = 65,
             LabViewMode = "world",
+            ProviderProfiles =
+            [
+                new WpfProviderProfile
+                {
+                    Name = "Explicit routes only",
+                    BaseUrl = "http://127.0.0.1:1234/v1",
+                    ApiMode = ModelProviderApiModes.LmStudioNative,
+                    Model = "shared-model",
+                    AlphaModel = "shared-model",
+                    RoleModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["alpha"] = "shared-model",
+                        ["epsilon"] = "epsilon-model"
+                    },
+                    DefaultForUnassignedAgentsEnabled = false
+                }
+            ],
             OperatorTemplates = ["one", "two"]
         });
 
@@ -83,6 +100,12 @@ static void SaveReloadVisualGenerationSettings()
         Require(loaded.VoiceTtsRate == 4, "voice TTS rate did not persist");
         Require(loaded.VoiceTtsVolume == 65, "voice TTS volume did not persist");
         Require(loaded.LabViewMode == "world", "AI World view mode did not persist behind its debug gate");
+        Require(loaded.ProviderProfiles.Single().Name == "Explicit routes only"
+                && !loaded.ProviderProfiles.Single().DefaultForUnassignedAgentsEnabled
+                && loaded.ProviderProfiles.Single().AlphaModel == "shared-model"
+                && loaded.ProviderProfiles.Single().RoleModels["alpha"] == "shared-model"
+                && loaded.ProviderProfiles.Single().RoleModels["epsilon"] == "epsilon-model",
+            "saved provider profiles did not round-trip the optional default policy, explicit same-model route, and dynamic role route");
         Require(loaded.OperatorTemplates.SequenceEqual(["one", "two"]), "operator templates did not persist");
     });
 }
@@ -106,6 +129,7 @@ static void NormalizeSystemThemeAndBlankSettings()
           "allowDebugControls": false,
           "showWorldDebug": true,
           "labViewMode": "world",
+          "providerProfiles": [{ "name": "Legacy setup", "model": "legacy-model", "alphaModel": "legacy-alpha" }],
           "operatorTemplates": null
         }
         """);
@@ -125,6 +149,10 @@ static void NormalizeSystemThemeAndBlankSettings()
         Require(!loaded.ShowWorldDebug, "AI World should default off and be cleared when master debug controls are disabled");
         Require(loaded.LabViewMode == "transcript", "disabled AI World debug should normalize stale world sessions back to transcript");
         Require(loaded.FollowTranscript, "missing follow transcript setting should default on");
+        Require(new WpfProviderProfile().DefaultForUnassignedAgentsEnabled
+                && loaded.ProviderProfiles.Single().DefaultForUnassignedAgentsEnabled
+                && loaded.ProviderProfiles.Single().RoleModels["alpha"] == "legacy-alpha",
+            "new and legacy saved provider profiles should default the optional Arena model fallback on and migrate flat role fields into the dynamic map");
         Require(loaded.OperatorTemplates.Count > 0, "null operator templates should keep default templates");
         Require(loaded.OperatorTemplates.SequenceEqual(new WpfSettings().OperatorTemplates), "null operator templates should restore the built-in prompts");
     });
@@ -704,6 +732,29 @@ static void ScenarioWorkflowPreservesGenerationHistorySelection()
     });
     Require(roleModelReport.Blockers.Count == 0, "role-specific active agent models should satisfy provider model readiness");
     Require(roleModelReport.Badges.Any(badge => badge.Label == "Provider" && badge.Value == "Role models" && badge.Tooltip.Contains("role-specific", StringComparison.OrdinalIgnoreCase)), "role-specific model readiness should be visible in provider badge");
+    var defaultOffPartial = ScenarioWorkflowCoordinator.BuildSetupReadinessReport(readySnapshot with
+    {
+        DefaultForUnassignedAgentsEnabled = false,
+        Agents =
+        [
+            new AgentState("alpha", "Alpha", "waiting", "persona", "", "", "", "local-model", true, false, []),
+            new AgentState("beta", "Beta", "waiting", "persona", "", "", "", "", true, false, [])
+        ]
+    });
+    Require(defaultOffPartial.Blockers.Any(blocker => blocker.Contains("enable Default", StringComparison.OrdinalIgnoreCase)),
+        "Default-off readiness should block when any active agent remains unassigned");
+    var defaultOffExplicit = ScenarioWorkflowCoordinator.BuildSetupReadinessReport(readySnapshot with
+    {
+        DefaultForUnassignedAgentsEnabled = false,
+        Agents =
+        [
+            new AgentState("alpha", "Alpha", "waiting", "persona", "", "", "", "local-model", true, false, []),
+            new AgentState("beta", "Beta", "waiting", "persona", "", "", "", "local-model", true, false, [])
+        ]
+    });
+    Require(defaultOffExplicit.Blockers.Count == 0
+            && defaultOffExplicit.Badges.Any(badge => badge.Label == "Provider" && badge.Value == "Role models"),
+        "fully explicit active-agent routing should remain runnable while Default is off");
     var warningReport = ScenarioWorkflowCoordinator.BuildSetupReadinessReport(readySnapshot with
     {
         ProviderOnline = false,

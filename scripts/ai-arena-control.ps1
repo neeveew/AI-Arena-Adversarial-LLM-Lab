@@ -1562,6 +1562,9 @@ function Set-AIArenaProviderConfig {
         [int]$NativeIdleTtlSeconds,
 
         [Parameter()]
+        [bool]$DefaultForUnassignedAgentsEnabled,
+
+        [Parameter()]
         [switch]$RefreshModels,
 
         [Parameter()]
@@ -1646,6 +1649,10 @@ function Set-AIArenaProviderConfig {
     }
     if ($PSBoundParameters.ContainsKey('NativeIdleTtlSeconds')) {
         $providerArgs['nativeIdleTtlSeconds'] = $NativeIdleTtlSeconds
+        $hasConfigurationChange = $true
+    }
+    if ($PSBoundParameters.ContainsKey('DefaultForUnassignedAgentsEnabled')) {
+        $providerArgs['defaultForUnassignedAgentsEnabled'] = $DefaultForUnassignedAgentsEnabled
         $hasConfigurationChange = $true
     }
     if ($PSBoundParameters.ContainsKey('RefreshModels')) {

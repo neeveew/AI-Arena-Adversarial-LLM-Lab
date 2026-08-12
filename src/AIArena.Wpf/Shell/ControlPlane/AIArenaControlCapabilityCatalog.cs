@@ -102,6 +102,7 @@ internal static class AIArenaControlCapabilityCatalog
                 "reasoning",
                 "nativeStatefulChat",
                 "nativeIdleTtlSeconds",
+                "defaultForUnassignedAgentsEnabled",
                 "refreshModels"
             ]),
         Capability(AIArenaControlCommands.ProviderModelSet, "provider", "Set all arena role models.", ["model"], ["refreshModels"]),

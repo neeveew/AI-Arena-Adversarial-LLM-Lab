@@ -44,7 +44,7 @@ The current WPF shell includes:
 - Random Seed match generation with categorized presets, rich preset tooltips, visibly refreshed cast roles, and personas
 - AI Choice match generation through the configured narrator/shared model, with fallback cast completion
 - Current Topics generation through live Internet search plus the configured narrator/shared model, saved as captured-output replayable history
-- portable Match Setup v2 JSON export/import with secret-free provider settings, atomic clean-session creation, fingerprints, and PowerShell parity
+- portable Match Setup v3 JSON export with optional-default and explicit/inherit role routing, compatible v2 import, secret-free provider settings, atomic clean-session creation, fingerprints, and PowerShell parity
 - Match Setup checkpoint save/restore/delete, clean-session copy, full-state current-run fork with direct-parent navigation, and relationship pressure graph controls
 - Narrate Now model call into the transcript with reasoning metadata
 - Internet Access gives agents and narrator general SearXNG-backed web search plus exact public-page fetching when current or external facts matter, with an independent Test Internet diagnostic, bounded source enrichment, domain-aware ranking, and numbered citation context

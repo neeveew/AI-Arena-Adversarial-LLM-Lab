@@ -35,11 +35,11 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, ProviderModelCatalogItem> catalogItemsByModel =
         new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim refreshGate = new(1, 1);
+    private readonly CancellationTokenSource disposalCancellation = new();
     private CancellationTokenSource? refreshCancellation;
     private CancellationTokenSource? lifecycleCancellation;
     private string lifecycleConnectionIdentity = "";
-    private long refreshRunGeneration;
-    private int refreshInFlight;
     private int lifecycleRunning;
     private bool disposed;
 
@@ -70,8 +70,7 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
 
     public Task HeartbeatAsync(CancellationToken cancellationToken = default)
     {
-        if (Volatile.Read(ref lifecycleRunning) != 0
-            || Volatile.Read(ref refreshInFlight) != 0)
+        if (Volatile.Read(ref lifecycleRunning) != 0)
         {
             return Task.CompletedTask;
         }
@@ -85,16 +84,41 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        if (heartbeat && Volatile.Read(ref refreshInFlight) != 0)
+        using var gateCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            disposalCancellation.Token);
+        var observedGeneration = catalogProjection.Current?.Generation ?? -1;
+        var gateTaken = heartbeat
+            ? await refreshGate.WaitAsync(0, gateCancellation.Token)
+            : await WaitForRefreshGateAsync(gateCancellation.Token);
+        if (!gateTaken)
         {
             return;
         }
 
-        var refreshRun = Interlocked.Increment(ref refreshRunGeneration);
-        Interlocked.Exchange(ref refreshInFlight, 1);
+        if (disposed)
+        {
+            refreshGate.Release();
+            throw new ObjectDisposedException(nameof(ProviderModelsSurfaceCoordinator));
+        }
+
+        cancellationToken = gateCancellation.Token;
+
         CancellationTokenSource? refreshOwner = null;
         try
         {
+        // If another catalog refresh completed while this manual request was
+        // waiting, reuse its authoritative evidence instead of issuing a
+        // duplicate provider request. A stale or rejected refresh does not
+        // advance the published generation, so the waiting request still runs.
+        if (!heartbeat
+            && refreshCatalog
+            && catalogProjection.Current is { } coalesced
+            && coalesced.Generation != observedGeneration)
+        {
+            refreshCatalog = false;
+        }
+
         var session = activeSession();
         if (session is null)
         {
@@ -192,7 +216,8 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         candidate = PreserveLastConfirmedResidency(
             current,
             candidate,
-            preserveMissingRows: Volatile.Read(ref lifecycleRunning) != 0);
+            preserveMissingRows: Volatile.Read(ref lifecycleRunning) != 0,
+            control.SelectedModelId);
 
         refreshToken.ThrowIfCancellationRequested();
         var active = activeSession();
@@ -224,11 +249,14 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                 refreshOwner?.Dispose();
             }
 
-            if (Volatile.Read(ref refreshRunGeneration) == refreshRun)
-            {
-                Interlocked.Exchange(ref refreshInFlight, 0);
-            }
+            refreshGate.Release();
         }
+    }
+
+    private async Task<bool> WaitForRefreshGateAsync(CancellationToken cancellationToken)
+    {
+        await refreshGate.WaitAsync(cancellationToken);
+        return true;
     }
 
     public async Task SaveAssignmentAsync(
@@ -252,13 +280,17 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         ProviderModelAssignmentControlResult result;
         try
         {
+            var equivalentModelIds = catalogItemsByModel.TryGetValue(change.ModelId, out var catalogItem)
+                ? catalogItem.Aliases
+                : [change.ModelId];
             result = await providerConfiguration.SetModelAssignmentAsync(
                 new ProviderModelAssignmentRequest(
                     target.Id,
                     change.ModelId,
                     change.IsAssigned,
                     assignment.ProviderFingerprint,
-                    target.AssignmentFingerprint),
+                    target.AssignmentFingerprint,
+                    equivalentModelIds),
                 cancellationToken);
         }
         catch (OperationCanceledException)
@@ -500,6 +532,7 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         }
 
         disposed = true;
+        disposalCancellation.Cancel();
         refreshCancellation?.Cancel();
         refreshCancellation?.Dispose();
         refreshCancellation = null;
@@ -569,7 +602,8 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             result.Ok,
             result.Error,
             shared.Model,
-            result.CheckedAt);
+            result.CheckedAt,
+            result.OmittedModelCount);
     }
 
     private async Task<ProviderModelCatalogSnapshot> LoadCompatibleFallbackAsync(
@@ -591,7 +625,8 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             result.Ok,
             error,
             shared.Model,
-            result.CheckedAt);
+            result.CheckedAt,
+            result.OmittedModelCount);
     }
 
     private void ApplyPresentation(
@@ -604,11 +639,14 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         var shared = SharedConfig(snapshot);
         var lmStudioLifecycle = ModelProviderApiModes.IsLmStudioNative(shared.ApiMode)
             && catalog.ResidencyEvidence != ProviderCatalogEvidenceState.Unavailable;
+        var assignmentBatch = ProviderModelAssignmentProjectionService.CreateBatch(
+            catalog.SessionId,
+            snapshot);
         var rows = new List<ProviderModelAssignmentPresentation>();
         foreach (var item in catalog.LoadedModels.Concat(catalog.AvailableModels))
         {
             catalogItemsByModel[item.Id] = item;
-            var assignment = ProviderModelAssignmentProjectionService.Project(catalog.SessionId, snapshot, item.Id);
+            var assignment = assignmentBatch.Project(item.Id, item.Aliases);
             assignmentsByModel[item.Id] = assignment;
             rows.Add(new ProviderModelAssignmentPresentation(
                 item.Id,
@@ -625,13 +663,7 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                 ModelAutomationHelp(item, catalog.ResidencyEvidence),
                 CanLoad: lmStudioLifecycle && item.CanLoad,
                 CanUnload: lmStudioLifecycle && item.CanUnload,
-                LifecycleHelp: item.IsResidencyStale
-                    ? "Showing the last confirmed grouping. Refresh before changing LM Studio residency."
-                    : item.LoadState == ProviderModelLoadState.Loaded && !item.CanUnload
-                        ? "LM Studio reports this model as loaded but did not provide an unloadable instance identifier. Refresh or manage it in LM Studio."
-                        : lmStudioLifecycle
-                            ? "LM Studio controls model residency. Assignments remain unchanged, and LM Studio chooses hardware placement."
-                            : "Load and unload are available only when LM Studio native residency evidence is current.",
+                LifecycleHelp: LifecycleHelpFor(item, lmStudioLifecycle),
                 IsResidencyStale: item.IsResidencyStale));
         }
 
@@ -652,14 +684,22 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         var busy = isArenaBusy();
         var providerName = ProviderName(shared.ApiMode);
         var catalogReady = catalog.CatalogEvidence != ProviderCatalogEvidenceState.Unavailable;
+        var catalogPartial = catalog.CatalogEvidence == ProviderCatalogEvidenceState.Partial
+            || catalog.ResidencyEvidence == ProviderCatalogEvidenceState.Partial
+            || catalog.OmittedModelCount > 0;
         var connectionState = isRefreshing
             ? ProviderConnectionState.Checking
-            : catalogReady ? ProviderConnectionState.Online : ProviderConnectionState.Offline;
+            : !catalogReady
+                ? ProviderConnectionState.Offline
+                : catalogPartial
+                    ? ProviderConnectionState.Partial
+                    : ProviderConnectionState.Online;
         control.ApplyPresentation(new ProviderModelAssignmentsPresentation(
             providerName,
             connectionState switch
             {
                 ProviderConnectionState.Online => "Online",
+                ProviderConnectionState.Partial => "Partial evidence",
                 ProviderConnectionState.Checking => "Refreshing",
                 _ => "Unavailable"
             },
@@ -674,9 +714,21 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                 target.Id,
                 target.IsDefault ? "Default for unassigned agents" : target.DisplayName,
                 AssignmentHelp(target, selectedIsDefault),
-                IsEnabled: !busy
-                    && !(target.IsDefault && target.Assigned)
-                    && !(selectedIsDefault && !target.IsDefault && target.InheritsDefault))).ToArray(),
+                IsEnabled: !busy,
+                AssignmentState: target.IsDefault && target.Assigned
+                    ? ProviderTargetAssignmentState.Default
+                    : target.Assigned
+                        ? ProviderTargetAssignmentState.Explicit
+                        : selectedIsDefault && target.InheritsDefault
+                            ? ProviderTargetAssignmentState.InheritsDefault
+                            : ProviderTargetAssignmentState.Unassigned,
+                AssignedState: target.IsDefault
+                    ? ProviderTargetAssignmentState.Default
+                    : ProviderTargetAssignmentState.Explicit,
+                ClearedState: selectedIsDefault && !target.IsDefault
+                    ? ProviderTargetAssignmentState.InheritsDefault
+                    : ProviderTargetAssignmentState.Unassigned,
+                IsDefault: target.IsDefault)).ToArray(),
             selected,
             IsRefreshing: isRefreshing,
             CanRefresh: !isRefreshing,
@@ -686,6 +738,29 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             PresentationIdentity: catalog.ProviderFingerprint,
             ConnectionIdentity: ProviderModelCatalogProjectionService.ConnectionFingerprint(catalog.SessionId, shared),
             CanRunLifecycle: !busy && !isRefreshing && lmStudioLifecycle));
+    }
+
+    internal static string LifecycleHelpFor(
+        ProviderModelCatalogItem item,
+        bool lmStudioLifecycle)
+    {
+        if (item.IsResidencyStale)
+        {
+            return lmStudioLifecycle
+                ? "Showing the last confirmed grouping. Refresh before changing LM Studio residency."
+                : "Showing the last confirmed provider grouping. Refresh before relying on model residency.";
+        }
+
+        if (item.LoadState == ProviderModelLoadState.Loaded && !item.CanUnload)
+        {
+            return lmStudioLifecycle
+                ? "LM Studio reports this model as loaded but did not provide an unloadable instance identifier. Refresh or manage it in LM Studio."
+                : "The provider reports this model as loaded, but this connection does not expose an unload action.";
+        }
+
+        return lmStudioLifecycle
+            ? "LM Studio controls model residency. Assignments remain unchanged, and LM Studio chooses hardware placement."
+            : "Load and unload controls are unavailable for this provider evidence.";
     }
 
     private static ProviderModelAssignmentsPresentation EmptyPresentation(string status) => new(
@@ -777,18 +852,18 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         if (target.IsDefault)
         {
             return target.Assigned
-                ? "This is the current default. Choose another model to change the default."
-                : "Make this model the default for targets without an explicit model assignment.";
+                ? "Turn off to leave unassigned Arena roles without a model. Agent Workspace and provider diagnostics keep using the shared provider model."
+                : "Turn on to use this model for Arena roles without an explicit assignment.";
         }
 
         if (selectedIsDefault && target.InheritsDefault)
         {
-            return "This target already uses this model through Default. Choose another model to create an explicit assignment.";
+            return "This target currently uses this model through Default. Turn on to preserve it as an explicit assignment when Default is off.";
         }
 
         return target.Assigned
-            ? "Uncheck to return this target to the default model."
-            : "Check to assign this model immediately.";
+            ? "Turn off to remove this explicit assignment and use Default when it is enabled."
+            : "Turn on to assign this model immediately.";
     }
 
     private static bool CatalogEvidenceEquivalent(
@@ -824,10 +899,11 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             && pair.First.Aliases.SequenceEqual(pair.Second.Aliases, StringComparer.Ordinal));
     }
 
-    private static ProviderModelCatalogSnapshot PreserveLastConfirmedResidency(
+    internal static ProviderModelCatalogSnapshot PreserveLastConfirmedResidency(
         ProviderModelCatalogSnapshot? previous,
         ProviderModelCatalogSnapshot candidate,
-        bool preserveMissingRows)
+        bool preserveMissingRows,
+        string selectedModelId = "")
     {
         if (previous is null
             || !previous.SessionId.Equals(candidate.SessionId, StringComparison.Ordinal)
@@ -883,8 +959,36 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             return candidate;
         }
 
+        var displayLimit = ProviderModelCatalogProjectionService.MaximumModelCount;
+        var omittedByMergedLimit = Math.Max(0, revised.Count - displayLimit);
+        if (omittedByMergedLimit > 0)
+        {
+            var selected = revised.FirstOrDefault(item =>
+                item.Id.Equals(selectedModelId?.Trim() ?? "", StringComparison.OrdinalIgnoreCase));
+            revised = revised.Take(displayLimit).ToList();
+            if (selected is not null
+                && revised.All(item => !item.Id.Equals(selected.Id, StringComparison.OrdinalIgnoreCase)))
+            {
+                var replacementIndex = revised.FindLastIndex(item =>
+                    !item.Id.Equals(candidate.ConfiguredModel, StringComparison.OrdinalIgnoreCase));
+                if (replacementIndex >= 0)
+                {
+                    revised[replacementIndex] = selected;
+                }
+            }
+        }
+
+        var mergedOmittedCount = candidate.OmittedModelCount + omittedByMergedLimit;
+        var mergedLimitStatus = omittedByMergedLimit > 0
+            ? $" {omittedByMergedLimit} merged catalog entries were omitted by the {displayLimit}-model display limit."
+            : "";
+
         return candidate with
         {
+            CatalogEvidence = omittedByMergedLimit > 0
+                && candidate.CatalogEvidence == ProviderCatalogEvidenceState.Ready
+                    ? ProviderCatalogEvidenceState.Partial
+                    : candidate.CatalogEvidence,
             LoadedModels = revised
                 .Where(item => item.LoadState == ProviderModelLoadState.Loaded)
                 .OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
@@ -895,7 +999,8 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                 .OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
-            Status = $"LM Studio load-state confirmation is unavailable; showing the last confirmed grouping. {candidate.Status}"
+            OmittedModelCount = mergedOmittedCount,
+            Status = $"Provider load-state confirmation is unavailable; showing the last confirmed grouping.{mergedLimitStatus} {candidate.Status}"
         };
     }
 

@@ -37,10 +37,16 @@ internal sealed partial class ProviderModelCatalogProjectionService
     public ProviderModelCatalogRefreshLease BeginRefresh(string sessionId, ArenaSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        var shared = snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var configured)
-            ? configured
-            : new ModelProviderConfig();
-        return BeginRefresh(sessionId, shared);
+        var normalizedSessionId = (sessionId ?? "").Trim();
+        lock (sync)
+        {
+            var lease = new ProviderModelCatalogRefreshLease(
+                ++generation,
+                normalizedSessionId,
+                ProviderFingerprint(normalizedSessionId, snapshot));
+            activeLease = lease;
+            return lease;
+        }
     }
 
     public ProviderModelCatalogRefreshLease BeginRefresh(string sessionId, ModelProviderConfig sharedConfig)
@@ -101,7 +107,11 @@ internal sealed partial class ProviderModelCatalogProjectionService
         var shared = snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var configured)
             ? configured
             : new ModelProviderConfig();
-        return ProviderFingerprint(sessionId, shared);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendConnectionFingerprintValues(hash, sessionId, shared);
+        AppendFingerprintValue(hash, shared.Model.Trim());
+        AppendFingerprintValue(hash, snapshot.Engine.DefaultForUnassignedAgentsEnabled ? "1" : "0");
+        return Convert.ToHexString(hash.GetHashAndReset());
     }
 
     internal static string ProviderFingerprint(string sessionId, ModelProviderConfig sharedConfig)
@@ -164,11 +174,18 @@ internal sealed partial class ProviderModelCatalogProjectionService
                 SafeAliases(model.Aliases));
         }).ToArray();
         var evidenceCount = chatModels.Count(model => model.HasResidencyEvidence);
-        var residencyEvidence = evidenceCount == chatModels.Count
-            ? ProviderCatalogEvidenceState.Ready
-            : evidenceCount > 0
+        var catalogEvidence = source.OmittedModelCount > 0
+            ? ProviderCatalogEvidenceState.Partial
+            : ProviderCatalogEvidenceState.Ready;
+        var residencyEvidence = source.OmittedModelCount > 0
+            ? evidenceCount > 0
                 ? ProviderCatalogEvidenceState.Partial
-                : ProviderCatalogEvidenceState.Unavailable;
+                : ProviderCatalogEvidenceState.Unavailable
+            : evidenceCount == chatModels.Count
+                ? ProviderCatalogEvidenceState.Ready
+                : evidenceCount > 0
+                    ? ProviderCatalogEvidenceState.Partial
+                    : ProviderCatalogEvidenceState.Unavailable;
         var loadedCount = items.Count(item => item.LoadState == ProviderModelLoadState.Loaded);
         var availableCount = items.Count(item => item.LoadState == ProviderModelLoadState.NotLoaded);
         var unavailableCount = items.Count(item => item.LoadState == ProviderModelLoadState.Unavailable);
@@ -185,11 +202,12 @@ internal sealed partial class ProviderModelCatalogProjectionService
         return Build(
             lease,
             items,
-            ProviderCatalogEvidenceState.Ready,
+            catalogEvidence,
             residencyEvidence,
             configuredModel,
             string.Join("; ", statusParts) + ".",
-            checkedAt);
+            checkedAt,
+            source.OmittedModelCount);
     }
 
     internal static ProviderModelCatalogSnapshot FromOllama(
@@ -244,7 +262,8 @@ internal sealed partial class ProviderModelCatalogProjectionService
             residencyEvidence,
             configuredModel,
             status,
-            checkedAt);
+            checkedAt,
+            source.OmittedModelCount);
     }
 
     internal static ProviderModelCatalogSnapshot FromLlamaCpp(
@@ -292,7 +311,8 @@ internal sealed partial class ProviderModelCatalogProjectionService
             residencyAvailable ? ProviderCatalogEvidenceState.Ready : ProviderCatalogEvidenceState.Unavailable,
             configuredModel,
             source.RouterMode ? "llama.cpp router inventory available." : "llama.cpp live-model inventory available.",
-            source.CheckedAt);
+            source.CheckedAt,
+            source.OmittedModelCount);
     }
 
     internal static ProviderModelCatalogSnapshot FromCompatible(
@@ -301,7 +321,8 @@ internal sealed partial class ProviderModelCatalogProjectionService
         bool catalogAvailable,
         string error,
         string configuredModel,
-        DateTimeOffset checkedAt)
+        DateTimeOffset checkedAt,
+        int additionalOmittedModelCount = 0)
     {
         ArgumentNullException.ThrowIfNull(advertisedModels);
         var items = catalogAvailable
@@ -328,7 +349,8 @@ internal sealed partial class ProviderModelCatalogProjectionService
             catalogAvailable
                 ? "Provider models available; load state unavailable."
                 : error.Length == 0 ? "Provider model list unavailable." : error,
-            checkedAt);
+            checkedAt,
+            additionalOmittedModelCount);
     }
 
     internal static string SafeModelIdentifier(string value)
@@ -356,7 +378,8 @@ internal sealed partial class ProviderModelCatalogProjectionService
         ProviderCatalogEvidenceState residencyEvidence,
         string configuredModel,
         string status,
-        DateTimeOffset checkedAt)
+        DateTimeOffset checkedAt,
+        int additionalOmittedModelCount = 0)
     {
         ArgumentNullException.ThrowIfNull(lease);
         var normalized = Deduplicate(sourceItems);
@@ -408,18 +431,31 @@ internal sealed partial class ProviderModelCatalogProjectionService
             .ThenBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        var omittedModelCount = Math.Max(0, additionalOmittedModelCount)
+            + Math.Max(0, normalized.Count - retainedSourceCount);
+        var effectiveCatalogEvidence = omittedModelCount > 0
+            && catalogEvidence == ProviderCatalogEvidenceState.Ready
+                ? ProviderCatalogEvidenceState.Partial
+                : catalogEvidence;
+        var effectiveResidencyEvidence = omittedModelCount > 0
+            && residencyEvidence == ProviderCatalogEvidenceState.Ready
+                ? ProviderCatalogEvidenceState.Partial
+                : residencyEvidence;
+        var safeStatus = omittedModelCount > 0
+            ? $"{omittedModelCount} additional catalog entries omitted by safety limits. {status}"
+            : status;
         return new ProviderModelCatalogSnapshot(
             lease.Generation,
             lease.SessionId,
             lease.ProviderFingerprint,
-            catalogEvidence,
-            residencyEvidence,
+            effectiveCatalogEvidence,
+            effectiveResidencyEvidence,
             loaded,
             available,
-            SafeModelIdentifier(configured),
+            matchingConfigured?.Id ?? SafeModelIdentifier(configured),
             configuredMissing,
-            Math.Max(0, normalized.Count - retainedSourceCount),
-            SafeStatus(status),
+            omittedModelCount,
+            SafeStatus(safeStatus),
             checkedAt);
     }
 
@@ -427,6 +463,8 @@ internal sealed partial class ProviderModelCatalogProjectionService
         IReadOnlyList<ProviderModelCatalogItem> sourceItems)
     {
         var retained = new List<ProviderModelCatalogItem>();
+        var aliasOwner = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var sets = new DisjointSet();
         foreach (var source in sourceItems)
         {
             var id = SafeModelIdentifier(source.Id);
@@ -445,18 +483,69 @@ internal sealed partial class ProviderModelCatalogProjectionService
                 CapabilitySummary = SafeText(source.CapabilitySummary, MaximumStatusLength),
                 Aliases = aliases
             };
-            var duplicateIndex = retained.FindIndex(existing =>
-                existing.Aliases.Any(alias => aliases.Contains(alias, StringComparer.OrdinalIgnoreCase)));
-            if (duplicateIndex < 0)
+            var itemIndex = retained.Count;
+            retained.Add(item);
+            sets.Add();
+            foreach (var alias in aliases)
             {
-                retained.Add(item);
-                continue;
+                if (aliasOwner.TryGetValue(alias, out var ownerIndex))
+                {
+                    sets.Union(itemIndex, ownerIndex);
+                }
+                else
+                {
+                    aliasOwner[alias] = itemIndex;
+                }
             }
-
-            retained[duplicateIndex] = Merge(retained[duplicateIndex], item);
         }
 
-        return retained
+        var membersByRoot = new Dictionary<int, List<int>>();
+        for (var index = 0; index < retained.Count; index++)
+        {
+            var root = sets.Find(index);
+            if (!membersByRoot.TryGetValue(root, out var members))
+            {
+                members = [];
+                membersByRoot[root] = members;
+            }
+
+            members.Add(index);
+        }
+
+        var deduplicated = new List<ProviderModelCatalogItem>(membersByRoot.Count);
+        foreach (var members in membersByRoot.Values.OrderBy(group => group[0]))
+        {
+            // Provider inventories are not required to retain a stable source order.
+            // Choose and merge each alias component by its safe identifier so the row
+            // key remains stable across heartbeats that advertise equivalent aliases in
+            // a different order. The Models surface reconciles rows by this identifier.
+            var orderedMembers = members
+                .OrderBy(member => retained[member].Id, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(member => retained[member].Id, StringComparer.Ordinal)
+                .ToArray();
+            var merged = retained[orderedMembers[0]];
+            var mergedAliases = new List<string>();
+            var observedAliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var member in orderedMembers)
+            {
+                if (member != orderedMembers[0])
+                {
+                    merged = Merge(merged, retained[member]);
+                }
+
+                foreach (var alias in retained[member].Aliases)
+                {
+                    if (observedAliases.Add(alias))
+                    {
+                        mergedAliases.Add(alias);
+                    }
+                }
+            }
+
+            deduplicated.Add(merged with { Aliases = mergedAliases });
+        }
+
+        return deduplicated
             .OrderByDescending(item => item.LoadState == ProviderModelLoadState.Loaded)
             .ThenBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
@@ -470,6 +559,10 @@ internal sealed partial class ProviderModelCatalogProjectionService
             : first.LoadState == ProviderModelLoadState.NotLoaded || second.LoadState == ProviderModelLoadState.NotLoaded
                 ? ProviderModelLoadState.NotLoaded
                 : ProviderModelLoadState.Unavailable;
+        var evidenceSource = LoadEvidenceRank(second.LoadState) > LoadEvidenceRank(first.LoadState)
+            ? second
+            : first;
+        var evidenceFallback = ReferenceEquals(evidenceSource, first) ? second : first;
         return first with
         {
             DisplayName = Prefer(first.DisplayName, second.DisplayName, first.Id),
@@ -477,13 +570,69 @@ internal sealed partial class ProviderModelCatalogProjectionService
             CanLoad = loadState != ProviderModelLoadState.Loaded && (first.CanLoad || second.CanLoad),
             CanUnload = loadState == ProviderModelLoadState.Loaded && (first.CanUnload || second.CanUnload),
             Publisher = Prefer(first.Publisher, second.Publisher),
-            Quantization = Prefer(first.Quantization, second.Quantization),
-            ContextLength = first.ContextLength ?? second.ContextLength,
-            SizeBytes = first.SizeBytes ?? second.SizeBytes,
-            CapabilitySummary = Prefer(first.CapabilitySummary, second.CapabilitySummary),
-            Aliases = first.Aliases.Concat(second.Aliases).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-            IsConfiguredOnly = first.IsConfiguredOnly && second.IsConfiguredOnly
+            Quantization = Prefer(evidenceSource.Quantization, evidenceFallback.Quantization),
+            ContextLength = evidenceSource.ContextLength ?? evidenceFallback.ContextLength,
+            SizeBytes = evidenceSource.SizeBytes ?? evidenceFallback.SizeBytes,
+            CapabilitySummary = Prefer(evidenceSource.CapabilitySummary, evidenceFallback.CapabilitySummary),
+            Aliases = first.Aliases,
+            IsConfiguredOnly = first.IsConfiguredOnly && second.IsConfiguredOnly,
+            IsResidencyStale = evidenceSource.IsResidencyStale
         };
+    }
+
+    private static int LoadEvidenceRank(ProviderModelLoadState state) => state switch
+    {
+        ProviderModelLoadState.Loaded => 2,
+        ProviderModelLoadState.NotLoaded => 1,
+        _ => 0
+    };
+
+    private sealed class DisjointSet
+    {
+        private readonly List<int> parents = [];
+        private readonly List<int> sizes = [];
+
+        public void Add()
+        {
+            parents.Add(parents.Count);
+            sizes.Add(1);
+        }
+
+        public int Find(int item)
+        {
+            var root = item;
+            while (parents[root] != root)
+            {
+                root = parents[root];
+            }
+
+            while (parents[item] != item)
+            {
+                var parent = parents[item];
+                parents[item] = root;
+                item = parent;
+            }
+
+            return root;
+        }
+
+        public void Union(int first, int second)
+        {
+            var firstRoot = Find(first);
+            var secondRoot = Find(second);
+            if (firstRoot == secondRoot)
+            {
+                return;
+            }
+
+            if (sizes[firstRoot] < sizes[secondRoot])
+            {
+                (firstRoot, secondRoot) = (secondRoot, firstRoot);
+            }
+
+            parents[secondRoot] = firstRoot;
+            sizes[firstRoot] += sizes[secondRoot];
+        }
     }
 
     private static bool Matches(ProviderModelCatalogItem item, string model)

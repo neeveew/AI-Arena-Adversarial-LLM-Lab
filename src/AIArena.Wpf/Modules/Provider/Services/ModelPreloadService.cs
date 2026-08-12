@@ -78,7 +78,7 @@ public sealed class ModelPreloadService
         foreach (var model in models)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var entry = catalog.Find(model);
+            var entry = catalog.FindForLoad(model);
             if (entry is null && requireCatalogMatch)
             {
                 results.Add(new ModelPreloadResult(
@@ -186,7 +186,7 @@ public sealed class ModelPreloadService
         foreach (var model in models)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var entry = catalog.Find(model);
+            var entry = catalog.FindForUnload(model);
             if (entry is null)
             {
                 results.Add(new ModelPreloadResult(model, "missing", "Model was not found in LM Studio's native catalog.", true));

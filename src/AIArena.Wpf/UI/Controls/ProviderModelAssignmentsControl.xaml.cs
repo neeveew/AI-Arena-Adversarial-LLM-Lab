@@ -1,12 +1,13 @@
-using System.Collections;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace AIArena.Wpf.Controls;
 
@@ -17,10 +18,19 @@ public enum ProviderModelAvailability
     Unavailable
 }
 
+public enum ProviderTargetAssignmentState
+{
+    Unassigned,
+    Default,
+    Explicit,
+    InheritsDefault
+}
+
 public enum ProviderConnectionState
 {
     Unknown,
     Online,
+    Partial,
     Offline,
     Checking,
     Failed
@@ -31,7 +41,8 @@ public enum ProviderAssignmentSaveState
     Ready,
     Saving,
     Saved,
-    Failed
+    Failed,
+    Unavailable
 }
 
 public enum ProviderModelLifecycleActionState
@@ -47,7 +58,11 @@ public sealed record ProviderAssignmentTargetPresentation(
     string Id,
     string DisplayName,
     string HelpText = "",
-    bool IsEnabled = true);
+    bool IsEnabled = true,
+    ProviderTargetAssignmentState AssignmentState = ProviderTargetAssignmentState.Unassigned,
+    ProviderTargetAssignmentState AssignedState = ProviderTargetAssignmentState.Explicit,
+    ProviderTargetAssignmentState ClearedState = ProviderTargetAssignmentState.Unassigned,
+    bool IsDefault = false);
 
 public sealed record ProviderModelAssignmentPresentation(
     string Id,
@@ -112,13 +127,17 @@ public partial class ProviderModelAssignmentsControl : UserControl
     internal const double WideHostWindowThreshold = 1200;
     private const double CompactHeaderThreshold = 760;
     private const int MaximumStatusLength = 240;
+    private static readonly TimeSpan SearchDebounceInterval = TimeSpan.FromMilliseconds(180);
 
-    private readonly RangeObservableCollection<ModelRowState> modelRows = [];
+    private readonly ObservableCollection<ModelRowState> modelRows = [];
+    private readonly ListCollectionView loadedRowsView;
     private readonly ListCollectionView modelRowsView;
+    private readonly DispatcherTimer searchDebounceTimer;
+    private readonly bool usesIncrementalLiveShaping;
     private IReadOnlyList<ProviderAssignmentTargetPresentation> targets = [];
     private IReadOnlyDictionary<string, ProviderAssignmentTargetPresentation> targetsById =
         new Dictionary<string, ProviderAssignmentTargetPresentation>(StringComparer.Ordinal);
-    private IReadOnlyList<TargetAssignmentState> selectedTargetRows = [];
+    private readonly ObservableCollection<TargetAssignmentState> selectedTargetRows = [];
     private ProviderModelAssignmentsPresentation? currentPresentation;
     private PendingAssignment? pendingAssignment;
     private PendingLifecycle? pendingLifecycle;
@@ -134,21 +153,54 @@ public partial class ProviderModelAssignmentsControl : UserControl
     private ProviderModelAssignmentPresentation? unconfirmedLifecycleReceipt;
     private bool lifecycleReceiptOrphanedByConnectionChange;
     private bool applyingPresentation;
+    private bool synchronizingSelection;
+    private ModelRowState? selectedModel;
     private bool usesCompactLayout;
     private Window? layoutHostWindow;
+    private string committedSearchQuery = "";
+    private string lastPublishedSearchQuery = "";
+    private ProviderModelFacet selectedFacet = ProviderModelFacet.All;
+    private int catalogContinuityGeneration;
 
     public ProviderModelAssignmentsControl()
     {
         InitializeComponent();
-        modelRowsView = new ListCollectionView(modelRows)
+        AssignmentTargetsItems.ItemsSource = selectedTargetRows;
+        searchDebounceTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
         {
-            CustomSort = ModelRowComparer.Instance,
-            Filter = MatchesCurrentSearch
+            Interval = SearchDebounceInterval
         };
-        modelRowsView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(ModelRowState.GroupName)));
+        searchDebounceTimer.Tick += SearchDebounceTimer_Tick;
+        loadedRowsView = new ListCollectionView(modelRows) { Filter = IsLoadedModel };
+        using (loadedRowsView.DeferRefresh())
+        {
+            loadedRowsView.SortDescriptions.Add(
+                new SortDescription(nameof(ModelRowState.DisplayName), ListSortDirection.Ascending));
+            loadedRowsView.SortDescriptions.Add(
+                new SortDescription(nameof(ModelRowState.Id), ListSortDirection.Ascending));
+        }
+        modelRowsView = new ListCollectionView(modelRows) { Filter = MatchesCurrentSearch };
+        using (modelRowsView.DeferRefresh())
+        {
+            modelRowsView.SortDescriptions.Add(
+                new SortDescription(nameof(ModelRowState.GroupOrder), ListSortDirection.Ascending));
+            modelRowsView.SortDescriptions.Add(
+                new SortDescription(nameof(ModelRowState.DisplayName), ListSortDirection.Ascending));
+            modelRowsView.SortDescriptions.Add(
+                new SortDescription(nameof(ModelRowState.Id), ListSortDirection.Ascending));
+            modelRowsView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(ModelRowState.GroupName)));
+        }
+        usesIncrementalLiveShaping = ConfigureIncrementalLiveShaping(loadedRowsView)
+            && ConfigureIncrementalLiveShaping(modelRowsView);
+        LoadedModelsList.ItemsSource = loadedRowsView;
         ModelsList.ItemsSource = modelRowsView;
-        ModelsList.ItemContainerGenerator.StatusChanged += ModelsListItemContainerGenerator_StatusChanged;
+        ModelFacetCombo.ItemsSource = ModelFacetOption.Options;
+        ModelFacetCombo.SelectedIndex = 0;
+        IsVisibleChanged += ProviderModelAssignmentsControl_IsVisibleChanged;
         ApplyResponsiveLayout(compact: false);
+        UpdateSearchChrome();
+        UpdateCatalogSummary();
+        UpdateSearchResults();
         UpdateEmptyState();
     }
 
@@ -160,7 +212,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
     public event EventHandler<ProviderModelLifecycleRequestedEventArgs>? LifecycleRequested;
 
     public string SearchQuery => ModelSearchText.Text;
-    public string SelectedModelId => (ModelsList.SelectedItem as ModelRowState)?.Id ?? "";
+    public string SelectedModelId => selectedModel?.Id ?? "";
     public bool HasPendingAssignment => pendingAssignment is not null;
     public bool HasPendingLifecycle => pendingLifecycle is not null;
 
@@ -171,13 +223,18 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
     internal bool UsesCompactLayout => usesCompactLayout;
     internal ListBox CatalogList => ModelsList;
+    internal ListBox LoadedList => LoadedModelsList;
+    internal Expander CatalogExpander => AvailableCatalogExpander;
     internal TextBox SearchBox => ModelSearchText;
     internal Border MasterSurface => MasterPane;
     internal Border DetailSurface => DetailPane;
+    internal ScrollViewer WorkspaceScroller => WorkspaceScrollViewer;
     internal ItemsControl AssignmentTargets => AssignmentTargetsItems;
     internal TextBlock AssignmentStatus => AssignmentSaveStatusText;
     internal Border AssignmentStatusSurface => AssignmentSaveStatusCard;
     internal TextBlock CatalogStatus => CatalogStatusText;
+    internal TextBlock CatalogSummary => CatalogSummaryText;
+    internal Border CatalogAlert => CatalogAlertBorder;
     internal Border ConnectionStatusSurface => ConnectionStatusChip;
     internal TextBlock ConnectionStatusLabel => ConnectionStatusText;
     internal Button RefreshAction => RefreshButton;
@@ -186,6 +243,16 @@ public partial class ProviderModelAssignmentsControl : UserControl
     internal Button LifecycleAction => LifecycleButton;
     internal TextBlock LifecycleStatus => LifecycleStatusText;
     internal Border LifecycleStatusSurface => LifecycleStatusCard;
+    internal ProgressBar LifecycleProgress => LifecycleProgressBar;
+    internal TextBlock FilteredCount => SearchResultsText;
+    internal ComboBox FacetFilter => ModelFacetCombo;
+    internal TextBlock AssignmentAvailability => AssignmentAvailabilityText;
+    internal TextBlock SelectedAssignmentSummary => SelectedModelAssignmentsText;
+    internal bool UsesIncrementalLiveShaping => usesIncrementalLiveShaping;
+    internal int CatalogRowCount => modelRows.Count;
+    internal int LoadedRowCount => LoadedRows().Count();
+    internal int AvailableCatalogRowCount => modelRows.Count - LoadedRowCount;
+    internal int VisibleCatalogRowCount => VisibleCatalogRows().Count();
     internal int PresentationApplyCount { get; private set; }
 
     public void ApplyPresentation(ProviderModelAssignmentsPresentation presentation)
@@ -193,6 +260,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         ArgumentNullException.ThrowIfNull(presentation);
         Dispatcher.VerifyAccess();
         PresentationApplyCount++;
+        var continuityGeneration = ++catalogContinuityGeneration;
 
         applyingPresentation = true;
         try
@@ -202,16 +270,19 @@ public partial class ProviderModelAssignmentsControl : UserControl
             ClearUnconfirmedLifecycleForConnectionChange(presentation);
             currentPresentation = presentation;
             var priorSelection = SelectedModelId;
+            var catalogScrollViewer = FindVisualDescendant<ScrollViewer>(ModelsList);
+            var priorCatalogOffset = catalogScrollViewer?.VerticalOffset ?? 0;
+            var priorViewportAnchor = CaptureCatalogViewportAnchor(catalogScrollViewer);
+            var catalogHadKeyboardFocus = ModelsList.IsKeyboardFocusWithin
+                || LoadedModelsList.IsKeyboardFocusWithin;
             ProviderNameText.Text = DisplayOrFallback(presentation.ProviderName, "Provider");
             ConnectionStatusText.Text = DisplayOrFallback(presentation.ConnectionStatus, "Unavailable");
             CatalogStatusText.Text = DisplayOrFallback(presentation.CatalogStatus, "Model evidence is unavailable.");
+            UpdateCatalogHealth(presentation);
             RefreshButton.IsEnabled = presentation.CanRefresh && !presentation.IsRefreshing;
             RefreshButton.Content = presentation.IsRefreshing ? "Refreshing…" : "Refresh";
             ConnectionButton.IsEnabled = presentation.CanOpenConnectionSettings;
             CloseButton.IsEnabled = presentation.CanClose;
-            AutomationProperties.SetItemStatus(
-                CatalogStatusText,
-                presentation.IsRefreshing ? "Refreshing" : "Current");
             ApplyConnectionState(presentation.ConnectionState);
 
             targets = DistinctTargets(presentation.Targets);
@@ -222,7 +293,6 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 && modelRows.Count > 0;
             if (!preserveCatalogDuringRefresh)
             {
-                var replacementRows = new List<ModelRowState>();
                 var presentedModels = DistinctModels(presentation.Models).ToList();
                 if (lastLifecycleState == ProviderModelLifecycleActionState.Unconfirmed
                     && lastLifecycleDesiredLoaded.HasValue
@@ -236,20 +306,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
                     presentedModels.Add(unconfirmedLifecycleReceipt);
                 }
 
-                foreach (var model in presentedModels)
-                {
-                    var row = new ModelRowState(model);
-                    if (pendingAssignment is not null
-                        && string.Equals(row.Id, pendingAssignment.ModelId, StringComparison.Ordinal))
-                    {
-                        row.SetAssigned(pendingAssignment.TargetId, pendingAssignment.RequestedValue);
-                    }
-
-                    row.RefreshAssignmentSummary(targetsById);
-                    replacementRows.Add(row);
-                }
-
-                modelRows.ReplaceAll(replacementRows);
+                CaptureLatestPendingAssignmentAuthority(presentedModels);
+                ReconcileModelRows(presentedModels);
             }
             else
             {
@@ -259,19 +317,35 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 }
             }
 
-            modelRowsView.Refresh();
             ReconcileUnconfirmedLifecycle(presentation);
+            ApplyLifecycleActivityMarkers();
             var requestedSelection = pendingAssignment?.ModelId
-                ?? pendingLifecycle?.ModelId
                 ?? (!string.IsNullOrWhiteSpace(presentation.SelectedModelId)
                     ? presentation.SelectedModelId
                     : priorSelection);
-            ModelsList.SelectedItem = VisibleRows()
-                .FirstOrDefault(row => string.Equals(row.Id, requestedSelection, StringComparison.Ordinal))
-                ?? VisibleRows().FirstOrDefault();
+            SelectModel(
+                SelectableRows().FirstOrDefault(row => string.Equals(
+                    row.Id,
+                    requestedSelection,
+                    StringComparison.Ordinal))
+                ?? SelectableRows().FirstOrDefault());
+            if (catalogScrollViewer is not null && priorCatalogOffset > 0)
+            {
+                ModelsList.UpdateLayout();
+                catalogScrollViewer.ScrollToVerticalOffset(
+                    Math.Min(priorCatalogOffset, catalogScrollViewer.ScrollableHeight));
+            }
             RebuildSelectedDetail();
+            UpdateCatalogSummary();
+            UpdateSearchResults();
             UpdateEmptyState();
             ApplyInteractionState();
+            ScheduleCatalogContinuity(
+                requestedSelection,
+                priorCatalogOffset,
+                priorViewportAnchor,
+                catalogHadKeyboardFocus,
+                continuityGeneration);
         }
         finally
         {
@@ -304,13 +378,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
         if (state is ProviderAssignmentSaveState.Failed or ProviderAssignmentSaveState.Ready)
         {
-            var model = FindModel(pending.ModelId);
-            model?.SetAssigned(pending.TargetId, pending.PreviousValue);
-            model?.RefreshAssignmentSummary(targetsById);
-            var selectedTarget = selectedTargetRows.FirstOrDefault(target =>
-                string.Equals(target.ModelId, pending.ModelId, StringComparison.Ordinal)
-                && string.Equals(target.TargetId, pending.TargetId, StringComparison.Ordinal));
-            selectedTarget?.SetAssigned(pending.PreviousValue);
+            RestorePendingAssignment(pending);
         }
 
         pendingAssignment = null;
@@ -318,6 +386,9 @@ public partial class ProviderModelAssignmentsControl : UserControl
         lastSaveState = state;
         lastSaveMessage = state switch
         {
+            ProviderAssignmentSaveState.Saved when pending.IsTransfer => pending.IsDefaultTarget
+                ? $"Changed {pending.TargetDisplayName} to {pending.ModelDisplayName}."
+                : $"Moved {pending.TargetDisplayName} to {pending.ModelDisplayName}.",
             ProviderAssignmentSaveState.Saved => DisplayOrFallback(message, "Saved."),
             ProviderAssignmentSaveState.Failed => $"Failed: {DisplayOrFallback(message, "Could not save the assignment.")}",
             _ => DisplayOrFallback(message, "Ready to assign.")
@@ -377,6 +448,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             ? CreateUnconfirmedLifecycleReceipt(pending)
             : null;
         EnsureUnconfirmedLifecycleReceiptRow();
+        ApplyLifecycleActivityMarkers();
         RebuildSelectedDetail();
         return true;
     }
@@ -395,34 +467,41 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
     public bool FocusCatalog()
     {
-        if (!ModelsList.IsEnabled)
+        var list = selectedModel?.Availability == ProviderModelAvailability.Loaded
+            ? LoadedModelsList
+            : ModelsList;
+        if (!list.IsEnabled)
         {
             return false;
         }
 
-        ModelsList.Focus();
-        ModelsList.ScrollIntoView(ModelsList.SelectedItem);
-        if (ModelsList.SelectedItem is not null
-            && ModelsList.ItemContainerGenerator.ContainerFromItem(ModelsList.SelectedItem) is ListBoxItem item)
+        list.Focus();
+        list.ScrollIntoView(list.SelectedItem);
+        if (list.SelectedItem is not null
+            && list.ItemContainerGenerator.ContainerFromItem(list.SelectedItem) is ListBoxItem item)
         {
             return item.Focus();
         }
 
-        return ModelsList.IsKeyboardFocusWithin;
+        return list.IsKeyboardFocusWithin;
     }
 
     public bool FocusSearch() => ModelSearchText.Focus();
 
-    internal static bool UsesCompactLayoutAt(double contentWidth, double hostWindowWidth = double.NaN)
+    internal static bool UsesCompactLayoutAt(
+        double contentWidth,
+        double hostWindowWidth = double.NaN,
+        bool contentIsScaled = false)
     {
         if (!double.IsNaN(hostWindowWidth) && hostWindowWidth > 0)
         {
-            return hostWindowWidth < WideHostWindowThreshold;
+            return hostWindowWidth < WideHostWindowThreshold
+                || (contentIsScaled
+                    && contentWidth > 0
+                    && contentWidth <= CompactContentThreshold);
         }
 
-        return !double.IsNaN(contentWidth)
-            && contentWidth > 0
-            && contentWidth <= CompactContentThreshold;
+        return contentWidth > 0 && contentWidth <= CompactContentThreshold;
     }
 
     internal void ApplyResponsiveLayout(bool compact)
@@ -430,6 +509,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         usesCompactLayout = compact;
         if (compact)
         {
+            WorkspaceScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
             MasterColumn.Width = new GridLength(1, GridUnitType.Star);
             WorkspaceGapColumn.Width = new GridLength(0);
             DetailColumn.Width = new GridLength(0);
@@ -443,12 +523,14 @@ public partial class ProviderModelAssignmentsControl : UserControl
             Grid.SetColumn(DetailPane, 0);
             Grid.SetColumnSpan(DetailPane, 3);
             MasterPane.MaxHeight = 360;
+            DetailPane.ClearValue(MaxWidthProperty);
         }
         else
         {
-            MasterColumn.Width = new GridLength(72, GridUnitType.Star);
+            WorkspaceScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            MasterColumn.Width = new GridLength(1, GridUnitType.Star);
             WorkspaceGapColumn.Width = new GridLength(12);
-            DetailColumn.Width = new GridLength(28, GridUnitType.Star);
+            DetailColumn.Width = new GridLength(360);
             MasterRow.Height = new GridLength(1, GridUnitType.Star);
             CompactWorkspaceGapRow.Height = new GridLength(0);
             DetailRow.Height = new GridLength(0);
@@ -459,6 +541,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             Grid.SetColumn(DetailPane, 2);
             Grid.SetColumnSpan(DetailPane, 1);
             MasterPane.ClearValue(MaxHeightProperty);
+            DetailPane.MaxWidth = 380;
         }
 
         var compactHeader = ActualWidth > 0 && ActualWidth <= CompactHeaderThreshold;
@@ -479,17 +562,56 @@ public partial class ProviderModelAssignmentsControl : UserControl
     private void ProviderModelAssignmentsControl_Loaded(object sender, RoutedEventArgs e)
     {
         AttachLayoutHostWindow(Window.GetWindow(this));
-        ApplyResponsiveLayout(UsesCompactLayoutAt(ActualWidth, layoutHostWindow?.ActualWidth ?? double.NaN));
+        ApplyResponsiveLayout(UsesCompactLayoutAt(
+            ActualWidth,
+            layoutHostWindow?.ActualWidth ?? double.NaN,
+            HasScaledLayoutTransform()));
     }
 
-    private void ProviderModelAssignmentsControl_Unloaded(object sender, RoutedEventArgs e) =>
+    private void ProviderModelAssignmentsControl_Unloaded(object sender, RoutedEventArgs e)
+    {
+        catalogContinuityGeneration++;
+        if (searchDebounceTimer.IsEnabled)
+        {
+            CommitSearchAndFacet();
+        }
+        else
+        {
+            searchDebounceTimer.Stop();
+        }
         AttachLayoutHostWindow(null);
+    }
+
+    private void ProviderModelAssignmentsControl_IsVisibleChanged(
+        object sender,
+        DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is not false)
+        {
+            return;
+        }
+
+        catalogContinuityGeneration++;
+        if (searchDebounceTimer.IsEnabled)
+        {
+            CommitSearchAndFacet();
+        }
+    }
 
     private void ProviderModelAssignmentsControl_SizeChanged(object sender, SizeChangedEventArgs e) =>
-        ApplyResponsiveLayout(UsesCompactLayoutAt(e.NewSize.Width, layoutHostWindow?.ActualWidth ?? double.NaN));
+        ApplyResponsiveLayout(UsesCompactLayoutAt(
+            e.NewSize.Width,
+            layoutHostWindow?.ActualWidth ?? double.NaN,
+            HasScaledLayoutTransform()));
 
     private void LayoutHostWindow_SizeChanged(object sender, SizeChangedEventArgs e) =>
-        ApplyResponsiveLayout(UsesCompactLayoutAt(ActualWidth, e.NewSize.Width));
+        ApplyResponsiveLayout(UsesCompactLayoutAt(
+            ActualWidth,
+            e.NewSize.Width,
+            HasScaledLayoutTransform()));
+
+    private bool HasScaledLayoutTransform() =>
+        LayoutTransform is { } transform && !transform.Value.IsIdentity;
 
     private void AttachLayoutHostWindow(Window? host)
     {
@@ -525,6 +647,25 @@ public partial class ProviderModelAssignmentsControl : UserControl
             return;
         }
 
+        if (e.Key == Key.Down
+            && LoadedModelsList.IsKeyboardFocusWithin
+            && ReferenceEquals(selectedModel, LoadedRows().LastOrDefault())
+            && AvailableCatalogExpander.IsExpanded
+            && VisibleCatalogRows().FirstOrDefault() is { } firstCatalogModel)
+        {
+            e.Handled = MoveKeyboardSelection(firstCatalogModel, ModelsList);
+            return;
+        }
+
+        if (e.Key == Key.Up
+            && ModelsList.IsKeyboardFocusWithin
+            && ReferenceEquals(selectedModel, VisibleCatalogRows().FirstOrDefault())
+            && LoadedRows().LastOrDefault() is { } lastLoadedModel)
+        {
+            e.Handled = MoveKeyboardSelection(lastLoadedModel, LoadedModelsList);
+            return;
+        }
+
         if (e.Key == Key.Escape && CloseButton.IsEnabled)
         {
             e.Handled = true;
@@ -543,7 +684,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
     private void LifecycleButton_Click(object sender, RoutedEventArgs e)
     {
-        if (ModelsList.SelectedItem is not ModelRowState model
+        if (selectedModel is not { } model
             || pendingLifecycle is not null
             || pendingAssignment is not null
             || currentPresentation?.IsRefreshing == true
@@ -567,8 +708,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
             ? $"Loading {model.DisplayName}…"
             : $"Unloading {model.DisplayName}…";
         SetLifecycleStatus(lastLifecycleState, lastLifecycleMessage);
-        ApplyLifecycleAction(model);
-        ApplyInteractionState();
+        ApplyLifecycleActivityMarkers();
+        RebuildSelectedDetail();
 
         var handler = LifecycleRequested;
         if (handler is null)
@@ -602,19 +743,118 @@ public partial class ProviderModelAssignmentsControl : UserControl
             return;
         }
 
-        modelRowsView.Refresh();
-        if (ModelsList.SelectedItem is not ModelRowState selected || !MatchesCurrentSearch(selected))
+        UpdateSearchChrome();
+        searchDebounceTimer.Stop();
+        searchDebounceTimer.Start();
+    }
+
+    private void SearchDebounceTimer_Tick(object? sender, EventArgs e)
+    {
+        searchDebounceTimer.Stop();
+        CommitSearchAndFacet();
+    }
+
+    private void ModelFacetCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ModelFacetCombo.SelectedItem is ModelFacetOption option)
         {
-            ModelsList.SelectedItem = VisibleRows().FirstOrDefault();
+            selectedFacet = option.Facet;
+        }
+
+        if (modelRowsView is not null)
+        {
+            CommitSearchAndFacet();
+        }
+    }
+
+    private void ClearSearchButton_Click(object sender, RoutedEventArgs e)
+    {
+        searchDebounceTimer.Stop();
+        ModelSearchText.Clear();
+        searchDebounceTimer.Stop();
+        CommitSearchAndFacet();
+        ModelSearchText.Focus();
+    }
+
+    private void EmptyClearFiltersButton_Click(object sender, RoutedEventArgs e)
+    {
+        searchDebounceTimer.Stop();
+        ModelSearchText.Clear();
+        searchDebounceTimer.Stop();
+        ModelFacetCombo.SelectedIndex = 0;
+        selectedFacet = ProviderModelFacet.All;
+        CommitSearchAndFacet();
+        ModelSearchText.Focus();
+    }
+
+    private void CommitSearchAndFacet()
+    {
+        searchDebounceTimer.Stop();
+        committedSearchQuery = ModelSearchText.Text.Trim();
+        synchronizingSelection = true;
+        try
+        {
+            modelRowsView.Refresh();
+        }
+        finally
+        {
+            synchronizingSelection = false;
+        }
+
+        var firstCatalogResult = VisibleCatalogRows().FirstOrDefault();
+        var activeCatalogFilter = committedSearchQuery.Length > 0
+            || selectedFacet != ProviderModelFacet.All;
+        if (selectedModel is { Availability: ProviderModelAvailability.Loaded }
+            && activeCatalogFilter
+            && firstCatalogResult is not null)
+        {
+            SelectModel(firstCatalogResult);
+        }
+        else if (selectedModel is not { } selected
+            || (selected.Availability != ProviderModelAvailability.Loaded
+                && !MatchesCurrentSearch(selected)))
+        {
+            SelectModel(firstCatalogResult ?? LoadedRows().FirstOrDefault());
+        }
+        else
+        {
+            SynchronizeSelection(selected);
         }
 
         RebuildSelectedDetail();
+        UpdateSearchChrome();
+        UpdateSearchResults();
         UpdateEmptyState();
-        SearchChanged?.Invoke(this, new ProviderModelSearchChangedEventArgs(ModelSearchText.Text));
+        if (!string.Equals(lastPublishedSearchQuery, ModelSearchText.Text, StringComparison.Ordinal))
+        {
+            lastPublishedSearchQuery = ModelSearchText.Text;
+            SearchChanged?.Invoke(this, new ProviderModelSearchChangedEventArgs(ModelSearchText.Text));
+        }
     }
 
     private void ModelsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        HandleListSelectionChanged(ModelsList);
+    }
+
+    private void LoadedModelsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        HandleListSelectionChanged(LoadedModelsList);
+    }
+
+    private void HandleListSelectionChanged(ListBox source)
+    {
+        if (synchronizingSelection || applyingPresentation)
+        {
+            return;
+        }
+
+        if (source.SelectedItem is not ModelRowState model)
+        {
+            return;
+        }
+
+        SelectModel(model);
         if (!applyingPresentation && pendingAssignment is null)
         {
             lastResolvedModelId = "";
@@ -625,40 +865,11 @@ public partial class ProviderModelAssignmentsControl : UserControl
         RebuildSelectedDetail();
     }
 
-    private void ModelsListItemContainerGenerator_StatusChanged(object? sender, EventArgs e)
-    {
-        if (ModelsList.ItemContainerGenerator.Status != GeneratorStatus.ContainersGenerated)
-        {
-            return;
-        }
-
-        foreach (var row in VisibleRows())
-        {
-            if (ModelsList.ItemContainerGenerator.ContainerFromItem(row) is not ListBoxItem item)
-            {
-                continue;
-            }
-
-            BindingOperations.SetBinding(
-                item,
-                AutomationProperties.NameProperty,
-                new Binding(nameof(ModelRowState.AutomationName)));
-            BindingOperations.SetBinding(
-                item,
-                AutomationProperties.HelpTextProperty,
-                new Binding(nameof(ModelRowState.AutomationHelp)));
-            BindingOperations.SetBinding(
-                item,
-                AutomationProperties.ItemStatusProperty,
-                new Binding(nameof(ModelRowState.Status)));
-        }
-    }
-
     private void AssignmentTargetCheckBox_ToggleRequested(object sender, RoutedEventArgs e)
     {
         if (sender is not CheckBox checkBox
             || checkBox.DataContext is not TargetAssignmentState target
-            || ModelsList.SelectedItem is not ModelRowState model
+            || selectedModel is not { } model
             || pendingAssignment is not null
             || currentPresentation?.CanAssign != true)
         {
@@ -672,9 +883,12 @@ public partial class ProviderModelAssignmentsControl : UserControl
             return;
         }
 
-        model.SetAssigned(target.TargetId, requestedValue);
-        model.RefreshAssignmentSummary(targetsById);
-        target.SetAssigned(requestedValue);
+        var targetPresentation = targetsById.TryGetValue(target.TargetId, out var presentedTarget)
+            ? presentedTarget
+            : new ProviderAssignmentTargetPresentation(target.TargetId, target.DisplayName);
+        var mutations = BuildAssignmentMutations(model, target.TargetId, requestedValue);
+        ApplyPendingAssignmentMutations(target.TargetId, mutations);
+        ReconcileSelectedTargetRows(model);
         RefreshSelectedAssignmentText();
 
         var changeId = Guid.NewGuid();
@@ -683,12 +897,22 @@ public partial class ProviderModelAssignmentsControl : UserControl
             model.Id,
             model.DisplayName,
             target.TargetId,
-            previousValue,
+            target.DisplayName,
             requestedValue,
+            targetPresentation.IsDefault
+                || targetPresentation.AssignmentState == ProviderTargetAssignmentState.Default,
+            mutations
+                .Where(mutation => mutation.PreviousValue
+                    && !mutation.RequestedValue
+                    && !string.Equals(mutation.ModelId, model.Id, StringComparison.Ordinal))
+                .Select(mutation => mutation.ModelDisplayName)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            mutations,
             EffectiveConnectionIdentity(currentPresentation));
         lastResolvedModelId = model.Id;
         lastSaveState = ProviderAssignmentSaveState.Saving;
-        lastSaveMessage = $"Saving assignment for {model.DisplayName}…";
+        lastSaveMessage = AssignmentProgressMessage(pendingAssignment);
         SetAssignmentStatus(lastSaveState, lastSaveMessage);
         ApplyInteractionState();
 
@@ -721,12 +945,86 @@ public partial class ProviderModelAssignmentsControl : UserControl
         }
     }
 
+    private IReadOnlyList<PendingAssignmentMutation> BuildAssignmentMutations(
+        ModelRowState selected,
+        string targetId,
+        bool requestedValue)
+    {
+        return modelRows
+            .Select(row =>
+            {
+                var previousValue = row.IsAssigned(targetId);
+                var nextValue = ReferenceEquals(row, selected)
+                    ? requestedValue
+                    : requestedValue
+                        ? false
+                        : previousValue;
+                return new PendingAssignmentMutation(
+                row.Id,
+                row.DisplayName,
+                previousValue,
+                nextValue);
+            })
+            .ToArray();
+    }
+
+    private void ApplyPendingAssignmentMutations(
+        string targetId,
+        IEnumerable<PendingAssignmentMutation> mutations)
+    {
+        foreach (var mutation in mutations)
+        {
+            var row = FindModel(mutation.ModelId);
+            row?.SetAssigned(targetId, mutation.RequestedValue);
+            row?.RefreshAssignmentSummary(targetsById);
+        }
+    }
+
+    private void RestorePendingAssignment(PendingAssignment pending)
+    {
+        foreach (var mutation in pending.Mutations)
+        {
+            var row = FindModel(mutation.ModelId);
+            row?.SetAssigned(pending.TargetId, mutation.PreviousValue);
+            row?.RefreshAssignmentSummary(targetsById);
+        }
+    }
+
+    private void CaptureLatestPendingAssignmentAuthority(
+        IReadOnlyList<ProviderModelAssignmentPresentation> presentedModels)
+    {
+        var pending = pendingAssignment;
+        if (pending is null)
+        {
+            return;
+        }
+
+        var latest = presentedModels
+            .Select(model =>
+            {
+                var previousValue = model.AssignedTargetIds.Contains(
+                    pending.TargetId,
+                    StringComparer.Ordinal);
+                var requestedValue = pending.RequestedValue
+                    ? string.Equals(model.Id, pending.ModelId, StringComparison.Ordinal)
+                    : string.Equals(model.Id, pending.ModelId, StringComparison.Ordinal)
+                        ? false
+                        : previousValue;
+                return new PendingAssignmentMutation(
+                    model.Id,
+                    model.DisplayName,
+                    previousValue,
+                    requestedValue);
+            })
+            .ToArray();
+        pendingAssignment = pending with { Mutations = latest };
+    }
+
     private void RebuildSelectedDetail()
     {
-        if (ModelsList.SelectedItem is not ModelRowState model)
+        if (selectedModel is not { } model)
         {
-            selectedTargetRows = [];
-            AssignmentTargetsItems.ItemsSource = null;
+            selectedTargetRows.Clear();
             ModelDetailContent.Visibility = Visibility.Collapsed;
             ModelDetailEmptyState.Visibility = Visibility.Visible;
             return;
@@ -740,31 +1038,33 @@ public partial class ProviderModelAssignmentsControl : UserControl
         SelectedModelAssignmentsText.Text = model.AssignmentSummary;
         SelectedModelLifecycleHelpText.Text = model.LifecycleHelp;
         ApplyLifecycleAction(model);
-        selectedTargetRows = targets
-            .Select(target => new TargetAssignmentState(
-                model.Id,
-                model.DisplayName,
-                target,
-                model.IsAssigned(target.Id)))
-            .ToArray();
-        AssignmentTargetsItems.ItemsSource = selectedTargetRows;
+        ReconcileSelectedTargetRows(model);
+        RefreshSelectedAssignmentText();
         ModelDetailContent.Visibility = Visibility.Visible;
         ModelDetailEmptyState.Visibility = Visibility.Collapsed;
+        AssignmentAvailabilityText.Text = AssignmentAvailabilityMessage();
 
         if (pendingAssignment is not null)
         {
             SetAssignmentStatus(ProviderAssignmentSaveState.Saving, lastSaveMessage);
         }
+        else if (pendingLifecycle is not null)
+        {
+            var activity = pendingLifecycle.Load ? "loading" : "unloading";
+            SetAssignmentStatus(
+                ProviderAssignmentSaveState.Unavailable,
+                $"Assignments are paused while {pendingLifecycle.ModelDisplayName} is {activity}. Catalog browsing remains available.");
+        }
         else if (currentPresentation?.IsRefreshing == true)
         {
             SetAssignmentStatus(
-                ProviderAssignmentSaveState.Ready,
+                ProviderAssignmentSaveState.Unavailable,
                 "Assignments are unavailable while provider models refresh.");
         }
         else if (currentPresentation?.CanAssign != true)
         {
             SetAssignmentStatus(
-                ProviderAssignmentSaveState.Ready,
+                ProviderAssignmentSaveState.Unavailable,
                 "Assignments are unavailable for the current provider state.");
         }
         else if (string.Equals(lastResolvedModelId, model.Id, StringComparison.Ordinal))
@@ -773,7 +1073,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         }
         else if (selectedTargetRows.Count == 0)
         {
-            SetAssignmentStatus(ProviderAssignmentSaveState.Ready, "No assignment targets are available.");
+            SetAssignmentStatus(ProviderAssignmentSaveState.Unavailable, "No assignment targets are available.");
         }
         else
         {
@@ -783,9 +1083,103 @@ public partial class ProviderModelAssignmentsControl : UserControl
         ApplyInteractionState();
     }
 
+    private void ReconcileSelectedTargetRows(ModelRowState model)
+    {
+        var defaultTargetIds = targets
+            .Where(target => target.IsDefault
+                || target.AssignmentState == ProviderTargetAssignmentState.Default)
+            .Select(target => target.Id)
+            .ToArray();
+        var selectedIsDefault = defaultTargetIds.Any(model.IsAssigned);
+        var modelTargets = targets
+            .Select(target => TargetPresentationForModel(model, target, selectedIsDefault))
+            .ToArray();
+        var targetIdsMatch = selectedTargetRows.Count == modelTargets.Length
+            && selectedTargetRows.Select(row => row.TargetId)
+                .SequenceEqual(modelTargets.Select(target => target.Id), StringComparer.Ordinal);
+        if (!targetIdsMatch)
+        {
+            selectedTargetRows.Clear();
+            foreach (var target in modelTargets)
+            {
+                selectedTargetRows.Add(new TargetAssignmentState(
+                    model.Id,
+                    model.DisplayName,
+                    target,
+                    model.IsAssigned(target.Id)));
+            }
+
+            return;
+        }
+
+        for (var index = 0; index < modelTargets.Length; index++)
+        {
+            var target = modelTargets[index];
+            selectedTargetRows[index].Retarget(
+                model.Id,
+                model.DisplayName,
+                target,
+                model.IsAssigned(target.Id));
+        }
+    }
+
+    private ProviderAssignmentTargetPresentation TargetPresentationForModel(
+        ModelRowState model,
+        ProviderAssignmentTargetPresentation target,
+        bool selectedIsDefault)
+    {
+        var isDefaultTarget = target.IsDefault
+            || target.AssignmentState == ProviderTargetAssignmentState.Default;
+        var explicitlyAssigned = model.IsAssigned(target.Id);
+        var explicitlyOwnedByAnotherModel = modelRows.Any(row =>
+            !ReferenceEquals(row, model) && row.IsAssigned(target.Id));
+        var assignmentState = isDefaultTarget && explicitlyAssigned
+            ? ProviderTargetAssignmentState.Default
+            : explicitlyAssigned
+                ? ProviderTargetAssignmentState.Explicit
+                : selectedIsDefault
+                    && !isDefaultTarget
+                    && !explicitlyOwnedByAnotherModel
+                    ? ProviderTargetAssignmentState.InheritsDefault
+                    : ProviderTargetAssignmentState.Unassigned;
+        var assignedState = isDefaultTarget
+            ? ProviderTargetAssignmentState.Default
+            : ProviderTargetAssignmentState.Explicit;
+        var clearedState = selectedIsDefault
+            && !isDefaultTarget
+            && !explicitlyOwnedByAnotherModel
+            ? ProviderTargetAssignmentState.InheritsDefault
+            : ProviderTargetAssignmentState.Unassigned;
+        var enabled = target.IsEnabled;
+        var help = assignmentState switch
+        {
+            ProviderTargetAssignmentState.Default =>
+                "Turn off this default to leave targets without an explicit assignment unassigned.",
+            ProviderTargetAssignmentState.Explicit =>
+                "Turn off this explicit model override to use the default again when one is enabled.",
+            ProviderTargetAssignmentState.InheritsDefault =>
+                "Turn on to preserve this model as an explicit route even if the default changes.",
+            _ when isDefaultTarget =>
+                "Turn on this model as the default for targets without an explicit assignment.",
+            _ => "Turn on an explicit model override for this target."
+        };
+        return target with
+        {
+            HelpText = help,
+            IsEnabled = enabled,
+            AssignmentState = assignmentState,
+            AssignedState = assignedState,
+            ClearedState = clearedState,
+            IsDefault = isDefaultTarget
+        };
+    }
+
     private void ApplyLifecycleAction(ModelRowState model)
     {
-        if (pendingLifecycle is not null)
+        LifecycleProgressBar.Visibility = Visibility.Collapsed;
+        var backgroundLifecycle = pendingLifecycle is not null
+            && !string.Equals(pendingLifecycle.ModelId, model.Id, StringComparison.Ordinal);
+        if (pendingLifecycle is not null && !backgroundLifecycle)
         {
             LifecycleButton.Content = pendingLifecycle.Load ? "Loading…" : "Unloading…";
             AutomationProperties.SetName(
@@ -797,7 +1191,10 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 LifecycleButton,
                 $"{lastLifecycleMessage} You can continue browsing models while provider-changing controls remain unavailable.");
             AutomationProperties.SetItemStatus(LifecycleButton, "Running");
-            SetLifecycleStatus(ProviderModelLifecycleActionState.Running, lastLifecycleMessage);
+            LifecycleProgressBar.Visibility = Visibility.Visible;
+            SetLifecycleStatus(
+                ProviderModelLifecycleActionState.Running,
+                $"{lastLifecycleMessage} Request sent; waiting for authoritative LM Studio load-state evidence. Browsing remains available.");
             return;
         }
 
@@ -878,13 +1275,32 @@ public partial class ProviderModelAssignmentsControl : UserControl
                         ? "LM Studio residency actions are temporarily unavailable."
                         : "LM Studio load state is unavailable for this model.");
         }
+
+        if (backgroundLifecycle && pendingLifecycle is not null)
+        {
+            var activity = pendingLifecycle.Load ? "Loading" : "Unloading";
+            SetLifecycleStatus(
+                ProviderModelLifecycleActionState.Running,
+                $"{activity} {pendingLifecycle.ModelDisplayName} in the background. You can inspect this model; provider-changing controls remain unavailable until LM Studio confirms the request.");
+            AutomationProperties.SetItemStatus(LifecycleButton, "Unavailable");
+            AutomationProperties.SetHelpText(
+                LifecycleButton,
+                $"Wait for the {activity.ToLowerInvariant()} request for {pendingLifecycle.ModelDisplayName} to finish before changing another model.");
+        }
     }
 
     private void RefreshSelectedAssignmentText()
     {
-        if (ModelsList.SelectedItem is ModelRowState model)
+        if (selectedModel is { } model)
         {
-            SelectedModelAssignmentsText.Text = model.AssignmentSummary;
+            var inheritedTargets = selectedTargetRows
+                .Where(target => target.AssignmentState == ProviderTargetAssignmentState.InheritsDefault)
+                .Select(target => target.DisplayName)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            SelectedModelAssignmentsText.Text = inheritedTargets.Length == 0
+                ? model.AssignmentSummary
+                : $"{model.AssignmentSummary}. Default also covers {string.Join(", ", inheritedTargets)}.";
         }
     }
 
@@ -901,9 +1317,9 @@ public partial class ProviderModelAssignmentsControl : UserControl
             return;
         }
 
-        var model = FindModel(pending.ModelId);
-        model?.SetAssigned(pending.TargetId, pending.PreviousValue);
-        model?.RefreshAssignmentSummary(targetsById);
+        // The incoming presentation belongs to a different provider/session
+        // identity and is authoritative for that identity. Drop the old overlay;
+        // do not project old-session ownership onto the replacement rows.
         pendingAssignment = null;
         lastResolvedModelId = pending.ModelId;
         lastSaveState = ProviderAssignmentSaveState.Failed;
@@ -943,6 +1359,12 @@ public partial class ProviderModelAssignmentsControl : UserControl
             ? CreateUnconfirmedLifecycleReceipt(pending)
             : null;
         lifecycleReceiptOrphanedByConnectionChange = mutationStarted;
+        // A replacement session can legitimately project an empty catalog. In that
+        // case RebuildSelectedDetail has no row from which to refresh the status card,
+        // so publish the causal terminal state here instead of leaving stale Running
+        // evidence visible until another model is selected.
+        SetLifecycleStatus(lastLifecycleState, lastLifecycleMessage);
+        ApplyLifecycleActivityMarkers();
     }
 
     private void ClearUnconfirmedLifecycleForConnectionChange(
@@ -1005,8 +1427,9 @@ public partial class ProviderModelAssignmentsControl : UserControl
         var row = new ModelRowState(unconfirmedLifecycleReceipt);
         row.RefreshAssignmentSummary(targetsById);
         modelRows.Add(row);
+        loadedRowsView.Refresh();
         modelRowsView.Refresh();
-        ModelsList.SelectedItem = row;
+        SelectModel(row);
     }
 
     private void ReconcileUnconfirmedLifecycle(
@@ -1081,7 +1504,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             && pendingLifecycle is null;
         foreach (var target in selectedTargetRows)
         {
-            target.SetInteractionEnabled(canAssign);
+            target.SetInteractionEnabled(canAssign, canAssign ? "" : AssignmentAvailabilityMessage());
             target.SetSaving(
                 pendingAssignment is not null
                 && string.Equals(target.ModelId, pendingAssignment.ModelId, StringComparison.Ordinal)
@@ -1093,16 +1516,23 @@ public partial class ProviderModelAssignmentsControl : UserControl
         // lifecycle request is running. Only controls that can start a conflicting
         // mutation are disabled below.
         ModelsList.IsEnabled = true;
-        ModelSearchText.IsEnabled = !hasPendingChange;
+        LoadedModelsList.IsEnabled = true;
+        AvailableCatalogExpander.IsEnabled = true;
+        ModelSearchText.IsEnabled = true;
+        ModelFacetCombo.IsEnabled = true;
+        ClearSearchButton.IsEnabled = true;
         RefreshButton.IsEnabled = currentPresentation?.CanRefresh == true
             && currentPresentation.IsRefreshing == false
             && !hasPendingChange;
         LifecycleButton.IsEnabled = !hasPendingChange
             && currentPresentation?.CanRunLifecycle == true
             && currentPresentation?.IsRefreshing == false
-            && ModelsList.SelectedItem is ModelRowState model
+            && selectedModel is { } model
             && !IsUnconfirmedLifecycle(model)
             && TryLifecycleAction(model, out _);
+        EmptyRefreshButton.IsEnabled = RefreshButton.IsEnabled;
+        EmptyConnectionButton.IsEnabled = ConnectionButton.IsEnabled;
+        EmptyClearFiltersButton.IsEnabled = true;
         if (pendingAssignment is not null)
         {
             AutomationProperties.SetItemStatus(LifecycleButton, "Unavailable");
@@ -1114,11 +1544,36 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
     private static string PendingAssignmentMessage(PendingAssignment pending, string? message)
     {
+        if (pending.IsTransfer)
+        {
+            return AssignmentProgressMessage(pending);
+        }
+
         var progress = DisplayOrFallback(message, $"Saving assignment for {pending.ModelDisplayName}…");
         return progress.Contains(pending.ModelDisplayName, StringComparison.OrdinalIgnoreCase)
             ? progress
             : $"{progress} Model: {pending.ModelDisplayName}.";
     }
+
+    private static string AssignmentProgressMessage(PendingAssignment pending)
+    {
+        if (!pending.IsTransfer)
+        {
+            return $"Saving assignment for {pending.ModelDisplayName}…";
+        }
+
+        var priorModels = JoinDisplayNames(pending.ReplacedModelDisplayNames);
+        var verb = pending.IsDefaultTarget ? "Changing" : "Moving";
+        return $"{verb} {pending.TargetDisplayName} from {priorModels} to {pending.ModelDisplayName}…";
+    }
+
+    private static string JoinDisplayNames(IReadOnlyList<string> values) => values.Count switch
+    {
+        0 => "another model",
+        1 => values[0],
+        2 => $"{values[0]} and {values[1]}",
+        _ => $"{string.Join(", ", values.Take(values.Count - 1))}, and {values[^1]}"
+    };
 
     private static string PendingLifecycleMessage(PendingLifecycle pending, string? message)
     {
@@ -1137,6 +1592,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         var borderKey = state switch
         {
             ProviderConnectionState.Online => "Arena.Brush.Success",
+            ProviderConnectionState.Partial => "Arena.Brush.Warning",
             ProviderConnectionState.Checking => "Arena.Brush.Info",
             ProviderConnectionState.Offline or ProviderConnectionState.Failed => "DangerBorderBrush",
             _ => "DisabledBorderBrush"
@@ -1144,6 +1600,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         var textKey = state switch
         {
             ProviderConnectionState.Online => "Arena.Brush.Success",
+            ProviderConnectionState.Partial => "Arena.Brush.Warning",
             ProviderConnectionState.Checking => "Arena.Brush.Info",
             ProviderConnectionState.Offline or ProviderConnectionState.Failed => "DangerTextBrush",
             _ => "MutedTextBrush"
@@ -1226,40 +1683,494 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
     private bool MatchesCurrentSearch(object item)
     {
-        if (item is not ModelRowState model)
+        if (item is not ModelRowState model
+            || model.Availability == ProviderModelAvailability.Loaded)
         {
             return false;
         }
 
-        var query = ModelSearchText?.Text?.Trim() ?? "";
-        return query.Length == 0
-            || model.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase)
-            || model.Id.Contains(query, StringComparison.OrdinalIgnoreCase)
-            || model.Status.Contains(query, StringComparison.OrdinalIgnoreCase)
-            || model.Metadata.Contains(query, StringComparison.OrdinalIgnoreCase);
+        var facetMatch = selectedFacet switch
+        {
+            ProviderModelFacet.Available => model.Availability == ProviderModelAvailability.Available,
+            ProviderModelFacet.Assigned => model.AssignedTargetIds.Count > 0,
+            ProviderModelFacet.Unassigned => model.AssignedTargetIds.Count == 0,
+            ProviderModelFacet.Unavailable => model.Availability == ProviderModelAvailability.Unavailable,
+            _ => true
+        };
+        return facetMatch
+            && (committedSearchQuery.Length == 0
+                || model.SearchText.Contains(committedSearchQuery, StringComparison.OrdinalIgnoreCase));
     }
 
-    private IEnumerable<ModelRowState> VisibleRows() =>
+    private static bool IsLoadedModel(object item) =>
+        item is ModelRowState { Availability: ProviderModelAvailability.Loaded };
+
+    private IEnumerable<ModelRowState> LoadedRows() =>
+        loadedRowsView.Cast<object>().OfType<ModelRowState>();
+
+    private IEnumerable<ModelRowState> VisibleCatalogRows() =>
         modelRowsView.Cast<object>().OfType<ModelRowState>();
+
+    private IEnumerable<ModelRowState> SelectableRows() =>
+        LoadedRows().Concat(VisibleCatalogRows());
+
+    private void SelectModel(ModelRowState? model)
+    {
+        selectedModel = model;
+        SynchronizeSelection(model);
+    }
+
+    private void SynchronizeSelection(ModelRowState? model)
+    {
+        synchronizingSelection = true;
+        try
+        {
+            LoadedModelsList.SelectedItem = model?.Availability == ProviderModelAvailability.Loaded
+                ? model
+                : null;
+            ModelsList.SelectedItem = model is not null
+                && model.Availability != ProviderModelAvailability.Loaded
+                && VisibleCatalogRows().Contains(model)
+                    ? model
+                    : null;
+        }
+        finally
+        {
+            synchronizingSelection = false;
+        }
+    }
+
+    private bool MoveKeyboardSelection(ModelRowState model, ListBox destination)
+    {
+        SelectModel(model);
+        destination.ScrollIntoView(model);
+        destination.UpdateLayout();
+        destination.Focus();
+        return destination.ItemContainerGenerator.ContainerFromItem(model) is ListBoxItem item
+            ? item.Focus()
+            : destination.IsKeyboardFocusWithin;
+    }
 
     private ModelRowState? FindModel(string modelId) =>
         modelRows.FirstOrDefault(model => string.Equals(model.Id, modelId, StringComparison.Ordinal));
 
     private void UpdateEmptyState()
     {
-        var hasVisibleModels = VisibleRows().Any();
+        var hasVisibleModels = VisibleCatalogRows().Any();
         ModelsEmptyState.Visibility = hasVisibleModels ? Visibility.Collapsed : Visibility.Visible;
         if (hasVisibleModels)
         {
             return;
         }
 
-        var query = ModelSearchText?.Text?.Trim() ?? "";
-        ModelsEmptyStateText.Text = modelRows.Count == 0
+        var query = committedSearchQuery;
+        var catalogModelCount = modelRows.Count(model =>
+            model.Availability != ProviderModelAvailability.Loaded);
+        ModelsEmptyStateText.Text = catalogModelCount == 0
             ? "Refresh the provider model list or review the connection."
-            : $"No models match “{NormalizeStatus(query)}”.";
+            : query.Length > 0
+                ? $"No models match “{NormalizeStatus(query)}” in {SelectedFacetName().ToLowerInvariant()}."
+                : $"No models match {SelectedFacetName().ToLowerInvariant()}.";
         AutomationProperties.SetHelpText(ModelsEmptyState, ModelsEmptyStateText.Text);
+        EmptyClearFiltersButton.Visibility = catalogModelCount > 0
+            && (committedSearchQuery.Length > 0 || selectedFacet != ProviderModelFacet.All)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
     }
+
+    private void ReconcileModelRows(IReadOnlyList<ProviderModelAssignmentPresentation> presentedModels)
+    {
+        var desiredIds = presentedModels.Select(model => model.Id).ToHashSet(StringComparer.Ordinal);
+        if (modelRows.Count == 0 && presentedModels.Count > 1)
+        {
+            // WPF forbids mutating a collection while its ListCollectionView is inside
+            // DeferRefresh. Strip the expensive view work first, populate the empty keyed
+            // source, then restore filtering/grouping/sorting in one deferred refresh.
+            // Subsequent refreshes use the keyed live-shaping path so existing containers and
+            // focus remain intact.
+            LoadedModelsList.ItemsSource = null;
+            ModelsList.ItemsSource = null;
+            try
+            {
+                using (loadedRowsView.DeferRefresh())
+                {
+                    loadedRowsView.Filter = null;
+                    loadedRowsView.SortDescriptions.Clear();
+                }
+                using (modelRowsView.DeferRefresh())
+                {
+                    modelRowsView.Filter = null;
+                    modelRowsView.SortDescriptions.Clear();
+                    modelRowsView.GroupDescriptions.Clear();
+                }
+
+                ReconcileModelRowsCore(presentedModels, desiredIds);
+
+                using (loadedRowsView.DeferRefresh())
+                {
+                    loadedRowsView.Filter = IsLoadedModel;
+                    loadedRowsView.SortDescriptions.Add(
+                        new SortDescription(nameof(ModelRowState.DisplayName), ListSortDirection.Ascending));
+                    loadedRowsView.SortDescriptions.Add(
+                        new SortDescription(nameof(ModelRowState.Id), ListSortDirection.Ascending));
+                }
+                using (modelRowsView.DeferRefresh())
+                {
+                    modelRowsView.Filter = MatchesCurrentSearch;
+                    modelRowsView.SortDescriptions.Add(
+                        new SortDescription(nameof(ModelRowState.GroupOrder), ListSortDirection.Ascending));
+                    modelRowsView.SortDescriptions.Add(
+                        new SortDescription(nameof(ModelRowState.DisplayName), ListSortDirection.Ascending));
+                    modelRowsView.SortDescriptions.Add(
+                        new SortDescription(nameof(ModelRowState.Id), ListSortDirection.Ascending));
+                    modelRowsView.GroupDescriptions.Add(
+                        new PropertyGroupDescription(nameof(ModelRowState.GroupName)));
+                }
+            }
+            finally
+            {
+                LoadedModelsList.ItemsSource = loadedRowsView;
+                ModelsList.ItemsSource = modelRowsView;
+            }
+
+            return;
+        }
+
+        ReconcileModelRowsCore(presentedModels, desiredIds);
+    }
+
+    private void ReconcileModelRowsCore(
+        IReadOnlyList<ProviderModelAssignmentPresentation> presentedModels,
+        IReadOnlySet<string> desiredIds)
+    {
+        var existingById = modelRows.ToDictionary(model => model.Id, StringComparer.Ordinal);
+        foreach (var stale in modelRows.Where(model => !desiredIds.Contains(model.Id)).ToArray())
+        {
+            modelRows.Remove(stale);
+        }
+
+        foreach (var presented in presentedModels)
+        {
+            var existing = existingById.TryGetValue(presented.Id, out var row);
+            var rowChangedViewKeys = false;
+            var availabilityChanged = false;
+            if (!existing)
+            {
+                row = new ModelRowState(presented);
+                modelRows.Add(row);
+            }
+            else
+            {
+                var previousAvailability = row!.Availability;
+                rowChangedViewKeys = row!.UpdateFrom(presented);
+                availabilityChanged = previousAvailability != row.Availability;
+            }
+
+            if (pendingAssignment is { } pending)
+            {
+                var optimisticValue = pending.RequestedValue
+                    ? string.Equals(row!.Id, pending.ModelId, StringComparison.Ordinal)
+                    : row!.IsAssigned(pending.TargetId);
+                if (!pending.RequestedValue
+                    && string.Equals(row.Id, pending.ModelId, StringComparison.Ordinal))
+                {
+                    optimisticValue = false;
+                }
+
+                if (row.IsAssigned(pending.TargetId) != optimisticValue)
+                {
+                    row.SetAssigned(pending.TargetId, optimisticValue);
+                    rowChangedViewKeys = true;
+                }
+            }
+
+            rowChangedViewKeys |= row!.RefreshAssignmentSummary(targetsById);
+            if (existing
+                && (availabilityChanged
+                    || (rowChangedViewKeys && !usesIncrementalLiveShaping)))
+            {
+                // Live filtering schedules cross-view moves at DataBind priority. A
+                // source remove/add keeps the same row object but makes a confirmed
+                // Loaded <-> catalog transfer visible synchronously to selection,
+                // status, and callers before ApplyPresentation returns.
+                modelRows.Remove(row);
+                modelRows.Add(row);
+            }
+
+        }
+    }
+
+    private void ScheduleCatalogContinuity(
+        string requestedSelection,
+        double priorCatalogOffset,
+        CatalogViewportAnchor? priorViewportAnchor,
+        bool restoreKeyboardFocus,
+        int continuityGeneration)
+    {
+        _ = Dispatcher.BeginInvoke(
+            DispatcherPriority.ContextIdle,
+            new Action(() =>
+            {
+                if (continuityGeneration != catalogContinuityGeneration || !IsLoaded || !IsVisible)
+                {
+                    return;
+                }
+
+                var requestedRow = SelectableRows().FirstOrDefault(row => string.Equals(
+                    row.Id,
+                    requestedSelection,
+                    StringComparison.Ordinal));
+                if (requestedRow is not null && !ReferenceEquals(selectedModel, requestedRow))
+                {
+                    SelectModel(requestedRow);
+                    RebuildSelectedDetail();
+                }
+
+                if (restoreKeyboardFocus)
+                {
+                    FocusCatalog();
+                }
+
+                if (selectedModel?.Availability == ProviderModelAvailability.Loaded)
+                {
+                    LoadedModelsList.ScrollIntoView(selectedModel);
+                    LoadedModelsList.UpdateLayout();
+                }
+                else
+                {
+                    ModelsList.UpdateLayout();
+                    if (FindVisualDescendant<ScrollViewer>(ModelsList) is { } scrollViewer)
+                    {
+                        if (!RestoreCatalogViewportAnchor(scrollViewer, priorViewportAnchor)
+                            && priorCatalogOffset > 0)
+                        {
+                            scrollViewer.ScrollToVerticalOffset(
+                                Math.Min(priorCatalogOffset, scrollViewer.ScrollableHeight));
+                        }
+                    }
+                }
+            }));
+    }
+
+    private CatalogViewportAnchor? CaptureCatalogViewportAnchor(ScrollViewer? scrollViewer)
+    {
+        if (scrollViewer is null || scrollViewer.ViewportHeight <= 0)
+        {
+            return null;
+        }
+
+        CatalogViewportAnchor? anchor = null;
+        foreach (var row in modelRows)
+        {
+            if (ModelsList.ItemContainerGenerator.ContainerFromItem(row) is not ListBoxItem container
+                || !container.IsVisible)
+            {
+                continue;
+            }
+
+            try
+            {
+                var y = container.TransformToAncestor(scrollViewer).Transform(new Point()).Y;
+                if (y + container.ActualHeight <= 0 || y >= scrollViewer.ViewportHeight)
+                {
+                    continue;
+                }
+
+                if (anchor is null || y < anchor.RelativeY)
+                {
+                    anchor = new CatalogViewportAnchor(row.Id, y);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // A recycled container can detach between lookup and transform.
+            }
+        }
+
+        return anchor;
+    }
+
+    private bool RestoreCatalogViewportAnchor(
+        ScrollViewer scrollViewer,
+        CatalogViewportAnchor? anchor)
+    {
+        if (anchor is null || FindModel(anchor.ModelId) is not { } row)
+        {
+            return false;
+        }
+
+        ModelsList.ScrollIntoView(row);
+        ModelsList.UpdateLayout();
+        if (ModelsList.ItemContainerGenerator.ContainerFromItem(row) is not ListBoxItem container)
+        {
+            return false;
+        }
+
+        try
+        {
+            var currentY = container.TransformToAncestor(scrollViewer).Transform(new Point()).Y;
+            var targetOffset = Math.Clamp(
+                scrollViewer.VerticalOffset + currentY - anchor.RelativeY,
+                0,
+                scrollViewer.ScrollableHeight);
+            scrollViewer.ScrollToVerticalOffset(targetOffset);
+            ModelsList.UpdateLayout();
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private void ApplyLifecycleActivityMarkers()
+    {
+        foreach (var row in modelRows)
+        {
+            row.SetLifecycleActivity("");
+        }
+
+        if (pendingLifecycle is not null)
+        {
+            FindModel(pendingLifecycle.ModelId)?.SetLifecycleActivity(
+                pendingLifecycle.Load ? "Loading…" : "Unloading…");
+        }
+        else if (lastLifecycleState == ProviderModelLifecycleActionState.Unconfirmed
+                 && unconfirmedLifecycleReceipt is not null
+                 && LifecycleReceiptMatchesConnection(currentPresentation))
+        {
+            FindModel(lastLifecycleModelId)?.SetLifecycleActivity("Awaiting confirmation");
+        }
+
+    }
+
+    private static bool ConfigureIncrementalLiveShaping(ListCollectionView view)
+    {
+        if (view is not ICollectionViewLiveShaping live
+            || !live.CanChangeLiveSorting
+            || !live.CanChangeLiveGrouping
+            || !live.CanChangeLiveFiltering)
+        {
+            return false;
+        }
+
+        live.LiveSortingProperties.Add(nameof(ModelRowState.GroupOrder));
+        live.LiveSortingProperties.Add(nameof(ModelRowState.DisplayName));
+        live.LiveSortingProperties.Add(nameof(ModelRowState.Id));
+        live.LiveGroupingProperties.Add(nameof(ModelRowState.GroupName));
+        live.LiveFilteringProperties.Add(nameof(ModelRowState.SearchText));
+        live.LiveFilteringProperties.Add(nameof(ModelRowState.Availability));
+        live.LiveFilteringProperties.Add(nameof(ModelRowState.AssignedTargetIds));
+        live.IsLiveSorting = true;
+        live.IsLiveGrouping = true;
+        live.IsLiveFiltering = true;
+        return live.IsLiveSorting == true
+            && live.IsLiveGrouping == true
+            && live.IsLiveFiltering == true;
+    }
+
+    private void UpdateCatalogHealth(ProviderModelAssignmentsPresentation presentation)
+    {
+        var stale = presentation.Models.Any(model => model.IsResidencyStale);
+        var exceptional = presentation.IsRefreshing
+            || presentation.ConnectionState != ProviderConnectionState.Online
+            || stale;
+        CatalogAlertBorder.Visibility = exceptional ? Visibility.Visible : Visibility.Collapsed;
+        var borderKey = presentation.ConnectionState switch
+        {
+            ProviderConnectionState.Checking => "Arena.Brush.Info",
+            ProviderConnectionState.Online when stale => "Arena.Brush.Warning",
+            ProviderConnectionState.Partial => "Arena.Brush.Warning",
+            ProviderConnectionState.Online => "DisabledBorderBrush",
+            _ => "DangerBorderBrush"
+        };
+        var textKey = presentation.ConnectionState switch
+        {
+            ProviderConnectionState.Checking => "Arena.Brush.Info",
+            ProviderConnectionState.Online when stale => "Arena.Brush.Warning",
+            ProviderConnectionState.Partial => "Arena.Brush.Warning",
+            ProviderConnectionState.Online => "MutedTextBrush",
+            _ => "DangerTextBrush"
+        };
+        CatalogAlertBorder.SetResourceReference(Border.BorderBrushProperty, borderKey);
+        CatalogStatusText.SetResourceReference(TextBlock.ForegroundProperty, textKey);
+        AutomationProperties.SetItemStatus(
+            CatalogStatusText,
+            presentation.IsRefreshing ? "Refreshing" : stale ? "Stale" : presentation.ConnectionState.ToString());
+        AutomationProperties.SetHelpText(CatalogSummaryText, CatalogStatusText.Text);
+    }
+
+    private void UpdateCatalogSummary()
+    {
+        var loaded = modelRows.Count(model => model.Availability == ProviderModelAvailability.Loaded);
+        var available = modelRows.Count(model => model.Availability == ProviderModelAvailability.Available);
+        var unavailable = modelRows.Count - loaded - available;
+        CatalogSummaryText.Text = unavailable > 0
+            ? $"{loaded} loaded · {available} available · {unavailable} state unknown"
+            : $"{loaded} loaded · {available} available";
+        AutomationProperties.SetItemStatus(CatalogSummaryText, $"{modelRows.Count} total models");
+        LoadedModelsCountText.Text = loaded.ToString();
+        AvailableCatalogCountText.Text = (available + unavailable).ToString();
+        LoadedModelsEmptyState.Visibility = loaded == 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        LoadedModelsList.Visibility = loaded == 0
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        AutomationProperties.SetItemStatus(LoadedModelsCountText, $"{loaded} loaded models");
+        AutomationProperties.SetItemStatus(
+            AvailableCatalogCountText,
+            $"{available + unavailable} catalog models");
+    }
+
+    private void UpdateSearchChrome()
+    {
+        var hasQuery = !string.IsNullOrEmpty(ModelSearchText.Text);
+        SearchWatermarkText.Visibility = hasQuery ? Visibility.Collapsed : Visibility.Visible;
+        ClearSearchButton.Visibility = hasQuery ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void UpdateSearchResults()
+    {
+        var shown = VisibleCatalogRows().Count();
+        var catalogCount = modelRows.Count(model =>
+            model.Availability != ProviderModelAvailability.Loaded);
+        SearchResultsText.Text = shown == catalogCount
+            ? $"{shown} catalog models"
+            : $"{shown} of {catalogCount}";
+        AutomationProperties.SetItemStatus(
+            SearchResultsText,
+            shown == catalogCount ? "All catalog models shown" : "Filtered catalog results");
+    }
+
+    private string AssignmentAvailabilityMessage()
+    {
+        if (pendingAssignment is not null)
+        {
+            return $"{AssignmentProgressMessage(pendingAssignment)} Other routing changes wait until this save finishes.";
+        }
+
+        if (pendingLifecycle is not null)
+        {
+            var activity = pendingLifecycle.Load ? "loads" : "unloads";
+            return $"Assignments are paused while LM Studio {activity} {pendingLifecycle.ModelDisplayName}. You can keep browsing models.";
+        }
+
+        if (currentPresentation?.IsRefreshing == true)
+        {
+            return "Assignments are paused while provider evidence refreshes.";
+        }
+
+        if (currentPresentation?.CanAssign != true)
+        {
+            return "Assignments are unavailable for the current provider or arena state.";
+        }
+
+        return "Changes save immediately. Turn routing targets on or off without changing model residency.";
+    }
+
+    private string SelectedFacetName() =>
+        (ModelFacetCombo.SelectedItem as ModelFacetOption)?.DisplayName ?? "All catalog";
 
     private static IReadOnlyList<ProviderAssignmentTargetPresentation> DistinctTargets(
         IEnumerable<ProviderAssignmentTargetPresentation>? values)
@@ -1335,52 +2246,86 @@ public partial class ProviderModelAssignmentsControl : UserControl
             : normalized[..(MaximumStatusLength - 1)] + "…";
     }
 
+    private static T? FindVisualDescendant<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            if (FindVisualDescendant<T>(child) is { } descendant)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
+    }
+
+    private enum ProviderModelFacet
+    {
+        All,
+        Available,
+        Assigned,
+        Unassigned,
+        Unavailable
+    }
+
+    private sealed record ModelFacetOption(ProviderModelFacet Facet, string DisplayName)
+    {
+        public static IReadOnlyList<ModelFacetOption> Options { get; } =
+        [
+            new(ProviderModelFacet.All, "All catalog"),
+            new(ProviderModelFacet.Available, "Available"),
+            new(ProviderModelFacet.Assigned, "Assigned"),
+            new(ProviderModelFacet.Unassigned, "Unassigned"),
+            new(ProviderModelFacet.Unavailable, "State unavailable")
+        ];
+
+        public override string ToString() => DisplayName;
+    }
+
     private sealed class ModelRowState : INotifyPropertyChanged
     {
-        private readonly HashSet<string> assignedTargetIds;
-        private readonly string suppliedAutomationHelp;
+        private readonly HashSet<string> assignedTargetIds = new(StringComparer.Ordinal);
+        private string displayName = "";
+        private ProviderModelAvailability availability;
+        private string status = "";
+        private string metadata = "";
+        private string suppliedAutomationHelp = "";
+        private bool canLoad;
+        private bool canUnload;
+        private bool isResidencyStale;
+        private string lifecycleHelp = "";
+        private string lifecycleActivity = "";
         private string assignmentSummary = "Not assigned";
         private string automationHelp = "";
+        private string searchText = "";
 
         public ModelRowState(ProviderModelAssignmentPresentation source)
         {
             Id = source.Id;
-            DisplayName = source.DisplayName;
-            Availability = source.Availability;
-            Status = DisplayOrFallback(
-                source.Status,
-                source.Availability switch
-                {
-                    ProviderModelAvailability.Loaded => "Loaded",
-                    ProviderModelAvailability.Available => "Available",
-                    _ => "Load state unavailable"
-                });
-            Metadata = DisplayOrFallback(source.Metadata, source.Id);
-            suppliedAutomationHelp = source.AutomationHelp;
-            CanLoad = source.CanLoad;
-            CanUnload = source.CanUnload;
-            IsResidencyStale = source.IsResidencyStale;
-            LifecycleHelp = DisplayOrFallback(
-                source.LifecycleHelp,
-                "LM Studio residency changes do not change model assignments.");
-            assignedTargetIds = new HashSet<string>(
-                source.AssignedTargetIds
-                    .Where(value => !string.IsNullOrWhiteSpace(value))
-                    .Select(value => value.Trim()),
-                StringComparer.Ordinal);
+            UpdateFrom(source);
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
         public string Id { get; }
-        public string DisplayName { get; }
-        public ProviderModelAvailability Availability { get; }
-        public string Status { get; }
-        public string Metadata { get; }
-        public bool CanLoad { get; }
-        public bool CanUnload { get; }
-        public bool IsResidencyStale { get; }
-        public string LifecycleHelp { get; }
+        public string DisplayName => displayName;
+        public ProviderModelAvailability Availability => availability;
+        public string Status => status;
+        public string DisplayStatus => lifecycleActivity.Length > 0 ? lifecycleActivity : status;
+        public string Metadata => metadata;
+        public bool CanLoad => canLoad;
+        public bool CanUnload => canUnload;
+        public bool IsResidencyStale => isResidencyStale;
+        public string LifecycleHelp => lifecycleHelp;
+        public bool HasLifecycleActivity => lifecycleActivity.Length > 0;
+        public string SearchText => searchText;
         public IReadOnlyCollection<string> AssignedTargetIds => assignedTargetIds.ToArray();
         public int GroupOrder => Availability switch
         {
@@ -1405,7 +2350,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             }
         }
 
-        public string AutomationName => $"{DisplayName}, {Status}";
+        public string AutomationName => $"{DisplayName}, {DisplayStatus}";
         public string AutomationHelp
         {
             get => automationHelp;
@@ -1419,19 +2364,96 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
         public bool IsAssigned(string targetId) => assignedTargetIds.Contains(targetId);
 
+        public bool UpdateFrom(ProviderModelAssignmentPresentation source)
+        {
+            var viewRefreshNeeded = false;
+            var nextDisplayName = DisplayOrFallback(source.DisplayName, source.Id);
+            if (SetField(ref displayName, nextDisplayName, nameof(DisplayName)))
+            {
+                viewRefreshNeeded = true;
+                Raise(nameof(AutomationName));
+            }
+
+            if (availability != source.Availability)
+            {
+                availability = source.Availability;
+                viewRefreshNeeded = true;
+                Raise(nameof(Availability));
+                Raise(nameof(GroupOrder));
+                Raise(nameof(GroupName));
+            }
+
+            var nextStatus = DisplayOrFallback(
+                source.Status,
+                source.Availability switch
+                {
+                    ProviderModelAvailability.Loaded => "Loaded",
+                    ProviderModelAvailability.Available => "Available",
+                    _ => "Load state unavailable"
+                });
+            if (SetField(ref status, nextStatus, nameof(Status)))
+            {
+                viewRefreshNeeded = true;
+                Raise(nameof(DisplayStatus));
+                Raise(nameof(AutomationName));
+            }
+
+            viewRefreshNeeded |= SetField(
+                ref metadata,
+                DisplayOrFallback(source.Metadata, source.Id),
+                nameof(Metadata));
+            suppliedAutomationHelp = source.AutomationHelp;
+            SetField(ref canLoad, source.CanLoad, nameof(CanLoad));
+            SetField(ref canUnload, source.CanUnload, nameof(CanUnload));
+            SetField(ref isResidencyStale, source.IsResidencyStale, nameof(IsResidencyStale));
+            SetField(
+                ref lifecycleHelp,
+                DisplayOrFallback(
+                    source.LifecycleHelp,
+                    "LM Studio residency changes do not change model assignments."),
+                nameof(LifecycleHelp));
+
+            var nextAssignments = source.AssignedTargetIds
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Select(value => value.Trim())
+                .ToHashSet(StringComparer.Ordinal);
+            if (!assignedTargetIds.SetEquals(nextAssignments))
+            {
+                assignedTargetIds.Clear();
+                assignedTargetIds.UnionWith(nextAssignments);
+                viewRefreshNeeded = true;
+                Raise(nameof(AssignedTargetIds));
+            }
+
+            RefreshSearchText();
+            return viewRefreshNeeded;
+        }
+
+        public void SetLifecycleActivity(string value)
+        {
+            var normalized = value?.Trim() ?? "";
+            if (!SetField(ref lifecycleActivity, normalized, nameof(HasLifecycleActivity)))
+            {
+                return;
+            }
+
+            Raise(nameof(DisplayStatus));
+            Raise(nameof(AutomationName));
+            RefreshSearchText();
+        }
+
         public void SetAssigned(string targetId, bool assigned)
         {
-            if (assigned)
+            var changed = assigned
+                ? assignedTargetIds.Add(targetId)
+                : assignedTargetIds.Remove(targetId);
+            if (changed)
             {
-                assignedTargetIds.Add(targetId);
-            }
-            else
-            {
-                assignedTargetIds.Remove(targetId);
+                Raise(nameof(AssignedTargetIds));
             }
         }
 
-        public void RefreshAssignmentSummary(
+        public bool RefreshAssignmentSummary(
             IReadOnlyDictionary<string, ProviderAssignmentTargetPresentation> targetLookup)
         {
             var labels = assignedTargetIds
@@ -1440,21 +2462,58 @@ public partial class ProviderModelAssignmentsControl : UserControl
                     : targetId)
                 .OrderBy(label => label, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            AssignmentSummary = labels.Length == 0
+            var nextSummary = labels.Length == 0
                 ? "Not assigned"
                 : $"Assigned to {string.Join(", ", labels)}";
+            var changed = !string.Equals(AssignmentSummary, nextSummary, StringComparison.Ordinal);
+            AssignmentSummary = nextSummary;
             AutomationHelp = string.Join(
                 " ",
-                new[] { suppliedAutomationHelp, Metadata, AssignmentSummary }
+                new[] { suppliedAutomationHelp, Metadata, AssignmentSummary, lifecycleActivity }
                     .Where(value => !string.IsNullOrWhiteSpace(value)));
+            RefreshSearchText();
+            return changed;
         }
+
+        private void RefreshSearchText()
+        {
+            var value = string.Join(
+                " ",
+                new[] { DisplayName, Id, Status, Metadata, AssignmentSummary, lifecycleActivity }
+                    .Where(part => !string.IsNullOrWhiteSpace(part)));
+            SetField(ref searchText, value, nameof(SearchText));
+        }
+
+        private bool SetField<T>(ref T field, T value, string propertyName)
+        {
+            if (EqualityComparer<T>.Default.Equals(field, value))
+            {
+                return false;
+            }
+
+            field = value;
+            Raise(propertyName);
+            return true;
+        }
+
+        private void Raise(string propertyName) =>
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 
     private sealed class TargetAssignmentState : INotifyPropertyChanged
     {
+        private string modelId;
+        private string modelDisplayName;
+        private string displayName;
+        private string helpText;
+        private bool targetEnabled;
         private bool isAssigned;
         private bool interactionEnabled;
         private bool saving;
+        private string interactionMessage = "";
+        private ProviderTargetAssignmentState assignmentState;
+        private ProviderTargetAssignmentState assignedState;
+        private ProviderTargetAssignmentState clearedState;
 
         public TargetAssignmentState(
             string modelId,
@@ -1462,23 +2521,40 @@ public partial class ProviderModelAssignmentsControl : UserControl
             ProviderAssignmentTargetPresentation target,
             bool assigned)
         {
-            ModelId = modelId;
-            ModelDisplayName = modelDisplayName;
+            this.modelId = modelId;
+            this.modelDisplayName = modelDisplayName;
             TargetId = target.Id;
-            DisplayName = target.DisplayName;
-            HelpText = target.HelpText;
-            TargetEnabled = target.IsEnabled;
+            displayName = target.DisplayName;
+            helpText = target.HelpText;
+            targetEnabled = target.IsEnabled;
             isAssigned = assigned;
+            assignedState = target.AssignmentState == ProviderTargetAssignmentState.Unassigned
+                ? target.AssignedState
+                : target.AssignmentState;
+            clearedState = target.ClearedState;
+            assignmentState = target.AssignmentState != ProviderTargetAssignmentState.Unassigned
+                ? target.AssignmentState
+                : assigned
+                    ? ProviderTargetAssignmentState.Explicit
+                    : ProviderTargetAssignmentState.Unassigned;
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
-        public string ModelId { get; }
-        public string ModelDisplayName { get; }
+        public string ModelId => modelId;
+        public string ModelDisplayName => modelDisplayName;
         public string TargetId { get; }
-        public string DisplayName { get; }
-        public string HelpText { get; }
-        public bool TargetEnabled { get; }
+        public string DisplayName => displayName;
+        public string HelpText => helpText;
+        public bool TargetEnabled => targetEnabled;
+        public ProviderTargetAssignmentState AssignmentState => assignmentState;
+        public string AssignmentStateLabel => assignmentState switch
+        {
+            ProviderTargetAssignmentState.Default => "Default",
+            ProviderTargetAssignmentState.Explicit => "Explicit",
+            ProviderTargetAssignmentState.InheritsDefault => "Uses default",
+            _ => "Unassigned"
+        };
         public bool IsAssigned
         {
             get => isAssigned;
@@ -1487,6 +2563,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 if (isAssigned == value) return;
                 isAssigned = value;
                 Raise(nameof(IsAssigned));
+                Raise(nameof(AutomationHelp));
                 Raise(nameof(ItemStatus));
             }
         }
@@ -1498,17 +2575,77 @@ public partial class ProviderModelAssignmentsControl : UserControl
             new[]
             {
                 HelpText,
-                $"Toggle whether {ModelDisplayName} is routed to {DisplayName}. Changes save immediately."
+                $"{(IsAssigned ? "Turn off" : "Turn on")} routing of {ModelDisplayName} to {DisplayName}. Changes save immediately.",
+                CanAssign ? "" : interactionMessage
             }.Where(value => !string.IsNullOrWhiteSpace(value)));
-        public string ItemStatus => saving ? "Saving" : IsAssigned ? "Assigned" : "Not assigned";
+        public string ItemStatus => saving ? "Saving" : AssignmentStateLabel;
 
-        public void SetAssigned(bool value) => IsAssigned = value;
-
-        public void SetInteractionEnabled(bool value)
+        public void Retarget(
+            string nextModelId,
+            string nextModelDisplayName,
+            ProviderAssignmentTargetPresentation target,
+            bool assigned)
         {
-            if (interactionEnabled == value) return;
-            interactionEnabled = value;
+            modelId = nextModelId;
+            modelDisplayName = nextModelDisplayName;
+            displayName = target.DisplayName;
+            helpText = target.HelpText;
+            targetEnabled = target.IsEnabled;
+            assignedState = target.AssignmentState == ProviderTargetAssignmentState.Unassigned
+                ? target.AssignedState
+                : target.AssignmentState;
+            clearedState = target.ClearedState;
+            isAssigned = assigned;
+            assignmentState = target.AssignmentState != ProviderTargetAssignmentState.Unassigned
+                ? target.AssignmentState
+                : assigned
+                    ? assignedState
+                    : ProviderTargetAssignmentState.Unassigned;
+            Raise(nameof(ModelId));
+            Raise(nameof(ModelDisplayName));
+            Raise(nameof(DisplayName));
+            Raise(nameof(HelpText));
+            Raise(nameof(TargetEnabled));
+            Raise(nameof(IsAssigned));
+            Raise(nameof(AssignmentState));
+            Raise(nameof(AssignmentStateLabel));
             Raise(nameof(CanAssign));
+            Raise(nameof(AutomationName));
+            Raise(nameof(AutomationHelp));
+            Raise(nameof(ItemStatus));
+        }
+
+        public void SetAssigned(bool value)
+        {
+            IsAssigned = value;
+            var nextState = value
+                ? assignedState
+                : clearedState;
+            if (assignmentState == nextState)
+            {
+                return;
+            }
+
+            assignmentState = nextState;
+            Raise(nameof(AssignmentState));
+            Raise(nameof(AssignmentStateLabel));
+            Raise(nameof(AutomationHelp));
+            Raise(nameof(ItemStatus));
+        }
+
+        public void SetInteractionEnabled(bool value, string unavailableMessage)
+        {
+            var normalizedMessage = unavailableMessage?.Trim() ?? "";
+            if (interactionEnabled == value
+                && string.Equals(interactionMessage, normalizedMessage, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            interactionEnabled = value;
+            interactionMessage = normalizedMessage;
+            Raise(nameof(CanAssign));
+            Raise(nameof(AutomationHelp));
         }
 
         public void SetSaving(bool value)
@@ -1527,9 +2664,21 @@ public partial class ProviderModelAssignmentsControl : UserControl
         string ModelId,
         string ModelDisplayName,
         string TargetId,
-        bool PreviousValue,
+        string TargetDisplayName,
         bool RequestedValue,
-        string ConnectionIdentity);
+        bool IsDefaultTarget,
+        IReadOnlyList<string> ReplacedModelDisplayNames,
+        IReadOnlyList<PendingAssignmentMutation> Mutations,
+        string ConnectionIdentity)
+    {
+        public bool IsTransfer => RequestedValue && ReplacedModelDisplayNames.Count > 0;
+    }
+
+    private sealed record PendingAssignmentMutation(
+        string ModelId,
+        string ModelDisplayName,
+        bool PreviousValue,
+        bool RequestedValue);
 
     private sealed record PendingLifecycle(
         Guid OperationId,
@@ -1538,38 +2687,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
         bool Load,
         string ConnectionIdentity);
 
-    private sealed class RangeObservableCollection<T> : ObservableCollection<T>
-    {
-        public void ReplaceAll(IEnumerable<T> values)
-        {
-            Items.Clear();
-            foreach (var value in values)
-            {
-                Items.Add(value);
-            }
+    private sealed record CatalogViewportAnchor(string ModelId, double RelativeY);
 
-            OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
-            OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
-            OnCollectionChanged(new System.Collections.Specialized.NotifyCollectionChangedEventArgs(
-                System.Collections.Specialized.NotifyCollectionChangedAction.Reset));
-        }
-    }
-
-    private sealed class ModelRowComparer : IComparer
-    {
-        public static ModelRowComparer Instance { get; } = new();
-
-        public int Compare(object? x, object? y)
-        {
-            if (ReferenceEquals(x, y)) return 0;
-            if (x is not ModelRowState left) return -1;
-            if (y is not ModelRowState right) return 1;
-            var group = left.GroupOrder.CompareTo(right.GroupOrder);
-            if (group != 0) return group;
-            var display = StringComparer.OrdinalIgnoreCase.Compare(left.DisplayName, right.DisplayName);
-            return display != 0 ? display : StringComparer.Ordinal.Compare(left.Id, right.Id);
-        }
-    }
 }
 
 public sealed class ProviderAssignmentCheckBox : CheckBox
@@ -1580,5 +2699,122 @@ public sealed class ProviderAssignmentCheckBox : CheckBox
     {
         base.OnToggle();
         ToggleRequested?.Invoke(this, new RoutedEventArgs());
+    }
+}
+
+/// <summary>
+/// Keeps assignment targets available to UI Automation while tolerating the
+/// short container-regeneration window caused by a live theme resource change.
+/// WPF's stock ItemsControl peer can dereference a disconnected child peer in
+/// that window; retrying on the next automation query is safer than allowing a
+/// theme switch to fault the UI thread.
+/// </summary>
+public sealed class StableAutomationItemsControl : ItemsControl
+{
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new StableItemsControlAutomationPeer(this);
+
+    private sealed class StableItemsControlAutomationPeer : ItemsControlAutomationPeer
+    {
+        private readonly ItemsControl owner;
+
+        public StableItemsControlAutomationPeer(ItemsControl owner)
+            : base(owner)
+        {
+            this.owner = owner;
+        }
+
+        protected override ItemAutomationPeer CreateItemAutomationPeer(object item) =>
+            new StableItemAutomationPeer(item, this);
+
+        protected override List<AutomationPeer>? GetChildrenCore()
+        {
+            try
+            {
+                return base.GetChildrenCore();
+            }
+            catch (NullReferenceException)
+            {
+                // DynamicResource changes can transiently disconnect an item
+                // container while the stock peer validates its child tree.
+                // Returning the currently connected children keeps the parent
+                // peer valid; WPF invalidates and rebuilds this list afterward.
+                var connected = new List<AutomationPeer>();
+                for (var index = 0; index < owner.Items.Count; index++)
+                {
+                    if (owner.ItemContainerGenerator.ContainerFromIndex(index) is not FrameworkElement container)
+                    {
+                        continue;
+                    }
+
+                    var peer = UIElementAutomationPeer.CreatePeerForElement(container)
+                        ?? new FrameworkElementAutomationPeer(container);
+                    connected.Add(peer);
+                }
+
+                return connected;
+            }
+        }
+    }
+
+    private sealed class StableItemAutomationPeer(
+        object item,
+        ItemsControlAutomationPeer parent)
+        : ItemAutomationPeer(item, parent)
+    {
+        protected override string GetClassNameCore() => "ProviderAssignmentTarget";
+
+        protected override AutomationControlType GetAutomationControlTypeCore() =>
+            AutomationControlType.Group;
+    }
+}
+
+/// <summary>
+/// Applies the same transient automation-tree protection to the virtualized,
+/// grouped provider catalog. Group expanders can raise Toggle events while a
+/// recycled ListBox container is being reconnected during a live theme change.
+/// </summary>
+public sealed class StableAutomationListBox : ListBox
+{
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new StableListBoxAutomationPeer(this);
+
+    private sealed class StableListBoxAutomationPeer : ListBoxAutomationPeer
+    {
+        private readonly ListBox owner;
+
+        public StableListBoxAutomationPeer(ListBox owner)
+            : base(owner)
+        {
+            this.owner = owner;
+        }
+
+        protected override ItemAutomationPeer CreateItemAutomationPeer(object item) =>
+            new ListBoxItemAutomationPeer(item, this);
+
+        protected override List<AutomationPeer>? GetChildrenCore()
+        {
+            try
+            {
+                return base.GetChildrenCore();
+            }
+            catch (NullReferenceException)
+            {
+                var connected = new List<AutomationPeer>();
+                for (var index = 0; index < owner.Items.Count; index++)
+                {
+                    if (owner.ItemContainerGenerator.ContainerFromIndex(index) is not FrameworkElement container)
+                    {
+                        continue;
+                    }
+
+                    var peer = UIElementAutomationPeer.CreatePeerForElement(container)
+                        ?? new FrameworkElementAutomationPeer(container);
+                    connected.Add(peer);
+                }
+
+                return connected;
+            }
+        }
     }
 }

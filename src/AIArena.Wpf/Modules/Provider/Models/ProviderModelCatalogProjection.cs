@@ -77,7 +77,8 @@ internal sealed record ProviderModelAssignmentRequest(
     string Model,
     bool Assigned,
     string ExpectedProviderFingerprint,
-    string ExpectedAssignmentFingerprint);
+    string ExpectedAssignmentFingerprint,
+    IReadOnlyList<string>? EquivalentModelIds = null);
 
 internal sealed record ProviderModelAssignmentControlResult(
     bool Ok,

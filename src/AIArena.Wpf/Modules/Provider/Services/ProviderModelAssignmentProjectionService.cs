@@ -19,55 +19,71 @@ internal static class ProviderModelAssignmentProjectionService
         ArenaSnapshot snapshot,
         string model)
     {
+        return CreateBatch(sessionId, snapshot).Project(model);
+    }
+
+    public static ProviderModelAssignmentProjectionBatch CreateBatch(
+        string sessionId,
+        ArenaSnapshot snapshot)
+    {
         ArgumentNullException.ThrowIfNull(snapshot);
         var shared = snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var configured)
             ? configured
             : new ModelProviderConfig();
-        var targets = new List<ProviderModelAssignmentTarget>();
+        var defaultEnabled = snapshot.Engine.DefaultForUnassignedAgentsEnabled
+            && !string.IsNullOrWhiteSpace(shared.Model);
+        var targets = new List<ProviderModelAssignmentTargetTemplate>();
         var normalizedSessionId = (sessionId ?? "").Trim();
-        var requestedModel = (model ?? "").Trim();
-        targets.Add(new ProviderModelAssignmentTarget(
+        targets.Add(new ProviderModelAssignmentTargetTemplate(
             ModelProviderRouting.SharedConfigKey,
             "Default",
             IsDefault: true,
             IsNarrator: false,
-            Assigned: requestedModel.Length > 0
-                && shared.Model.Trim().Equals(requestedModel, StringComparison.Ordinal),
+            ConfiguredModel: defaultEnabled ? shared.Model.Trim() : "",
             InheritsDefault: false,
-            AssignmentFingerprint(shared.Model)));
+            AssignmentFingerprint(shared.Model, defaultEnabled)));
 
         foreach (var id in ActiveParticipantIds(snapshot))
         {
             var agent = snapshot.Engine.Agents.First(item =>
                 item.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
             var configuredModel = ConfiguredRoleModel(snapshot.Configs, id, shared);
-            targets.Add(new ProviderModelAssignmentTarget(
+            var inheritsDefault = defaultEnabled && configuredModel.Length == 0;
+            targets.Add(new ProviderModelAssignmentTargetTemplate(
                 id,
                 string.IsNullOrWhiteSpace(agent.Name) ? AgentRosterService.DisplayName(id) : agent.Name.Trim(),
                 IsDefault: false,
                 IsNarrator: false,
-                Assigned: requestedModel.Length > 0
-                    && configuredModel.Equals(requestedModel, StringComparison.Ordinal),
-                InheritsDefault: configuredModel.Length == 0,
-                AssignmentFingerprint(configuredModel)));
+                ConfiguredModel: configuredModel,
+                InheritsDefault: inheritsDefault,
+                AssignmentFingerprint(configuredModel, configuredModel.Length > 0)));
         }
 
         var narratorModel = ConfiguredRoleModel(snapshot.Configs, "narrator", shared);
-        targets.Add(new ProviderModelAssignmentTarget(
+        var narratorInheritsDefault = defaultEnabled && narratorModel.Length == 0;
+        targets.Add(new ProviderModelAssignmentTargetTemplate(
             "narrator",
             "Narrator",
             IsDefault: false,
             IsNarrator: true,
-            Assigned: requestedModel.Length > 0
-                && narratorModel.Equals(requestedModel, StringComparison.Ordinal),
-            InheritsDefault: narratorModel.Length == 0,
-            AssignmentFingerprint(narratorModel)));
-        return new ProviderModelAssignmentProjection(
+            ConfiguredModel: narratorModel,
+            InheritsDefault: narratorInheritsDefault,
+            AssignmentFingerprint(narratorModel, narratorModel.Length > 0)));
+
+        return new ProviderModelAssignmentProjectionBatch(
             normalizedSessionId,
             ProviderModelCatalogProjectionService.ProviderFingerprint(normalizedSessionId, snapshot),
             snapshot.PersistenceRevision,
-            ProviderModelCatalogProjectionService.SafeModelIdentifier(requestedModel),
             targets);
+    }
+
+    public static IReadOnlyList<ProviderModelAssignmentProjection> ProjectMany(
+        string sessionId,
+        ArenaSnapshot snapshot,
+        IEnumerable<string> models)
+    {
+        ArgumentNullException.ThrowIfNull(models);
+        return CreateBatch(sessionId, snapshot).ProjectMany(models);
     }
 
     public static IReadOnlyList<string> ActiveTargetIds(ArenaSnapshot snapshot)
@@ -79,22 +95,32 @@ internal static class ProviderModelAssignmentProjectionService
             .ToArray();
     }
 
-    internal static string AssignmentFingerprint(string configuredModel)
+    internal static string AssignmentFingerprint(string configuredModel, bool explicitlyAssigned)
     {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes((configuredModel ?? "").Trim()));
+        var identity = $"{(explicitlyAssigned ? "explicit" : "inherit")}\n{(configuredModel ?? "").Trim()}";
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(identity));
         return Convert.ToHexString(bytes);
     }
+
+    internal static string AssignmentFingerprint(string configuredModel) =>
+        AssignmentFingerprint(configuredModel, !string.IsNullOrWhiteSpace(configuredModel));
 
     internal static string ConfiguredRoleModel(
         IReadOnlyDictionary<string, ModelProviderConfig> configs,
         string role,
         ModelProviderConfig shared)
     {
-        return configs.TryGetValue(role, out var config)
-            && !string.IsNullOrWhiteSpace(config.Model)
-            && !config.Model.Trim().Equals(shared.Model.Trim(), StringComparison.Ordinal)
-            ? config.Model.Trim()
-            : "";
+        if (!configs.TryGetValue(role, out var config)
+            || string.IsNullOrWhiteSpace(config.Model))
+        {
+            return "";
+        }
+
+        var model = config.Model.Trim();
+        return config.ExplicitModelAssignment
+            || !model.Equals(shared.Model.Trim(), StringComparison.Ordinal)
+                ? model
+                : "";
     }
 
     private static IReadOnlyList<string> ActiveParticipantIds(ArenaSnapshot snapshot)
@@ -106,3 +132,65 @@ internal static class ProviderModelAssignmentProjectionService
         return AgentRosterService.ParticipantIds.Where(active.Contains).ToArray();
     }
 }
+
+internal sealed class ProviderModelAssignmentProjectionBatch(
+    string sessionId,
+    string providerFingerprint,
+    long persistenceRevision,
+    IReadOnlyList<ProviderModelAssignmentTargetTemplate> targetTemplates)
+{
+    public string SessionId { get; } = sessionId;
+
+    public string ProviderFingerprint { get; } = providerFingerprint;
+
+    public long PersistenceRevision { get; } = persistenceRevision;
+
+    public ProviderModelAssignmentProjection Project(
+        string model,
+        IEnumerable<string>? aliases = null)
+    {
+        var requestedModel = (model ?? "").Trim();
+        var equivalentModels = (aliases ?? [])
+            .Append(requestedModel)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .SelectMany(value => new[]
+            {
+                value.Trim(),
+                ProviderModelCatalogProjectionService.SafeModelIdentifier(value)
+            })
+            .Where(value => value.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var targets = targetTemplates.Select(target => new ProviderModelAssignmentTarget(
+            target.Id,
+            target.DisplayName,
+            target.IsDefault,
+            target.IsNarrator,
+            Assigned: target.ConfiguredModel.Length > 0
+                && (equivalentModels.Contains(target.ConfiguredModel)
+                    || equivalentModels.Contains(ProviderModelCatalogProjectionService.SafeModelIdentifier(
+                        target.ConfiguredModel))),
+            target.InheritsDefault,
+            target.AssignmentFingerprint)).ToArray();
+        return new ProviderModelAssignmentProjection(
+            SessionId,
+            ProviderFingerprint,
+            PersistenceRevision,
+            ProviderModelCatalogProjectionService.SafeModelIdentifier(requestedModel),
+            targets);
+    }
+
+    public IReadOnlyList<ProviderModelAssignmentProjection> ProjectMany(IEnumerable<string> models)
+    {
+        ArgumentNullException.ThrowIfNull(models);
+        return models.Select(model => Project(model)).ToArray();
+    }
+}
+
+internal sealed record ProviderModelAssignmentTargetTemplate(
+    string Id,
+    string DisplayName,
+    bool IsDefault,
+    bool IsNarrator,
+    string ConfiguredModel,
+    bool InheritsDefault,
+    string AssignmentFingerprint);

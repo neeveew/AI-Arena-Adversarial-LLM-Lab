@@ -438,6 +438,26 @@ static void CustomMatchSummaryCoordinatorNormalizesCardText()
     Require(setupSpec.RootElement.GetProperty("tuning").GetProperty("presetMatches").EnumerateArray().Any(item => item.GetString() == "Model Duel"), "current setup spec should include preset match metadata");
     Require(setupSpec.RootElement.GetProperty("relationship").GetProperty("links").GetArrayLength() == 1, "current setup spec should include valid relationship links");
     Require(setupSpec.RootElement.GetProperty("cast").GetArrayLength() == 2, "current setup spec should include active cast only");
+    Require(setupSpec.RootElement.GetProperty("provider").GetProperty("defaultForUnassignedAgentsEnabled").GetBoolean()
+            && setupSpec.RootElement.GetProperty("cast").EnumerateArray().All(item =>
+                item.GetProperty("assignmentMode").GetString() == "inherit"),
+        "current setup spec should disclose enabled Default inheritance");
+
+    var explicitAlpha = snapshot with
+    {
+        DefaultForUnassignedAgentsEnabled = false,
+        ExplicitRoleModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["alpha"] = snapshot.ProviderModel
+        }
+    };
+    using var explicitSpec = JsonDocument.Parse(CustomMatchSummaryCoordinator.CurrentSetupSpec(explicitAlpha));
+    var explicitCast = explicitSpec.RootElement.GetProperty("cast").EnumerateArray().ToArray();
+    Require(!explicitSpec.RootElement.GetProperty("provider").GetProperty("defaultForUnassignedAgentsEnabled").GetBoolean()
+            && explicitCast.Single(item => item.GetProperty("id").GetString() == "alpha").GetProperty("assignmentMode").GetString() == "explicit"
+            && explicitCast.Single(item => item.GetProperty("id").GetString() == "beta").GetProperty("assignmentMode").GetString() == "unassigned"
+            && CustomMatchSummaryCoordinator.CurrentSetupBrief(explicitAlpha).Contains("Default off", StringComparison.Ordinal),
+        "current setup summary should distinguish explicit routes from unassigned roles when Default is off");
 
     var invalidRelationshipSnapshot = snapshot with
     {

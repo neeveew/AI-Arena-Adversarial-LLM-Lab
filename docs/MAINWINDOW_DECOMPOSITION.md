@@ -53,7 +53,7 @@ Feature behavior should live in focused coordinators under `src/AIArena.Wpf/Shel
 | `CustomMatchSummaryCoordinator` | Match Setup scenario topic/global and cast/narrator preview cards |
 | `MatchLockCoordinator` | lock/edit controls, voice style and pressure pickers |
 | `MatchSetupCoordinator` | rivalry matrix rendering and persistence |
-| `MatchSetupPortabilityService` | validated secret-free Match Setup v2 export, atomic clean-session import, fingerprints and receipts shared by UI and PowerShell |
+| `MatchSetupPortabilityService` | validated secret-free Match Setup v3 export with optional-default and explicit/inherit role routing, v2 migration, atomic clean-session import, fingerprints and receipts shared by UI and PowerShell |
 | `InternetWorkflowCoordinator` | internet enablement and local-search health |
 | `OperatorTurnCoordinator` | operator route, template, private target, and send workflows |
 

@@ -371,6 +371,13 @@ static void ProviderSettingsResetStaleReadinessOnIdentityChanges()
 
     ProviderSettingsCoordinator.SaveRoleModelConfig(configs, "alpha", "", shared);
     Require(!configs.ContainsKey("alpha"), "blank role model without overrides should remove the role config");
+
+    Require(ProviderSettingsCoordinator.ResolveRoleModelForDiagnostic("explicit-model", "shared-model", false) == "explicit-model",
+        "all-role diagnostics should retain an explicit role model while the default is disabled");
+    Require(ProviderSettingsCoordinator.ResolveRoleModelForDiagnostic("", "shared-model", true) == "shared-model",
+        "all-role diagnostics should use the shared model for an inherited role while the default is enabled");
+    Require(ProviderSettingsCoordinator.ResolveRoleModelForDiagnostic("", "shared-model", false) == "",
+        "all-role diagnostics should report an inherited role as unassigned while the default is disabled");
 }
 
 static void ProviderRoutingKeepsCurrentNativeOptions()
@@ -836,12 +843,14 @@ static void LlamaCppRuntimeGivesEachOptionalProbeAnIndependentTimeout()
 
 static void LlamaCppRuntimeContinuesAfterOversizedOptionalResponse()
 {
+    CountingReadStream? oversizedStream = null;
     var handler = new TestHttpMessageHandler(request =>
     {
         var path = request.RequestUri?.AbsolutePath ?? "";
         if (path == "/models")
         {
-            var oversized = new StreamContent(new CountingReadStream((1024 * 1024) + 8192));
+            oversizedStream = new CountingReadStream(LlamaCppRuntimeService.MaximumResponseBytes + 8192);
+            var oversized = new StreamContent(oversizedStream);
             oversized.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
             return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = oversized };
         }
@@ -868,6 +877,68 @@ static void LlamaCppRuntimeContinuesAfterOversizedOptionalResponse()
     Require(snapshot.Warnings.Any(value => value.Contains("Router model inventory unavailable", StringComparison.OrdinalIgnoreCase)
         && value.Contains("safety limit", StringComparison.OrdinalIgnoreCase)), "bounded-body rejection should remain visible as a capability warning");
     Require(handler.Requests.Select(uri => uri.AbsolutePath).SequenceEqual(["/health", "/models", "/v1/models", "/props", "/slots"]), "oversized optional evidence must not stop the remaining bounded probe sequence");
+    Require(oversizedStream is not null
+            && oversizedStream.BytesRead <= LlamaCppRuntimeService.MaximumResponseBytes + 1,
+        "a chunked llama.cpp response should stream and stop reading at the byte safety boundary");
+
+    static HttpResponseMessage JsonResponse(string body) => new(System.Net.HttpStatusCode.OK)
+    {
+        Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
+    };
+}
+
+static void LlamaCppRuntimeCapsSourceEntriesAndProjectsPartialEvidence()
+{
+    const int sourceCount = 300;
+    var routerBody = JsonSerializer.Serialize(new
+    {
+        data = Enumerable.Range(0, sourceCount)
+            .Select(index => new
+            {
+                id = $"router-{index:000}.gguf",
+                status = new { value = index == 0 ? "loaded" : "unloaded" }
+            })
+            .ToArray()
+    });
+    var handler = new TestHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        return path switch
+        {
+            "/health" => JsonResponse("""{"status":"ok"}"""),
+            "/models" => JsonResponse(routerBody),
+            "/v1/models" => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound),
+            "/props" => JsonResponse("""{"build_info":"llama.cpp bounded-inventory"}"""),
+            "/slots" => JsonResponse("[]"),
+            _ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+        };
+    });
+    var config = LlamaRuntimeConfig("router-000.gguf");
+    var runtime = new LlamaCppRuntimeService(new HttpClient(handler))
+        .InspectAsync(config)
+        .GetAwaiter()
+        .GetResult();
+    var expectedOmitted = sourceCount - 256;
+
+    Require(runtime.Available
+            && runtime.RouterMode
+            && runtime.Models.Count == 256
+            && runtime.OmittedModelCount == expectedOmitted
+            && runtime.Warnings.Any(value => value.Contains($"{expectedOmitted}", StringComparison.Ordinal)
+                && value.Contains("omitted", StringComparison.OrdinalIgnoreCase)),
+        "native llama.cpp inspection did not retain its bounded source set and exact raw omission evidence");
+
+    var projection = new ProviderModelCatalogProjectionService();
+    var projected = ProviderModelCatalogProjectionService.FromLlamaCpp(
+        projection.BeginRefresh("llama-bounded-source", config),
+        runtime,
+        config.Model);
+    Require(projected.CatalogEvidence == ProviderCatalogEvidenceState.Partial
+            && projected.ResidencyEvidence == ProviderCatalogEvidenceState.Partial
+            && projected.Models.Count == 256
+            && projected.OmittedModelCount == expectedOmitted
+            && projected.Status.Contains($"{expectedOmitted} additional catalog entries omitted", StringComparison.Ordinal),
+        "native llama.cpp source omissions were not projected as truthful Partial catalog and residency evidence");
 
     static HttpResponseMessage JsonResponse(string body) => new(System.Net.HttpStatusCode.OK)
     {
@@ -940,6 +1011,22 @@ static void LlamaCppRuntimeLifecycleIsCapabilitySafeAndCancelable()
         .GetAwaiter()
         .GetResult();
     Require(!unsupported.Supported && !unsupported.Ok, "missing router lifecycle endpoints should be reported as unsupported");
+
+    var oversizedLifecycleStream = new CountingReadStream(LlamaCppRuntimeService.MaximumResponseBytes + 8192);
+    var oversizedLifecycleHandler = new TestHttpMessageHandler(_ =>
+    {
+        var content = new StreamContent(oversizedLifecycleStream);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = content };
+    });
+    var oversizedLifecycle = new LlamaCppRuntimeService(new HttpClient(oversizedLifecycleHandler))
+        .LoadAsync(config, "router-model.gguf")
+        .GetAwaiter()
+        .GetResult();
+    Require(!oversizedLifecycle.Ok
+            && oversizedLifecycle.Error.Contains("safety limit", StringComparison.OrdinalIgnoreCase)
+            && oversizedLifecycleStream.BytesRead <= LlamaCppRuntimeService.MaximumResponseBytes + 1,
+        "a chunked oversized llama.cpp lifecycle response should fail safely and stop reading at the byte boundary");
 
     var cancellationHandler = new CancellationBlockingHttpMessageHandler();
     var cancellationService = new LlamaCppRuntimeService(new HttpClient(cancellationHandler));
@@ -1221,6 +1308,93 @@ static void LmStudioCatalogParsesNativeModelMetadata()
     Require(llm.ReasoningDefault == "on", "reasoning default should parse");
     Require(llm.Matches("Gemma 4 26B A4B"), "display name alias should match");
     Require(embedding.IsEmbeddingModel, "embedding type should parse");
+}
+
+static void LmStudioCatalogBoundsNativeResponseEvidence()
+{
+    const int extraEntries = 3;
+    var catalogBody = JsonSerializer.Serialize(new
+    {
+        models = Enumerable.Range(0, LmStudioModelCatalogService.MaximumModelEntries + extraEntries)
+            .Select(index => new
+            {
+                type = "llm",
+                key = $"bounded-{index:0000}",
+                display_name = $"Bounded {index:0000}",
+                loaded_instances = Array.Empty<object>()
+            })
+            .ToArray()
+    });
+    var handler = new TestHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+    {
+        Content = new StringContent(catalogBody, System.Text.Encoding.UTF8, "application/json")
+    });
+    var catalog = new LmStudioModelCatalogService(new HttpClient(handler))
+        .TryLoadAsync("http://127.0.0.1:1234/v1", "bounded-secret")
+        .GetAwaiter()
+        .GetResult();
+
+    Require(catalog.Ok
+            && catalog.Models.Count == LmStudioModelCatalogService.MaximumModelEntries
+            && catalog.OmittedModelCount == extraEntries,
+        "the native reader should retain a bounded entry set and report the exact upstream omission count");
+    var config = new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:1234/v1",
+        ApiMode = ModelProviderApiModes.LmStudioNative,
+        ApiToken = "bounded-secret",
+        Model = "bounded-0000"
+    };
+    var projection = new ProviderModelCatalogProjectionService();
+    var snapshot = ProviderModelCatalogProjectionService.FromLmStudio(
+        projection.BeginRefresh("bounded-session", config),
+        catalog,
+        config.Model,
+        DateTimeOffset.UnixEpoch);
+    var expectedOmitted = LmStudioModelCatalogService.MaximumModelEntries
+        + extraEntries
+        - ProviderModelCatalogProjectionService.MaximumModelCount;
+    Require(snapshot.CatalogEvidence == ProviderCatalogEvidenceState.Partial
+            && snapshot.ResidencyEvidence == ProviderCatalogEvidenceState.Partial
+            && snapshot.AvailableModels.Count == ProviderModelCatalogProjectionService.MaximumModelCount
+            && snapshot.OmittedModelCount == expectedOmitted
+            && snapshot.Status.Contains(
+                $"{expectedOmitted} additional catalog entries omitted",
+                StringComparison.Ordinal),
+        "bounded native evidence should remain explicitly partial and report every upstream and display omission");
+
+    var oversizedStream = new CountingReadStream(LmStudioModelCatalogService.MaximumResponseBytes + 8192);
+    var oversizedHandler = new TestHttpMessageHandler(_ =>
+    {
+        var content = new StreamContent(oversizedStream);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = content };
+    });
+    var oversized = new LmStudioModelCatalogService(new HttpClient(oversizedHandler))
+        .TryLoadAsync("http://127.0.0.1:1234/v1", "bounded-secret")
+        .GetAwaiter()
+        .GetResult();
+    Require(!oversized.Ok
+            && oversized.Models.Count == 0
+            && oversized.Error.Contains("response limit", StringComparison.OrdinalIgnoreCase)
+            && oversizedStream.BytesRead <= LmStudioModelCatalogService.MaximumResponseBytes + 1,
+        "a chunked oversized response should stop at the byte boundary and must not become partial catalog evidence");
+
+    var excessiveDepth = "{\"models\":[],\"nested\":"
+        + new string('[', LmStudioModelCatalogService.MaximumJsonDepth + 2)
+        + "0"
+        + new string(']', LmStudioModelCatalogService.MaximumJsonDepth + 2)
+        + "}";
+    var depthHandler = new TestHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+    {
+        Content = new StringContent(excessiveDepth, System.Text.Encoding.UTF8, "application/json")
+    });
+    var excessive = new LmStudioModelCatalogService(new HttpClient(depthHandler))
+        .TryLoadAsync("http://127.0.0.1:1234/v1", "bounded-secret")
+        .GetAwaiter()
+        .GetResult();
+    Require(!excessive.Ok && excessive.Models.Count == 0,
+        "JSON beyond the native catalog depth limit should fail closed instead of publishing incomplete evidence");
 }
 
 static void OllamaCatalogParsesNativeModelMetadata()
@@ -1843,6 +2017,37 @@ static void ModelUnloadSendsBearerToken()
     Require(handler.Requests.Any(uri => uri.AbsolutePath.EndsWith("/api/v1/models/unload", StringComparison.OrdinalIgnoreCase)), "native unload endpoint should be called");
     Require(handler.Bodies.Any(body => body.Contains("\"instance_id\":\"google/gemma-4-26b-a4b\"", StringComparison.Ordinal)), "native unload should send loaded instance id");
 
+    var aliasHandler = new TestHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(path.EndsWith("/models", StringComparison.OrdinalIgnoreCase)
+                ? """
+                  {"models":[
+                    {"type":"llm","key":"alpha","display_name":"left","loaded_instances":[]},
+                    {"type":"llm","key":"beta","display_name":"right","loaded_instances":[{"id":"instance-beta"}]},
+                    {"type":"llm","key":"bridge","selected_variant":"left","display_name":"right","loaded_instances":[]}
+                  ]}
+                  """
+                : "{}")
+        };
+    });
+    using var aliasClient = new HttpClient(aliasHandler);
+    var aliasService = new ModelPreloadService(aliasClient, new LmStudioModelCatalogService(aliasClient));
+    var aliasResults = aliasService.UnloadAsync(
+            "http://127.0.0.1:1234/v1",
+            ["alpha"],
+            ModelProviderApiModes.LmStudioNative,
+            "secret-token")
+        .GetAwaiter()
+        .GetResult();
+    Require(aliasResults.Single().Status == "unloaded"
+            && aliasHandler.Requests.Select(uri => uri.AbsolutePath)
+                .SequenceEqual(["/api/v1/models", "/api/v1/models/unload"])
+            && aliasHandler.Bodies.Any(body => body.Contains("\"instance_id\":\"instance-beta\"", StringComparison.Ordinal)),
+        "unloading a deduplicated canonical alias did not target the loaded equivalent instance");
+
     var guardedHandler = new TestHttpMessageHandler(request =>
     {
         var path = request.RequestUri?.AbsolutePath ?? "";
@@ -1891,6 +2096,78 @@ static void ModelUnloadSendsBearerToken()
             && guardedStarts == 2
             && guardedHandler.Requests.Count(uri => uri.AbsolutePath.EndsWith("/api/v1/models/unload", StringComparison.OrdinalIgnoreCase)) == 1,
         "a session change before the second instance mutation must stop the next POST while surfacing the earlier partial mutation");
+}
+
+static void ModelPreloadResolvesSanitizedLmStudioPathKey()
+{
+    const string providerModelPath = @"C:\LM Studio\models\coding\yi-coder.gguf";
+    var selectedModel = ProviderModelCatalogProjectionService.SafeModelIdentifier(providerModelPath);
+    var handler = new TestHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(path.EndsWith("/models", StringComparison.OrdinalIgnoreCase)
+                ? $$"""
+                    {"models":[{"type":"llm","key":"{{providerModelPath.Replace("\\", "\\\\", StringComparison.Ordinal)}}","loaded_instances":[]}]}
+                    """
+                : """{"load_time_seconds":0.25}""")
+        };
+    });
+    using var httpClient = new HttpClient(handler);
+    var service = new ModelPreloadService(httpClient, new LmStudioModelCatalogService(httpClient));
+
+    var results = service.PreloadAsync(
+            "http://127.0.0.1:1234/v1",
+            [selectedModel],
+            ModelProviderApiModes.LmStudioNative,
+            requireCatalogMatch: true)
+        .GetAwaiter()
+        .GetResult();
+
+    Require(results.Single().Status == "loaded", "a filename-safe selected id should resolve its LM Studio absolute-path catalog key for load");
+    Require(handler.Requests.Select(uri => uri.AbsolutePath)
+            .SequenceEqual(["/api/v1/models", "/api/v1/models/load"]),
+        "path-key load should perform exactly one catalog request and one native load request");
+    using var payload = JsonDocument.Parse(handler.Bodies.Last());
+    Require(payload.RootElement.GetProperty("model").GetString() == providerModelPath,
+        "path-key load must send LM Studio's exact raw provider identifier instead of its filename-safe display alias");
+}
+
+static void ModelUnloadResolvesSanitizedLmStudioPathKey()
+{
+    const string providerModelPath = @"C:\LM Studio\models\coding\yi-coder.gguf";
+    const string loadedInstanceId = "yi-coder-instance";
+    var selectedModel = ProviderModelCatalogProjectionService.SafeModelIdentifier(providerModelPath);
+    var handler = new TestHttpMessageHandler(request =>
+    {
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(path.EndsWith("/models", StringComparison.OrdinalIgnoreCase)
+                ? $$"""
+                    {"models":[{"type":"llm","key":"{{providerModelPath.Replace("\\", "\\\\", StringComparison.Ordinal)}}","loaded_instances":[{"id":"{{loadedInstanceId}}"}]}]}
+                    """
+                : "{}")
+        };
+    });
+    using var httpClient = new HttpClient(handler);
+    var service = new ModelPreloadService(httpClient, new LmStudioModelCatalogService(httpClient));
+
+    var results = service.UnloadAsync(
+            "http://127.0.0.1:1234/v1",
+            [selectedModel],
+            ModelProviderApiModes.LmStudioNative)
+        .GetAwaiter()
+        .GetResult();
+
+    Require(results.Single().Status == "unloaded", "a filename-safe selected id should resolve its loaded LM Studio absolute-path catalog key for unload");
+    Require(handler.Requests.Select(uri => uri.AbsolutePath)
+            .SequenceEqual(["/api/v1/models", "/api/v1/models/unload"]),
+        "path-key unload should perform exactly one catalog request and one native unload request");
+    using var payload = JsonDocument.Parse(handler.Bodies.Last());
+    Require(payload.RootElement.GetProperty("instance_id").GetString() == loadedInstanceId,
+        "path-key unload must send LM Studio's exact loaded instance id");
 }
 
 static void ModelPreloadUsesOllamaKeepAlive()

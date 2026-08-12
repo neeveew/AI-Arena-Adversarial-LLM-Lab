@@ -12,6 +12,7 @@ internal static partial class Program
         AgentRosterService.EnsureParticipantCount(source, 6);
         source.MatchType = "scientific";
         source.Engine.FactoryMode = true;
+        source.Engine.DefaultForUnassignedAgentsEnabled = false;
         source.Engine.Steering.Topic = "Which evidence should decide the launch?";
         source.Engine.Steering.Global = "Quality contract: cite evidence and end with an actionable decision.";
         source.ScenarioGenerator.Style = "technical";
@@ -56,14 +57,47 @@ internal static partial class Program
             NativeStatefulChat = false,
             NativeIdleTtlSeconds = 45
         };
+        source.Configs["alpha"] = new ModelProviderConfig
+        {
+            BaseUrl = "http://localhost:1234/v1",
+            ApiMode = ModelProviderApiModes.OpenAiCompatible,
+            Model = "arena-model",
+            Timeout = 88,
+            Temperature = 0.4,
+            MaxOutputTokens = 2048,
+            ContextLength = 32768,
+            Reasoning = "medium",
+            NativeStatefulChat = false,
+            NativeIdleTtlSeconds = 45,
+            ExplicitModelAssignment = true
+        };
+        source.Configs["beta"] = new ModelProviderConfig
+        {
+            BaseUrl = "http://localhost:1234/v1",
+            ApiMode = ModelProviderApiModes.OpenAiCompatible,
+            Model = "legacy-distinct-model",
+            Timeout = 88,
+            Temperature = 0.4,
+            MaxOutputTokens = 2048,
+            ContextLength = 32768,
+            Reasoning = "medium",
+            NativeStatefulChat = false,
+            NativeIdleTtlSeconds = 45
+        };
         source.Engine.Messages.Add(new DialogueMessage { Turn = 1, Speaker = "Alpha", SpeakerId = "alpha", Text = "Runtime text" });
         source.GenerationHistory.Add(new GenerationHistoryEntry { Id = "history", Kind = "random" });
 
         var package = MatchSetupPackageCodec.FromSnapshot("portable-source", source);
         var json = MatchSetupPackageCodec.Serialize(package);
-        Require(json.Contains(MatchSetupPackageCodec.Schema, StringComparison.Ordinal), "portable JSON should declare the v2 setup schema");
+        Require(json.Contains(MatchSetupPackageCodec.Schema, StringComparison.Ordinal), "portable JSON should declare the v3 setup schema");
         Require(MatchSetupPackageCodec.FactoryConversationContract == "public_group_v1", "Factory setup identity should declare the public group prompt contract");
-        Require(package.Setup.FactoryMode && json.Contains("\"factoryMode\": true", StringComparison.Ordinal), "portable JSON should preserve Factory mode without changing the v2 schema");
+        Require(package.Setup.FactoryMode && json.Contains("\"factoryMode\": true", StringComparison.Ordinal), "portable JSON should preserve Factory mode in the v3 schema");
+        Require(!package.Setup.DefaultForUnassignedAgentsEnabled
+                && json.Contains("\"defaultForUnassignedAgentsEnabled\": false", StringComparison.Ordinal)
+                && package.Setup.Providers["alpha"].AssignmentMode == MatchSetupProviderAssignmentModes.Explicit
+                && package.Setup.Providers["beta"].AssignmentMode == MatchSetupProviderAssignmentModes.Explicit
+                && json.Contains("\"assignmentMode\": \"explicit\"", StringComparison.Ordinal),
+            "portable v3 JSON should preserve the optional default policy, explicit-equal-to-shared routing, and legacy distinct role routing");
         var packageState = MatchSetupPackageCodec.ToState("portable-source", package);
         Require(packageState.FactoryMode, "portable package state should project Factory mode for control-plane consumers");
         var canonicalSetup = System.Text.Json.JsonSerializer.Serialize(
@@ -103,6 +137,14 @@ internal static partial class Program
         var applied = MatchSetupPackageCodec.Apply(parsed.Package!, target, source.Configs);
         Require(applied.Ok, $"portable setup should apply atomically: {applied.Message}");
         Require(target.Engine.FactoryMode, "round trip should preserve Factory mode");
+        Require(!target.Engine.DefaultForUnassignedAgentsEnabled,
+            "round trip should preserve the disabled default-for-unassigned policy");
+        Require(target.Configs["alpha"].ExplicitModelAssignment
+                && target.Configs["alpha"].Model == target.Configs["shared"].Model,
+            "round trip should preserve an explicit role assignment even when it equals the shared model");
+        Require(target.Configs["beta"].ExplicitModelAssignment
+                && target.Configs["beta"].Model == "legacy-distinct-model",
+            "round trip should migrate a legacy distinct role model to explicit even while the shared fallback is disabled");
         Require(target.MatchType == "scientific" && target.Engine.Steering.Topic == source.Engine.Steering.Topic, "round trip should preserve scenario identity");
         Require(target.Engine.Agents.Count(agent => agent.Active && AgentRosterService.IsParticipantId(agent.Id)) == 6, "round trip should preserve dynamic cast size");
         Require(target.Engine.Agents.Single(agent => agent.Id == "alpha").Persona == source.Engine.Agents[0].Persona, "round trip should preserve exact personas");
@@ -150,10 +192,44 @@ internal static partial class Program
         Require(blankFactory.Warnings.Any(warning => warning.Contains("blank name", StringComparison.OrdinalIgnoreCase)), "Factory import should retain structural cast warnings");
         Require(blankFactory.Warnings.Any(warning => warning.Contains("Relationship pressure is enabled", StringComparison.Ordinal)), "Factory import should retain relationship-matrix validation warnings");
 
-        var legacyJson = blankFactoryJson.Replace("\"factoryMode\": true,", "", StringComparison.Ordinal);
-        var legacy = MatchSetupPackageCodec.Parse(legacyJson);
-        Require(legacy.Ok && legacy.Package?.Setup.FactoryMode == false, "legacy v2 packages without factoryMode should default to Arena mode");
-        Require(legacy.Warnings.Any(warning => warning.Contains("Scenario topic is blank", StringComparison.Ordinal)), "legacy packages should retain Arena-mode readiness warnings");
+        var missingFactoryModeJson = blankFactoryJson.Replace("\"factoryMode\": true,", "", StringComparison.Ordinal);
+        var missingFactoryMode = MatchSetupPackageCodec.Parse(missingFactoryModeJson);
+        Require(missingFactoryMode.Ok && missingFactoryMode.Package?.Setup.FactoryMode == false,
+            "packages without factoryMode should default to Arena mode");
+        Require(missingFactoryMode.Warnings.Any(warning => warning.Contains("Scenario topic is blank", StringComparison.Ordinal)),
+            "packages without factoryMode should retain Arena-mode readiness warnings");
+
+        var legacyNode = System.Text.Json.Nodes.JsonNode.Parse(json)?.AsObject()
+            ?? throw new InvalidOperationException("portable JSON should parse as a mutable legacy fixture");
+        legacyNode["schema"] = MatchSetupPackageCodec.LegacySchema;
+        var legacySetup = legacyNode["setup"]?.AsObject()
+            ?? throw new InvalidOperationException("portable JSON should contain setup");
+        legacySetup.Remove("defaultForUnassignedAgentsEnabled");
+        var legacyProviders = legacySetup["providers"]?.AsObject()
+            ?? throw new InvalidOperationException("portable JSON should contain providers");
+        foreach (var providerNode in legacyProviders.Select(item => item.Value).OfType<System.Text.Json.Nodes.JsonObject>())
+        {
+            providerNode.Remove("assignmentMode");
+        }
+        legacyProviders["beta"] = System.Text.Json.Nodes.JsonNode.Parse(
+            legacyProviders["alpha"]!.ToJsonString())!.AsObject();
+        legacyProviders["beta"]!["model"] = "legacy-beta-model";
+        var legacyV2 = MatchSetupPackageCodec.Parse(legacyNode.ToJsonString());
+        Require(legacyV2.Ok
+                && legacyV2.Package?.Schema == MatchSetupPackageCodec.Schema
+                && legacyV2.Package.Setup.DefaultForUnassignedAgentsEnabled
+                && legacyV2.Package.Setup.Providers["alpha"].AssignmentMode == MatchSetupProviderAssignmentModes.Inherit
+                && legacyV2.Package.Setup.Providers["beta"].AssignmentMode == MatchSetupProviderAssignmentModes.Explicit,
+            "legacy v2 migration should enable the default and infer same-as-shared inheritance versus a differing explicit role model");
+        Require(legacyV2.Warnings.Any(warning => warning.Contains("Legacy Match Setup v2", StringComparison.Ordinal)),
+            "legacy v2 migration should disclose its default and assignment-mode inference");
+        var legacyTarget = SessionStore.CreateDefaultSnapshot();
+        Require(MatchSetupPackageCodec.Apply(legacyV2.Package!, legacyTarget, source.Configs).Ok
+                && legacyTarget.Engine.DefaultForUnassignedAgentsEnabled
+                && !legacyTarget.Configs["alpha"].ExplicitModelAssignment
+                && legacyTarget.Configs["beta"].ExplicitModelAssignment
+                && legacyTarget.Configs["beta"].Model == "legacy-beta-model",
+            "legacy v2 migration did not persist its inferred fallback and role assignment semantics");
 
         var invalidJson = json.Replace("\"id\": \"beta\"", "\"id\": \"alpha\"", StringComparison.Ordinal);
         var invalid = MatchSetupPackageCodec.Parse(invalidJson);
@@ -188,7 +264,7 @@ internal static partial class Program
 
         var unknownMemberJson = json.Insert(json.IndexOf('{') + 1, "\n  \"unexpected\": true,");
         var unknownMemberResult = MatchSetupPackageCodec.Parse(unknownMemberJson);
-        Require(!unknownMemberResult.Ok && unknownMemberResult.ErrorCode == "invalid_json", "unknown v2 package members should reject instead of being silently ignored");
+        Require(!unknownMemberResult.Ok && unknownMemberResult.ErrorCode == "invalid_json", "unknown v3 package members should reject instead of being silently ignored");
 
         var invalidRelationship = MatchSetupPackageCodec.FromSnapshot("invalid-relationship", source);
         invalidRelationship.Setup.Relationship.Links.Add(new MatchSetupRelationshipLinkPackage { Source = "beta", Target = "beta", Stance = "challenge" });

@@ -1415,7 +1415,7 @@ internal sealed class ScenarioWorkflowCoordinator
 
             if (!HasRunnableModelAssignment(snapshot))
             {
-                yield return "choose a shared provider model or assign models to every active agent";
+                yield return "enable Default for unassigned agents or assign models to every active agent";
             }
 
             if (!ArenaOperationCoordinator.HasFactoryInput(snapshot))
@@ -1445,7 +1445,7 @@ internal sealed class ScenarioWorkflowCoordinator
 
         if (!HasRunnableModelAssignment(snapshot))
         {
-            yield return "choose a shared provider model or assign models to every active agent";
+            yield return "enable Default for unassigned agents or assign models to every active agent";
         }
 
         if (snapshot.RivalryMatrixEnabled && ActiveRelationshipPlan(snapshot).Links.Count == 0)
@@ -1497,7 +1497,7 @@ internal sealed class ScenarioWorkflowCoordinator
 
     private static bool HasRunnableModelAssignment(ArenaViewSnapshot snapshot)
     {
-        if (HasModel(snapshot.ProviderModel))
+        if (snapshot.DefaultForUnassignedAgentsEnabled && HasModel(snapshot.ProviderModel))
         {
             return true;
         }
@@ -1508,12 +1508,17 @@ internal sealed class ScenarioWorkflowCoordinator
 
     private static string ProviderModelState(ArenaViewSnapshot snapshot)
     {
-        if (HasModel(snapshot.ProviderModel))
+        if (snapshot.DefaultForUnassignedAgentsEnabled && HasModel(snapshot.ProviderModel))
         {
             return "Online";
         }
 
-        return HasRunnableModelAssignment(snapshot) ? "Role models" : "No model";
+        if (HasRunnableModelAssignment(snapshot))
+        {
+            return "Role models";
+        }
+
+        return HasModel(snapshot.ProviderModel) ? "Default off" : "No model";
     }
 
     private static string ProviderBadgeTooltip(ArenaViewSnapshot snapshot, string providerModelState)
@@ -1525,11 +1530,21 @@ internal sealed class ScenarioWorkflowCoordinator
                 : $"Provider is offline: {ShortHistoryText(snapshot.ProviderLastError, 96)}";
         }
 
-        return providerModelState.Equals("Role models", StringComparison.OrdinalIgnoreCase)
-            ? "Shared provider model is blank, but every active agent has a role-specific model."
-            : HasModel(snapshot.ProviderModel)
-                ? $"Shared provider model: {ShortHistoryText(snapshot.ProviderModel, 64)}"
-                : "Choose a shared provider model or assign models to every active agent.";
+        if (providerModelState.Equals("Role models", StringComparison.OrdinalIgnoreCase))
+        {
+            return snapshot.DefaultForUnassignedAgentsEnabled
+                ? "Every active agent resolves through the shared default or a role-specific model."
+                : "Default fallback is off, and every active agent has an explicit model.";
+        }
+
+        if (providerModelState.Equals("Default off", StringComparison.OrdinalIgnoreCase))
+        {
+            return "The shared provider model remains available to Agent Workspace, but Arena fallback is off. Assign every active agent or enable Default for unassigned agents.";
+        }
+
+        return HasModel(snapshot.ProviderModel)
+            ? $"Shared provider model: {ShortHistoryText(snapshot.ProviderModel, 64)}"
+            : "Choose a shared provider model or assign models to every active agent.";
     }
 
     private static int SetupLockCount(ArenaViewSnapshot snapshot)

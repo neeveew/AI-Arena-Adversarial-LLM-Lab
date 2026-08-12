@@ -1,5 +1,7 @@
 using System.Globalization;
+using System.IO;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using AIArena.Core.Providers;
 
@@ -7,6 +9,10 @@ namespace AIArena.Wpf.Services;
 
 public class OllamaModelCatalogService
 {
+    internal const int MaximumResponseBytes = 4 * 1024 * 1024;
+    internal const int MaximumJsonDepth = 32;
+    internal const int MaximumModelEntries = 1024;
+
     private static readonly HttpClient SharedHttpClient = new()
     {
         Timeout = TimeSpan.FromSeconds(5)
@@ -25,24 +31,80 @@ public class OllamaModelCatalogService
     {
         try
         {
+            using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            if (httpClient.Timeout != Timeout.InfiniteTimeSpan)
+            {
+                requestCancellation.CancelAfter(httpClient.Timeout);
+            }
+
+            var requestToken = requestCancellation.Token;
             var apiBase = ModelProviderClient.NormalizeOllamaApiBase(providerBaseUrl);
-            var tags = await GetAsync(new Uri(new Uri(apiBase + "/", UriKind.Absolute), "tags"), apiToken, cancellationToken);
+            var tags = await GetAsync(
+                new Uri(new Uri(apiBase + "/", UriKind.Absolute), "tags"),
+                apiToken,
+                "model catalog",
+                requestToken);
             if (!tags.Ok)
             {
                 return OllamaModelCatalog.Failed(tags.Error);
             }
 
-            var models = ParseTags(tags.Body);
-            var ps = await GetAsync(new Uri(new Uri(apiBase + "/", UriKind.Absolute), "ps"), apiToken, cancellationToken);
-            return ps.Ok
-                ? OllamaModelCatalog.Success(MergeRunningModels(models, ParseRunningModels(ps.Body)), runningModelsOk: true, "")
-                : OllamaModelCatalog.Success(models, runningModelsOk: false, ps.Error);
+            var localModels = ParseModelList(tags.Body, "Ollama tags");
+            try
+            {
+                var ps = await GetAsync(
+                    new Uri(new Uri(apiBase + "/", UriKind.Absolute), "ps"),
+                    apiToken,
+                    "running-model inventory",
+                    requestToken);
+                if (!ps.Ok)
+                {
+                    return OllamaModelCatalog.Success(
+                        localModels.Models,
+                        runningModelsOk: false,
+                        ps.Error,
+                        omittedTagEntryCount: localModels.OmittedEntryCount);
+                }
+
+                var runningModels = ParseModelList(ps.Body, "Ollama running-model inventory");
+                return OllamaModelCatalog.Success(
+                    MergeRunningModels(localModels.Models, runningModels.Models),
+                    runningModelsOk: true,
+                    "",
+                    localModels.OmittedEntryCount,
+                    runningModels.OmittedEntryCount);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                return OllamaModelCatalog.Success(
+                    localModels.Models,
+                    runningModelsOk: false,
+                    "Timed out while asking Ollama for its running-model inventory.",
+                    omittedTagEntryCount: localModels.OmittedEntryCount);
+            }
+            catch (Exception ex) when (IsCatalogException(ex))
+            {
+                return OllamaModelCatalog.Success(
+                    localModels.Models,
+                    runningModelsOk: false,
+                    ProviderConfigurationControlService.SanitizeError(FriendlyException(ex), apiToken),
+                    omittedTagEntryCount: localModels.OmittedEntryCount);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception ex) when (ex is UriFormatException or HttpRequestException or TaskCanceledException or JsonException)
+        catch (OperationCanceledException)
+        {
+            return OllamaModelCatalog.Failed(
+                "Timed out while asking Ollama for its native model catalog.");
+        }
+        catch (Exception ex) when (IsCatalogException(ex))
         {
             return OllamaModelCatalog.Failed(ProviderConfigurationControlService.SanitizeError(
                 FriendlyException(ex),
@@ -50,87 +112,130 @@ public class OllamaModelCatalogService
         }
     }
 
-    private async Task<(bool Ok, string Body, string Error)> GetAsync(Uri endpoint, string apiToken, CancellationToken cancellationToken)
+    private async Task<TransportResult> GetAsync(
+        Uri endpoint,
+        string apiToken,
+        string responseName,
+        CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
         ProviderHttpHelpers.ApplyAuthorization(request, apiToken);
-        using var response = await httpClient.SendAsync(request, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var response = await httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        var body = await ReadBoundedContentAsync(response.Content, responseName, cancellationToken);
         return response.IsSuccessStatusCode
-            ? (true, body, "")
-            : (false, "", ProviderConfigurationControlService.SanitizeError(
-                ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Ollama native model catalog request failed.", "message", "error", "detail"),
+            ? new TransportResult(true, body.Memory, "")
+            : new TransportResult(false, ReadOnlyMemory<byte>.Empty, ProviderConfigurationControlService.SanitizeError(
+                ProviderHttpHelpers.FriendlyBody(
+                    Encoding.UTF8.GetString(body.Memory.Span),
+                    response.ReasonPhrase,
+                    $"Ollama native {responseName} request failed.",
+                    "message",
+                    "error",
+                    "detail"),
                 apiToken));
     }
 
     public static IReadOnlyList<OllamaModelInfo> ParseTags(string json)
     {
-        using var doc = JsonDocument.Parse(json);
-        if (!TryGetArray(doc.RootElement, "models", out var models))
+        var parsed = ParseModelList(Encoding.UTF8.GetBytes(json ?? ""), "Ollama tags");
+        if (parsed.OmittedEntryCount > 0)
         {
-            return [];
+            throw new JsonException(
+                $"Ollama tags exceeded the {MaximumModelEntries} entry parser limit.");
         }
 
-        var entries = new List<OllamaModelInfo>();
-        foreach (var item in models.EnumerateArray())
-        {
-            var model = ProviderHttpHelpers.FirstString(item, "model", "name").Trim();
-            if (string.IsNullOrWhiteSpace(model))
-            {
-                continue;
-            }
-
-            entries.Add(ParseModelInfo(item, model));
-        }
-
-        return entries;
+        return parsed.Models;
     }
 
     public static IReadOnlyList<OllamaModelInfo> ParseRunningModels(string json)
     {
-        using var doc = JsonDocument.Parse(json);
-        if (!TryGetArray(doc.RootElement, "models", out var models))
+        var parsed = ParseModelList(
+            Encoding.UTF8.GetBytes(json ?? ""),
+            "Ollama running-model inventory");
+        if (parsed.OmittedEntryCount > 0)
         {
-            return [];
+            throw new JsonException(
+                $"Ollama running-model inventory exceeded the {MaximumModelEntries} entry parser limit.");
         }
 
+        return parsed.Models;
+    }
+
+    private static ParsedModelList ParseModelList(ReadOnlyMemory<byte> utf8Json, string sourceName)
+    {
+        using var doc = JsonDocument.Parse(
+            utf8Json,
+            new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = MaximumJsonDepth
+            });
+        if (doc.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException($"{sourceName} root must be an object.");
+        }
+
+        if (!TryGetArray(doc.RootElement, "models", out var models))
+        {
+            throw new JsonException($"{sourceName} did not contain a models array.");
+        }
+
+        var sourceEntryCount = models.GetArrayLength();
+        var retainedEntryCount = Math.Min(sourceEntryCount, MaximumModelEntries);
         var entries = new List<OllamaModelInfo>();
+        var observedEntryCount = 0;
         foreach (var item in models.EnumerateArray())
         {
+            if (observedEntryCount++ >= retainedEntryCount)
+            {
+                break;
+            }
+
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                throw new JsonException($"{sourceName} contained a malformed model entry.");
+            }
+
             var model = ProviderHttpHelpers.FirstString(item, "model", "name").Trim();
             if (string.IsNullOrWhiteSpace(model))
             {
-                continue;
+                throw new JsonException($"{sourceName} contained a model without an identifier.");
             }
 
             entries.Add(ParseModelInfo(item, model));
         }
 
-        return entries;
+        return new ParsedModelList(
+            entries,
+            Math.Max(0, sourceEntryCount - retainedEntryCount));
     }
 
     public static IReadOnlyList<OllamaModelInfo> MergeRunningModels(
         IReadOnlyList<OllamaModelInfo> localModels,
         IReadOnlyList<OllamaModelInfo> runningModels)
     {
-        var merged = localModels.ToDictionary(model => model.PreferredIdentifier, StringComparer.OrdinalIgnoreCase);
+        var merged = new Dictionary<string, OllamaModelInfo>(StringComparer.OrdinalIgnoreCase);
+        foreach (var local in localModels)
+        {
+            if (merged.TryGetValue(local.PreferredIdentifier, out var existing))
+            {
+                merged[local.PreferredIdentifier] = MergeModelEvidence(existing, local);
+            }
+            else
+            {
+                merged[local.PreferredIdentifier] = local;
+            }
+        }
+
         foreach (var running in runningModels)
         {
             if (merged.TryGetValue(running.PreferredIdentifier, out var local))
             {
-                merged[running.PreferredIdentifier] = local with
-                {
-                    ContextLength = running.ContextLength ?? local.ContextLength,
-                    ExpiresAt = running.ExpiresAt ?? local.ExpiresAt,
-                    SizeVramBytes = running.SizeVramBytes ?? local.SizeVramBytes,
-                    SizeBytes = running.SizeBytes ?? local.SizeBytes,
-                    Digest = string.IsNullOrWhiteSpace(running.Digest) ? local.Digest : running.Digest,
-                    Format = string.IsNullOrWhiteSpace(running.Format) ? local.Format : running.Format,
-                    Family = string.IsNullOrWhiteSpace(running.Family) ? local.Family : running.Family,
-                    ParameterSize = string.IsNullOrWhiteSpace(running.ParameterSize) ? local.ParameterSize : running.ParameterSize,
-                    QuantizationLevel = string.IsNullOrWhiteSpace(running.QuantizationLevel) ? local.QuantizationLevel : running.QuantizationLevel,
-                    Aliases = local.Aliases.Concat(running.Aliases).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
-                };
+                merged[running.PreferredIdentifier] = MergeModelEvidence(local, running);
                 continue;
             }
 
@@ -142,6 +247,30 @@ public class OllamaModelCatalogService
             .ThenBy(model => model.PreferredIdentifier, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+
+    private static OllamaModelInfo MergeModelEvidence(OllamaModelInfo first, OllamaModelInfo second)
+    {
+        var evidence = second.Loaded && !first.Loaded ? second : first;
+        var fallback = ReferenceEquals(evidence, first) ? second : first;
+        return first with
+        {
+            Name = Prefer(first.Name, second.Name),
+            Model = Prefer(first.Model, second.Model),
+            ContextLength = evidence.ContextLength ?? fallback.ContextLength,
+            ExpiresAt = evidence.ExpiresAt ?? fallback.ExpiresAt,
+            SizeVramBytes = evidence.SizeVramBytes ?? fallback.SizeVramBytes,
+            SizeBytes = evidence.SizeBytes ?? fallback.SizeBytes,
+            Digest = Prefer(evidence.Digest, fallback.Digest),
+            Format = Prefer(evidence.Format, fallback.Format),
+            Family = Prefer(evidence.Family, fallback.Family),
+            ParameterSize = Prefer(evidence.ParameterSize, fallback.ParameterSize),
+            QuantizationLevel = Prefer(evidence.QuantizationLevel, fallback.QuantizationLevel),
+            Aliases = first.Aliases.Concat(second.Aliases).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+        };
+    }
+
+    private static string Prefer(string first, string second) =>
+        string.IsNullOrWhiteSpace(first) ? second : first;
 
     private static OllamaModelInfo ParseModelInfo(JsonElement item, string model)
     {
@@ -213,6 +342,61 @@ public class OllamaModelCatalogService
             : null;
     }
 
+    private static async Task<BoundedContent> ReadBoundedContentAsync(
+        HttpContent content,
+        string responseName,
+        CancellationToken cancellationToken)
+    {
+        if (content.Headers.ContentLength is long declaredLength
+            && declaredLength > MaximumResponseBytes)
+        {
+            throw ResponseLimitExceeded(responseName);
+        }
+
+        var initialCapacity = content.Headers.ContentLength is long contentLength
+            ? (int)Math.Clamp(contentLength, 0, MaximumResponseBytes)
+            : 16 * 1024;
+        await using var source = await content.ReadAsStreamAsync(cancellationToken);
+        using var destination = new MemoryStream(initialCapacity);
+        var buffer = new byte[64 * 1024];
+        var totalRead = 0;
+        while (true)
+        {
+            var remaining = MaximumResponseBytes + 1 - totalRead;
+            if (remaining <= 0)
+            {
+                throw ResponseLimitExceeded(responseName);
+            }
+
+            var read = await source.ReadAsync(
+                buffer.AsMemory(0, Math.Min(buffer.Length, remaining)),
+                cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+
+            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            totalRead += read;
+        }
+
+        if (totalRead > MaximumResponseBytes)
+        {
+            throw ResponseLimitExceeded(responseName);
+        }
+
+        return new BoundedContent(destination.GetBuffer(), totalRead);
+    }
+
+    private static InvalidDataException ResponseLimitExceeded(string responseName) =>
+        new($"Ollama native {responseName} exceeded the {MaximumResponseBytes / 1024 / 1024} MiB response limit.");
+
+    private static bool IsCatalogException(Exception ex) =>
+        ex is UriFormatException
+            or HttpRequestException
+            or JsonException
+            or InvalidDataException;
+
     private static string FriendlyException(Exception ex)
     {
         if (ex is UriFormatException)
@@ -220,12 +404,21 @@ public class OllamaModelCatalogService
             return $"Invalid Ollama native API URL: {ex.Message}";
         }
 
-        if (ex is TaskCanceledException)
-        {
-            return "Timed out while asking Ollama for its native model catalog.";
-        }
-
         return ex.Message;
+    }
+
+    private readonly record struct TransportResult(
+        bool Ok,
+        ReadOnlyMemory<byte> Body,
+        string Error);
+
+    private readonly record struct ParsedModelList(
+        IReadOnlyList<OllamaModelInfo> Models,
+        int OmittedEntryCount);
+
+    private readonly record struct BoundedContent(byte[] Buffer, int Length)
+    {
+        public ReadOnlyMemory<byte> Memory => Buffer.AsMemory(0, Length);
     }
 }
 
@@ -234,18 +427,33 @@ public sealed record OllamaModelCatalog(
     IReadOnlyList<OllamaModelInfo> Models,
     string Error,
     bool RunningModelsOk,
-    string RunningModelsError)
+    string RunningModelsError,
+    int OmittedTagEntryCount = 0,
+    int OmittedRunningEntryCount = 0)
 {
     public static OllamaModelCatalog Empty { get; } = new(false, [], "", false, "");
 
     public int LoadedCount => Models.Count(model => model.Loaded);
 
+    public int OmittedModelCount => (int)Math.Min(
+        int.MaxValue,
+        (long)Math.Max(0, OmittedTagEntryCount) + Math.Max(0, OmittedRunningEntryCount));
+
     public static OllamaModelCatalog Success(
         IReadOnlyList<OllamaModelInfo> models,
         bool runningModelsOk,
-        string runningModelsError)
+        string runningModelsError,
+        int omittedTagEntryCount = 0,
+        int omittedRunningEntryCount = 0)
     {
-        return new OllamaModelCatalog(true, models, "", runningModelsOk, runningModelsError);
+        return new OllamaModelCatalog(
+            true,
+            models,
+            "",
+            runningModelsOk,
+            runningModelsError,
+            Math.Max(0, omittedTagEntryCount),
+            Math.Max(0, omittedRunningEntryCount));
     }
 
     public static OllamaModelCatalog Failed(string error)

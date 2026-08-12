@@ -1827,19 +1827,22 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             return ProviderConfigurationControlService.EmptyState(_activeSession?.Id ?? "");
         }
 
-        var roles = ProviderConfigurationControlService.RoleKeys.Select(role =>
+        var roleIds = snapshot.Agents
+            .Where(agent => agent.Active)
+            .Select(agent => agent.Id.Trim().ToLowerInvariant())
+            .Append("narrator")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var roles = roleIds.Select(role =>
         {
-            var effectiveModel = role switch
-            {
-                "alpha" => snapshot.AlphaModel,
-                "beta" => snapshot.BetaModel,
-                "gamma" => snapshot.GammaModel,
-                "delta" => snapshot.DeltaModel,
-                _ => snapshot.NarratorModel
-            };
-            var configuredModel = effectiveModel.Equals(snapshot.ProviderModel, StringComparison.OrdinalIgnoreCase)
-                ? ""
-                : effectiveModel;
+            var configuredModel = snapshot.ExplicitRoleModels.TryGetValue(role, out var explicitModel)
+                ? explicitModel
+                : "";
+            var effectiveModel = !string.IsNullOrWhiteSpace(configuredModel)
+                ? configuredModel
+                : snapshot.DefaultForUnassignedAgentsEnabled
+                    ? snapshot.ProviderModel
+                    : "";
             var generationOverride = snapshot.RoleOverrides.TryGetValue(role, out var roleOverride)
                 ? roleOverride
                 : null;
@@ -1847,19 +1850,23 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 role,
                 configuredModel,
                 effectiveModel,
-                string.IsNullOrWhiteSpace(configuredModel),
+                snapshot.DefaultForUnassignedAgentsEnabled
+                    && string.IsNullOrWhiteSpace(configuredModel)
+                    && !string.IsNullOrWhiteSpace(snapshot.ProviderModel),
                 generationOverride?.Temperature,
                 generationOverride?.MaxOutputTokens);
         }).ToArray();
+        string Effective(string role) => roles.FirstOrDefault(item =>
+            item.Id.Equals(role, StringComparison.OrdinalIgnoreCase))?.EffectiveModel ?? "";
         var advertisedModels = _providerSettingsCoordinator?.AdvertisedModels ?? [];
         return new AIArenaProviderControlState(
             snapshot.ProviderOnline,
             snapshot.ProviderModel,
-            snapshot.AlphaModel,
-            snapshot.BetaModel,
-            snapshot.GammaModel,
-            snapshot.DeltaModel,
-            snapshot.NarratorModel,
+            Effective("alpha"),
+            Effective("beta"),
+            Effective("gamma"),
+            Effective("delta"),
+            Effective("narrator"),
             ProviderConfigurationControlService.SanitizeError(snapshot.ProviderLastError, snapshot.ProviderApiToken))
         {
             SessionId = snapshot.SessionId,
@@ -1874,6 +1881,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             Reasoning = string.IsNullOrWhiteSpace(snapshot.ProviderReasoning) ? "default" : snapshot.ProviderReasoning,
             NativeStatefulChat = snapshot.ProviderNativeStatefulChat,
             NativeIdleTtlSeconds = snapshot.ProviderNativeIdleTtlSeconds,
+            DefaultForUnassignedAgentsEnabled = snapshot.DefaultForUnassignedAgentsEnabled,
             LastTestOk = snapshot.ProviderOnline,
             LastLatencyMs = snapshot.ProviderLastLatencyMs,
             LastHealthCheckedAt = _providerSettingsCoordinator?.LastProviderHealthCheckedAt,
@@ -3086,7 +3094,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             return;
         }
 
-        var (baseUrl, apiMode, model, roleModels) = _providerSettingsCoordinator.CaptureProviderProfile();
+        var (baseUrl, apiMode, model, roleModels, defaultForUnassignedAgentsEnabled) = _providerSettingsCoordinator.CaptureProviderProfile();
         var profile = new WpfProviderProfile
         {
             Name = name,
@@ -3097,7 +3105,12 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             BetaModel = roleModels.GetValueOrDefault("beta", ""),
             GammaModel = roleModels.GetValueOrDefault("gamma", ""),
             DeltaModel = roleModels.GetValueOrDefault("delta", ""),
-            NarratorModel = roleModels.GetValueOrDefault("narrator", "")
+            NarratorModel = roleModels.GetValueOrDefault("narrator", ""),
+            RoleModels = roleModels.ToDictionary(
+                item => item.Key,
+                item => item.Value,
+                StringComparer.OrdinalIgnoreCase),
+            DefaultForUnassignedAgentsEnabled = defaultForUnassignedAgentsEnabled
         };
         _wpfSettings.ProviderProfiles.RemoveAll(existing => existing.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
         _wpfSettings.ProviderProfiles.Add(profile);
@@ -3123,14 +3136,23 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             return;
         }
 
-        var roleModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        var roleModels = new Dictionary<string, string>(
+            profile.RoleModels ?? new Dictionary<string, string>(),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var (role, model) in new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["alpha"] = profile.AlphaModel,
             ["beta"] = profile.BetaModel,
             ["gamma"] = profile.GammaModel,
             ["delta"] = profile.DeltaModel,
             ["narrator"] = profile.NarratorModel
-        };
+        })
+        {
+            if (!roleModels.ContainsKey(role) && !string.IsNullOrWhiteSpace(model))
+            {
+                roleModels[role] = model;
+            }
+        }
         await RunProviderCommitSafelyAsync(async (coordinator, cancellationToken) =>
         {
             await coordinator.ApplyProviderProfileAsync(
@@ -3138,6 +3160,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 profile.ApiMode,
                 profile.Model,
                 roleModels,
+                profile.DefaultForUnassignedAgentsEnabled,
                 profile.Name,
                 cancellationToken);
             ProviderProfileStatusText.Text = $"Setup '{profile.Name}' is now in use.";

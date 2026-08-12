@@ -1,0 +1,8 @@
+AI Arena 0.4.130-beta
+
+- Rework Models & assignments into a pinned Loaded Models region and a collapsible, virtualized Available catalog with responsive layouts, search facets, keyboard continuity, and accessible toggle switches.
+- Add provider-backed LM Studio load and unload controls with a visibility-scoped five-second residency heartbeat, non-blocking browsing, confirmed state transitions, and truthful unknown or partial evidence.
+- Add an optional Arena default-routing policy while retaining the shared provider model for Agent Workspace and diagnostics, including explicit same-model role assignments and Match Setup v3, profile, fork, restart, and control-plane persistence.
+- Make agent and Default reassignment an atomic exclusive transfer with immediate single-owner feedback, causal rollback, stale-save protection, and residency-independent routing.
+- Harden LM Studio, Ollama, llama.cpp, and compatible catalog discovery with bounded responses, deterministic alias reconciliation, truthful omission counts, and privacy-safe lifecycle diagnostics.
+- Expand Core and hosted WPF coverage for routing readiness, loaded-model pinning, catalog collapse and virtualization, lifecycle confirmation, assignment transfers, accessibility, themes, and responsive scaling.

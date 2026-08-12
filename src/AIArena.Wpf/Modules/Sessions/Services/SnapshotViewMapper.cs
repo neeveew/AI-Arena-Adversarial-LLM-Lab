@@ -42,11 +42,11 @@ public static class SnapshotViewMapper
             snapshot.Engine.TurnCount,
             snapshot.Engine.TurnIndex,
             DisplayValue(sharedConfig.Model),
-            Config(snapshot, "alpha").Model,
-            Config(snapshot, "beta").Model,
-            Config(snapshot, "gamma").Model,
-            Config(snapshot, "delta").Model,
-            Config(snapshot, "narrator").Model,
+            ExplicitRoleModel(snapshot, "alpha", sharedConfig),
+            ExplicitRoleModel(snapshot, "beta", sharedConfig),
+            ExplicitRoleModel(snapshot, "gamma", sharedConfig),
+            ExplicitRoleModel(snapshot, "delta", sharedConfig),
+            ExplicitRoleModel(snapshot, "narrator", sharedConfig),
             string.IsNullOrWhiteSpace(snapshot.Engine.Narrator.Status) ? "idle" : snapshot.Engine.Narrator.Status,
             snapshot.Engine.Narrator.Persona,
             snapshot.Engine.Narrator.VoiceStyle,
@@ -75,6 +75,8 @@ public static class SnapshotViewMapper
             ParseAgents(snapshot.Engine.Agents, snapshot))
         {
             FactoryMode = snapshot.Engine.FactoryMode,
+            DefaultForUnassignedAgentsEnabled = snapshot.Engine.DefaultForUnassignedAgentsEnabled,
+            ExplicitRoleModels = ExplicitRoleModelsFrom(snapshot, sharedConfig),
             HasFactoryConversationRoot = factoryGroup.IsAnchored && factoryGroup.HasUsableRoot,
             FactoryConversationRootAssigned = factoryGroup.IsAnchored,
             FactoryConversationEntryCount = factoryGroup.EligibleEntryCount,
@@ -89,7 +91,7 @@ public static class SnapshotViewMapper
         ModelProviderConfig sharedConfig)
     {
         var overrides = new Dictionary<string, Models.RoleGenerationOverride>(StringComparer.OrdinalIgnoreCase);
-        foreach (var key in new[] { "alpha", "beta", "gamma", "delta", "narrator" })
+        foreach (var key in snapshot.Engine.Agents.Select(agent => agent.Id).Append("narrator").Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (!snapshot.Configs.TryGetValue(key, out var config) || config is null)
             {
@@ -105,6 +107,19 @@ public static class SnapshotViewMapper
         }
 
         return overrides;
+    }
+
+    private static IReadOnlyDictionary<string, string> ExplicitRoleModelsFrom(
+        CoreSnapshot snapshot,
+        ModelProviderConfig sharedConfig)
+    {
+        return snapshot.Engine.Agents
+            .Select(agent => agent.Id)
+            .Append("narrator")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(key => new { Key = key, Model = ExplicitRoleModel(snapshot, key, sharedConfig) })
+            .Where(item => item.Model.Length > 0)
+            .ToDictionary(item => item.Key, item => item.Model, StringComparer.OrdinalIgnoreCase);
     }
 
     public static RenderSnapshot Empty(CoreSessionSummary session, string message)
@@ -167,6 +182,24 @@ public static class SnapshotViewMapper
     private static ModelProviderConfig Config(CoreSnapshot snapshot, string key)
     {
         return snapshot.Configs.TryGetValue(key, out var config) ? config : new ModelProviderConfig();
+    }
+
+    private static string ExplicitRoleModel(
+        CoreSnapshot snapshot,
+        string key,
+        ModelProviderConfig shared)
+    {
+        if (!snapshot.Configs.TryGetValue(key, out var config)
+            || string.IsNullOrWhiteSpace(config.Model))
+        {
+            return "";
+        }
+
+        var model = config.Model.Trim();
+        return config.ExplicitModelAssignment
+            || !model.Equals(shared.Model.Trim(), StringComparison.Ordinal)
+                ? model
+                : "";
     }
 
     private static bool Locked(CoreSnapshot snapshot, string key)
@@ -244,13 +277,19 @@ public static class SnapshotViewMapper
 
     private static IReadOnlyList<AgentState> ParseAgents(IReadOnlyList<DialogueAgent> agents, CoreSnapshot snapshot)
     {
-        var sharedModel = DisplayValue(Config(snapshot, "shared").Model);
+        var sharedConfig = Config(snapshot, "shared");
+        var sharedModel = sharedConfig.Model.Trim();
         var latestInternetByAgent = LatestInternetSourcesByAgent(snapshot.Engine.Messages);
         return agents
             .Select(agent =>
             {
                 var id = agent.Id;
-                var agentModel = Config(snapshot, id).Model;
+                var explicitModel = ExplicitRoleModel(snapshot, id, sharedConfig);
+                var agentModel = explicitModel.Length > 0
+                    ? explicitModel
+                    : snapshot.Engine.DefaultForUnassignedAgentsEnabled
+                        ? sharedModel
+                        : "";
                 latestInternetByAgent.TryGetValue(id, out var internetSources);
                 return new AgentState(
                     id,
@@ -260,7 +299,7 @@ public static class SnapshotViewMapper
                     agent.VoiceStyle,
                     agent.PressureProfile,
                     AgentAccentService.NormalizeColor(agent.AccentColor),
-                    DisplayValue(string.IsNullOrWhiteSpace(agentModel) ? sharedModel : agentModel),
+                    DisplayValue(agentModel),
                     agent.Active,
                     Locked(snapshot, id),
                     agent.PrivateNotes.Where(note => !string.IsNullOrWhiteSpace(note)).ToArray(),

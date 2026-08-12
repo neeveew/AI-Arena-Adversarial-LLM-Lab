@@ -24,7 +24,8 @@ internal sealed record AIArenaProviderConfigurationPatch(
     bool? NativeStatefulChat,
     int? NativeIdleTtlSeconds,
     IReadOnlyDictionary<string, string> RoleModels,
-    bool RefreshModels)
+    bool RefreshModels,
+    bool? DefaultForUnassignedAgentsEnabled = null)
 {
     public bool HasMutation =>
         BaseUrl is not null
@@ -39,6 +40,7 @@ internal sealed record AIArenaProviderConfigurationPatch(
         || Reasoning is not null
         || NativeStatefulChat.HasValue
         || NativeIdleTtlSeconds.HasValue
+        || DefaultForUnassignedAgentsEnabled.HasValue
         || RoleModels.Count > 0;
 }
 
@@ -238,7 +240,21 @@ internal sealed class ProviderConfigurationControlService
                         ProviderModelAssignmentProjection.Empty(ProviderModelCatalogProjectionService.SafeModelIdentifier(request.Model)));
                 }
 
-                var before = ProviderModelAssignmentProjectionService.Project(session.Id, snapshot, request.Model);
+                var equivalentModels = (request.EquivalentModelIds ?? [])
+                    .Append(request.Model)
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .SelectMany(value => new[]
+                    {
+                        value.Trim(),
+                        ProviderModelCatalogProjectionService.SafeModelIdentifier(value)
+                    })
+                    .Where(value => value.Length > 0)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                bool MatchesEquivalentModel(string value) =>
+                    equivalentModels.Contains(value.Trim())
+                    || equivalentModels.Contains(ProviderModelCatalogProjectionService.SafeModelIdentifier(value));
+                var assignmentBatch = ProviderModelAssignmentProjectionService.CreateBatch(session.Id, snapshot);
+                var before = assignmentBatch.Project(request.Model, equivalentModels);
                 if (!before.ProviderFingerprint.Equals(request.ExpectedProviderFingerprint, StringComparison.Ordinal))
                 {
                     return AssignmentFailure(
@@ -273,19 +289,23 @@ internal sealed class ProviderConfigurationControlService
                 {
                     if (!request.Assigned)
                     {
-                        if (shared.Model.Trim().Equals(requestedModel, StringComparison.Ordinal))
+                        if (target.Assigned
+                            && snapshot.Engine.DefaultForUnassignedAgentsEnabled
+                            && MatchesEquivalentModel(shared.Model))
                         {
-                            return AssignmentFailure(
-                                "invalid_operation",
-                                "Choose another default model before removing the current default.",
-                                before);
+                            snapshot.Engine.DefaultForUnassignedAgentsEnabled = false;
+                            changedFields = ["defaultForUnassignedAgentsEnabled"];
                         }
-
-                        savedProjection = before;
-                        break;
+                        else
+                        {
+                            savedProjection = before;
+                            break;
+                        }
                     }
-
-                    changedFields = ApplyPatch(snapshot, DefaultModelPatch(requestedModel));
+                    else
+                    {
+                        changedFields = ApplyPatch(snapshot, DefaultModelPatch(requestedModel, true));
+                    }
                 }
                 else
                 {
@@ -293,12 +313,14 @@ internal sealed class ProviderConfigurationControlService
                         snapshot.Configs,
                         target.Id,
                         shared);
-                    var desiredModel = request.Assigned
-                        ? requestedModel.Equals(shared.Model.Trim(), StringComparison.Ordinal) ? "" : requestedModel
-                        : "";
+                    // A checked role switch is always an explicit assignment,
+                    // even when its model currently matches the shared model.
+                    // The persisted explicit marker keeps that intent distinct
+                    // from inheritance when the Arena default is later disabled.
+                    var desiredModel = request.Assigned ? requestedModel : "";
                     if (!request.Assigned
                         && configuredModel.Length > 0
-                        && !configuredModel.Equals(requestedModel, StringComparison.Ordinal))
+                        && !MatchesEquivalentModel(configuredModel))
                     {
                         return AssignmentFailure(
                             "conflict",
@@ -322,20 +344,23 @@ internal sealed class ProviderConfigurationControlService
                         desiredModel,
                         shared,
                         temperatureOverride,
-                        maxOutputTokensOverride);
+                        maxOutputTokensOverride,
+                        explicitAssignment: request.Assigned && desiredModel.Length > 0);
                     changedFields = [$"{target.Id}Model"];
                 }
 
                 if (changedFields.Count == 0)
                 {
-                    savedProjection = ProviderModelAssignmentProjectionService.Project(session.Id, snapshot, request.Model);
+                    savedProjection = assignmentBatch.Project(request.Model, equivalentModels);
                     break;
                 }
 
                 try
                 {
                     await sessionStore.SaveSnapshotAsync(snapshot, session.Id, cancellationToken);
-                    savedProjection = ProviderModelAssignmentProjectionService.Project(session.Id, snapshot, request.Model);
+                    savedProjection = ProviderModelAssignmentProjectionService
+                        .CreateBatch(session.Id, snapshot)
+                        .Project(request.Model, equivalentModels);
                     await eventLogStore.AppendAsync(session.Id, "provider_model_assignment_changed", new
                     {
                         TargetId = target.Id,
@@ -368,15 +393,23 @@ internal sealed class ProviderConfigurationControlService
         var message = changedFields.Count == 0
             ? "Model assignment already matched the requested value."
             : request.TargetId.Equals(ModelProviderRouting.SharedConfigKey, StringComparison.OrdinalIgnoreCase)
-                ? "Default model saved."
+                ? request.Assigned
+                    ? "Default for unassigned agents enabled."
+                    : "Default for unassigned agents disabled."
                 : request.Assigned
                     ? "Agent model assignment saved."
-                    : "Agent now inherits the default model.";
+                    : savedProjection.Targets.Any(target =>
+                        target.Id.Equals(request.TargetId, StringComparison.OrdinalIgnoreCase)
+                        && target.InheritsDefault)
+                        ? "Agent now uses the default model."
+                        : "Agent is now unassigned.";
         await refreshHostAsync(message, false, cancellationToken);
         var refreshedSnapshot = await sessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
         var refreshedProjection = refreshedSnapshot is null
             ? savedProjection
-            : ProviderModelAssignmentProjectionService.Project(session.Id, refreshedSnapshot, request.Model);
+            : ProviderModelAssignmentProjectionService
+                .CreateBatch(session.Id, refreshedSnapshot)
+                .Project(request.Model, request.EquivalentModelIds);
         return new ProviderModelAssignmentControlResult(
             true,
             "",
@@ -500,6 +533,8 @@ internal sealed class ProviderConfigurationControlService
             : NormalizeReasoning(patch.Reasoning);
         var nativeStatefulChat = patch.NativeStatefulChat ?? existingShared.NativeStatefulChat;
         var nativeIdleTtlSeconds = patch.NativeIdleTtlSeconds ?? existingShared.NativeIdleTtlSeconds;
+        var defaultForUnassignedAgentsEnabled = patch.DefaultForUnassignedAgentsEnabled
+            ?? snapshot.Engine.DefaultForUnassignedAgentsEnabled;
         var readinessChanged = ProviderReadinessChanged(
             existingShared,
             baseUrl,
@@ -516,6 +551,7 @@ internal sealed class ProviderConfigurationControlService
             ApiMode = apiMode,
             ApiToken = apiToken,
             Model = model,
+            ExplicitModelAssignment = false,
             Timeout = timeout,
             Temperature = temperature,
             MaxOutputTokens = maxOutputTokens,
@@ -530,6 +566,12 @@ internal sealed class ProviderConfigurationControlService
         };
 
         var changed = ChangedSharedFields(existingShared, updatedShared, patch);
+        if (snapshot.Engine.DefaultForUnassignedAgentsEnabled != defaultForUnassignedAgentsEnabled)
+        {
+            changed.Add("defaultForUnassignedAgentsEnabled");
+        }
+
+        snapshot.Engine.DefaultForUnassignedAgentsEnabled = defaultForUnassignedAgentsEnabled;
         snapshot.Configs[ModelProviderRouting.SharedConfigKey] = updatedShared;
         foreach (var role in roleKeys)
         {
@@ -561,8 +603,11 @@ internal sealed class ProviderConfigurationControlService
         string model,
         ModelProviderConfig shared,
         double? temperatureOverride = null,
-        int? maxOutputTokensOverride = null)
+        int? maxOutputTokensOverride = null,
+        bool? explicitAssignment = null)
     {
+        var roleIsExplicit = explicitAssignment
+            ?? !string.IsNullOrWhiteSpace(model);
         if (string.IsNullOrWhiteSpace(model))
         {
             if (!temperatureOverride.HasValue && !maxOutputTokensOverride.HasValue)
@@ -572,11 +617,7 @@ internal sealed class ProviderConfigurationControlService
             }
 
             model = shared.Model;
-            if (string.IsNullOrWhiteSpace(model))
-            {
-                configs.Remove(role);
-                return;
-            }
+            roleIsExplicit = false;
         }
 
         var existing = configs.TryGetValue(role, out var current) ? current : null;
@@ -596,6 +637,7 @@ internal sealed class ProviderConfigurationControlService
             ApiMode = shared.ApiMode,
             ApiToken = shared.ApiToken,
             Model = model,
+            ExplicitModelAssignment = roleIsExplicit,
             Timeout = shared.Timeout,
             Temperature = temperatureOverride ?? shared.Temperature,
             MaxOutputTokens = maxOutputTokensOverride ?? shared.MaxOutputTokens,
@@ -652,19 +694,22 @@ internal sealed class ProviderConfigurationControlService
         var shared = snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var configured)
             ? configured
             : snapshot.Configs.Values.FirstOrDefault() ?? new ModelProviderConfig();
-        var roles = RoleKeys.Select(role =>
+        var roles = ConfigurationRoleKeys(snapshot).Select(role =>
         {
             var configuredModel = ConfiguredRoleModel(snapshot.Configs, role, shared);
-            var effectiveModel = snapshot.Configs.TryGetValue(role, out var roleConfig)
-                && !string.IsNullOrWhiteSpace(roleConfig.Model)
-                ? roleConfig.Model.Trim()
-                : shared.Model.Trim();
+            var effectiveModel = configuredModel.Length > 0
+                ? configuredModel
+                : snapshot.Engine.DefaultForUnassignedAgentsEnabled
+                    ? shared.Model.Trim()
+                    : "";
             var (temperatureOverride, maxOutputTokensOverride) = GenerationOverrides(snapshot.Configs, role, shared);
             return new AIArenaProviderRoleControlState(
                 role,
                 configuredModel,
                 effectiveModel,
-                string.IsNullOrWhiteSpace(configuredModel),
+                snapshot.Engine.DefaultForUnassignedAgentsEnabled
+                    && configuredModel.Length == 0
+                    && !string.IsNullOrWhiteSpace(shared.Model),
                 temperatureOverride,
                 maxOutputTokensOverride);
         }).ToArray();
@@ -693,6 +738,7 @@ internal sealed class ProviderConfigurationControlService
             Reasoning = string.IsNullOrWhiteSpace(shared.Reasoning) ? "default" : ModelProviderReasoningModes.Normalize(shared.Reasoning),
             NativeStatefulChat = shared.NativeStatefulChat,
             NativeIdleTtlSeconds = shared.NativeIdleTtlSeconds,
+            DefaultForUnassignedAgentsEnabled = snapshot.Engine.DefaultForUnassignedAgentsEnabled,
             LastTestOk = shared.LastTestOk,
             LastLatencyMs = shared.LastLatencyMs,
             Roles = roles
@@ -714,6 +760,7 @@ internal sealed class ProviderConfigurationControlService
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendIdentityValue(hash, snapshot.Engine.DefaultForUnassignedAgentsEnabled ? "1" : "0");
         foreach (var key in new[] { ModelProviderRouting.SharedConfigKey }.Concat(ConfigurationRoleKeys(snapshot)))
         {
             AppendIdentityValue(hash, key);
@@ -727,6 +774,7 @@ internal sealed class ProviderConfigurationControlService
             AppendIdentityValue(hash, ModelProviderApiModes.Normalize(config.ApiMode));
             AppendIdentityValue(hash, config.ApiToken);
             AppendIdentityValue(hash, config.Model.Trim());
+            AppendIdentityValue(hash, config.ExplicitModelAssignment ? "1" : "0");
             AppendIdentityValue(hash, config.Timeout.ToString(CultureInfo.InvariantCulture));
             AppendIdentityValue(hash, config.Temperature.ToString("R", CultureInfo.InvariantCulture));
             AppendIdentityValue(hash, config.MaxOutputTokens.ToString(CultureInfo.InvariantCulture));
@@ -844,11 +892,7 @@ internal sealed class ProviderConfigurationControlService
         string role,
         ModelProviderConfig shared)
     {
-        return configs.TryGetValue(role, out var config)
-            && !string.IsNullOrWhiteSpace(config.Model)
-            && !config.Model.Trim().Equals(shared.Model.Trim(), StringComparison.Ordinal)
-            ? config.Model.Trim()
-            : "";
+        return ProviderModelAssignmentProjectionService.ConfiguredRoleModel(configs, role, shared);
     }
 
     private async Task<ProviderModelAssignmentProjection> CaptureAssignmentAsync(
@@ -904,7 +948,9 @@ internal sealed class ProviderConfigurationControlService
         return (true, "", "");
     }
 
-    private static AIArenaProviderConfigurationPatch DefaultModelPatch(string model)
+    private static AIArenaProviderConfigurationPatch DefaultModelPatch(
+        string model,
+        bool defaultForUnassignedAgentsEnabled)
     {
         return new AIArenaProviderConfigurationPatch(
             BaseUrl: null,
@@ -920,7 +966,8 @@ internal sealed class ProviderConfigurationControlService
             NativeStatefulChat: null,
             NativeIdleTtlSeconds: null,
             RoleModels: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-            RefreshModels: false);
+            RefreshModels: false,
+            DefaultForUnassignedAgentsEnabled: defaultForUnassignedAgentsEnabled);
     }
 
     private static IReadOnlyList<string> ConfigurationRoleKeys(ArenaSnapshot snapshot)

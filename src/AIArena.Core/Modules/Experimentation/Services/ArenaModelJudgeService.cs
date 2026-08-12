@@ -229,6 +229,7 @@ public sealed class ArenaModelJudgeService
         ApiMode = source.ApiMode,
         ApiToken = source.ApiToken,
         Model = source.Model,
+        ExplicitModelAssignment = source.ExplicitModelAssignment,
         Timeout = source.Timeout,
         Temperature = 0,
         MaxOutputTokens = Math.Clamp(source.MaxOutputTokens, 64, 2_048),

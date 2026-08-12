@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using AIArena.Core.Models;
+using AIArena.Core.Services;
 
 namespace AIArena.Core.Providers;
 
@@ -29,6 +30,11 @@ public interface IStreamingModelProviderClient
 public class ModelProviderClient : IModelProviderClient, IStreamingModelProviderClient
 {
     private const int MaxProviderErrorLength = 360;
+    internal const int MaximumModelCatalogBytes = 4 * 1024 * 1024;
+    // Provider inventories are untrusted input. Inspect no more than this many
+    // source-array entries even when a highly compressed inventory remains
+    // below the independent four-MiB response bound.
+    internal const int MaximumModelCatalogEntries = 1024;
     private const string EmptyCompletionError = "Provider returned a successful response without assistant content.";
     private const int LlamaCppMaximumRetries = 2;
     private static readonly JsonSerializerOptions ProviderPayloadJsonOptions = new(JsonSerializerDefaults.Web);
@@ -50,7 +56,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         var apiMode = ModelProviderApiModes.Normalize(config.ApiMode);
         if (apiMode.Equals(ModelProviderApiModes.LlamaCppNative, StringComparison.OrdinalIgnoreCase))
         {
-            return await ListLlamaCppModelsAsync(config, cancellationToken);
+            return await ListLlamaCppModelsAsync(config, cancellationToken).ConfigureAwait(false);
         }
 
         var listBaseUrl = apiMode switch
@@ -69,8 +75,14 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
             ApplyAuthorization(request, config);
             using var timeout = TimeoutToken(config, cancellationToken);
-            using var response = await _httpClient.SendAsync(request, timeout.Token);
-            var body = await response.Content.ReadAsStringAsync(timeout.Token);
+            using var response = await _httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                timeout.Token).ConfigureAwait(false);
+            var body = await BoundedTextContentReader.ReadAsync(
+                response.Content,
+                MaximumModelCatalogBytes,
+                timeout.Token).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 return new ModelProviderModels(
@@ -81,13 +93,20 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     DateTimeOffset.Now);
             }
 
-            return new ModelProviderModels(true, baseUrl, ParseModelNames(body), "", DateTimeOffset.Now);
+            var catalog = ParseModelCatalog(body);
+            return new ModelProviderModels(
+                true,
+                baseUrl,
+                catalog.Models,
+                "",
+                DateTimeOffset.Now,
+                catalog.OmittedEntryCount);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or JsonException)
+        catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or JsonException or InvalidDataException)
         {
             return new ModelProviderModels(false, baseUrl, Array.Empty<string>(), FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
         }
@@ -101,25 +120,43 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         try
         {
             var rootEndpoint = new Uri(new Uri(NormalizeLlamaCppApiBase(config.BaseUrl) + "/"), "models");
-            var rootResult = await TryListLlamaCppModelsAsync(rootEndpoint, config, cancellationToken);
+            var rootResult = await TryListLlamaCppModelsAsync(rootEndpoint, config, cancellationToken).ConfigureAwait(false);
             if (rootResult.Ok && rootResult.Models.Count > 0)
             {
                 // Router mode lists available models here, including unloaded
                 // models. This keeps an idle but healthy router from appearing
                 // offline merely because /v1/models only reports live instances.
-                return new ModelProviderModels(true, baseUrl, rootResult.Models, "", DateTimeOffset.Now);
+                return new ModelProviderModels(
+                    true,
+                    baseUrl,
+                    rootResult.Models,
+                    "",
+                    DateTimeOffset.Now,
+                    rootResult.OmittedEntryCount);
             }
 
             var compatibleEndpoint = new Uri(new Uri(baseUrl + "/"), "models");
-            var compatibleResult = await TryListLlamaCppModelsAsync(compatibleEndpoint, config, cancellationToken);
+            var compatibleResult = await TryListLlamaCppModelsAsync(compatibleEndpoint, config, cancellationToken).ConfigureAwait(false);
             if (compatibleResult.Ok)
             {
-                return new ModelProviderModels(true, baseUrl, compatibleResult.Models, "", DateTimeOffset.Now);
+                return new ModelProviderModels(
+                    true,
+                    baseUrl,
+                    compatibleResult.Models,
+                    "",
+                    DateTimeOffset.Now,
+                    compatibleResult.OmittedEntryCount);
             }
 
             if (rootResult.Ok)
             {
-                return new ModelProviderModels(true, baseUrl, rootResult.Models, "", DateTimeOffset.Now);
+                return new ModelProviderModels(
+                    true,
+                    baseUrl,
+                    rootResult.Models,
+                    "",
+                    DateTimeOffset.Now,
+                    rootResult.OmittedEntryCount);
             }
 
             var error = string.IsNullOrWhiteSpace(compatibleResult.Error)
@@ -131,37 +168,44 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         {
             throw;
         }
-        catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or JsonException)
+        catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or JsonException or InvalidDataException)
         {
             return new ModelProviderModels(false, baseUrl, Array.Empty<string>(), FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
         }
     }
 
-    private async Task<(bool Ok, IReadOnlyList<string> Models, string Error)> TryListModelsAsync(
+    private async Task<(bool Ok, IReadOnlyList<string> Models, string Error, int OmittedEntryCount)> TryListModelsAsync(
         Uri endpoint,
         ModelProviderConfig config,
         CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
         ApplyAuthorization(request, config);
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var response = await _httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken).ConfigureAwait(false);
+        var body = await BoundedTextContentReader.ReadAsync(
+            response.Content,
+            MaximumModelCatalogBytes,
+            cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            return (false, Array.Empty<string>(), FriendlyProviderHttpError(body, response.ReasonPhrase, NormalizeBaseUrl(config.BaseUrl), config.ApiToken));
+            return (false, Array.Empty<string>(), FriendlyProviderHttpError(body, response.ReasonPhrase, NormalizeBaseUrl(config.BaseUrl), config.ApiToken), 0);
         }
 
         try
         {
-            return (true, ParseModelNames(body), "");
+            var catalog = ParseModelCatalog(body);
+            return (true, catalog.Models, "", catalog.OmittedEntryCount);
         }
         catch (JsonException)
         {
-            return (false, Array.Empty<string>(), $"Provider returned an unreadable model inventory at {SafeProviderEndpoint(endpoint.AbsoluteUri, config.ApiToken)}.");
+            return (false, Array.Empty<string>(), $"Provider returned an unreadable model inventory at {SafeProviderEndpoint(endpoint.AbsoluteUri, config.ApiToken)}.", 0);
         }
     }
 
-    private async Task<(bool Ok, IReadOnlyList<string> Models, string Error)> TryListLlamaCppModelsAsync(
+    private async Task<(bool Ok, IReadOnlyList<string> Models, string Error, int OmittedEntryCount)> TryListLlamaCppModelsAsync(
         Uri endpoint,
         ModelProviderConfig config,
         CancellationToken cancellationToken)
@@ -170,7 +214,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         timeout.CancelAfter(TimeSpan.FromSeconds(LlamaCppModelProbeTimeoutSeconds(config.Timeout)));
         try
         {
-            return await TryListModelsAsync(endpoint, config, timeout.Token);
+            return await TryListModelsAsync(endpoint, config, timeout.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -181,14 +225,16 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             return (
                 false,
                 Array.Empty<string>(),
-                $"llama.cpp model inventory probe timed out after {LlamaCppModelProbeTimeoutSeconds(config.Timeout)}s at {SafeProviderEndpoint(endpoint.AbsoluteUri, config.ApiToken)}.");
+                $"llama.cpp model inventory probe timed out after {LlamaCppModelProbeTimeoutSeconds(config.Timeout)}s at {SafeProviderEndpoint(endpoint.AbsoluteUri, config.ApiToken)}.",
+                0);
         }
-        catch (Exception ex) when (ex is HttpRequestException or IOException)
+        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException)
         {
             return (
                 false,
                 Array.Empty<string>(),
-                FriendlyProviderError(ex, NormalizeBaseUrl(config.BaseUrl), config.Timeout, config.ApiMode, config.ApiToken));
+                FriendlyProviderError(ex, NormalizeBaseUrl(config.BaseUrl), config.Timeout, config.ApiMode, config.ApiToken),
+                0);
         }
     }
 
@@ -1132,18 +1178,31 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
 
     public static IReadOnlyList<string> ParseModelNames(string json)
     {
+        return ParseModelCatalog(json).Models;
+    }
+
+    private static ParsedModelCatalog ParseModelCatalog(string json)
+    {
         using var doc = JsonDocument.Parse(json);
         if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
         {
             if (!doc.RootElement.TryGetProperty("models", out data) || data.ValueKind != JsonValueKind.Array)
             {
-                return Array.Empty<string>();
+                return new ParsedModelCatalog(Array.Empty<string>(), 0);
             }
         }
 
-        var models = new List<string>();
+        var sourceEntryCount = data.GetArrayLength();
+        var inspectedEntryCount = Math.Min(sourceEntryCount, MaximumModelCatalogEntries);
+        var models = new List<string>(inspectedEntryCount);
+        var inspected = 0;
         foreach (var item in data.EnumerateArray())
         {
+            if (inspected++ >= inspectedEntryCount)
+            {
+                break;
+            }
+
             if (item.ValueKind != JsonValueKind.Object)
             {
                 continue;
@@ -1152,8 +1211,14 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             models.Add(FirstString(item, "id", "key", "selected_variant", "model", "name"));
         }
 
-        return models.Where(item => !string.IsNullOrWhiteSpace(item)).ToArray();
+        return new ParsedModelCatalog(
+            models.Where(item => !string.IsNullOrWhiteSpace(item)).ToArray(),
+            Math.Max(0, sourceEntryCount - inspectedEntryCount));
     }
+
+    private readonly record struct ParsedModelCatalog(
+        IReadOnlyList<string> Models,
+        int OmittedEntryCount);
 
     public static string ExtractAssistantContent(string json)
     {

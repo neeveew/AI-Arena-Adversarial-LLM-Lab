@@ -219,13 +219,20 @@ internal sealed class ArenaSessionMutationCoordinator
             && existingRole.MaxOutputTokens != previousShared.MaxOutputTokens
                 ? existingRole.MaxOutputTokens
                 : null;
-        ProviderSettingsCoordinator.SaveRoleModelConfig(
+        var explicitModel = existingRole is not null
+            && !string.IsNullOrWhiteSpace(existingRole.Model)
+            && (existingRole.ExplicitModelAssignment
+                || !existingRole.Model.Trim().Equals(previousShared.Model.Trim(), StringComparison.Ordinal))
+            ? existingRole.Model
+            : "";
+        ProviderConfigurationControlService.SaveRoleModelConfig(
             configs,
             role,
-            existingRole?.Model ?? "",
+            explicitModel,
             updatedShared,
             temperatureOverride,
-            maxOutputOverride);
+            maxOutputOverride,
+            explicitAssignment: explicitModel.Length > 0);
     }
 
     public async Task ResetArenaAsync()

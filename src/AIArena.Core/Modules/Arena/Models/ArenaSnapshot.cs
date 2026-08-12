@@ -63,6 +63,14 @@ public sealed class EngineSnapshot
     [JsonPropertyName("factory_mode")]
     public bool FactoryMode { get; set; }
 
+    /// <summary>
+    /// Controls whether Arena roles without an explicit provider assignment may
+    /// use the shared provider configuration. The shared configuration itself
+    /// remains available to connection diagnostics and Agent Workspace.
+    /// </summary>
+    [JsonPropertyName("default_for_unassigned_agents_enabled")]
+    public bool DefaultForUnassignedAgentsEnabled { get; set; } = true;
+
     [JsonPropertyName("agents")]
     public List<DialogueAgent> Agents { get; init; } = new();
 

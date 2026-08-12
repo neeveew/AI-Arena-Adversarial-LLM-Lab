@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.4.129-beta",
+    [string]$Version = "0.4.130-beta",
     [string]$SigningPolicy = ""
 )
 

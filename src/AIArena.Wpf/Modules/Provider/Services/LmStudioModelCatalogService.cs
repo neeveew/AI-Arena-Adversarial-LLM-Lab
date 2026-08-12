@@ -1,11 +1,17 @@
 using System.Globalization;
+using System.IO;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 
 namespace AIArena.Wpf.Services;
 
 public class LmStudioModelCatalogService
 {
+    internal const int MaximumResponseBytes = 4 * 1024 * 1024;
+    internal const int MaximumJsonDepth = 32;
+    internal const int MaximumModelEntries = 1024;
+
     private static readonly HttpClient SharedHttpClient = new()
     {
         Timeout = TimeSpan.FromSeconds(5)
@@ -31,26 +37,50 @@ public class LmStudioModelCatalogService
     {
         try
         {
+            using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            if (httpClient.Timeout != Timeout.InfiniteTimeSpan)
+            {
+                requestCancellation.CancelAfter(httpClient.Timeout);
+            }
+
+            var requestToken = requestCancellation.Token;
             var apiBase = NormalizeLmStudioApiBase(providerBaseUrl);
             var endpoint = new Uri(new Uri(apiBase + "/", UriKind.Absolute), "models");
             using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
             ProviderHttpHelpers.ApplyAuthorization(request, apiToken);
-            using var response = await httpClient.SendAsync(request, cancellationToken);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var response = await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                requestToken);
+            var body = await ReadBoundedContentAsync(response.Content, requestToken);
             if (!response.IsSuccessStatusCode)
             {
                 return LmStudioModelCatalog.Failed(ProviderConfigurationControlService.SanitizeError(
-                    ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "LM Studio native model catalog request failed.", "message", "error", "detail"),
+                    ProviderHttpHelpers.FriendlyBody(
+                        Encoding.UTF8.GetString(body.Memory.Span),
+                        response.ReasonPhrase,
+                        "LM Studio native model catalog request failed.",
+                        "message",
+                        "error",
+                        "detail"),
                     apiToken));
             }
 
-            return LmStudioModelCatalog.Success(ParseModels(body));
+            return ParseCatalog(body.Memory);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception ex) when (ex is UriFormatException or HttpRequestException or TaskCanceledException or JsonException)
+        catch (OperationCanceledException)
+        {
+            return LmStudioModelCatalog.Failed(
+                "Timed out while asking LM Studio for its native model catalog.");
+        }
+        catch (Exception ex) when (ex is UriFormatException
+                                   or HttpRequestException
+                                   or JsonException
+                                   or InvalidDataException)
         {
             return LmStudioModelCatalog.Failed(ProviderConfigurationControlService.SanitizeError(
                 FriendlyException(ex),
@@ -60,7 +90,26 @@ public class LmStudioModelCatalogService
 
     public static IReadOnlyList<LmStudioModelInfo> ParseModels(string json)
     {
-        using var doc = JsonDocument.Parse(json);
+        var catalog = ParseCatalog(Encoding.UTF8.GetBytes(json ?? ""));
+        if (catalog.OmittedModelCount > 0)
+        {
+            throw new JsonException(
+                $"LM Studio model catalog exceeded the {MaximumModelEntries} entry parser limit.");
+        }
+
+        return catalog.Models;
+    }
+
+    internal static LmStudioModelCatalog ParseCatalog(ReadOnlyMemory<byte> utf8Json)
+    {
+        using var doc = JsonDocument.Parse(
+            utf8Json,
+            new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = MaximumJsonDepth
+            });
         if (doc.RootElement.ValueKind != JsonValueKind.Object)
         {
             throw new JsonException("LM Studio model catalog root must be an object.");
@@ -73,8 +122,16 @@ public class LmStudioModelCatalogService
         }
 
         var entries = new List<LmStudioModelInfo>();
+        var sourceEntryCount = models.GetArrayLength();
+        var retainedEntryCount = Math.Min(sourceEntryCount, MaximumModelEntries);
+        var observedEntryCount = 0;
         foreach (var item in models.EnumerateArray())
         {
+            if (observedEntryCount++ >= retainedEntryCount)
+            {
+                break;
+            }
+
             if (item.ValueKind != JsonValueKind.Object)
             {
                 throw new JsonException("LM Studio model catalog contained a malformed model entry.");
@@ -149,7 +206,57 @@ public class LmStudioModelCatalogService
                 HasResidencyEvidence: hasResidencyEvidence));
         }
 
-        return entries;
+        return LmStudioModelCatalog.Success(
+            entries,
+            Math.Max(0, sourceEntryCount - retainedEntryCount));
+    }
+
+    private static async Task<BoundedContent> ReadBoundedContentAsync(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        if (content.Headers.ContentLength is long declaredLength
+            && declaredLength > MaximumResponseBytes)
+        {
+            throw new InvalidDataException(
+                $"LM Studio native model catalog exceeded the {MaximumResponseBytes / 1024 / 1024} MiB response limit.");
+        }
+
+        var initialCapacity = content.Headers.ContentLength is long contentLength
+            ? (int)Math.Clamp(contentLength, 0, MaximumResponseBytes)
+            : 16 * 1024;
+        await using var source = await content.ReadAsStreamAsync(cancellationToken);
+        using var destination = new MemoryStream(initialCapacity);
+        var buffer = new byte[64 * 1024];
+        var totalRead = 0;
+        while (true)
+        {
+            var remaining = MaximumResponseBytes + 1 - totalRead;
+            if (remaining <= 0)
+            {
+                throw new InvalidDataException(
+                    $"LM Studio native model catalog exceeded the {MaximumResponseBytes / 1024 / 1024} MiB response limit.");
+            }
+
+            var read = await source.ReadAsync(
+                buffer.AsMemory(0, Math.Min(buffer.Length, remaining)),
+                cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+
+            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            totalRead += read;
+        }
+
+        if (totalRead > MaximumResponseBytes)
+        {
+            throw new InvalidDataException(
+                $"LM Studio native model catalog exceeded the {MaximumResponseBytes / 1024 / 1024} MiB response limit.");
+        }
+
+        return new BoundedContent(destination.GetBuffer(), totalRead);
     }
 
     public static string NormalizeLmStudioApiBase(string providerBaseUrl)
@@ -281,16 +388,20 @@ public class LmStudioModelCatalogService
             return $"Invalid LM Studio native API URL: {ex.Message}";
         }
 
-        if (ex is TaskCanceledException)
-        {
-            return "Timed out while asking LM Studio for its native model catalog.";
-        }
-
         return ex.Message;
+    }
+
+    private readonly record struct BoundedContent(byte[] Buffer, int Length)
+    {
+        public ReadOnlyMemory<byte> Memory => Buffer.AsMemory(0, Length);
     }
 }
 
-public sealed record LmStudioModelCatalog(bool Ok, IReadOnlyList<LmStudioModelInfo> Models, string Error)
+public sealed record LmStudioModelCatalog(
+    bool Ok,
+    IReadOnlyList<LmStudioModelInfo> Models,
+    string Error,
+    int OmittedModelCount = 0)
 {
     public static LmStudioModelCatalog Empty { get; } = new(false, [], "");
 
@@ -302,9 +413,15 @@ public sealed record LmStudioModelCatalog(bool Ok, IReadOnlyList<LmStudioModelIn
 
     public int LoadedCount => Models.Count(model => model.Loaded);
 
-    public static LmStudioModelCatalog Success(IReadOnlyList<LmStudioModelInfo> models)
+    public static LmStudioModelCatalog Success(
+        IReadOnlyList<LmStudioModelInfo> models,
+        int omittedModelCount = 0)
     {
-        return new LmStudioModelCatalog(true, models, "");
+        return new LmStudioModelCatalog(
+            true,
+            models,
+            "",
+            Math.Max(0, omittedModelCount));
     }
 
     public static LmStudioModelCatalog Failed(string error)
@@ -314,7 +431,67 @@ public sealed record LmStudioModelCatalog(bool Ok, IReadOnlyList<LmStudioModelIn
 
     public LmStudioModelInfo? Find(string selectedModel)
     {
-        return Models.FirstOrDefault(model => model.Matches(selectedModel));
+        return EquivalentModels(selectedModel).FirstOrDefault();
+    }
+
+    public LmStudioModelInfo? FindForLoad(string selectedModel)
+    {
+        var equivalents = EquivalentModels(selectedModel);
+        return equivalents.FirstOrDefault(model => model.Loaded)
+            ?? equivalents.FirstOrDefault(model => model.HasResidencyEvidence && !model.Loaded)
+            ?? equivalents.FirstOrDefault();
+    }
+
+    public LmStudioModelInfo? FindForUnload(string selectedModel)
+    {
+        var equivalents = EquivalentModels(selectedModel);
+        return equivalents.FirstOrDefault(model => model.Loaded
+                && model.LoadedInstances.Any(instance => !string.IsNullOrWhiteSpace(instance.Id)))
+            ?? equivalents.FirstOrDefault(model => model.Loaded)
+            ?? equivalents.FirstOrDefault();
+    }
+
+    private IReadOnlyList<LmStudioModelInfo> EquivalentModels(string selectedModel)
+    {
+        var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var selectedAlias = ProviderModelCatalogProjectionService.SafeModelIdentifier(selectedModel);
+        if (selectedAlias.Length > 0)
+        {
+            aliases.Add(selectedAlias);
+        }
+
+        var equivalent = new List<LmStudioModelInfo>();
+        var observed = new HashSet<LmStudioModelInfo>();
+        var expanded = true;
+        while (expanded)
+        {
+            expanded = false;
+            foreach (var model in Models)
+            {
+                if (observed.Contains(model)
+                    || !model.Aliases
+                        .Select(ProviderModelCatalogProjectionService.SafeModelIdentifier)
+                        .Any(aliases.Contains))
+                {
+                    continue;
+                }
+
+                observed.Add(model);
+                equivalent.Add(model);
+                foreach (var alias in model.Aliases)
+                {
+                    var safeAlias = ProviderModelCatalogProjectionService.SafeModelIdentifier(alias);
+                    if (safeAlias.Length > 0)
+                    {
+                        aliases.Add(safeAlias);
+                    }
+                }
+
+                expanded = true;
+            }
+        }
+
+        return equivalent;
     }
 }
 

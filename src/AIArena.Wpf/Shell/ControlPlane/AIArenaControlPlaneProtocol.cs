@@ -351,6 +351,8 @@ internal sealed record AIArenaProviderControlState(
 
     public int NativeIdleTtlSeconds { get; init; }
 
+    public bool DefaultForUnassignedAgentsEnabled { get; init; } = true;
+
     public bool LastTestOk { get; init; }
 
     public int LastLatencyMs { get; init; }

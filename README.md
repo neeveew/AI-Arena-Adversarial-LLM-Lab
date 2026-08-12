@@ -2,7 +2,7 @@
 
 A native Windows lab for running adversarial multi-agent conversations and collaborative AI team chats between local or OpenAI-compatible LLMs.
 
-[Download 0.4.129-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.129-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
+[Download 0.4.130-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.130-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
 
 AI Arena is not a chatbot and not just a model comparison board. It is a local multi-agent LLM lab where agents can debate, collaborate, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
 
@@ -41,7 +41,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 - Context-aware top-rail export for AI Lab transcripts and AI Collaborate chats.
 - Surface-aware top commands that hide transcript-only Search, Export, and View actions outside the workspaces they control.
 - Match Setup returns to the workspace and keyboard focus that opened it; Escape closes it without clearing transcript filters.
-- Top-rail **Models** opens a wide, searchable model catalog with observed loaded models first and provider-available models below. While the surface is open, LM Studio residency is rechecked every five seconds. Selecting a model exposes a narrow pane with one evidence-driven **Load model** or **Unload model** action plus immediate routing assignments; neither workflow claims to choose GPU placement.
+- Top-rail **Models** opens a wide, searchable model catalog with observed loaded models first and provider-available models below. Provider inventories are bounded to 4 MiB and 1,024 source entries before the 256-row display projection; omitted entries are reported as Partial evidence. While the surface is open, LM Studio residency is rechecked every five seconds. Selecting a model exposes a narrow pane with one evidence-driven **Load model** or **Unload model** action plus immediate routing assignments; neither workflow claims to choose GPU placement.
 - Narrow-window right rail opens as an overlay drawer so the main workspace keeps its usable width.
 - Default-on, token-authenticated local PowerShell control plane with a normal Settings toggle, typed commands for navigation, secret-free portable Match Setup export/import, cast sizing/relationship patterns/generation/history/replay, searchable and safely mutable Settings, full-state current-match forks with parent lineage, saved-session and checkpoint recovery, provider/Agent/Collaborate state, Collaborate run-review/trace inspection, arena turn/narration/reset, Internet state/toggle/diagnostics, self-screenshots, exports, live events, and an authoritative post-command state snapshot on every response.
 - Configurable AI Collaborate rounds for deeper team drafting, critique, and hardening passes.
@@ -90,7 +90,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 
    For a typical user-started llama.cpp server, choose **llama.cpp** / **llama.cpp native /v1** and use `http://127.0.0.1:8080/v1`.
 
-6. Press **Models** in the AI Lab top rail. Pick a model from **Loaded Models** or **Available Models**. For LM Studio, use the single residency button to request Load or Unload; the row moves sections only after LM Studio confirms the new state. Check **Default** or any active agent/Narrator target to save routing immediately.
+6. Press **Models** in the AI Lab top rail. Pick a model from **Loaded Models** or **Available Models**. For LM Studio, use the single residency button to request Load or Unload; the row moves sections only after LM Studio confirms the new state. Check **Default** to let unassigned Arena agents use the shared model, or uncheck it to require explicit agent assignments. Check any active agent/Narrator target to save an explicit route immediately—even when that route uses the same model as Default.
 7. Use **Connection** from the Models header to return to Provider connection and press **Test connection** for the selected default model. Optionally open **Model recommendations** to scan local hardware and recommend a role spread. The provider still owns device placement.
 8. Open Match Setup to create or replay a setup with Random Seed, AI Choice, or Wild Seed.
 9. Run 1 TURN or AUTO CHAT to start an adversarial match.
@@ -148,12 +148,12 @@ The local, token-authenticated WPF control plane is enabled by default. Its togg
 . "$env:LOCALAPPDATA\Programs\AI Arena\ai-arena-control.ps1"
 
 $provider = Get-AIArenaProvider
-Set-AIArenaProviderConfig -BaseUrl "http://127.0.0.1:1234/v1" -ApiMode lmstudio_native -Model "google/gemma-4-e2b"
+Set-AIArenaProviderConfig -BaseUrl "http://127.0.0.1:1234/v1" -ApiMode lmstudio_native -Model "google/gemma-4-e2b" -DefaultForUnassignedAgentsEnabled $true
 Update-AIArenaProviderModels
 Test-AIArenaProvider
 ```
 
-Provider tokens use `SecureString`: `$token = Read-Host "Provider token" -AsSecureString`, then `Set-AIArenaProviderConfig -ApiToken $token`. Responses expose only whether a token is configured.
+Provider tokens use `SecureString`: `$token = Read-Host "Provider token" -AsSecureString`, then `Set-AIArenaProviderConfig -ApiToken $token`. Responses expose only whether a token is configured. `-DefaultForUnassignedAgentsEnabled $false` leaves the shared provider model configured but prevents unassigned Arena roles from silently falling back to it.
 
 AI Arena can also capture its own WPF window:
 

@@ -89,6 +89,7 @@ var tests = new List<(string Name, Action Test)>
     ("normalizes provider base urls", NormalizeProviderBaseUrls),
     ("normalizes null provider reasoning", NormalizeNullProviderReasoning),
     ("resolves provider routing fallbacks", ResolveProviderRoutingFallbacks),
+    ("routes only explicit roles when the Arena default is disabled", ResolveProviderRoutingWithoutArenaDefault),
     ("counts OpenAI-compatible model list", CountOpenAiCompatibleModels),
     ("parses OpenAI-compatible model names", ParseOpenAiCompatibleModelNames),
     ("extracts assistant completion content", ExtractAssistantCompletionContent),
@@ -555,6 +556,54 @@ static void ResolveProviderRoutingFallbacks()
     Require(gammaFallback is null, "shared config should not fallback to itself");
 }
 
+static void ResolveProviderRoutingWithoutArenaDefault()
+{
+    var snapshot = new ArenaSnapshot();
+    snapshot.Configs["shared"] = new ModelProviderConfig { Model = "default-model" };
+    snapshot.Configs["alpha"] = new ModelProviderConfig { Model = "specialist-model", ExplicitModelAssignment = true };
+    snapshot.Configs["beta"] = new ModelProviderConfig { Model = "default-model", ExplicitModelAssignment = true };
+    snapshot.Configs["gamma"] = new ModelProviderConfig { Model = "legacy-model" };
+    snapshot.Configs["delta"] = new ModelProviderConfig { Model = "default-model" };
+
+    var baselineFingerprint = SessionStore.SetupFingerprint(snapshot);
+    snapshot.Engine.DefaultForUnassignedAgentsEnabled = false;
+    Require(SessionStore.SetupFingerprint(snapshot) != baselineFingerprint, "Arena default policy did not affect the setup fingerprint");
+
+    var alpha = ModelProviderRouting.Resolve(snapshot, "alpha", out var alphaFallback);
+    Require(alpha?.Model == "specialist-model", "explicit specialist assignment did not route with the default disabled");
+    Require(alphaFallback is null, "explicit specialist assignment retried through the disabled Arena default");
+
+    var beta = ModelProviderRouting.Resolve(snapshot, "beta", out var betaFallback);
+    Require(beta?.Model == "default-model", "explicit same-as-shared assignment did not survive default disablement");
+    Require(betaFallback is null, "same-model explicit assignment should not retry the same shared model");
+
+    var gamma = ModelProviderRouting.Resolve(snapshot, "gamma", out var gammaFallback);
+    Require(gamma?.Model == "legacy-model" && gammaFallback is null,
+        "legacy distinct role assignment did not remain explicit when the default was disabled");
+
+    var inherited = ModelProviderRouting.Resolve(snapshot, "delta", out var inheritedFallback);
+    Require(inherited is null && inheritedFallback is null,
+        "same-as-shared inheritance carrier routed while the default was disabled");
+
+    var unassigned = ModelProviderRouting.Resolve(snapshot, "epsilon", out var unassignedFallback);
+    Require(unassigned is null && unassignedFallback is null, "unassigned role fell back while the default was disabled");
+
+    var narrator = ModelProviderRouting.Resolve(snapshot, "narrator", out var narratorFallback);
+    Require(narrator is null && narratorFallback is null, "unassigned narrator fell back while the default was disabled");
+
+    snapshot.Configs["narrator"] = new ModelProviderConfig { Model = "default-model", ExplicitModelAssignment = true };
+    narrator = ModelProviderRouting.Resolve(snapshot, "narrator", out narratorFallback);
+    Require(narrator?.Model == "default-model" && narratorFallback is null, "explicit narrator assignment did not route independently of the disabled default");
+
+    var explicitFingerprint = SessionStore.SetupFingerprint(snapshot);
+    snapshot.Configs["alpha"] = new ModelProviderConfig { Model = "specialist-model" };
+    Require(SessionStore.SetupFingerprint(snapshot) != explicitFingerprint, "role assignment mode did not affect the setup fingerprint");
+
+    var restored = JsonSerializer.Deserialize<ArenaSnapshot>(JsonSerializer.Serialize(snapshot));
+    Require(restored is not null && !restored.Engine.DefaultForUnassignedAgentsEnabled, "Arena default policy did not round trip through session JSON");
+    Require(!restored!.Configs["alpha"].ExplicitModelAssignment, "role assignment mode did not round trip through session JSON");
+}
+
 static void CountOpenAiCompatibleModels()
 {
     var count = ModelProviderHealthService.CountModels("""{"data":[{"id":"alpha"},{"id":"beta"}]}""");
@@ -745,6 +794,69 @@ static void ListsLlamaCppRouterModelsBeforeCompatibleFallback()
     }).GetAwaiter().GetResult();
     Require(transportFallback.Ok && transportFallback.Models.SequenceEqual(["transport-fallback.gguf"]), "a router transport exception should degrade into an independent compatible inventory attempt");
     Require(transportHandler.Requests.Select(uri => uri.AbsolutePath).SequenceEqual(["/models", "/v1/models"]), "router transport failure must not suppress the compatible fallback request");
+
+    var boundedSourceEntryCount = ModelProviderClient.MaximumModelCatalogEntries + 476;
+    var boundedCatalogBody = JsonSerializer.Serialize(new
+    {
+        data = Enumerable.Range(0, boundedSourceEntryCount)
+            .Select(index => new { id = $"bounded-model-{index:0000}" })
+    });
+    Require(Encoding.UTF8.GetByteCount(boundedCatalogBody) < ModelProviderClient.MaximumModelCatalogBytes,
+        "the source-entry regression fixture must remain below the independent four-MiB response limit");
+
+    var boundedCompatibleHandler = new ProviderSequenceHandler((HttpStatusCode.OK, boundedCatalogBody));
+    var boundedCompatible = new ModelProviderClient(new HttpClient(boundedCompatibleHandler)).ListModelsAsync(new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8081/v1",
+        ApiMode = ModelProviderApiModes.OpenAiCompatible,
+        Timeout = 5
+    }).GetAwaiter().GetResult();
+    Require(boundedCompatible.Ok
+            && boundedCompatible.Models.Count == ModelProviderClient.MaximumModelCatalogEntries
+            && boundedCompatible.Models[0] == "bounded-model-0000"
+            && boundedCompatible.Models[^1] == "bounded-model-1023"
+            && boundedCompatible.OmittedModelCount == 476,
+        "a many-entry compatible inventory below four MiB was not capped with exact omission evidence");
+
+    var boundedRouterHandler = new ProviderSequenceHandler((HttpStatusCode.OK, boundedCatalogBody));
+    var boundedRouter = new ModelProviderClient(new HttpClient(boundedRouterHandler)).ListModelsAsync(new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8080/v1",
+        ApiMode = ModelProviderApiModes.LlamaCppNative,
+        Timeout = 5
+    }).GetAwaiter().GetResult();
+    Require(boundedRouter.Ok
+            && boundedRouter.Models.Count == ModelProviderClient.MaximumModelCatalogEntries
+            && boundedRouter.OmittedModelCount == 476
+            && boundedRouterHandler.Requests.Select(uri => uri.AbsolutePath).SequenceEqual(["/models"]),
+        "llama.cpp router discovery did not retain the shared source-entry bound and omission contract");
+
+    var oversizedBody = new string('x', ModelProviderClient.MaximumModelCatalogBytes + 1);
+    var oversizedRouterHandler = new ProviderSequenceHandler(
+        (HttpStatusCode.OK, oversizedBody),
+        (HttpStatusCode.OK, """{"data":[{"id":"bounded-fallback.gguf"}]}"""));
+    var oversizedRouter = new ModelProviderClient(new HttpClient(oversizedRouterHandler)).ListModelsAsync(new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8080/v1",
+        ApiMode = ModelProviderApiModes.LlamaCppNative,
+        Timeout = 5
+    }).GetAwaiter().GetResult();
+    Require(oversizedRouter.Ok && oversizedRouter.Models.SequenceEqual(["bounded-fallback.gguf"]),
+        "an oversized llama.cpp router inventory should fail boundedly and use the independently bounded compatible fallback");
+    Require(oversizedRouterHandler.Requests.Select(uri => uri.AbsolutePath).SequenceEqual(["/models", "/v1/models"]),
+        "an oversized router inventory did not stay on the two bounded model-list routes");
+
+    var oversizedCompatible = new ModelProviderClient(new HttpClient(new ProviderSequenceHandler(
+        (HttpStatusCode.OK, oversizedBody)))).ListModelsAsync(new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:8081/v1",
+        ApiMode = ModelProviderApiModes.OpenAiCompatible,
+        Timeout = 5
+    }).GetAwaiter().GetResult();
+    Require(!oversizedCompatible.Ok
+            && oversizedCompatible.Models.Count == 0
+            && !oversizedCompatible.Error.Contains(oversizedBody[..256], StringComparison.Ordinal),
+        "an oversized compatible inventory was accepted, leaked, or escaped the bounded error contract");
 }
 
 static void RetriesOnlyUnacceptedTransientLlamaCppRequests()
@@ -2856,6 +2968,13 @@ static void ForkFullSessionStateWithoutMutatingSource()
             LastError = "keep provider diagnostic",
             LastLatencyMs = 41
         };
+        source.Engine.DefaultForUnassignedAgentsEnabled = false;
+        source.Configs["alpha"] = new ModelProviderConfig
+        {
+            BaseUrl = "http://127.0.0.1:1234/v1",
+            Model = "fork-model",
+            ExplicitModelAssignment = true
+        };
         source.Engine.Messages.Add(new DialogueMessage
         {
             Turn = 3,
@@ -2940,6 +3059,10 @@ static void ForkFullSessionStateWithoutMutatingSource()
         Require(fork.GenerationHistory.Count == 1, "fork should retain generation history");
         Require(fork.Engine.TurnIndex == 2, "fork should retain the next-speaker position");
         Require(fork.Configs["shared"].Model == "fork-model", "fork should retain provider configuration");
+        Require(!fork.Engine.DefaultForUnassignedAgentsEnabled
+                && fork.Configs["alpha"].ExplicitModelAssignment
+                && fork.Configs["alpha"].Model == "fork-model",
+            "fork should preserve the optional Default policy and explicit same-as-shared role semantics");
         Require(fork.Configs["shared"].LastError == "keep provider diagnostic", "fork should retain provider diagnostic state");
 
         fork.Engine.Steering.Topic = "branch-only mutation";

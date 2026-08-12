@@ -1726,7 +1726,9 @@ internal sealed class CollaborateCoordinator
 
     private ProviderPlan ProviderPlanForRole(ArenaViewSnapshot current, string roleId)
     {
-        var sharedModel = CleanModel(current.ProviderModel);
+        var sharedModel = current.DefaultForUnassignedAgentsEnabled
+            ? CleanModel(current.ProviderModel)
+            : "";
         var roleModel = CleanModel(ModelForRole(current, roleId));
         var model = string.IsNullOrWhiteSpace(roleModel) ? sharedModel : roleModel;
         if (string.IsNullOrWhiteSpace(model))
@@ -1744,7 +1746,9 @@ internal sealed class CollaborateCoordinator
 
     internal static IReadOnlyList<string> MissingConfiguredModelRoles(ArenaViewSnapshot current, string mode)
     {
-        var sharedModel = CleanModel(current.ProviderModel);
+        var sharedModel = current.DefaultForUnassignedAgentsEnabled
+            ? CleanModel(current.ProviderModel)
+            : "";
         var missing = new List<string>();
         foreach (var roleId in RequiredRoleIdsForMode(mode))
         {

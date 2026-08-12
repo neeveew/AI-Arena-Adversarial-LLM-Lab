@@ -61,6 +61,20 @@ public sealed record ArenaViewSnapshot(
     public bool FactoryMode { get; init; }
 
     /// <summary>
+    /// When true, participant and Narrator roles without an explicit model use
+    /// the shared provider model. The shared model remains available to Agent
+    /// Workspace and provider diagnostics even when this policy is disabled.
+    /// </summary>
+    public bool DefaultForUnassignedAgentsEnabled { get; init; } = true;
+
+    /// <summary>
+    /// Explicit role-model routes keyed by durable role id. An inherited role
+    /// is absent even when its effective model equals the shared model.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ExplicitRoleModels { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// True when the durable Factory conversation root still resolves to its
     /// original public Operator message.
     /// </summary>

@@ -746,8 +746,21 @@ static void CollaboratePreflightAcceptsRoleSpecificModels()
             BetaModel = "",
             GammaModel = "",
             NarratorModel = ""
-        };
+    };
     Require(CollaborateCoordinator.MissingConfiguredModelRoles(sharedOnly, "team").Count == 0, "shared model should satisfy all collaborate roles");
+    var sharedWithDefaultOff = sharedOnly with { DefaultForUnassignedAgentsEnabled = false };
+    Require(CollaborateCoordinator.MissingConfiguredModelRoles(sharedWithDefaultOff, "team")
+            .SequenceEqual(["Alpha", "Beta", "Gamma", "Narrator"]),
+        "Collaborate should not use the shared provider model when Default for roles is off");
+    var explicitSameAsShared = sharedWithDefaultOff with
+    {
+        AlphaModel = "shared-local",
+        BetaModel = "shared-local",
+        GammaModel = "shared-local",
+        NarratorModel = "shared-local"
+    };
+    Require(CollaborateCoordinator.MissingConfiguredModelRoles(explicitSameAsShared, "team").Count == 0,
+        "explicit same-as-shared Collaborate routes should remain available when Default is off");
 
     var missingGamma = roleModels with { GammaModel = "" };
     var missing = CollaborateCoordinator.MissingConfiguredModelRoles(missingGamma, "team");

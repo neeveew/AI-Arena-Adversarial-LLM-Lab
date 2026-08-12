@@ -20,7 +20,7 @@ namespace AIArena.Wpf.Services;
 /// </summary>
 public sealed partial class LlamaCppRuntimeService
 {
-    private const int MaximumBodyBytes = 1024 * 1024;
+    internal const int MaximumResponseBytes = 1024 * 1024;
     private const int MaximumModelCount = 256;
     private const int MaximumSlotCount = 256;
     private const int MaximumServerModelMappings = 512;
@@ -85,20 +85,24 @@ public sealed partial class LlamaCppRuntimeService
             var compatibleModelsResponse = await ProbeGetAsync(new Uri(new Uri(compatibleBase + "/"), "models"), config, cancellationToken);
 
             var models = new Dictionary<string, MutableModel>(StringComparer.OrdinalIgnoreCase);
+            var routerOmittedEntryCount = 0;
             var routerMode = routerModelsResponse.Success
                 && TryParseModels(
                     routerModelsResponse.Body,
                     models,
                     assumeLoaded: false,
                     requireRouterStatus: true,
+                    out routerOmittedEntryCount,
                     "Router model inventory",
                     warnings);
+            var compatibleOmittedEntryCount = 0;
             var openAiModelsAvailable = compatibleModelsResponse.Success
                 && TryParseModels(
                     compatibleModelsResponse.Body,
                     models,
                     assumeLoaded: true,
                     requireRouterStatus: false,
+                    out compatibleOmittedEntryCount,
                     "OpenAI model inventory",
                     warnings);
             var selectedModel = SelectModel(config.Model, models.Values);
@@ -142,9 +146,13 @@ public sealed partial class LlamaCppRuntimeService
             AddOptionalWarning(warnings, "OpenAI model inventory", compatibleModelsResponse);
             AddOptionalWarning(warnings, "Runtime properties", props);
             AddOptionalWarning(warnings, "Slot telemetry", slots);
-            if (models.Count >= MaximumModelCount)
+            var displayOmittedModelCount = Math.Max(0, models.Count - MaximumModelCount);
+            var omittedModelCount = (int)Math.Min(
+                int.MaxValue,
+                (long)routerOmittedEntryCount + compatibleOmittedEntryCount + displayOmittedModelCount);
+            if (omittedModelCount > 0)
             {
-                warnings.Add($"Model inventory was capped at {MaximumModelCount} entries.");
+                warnings.Add($"{omittedModelCount} model inventory entries were omitted by safety limits.");
             }
 
             var buildInfo = SafeText(propsInfo.BuildInfo);
@@ -211,7 +219,8 @@ public sealed partial class LlamaCppRuntimeService
                 Slots: Array.AsReadOnly(safeSlots),
                 Warnings: Array.AsReadOnly(warnings.Select(SafeText).Where(value => value.Length > 0).Distinct(StringComparer.Ordinal).ToArray()),
                 Error: error,
-                CheckedAt: checkedAt);
+                CheckedAt: checkedAt,
+                OmittedModelCount: omittedModelCount);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -272,7 +281,10 @@ public sealed partial class LlamaCppRuntimeService
                 Content = JsonContent.Create(new { model = lifecycleModel })
             };
             ProviderHttpHelpers.ApplyAuthorization(request, config.ApiToken);
-            using var response = await httpClient.SendAsync(request, timeout.Token);
+            using var response = await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                timeout.Token);
             var body = await ReadBoundedBodyAsync(response, timeout.Token);
             if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed or HttpStatusCode.NotImplemented)
             {
@@ -319,7 +331,10 @@ public sealed partial class LlamaCppRuntimeService
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
         ProviderHttpHelpers.ApplyAuthorization(request, config.ApiToken);
-        using var response = await httpClient.SendAsync(request, cancellationToken);
+        using var response = await httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
         var body = await ReadBoundedBodyAsync(response, cancellationToken);
         if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed or HttpStatusCode.NotImplemented)
         {
@@ -362,8 +377,10 @@ public sealed partial class LlamaCppRuntimeService
         string json,
         IDictionary<string, MutableModel> target,
         bool assumeLoaded,
-        bool requireRouterStatus)
+        bool requireRouterStatus,
+        out int omittedEntryCount)
     {
+        omittedEntryCount = 0;
         if (string.IsNullOrWhiteSpace(json))
         {
             return false;
@@ -375,6 +392,7 @@ public sealed partial class LlamaCppRuntimeService
             return false;
         }
 
+        omittedEntryCount = Math.Max(0, data.GetArrayLength() - MaximumModelCount);
         var foundRouterStatus = false;
         foreach (var item in data.EnumerateArray().Take(MaximumModelCount))
         {
@@ -435,15 +453,23 @@ public sealed partial class LlamaCppRuntimeService
         IDictionary<string, MutableModel> target,
         bool assumeLoaded,
         bool requireRouterStatus,
+        out int omittedEntryCount,
         string label,
         ICollection<string> warnings)
     {
+        omittedEntryCount = 0;
         try
         {
-            return ParseModels(json, target, assumeLoaded, requireRouterStatus);
+            return ParseModels(
+                json,
+                target,
+                assumeLoaded,
+                requireRouterStatus,
+                out omittedEntryCount);
         }
         catch (JsonException)
         {
+            omittedEntryCount = 0;
             warnings.Add($"{label} returned unreadable JSON.");
             return false;
         }
@@ -745,23 +771,29 @@ public sealed partial class LlamaCppRuntimeService
 
     private static async Task<string> ReadBoundedBodyAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
+        if (response.Content.Headers.ContentLength is long declaredLength
+            && declaredLength > MaximumResponseBytes)
+        {
+            throw new InvalidDataException($"llama.cpp response exceeded the {MaximumResponseBytes / 1024} KiB safety limit.");
+        }
+
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var output = new MemoryStream();
         var buffer = new byte[8192];
         while (true)
         {
-            var read = await stream.ReadAsync(buffer, cancellationToken);
+            var remaining = MaximumResponseBytes + 1 - checked((int)output.Length);
+            var read = await stream.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining)), cancellationToken);
             if (read <= 0)
             {
                 break;
             }
 
-            if (output.Length + read > MaximumBodyBytes)
-            {
-                throw new InvalidDataException($"llama.cpp response exceeded the {MaximumBodyBytes / 1024} KiB safety limit.");
-            }
-
             output.Write(buffer, 0, read);
+            if (output.Length > MaximumResponseBytes)
+            {
+                throw new InvalidDataException($"llama.cpp response exceeded the {MaximumResponseBytes / 1024} KiB safety limit.");
+            }
         }
 
         return Encoding.UTF8.GetString(output.ToArray());
@@ -932,7 +964,8 @@ public sealed record LlamaCppRuntimeSnapshot(
     IReadOnlyList<LlamaCppRuntimeSlot> Slots,
     IReadOnlyList<string> Warnings,
     string Error,
-    DateTimeOffset CheckedAt)
+    DateTimeOffset CheckedAt,
+    int OmittedModelCount = 0)
 {
     public static LlamaCppRuntimeSnapshot Unavailable(string error, DateTimeOffset checkedAt)
     {

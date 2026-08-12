@@ -319,7 +319,8 @@ internal sealed class MatchSetupPortabilityService
         ContextLength = config.ContextLength,
         Reasoning = config.Reasoning,
         NativeStatefulChat = config.NativeStatefulChat,
-        NativeIdleTtlSeconds = config.NativeIdleTtlSeconds
+        NativeIdleTtlSeconds = config.NativeIdleTtlSeconds,
+        ExplicitModelAssignment = config.ExplicitModelAssignment
     };
 
     private static AIArenaMatchSetupPackageResult Success(
@@ -333,7 +334,8 @@ internal sealed class MatchSetupPortabilityService
 
 internal static class MatchSetupPackageCodec
 {
-    public const string Schema = "ai_arena.match_setup.v2";
+    public const string Schema = "ai_arena.match_setup.v3";
+    public const string LegacySchema = "ai_arena.match_setup.v2";
     public const string FactoryConversationContract = FactoryConversationService.ContractVersion;
     public const int MaxPackageBytes = 512 * 1024;
     private const int MaxPackageChars = 512 * 1024;
@@ -387,22 +389,37 @@ internal static class MatchSetupPackageCodec
         }
 
         var providers = new SortedDictionary<string, MatchSetupProviderPackage>(StringComparer.OrdinalIgnoreCase);
+        var sharedModel = snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var sharedConfig)
+            ? sharedConfig.Model.Trim()
+            : "";
         foreach (var (key, config) in snapshot.Configs
                      .Where(item => IsSupportedProviderKey(item.Key, activeIds))
                      .OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
         {
-            providers[key.Trim().ToLowerInvariant()] = new MatchSetupProviderPackage
+            var normalizedKey = key.Trim().ToLowerInvariant();
+            var assignmentMode = normalizedKey.Equals(ModelProviderRouting.SharedConfigKey, StringComparison.OrdinalIgnoreCase)
+                ? MatchSetupProviderAssignmentModes.Inherit
+                : config.ExplicitModelAssignment
+                  || !string.IsNullOrWhiteSpace(config.Model)
+                  && !config.Model.Trim().Equals(sharedModel, StringComparison.Ordinal)
+                    ? MatchSetupProviderAssignmentModes.Explicit
+                    : MatchSetupProviderAssignmentModes.Inherit;
+            providers[normalizedKey] = new MatchSetupProviderPackage
             {
                 BaseUrl = SanitizeProviderBaseUrl(config.BaseUrl),
                 ApiMode = ModelProviderApiModes.Normalize(config.ApiMode),
-                Model = config.Model,
+                Model = assignmentMode.Equals(MatchSetupProviderAssignmentModes.Explicit, StringComparison.Ordinal)
+                    || normalizedKey.Equals(ModelProviderRouting.SharedConfigKey, StringComparison.OrdinalIgnoreCase)
+                        ? config.Model
+                        : sharedModel,
                 TimeoutSeconds = ArenaSessionMutationCoordinator.ClampTimeout(config.Timeout),
                 Temperature = ArenaSessionMutationCoordinator.ClampTemperature(config.Temperature),
                 MaxOutputTokens = ArenaSessionMutationCoordinator.ClampMaxOutput(config.MaxOutputTokens),
                 ContextLength = ArenaSessionMutationCoordinator.ClampProviderContextLength(config.ContextLength),
                 Reasoning = ModelProviderReasoningModes.Normalize(config.Reasoning),
                 NativeStatefulChat = config.NativeStatefulChat,
-                NativeIdleTtlSeconds = ArenaSessionMutationCoordinator.ClampProviderNativeIdleTtlSeconds(config.NativeIdleTtlSeconds)
+                NativeIdleTtlSeconds = ArenaSessionMutationCoordinator.ClampProviderNativeIdleTtlSeconds(config.NativeIdleTtlSeconds),
+                AssignmentMode = assignmentMode
             };
         }
 
@@ -413,6 +430,7 @@ internal static class MatchSetupPackageCodec
             {
                 MatchType = snapshot.MatchType,
                 FactoryMode = snapshot.Engine.FactoryMode,
+                DefaultForUnassignedAgentsEnabled = snapshot.Engine.DefaultForUnassignedAgentsEnabled,
                 Scenario = new MatchSetupScenarioPackage
                 {
                     Topic = snapshot.Engine.Steering.Topic,
@@ -532,13 +550,22 @@ internal static class MatchSetupPackageCodec
             return Invalid("invalid_package", "Match Setup JSON did not contain a package.");
         }
 
-        if (!string.Equals(package.Schema, Schema, StringComparison.Ordinal))
+        var legacyV2 = string.Equals(package.Schema, LegacySchema, StringComparison.Ordinal);
+        if (!legacyV2 && !string.Equals(package.Schema, Schema, StringComparison.Ordinal))
         {
-            return Invalid("unsupported_schema", $"Unsupported Match Setup schema '{package.Schema}'. Expected '{Schema}'.");
+            return Invalid(
+                "unsupported_schema",
+                $"Unsupported Match Setup schema '{package.Schema}'. Expected '{Schema}' or legacy '{LegacySchema}'.");
         }
 
         var errors = new List<string>();
         var warnings = new List<string>();
+        if (legacyV2)
+        {
+            UpgradeLegacyV2(package);
+            warnings.Add(
+                "Legacy Match Setup v2 was upgraded to v3. Default-for-unassigned remains enabled, and role assignment modes were inferred from the legacy model values.");
+        }
         Validate(package, errors, warnings);
         if (errors.Count > 0)
         {
@@ -600,6 +627,7 @@ internal static class MatchSetupPackageCodec
         var setup = package.Setup;
         target.MatchType = setup.MatchType.Trim();
         target.Engine.FactoryMode = setup.FactoryMode;
+        target.Engine.DefaultForUnassignedAgentsEnabled = setup.DefaultForUnassignedAgentsEnabled;
         target.Engine.Steering.Topic = setup.Scenario.Topic;
         target.Engine.Steering.Global = setup.Scenario.Global;
         target.ScenarioGenerator.Style = setup.Generation.ScenarioStyle;
@@ -673,6 +701,11 @@ internal static class MatchSetupPackageCodec
 
         var warnings = validationWarnings.ToList();
         target.Configs.Clear();
+        var importedSharedModel = setup.Providers.TryGetValue(ModelProviderRouting.SharedConfigKey, out var sharedDefinition)
+            ? sharedDefinition?.Model?.Trim() ?? ""
+            : trustedConfigs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var trustedShared)
+                ? trustedShared.Model.Trim()
+                : "";
         foreach (var (key, definition) in setup.Providers.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
         {
             trustedConfigs.TryGetValue(key, out var trusted);
@@ -685,19 +718,22 @@ internal static class MatchSetupPackageCodec
                 warnings.Add($"Provider token for '{key}' was cleared because the imported endpoint or API mode changed.");
             }
 
+            var explicitAssignment = !key.Equals(ModelProviderRouting.SharedConfigKey, StringComparison.OrdinalIgnoreCase)
+                && definition.AssignmentMode.Equals(MatchSetupProviderAssignmentModes.Explicit, StringComparison.Ordinal);
             target.Configs[key] = new ModelProviderConfig
             {
                 BaseUrl = definition.BaseUrl.Trim(),
                 ApiMode = normalizedMode,
                 ApiToken = canReuseToken ? trusted!.ApiToken : "",
-                Model = definition.Model.Trim(),
+                Model = explicitAssignment ? definition.Model.Trim() : importedSharedModel,
                 Timeout = ArenaSessionMutationCoordinator.ClampTimeout(definition.TimeoutSeconds),
                 Temperature = ArenaSessionMutationCoordinator.ClampTemperature(definition.Temperature),
                 MaxOutputTokens = ArenaSessionMutationCoordinator.ClampMaxOutput(definition.MaxOutputTokens),
                 ContextLength = ArenaSessionMutationCoordinator.ClampProviderContextLength(definition.ContextLength),
                 Reasoning = ModelProviderReasoningModes.Normalize(definition.Reasoning),
                 NativeStatefulChat = definition.NativeStatefulChat,
-                NativeIdleTtlSeconds = ArenaSessionMutationCoordinator.ClampProviderNativeIdleTtlSeconds(definition.NativeIdleTtlSeconds)
+                NativeIdleTtlSeconds = ArenaSessionMutationCoordinator.ClampProviderNativeIdleTtlSeconds(definition.NativeIdleTtlSeconds),
+                ExplicitModelAssignment = explicitAssignment
             };
         }
 
@@ -716,7 +752,8 @@ internal static class MatchSetupPackageCodec
                     ContextLength = shared.ContextLength,
                     Reasoning = shared.Reasoning,
                     NativeStatefulChat = shared.NativeStatefulChat,
-                    NativeIdleTtlSeconds = shared.NativeIdleTtlSeconds
+                    NativeIdleTtlSeconds = shared.NativeIdleTtlSeconds,
+                    ExplicitModelAssignment = false
                 }
                 : new ModelProviderConfig();
             warnings.Add("The package had no shared provider definition; the trusted local shared provider was retained.");
@@ -787,6 +824,7 @@ internal static class MatchSetupPackageCodec
             provider.ApiMode ??= "";
             provider.Model ??= "";
             provider.Reasoning ??= "";
+            provider.AssignmentMode ??= "";
         }
 
         RequireText("setup.matchType", setup.MatchType, 1, 64, errors);
@@ -954,6 +992,9 @@ internal static class MatchSetupPackageCodec
             errors.Add("setup.internet must use maxResults 1-10 and sourceFreshnessMinutes 1-1440.");
         }
 
+        var sharedProviderModel = setup.Providers.TryGetValue(ModelProviderRouting.SharedConfigKey, out var sharedProvider)
+            ? sharedProvider?.Model?.Trim() ?? ""
+            : "";
         foreach (var (key, provider) in setup.Providers)
         {
             if (provider is null)
@@ -1022,6 +1063,53 @@ internal static class MatchSetupPackageCodec
             {
                 errors.Add($"setup.providers.{key}.reasoning must be off, low, medium, high, on, or blank.");
             }
+            if (!MatchSetupProviderAssignmentModes.IsSupported(provider.AssignmentMode))
+            {
+                errors.Add($"setup.providers.{key}.assignmentMode must be explicit or inherit.");
+            }
+            else if (key.Equals(ModelProviderRouting.SharedConfigKey, StringComparison.OrdinalIgnoreCase)
+                     && !provider.AssignmentMode.Equals(MatchSetupProviderAssignmentModes.Inherit, StringComparison.Ordinal))
+            {
+                errors.Add("setup.providers.shared.assignmentMode must be inherit.");
+            }
+            else if (!key.Equals(ModelProviderRouting.SharedConfigKey, StringComparison.OrdinalIgnoreCase)
+                     && provider.AssignmentMode.Equals(MatchSetupProviderAssignmentModes.Explicit, StringComparison.Ordinal)
+                     && string.IsNullOrWhiteSpace(provider.Model))
+            {
+                errors.Add($"setup.providers.{key}.model must be non-empty when assignmentMode is explicit.");
+            }
+            else if (!key.Equals(ModelProviderRouting.SharedConfigKey, StringComparison.OrdinalIgnoreCase)
+                     && provider.AssignmentMode.Equals(MatchSetupProviderAssignmentModes.Inherit, StringComparison.Ordinal)
+                     && !string.IsNullOrWhiteSpace(provider.Model)
+                     && !provider.Model.Trim().Equals(sharedProviderModel, StringComparison.Ordinal))
+            {
+                errors.Add($"setup.providers.{key}.model must be blank or match the shared model when assignmentMode is inherit.");
+            }
+        }
+    }
+
+    private static void UpgradeLegacyV2(MatchSetupPackage package)
+    {
+        package.Schema = Schema;
+        package.Setup ??= new MatchSetupDefinitionPackage();
+        package.Setup.DefaultForUnassignedAgentsEnabled = true;
+        package.Setup.Providers ??= new SortedDictionary<string, MatchSetupProviderPackage>(StringComparer.OrdinalIgnoreCase);
+        var sharedModel = package.Setup.Providers.TryGetValue(ModelProviderRouting.SharedConfigKey, out var shared)
+            ? shared?.Model?.Trim() ?? ""
+            : "";
+        foreach (var (key, provider) in package.Setup.Providers)
+        {
+            if (provider is null)
+            {
+                continue;
+            }
+
+            var model = provider.Model?.Trim() ?? "";
+            provider.AssignmentMode = !key.Equals(ModelProviderRouting.SharedConfigKey, StringComparison.OrdinalIgnoreCase)
+                                      && model.Length > 0
+                                      && !model.Equals(sharedModel, StringComparison.Ordinal)
+                ? MatchSetupProviderAssignmentModes.Explicit
+                : MatchSetupProviderAssignmentModes.Inherit;
         }
     }
 
@@ -1144,6 +1232,7 @@ internal sealed class MatchSetupDefinitionPackage
 {
     public string MatchType { get; set; } = "balanced";
     public bool FactoryMode { get; set; }
+    public bool DefaultForUnassignedAgentsEnabled { get; set; } = true;
     public MatchSetupScenarioPackage Scenario { get; set; } = new();
     public MatchSetupGenerationPackage Generation { get; set; } = new();
     public List<MatchSetupAgentPackage> Cast { get; set; } = [];
@@ -1232,4 +1321,13 @@ internal sealed class MatchSetupProviderPackage
     public string Reasoning { get; set; } = "";
     public bool NativeStatefulChat { get; set; } = true;
     public int NativeIdleTtlSeconds { get; set; }
+    public string AssignmentMode { get; set; } = MatchSetupProviderAssignmentModes.Inherit;
+}
+
+internal static class MatchSetupProviderAssignmentModes
+{
+    public const string Explicit = "explicit";
+    public const string Inherit = "inherit";
+
+    public static bool IsSupported(string value) => value is Explicit or Inherit;
 }

@@ -162,6 +162,119 @@ static void ProviderCatalogProjectionSeparatesLoadedAndAvailableEvidence()
         "catalog status must not disclose local paths, provider credentials, or URL queries");
 }
 
+static void ProviderCatalogProjectionMergesTransitiveAliases()
+{
+    var config = new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:1234/v1",
+        ApiMode = ModelProviderApiModes.LmStudioNative,
+        Model = "beta"
+    };
+    var projection = new ProviderModelCatalogProjectionService();
+    var lease = projection.BeginRefresh("alias-session", config);
+    var source = LmStudioModelCatalog.Success(
+    [
+        Model("alpha", "Alpha", ["alpha", "left"], loaded: false, maxContextLength: 32768),
+        Model("beta", "Beta", ["beta", "right"], loaded: true, maxContextLength: 8192, loadedContextLength: 8192),
+        Model("bridge", "Bridge", ["bridge", "left", "right"], loaded: false)
+    ]);
+
+    var result = ProviderModelCatalogProjectionService.FromLmStudio(
+        lease,
+        source,
+        config.Model,
+        DateTimeOffset.UnixEpoch);
+
+    var merged = result.LoadedModels.Single();
+    Require(result.AvailableModels.Count == 0
+            && result.OmittedModelCount == 0
+            && !result.ConfiguredModelMissing
+            && result.ConfiguredModel == "alpha",
+        "transitively overlapping aliases should form one complete configured catalog row");
+    Require(merged.Id == "alpha"
+            && merged.LoadState == ProviderModelLoadState.Loaded
+            && merged.CanUnload
+            && !merged.CanLoad
+            && merged.ContextLength == 8192
+            && new[] { "alpha", "left", "beta", "right", "bridge" }.All(alias =>
+                merged.Aliases.Contains(alias, StringComparer.OrdinalIgnoreCase)),
+        "alias union should retain a deterministic canonical identity, every safe alias, and the strongest observed residency evidence");
+
+    var reversedLease = projection.BeginRefresh("alias-session-reversed", config);
+    var reversedResult = ProviderModelCatalogProjectionService.FromLmStudio(
+        reversedLease,
+        LmStudioModelCatalog.Success(source.Models.Reverse().ToArray()),
+        config.Model,
+        DateTimeOffset.UnixEpoch.AddSeconds(5));
+    var reversedMerged = reversedResult.LoadedModels.Single();
+    Require(reversedMerged.Id == merged.Id
+            && reversedResult.ConfiguredModel == result.ConfiguredModel
+            && reversedMerged.Aliases.SequenceEqual(merged.Aliases, StringComparer.OrdinalIgnoreCase),
+        "reordering equivalent provider aliases changed the canonical Models row key or alias contract across heartbeats");
+
+    var snapshot = SessionStore.CreateDefaultSnapshot();
+    snapshot.Configs[ModelProviderRouting.SharedConfigKey] = config;
+    var assignment = ProviderModelAssignmentProjectionService
+        .CreateBatch("alias-session", snapshot)
+        .Project(merged.Id, merged.Aliases);
+    Require(assignment.Targets.Single(target => target.IsDefault).Assigned,
+        "a configured provider alias did not project onto its canonical model row assignment");
+
+    var availableLease = projection.BeginRefresh("available-alias-session", new ModelProviderConfig
+    {
+        BaseUrl = config.BaseUrl,
+        ApiMode = config.ApiMode,
+        Model = "unavailable-first"
+    });
+    var availableSource = LmStudioModelCatalog.Success(
+    [
+        Model("unavailable-first", "Shared Alias", ["unavailable-first", "shared-alias"], loaded: false, maxContextLength: 32768, hasResidencyEvidence: false),
+        Model("available-second", "Shared Alias", ["available-second", "shared-alias"], loaded: false, maxContextLength: 8192)
+    ]);
+    var availableResult = ProviderModelCatalogProjectionService.FromLmStudio(
+        availableLease,
+        availableSource,
+        "unavailable-first",
+        DateTimeOffset.UnixEpoch);
+    var availableMerged = availableResult.AvailableModels.Single();
+    Require(availableMerged.LoadState == ProviderModelLoadState.NotLoaded
+            && availableMerged.CanLoad
+            && availableMerged.ContextLength == 8192,
+        "deduplication exposed Available while retaining metadata from a weaker unavailable alias");
+
+    static LmStudioModelInfo Model(
+        string key,
+        string displayName,
+        IReadOnlyList<string> aliases,
+        bool loaded,
+        int maxContextLength = 4096,
+        int loadedContextLength = 4096,
+        bool hasResidencyEvidence = true)
+    {
+        return new LmStudioModelInfo(
+            Key: key,
+            DisplayName: displayName,
+            Type: "llm",
+            Publisher: "local",
+            Architecture: "test",
+            QuantizationName: "Q4",
+            BitsPerWeight: 4,
+            SizeBytes: 1_000_000,
+            ParamsString: "1B",
+            LoadedInstances: loaded ? [new LmStudioLoadedInstance("opaque-instance", loadedContextLength, 1, null, null)] : [],
+            MaxContextLength: maxContextLength,
+            Format: "gguf",
+            Vision: false,
+            TrainedForToolUse: false,
+            ReasoningOptions: [],
+            ReasoningDefault: "",
+            SelectedVariant: "",
+            Aliases: aliases,
+            Description: "",
+            HasResidencyEvidence: hasResidencyEvidence);
+    }
+}
+
 static void ProviderCatalogProjectionPreservesLlamaAndCompatibleTruth()
 {
     var config = new ModelProviderConfig
@@ -241,10 +354,10 @@ static void ProviderCatalogProjectionPreservesLlamaAndCompatibleTruth()
         configuredModel: "configured-only",
         checkedAt: DateTimeOffset.UnixEpoch);
 
-    Require(compatible.CatalogEvidence == ProviderCatalogEvidenceState.Ready
+    Require(compatible.CatalogEvidence == ProviderCatalogEvidenceState.Partial
         && compatible.ResidencyEvidence == ProviderCatalogEvidenceState.Unavailable
         && compatible.LoadedModels.Count == 0,
-        "generic compatible catalogs must never infer loaded residency");
+        "display-capped compatible catalogs must report partial catalog evidence without inferring loaded residency");
     Require(compatible.AvailableModels.Count == ProviderModelCatalogProjectionService.MaximumModelCount
         && compatible.OmittedModelCount == 45,
         "generic model catalogs should deduplicate and retain a bounded 256-row projection");
@@ -252,6 +365,25 @@ static void ProviderCatalogProjectionPreservesLlamaAndCompatibleTruth()
         && compatible.AvailableModels[0].IsConfiguredOnly
         && compatible.AvailableModels[0].Id == "configured-only",
         "a configured model missing from a fresh catalog should remain visible as a neutral pinned row");
+
+    var sourceCappedLease = projection.BeginRefresh("compatible-source-cap", compatibleConfig);
+    var sourceCapped = ProviderModelCatalogProjectionService.FromCompatible(
+        sourceCappedLease,
+        Enumerable.Range(0, 1024)
+            .Select(index => $"source-capped-{index:0000}")
+            .ToArray(),
+        catalogAvailable: true,
+        error: "",
+        configuredModel: "source-capped-0000",
+        checkedAt: DateTimeOffset.UnixEpoch,
+        additionalOmittedModelCount: 476);
+    Require(sourceCapped.CatalogEvidence == ProviderCatalogEvidenceState.Partial
+            && sourceCapped.ResidencyEvidence == ProviderCatalogEvidenceState.Unavailable
+            && sourceCapped.AvailableModels.Count == ProviderModelCatalogProjectionService.MaximumModelCount
+            && sourceCapped.OmittedModelCount == 1244
+            && sourceCapped.Status.Contains("1244", StringComparison.Ordinal)
+            && sourceCapped.Status.Contains("omitted", StringComparison.OrdinalIgnoreCase),
+        "compatible source-parser and display omissions did not combine on the Models surface as explicit Partial evidence");
 }
 
 static void ProviderCatalogProjectionRejectsStaleGenerations()
@@ -313,6 +445,55 @@ static void ProviderCatalogProjectionRejectsStaleGenerations()
     projection.Invalidate();
     Require(projection.Current is null && !projection.TryPublish(secondLease, second, out _),
         "invalidating the projection should reject every in-flight prior lease");
+}
+
+static void ProviderModelAssignmentBatchesSharedProjectionState()
+{
+    var snapshot = SessionStore.CreateDefaultSnapshot();
+    snapshot.PersistenceRevision = 42;
+    snapshot.Configs[ModelProviderRouting.SharedConfigKey] = new ModelProviderConfig
+    {
+        BaseUrl = "http://127.0.0.1:1234/v1",
+        ApiMode = ModelProviderApiModes.LmStudioNative,
+        ApiToken = "batch-secret",
+        Model = "default-model"
+    };
+    snapshot.Configs["alpha"] = new ModelProviderConfig { Model = "alpha-model" };
+    snapshot.Configs["narrator"] = new ModelProviderConfig { Model = "narrator-model" };
+
+    var batch = ProviderModelAssignmentProjectionService.CreateBatch("batch-session", snapshot);
+    var projections = batch.ProjectMany(["default-model", "alpha-model", "unassigned-model"]);
+
+    Require(projections.Count == 3
+            && projections.All(item => item.SessionId == "batch-session"
+                && item.PersistenceRevision == 42
+                && ReferenceEquals(item.ProviderFingerprint, batch.ProviderFingerprint)),
+        "one assignment batch should reuse its snapshot identity for every projected model");
+    Require(!batch.ProviderFingerprint.Contains("batch-secret", StringComparison.Ordinal),
+        "the reusable batch identity must remain privacy safe");
+
+    var defaultProjection = projections[0];
+    var alphaProjection = projections[1];
+    var otherProjection = projections[2];
+    Require(defaultProjection.Targets.Single(target => target.IsDefault).Assigned
+            && !alphaProjection.Targets.Single(target => target.IsDefault).Assigned,
+        "batch projection should preserve exact Default assignment semantics per requested model");
+    Require(alphaProjection.Targets.Single(target => target.Id == "alpha").Assigned
+            && !defaultProjection.Targets.Single(target => target.Id == "alpha").Assigned
+            && otherProjection.Targets.All(target => !target.Assigned),
+        "batch projection should preserve explicit and unmatched target assignment truth");
+    Require(defaultProjection.Targets.Select(target => target.Id)
+            .SequenceEqual(alphaProjection.Targets.Select(target => target.Id), StringComparer.Ordinal)
+            && defaultProjection.Targets.Zip(alphaProjection.Targets).All(pair =>
+                ReferenceEquals(pair.First.AssignmentFingerprint, pair.Second.AssignmentFingerprint)),
+        "target order and precomputed assignment fingerprints should be reused across a batch");
+
+    var serviceBatch = ProviderModelAssignmentProjectionService.ProjectMany(
+        "batch-session",
+        snapshot,
+        ["default-model", "alpha-model"]);
+    Require(serviceBatch.Select(item => item.Model).SequenceEqual(["default-model", "alpha-model"]),
+        "the batch convenience API should preserve caller order without recomputing per-model snapshot state");
 }
 
 static void ProviderModelAssignmentPersistsDynamicTargetsAtomically()
@@ -431,10 +612,196 @@ static void ProviderModelAssignmentPersistsDynamicTargetsAtomically()
         Require(refreshFlags.SequenceEqual([false, false, false]),
             "immediate assignments should refresh host state but never request model loading or residency changes");
 
+        var aliasSnapshot = sessionStore.LoadSnapshotAsync("assignment-session").GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("alias assignment snapshot should load");
+        ProviderConfigurationControlService.SaveRoleModelConfig(
+            aliasSnapshot.Configs,
+            "theta",
+            "yi-coder-alias",
+            aliasSnapshot.Configs[ModelProviderRouting.SharedConfigKey],
+            temperatureOverride: 1.25,
+            maxOutputTokensOverride: 7777);
+        sessionStore.SaveSnapshotAsync(aliasSnapshot, "assignment-session").GetAwaiter().GetResult();
+        var aliasCurrent = sessionStore.LoadSnapshotAsync("assignment-session").GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("persisted alias assignment snapshot should load");
+        var aliasProjection = ProviderModelAssignmentProjectionService
+            .CreateBatch("assignment-session", aliasCurrent)
+            .Project("yi-coder", ["yi-coder-alias"]);
+        var aliasTheta = aliasProjection.Targets.Single(target => target.Id == "theta");
+        Require(aliasTheta.Assigned,
+            "an explicit provider alias did not render as assigned on its canonical catalog row");
+        var aliasUnassigned = service.SetModelAssignmentAsync(new ProviderModelAssignmentRequest(
+                "theta",
+                "yi-coder",
+                Assigned: false,
+                aliasProjection.ProviderFingerprint,
+                aliasTheta.AssignmentFingerprint,
+                EquivalentModelIds: ["yi-coder-alias"]))
+            .GetAwaiter()
+            .GetResult();
+        var afterAliasUnassign = sessionStore.LoadSnapshotAsync("assignment-session").GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("alias-unassigned snapshot should load");
+        Require(aliasUnassigned.Ok
+                && afterAliasUnassign.Configs["theta"].Model == "yi-coder"
+                && aliasUnassigned.Assignment.Targets.Single(target => target.Id == "theta").InheritsDefault
+                && Math.Abs(afterAliasUnassign.Configs["theta"].Temperature - 1.25) < 0.000001
+                && afterAliasUnassign.Configs["theta"].MaxOutputTokens == 7777
+                && refreshFlags.SequenceEqual([false, false, false, false]),
+            "unchecking an alias-equivalent explicit route did not restore Default inheritance atomically");
+
         var audit = File.ReadAllText(eventLogStore.EventPath("assignment-session"));
         Require(!audit.Contains(providerToken, StringComparison.Ordinal)
             && audit.Contains("provider_model_assignment_changed", StringComparison.Ordinal),
             "assignment evidence should be present without serializing provider credentials");
+    }
+    finally
+    {
+        DeleteProviderCatalogTestRoot(root);
+    }
+}
+
+static void ProviderOptionalDefaultPreservesExplicitRoutesAndDormantOverrides()
+{
+    var root = CreateProviderCatalogTestRoot("optional-default");
+    try
+    {
+        const string sessionId = "optional-default-session";
+        var sessionStore = new SessionStore(root);
+        var eventLogStore = new EventLogStore(root);
+        var snapshot = SessionStore.CreateDefaultSnapshot();
+        var shared = new ModelProviderConfig
+        {
+            BaseUrl = "http://127.0.0.1:1234/v1",
+            ApiMode = ModelProviderApiModes.LmStudioNative,
+            Model = "model-a",
+            Temperature = 0.7,
+            MaxOutputTokens = 4096
+        };
+        snapshot.Configs[ModelProviderRouting.SharedConfigKey] = shared;
+        ProviderConfigurationControlService.SaveRoleModelConfig(
+            snapshot.Configs,
+            "beta",
+            "",
+            shared,
+            temperatureOverride: 1.2,
+            maxOutputTokensOverride: 7777,
+            explicitAssignment: false);
+        sessionStore.SaveSnapshotAsync(snapshot, sessionId).GetAwaiter().GetResult();
+        var active = sessionStore.ListSessionsAsync().GetAwaiter().GetResult()
+            .Single(session => session.Id == sessionId);
+        var refreshes = new List<bool>();
+        using var operationLock = new SemaphoreSlim(1, 1);
+        var service = new ProviderConfigurationControlService(
+            sessionStore,
+            eventLogStore,
+            operationLock,
+            () => active,
+            () => false,
+            (_, refreshModels, _) =>
+            {
+                refreshes.Add(refreshModels);
+                return Task.CompletedTask;
+            });
+
+        var initial = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("optional-default snapshot should load");
+        var initialRevision = initial.PersistenceRevision;
+        var modelA = ProviderModelAssignmentProjectionService.Project(sessionId, initial, "model-a");
+        var alphaTarget = modelA.Targets.Single(target => target.Id == "alpha");
+        var explicitAlpha = service.SetModelAssignmentAsync(new ProviderModelAssignmentRequest(
+                "alpha",
+                "model-a",
+                Assigned: true,
+                modelA.ProviderFingerprint,
+                alphaTarget.AssignmentFingerprint))
+            .GetAwaiter()
+            .GetResult();
+        Require(explicitAlpha.Ok, "same-as-shared explicit role assignment should save");
+
+        var afterExplicitAlpha = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("same-as-shared explicit snapshot should load");
+        var aliasDefaultProjection = ProviderModelAssignmentProjectionService
+            .CreateBatch(sessionId, afterExplicitAlpha)
+            .Project("model-a-canonical", ["model-a"]);
+        var defaultTarget = aliasDefaultProjection.Targets.Single(target => target.IsDefault);
+        var disabled = service.SetModelAssignmentAsync(new ProviderModelAssignmentRequest(
+                ModelProviderRouting.SharedConfigKey,
+                "model-a-canonical",
+                Assigned: false,
+                aliasDefaultProjection.ProviderFingerprint,
+                defaultTarget.AssignmentFingerprint,
+                EquivalentModelIds: ["model-a"]))
+            .GetAwaiter()
+            .GetResult();
+        var afterDisable = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("default-disabled snapshot should load");
+        var disabledAlpha = ModelProviderRouting.Resolve(afterDisable, "alpha", out var disabledAlphaFallback);
+        var disabledBeta = ModelProviderRouting.Resolve(afterDisable, "beta", out var disabledBetaFallback);
+        Require(disabled.Ok
+                && !afterDisable.Engine.DefaultForUnassignedAgentsEnabled
+                && afterDisable.Configs[ModelProviderRouting.SharedConfigKey].Model == "model-a"
+                && afterDisable.Configs["alpha"].Model == "model-a"
+                && afterDisable.Configs["alpha"].ExplicitModelAssignment
+                && disabledAlpha?.Model == "model-a"
+                && disabledAlphaFallback is null,
+            "turning Default off should leave the shared provider model intact and preserve an explicit same-model route");
+        Require(disabledBeta is null
+                && disabledBetaFallback is null
+                && afterDisable.Configs["beta"].Model == "model-a"
+                && !afterDisable.Configs["beta"].ExplicitModelAssignment
+                && Math.Abs(afterDisable.Configs["beta"].Temperature - 1.2) < 0.000001
+                && afterDisable.Configs["beta"].MaxOutputTokens == 7777,
+            "turning Default off should make inherited roles unassigned without losing dormant generation overrides");
+        var disabledProjection = disabled.Assignment;
+        Require(!disabledProjection.Targets.Single(target => target.IsDefault).Assigned
+                && disabledProjection.Targets.Single(target => target.Id == "alpha").Assigned
+                && !disabledProjection.Targets.Single(target => target.Id == "beta").Assigned
+                && !disabledProjection.Targets.Single(target => target.Id == "beta").InheritsDefault,
+            "disabled-default projection should distinguish explicit, inherited, and unassigned roles truthfully");
+
+        var rawDisabledProjection = ProviderModelAssignmentProjectionService.Project(sessionId, afterDisable, "model-a");
+        var reenabledTarget = rawDisabledProjection.Targets.Single(target => target.IsDefault);
+        var reenabled = service.SetModelAssignmentAsync(new ProviderModelAssignmentRequest(
+                ModelProviderRouting.SharedConfigKey,
+                "model-a",
+                Assigned: true,
+                rawDisabledProjection.ProviderFingerprint,
+                reenabledTarget.AssignmentFingerprint))
+            .GetAwaiter()
+            .GetResult();
+        Require(reenabled.Ok, "turning the same Default back on should save");
+
+        var modelB = ProviderModelAssignmentProjectionService.Project(
+            sessionId,
+            sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException("re-enabled snapshot should load"),
+            "model-b");
+        var switched = service.SetModelAssignmentAsync(new ProviderModelAssignmentRequest(
+                ModelProviderRouting.SharedConfigKey,
+                "model-b",
+                Assigned: true,
+                modelB.ProviderFingerprint,
+                modelB.Targets.Single(target => target.IsDefault).AssignmentFingerprint))
+            .GetAwaiter()
+            .GetResult();
+        var final = sessionStore.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("switched-default snapshot should load");
+        Require(switched.Ok
+                && final.PersistenceRevision == initialRevision + 4
+                && final.Engine.DefaultForUnassignedAgentsEnabled
+                && final.Configs[ModelProviderRouting.SharedConfigKey].Model == "model-b"
+                && final.Configs["alpha"].Model == "model-a"
+                && final.Configs["alpha"].ExplicitModelAssignment
+                && final.Configs["beta"].Model == "model-b"
+                && !final.Configs["beta"].ExplicitModelAssignment
+                && Math.Abs(final.Configs["beta"].Temperature - 1.2) < 0.000001
+                && final.Configs["beta"].MaxOutputTokens == 7777,
+            "re-enabling or replacing Default should preserve explicit routes and reactivate inherited override carriers atomically");
+        Require(refreshes.SequenceEqual([false, false, false, false]),
+            "routing toggles must never request provider residency changes");
+        Require(File.ReadLines(eventLogStore.EventPath(sessionId)).Count(line =>
+                line.Contains("provider_model_assignment_changed", StringComparison.Ordinal)) == 4,
+            "each routing change should emit exactly one secret-safe assignment event");
     }
     finally
     {
@@ -488,7 +855,7 @@ static void ProviderModelAssignmentRejectsStaleAndInactiveTargets()
             "known but inactive participant slots must not receive hidden model overrides");
 
         var defaultTarget = projection.Targets.Single(target => target.IsDefault);
-        var cannotUnsetDefault = service.SetModelAssignmentAsync(new ProviderModelAssignmentRequest(
+        var unsetDefault = service.SetModelAssignmentAsync(new ProviderModelAssignmentRequest(
                 ModelProviderRouting.SharedConfigKey,
                 "default-model",
                 Assigned: false,
@@ -496,8 +863,12 @@ static void ProviderModelAssignmentRejectsStaleAndInactiveTargets()
                 defaultTarget.AssignmentFingerprint))
             .GetAwaiter()
             .GetResult();
-        Require(!cannotUnsetDefault.Ok && cannotUnsetDefault.ErrorCode == "invalid_operation",
-            "the current Default target must not be left without a configured fallback");
+        var afterDefaultOff = sessionStore.LoadSnapshotAsync("stale-session").GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("default-off snapshot should load");
+        Require(unsetDefault.Ok
+                && !afterDefaultOff.Engine.DefaultForUnassignedAgentsEnabled
+                && afterDefaultOff.Configs[ModelProviderRouting.SharedConfigKey].Model == "default-model",
+            "the active Default should turn off without clearing the shared provider model");
 
         var providerChanged = sessionStore.LoadSnapshotAsync("stale-session").GetAwaiter().GetResult()
             ?? throw new InvalidOperationException("provider change snapshot should load");
@@ -551,8 +922,8 @@ static void ProviderModelAssignmentRejectsStaleAndInactiveTargets()
             "a concurrent target-routing change must reject a stale checkbox mutation without overwriting it");
         var persisted = sessionStore.LoadSnapshotAsync("stale-session").GetAwaiter().GetResult()
             ?? throw new InvalidOperationException("conflicted assignment snapshot should load");
-        Require(persisted.Configs["alpha"].Model == "concurrent-model" && refreshCount == 0,
-            "rejected stale and inactive assignments must not save, refresh, or reroute agents");
+        Require(persisted.Configs["alpha"].Model == "concurrent-model" && refreshCount == 1,
+            "only the successful Default-off change should refresh; rejected stale and inactive assignments must not reroute agents");
     }
     finally
     {
@@ -585,6 +956,13 @@ static void ProviderModelsDefaultAssignmentSurvivesHostRefresh()
             }
 
             task.GetAwaiter().GetResult();
+            // Provider presentation updates deliberately restore selection, focus, and
+            // viewport continuity at ContextIdle. Let that queued UI work settle before
+            // the next lifecycle action so this hosted scenario observes the same stable
+            // state a user sees after the async operation completes.
+            dispatcher.Invoke(
+                static () => { },
+                System.Windows.Threading.DispatcherPriority.ContextIdle);
         }
         finally
         {
@@ -598,10 +976,10 @@ static void ProviderModelsDefaultAssignmentSurvivesHostRefresh()
         try
         {
             const string sessionId = "default-assignment-session";
-            // LM Studio advertises the configured display-name alias but the
-            // assignment persists its canonical key, producing the same
-            // routing-only ProviderFingerprint change as choosing a new default.
-            const string originalDefault = "Provider observed model";
+            // Choose a genuinely different observed model. Alias-equivalent defaults are
+            // already assigned and intentionally non-actionable; this fixture isolates the
+            // routing-only ProviderFingerprint refresh that occurs during a real change.
+            const string originalDefault = "old-default-model";
             const string requestedDefault = "provider-observed-model";
             var sessionStore = new SessionStore(root);
             var eventLogStore = new EventLogStore(root);
@@ -622,6 +1000,11 @@ static void ProviderModelsDefaultAssignmentSurvivesHostRefresh()
             var originalConnectionFingerprint = ProviderModelCatalogProjectionService.ConnectionFingerprint(
                 sessionId,
                 initial.Configs[ModelProviderRouting.SharedConfigKey]);
+            var requestedProjection = ProviderModelAssignmentProjectionService.CreateBatch(sessionId, initial)
+                .Project(requestedDefault, ["Provider observed model"]);
+            Require(initial.Configs[ModelProviderRouting.SharedConfigKey].Model == originalDefault
+                    && !requestedProjection.Targets.Single(target => target.IsDefault).Assigned,
+                $"Test setup did not retain a distinct default ('{initial.Configs[ModelProviderRouting.SharedConfigKey].Model}').");
 
             using var operationLock = new SemaphoreSlim(1, 1);
             ProviderModelsSurfaceCoordinator? coordinator = null;
@@ -683,7 +1066,7 @@ static void ProviderModelsDefaultAssignmentSurvivesHostRefresh()
                 control.AssignmentChanged += (_, args) => assignmentTask = coordinator.SaveAssignmentAsync(args);
 
                 Require(control.SelectedModelId == requestedDefault && defaultTarget.IsEnabled,
-                    $"Provider-observed model Default target was not actionable (selected '{control.SelectedModelId}', enabled {defaultTarget.IsEnabled}).");
+                    $"Provider-observed model Default target was not actionable (selected '{control.SelectedModelId}', enabled {defaultTarget.IsEnabled}, status '{AutomationProperties.GetItemStatus(defaultTarget)}', help '{AutomationProperties.GetHelpText(defaultTarget)}').");
                 Pump(() =>
                 {
                     ToggleProviderModelsCheckBox(defaultTarget);
@@ -712,9 +1095,14 @@ static void ProviderModelsDefaultAssignmentSurvivesHostRefresh()
                         && control.SelectedModelId == requestedDefault
                         && savedDefaultTarget.IsChecked == true
                         && AutomationProperties.GetItemStatus(control.AssignmentStatus) == "Saved"
-                        && control.AssignmentStatus.Text.Contains("Default model saved", StringComparison.Ordinal)
+                        && control.AssignmentStatus.Text.Contains(
+                            "Changed Default for unassigned agents to Provider observed model",
+                            StringComparison.Ordinal)
                         && !control.AssignmentStatus.Text.Contains("provider or session changed", StringComparison.OrdinalIgnoreCase),
-                    "The host refresh before service completion reinterpreted a persisted Default assignment as failure.");
+                    $"The host refresh before service completion did not retain the completed Default transfer "
+                    + $"(pending={control.HasPendingAssignment}, selected='{control.SelectedModelId}', "
+                    + $"checked={savedDefaultTarget.IsChecked}, itemStatus='{AutomationProperties.GetItemStatus(control.AssignmentStatus)}', "
+                    + $"status='{control.AssignmentStatus.Text}').");
             }
             finally
             {
@@ -727,6 +1115,81 @@ static void ProviderModelsDefaultAssignmentSurvivesHostRefresh()
             DeleteProviderCatalogTestRoot(root);
         }
     });
+}
+
+static void ProviderModelsStaleResidencyMergeRemainsBoundedAndProviderNeutral()
+{
+    const string sessionId = "bounded-stale-residency";
+    const string fingerprint = "same-provider-fingerprint";
+    var previousItems = Enumerable.Range(0, ProviderModelCatalogProjectionService.MaximumModelCount)
+        .Select(index => Item($"prior-{index:000}", ProviderModelLoadState.NotLoaded))
+        .ToArray();
+    var candidateItems = Enumerable.Range(0, ProviderModelCatalogProjectionService.MaximumModelCount)
+        .Select(index => Item($"candidate-{index:000}", ProviderModelLoadState.Unavailable))
+        .ToArray();
+    var previous = new ProviderModelCatalogSnapshot(
+        1,
+        sessionId,
+        fingerprint,
+        ProviderCatalogEvidenceState.Ready,
+        ProviderCatalogEvidenceState.Ready,
+        [],
+        previousItems,
+        "prior-000",
+        false,
+        0,
+        "256 available.",
+        DateTimeOffset.UnixEpoch);
+    var candidate = new ProviderModelCatalogSnapshot(
+        2,
+        sessionId,
+        fingerprint,
+        ProviderCatalogEvidenceState.Ready,
+        ProviderCatalogEvidenceState.Unavailable,
+        [],
+        candidateItems,
+        "candidate-000",
+        false,
+        0,
+        "Ollama running inventory unavailable.",
+        DateTimeOffset.UnixEpoch.AddSeconds(5));
+
+    var merged = ProviderModelsSurfaceCoordinator.PreserveLastConfirmedResidency(
+        previous,
+        candidate,
+        preserveMissingRows: true,
+        selectedModelId: "prior-255");
+
+    Require(merged.Models.Count == ProviderModelCatalogProjectionService.MaximumModelCount
+            && merged.Models.Any(item => item.Id == "candidate-000")
+            && merged.Models.Any(item => item.Id == "prior-255")
+            && merged.CatalogEvidence == ProviderCatalogEvidenceState.Partial
+            && merged.OmittedModelCount == ProviderModelCatalogProjectionService.MaximumModelCount,
+        "merging disjoint last-confirmed residency exceeded the 256-row cap or dropped configured/selected pins without omission evidence");
+    Require(merged.Status.Contains("Provider load-state", StringComparison.Ordinal)
+            && merged.Status.Contains("256", StringComparison.Ordinal)
+            && !merged.Status.Contains("LM Studio", StringComparison.OrdinalIgnoreCase),
+        "provider-neutral stale-residency evidence was mislabeled or omitted its bounded-merge count");
+    Require(!ProviderModelsSurfaceCoordinator.LifecycleHelpFor(merged.Models[0], lmStudioLifecycle: false)
+                .Contains("LM Studio", StringComparison.OrdinalIgnoreCase)
+            && !ProviderModelsSurfaceCoordinator.LifecycleHelpFor(
+                    Item("ollama-loaded", ProviderModelLoadState.Loaded),
+                    lmStudioLifecycle: false)
+                .Contains("LM Studio", StringComparison.OrdinalIgnoreCase),
+        "Ollama stale or loaded rows exposed LM Studio-specific lifecycle guidance");
+
+    static ProviderModelCatalogItem Item(string id, ProviderModelLoadState state) => new(
+        id,
+        id,
+        state,
+        CanLoad: false,
+        CanUnload: false,
+        "local",
+        "Q4",
+        4096,
+        1_000_000,
+        "chat",
+        [id]);
 }
 
 static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
@@ -843,10 +1306,13 @@ static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
             try
             {
                 Pump(() => coordinator.RefreshAsync(refreshCatalog: true));
+                FlushProviderModelsDispatcher(host);
                 Require(control.SelectedModelId == modelId
                         && control.LifecycleAction.Content?.ToString() == "Load model"
                         && control.CatalogStatus.Text.Contains("Auto-checking every 5 seconds", StringComparison.Ordinal),
-                    "LM Studio available evidence did not expose the selected Load action and five-second heartbeat contract");
+                    $"LM Studio available evidence did not expose the selected Load action and five-second heartbeat contract "
+                    + $"(selected='{control.SelectedModelId}', rows={control.CatalogRowCount}, visible={control.VisibleCatalogRowCount}, "
+                    + $"action='{control.LifecycleAction.Content}', status='{control.CatalogStatus.Text}')");
 
                 Task? lifecycleTask = null;
                 control.LifecycleRequested += (_, args) =>
@@ -906,6 +1372,7 @@ static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
                         System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                     return lifecycleTask ?? throw new InvalidOperationException("Load click did not start lifecycle work.");
                 });
+                FlushProviderModelsDispatcher(host);
                 Require(handler.Loaded
                         && control.SelectedModelId == modelId
                         && control.LifecycleAction.Content?.ToString() == "Unload model"
@@ -930,12 +1397,15 @@ static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
                         System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                     return lifecycleTask ?? throw new InvalidOperationException("Unload click did not start lifecycle work.");
                 });
+                FlushProviderModelsDispatcher(host);
                 Require(!handler.Loaded
                         && control.SelectedModelId == modelId
                         && control.LifecycleAction.Content?.ToString() == "Load model"
                         && control.LifecycleStatus.Text.Contains("unloaded from LM Studio", StringComparison.OrdinalIgnoreCase)
                         && handler.Requests.Count(path => path == "/api/v1/models/unload") == 1,
-                    "confirmed LM Studio unload did not return the retained selection to Available exactly once");
+                    $"confirmed LM Studio unload did not return the retained selection to Available exactly once "
+                    + $"(loaded={handler.Loaded}, selected='{control.SelectedModelId}', action='{control.LifecycleAction.Content}', "
+                    + $"status='{control.LifecycleStatus.Text}', unloadRequests={handler.Requests.Count(path => path == "/api/v1/models/unload")})");
 
                 handler.Loaded = true;
                 var requestsBeforeHeartbeat = handler.Requests.Count;
@@ -1016,9 +1486,11 @@ static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
                         System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                     return lifecycleTask ?? throw new InvalidOperationException("Malformed-success load did not start.");
                 });
+                FlushProviderModelsDispatcher(host);
                 Require(handler.Loaded
                         && AutomationProperties.GetItemStatus(control.LifecycleStatus) == "Succeeded"
-                        && control.LifecycleAction.Content?.ToString() == "Unload model",
+                        && control.LifecycleAction.Content?.ToString() == "Unload model"
+                        && control.LifecycleAction.IsEnabled,
                     "authoritative desired residency did not win over an indeterminate lifecycle response body");
 
                 handler.LifecycleFailureBody = "server ended without a definite response";
@@ -1058,7 +1530,8 @@ static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
                 {
                     control.LifecycleAction.RaiseEvent(new System.Windows.RoutedEventArgs(
                         System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
-                    return lifecycleTask ?? throw new InvalidOperationException("Post-mutation session-switch load did not start.");
+                    return lifecycleTask ?? throw new InvalidOperationException(
+                        $"Post-mutation session-switch load did not start (enabled={control.LifecycleAction.IsEnabled}, content='{control.LifecycleAction.Content}', itemStatus='{AutomationProperties.GetItemStatus(control.LifecycleAction)}', lifecycle='{control.LifecycleStatus.Text}').");
                 });
                 if (switchedSessionRefresh is not null)
                 {
@@ -1070,7 +1543,10 @@ static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
                         && AutomationProperties.GetItemStatus(control.LifecycleStatus) == "Unconfirmed"
                         && control.LifecycleStatus.Text.Contains("load state is unknown", StringComparison.OrdinalIgnoreCase)
                         && !control.LifecycleStatus.Text.StartsWith("Failed", StringComparison.OrdinalIgnoreCase),
-                    "a session switch after the LM Studio POST started was reinterpreted as a definite failure");
+                    "a session switch after the LM Studio POST started was reinterpreted as a definite failure "
+                    + $"(active='{active?.Id}', expected='{alternateSessionId}', loaded={handler.Loaded}, "
+                    + $"receipt={control.HasUnconfirmedLifecycleReceipt}, status='{AutomationProperties.GetItemStatus(control.LifecycleStatus)}', "
+                    + $"text='{control.LifecycleStatus.Text}', action='{control.LifecycleAction.Content}', selected='{control.SelectedModelId}')");
                 // The first post-operation heartbeat may legitimately replace
                 // lifecycle-stale evidence. The following heartbeat is the
                 // equivalent steady-state probe whose UI commit must be skipped.
@@ -1090,7 +1566,11 @@ static void ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat()
                         && control.LifecycleStatus.Text.Contains("LM Studio now confirms", StringComparison.Ordinal)
                         && control.LifecycleStatus.Text.Contains("is loaded", StringComparison.Ordinal)
                         && control.LifecycleAction.Content?.ToString() == "Unload model",
-                    "returning to the original session did not reconcile the post-mutation orphan from authoritative loaded residency");
+                    "returning to the original session did not reconcile the post-mutation orphan from authoritative loaded residency "
+                    + $"(selected='{control.SelectedModelId}', receipt={control.HasUnconfirmedLifecycleReceipt}, "
+                    + $"status='{AutomationProperties.GetItemStatus(control.LifecycleStatus)}', text='{control.LifecycleStatus.Text}', "
+                    + $"action='{control.LifecycleAction.Content}', enabled={control.LifecycleAction.IsEnabled}, "
+                    + $"loaded={control.LoadedRowCount}, catalog={control.AvailableCatalogRowCount})");
 
                 busy = true;
                 Pump(() => coordinator.RefreshAsync(refreshCatalog: false));

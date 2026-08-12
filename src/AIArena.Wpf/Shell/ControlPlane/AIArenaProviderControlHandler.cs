@@ -112,8 +112,9 @@ internal sealed class AIArenaProviderControlHandler
                 Enrich(await configuration.CaptureAsync(cancellationToken)));
         }
 
-        var roleModels = ProviderConfigurationControlService.RoleKeys.ToDictionary(
-            role => role,
+        var currentState = await configuration.CaptureAsync(cancellationToken);
+        var roleModels = currentState.Roles.ToDictionary(
+            role => role.Id,
             _ => model,
             StringComparer.OrdinalIgnoreCase);
         var patch = new AIArenaProviderConfigurationPatch(
@@ -369,6 +370,12 @@ internal sealed class AIArenaProviderControlHandler
             return false;
         }
 
+        if (!AIArenaControlArguments.TryOptionalBool(request, "defaultForUnassignedAgentsEnabled", out var defaultForUnassignedAgentsEnabled))
+        {
+            error = "args.defaultForUnassignedAgentsEnabled must be true or false.";
+            return false;
+        }
+
         if (!AIArenaControlArguments.TryOptionalBool(request, "refreshModels", out var refreshModels))
         {
             error = "args.refreshModels must be true or false.";
@@ -398,7 +405,8 @@ internal sealed class AIArenaProviderControlHandler
             nativeStatefulChat,
             nativeIdleTtlSeconds,
             roleModels,
-            refreshModels == true);
+            refreshModels == true,
+            defaultForUnassignedAgentsEnabled);
         return true;
     }
 

@@ -34,6 +34,7 @@ public sealed class ModelProviderHealthService
             ApiMode = config.ApiMode,
             ApiToken = config.ApiToken,
             Model = config.Model,
+            ExplicitModelAssignment = config.ExplicitModelAssignment,
             Timeout = config.Timeout,
             Temperature = 0,
             MaxOutputTokens = 16,
