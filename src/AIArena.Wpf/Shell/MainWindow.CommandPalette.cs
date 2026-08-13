@@ -246,7 +246,14 @@ public partial class MainWindow
                 "Shell",
                 "F1",
                 "keys help bindings",
-                ShowShortcutsOverlay)
+                ShowShortcutsOverlay),
+            new(
+                "shell.help-center",
+                "Open contextual Help Center guidance",
+                "Shell",
+                "Shift+F1",
+                "guide documentation support learn current screen",
+                () => OpenUserGuide(CurrentContextualHelpArticleId()))
         };
 
         AddSurfaceCommands(commands);

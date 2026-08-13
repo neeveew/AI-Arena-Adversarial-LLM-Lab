@@ -1,0 +1,649 @@
+<Window x:Class="AIArena.Wpf.Help.Presentation.HelpCenterWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:ClassModifier="internal"
+        xmlns:help="clr-namespace:AIArena.Wpf.Help"
+        xmlns:p="clr-namespace:AIArena.Wpf.Help.Presentation"
+        xmlns:media="clr-namespace:System.Windows.Media;assembly=PresentationCore"
+        Title="AI Arena Help Center"
+        Width="1240"
+        Height="820"
+        MinWidth="720"
+        MinHeight="520"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResizeWithGrip"
+        WindowStyle="None"
+        ShowInTaskbar="False"
+        Background="Transparent"
+        SnapsToDevicePixels="True"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType"
+        AutomationProperties.AutomationId="HelpCenterWindow"
+        AutomationProperties.Name="AI Arena Help Center"
+        AutomationProperties.HelpText="Search or browse task-based guidance for AI Arena.">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/AI Arena;component/UI/Theming/ThemeBrushes.xaml" />
+                <ResourceDictionary Source="/AI Arena;component/UI/Theming/DesignTokens.xaml" />
+                <ResourceDictionary Source="/AI Arena;component/UI/Theming/ControlStyles.xaml" />
+                <ResourceDictionary Source="/AI Arena;component/UI/Theming/SurfaceStyles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibility" />
+
+        <Style x:Key="HelpCommandButton"
+               TargetType="Button"
+               BasedOn="{StaticResource Arena.Button.Quiet}">
+            <Setter Property="Width" Value="{DynamicResource Arena.Help.Target}" />
+            <Setter Property="Height" Value="{DynamicResource Arena.Help.Target}" />
+            <Setter Property="MinWidth" Value="{DynamicResource Arena.Help.Target}" />
+            <Setter Property="MinHeight" Value="{DynamicResource Arena.Help.Target}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Inset.None}" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Help.CommandMargin}" />
+        </Style>
+
+        <Style x:Key="HelpNavigationButton"
+               TargetType="Button"
+               BasedOn="{StaticResource Arena.Button.Quiet}">
+            <Setter Property="MinHeight" Value="{DynamicResource Arena.Help.Target}" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Help.NavigationPadding}" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="FontWeight" Value="Normal" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Help.NavigationMargin}" />
+        </Style>
+
+        <Style x:Key="HelpResultButton"
+               TargetType="Button"
+               BasedOn="{StaticResource Arena.Button.Quiet}">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+            <Setter Property="Padding" Value="{DynamicResource Arena.Help.ResultPadding}" />
+            <Setter Property="Margin" Value="{DynamicResource Arena.Help.ResultMargin}" />
+            <Setter Property="MinHeight" Value="76" />
+        </Style>
+
+        <DataTemplate x:Key="HelpArticleNavigationTemplate" DataType="{x:Type help:HelpArticle}">
+            <Button Style="{StaticResource HelpNavigationButton}"
+                    Tag="{Binding}"
+                    Click="ArticleButton_Click"
+                    AutomationProperties.AutomationId="{Binding Id}"
+                    AutomationProperties.Name="{Binding Title}"
+                    AutomationProperties.HelpText="{Binding Summary}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="24" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding IconGlyph}"
+                               FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                               FontSize="{DynamicResource Arena.Type.HeadingSize}"
+                               Foreground="{DynamicResource MutedTextBrush}"
+                               VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding Title}"
+                               Style="{StaticResource Arena.Text.Body}"
+                               TextTrimming="CharacterEllipsis"
+                               TextWrapping="NoWrap"
+                               VerticalAlignment="Center" />
+                </Grid>
+            </Button>
+        </DataTemplate>
+
+        <DataTemplate x:Key="HelpSearchResultTemplate" DataType="{x:Type help:HelpSearchResult}">
+            <Button Style="{StaticResource HelpResultButton}"
+                    Tag="{Binding Article}"
+                    Click="SearchResultButton_Click"
+                    AutomationProperties.AutomationId="{Binding Article.Id}"
+                    AutomationProperties.Name="{Binding Article.Title}"
+                    AutomationProperties.HelpText="{Binding Snippet}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="40" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="24" />
+                    </Grid.ColumnDefinitions>
+                    <Border Width="32"
+                            Height="32"
+                            Background="{DynamicResource NavActiveBrush}"
+                            BorderBrush="{DynamicResource ControlBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{DynamicResource Arena.Radius.Small}">
+                        <TextBlock Text="{Binding Article.IconGlyph}"
+                                   FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                                   FontSize="{DynamicResource Arena.Help.SearchIconSize}"
+                                   Foreground="{DynamicResource PrimaryBorderBrush}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="{DynamicResource Arena.Help.SearchResultTextMargin}">
+                        <p:HelpHighlightedTextBlock HighlightText="{Binding Article.Title}"
+                                                    HighlightRanges="{Binding TitleMatches}"
+                                                    Style="{StaticResource Arena.Text.Heading}" />
+                        <p:HelpHighlightedTextBlock HighlightText="{Binding Snippet}"
+                                                    HighlightRanges="{Binding SnippetMatches}"
+                                                    Style="{StaticResource Arena.Text.Secondary}"
+                                                    Margin="{DynamicResource Arena.Help.SearchSnippetMargin}"
+                                                    MaxHeight="38"
+                                                    TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="2"
+                               Text="&#xE76C;"
+                               FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                               Foreground="{DynamicResource MutedTextBrush}"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center" />
+                </Grid>
+            </Button>
+        </DataTemplate>
+
+        <DataTemplate x:Key="HelpTaskCardTemplate" DataType="{x:Type p:HelpTaskCard}">
+            <Button Tag="{Binding ArticleId}"
+                    Click="HomeTaskButton_Click"
+                    Style="{StaticResource Arena.Button.Secondary}"
+                    MinHeight="112"
+                    Margin="{DynamicResource Arena.Help.TaskMargin}"
+                    Padding="{DynamicResource Arena.Help.TaskPadding}"
+                    HorizontalContentAlignment="Stretch"
+                    VerticalContentAlignment="Stretch"
+                    AutomationProperties.AutomationId="{Binding ArticleId}"
+                    AutomationProperties.Name="{Binding Title}"
+                    AutomationProperties.HelpText="{Binding Summary}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="{Binding IconGlyph}"
+                               FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                               FontSize="{DynamicResource Arena.Help.TaskIconSize}"
+                               Foreground="{DynamicResource PrimaryBorderBrush}" />
+                    <TextBlock Grid.Row="1" Text="{Binding Title}" Style="{StaticResource Arena.Text.Heading}" Margin="{DynamicResource Arena.Help.TaskTitleMargin}" />
+                    <TextBlock Grid.Row="2" Text="{Binding Summary}" Style="{StaticResource Arena.Text.Secondary}" Margin="{DynamicResource Arena.Help.TaskSummaryMargin}" />
+                </Grid>
+            </Button>
+        </DataTemplate>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <Border x:Name="WindowShell"
+            Style="{StaticResource Arena.Surface.Panel}"
+            Padding="{DynamicResource Arena.Help.None}"
+            BorderBrush="{DynamicResource PrimaryBorderBrush}">
+        <Grid x:Name="HelpFocusScope">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Border x:Name="CommandBar"
+                    Padding="{DynamicResource Arena.Help.CommandBarPadding}"
+                    Background="{DynamicResource TopBarBrush}"
+                    BorderBrush="{DynamicResource DisabledBorderBrush}"
+                    BorderThickness="0,0,0,1"
+                    CornerRadius="{DynamicResource Arena.Help.CommandBarRadius}"
+                    PreviewMouseLeftButtonDown="WindowShell_PreviewMouseLeftButtonDown">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Button x:Name="DrawerButton"
+                            Style="{StaticResource HelpCommandButton}"
+                            Click="DrawerButton_Click"
+                            Visibility="Collapsed"
+                            ToolTip="Browse guide topics"
+                            AutomationProperties.AutomationId="HelpCenterBrowseButton"
+                            AutomationProperties.Name="Browse guide topics"
+                            AutomationProperties.HelpText="Opens the topic drawer.">
+                        <TextBlock Text="&#xE700;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="{DynamicResource Arena.Type.HeadingSize}" />
+                    </Button>
+                    <Button x:Name="BackButton"
+                            Grid.Column="1"
+                            Style="{StaticResource HelpCommandButton}"
+                            Click="BackButton_Click"
+                            ToolTip="Back"
+                            AutomationProperties.AutomationId="HelpCenterBackButton"
+                            AutomationProperties.Name="Back"
+                            AutomationProperties.HelpText="Returns to the previous guide location.">
+                        <TextBlock Text="&#xE72B;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="{DynamicResource Arena.Type.HeadingSize}" />
+                    </Button>
+                    <Button x:Name="ForwardButton"
+                            Grid.Column="2"
+                            Style="{StaticResource HelpCommandButton}"
+                            Click="ForwardButton_Click"
+                            ToolTip="Forward"
+                            AutomationProperties.AutomationId="HelpCenterForwardButton"
+                            AutomationProperties.Name="Forward"
+                            AutomationProperties.HelpText="Moves to the next guide location.">
+                        <TextBlock Text="&#xE72A;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="{DynamicResource Arena.Type.HeadingSize}" />
+                    </Button>
+
+                    <Button x:Name="HomeButton"
+                            Grid.Column="3"
+                            Style="{StaticResource HelpCommandButton}"
+                            Click="HomeButton_Click"
+                            ToolTip="Help Center home"
+                            AutomationProperties.AutomationId="HelpCenterHomeButton"
+                            AutomationProperties.Name="Help Center home"
+                            AutomationProperties.HelpText="Opens the task-based Help Center home page.">
+                        <TextBlock Text="&#xE80F;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="{DynamicResource Arena.Type.HeadingSize}" />
+                    </Button>
+
+                    <StackPanel x:Name="BrandBlock" Grid.Column="4" Margin="{DynamicResource Arena.Help.BrandMargin}" VerticalAlignment="Center">
+                        <TextBlock Text="Help Center" Style="{StaticResource Arena.Text.Heading}" />
+                        <TextBlock Text="AI Arena  •  Shift+F1 for contextual help"
+                                   Style="{StaticResource Arena.Text.Caption}" />
+                    </StackPanel>
+
+                    <Grid Grid.Column="5" MaxWidth="520" HorizontalAlignment="Stretch">
+                        <TextBox x:Name="SearchBox"
+                                 Style="{StaticResource Arena.TextBox}"
+                                 Tag="Search tasks, controls, and errors…"
+                                 MinHeight="{DynamicResource Arena.Help.Target}"
+                                 Padding="{DynamicResource Arena.Help.SearchPadding}"
+                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                 TextChanged="SearchBox_TextChanged"
+                                 PreviewKeyDown="SearchBox_PreviewKeyDown"
+                                 AutomationProperties.AutomationId="HelpCenterSearchBox"
+                                 AutomationProperties.Name="Search the Help Center"
+                                 AutomationProperties.HelpText="Type keywords to search titles and guide content." />
+                        <TextBlock Text="&#xE721;"
+                                   FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                                   FontSize="{DynamicResource Arena.Type.HeadingSize}"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   Width="32"
+                                   HorizontalAlignment="Left"
+                                   VerticalAlignment="Center"
+                                   TextAlignment="Center"
+                                   IsHitTestVisible="False" />
+                        <Border Padding="{DynamicResource Arena.Help.KeyPadding}"
+                                Margin="{DynamicResource Arena.Help.KeyMargin}"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                Background="{DynamicResource CardBrush}"
+                                BorderBrush="{DynamicResource DisabledBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="{DynamicResource Arena.Radius.Small}"
+                                IsHitTestVisible="False">
+                            <TextBlock Text="Ctrl+F" Style="{StaticResource Arena.Text.Caption}" />
+                        </Border>
+                    </Grid>
+
+                    <Button x:Name="MoreButton"
+                            Grid.Column="6"
+                            Style="{StaticResource HelpCommandButton}"
+                            Margin="{DynamicResource Arena.Help.MoreMargin}"
+                            Click="MoreButton_Click"
+                            ToolTip="More Help Center actions"
+                            AutomationProperties.AutomationId="HelpCenterMoreButton"
+                            AutomationProperties.Name="More Help Center actions"
+                            AutomationProperties.HelpText="Opens additional Help Center actions.">
+                        <TextBlock Text="&#xE712;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="{DynamicResource Arena.Type.HeadingSize}" />
+                        <Button.ContextMenu>
+                            <ContextMenu Placement="Bottom">
+                                <MenuItem Header="Open full guide file"
+                                          Click="OpenFileButton_Click"
+                                          AutomationProperties.Name="Open full guide file"
+                                          AutomationProperties.HelpText="Opens the packaged Markdown guide in the default application." />
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                    <Button x:Name="CloseButton"
+                            Grid.Column="7"
+                            Style="{StaticResource HelpCommandButton}"
+                            Margin="{DynamicResource Arena.Help.None}"
+                            Click="CloseButton_Click"
+                            ToolTip="Close Help Center"
+                            AutomationProperties.AutomationId="HelpCenterCloseButton"
+                            AutomationProperties.Name="Close Help Center"
+                            AutomationProperties.HelpText="Closes the Help Center and returns focus to the app.">
+                        <TextBlock Text="&#xE8BB;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="{DynamicResource Arena.Type.CompactBodySize}" />
+                    </Button>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Row="1" x:Name="BodyGrid">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition x:Name="NavigationColumn" Width="288" />
+                    <ColumnDefinition x:Name="NavigationGapColumn" Width="1" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border x:Name="NavigationPanel"
+                        Grid.Column="0"
+                        Padding="{DynamicResource Arena.Help.NavigationPanelPadding}"
+                        Background="{DynamicResource PanelBrush}"
+                        BorderBrush="{DynamicResource DisabledBorderBrush}"
+                        BorderThickness="0,0,1,0"
+                        AutomationProperties.AutomationId="HelpCenterTopicNavigation"
+                        AutomationProperties.Name="Guide topics">
+                    <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto"
+                                  Focusable="False">
+                        <ItemsControl ItemsSource="{Binding Groups}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Expander IsExpanded="True"
+                                              Style="{StaticResource Arena.Expander.Section}"
+                                              Margin="{DynamicResource Arena.Help.GroupMargin}"
+                                              AutomationProperties.Name="{Binding Title}">
+                                        <Expander.Header>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding IconGlyph}"
+                                                           FontFamily="{DynamicResource Arena.Type.IconFontFamily}"
+                                                           FontSize="{DynamicResource Arena.Type.BodySize}"
+                                                           Foreground="{DynamicResource PrimaryBorderBrush}"
+                                                           Width="24"
+                                                           VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding Title}"
+                                                           Style="{StaticResource Arena.Text.Label}"
+                                                           VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Expander.Header>
+                                        <ItemsControl ItemsSource="{Binding Articles}"
+                                                      ItemTemplate="{StaticResource HelpArticleNavigationTemplate}" />
+                                    </Expander>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Border>
+
+                <Grid x:Name="ArticlePanel" Grid.Column="2">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Border Padding="{DynamicResource Arena.Help.ArticleHeaderPadding}"
+                            Background="{DynamicResource CardBrush}"
+                            BorderBrush="{DynamicResource DisabledBorderBrush}"
+                            BorderThickness="0,0,0,1">
+                        <StackPanel MaxWidth="820" HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding CurrentGroupTitle}" Style="{StaticResource Arena.Text.Caption}" />
+                                <TextBlock Text="  /  " Style="{StaticResource Arena.Text.Caption}" />
+                                <TextBlock Text="{Binding CurrentTitle}" Style="{StaticResource Arena.Text.Caption}" />
+                            </StackPanel>
+                            <TextBlock x:Name="ArticleHeading"
+                                       Text="{Binding CurrentTitle}"
+                                       Style="{StaticResource Arena.Text.PageTitle}"
+                                       Margin="{DynamicResource Arena.Help.ArticleTitleMargin}"
+                                       Focusable="True"
+                                       AutomationProperties.AutomationId="HelpCenterArticleHeading"
+                                       AutomationProperties.Name="{Binding CurrentTitle}"
+                                       AutomationProperties.LiveSetting="Polite" />
+                            <TextBlock Text="{Binding CurrentSummary}"
+                                       Style="{StaticResource Arena.Text.Secondary}"
+                                       Margin="{DynamicResource Arena.Help.ArticleSummaryMargin}"
+                                       MaxWidth="760" />
+                            <ItemsControl x:Name="ArticleActions" ItemsSource="{Binding CurrentArticle.Actions}" Margin="{DynamicResource Arena.Help.ArticleActionsMargin}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type help:HelpAction}">
+                                        <Button Content="{Binding Label}"
+                                                Tag="{Binding Route}"
+                                                Click="AppActionButton_Click"
+                                                Style="{StaticResource Arena.Button.Secondary}"
+                                                MinHeight="{DynamicResource Arena.Help.Target}"
+                                                Margin="{DynamicResource Arena.Help.ArticleActionMargin}"
+                                                AutomationProperties.Name="{Binding Label}"
+                                                AutomationProperties.HelpText="Open this feature in AI Arena." />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
+                    <ScrollViewer x:Name="HomePanel"
+                                  Grid.Row="1"
+                                  Padding="{DynamicResource Arena.Help.PagePadding}"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto"
+                                  Background="{DynamicResource TranscriptBodyBrush}"
+                                  Visibility="Collapsed"
+                                  AutomationProperties.AutomationId="HelpCenterHomeTasks"
+                                  AutomationProperties.Name="Help Center tasks">
+                        <StackPanel MaxWidth="980" HorizontalAlignment="Left">
+                            <TextBlock Text="Choose a task" Style="{StaticResource Arena.Text.Heading}" Margin="{DynamicResource Arena.Help.HomeHeadingMargin}" />
+                            <ItemsControl x:Name="HomeCardsItems"
+                                          ItemsSource="{Binding HomeCards}"
+                                          ItemTemplate="{StaticResource HelpTaskCardTemplate}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <UniformGrid Columns="3" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <Grid x:Name="ArticleContentPanel" Grid.Row="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition x:Name="OutlineGapColumn" Width="12" />
+                            <ColumnDefinition x:Name="OutlineColumn" Width="220" />
+                        </Grid.ColumnDefinitions>
+                        <Expander x:Name="CompactOnThisPagePanel"
+                                  Grid.ColumnSpan="3"
+                                  Margin="{DynamicResource Arena.Help.CompactOutlineMargin}"
+                                  Style="{StaticResource Arena.Expander.Section}"
+                                  Header="On this page"
+                                  Visibility="Collapsed"
+                                  AutomationProperties.AutomationId="HelpCenterCompactOnThisPage"
+                                  AutomationProperties.Name="On this page">
+                            <ItemsControl ItemsSource="{Binding CurrentHeadings}" Margin="{DynamicResource Arena.Help.OutlineItemsMargin}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type p:HelpHeadingLink}">
+                                        <Button Tag="{Binding Anchor}"
+                                                Click="HeadingButton_Click"
+                                                Style="{StaticResource Arena.Button.Quiet}"
+                                                MinHeight="44"
+                                                Padding="{DynamicResource Arena.Help.OutlineActionPadding}"
+                                                HorizontalContentAlignment="Stretch"
+                                                FontWeight="Normal"
+                                                AutomationProperties.Name="{Binding Title}"
+                                                AutomationProperties.HelpText="Jump to this heading in the current article.">
+                                            <TextBlock Text="{Binding Title}"
+                                                       TextWrapping="Wrap"
+                                                       TextTrimming="None"
+                                                       TextAlignment="Left" />
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Expander>
+                        <FlowDocumentScrollViewer x:Name="ArticleViewer"
+                                                  Grid.Row="1"
+                                                  Background="{DynamicResource TranscriptBodyBrush}"
+                                                  Padding="{DynamicResource Arena.Help.None}"
+                                                  IsToolBarVisible="False"
+                                                  VerticalScrollBarVisibility="Auto"
+                                                  AutomationProperties.AutomationId="HelpCenterArticle"
+                                                  AutomationProperties.Name="Guide article"
+                                                  AutomationProperties.HelpText="The selected Help Center article." />
+                        <Border x:Name="OnThisPagePanel"
+                                Grid.Row="1"
+                                Grid.Column="2"
+                                Margin="{DynamicResource Arena.Help.OutlineMargin}"
+                                Padding="{DynamicResource Arena.Help.OutlinePadding}"
+                                VerticalAlignment="Top"
+                                MaxHeight="420"
+                                Style="{StaticResource Arena.Surface.Inset}"
+                                AutomationProperties.AutomationId="HelpCenterOnThisPage"
+                                AutomationProperties.Name="On this page">
+                            <StackPanel>
+                                <TextBlock Text="On this page" Style="{StaticResource Arena.Text.Label}" Margin="{DynamicResource Arena.Help.OutlineHeadingMargin}" />
+                                <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto" Focusable="False">
+                                    <ItemsControl ItemsSource="{Binding CurrentHeadings}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate DataType="{x:Type p:HelpHeadingLink}">
+                                                <Button Tag="{Binding Anchor}"
+                                                        Click="HeadingButton_Click"
+                                                        Style="{StaticResource Arena.Button.Quiet}"
+                                                        MinHeight="44"
+                                                        Padding="{DynamicResource Arena.Help.OutlineActionPadding}"
+                                                        HorizontalContentAlignment="Stretch"
+                                                        FontWeight="Normal"
+                                                        AutomationProperties.Name="{Binding Title}"
+                                                        AutomationProperties.HelpText="Jump to this heading in the current article.">
+                                                    <TextBlock Text="{Binding Title}"
+                                                               TextWrapping="Wrap"
+                                                               TextTrimming="None"
+                                                               TextAlignment="Left" />
+                                                </Button>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <Border Grid.Row="2"
+                            Padding="{DynamicResource Arena.Help.FooterPadding}"
+                            Background="{DynamicResource PanelBrush}"
+                            BorderBrush="{DynamicResource DisabledBorderBrush}"
+                            BorderThickness="0,1,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="12" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="PreviousArticleButton"
+                                    Tag="{Binding PreviousArticle}"
+                                    Click="AdjacentArticleButton_Click"
+                                    Style="{StaticResource Arena.Button.Secondary}"
+                                    MinHeight="44"
+                                    HorizontalContentAlignment="Left"
+                                    AutomationProperties.AutomationId="HelpCenterPreviousArticleButton"
+                                    AutomationProperties.Name="Previous article">
+                                <StackPanel>
+                                    <TextBlock Text="Previous" Style="{StaticResource Arena.Text.Caption}" />
+                                    <TextBlock Text="{Binding PreviousArticle.Title}"
+                                               Style="{StaticResource Arena.Text.Label}"
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="NextArticleButton"
+                                    Grid.Column="2"
+                                    Tag="{Binding NextArticle}"
+                                    Click="AdjacentArticleButton_Click"
+                                    Style="{StaticResource Arena.Button.Secondary}"
+                                    MinHeight="44"
+                                    HorizontalContentAlignment="Right"
+                                    AutomationProperties.AutomationId="HelpCenterNextArticleButton"
+                                    AutomationProperties.Name="Next article">
+                                <StackPanel HorizontalAlignment="Right">
+                                    <TextBlock Text="Next" Style="{StaticResource Arena.Text.Caption}" HorizontalAlignment="Right" />
+                                    <TextBlock Text="{Binding NextArticle.Title}"
+                                               Style="{StaticResource Arena.Text.Label}"
+                                               TextTrimming="CharacterEllipsis"
+                                               HorizontalAlignment="Right" />
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <Border x:Name="SearchResultsPanel"
+                        Grid.Column="2"
+                        Padding="{DynamicResource Arena.Help.PagePadding}"
+                        Background="{DynamicResource TranscriptBodyBrush}"
+                        Visibility="Collapsed"
+                        AutomationProperties.AutomationId="HelpCenterSearchResults">
+                    <Grid MaxWidth="860" HorizontalAlignment="Left">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="Search results" Style="{StaticResource Arena.Text.PageTitle}" />
+                            <TextBlock x:Name="SearchStatusText"
+                                       Text="{Binding SearchResultStatus}"
+                                       Style="{StaticResource Arena.Text.Secondary}"
+                                       Margin="{DynamicResource Arena.Help.SearchStatusMargin}"
+                                       AutomationProperties.Name="{Binding SearchResultStatus}"
+                                       AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
+                        <ListBox x:Name="SearchResultsList"
+                                 Grid.Row="1"
+                                 ItemsSource="{Binding SearchResults}"
+                                 ItemTemplate="{StaticResource HelpSearchResultTemplate}"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 PreviewKeyDown="SearchResultsList_PreviewKeyDown"
+                                 AutomationProperties.Name="Help Center search results" />
+                    </Grid>
+                </Border>
+
+                <Border x:Name="CompactDrawer"
+                        Grid.ColumnSpan="3"
+                        Width="320"
+                        MaxWidth="420"
+                        HorizontalAlignment="Left"
+                        Background="{DynamicResource PanelBrush}"
+                        BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                        BorderThickness="0,0,1,0"
+                        Visibility="Collapsed"
+                        Panel.ZIndex="20"
+                        AutomationProperties.AutomationId="HelpCenterTopicDrawer"
+                        AutomationProperties.Name="Guide topic drawer">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Grid Margin="{DynamicResource Arena.Help.DrawerHeaderMargin}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Browse topics" Style="{StaticResource Arena.Text.Heading}" VerticalAlignment="Center" />
+                            <Button Grid.Column="1"
+                                    Style="{StaticResource HelpCommandButton}"
+                                    Margin="{DynamicResource Arena.Help.None}"
+                                    Click="CloseDrawerButton_Click"
+                                    AutomationProperties.Name="Close topic drawer"
+                                    ToolTip="Close topic drawer">
+                                <TextBlock Text="&#xE8BB;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="{DynamicResource Arena.Type.CompactBodySize}" />
+                            </Button>
+                        </Grid>
+                        <ScrollViewer Grid.Row="1" Margin="{DynamicResource Arena.Help.DrawerBodyMargin}" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding Groups}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Expander IsExpanded="True" Style="{StaticResource Arena.Expander.Section}" Margin="{DynamicResource Arena.Help.GroupMargin}">
+                                            <Expander.Header>
+                                                <TextBlock Text="{Binding Title}" Style="{StaticResource Arena.Text.Label}" />
+                                            </Expander.Header>
+                                            <ItemsControl ItemsSource="{Binding Articles}"
+                                                          ItemTemplate="{StaticResource HelpArticleNavigationTemplate}" />
+                                        </Expander>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

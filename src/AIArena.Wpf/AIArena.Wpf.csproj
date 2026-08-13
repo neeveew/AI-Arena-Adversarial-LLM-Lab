@@ -36,6 +36,21 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The in-app Help Center is fully offline. Keep its structured source as
+         ordinary published content so installed articles, search metadata, and
+         the portable USER_GUIDE.md can be validated from the same files. -->
+    <Content Include="Help\Content\**\*.json"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Help\Content\**\*.md"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Help\Content\assets\**\*.png;Help\Content\assets\**\*.jpg;Help\Content\assets\**\*.jpeg;Help\Content\assets\**\*.webp"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="System.Management" Version="10.0.8" />
     <PackageReference Include="System.Speech" Version="10.0.9" />
   </ItemGroup>

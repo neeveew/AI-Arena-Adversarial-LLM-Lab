@@ -1,5 +1,7 @@
 param(
     [string]$Version = "0.4.131-beta",
+    [ValidateSet("Debug", "Release")]
+    [string]$Configuration = "Release",
     [string]$SigningPolicy = ""
 )
 
@@ -53,6 +55,7 @@ $installerSigningReport = Join-Path $installerDir "installer-signing.json"
 $dependencyIndexScript = Join-Path $Root "scripts/dependency-index.ps1"
 $xamlBaselineScript = Join-Path $Root "scripts/xaml-hardcoded-values.ps1"
 $xamlBaselineTests = Join-Path $Root "scripts/tests/xaml-hardcoded-values.tests.ps1"
+$userGuideContentScript = Join-Path $Root "scripts/user-guide-content.ps1"
 $solutionFile = Join-Path $Root "AI Arena - WPF.sln"
 $coreTests = Join-Path $Root "tests/AIArena.Tests/AIArena.Tests.csproj"
 $wpfTests = Join-Path $Root "tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj"
@@ -60,6 +63,10 @@ $licenseFile = Join-Path $Root "LICENSE"
 $noticeFile = Join-Path $Root "NOTICE.md"
 $readmeFile = Join-Path $Root "README.md"
 $userGuideFile = Join-Path $Root "docs/USER_GUIDE.md"
+$helpContentRoot = Join-Path $Root "src/AIArena.Wpf/Help/Content"
+$helpManifestFile = Join-Path $helpContentRoot "guide-manifest.json"
+$releaseHelpContentRoot = Join-Path $releaseDir "Help/Content"
+$releaseHelpManifest = Join-Path $releaseHelpContentRoot "guide-manifest.json"
 $shortcutIconFile = Join-Path $Root "src/AIArena.Wpf/Assets/ai-arena-icon.ico"
 $wpfProject = Join-Path $Root "src/AIArena.Wpf/AIArena.Wpf.csproj"
 $coreProject = Join-Path $Root "src/AIArena.Core/AIArena.Core.csproj"
@@ -69,6 +76,29 @@ function Assert-PathExists {
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "Missing ${Label}: $Path"
     }
+}
+
+function Get-HelpContentInventory {
+    param([string]$Directory)
+
+    $allowedExtensions = @('.json', '.md', '.png', '.jpg', '.jpeg', '.webp')
+    $resolvedDirectory = [IO.Path]::GetFullPath($Directory).TrimEnd([char[]]@('\', '/'))
+    $directoryPrefix = $resolvedDirectory + [IO.Path]::DirectorySeparatorChar
+    $files = @(Get-ChildItem -LiteralPath $Directory -Recurse -File)
+    $unsupported = @($files | Where-Object { $allowedExtensions -notcontains $_.Extension.ToLowerInvariant() })
+    if ($unsupported.Count -gt 0) {
+        throw "Help content contains unsupported packaged files: $($unsupported.FullName -join ', ')."
+    }
+
+    return @($files |
+        ForEach-Object {
+            $fullPath = [IO.Path]::GetFullPath($_.FullName)
+            if (-not $fullPath.StartsWith($directoryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Help content inventory escaped its root: $fullPath"
+            }
+            $fullPath.Substring($directoryPrefix.Length).Replace('\', '/')
+        } |
+        Sort-Object -CaseSensitive)
 }
 
 Assert-PathExists $innoScript "Inno script"
@@ -106,6 +136,7 @@ Assert-PathExists $releaseGithubReleaseNotes "release GitHub release notes"
 Assert-PathExists $dependencyIndexScript "dependency index script"
 Assert-PathExists $xamlBaselineScript "XAML hard-coded baseline script"
 Assert-PathExists $xamlBaselineTests "XAML hard-coded baseline fixture tests"
+Assert-PathExists $userGuideContentScript "User Guide content validation script"
 Assert-PathExists $solutionFile "WPF solution"
 Assert-PathExists $coreTests "core console test harness"
 Assert-PathExists $wpfTests "WPF console test harness"
@@ -113,9 +144,38 @@ Assert-PathExists $licenseFile "licence file"
 Assert-PathExists $noticeFile "notice file"
 Assert-PathExists $readmeFile "readme"
 Assert-PathExists $userGuideFile "user guide"
+Assert-PathExists $helpContentRoot "structured Help content"
+Assert-PathExists $helpManifestFile "structured Help manifest"
+Assert-PathExists $releaseHelpContentRoot "published Help content"
+Assert-PathExists $releaseHelpManifest "published Help manifest"
 Assert-PathExists $shortcutIconFile "shortcut icon"
 Assert-PathExists $wpfProject "WPF project"
 Assert-PathExists $coreProject "core project"
+
+& $userGuideContentScript -Check
+$userGuideContentExitCode = $LASTEXITCODE
+if ($userGuideContentExitCode -ne 0) {
+    throw "User Guide content validation failed with exit code $userGuideContentExitCode."
+}
+
+$sourceHelpInventory = @(Get-HelpContentInventory -Directory $helpContentRoot)
+$releaseHelpInventory = @(Get-HelpContentInventory -Directory $releaseHelpContentRoot)
+$helpInventoryDelta = @(Compare-Object -ReferenceObject $sourceHelpInventory -DifferenceObject $releaseHelpInventory -CaseSensitive)
+if ($sourceHelpInventory.Count -eq 0 -or $helpInventoryDelta.Count -gt 0) {
+    throw "Published Help/Content inventory does not exactly match the structured source. Differences: $($helpInventoryDelta | Out-String)"
+}
+foreach ($relativePath in $sourceHelpInventory) {
+    $sourceHelpHash = (Get-FileHash -LiteralPath (Join-Path $helpContentRoot $relativePath) -Algorithm SHA256).Hash
+    $releaseHelpHash = (Get-FileHash -LiteralPath (Join-Path $releaseHelpContentRoot $relativePath) -Algorithm SHA256).Hash
+    if ($sourceHelpHash -ne $releaseHelpHash) {
+        throw "Published Help file differs from source: $relativePath"
+    }
+}
+
+$helpManifest = Get-Content -LiteralPath $helpManifestFile -Raw -Encoding UTF8 | ConvertFrom-Json
+if ([string]$helpManifest.guideVersion -ne $Version) {
+    throw "Help manifest guideVersion drifted: expected $Version."
+}
 
 & $dependencyIndexScript -Check
 & $xamlBaselineScript -Check
@@ -133,13 +193,13 @@ if ($solutionText -notmatch [regex]::Escape("tests\AIArena.Wpf.Tests\AIArena.Wpf
     throw "WPF solution does not include the WPF console test harness."
 }
 
-dotnet run --project $coreTests --no-restore
+dotnet run --project $coreTests -c $Configuration --no-build --no-restore
 $coreTestExitCode = $LASTEXITCODE
 if ($coreTestExitCode -ne 0) {
     throw "Core console test harness failed with exit code $coreTestExitCode."
 }
 
-dotnet run --project $wpfTests --no-restore
+dotnet run --project $wpfTests -c $Configuration --no-build --no-restore
 $wpfTestExitCode = $LASTEXITCODE
 if ($wpfTestExitCode -ne 0) {
     throw "WPF console test harness failed with exit code $wpfTestExitCode."
@@ -291,11 +351,11 @@ if ($licenseText -notmatch 'Copyright © 2026 Dominik Fiala') {
 
 $guideText = Get-Content -LiteralPath $userGuideFile -Raw
 foreach ($requiredGuideSection in @(
-    '## Quick Start',
-    '## AI Lab',
+    '## Quick Start: Your First Turn',
+    '## Run Arena Mode',
     '## Match Setup',
     '## Agent Performance',
-    '## Licensing'
+    '## Reference, Installation & Licensing'
 )) {
     if ($guideText -notmatch [regex]::Escape($requiredGuideSection)) {
         throw "User guide missing required section: $requiredGuideSection"

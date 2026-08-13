@@ -291,6 +291,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     {
         InitializeComponent();
         ShellNavigationRail.Presentation = ShellTopBar.Presentation;
+        _userGuideWindowHost.AppRouteRequested += UserGuideWindowHost_AppRouteRequested;
         ShellTopBar.Presentation.StatusCenter.NavigationRequested += ApplicationStatusCenter_NavigationRequested;
         UniversalStatusCenter.PresentationChanged += UniversalStatusCenter_PresentationChanged;
         UniversalStatusCenter.Bind(ShellTopBar.Presentation.StatusCenter);
@@ -1553,6 +1554,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             _narratorService.Dispose();
             _internetToolService.Dispose();
             InternetWorkflow.Dispose();
+            _userGuideWindowHost.AppRouteRequested -= UserGuideWindowHost_AppRouteRequested;
+            _userGuideWindowHost.Close();
             _applicationStatusControlPublisher.Dispose();
             _controlPlaneHost?.Dispose();
         };
@@ -4439,6 +4442,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         {
             switch (key)
             {
+                case Key.F1 when shift:
+                    OpenUserGuide(CurrentContextualHelpArticleId(), Keyboard.FocusedElement);
+                    return true;
                 case Key.F2:
                     MatchSetupButton_Click(MatchSetupButton, new RoutedEventArgs());
                     return true;
@@ -4623,6 +4629,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         ("Ctrl+E", "Export the transcript"),
         ("Ctrl+,", "Open App Settings"),
         ("Ctrl+Shift+R", "Show or hide the right rail"),
+        ("Shift+F1", "Open contextual Help Center guidance"),
         ("Ctrl+/ or F1", "Show this shortcut list"),
         ("Esc", "Close the topmost overlay")
     ];
@@ -5093,6 +5100,18 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         return autoCollapseActive
             ? !narrowRevealRequested
             : widthCollapseLatched;
+    }
+
+    internal static bool ShouldUseCollapsedStatusCenterLauncher(
+        bool userCollapsed,
+        bool autoCollapseActive,
+        bool widthCollapseLatched)
+    {
+        return IsRightRailEffectivelyCollapsed(
+            userCollapsed,
+            autoCollapseActive,
+            narrowRevealRequested: true,
+            widthCollapseLatched);
     }
 
     internal static bool ShouldOverlayRightRail(bool autoCollapseActive, bool collapsed)
@@ -6473,7 +6492,6 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void TranscriptSearchButton_Click(object sender, RoutedEventArgs e)
     {
-        _userGuideWindowHost.Close();
         ProviderReachability.ClosePopup();
         ViewMenuPopup.IsOpen = false;
         DebugMenuPopup.IsOpen = false;
@@ -6681,10 +6699,16 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void OpenUserGuideButton_Click(object sender, RoutedEventArgs e)
     {
+        TranscriptFiltersPopup.IsOpen = false;
+        OpenUserGuide(articleId: null, sender as IInputElement);
+    }
+
+    private void OpenUserGuide(string? articleId, IInputElement? launcher = null)
+    {
         _transcriptSearchCoordinator?.CloseSearch();
         ProviderReachability.ClosePopup();
         TranscriptFiltersPopup.IsOpen = false;
-        if (!_userGuideWindowHost.Show(this))
+        if (!_userGuideWindowHost.Show(this, articleId, launcher ?? Keyboard.FocusedElement))
         {
             const string status = "User guide not found.";
             LoadStatus.Text = status;
@@ -6700,6 +6724,152 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
 
         ShellTopBar.Presentation.StatusCenter.Resolve("app.user-guide");
+    }
+
+    private string CurrentContextualHelpArticleId()
+    {
+        var settingsOpen = AppSettingsPanel.Visibility == Visibility.Visible;
+        var settingsContext = SettingsHelpContext(
+            InternetAccessSettingsExpander.IsKeyboardFocusWithin,
+            DebugControlsSettingsExpander.IsKeyboardFocusWithin,
+            AgentSettingsExpander.IsKeyboardFocusWithin,
+            InternetAccessSettingsExpander.IsExpanded,
+            DebugControlsSettingsExpander.IsExpanded,
+            AgentSettingsExpander.IsExpanded);
+        return HelpArticleForContext(
+            _activeShellSurface,
+            settingsOpen,
+            internetSettings: settingsOpen && settingsContext.Internet,
+            debugSettings: settingsOpen && settingsContext.Debug,
+            agentSettings: settingsOpen && settingsContext.Agent,
+            statusCenterOpen: UniversalStatusCenter.IsDashboardOpen,
+            providerHealthOpen: ProviderHealthPopup.IsOpen);
+    }
+
+    internal static (bool Internet, bool Debug, bool Agent) SettingsHelpContext(
+        bool internetFocused,
+        bool debugFocused,
+        bool agentFocused,
+        bool internetExpanded,
+        bool debugExpanded,
+        bool agentExpanded)
+    {
+        if (internetFocused || debugFocused || agentFocused)
+        {
+            return (internetFocused, debugFocused, agentFocused);
+        }
+
+        var expandedCount = (internetExpanded ? 1 : 0) + (debugExpanded ? 1 : 0) + (agentExpanded ? 1 : 0);
+        return expandedCount == 1
+            ? (internetExpanded, debugExpanded, agentExpanded)
+            : (false, false, false);
+    }
+
+    internal static string HelpArticleForContext(
+        ShellSurface surface,
+        bool settingsOpen = false,
+        bool internetSettings = false,
+        bool debugSettings = false,
+        bool agentSettings = false,
+        bool statusCenterOpen = false,
+        bool providerHealthOpen = false)
+    {
+        if (statusCenterOpen)
+        {
+            return "status-center";
+        }
+
+        if (settingsOpen)
+        {
+            if (internetSettings)
+            {
+                return "internet-privacy";
+            }
+
+            if (debugSettings)
+            {
+                return "ai-world-debug";
+            }
+
+            if (agentSettings)
+            {
+                return "agent";
+            }
+
+            return "provider-troubleshooting";
+        }
+
+        if (providerHealthOpen)
+        {
+            return "provider-troubleshooting";
+        }
+
+        return surface switch
+        {
+            ShellSurface.Models => "models-routing",
+            ShellSurface.MatchSetup => "match-setup",
+            ShellSurface.Agent => "agent",
+            ShellSurface.Collaborate => "collaborate",
+            ShellSurface.ExperimentLab => "experiment-lab",
+            ShellSurface.World => "ai-world-debug",
+            _ => "arena-mode"
+        };
+    }
+
+    private void UserGuideWindowHost_AppRouteRequested(object? sender, AIArena.Wpf.Help.Presentation.HelpAppRouteRequestedEventArgs e)
+    {
+        switch (e.Route)
+        {
+            case "app/view/arena":
+                ShowTranscriptPanel(clearFilters: false);
+                break;
+            case "app/models":
+                ShowProviderModelsPanel();
+                break;
+            case "app/settings/provider":
+                OpenModelProviderSettings();
+                break;
+            case "app/match-setup":
+                ShowCustomMatchPanel();
+                break;
+            case "app/status-center":
+                if (IsRightRailEffectivelyCollapsed(
+                        _wpfSettings.RightRailCollapsed,
+                        _rightRailAutoCollapseActive,
+                        _rightRailNarrowRevealRequested,
+                        _rightRailWidthCollapseLatched))
+                {
+                    _rightRailNarrowRevealRequested = true;
+                    ApplyRightRailCollapsed();
+                }
+
+                var useCollapsedLauncher = ShouldUseCollapsedStatusCenterLauncher(
+                    _wpfSettings.RightRailCollapsed,
+                    _rightRailAutoCollapseActive,
+                    _rightRailWidthCollapseLatched);
+                UniversalStatusCenter.OpenDashboard(
+                    useCollapsedLauncher ? CollapsedStatusCenterButton : null);
+                break;
+            case "app/view/agent":
+                ShowAgentPanel();
+                break;
+            case "app/view/collaborate":
+                ShowCollaboratePanel();
+                break;
+            case "app/view/experiment":
+                ShowExperimentLabPanel();
+                break;
+            case "app/settings/debug":
+                AppSettingsWorkflow.SetVisible(true);
+                DebugControlsSettingsExpander.IsExpanded = true;
+                DebugControlsSettingsExpander.BringIntoView();
+                break;
+            case "app/settings/internet":
+                AppSettingsWorkflow.SetVisible(true);
+                InternetAccessSettingsExpander.IsExpanded = true;
+                InternetAccessSettingsExpander.BringIntoView();
+                break;
+        }
     }
 
     private void OpenModelProviderSettings(string? baseUrl = null, string? model = null)

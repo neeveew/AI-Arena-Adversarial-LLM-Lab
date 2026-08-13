@@ -5146,7 +5146,11 @@
                     </StackPanel>
                 </Expander>
 
-                <Expander Header="Internet Access" Tag="&#xE774;" Style="{StaticResource SettingsExpander}" IsExpanded="False">
+                <Expander Header="Internet Access"
+                          x:Name="InternetAccessSettingsExpander"
+                          Tag="&#xE774;"
+                          Style="{StaticResource SettingsExpander}"
+                          IsExpanded="False">
                     <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                         <CheckBox x:Name="UseInternetCheckBox"
                                   Content="Internet Access"

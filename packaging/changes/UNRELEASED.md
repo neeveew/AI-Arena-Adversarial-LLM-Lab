@@ -7,4 +7,7 @@ versioned `.txt` change file.
 
 ## Verified
 
-No changes recorded yet.
+- Rebuilt the offline User Guide as a modern, responsive, searchable Help
+  Center with task-based navigation, contextual help routes, current workflow
+  and recovery guidance, accessible keyboard behavior, and packaged release
+  validation.

@@ -69,8 +69,8 @@ if ((Test-Path -LiteralPath $output) -and $Force) {
 }
 
 $dotnet = Get-Command dotnet -CommandType Application -ErrorAction Stop | Select-Object -First 1
-Invoke-AIArenaNativeCommand -FilePath $dotnet.Source -ArgumentList @('run', '--project', $coreTests, '--no-restore') -Label 'Core test harness'
-Invoke-AIArenaNativeCommand -FilePath $dotnet.Source -ArgumentList @('run', '--project', $wpfTests, '--no-restore') -Label 'WPF test harness'
+Invoke-AIArenaNativeCommand -FilePath $dotnet.Source -ArgumentList @('run', '--project', $coreTests, '-c', $Configuration, '--no-restore') -Label 'Core test harness'
+Invoke-AIArenaNativeCommand -FilePath $dotnet.Source -ArgumentList @('run', '--project', $wpfTests, '-c', $Configuration, '--no-restore') -Label 'WPF test harness'
 
 # ReadyToRun precompiles the hot startup path. Measured on a self-contained
 # build: warm launch to a responsive shell drops from about 1230 ms to 1110 ms,

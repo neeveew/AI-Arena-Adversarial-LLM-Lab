@@ -138,6 +138,50 @@
     <Thickness x:Key="Arena.Layout.StatusCenterSectionMargin">0,8,0,8</Thickness>
     <Thickness x:Key="Arena.Layout.CollapsedStatusButtonMargin">0,-3,4,-3</Thickness>
 
+    <!-- Help Center geometry. Kept as a component family so the modeless
+         reader can evolve without reintroducing one-off XAML measurements. -->
+    <sys:Double x:Key="Arena.Help.Target">44</sys:Double>
+    <sys:Double x:Key="Arena.Help.SearchIconSize">15</sys:Double>
+    <sys:Double x:Key="Arena.Help.TaskIconSize">17</sys:Double>
+    <Thickness x:Key="Arena.Help.None">0</Thickness>
+    <Thickness x:Key="Arena.Help.CommandMargin">0,0,4,0</Thickness>
+    <Thickness x:Key="Arena.Help.SearchResultTextMargin">8,0,12,0</Thickness>
+    <Thickness x:Key="Arena.Help.SearchSnippetMargin">0,3,0,0</Thickness>
+    <Thickness x:Key="Arena.Help.BrandMargin">6,0,16,0</Thickness>
+    <Thickness x:Key="Arena.Help.SearchPadding">34,6,72,6</Thickness>
+    <Thickness x:Key="Arena.Help.KeyPadding">6,2</Thickness>
+    <Thickness x:Key="Arena.Help.KeyMargin">0,0,8,0</Thickness>
+    <Thickness x:Key="Arena.Help.MoreMargin">8,0,4,0</Thickness>
+    <Thickness x:Key="Arena.Help.NavigationPanelPadding">10,10,8,10</Thickness>
+    <Thickness x:Key="Arena.Help.GroupMargin">0,0,0,8</Thickness>
+    <Thickness x:Key="Arena.Help.NavigationPadding">10,6</Thickness>
+    <Thickness x:Key="Arena.Help.NavigationMargin">0,1</Thickness>
+    <Thickness x:Key="Arena.Help.ResultPadding">12,10</Thickness>
+    <Thickness x:Key="Arena.Help.ResultMargin">0,0,0,8</Thickness>
+    <Thickness x:Key="Arena.Help.TaskMargin">0,0,10,10</Thickness>
+    <Thickness x:Key="Arena.Help.TaskPadding">14,12</Thickness>
+    <Thickness x:Key="Arena.Help.TaskTitleMargin">0,8,0,0</Thickness>
+    <Thickness x:Key="Arena.Help.TaskSummaryMargin">0,4,0,0</Thickness>
+    <Thickness x:Key="Arena.Help.CommandBarPadding">12,8</Thickness>
+    <CornerRadius x:Key="Arena.Help.CommandBarRadius">11,11,0,0</CornerRadius>
+    <Thickness x:Key="Arena.Help.ArticleHeaderPadding">24,18,24,14</Thickness>
+    <Thickness x:Key="Arena.Help.ArticleTitleMargin">0,6,0,0</Thickness>
+    <Thickness x:Key="Arena.Help.ArticleSummaryMargin">0,5,0,0</Thickness>
+    <Thickness x:Key="Arena.Help.ArticleActionsMargin">0,10,0,0</Thickness>
+    <Thickness x:Key="Arena.Help.ArticleActionMargin">0,0,8,4</Thickness>
+    <Thickness x:Key="Arena.Help.HomeHeadingMargin">0,0,0,10</Thickness>
+    <Thickness x:Key="Arena.Help.PagePadding">24,18</Thickness>
+    <Thickness x:Key="Arena.Help.OutlinePadding">10</Thickness>
+    <Thickness x:Key="Arena.Help.OutlineHeadingMargin">2,0,2,6</Thickness>
+    <Thickness x:Key="Arena.Help.OutlineItemsMargin">4,0,4,6</Thickness>
+    <Thickness x:Key="Arena.Help.OutlineActionPadding">8,5</Thickness>
+    <Thickness x:Key="Arena.Help.FooterPadding">16,10</Thickness>
+    <Thickness x:Key="Arena.Help.SearchStatusMargin">0,4,0,12</Thickness>
+    <Thickness x:Key="Arena.Help.DrawerHeaderMargin">12,10</Thickness>
+    <Thickness x:Key="Arena.Help.DrawerBodyMargin">10,0,8,10</Thickness>
+    <Thickness x:Key="Arena.Help.OutlineMargin">0,14,14,14</Thickness>
+    <Thickness x:Key="Arena.Help.CompactOutlineMargin">12,10,12,4</Thickness>
+
     <!-- Compatibility keys retained until their existing consumers migrate. -->
     <Thickness x:Key="Arena.Gap.Inline">6,0,0,0</Thickness>
     <Thickness x:Key="Arena.Gap.Stack">0,0,0,8</Thickness>

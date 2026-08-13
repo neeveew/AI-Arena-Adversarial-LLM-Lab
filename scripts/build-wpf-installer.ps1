@@ -189,7 +189,7 @@ $installerSigning | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $installe
 
 New-AIArenaSha256Manifest -BaseDirectory $installerDir -OutputPath $installerChecksums
 
-& $sanityScript -Version $Version -SigningPolicy $SigningPolicy
+& $sanityScript -Version $Version -Configuration $Configuration -SigningPolicy $SigningPolicy
 
 Write-Host "WPF installer distribution created:"
 Write-Host $installerDir
