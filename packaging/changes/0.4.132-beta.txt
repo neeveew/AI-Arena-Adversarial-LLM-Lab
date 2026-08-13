@@ -1,0 +1,7 @@
+AI Arena 0.4.132-beta
+
+- Rebuild the offline User Guide as a modern, responsive, searchable Help Center with task-based navigation, contextual help routes, current workflow and recovery guidance, and accessible keyboard behavior.
+- Add 20 versioned Help articles across six groups and eight guided journeys, covering provider setup, model residency and routing, Arena and Factory workflows, context recovery, Agent, comparison, automation, privacy, and troubleshooting.
+- Add safe rich Markdown rendering, ranked highlighted search, breadcrumbs, Back and Forward navigation, on-page navigation, related topics, copyable code, and process-local topic and scroll restoration.
+- Add responsive wide, compact, and 200 percent layouts with Dark, Light, and High Contrast support, modeless app routing, focus restoration, and non-overlapping article outlines.
+- Package Help content for offline use and add content freshness, link, asset, dependency, XAML, publish-parity, and Release-harness gates to the installer pipeline.
