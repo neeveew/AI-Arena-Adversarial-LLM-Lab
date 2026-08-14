@@ -957,10 +957,10 @@ internal static partial class Program
                     "later authoritative heartbeat evidence did not reconcile the retained desired loaded outcome");
 
                 lifecycle = null;
-                InvokeProviderModelsButtonByKeyboard(control.LifecycleAction, host);
+                control.LifecycleAction.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                 FlushProviderModelsDispatcher(host);
                 Require(lifecycle is not null && !lifecycle.Load && control.HasPendingLifecycle,
-                    "keyboard did not invoke Unload after heartbeat reconciliation");
+                    "the reconciled lifecycle action did not invoke Unload after heartbeat confirmation");
                 var staleOperation = lifecycle!;
                 control.ApplyPresentation(heartbeatConfirmedLoad with
                 {
