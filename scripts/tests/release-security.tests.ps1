@@ -236,11 +236,20 @@ try {
     $installerPipelineText = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts/build-wpf-installer.ps1') -Raw
     $releasePipelineText = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts/build-wpf-release.ps1') -Raw
     $sanityPipelineText = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts/wpf-release-sanity.ps1') -Raw
+    $innoScriptText = Get-Content -LiteralPath (Join-Path $repositoryRoot 'packaging/inno/ai-arena-wpf.iss') -Raw
+    $migrationHelperPath = Join-Path $repositoryRoot 'packaging/inno/migrate-ai-arena-per-user.ps1'
+    $migrationHelperSha256 = (Get-FileHash -LiteralPath $migrationHelperPath -Algorithm SHA256).Hash
     Require ($installerPipelineText -match '(?s)Invoke-AIArenaAuthenticodeSigning.+New-AIArenaInstallerCompileReceipt') 'The exact installer receipt must be emitted only after compile and any Authenticode mutation have succeeded.'
     Require ($installerPipelineText -match '(?s)ResumeFinalization.+Test-AIArenaInstallerCompileReceipt') 'Resume finalization must validate the exact post-compile receipt before copying release artifacts.'
     Require ($sanityPipelineText.Contains('Test-AIArenaInstallerCompileReceipt')) 'Release sanity must independently validate installer compile provenance.'
     Require ($releasePipelineText.Contains('Invoke-AIArenaReleaseVerificationHarnesses') -and -not $releasePipelineText.Contains('New-AIArenaReleaseVerificationReceipt')) 'Release receipt creation must be inseparable from the function that observes harness process results.'
     Require ($sanityPipelineText.Contains('VerificationReceiptPath and its ephemeral VerificationReceiptKey must be supplied together.')) 'Standalone sanity must not accept an unauthenticated harness receipt.'
+    $migrationHashGuardIndex = $installerPipelineText.IndexOf('Per-user installer migration helper SHA-256 does not match', [StringComparison]::Ordinal)
+    $resumeGuardIndex = $installerPipelineText.IndexOf('if ($ResumeFinalization.IsPresent)', [StringComparison]::Ordinal)
+    Require ($migrationHashGuardIndex -ge 0 -and $resumeGuardIndex -gt $migrationHashGuardIndex) 'Installer compile and resume must validate the external migration helper before either path can consume an installer.'
+    Require ($innoScriptText.Contains("#define MyPerUserMigrationSha256 `"$migrationHelperSha256`"")) 'The receipt-covered Inno script must pin the exact per-user migration helper bytes.'
+    Require ($innoScriptText.Contains('GetSHA256OfFile(MigrationScript)') -and $innoScriptText.Contains('$sha.ComputeHash($bytes)') -and $innoScriptText.Contains('[ScriptBlock]::Create($text)')) 'Runtime migration must hash and execute the same extracted helper byte buffer, rejecting substitution after extraction.'
+    Require ($sanityPipelineText.Contains('Per-user migration helper SHA-256 drifted from the Inno-script pin')) 'Release sanity must independently reject migration-helper drift.'
 
     $legacyUnsignedRecord = [pscustomobject]@{
         status = 'NotSigned'

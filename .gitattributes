@@ -8,6 +8,7 @@
 *.md text eol=lf
 *.json text eol=lf
 *.ps1 text eol=crlf
+packaging/inno/migrate-ai-arena-per-user.ps1 text eol=lf
 *.txt text eol=lf
 
 *.png binary

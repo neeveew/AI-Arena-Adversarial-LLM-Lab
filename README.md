@@ -6,7 +6,7 @@
 
 A native Windows lab for running adversarial multi-agent conversations and collaborative AI team chats between local or OpenAI-compatible LLMs.
 
-[Download 0.4.135-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.135-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
+[Download 0.4.136-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.136-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
 
 AI Arena - Lite is not a chatbot and not just a model comparison board. It is a local multi-agent LLM lab where agents can debate, collaborate, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
 
@@ -143,7 +143,7 @@ AI Arena - Lite uses `/v1/chat/completions` for model turns. Under **Settings ->
 The local, token-authenticated WPF control plane is enabled by default. Its toggle is organized under **Settings -> Debug controls** with the other developer tools, but it remains independently enabled when **Allow debug controls** is off. Load the helper, then inspect or administer the active session's provider:
 
 ```powershell
-. "$env:LOCALAPPDATA\Programs\AI Arena\ai-arena-control.ps1"
+. "$env:ProgramFiles\AI Arena Lite\ai-arena-control.ps1"
 
 $provider = Get-AIArenaProvider
 Set-AIArenaProviderConfig -BaseUrl "http://127.0.0.1:1234/v1" -ApiMode lmstudio_native -Model "google/gemma-4-e2b" -DefaultForUnassignedAgentsEnabled $true

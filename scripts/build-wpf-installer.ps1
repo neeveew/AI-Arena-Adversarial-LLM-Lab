@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.4.135-beta",
+    [string]$Version = "0.4.136-beta",
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = "Release",
     [ValidateSet('win-x64')]
@@ -46,6 +46,7 @@ if ((Split-Path -Leaf $releaseDir) -ne "AI Arena - $Version" -or (Split-Path -Le
 }
 
 $innoScript = Join-Path $repoRoot "packaging\inno\ai-arena-wpf.iss"
+$perUserMigrationScript = Join-Path $repoRoot "packaging\inno\migrate-ai-arena-per-user.ps1"
 $releaseScript = Join-Path $repoRoot "scripts\build-wpf-release.ps1"
 $sanityScript = Join-Path $repoRoot "scripts\wpf-release-sanity.ps1"
 $artifactNames = @(
@@ -69,6 +70,17 @@ $innoText = Get-Content -LiteralPath $innoScript -Raw
 if ($innoText -notmatch ('#define MyAppVersion "' + [regex]::Escape($Version) + '"') `
     -or $innoText -notmatch ('#define MyReleaseDir "\.\.\\\.\.\\dist\\AI Arena - ' + [regex]::Escape($Version) + '"')) {
     throw "Inno Setup version metadata does not match release $Version."
+}
+if (-not (Test-Path -LiteralPath $perUserMigrationScript -PathType Leaf)) {
+    throw "Per-user installer migration helper is missing: $perUserMigrationScript"
+}
+$perUserMigrationSha256 = (Get-FileHash -LiteralPath $perUserMigrationScript -Algorithm SHA256).Hash
+$perUserMigrationHashMatch = [regex]::Match(
+    $innoText,
+    '#define MyPerUserMigrationSha256 "(?<sha256>[0-9A-Fa-f]{64})"')
+if (-not $perUserMigrationHashMatch.Success `
+    -or -not $perUserMigrationHashMatch.Groups['sha256'].Value.Equals($perUserMigrationSha256, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Per-user installer migration helper SHA-256 does not match the hash pinned by the Inno script."
 }
 
 if ($ResumeFinalization.IsPresent) {

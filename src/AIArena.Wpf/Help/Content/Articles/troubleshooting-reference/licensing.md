@@ -13,9 +13,9 @@ Controls use visible labels, non-color status text, focus rings, and 44-DIP targ
 
 ## Installation
 
-The self-contained installer retains the compatibility path `%LOCALAPPDATA%\Programs\AI Arena` by default and does not require a separate .NET installation. Installed supporting files include `LICENSE`, `NOTICE.md`, release notes, release manifest, `CONTROLPLANE.md`, and the generated full user guide.
+Launch the self-contained installer normally and let it request administrator approval; do not use **Run as administrator**. Keeping the original user token lets Setup safely remove an earlier per-user release. Setup installs the app for the machine under `%ProgramFiles%\AI Arena Lite` and does not require a separate .NET installation. Installed supporting files include `LICENSE`, `NOTICE.md`, release notes, release manifest, `CONTROLPLANE.md`, and the generated full user guide.
 
-App data remains separate under the compatibility path `%LOCALAPPDATA%\AI Arena` by default. Uninstalling the program does not imply deleting saved sessions and configs unless that separate removal is explicitly selected.
+App data remains separate for each user under the compatibility path `%LOCALAPPDATA%\AI Arena`. Installing over the earlier per-user release preserves this data, and the machine-scope uninstaller does not delete it.
 
 ## Optional SearXNG component
 

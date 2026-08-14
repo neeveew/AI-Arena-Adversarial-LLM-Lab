@@ -1,15 +1,16 @@
 ; Inno Setup installer for the native WPF AI Arena build.
 
-; Compatibility identity: keep this value stable for the existing executable,
-; per-user install path, and upgrade lineage. Public Lite labels are separate.
+; Compatibility identity: keep this value stable for the existing executable
+; and upgrade lineage. Public Lite labels and the machine install path are separate.
 #define MyAppName "AI Arena"
 #define MyAppShortDisplayName "AI Arena - Lite"
 #define MyAppDisplayName "AI Arena - Lite: Adversarial LLM Lab"
-#define MyAppVersion "0.4.135-beta"
+#define MyAppVersion "0.4.136-beta"
 #define MyAppPublisher "Dominik Fiala"
 #define MyAppExeName "AI Arena.exe"
-#define MyAppIconName "ai-arena-icon.ico"
-#define MyReleaseDir "..\..\dist\AI Arena - 0.4.135-beta"
+#define MyAppIconName "ai-arena-lite-icon.ico"
+#define MyPerUserMigrationSha256 "0F75A6496F52DAD96E08B86C20BF4287AB76F62B325110CE6E460EB9CFC2087E"
+#define MyReleaseDir "..\..\dist\AI Arena - 0.4.136-beta"
 #define MyReleaseUrl "https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases"
 
 [Setup]
@@ -21,9 +22,9 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyReleaseUrl}
 AppSupportURL={#MyReleaseUrl}
 AppUpdatesURL={#MyReleaseUrl}
-DefaultDirName={localappdata}\Programs\{#MyAppName}
+DefaultDirName={autopf}\AI Arena Lite
 DefaultGroupName={#MyAppShortDisplayName}
-DisableDirPage=no
+DisableDirPage=yes
 DisableProgramGroupPage=yes
 UsePreviousAppDir=no
 UsePreviousGroup=no
@@ -33,8 +34,10 @@ SetupIconFile=..\..\src\AIArena.Wpf\Assets\ai-arena-icon.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
-PrivilegesRequired=lowest
-UninstallDisplayIcon={app}\{#MyAppExeName}
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+PrivilegesRequired=admin
+UninstallDisplayIcon={app}\{#MyAppIconName}
 LicenseFile=..\..\LICENSE
 
 [Languages]
@@ -50,9 +53,10 @@ Name: "app"; Description: "{#MyAppShortDisplayName} application"; Types: full co
 Name: "searxng"; Description: "Local web search engine (SearXNG, AGPL-3.0)"; Types: full custom
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
 
 [Files]
+Source: "migrate-ai-arena-per-user.ps1"; Flags: dontcopy noencryption
 Source: "{#MyReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "searxng\*"; Components: app
 Source: "{#MyReleaseDir}\searxng\*"; DestDir: "{app}\searxng"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: searxng
 Source: "{#MyReleaseDir}\searxng\LICENSE"; DestDir: "{tmp}"; DestName: "SEARXNG-LICENSE.txt"; Flags: dontcopy
@@ -68,26 +72,7 @@ Name: "{group}\{#MyAppShortDisplayName} User Guide"; Filename: "{app}\USER_GUIDE
 Name: "{group}\{#MyAppShortDisplayName} PowerShell Control"; Filename: "{app}\CONTROLPLANE.md"; IconFilename: "{app}\{#MyAppIconName}"
 Name: "{group}\Release Notes"; Filename: "{app}\changes.txt"; IconFilename: "{app}\{#MyAppIconName}"
 Name: "{group}\GitHub Releases"; Filename: "{#MyReleaseUrl}"; IconFilename: "{app}\{#MyAppIconName}"
-Name: "{userdesktop}\{#MyAppShortDisplayName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconName}"; Tasks: desktopicon
-
-[InstallDelete]
-; Remove only the exact default shortcut names from pre-Lite installs and the
-; superseded bracketed Lite preview. Keep the stable install/data directories
-; and any user-chosen/custom shortcut locations.
-Type: files; Name: "{userprograms}\AI Arena\AI Arena.lnk"
-Type: files; Name: "{userprograms}\AI Arena\AI Arena User Guide.lnk"
-Type: files; Name: "{userprograms}\AI Arena\AI Arena PowerShell Control.lnk"
-Type: files; Name: "{userprograms}\AI Arena\Release Notes.lnk"
-Type: files; Name: "{userprograms}\AI Arena\GitHub Releases.lnk"
-Type: dirifempty; Name: "{userprograms}\AI Arena"
-Type: files; Name: "{userdesktop}\AI Arena.lnk"
-Type: files; Name: "{userprograms}\AI Arena [lite]\AI Arena [lite].lnk"
-Type: files; Name: "{userprograms}\AI Arena [lite]\AI Arena [lite] User Guide.lnk"
-Type: files; Name: "{userprograms}\AI Arena [lite]\AI Arena [lite] PowerShell Control.lnk"
-Type: files; Name: "{userprograms}\AI Arena [lite]\Release Notes.lnk"
-Type: files; Name: "{userprograms}\AI Arena [lite]\GitHub Releases.lnk"
-Type: dirifempty; Name: "{userprograms}\AI Arena [lite]"
-Type: files; Name: "{userdesktop}\AI Arena [lite].lnk"
+Name: "{autodesktop}\{#MyAppShortDisplayName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppShortDisplayName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
@@ -100,7 +85,6 @@ Type: filesandordirs; Name: "{app}\searxng"
 
 [Code]
 var
-  RemoveUserData: Boolean;
   SearxngLicensePage: TWizardPage;
   SearxngLicenseMemo: TNewMemo;
   SearxngLicenseAccepted: TNewCheckBox;
@@ -149,6 +133,90 @@ begin
     (Lowercase(Trim(ExpandConstant('{param:SEARXNGLICENSE|}'))) = 'accept');
 end;
 
+function EscapePowerShellSingleQuoted(Value: string): string;
+begin
+  StringChangeEx(Value, '''', '''''', True);
+  Result := Value;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): string;
+var
+  MigrationScript: string;
+  MigrationCommand: string;
+  ResultCode: Integer;
+begin
+  Result := '';
+  NeedsRestart := False;
+  MigrationScript := ExpandConstant('{tmp}\migrate-ai-arena-per-user.ps1');
+  ExtractTemporaryFile('migrate-ai-arena-per-user.ps1');
+  if CompareText(GetSHA256OfFile(MigrationScript), '{#MyPerUserMigrationSha256}') <> 0 then
+  begin
+    Result :=
+      'Setup could not verify its per-user migration helper. No legacy files were changed. ' +
+      'Download a fresh installer and try again.';
+    Exit;
+  end;
+
+  { The inline command reads the helper once, hashes those exact bytes, and
+    executes the same decoded buffer. A replacement between extraction and
+    launch therefore cannot be executed under the original user token. }
+  MigrationCommand :=
+    '$ErrorActionPreference = ''Stop''; ' +
+    '$bytes = [IO.File]::ReadAllBytes(''' + EscapePowerShellSingleQuoted(MigrationScript) + '''); ' +
+    '$sha = [Security.Cryptography.SHA256]::Create(); ' +
+    'try { $actual = ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace(''-'', '''') } finally { $sha.Dispose() }; ' +
+    'if (-not $actual.Equals(''{#MyPerUserMigrationSha256}'', [StringComparison]::OrdinalIgnoreCase)) { exit 92 }; ' +
+    '$text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes); ' +
+    '& ([ScriptBlock]::Create($text)); exit $LASTEXITCODE';
+
+  if not ExecAsOriginalUser(
+    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -Command "' + MigrationCommand + '"',
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode) then
+  begin
+    Result :=
+      'Setup could not inspect the current user''s earlier AI Arena installation. ' +
+      'No files were changed. Close Setup, uninstall the earlier per-user version while keeping its saved data, then run Setup again.';
+    Exit;
+  end;
+
+  case ResultCode of
+    0:
+      Result := '';
+    20:
+      Result :=
+        'An earlier AI Arena installation uses a custom or unverified location. ' +
+        'For safety, Setup will not remove it automatically. Uninstall that version while keeping its saved data, then run Setup again.';
+    21:
+      Result :=
+        'The earlier AI Arena uninstall command could not be verified. ' +
+        'No legacy files were removed. Repair or uninstall that version manually, then run Setup again.';
+    22:
+      Result :=
+        'The earlier AI Arena uninstaller is missing. ' +
+        'Repair or remove that installation manually, then run Setup again.';
+    23:
+      Result :=
+        'The earlier per-user AI Arena installation could not be removed cleanly. ' +
+        'Its saved data was preserved. Finish uninstalling it, then run Setup again.';
+    24:
+      Result :=
+        'Setup was started from an already elevated process, so it cannot safely access the original user''s earlier installation. ' +
+        'Close Setup and launch the installer normally (do not use Run as administrator), or uninstall the earlier per-user version manually while keeping its saved data.';
+    92:
+      Result :=
+        'Setup detected that its per-user migration helper changed after extraction. ' +
+        'No legacy files were changed. Download a fresh installer and try again.';
+  else
+    Result :=
+      'Setup could not migrate the earlier per-user AI Arena installation (code ' +
+      IntToStr(ResultCode) + '). Its saved data was preserved. Resolve that installation, then run Setup again.';
+  end;
+end;
+
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
@@ -171,12 +239,6 @@ begin
   end;
 end;
 
-function EscapePowerShellSingleQuoted(Value: string): string;
-begin
-  StringChangeEx(Value, '''', '''''', True);
-  Result := Value;
-end;
-
 procedure StopBundledSearxng;
 var
   ResultCode: Integer;
@@ -195,30 +257,9 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var
-  DataDir: string;
 begin
   if CurUninstallStep = usUninstall then
   begin
     StopBundledSearxng;
-    RemoveUserData := False;
-    if not UninstallSilent then
-    begin
-      RemoveUserData :=
-        MsgBox(
-          'Also delete AI Arena - Lite saved sessions, settings, templates, checkpoints, exports, logs, and cache from your user profile?'#13#10#13#10 +
-          'Choose No to uninstall the app but keep your data.',
-          mbConfirmation,
-          MB_YESNO) = IDYES;
-    end;
-  end;
-
-  if (CurUninstallStep = usPostUninstall) and RemoveUserData then
-  begin
-    DataDir := ExpandConstant('{localappdata}\AI Arena');
-    if DirExists(DataDir) then
-    begin
-      DelTree(DataDir, True, True, True);
-    end;
   end;
 end;

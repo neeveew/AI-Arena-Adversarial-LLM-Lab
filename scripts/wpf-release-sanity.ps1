@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.4.135-beta",
+    [string]$Version = "0.4.136-beta",
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [ValidateSet('win-x64')]
@@ -23,6 +23,7 @@ if (-not [string]::IsNullOrWhiteSpace($SigningPolicy) -and $SigningPolicy -notin
 }
 
 $innoScript = Join-Path $Root "packaging/inno/ai-arena-wpf.iss"
+$perUserMigrationScript = Join-Path $Root "packaging/inno/migrate-ai-arena-per-user.ps1"
 $releaseDir = Join-Path $Root "dist/AI Arena - $Version"
 $installerDir = Join-Path $Root "dist/installer/AI Arena - $Version"
 $installer = Join-Path $installerDir "AI Arena Setup $Version.exe"
@@ -64,6 +65,7 @@ $installerSigningReport = Join-Path $installerDir "installer-signing.json"
 $dependencyIndexScript = Join-Path $Root "scripts/dependency-index.ps1"
 $xamlBaselineScript = Join-Path $Root "scripts/xaml-hardcoded-values.ps1"
 $xamlBaselineTests = Join-Path $Root "scripts/tests/xaml-hardcoded-values.tests.ps1"
+$installerMigrationTests = Join-Path $Root "scripts/tests/installer-migration.tests.ps1"
 $userGuideContentScript = Join-Path $Root "scripts/user-guide-content.ps1"
 $solutionFile = Join-Path $Root "AI Arena - WPF.sln"
 $coreTests = Join-Path $Root "tests/AIArena.Tests/AIArena.Tests.csproj"
@@ -237,6 +239,11 @@ $xamlBaselineTestExitCode = $LASTEXITCODE
 if ($xamlBaselineTestExitCode -ne 0) {
     throw "XAML hard-coded baseline fixture tests failed with exit code $xamlBaselineTestExitCode."
 }
+& $installerMigrationTests
+$installerMigrationTestExitCode = $LASTEXITCODE
+if ($installerMigrationTestExitCode -ne 0) {
+    throw "Installer scope-migration fixture tests failed with exit code $installerMigrationTestExitCode."
+}
 
 $solutionText = Get-Content -LiteralPath $solutionFile -Raw
 if ($solutionText -notmatch [regex]::Escape("tests\AIArena.Tests\AIArena.Tests.csproj")) {
@@ -339,8 +346,10 @@ if ($scriptText -notmatch 'SearxngLicensePage' -or $scriptText -notmatch 'Wizard
 if ($scriptText -notmatch '\{param:SEARXNGLICENSE\|\}' -or $scriptText -notmatch "= 'accept'") {
     throw "Silent full installs must require explicit /SEARXNGLICENSE=accept acknowledgement."
 }
-if ($scriptText -match 'SW_HIDE') {
-    throw "Installer should not spawn hidden cleanup helpers."
+$hiddenWindowUses = [regex]::Matches($scriptText, '\bSW_HIDE\b')
+if ($hiddenWindowUses.Count -ne 1 `
+    -or $scriptText -notmatch '(?s)ExecAsOriginalUser\(.{0,700}\bSW_HIDE\b') {
+    throw "Only the hash-pinned original-user migration helper may run hidden."
 }
 if ($scriptText -match 'schtasks|AI Arena SearXNG') {
     throw "Installer should not depend on the legacy scheduled-task SearXNG lifecycle."
@@ -348,7 +357,8 @@ if ($scriptText -match 'schtasks|AI Arena SearXNG') {
 if ($scriptText -notmatch '\[UninstallDelete\]' -or $scriptText -notmatch 'Type: filesandordirs; Name: "\{app\}\\searxng"') {
     throw "Installer should remove app-owned SearXNG runtime residue during uninstall."
 }
-if ($scriptText -notmatch 'StopBundledSearxng' -or $scriptText -notmatch 'ExecutablePath' -or $scriptText -notmatch '\{app\}\\searxng\\python') {
+if ($scriptText -notmatch 'StopBundledSearxng' -or $scriptText -notmatch 'ExecutablePath' -or $scriptText -notmatch '\{app\}\\searxng\\python' `
+    -or $scriptText -notmatch '(?s)procedure StopBundledSearxng;.{0,1600}\bSW_SHOWNORMAL\b') {
     throw "Installer should stop only the bundled app-managed SearXNG process tree on uninstall."
 }
 if ($scriptText -notmatch 'EscapePowerShellSingleQuoted') {
@@ -366,29 +376,43 @@ if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\docs\\USER_GUIDE\.md"; DestDir: 
 if ($scriptText -notmatch 'Filename: "\{app\}\\USER_GUIDE\.md"; Description: "Open user guide"; Flags: shellexec postinstall skipifsilent') {
     throw "Installer no longer offers the user guide at the end of setup."
 }
-if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\src\\AIArena\.Wpf\\Assets\\ai-arena-icon\.ico"; DestDir: "\{app\}"') {
-    throw "Installer no longer installs the app icon beside the app."
+if ($scriptText -notmatch '#define MyAppIconName "ai-arena-lite-icon\.ico"') {
+    throw "Installer shortcut icon no longer has a Lite-specific cache identity."
 }
-if ($scriptText -notmatch 'DefaultDirName=\{localappdata\}\\Programs\\\{#MyAppName\}') {
-    throw "Installer no longer separates program files from the per-user AI Arena data folder."
+if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\src\\AIArena\.Wpf\\Assets\\ai-arena-icon\.ico"; DestDir: "\{app\}"; DestName: "\{#MyAppIconName\}"') {
+    throw "Installer no longer installs the reviewed app icon under its Lite-specific shortcut name."
+}
+if ($scriptText -notmatch 'UninstallDisplayIcon=\{app\}\\\{#MyAppIconName\}') {
+    throw "Installer uninstall metadata no longer uses the Lite-specific installed icon."
+}
+if ($scriptText -notmatch 'DefaultDirName=\{autopf\}\\AI Arena Lite') {
+    throw "Installer no longer uses the fixed Program Files/AI Arena Lite machine directory."
 }
 if ($scriptText -notmatch 'DefaultGroupName=\{#MyAppShortDisplayName\}') {
     throw "Installer Start Menu group no longer uses the Lite display name."
 }
-if ($scriptText -notmatch 'DisableDirPage=no') {
-    throw "Installer no longer allows manual install directory selection."
+if ($scriptText -notmatch 'DisableDirPage=yes') {
+    throw "Installer must keep the machine install directory fixed so upgrades cannot fork into custom payload locations."
 }
 if ($scriptText -notmatch 'UsePreviousAppDir=no') {
-    throw "Installer may reuse an older path instead of the separated per-user program directory."
+    throw "Installer may reuse the previous per-user directory instead of the fixed machine directory."
 }
 if ($scriptText -notmatch 'UsePreviousGroup=no') {
     throw "Installer may retain the pre-Lite Start Menu group instead of adopting the Lite group."
 }
-if ($scriptText -notmatch 'PrivilegesRequired=lowest') {
-    throw "Installer no longer uses per-user privileges."
+if ($scriptText -notmatch 'ArchitecturesAllowed=x64compatible' `
+    -or $scriptText -notmatch 'ArchitecturesInstallIn64BitMode=x64compatible') {
+    throw "The win-x64 installer must require an x64-compatible OS and use 64-bit Program Files."
 }
-if ($scriptText -notmatch 'Name: "\{userdesktop\}\\\{#MyAppShortDisplayName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
-    throw "Per-user desktop shortcut no longer has an explicit icon."
+if ($scriptText -notmatch 'PrivilegesRequired=admin') {
+    throw "The Program Files installer must use administrative machine-install mode."
+}
+if ($scriptText -notmatch 'Name: "\{autodesktop\}\\\{#MyAppShortDisplayName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
+    throw "Machine-scope desktop shortcut no longer has an explicit icon."
+}
+if ($scriptText -notmatch 'Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"\s*(?:\r?\n)' `
+    -or $scriptText -match 'Name: "desktopicon"[^\r\n]*Flags:\s*unchecked') {
+    throw "Lite desktop shortcut must be selected by default during the per-user-to-machine migration."
 }
 if ($scriptText -notmatch 'Name: "\{group\}\\\{#MyAppShortDisplayName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
     throw "Start Menu shortcut no longer has an explicit icon."
@@ -396,35 +420,45 @@ if ($scriptText -notmatch 'Name: "\{group\}\\\{#MyAppShortDisplayName\}".*IconFi
 if ($scriptText -notmatch 'Name: "\{group\}\\\{#MyAppShortDisplayName\} User Guide"; Filename: "\{app\}\\USER_GUIDE\.md"') {
     throw "Start Menu user guide shortcut is missing."
 }
-foreach ($legacyShortcutCleanup in @(
-    'Type: files; Name: "\{userprograms\}\\AI Arena\\AI Arena\.lnk"',
-    'Type: files; Name: "\{userprograms\}\\AI Arena\\AI Arena User Guide\.lnk"',
-    'Type: files; Name: "\{userprograms\}\\AI Arena\\AI Arena PowerShell Control\.lnk"',
-    'Type: files; Name: "\{userprograms\}\\AI Arena\\Release Notes\.lnk"',
-    'Type: files; Name: "\{userprograms\}\\AI Arena\\GitHub Releases\.lnk"',
-    'Type: dirifempty; Name: "\{userprograms\}\\AI Arena"',
-    'Type: files; Name: "\{userdesktop\}\\AI Arena\.lnk"'
-)) {
-    if ($scriptText -notmatch $legacyShortcutCleanup) {
-        throw "Installer no longer removes an exact pre-Lite default shortcut or empty legacy group: $legacyShortcutCleanup"
-    }
+if ($scriptText -match '\{user(?:desktop|programs)\}' -or $scriptText -match '\{localappdata\}') {
+    throw "Administrative installer must not directly read, write, or delete per-user shell or data locations."
 }
-foreach ($supersededLiteShortcutCleanup in @(
-    'Type: files; Name: "\{userprograms\}\\AI Arena \[lite\]\\AI Arena \[lite\]\.lnk"',
-    'Type: files; Name: "\{userprograms\}\\AI Arena \[lite\]\\AI Arena \[lite\] User Guide\.lnk"',
-    'Type: files; Name: "\{userprograms\}\\AI Arena \[lite\]\\AI Arena \[lite\] PowerShell Control\.lnk"',
-    'Type: files; Name: "\{userprograms\}\\AI Arena \[lite\]\\Release Notes\.lnk"',
-    'Type: files; Name: "\{userprograms\}\\AI Arena \[lite\]\\GitHub Releases\.lnk"',
-    'Type: dirifempty; Name: "\{userprograms\}\\AI Arena \[lite\]"',
-    'Type: files; Name: "\{userdesktop\}\\AI Arena \[lite\]\.lnk"'
-)) {
-    if ($scriptText -notmatch $supersededLiteShortcutCleanup) {
-        throw "Installer no longer removes an exact superseded bracketed-Lite shortcut or empty group: $supersededLiteShortcutCleanup"
-    }
+if ($scriptText -match 'Type:\s*(?:files|filesandordirs);\s*Name:\s*"\{autodesktop\}\\AI Arena\.lnk"') {
+    throw "Lite installer must never delete the public AI Arena desktop shortcut owned by a sibling branch."
 }
-if ($scriptText -notmatch "Also delete AI Arena - Lite saved sessions" `
-    -or $scriptText -notmatch "DataDir := ExpandConstant\('\{localappdata\}\\AI Arena'\)") {
-    throw "Installer uninstall wording or compatibility-stable AI Arena data root drifted."
+if (-not (Test-Path -LiteralPath $perUserMigrationScript -PathType Leaf)) {
+    throw "Per-user-to-machine installer migration helper is missing."
+}
+$migrationText = Get-Content -LiteralPath $perUserMigrationScript -Raw
+$migrationSha256 = (Get-FileHash -LiteralPath $perUserMigrationScript -Algorithm SHA256).Hash
+if ($scriptText -notmatch ('#define MyPerUserMigrationSha256 "' + [regex]::Escape($migrationSha256) + '"')) {
+    throw "Per-user migration helper SHA-256 drifted from the Inno-script pin used by installer compile receipts."
+}
+if ($scriptText -notmatch 'Source: "migrate-ai-arena-per-user\.ps1"; Flags: dontcopy noencryption' `
+    -or $scriptText -notmatch 'ExecAsOriginalUser\(' `
+    -or $scriptText -notmatch "ExtractTemporaryFile\('migrate-ai-arena-per-user\.ps1'\)" `
+    -or $scriptText -notmatch "GetSHA256OfFile\(MigrationScript\), '\{#MyPerUserMigrationSha256\}'" `
+    -or $scriptText -notmatch 'ComputeHash\(\$bytes\)' `
+    -or $scriptText -notmatch 'ScriptBlock\]::Create\(\$text\)' `
+    -or $scriptText -notmatch '-ExecutionPolicy RemoteSigned' `
+    -or $scriptText -notmatch 'SW_HIDE') {
+    throw "Installer no longer hash-verifies and runs the exact per-user migration bytes under the original user token."
+}
+if ($migrationText -notmatch [regex]::Escape('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{E2F12C8E-9B8C-45C3-B9A1-A8F8E1725F61}_is1') `
+    -or $migrationText -notmatch [regex]::Escape("Join-Path `$env:LOCALAPPDATA 'Programs\AI Arena'") `
+    -or $migrationText -notmatch "unins\[0-9\]\{3\}\\\.exe" `
+    -or $migrationText -notmatch "'/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'") {
+    throw "Per-user migration no longer validates and silently removes only the exact legacy AppId/default install."
+}
+$elevationGuardIndex = $migrationText.IndexOf('if (Test-AIArenaProcessElevated)', [StringComparison]::Ordinal)
+$liveRegistryReadIndex = $migrationText.IndexOf("`$legacyUninstallKey = 'HKCU:\Software", [StringComparison]::Ordinal)
+if ($elevationGuardIndex -lt 0 -or $liveRegistryReadIndex -le $elevationGuardIndex `
+    -or $scriptText -notmatch '(?s)24:\s*Result :=.{0,500}do not use Run as administrator') {
+    throw "Migration must reject an elevated helper token before reading HKCU or launching a user-writable legacy uninstaller."
+}
+if ($scriptText -match 'DelTree\([^\r\n]*\{localappdata\}' `
+    -or $scriptText -match 'Also delete AI Arena - Lite saved sessions') {
+    throw "Machine-scope uninstaller must preserve the compatibility-stable per-user AI Arena data root."
 }
 if ($scriptText -notmatch 'Name: "\{group\}\\Release Notes"; Filename: "\{app\}\\changes\.txt"') {
     throw "Start Menu release notes shortcut is missing."
@@ -436,6 +470,9 @@ if ($scriptText -notmatch 'Name: "\{group\}\\GitHub Releases"; Filename: "\{#MyR
 $projectText = Get-Content -LiteralPath $wpfProject -Raw
 if ($projectText -notmatch '<AssemblyName>AI Arena</AssemblyName>') {
     throw "WPF assembly compatibility identity drifted; executable and pack-resource names must remain AI Arena."
+}
+if ($projectText -notmatch '<ApplicationIcon>Assets\\ai-arena-icon\.ico</ApplicationIcon>') {
+    throw "WPF executable no longer embeds the reviewed Lite icon source."
 }
 if ($projectText -notmatch ('<Product>' + [regex]::Escape($productDisplayName) + '</Product>') `
     -or $projectText -notmatch ('<AssemblyTitle>' + [regex]::Escape($productShortDisplayName) + '</AssemblyTitle>')) {

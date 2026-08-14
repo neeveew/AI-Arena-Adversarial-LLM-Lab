@@ -1,0 +1,11 @@
+AI Arena - Lite 0.4.136-beta
+
+- Rebrand the Windows edition as AI Arena - Lite: Adversarial LLM Lab across the shell, Help Center, documentation, exports, diagnostics, prompts, and installer.
+- Introduce the green Lite emblem and complete Windows, navigation, Help, README, shortcut, and uninstall icon family with deterministic generation and release hash checks.
+- Refresh all 20 offline Help Center articles for the Lite identity, current workflows, and machine-wide installation guidance.
+- Move the self-contained x64 installer to the fixed machine-wide `%ProgramFiles%\AI Arena Lite` directory with administrator approval, while retaining per-user data under `%LOCALAPPDATA%\AI Arena`.
+- Safely migrate only the exact legacy default per-user installation by validating its AppId, path, uninstall command, and uninstaller under the original user token; preserve user data and fail closed for custom, missing, elevated, or unverified cases.
+- Hash-pin the migration helper through compile, resume, runtime, and release-sanity checks so substituted helper bytes cannot execute.
+- Give Lite shortcuts and uninstall metadata the unique installed `ai-arena-lite-icon.ico` cache identity, create the desktop shortcut by default, and never remove the sibling public AI Arena shortcut.
+- Preserve compatibility through the established AppId, executable name, data path, schemas, control pipe, token file, environment variables, and automation command names.
+- Add deterministic migration fixtures and release gates for Program Files scope, data preservation, shortcut ownership, privilege boundaries, and icon identity.

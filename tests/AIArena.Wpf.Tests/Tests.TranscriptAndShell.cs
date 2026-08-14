@@ -3848,7 +3848,11 @@ static void ReleaseScriptsProtectInstallerDistributions()
     var dependencyLock = ReadWorkspaceFile("packaging/searxng-requirements-lock.txt");
     var dependencyLockBytes = File.ReadAllBytes(FindWorkspaceFile("packaging/searxng-requirements-lock.txt"));
     var innoScript = ReadWorkspaceFile("packaging/inno/ai-arena-wpf.iss");
+    var perUserMigrationScript = ReadWorkspaceFile("packaging/inno/migrate-ai-arena-per-user.ps1");
+    var perUserMigrationBytes = File.ReadAllBytes(FindWorkspaceFile("packaging/inno/migrate-ai-arena-per-user.ps1"));
+    var installerMigrationTests = ReadWorkspaceFile("scripts/tests/installer-migration.tests.ps1");
     var wpfProject = ReadWorkspaceFile("src/AIArena.Wpf/AIArena.Wpf.csproj");
+    var nativeDataPaths = ReadWorkspaceFile("src/AIArena.Core/Modules/Sessions/Persistence/NativeDataPaths.cs");
 
     Require(innoScript.Contains("#define MyAppName \"AI Arena\"", StringComparison.Ordinal)
         && innoScript.Contains("#define MyAppShortDisplayName \"AI Arena - Lite\"", StringComparison.Ordinal)
@@ -3856,33 +3860,75 @@ static void ReleaseScriptsProtectInstallerDistributions()
         "installer should separate the compatibility identity from the Lite public names");
     Require(innoScript.Contains("AppId={{E2F12C8E-9B8C-45C3-B9A1-A8F8E1725F61}", StringComparison.Ordinal)
         && innoScript.Contains("#define MyAppExeName \"AI Arena.exe\"", StringComparison.Ordinal)
-        && innoScript.Contains("DefaultDirName={localappdata}\\Programs\\{#MyAppName}", StringComparison.Ordinal)
-        && innoScript.Contains("DataDir := ExpandConstant('{localappdata}\\AI Arena')", StringComparison.Ordinal),
-        "Lite branding must preserve the installer AppId, executable, install directory, and saved-data root");
+        && nativeDataPaths.Contains("public const string AppDataFolderName = \"AI Arena\";", StringComparison.Ordinal),
+        "Lite branding must preserve the installer AppId, executable, and saved-data identity");
+    Require(innoScript.Contains("DefaultDirName={autopf}\\AI Arena Lite", StringComparison.Ordinal)
+        && innoScript.Contains("DisableDirPage=yes", StringComparison.Ordinal)
+        && innoScript.Contains("UsePreviousAppDir=no", StringComparison.Ordinal)
+        && innoScript.Contains("ArchitecturesAllowed=x64compatible", StringComparison.Ordinal)
+        && innoScript.Contains("ArchitecturesInstallIn64BitMode=x64compatible", StringComparison.Ordinal)
+        && innoScript.Contains("PrivilegesRequired=admin", StringComparison.Ordinal),
+        "Lite installer should use the fixed 64-bit Program Files/AI Arena Lite machine directory");
     Require(innoScript.Contains("OutputDir=..\\..\\dist\\installer\\AI Arena - {#MyAppVersion}", StringComparison.Ordinal)
         && innoScript.Contains("OutputBaseFilename=AI Arena Setup {#MyAppVersion}", StringComparison.Ordinal),
         "Lite branding must preserve versioned release and installer artifact filenames");
     Require(innoScript.Contains("DefaultGroupName={#MyAppShortDisplayName}", StringComparison.Ordinal)
         && innoScript.Contains("UsePreviousGroup=no", StringComparison.Ordinal)
-        && innoScript.Contains("{userdesktop}\\{#MyAppShortDisplayName}", StringComparison.Ordinal)
-        && innoScript.Contains("Also delete AI Arena - Lite saved sessions", StringComparison.Ordinal),
-        "installer public group, shortcut, and uninstall wording should expose the Lite brand");
-    Require(innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena\\AI Arena.lnk\"", StringComparison.Ordinal)
-        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena\\AI Arena User Guide.lnk\"", StringComparison.Ordinal)
-        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena\\AI Arena PowerShell Control.lnk\"", StringComparison.Ordinal)
-        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena\\Release Notes.lnk\"", StringComparison.Ordinal)
-        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena\\GitHub Releases.lnk\"", StringComparison.Ordinal)
-        && innoScript.Contains("Type: dirifempty; Name: \"{userprograms}\\AI Arena\"", StringComparison.Ordinal)
-        && innoScript.Contains("Type: files; Name: \"{userdesktop}\\AI Arena.lnk\"", StringComparison.Ordinal),
-        "same-AppId upgrades should remove only exact pre-Lite default shortcuts and the empty legacy group");
-    Require(innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena [lite]\\AI Arena [lite].lnk\"", StringComparison.Ordinal)
-        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena [lite]\\AI Arena [lite] User Guide.lnk\"", StringComparison.Ordinal)
-        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena [lite]\\AI Arena [lite] PowerShell Control.lnk\"", StringComparison.Ordinal)
-        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena [lite]\\Release Notes.lnk\"", StringComparison.Ordinal)
-        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena [lite]\\GitHub Releases.lnk\"", StringComparison.Ordinal)
-        && innoScript.Contains("Type: dirifempty; Name: \"{userprograms}\\AI Arena [lite]\"", StringComparison.Ordinal)
-        && innoScript.Contains("Type: files; Name: \"{userdesktop}\\AI Arena [lite].lnk\"", StringComparison.Ordinal),
-        "same-AppId upgrades should remove only exact superseded bracketed-Lite shortcuts and the empty preview group");
+        && innoScript.Contains("{autodesktop}\\{#MyAppShortDisplayName}", StringComparison.Ordinal),
+        "installer public group and machine-scope shortcut should expose the Lite brand");
+    Require(innoScript.Contains("Name: \"desktopicon\"; Description: \"Create a desktop shortcut\"; GroupDescription: \"Additional shortcuts:\"", StringComparison.Ordinal)
+        && !innoScript.Contains("Name: \"desktopicon\"; Description: \"Create a desktop shortcut\"; GroupDescription: \"Additional shortcuts:\"; Flags: unchecked", StringComparison.Ordinal),
+        "Lite desktop shortcut should be selected by default so migration replaces the stale per-user shortcut");
+    Require(innoScript.Contains("#define MyAppIconName \"ai-arena-lite-icon.ico\"", StringComparison.Ordinal)
+        && innoScript.Contains("Source: \"..\\..\\src\\AIArena.Wpf\\Assets\\ai-arena-icon.ico\"; DestDir: \"{app}\"; DestName: \"{#MyAppIconName}\"", StringComparison.Ordinal)
+        && innoScript.Contains("UninstallDisplayIcon={app}\\{#MyAppIconName}", StringComparison.Ordinal)
+        && innoScript.Contains("Name: \"{autodesktop}\\{#MyAppShortDisplayName}\"; Filename: \"{app}\\{#MyAppExeName}\"; IconFilename: \"{app}\\{#MyAppIconName}\"", StringComparison.Ordinal),
+        "installer shortcuts and uninstall metadata should use a Lite-specific installed icon path so shell caches cannot retain the pre-Lite icon");
+    Require(wpfProject.Contains("<ApplicationIcon>Assets\\ai-arena-icon.ico</ApplicationIcon>", StringComparison.Ordinal)
+        && sanityScript.Contains("WPF executable no longer embeds the reviewed Lite icon source", StringComparison.Ordinal),
+        "the installer-only cache identity must preserve and gate the reviewed source ICO used by the executable");
+    Require(!innoScript.Contains("{userdesktop}", StringComparison.Ordinal)
+        && !innoScript.Contains("{userprograms}", StringComparison.Ordinal)
+        && !innoScript.Contains("{localappdata}", StringComparison.Ordinal)
+        && !innoScript.Contains("Also delete AI Arena - Lite saved sessions", StringComparison.Ordinal)
+        && !innoScript.Contains("RemoveUserData", StringComparison.Ordinal)
+        && !innoScript.Contains("DelTree(", StringComparison.Ordinal),
+        "administrative setup and uninstall must not directly mutate per-user shell or saved-data locations");
+    Require(!innoScript.Contains("Type: files; Name: \"{autodesktop}\\AI Arena.lnk\"", StringComparison.Ordinal)
+        && !innoScript.Contains("Type: filesandordirs; Name: \"{autodesktop}\\AI Arena.lnk\"", StringComparison.Ordinal),
+        "Lite installer must not delete the public AI Arena shortcut owned by the sibling branch");
+    var perUserMigrationSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(perUserMigrationBytes));
+    Require(innoScript.Contains("Source: \"migrate-ai-arena-per-user.ps1\"; Flags: dontcopy noencryption", StringComparison.Ordinal)
+        && innoScript.Contains($"#define MyPerUserMigrationSha256 \"{perUserMigrationSha256}\"", StringComparison.Ordinal)
+        && innoScript.Contains("ExecAsOriginalUser(", StringComparison.Ordinal)
+        && innoScript.Contains("GetSHA256OfFile(MigrationScript)", StringComparison.Ordinal)
+        && innoScript.Contains("$sha.ComputeHash($bytes)", StringComparison.Ordinal)
+        && innoScript.Contains("[ScriptBlock]::Create($text)", StringComparison.Ordinal)
+        && innoScript.Contains("-ExecutionPolicy RemoteSigned", StringComparison.Ordinal)
+        && innoScript.Contains("SW_HIDE", StringComparison.Ordinal)
+        && perUserMigrationScript.Contains("HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{E2F12C8E-9B8C-45C3-B9A1-A8F8E1725F61}_is1", StringComparison.Ordinal)
+        && perUserMigrationScript.Contains("Join-Path $env:LOCALAPPDATA 'Programs\\AI Arena'", StringComparison.Ordinal)
+        && perUserMigrationScript.Contains("$uninstallerName -notmatch '^unins[0-9]{3}\\.exe$'", StringComparison.Ordinal)
+        && perUserMigrationScript.Contains("'/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'", StringComparison.Ordinal),
+        "scope migration should hash and execute the same helper bytes, then remove only the exact legacy current-user installation under the original user token");
+    var elevationGuardIndex = perUserMigrationScript.IndexOf("if (Test-AIArenaProcessElevated)", StringComparison.Ordinal);
+    var liveRegistryReadIndex = perUserMigrationScript.IndexOf("$legacyUninstallKey = 'HKCU:\\Software", StringComparison.Ordinal);
+    Require(elevationGuardIndex >= 0 && liveRegistryReadIndex > elevationGuardIndex
+        && innoScript.Contains("do not use Run as administrator", StringComparison.Ordinal),
+        "migration must reject an elevated helper token before reading HKCU or launching a user-writable uninstaller");
+    Require(installerMigrationTests.Contains("AI_ARENA_INSTALLER_MIGRATION_TEST_MODE", StringComparison.Ordinal)
+        && installerMigrationTests.Contains("Elevated helper token", StringComparison.Ordinal)
+        && installerMigrationTests.Contains("Custom legacy directory", StringComparison.Ordinal)
+        && installerMigrationTests.Contains("Untrusted uninstall command", StringComparison.Ordinal)
+        && installerMigrationTests.Contains("Missing legacy uninstaller", StringComparison.Ordinal)
+        && installerMigrationTests.Contains("Legacy registry key left behind", StringComparison.Ordinal)
+        && sanityScript.Contains("Installer scope-migration fixture tests failed with exit code", StringComparison.Ordinal),
+        "migration branches should be exercised by deterministic fixtures that never inspect the live uninstall key");
+    var migrationHashGuard = installerScript.IndexOf("Per-user installer migration helper SHA-256 does not match", StringComparison.Ordinal);
+    var resumeGuard = installerScript.IndexOf("if ($ResumeFinalization.IsPresent)", StringComparison.Ordinal);
+    Require(migrationHashGuard >= 0 && resumeGuard > migrationHashGuard
+        && sanityScript.Contains("Per-user migration helper SHA-256 drifted from the Inno-script pin", StringComparison.Ordinal),
+        "installer compile and resume must bind the external migration helper through the receipt-covered Inno hash pin");
     Require(wpfProject.Contains("<AssemblyName>AI Arena</AssemblyName>", StringComparison.Ordinal)
         && wpfProject.Contains("<Product>AI Arena - Lite: Adversarial LLM Lab</Product>", StringComparison.Ordinal)
         && wpfProject.Contains("<AssemblyTitle>AI Arena - Lite</AssemblyTitle>", StringComparison.Ordinal),
@@ -3894,7 +3940,7 @@ static void ReleaseScriptsProtectInstallerDistributions()
         "human-facing release notes and manifest should identify the Lite product and edition");
     Require(sanityScript.Contains("Installer compatibility identity drifted", StringComparison.Ordinal)
         && sanityScript.Contains("Release manifest does not identify the Lite product and edition", StringComparison.Ordinal)
-        && sanityScript.Contains("compatibility-stable AI Arena data root", StringComparison.Ordinal)
+        && sanityScript.Contains("compatibility-stable per-user AI Arena data root", StringComparison.Ordinal)
         && sanityScript.Contains("Release executable ProductName drifted", StringComparison.Ordinal)
         && sanityScript.Contains("Release executable FileDescription drifted", StringComparison.Ordinal),
         "release sanity should guard both Lite branding and backward-compatible installer/storage identities");
@@ -4010,21 +4056,30 @@ static void ReleaseScriptsProtectInstallerDistributions()
     Require(sanityScript.Contains("unrecorded signature", StringComparison.Ordinal) && sanityScript.Contains("signer or timestamp", StringComparison.Ordinal), "release sanity should reject report/signature and timestamp mismatches");
     Require(sanityScript.Contains("Self-contained: True", StringComparison.Ordinal) && sanityScript.Contains("includedFrameworks", StringComparison.Ordinal) && sanityScript.Contains("hostfxr.dll", StringComparison.Ordinal) && sanityScript.Contains("System.Private.CoreLib.dll", StringComparison.Ordinal), "release sanity should reject installers without a coherent private .NET runtime");
     Require(innoScript.Contains("OutputDir=..\\..\\dist\\installer\\AI Arena - {#MyAppVersion}", StringComparison.Ordinal), "Inno output should remain versioned");
-    Require(innoScript.Contains("DefaultDirName={localappdata}\\Programs\\{#MyAppName}", StringComparison.Ordinal), "installer binaries should remain separate from the LocalAppData AI Arena user-data root");
+    Require(innoScript.Contains("DefaultDirName={autopf}\\AI Arena Lite", StringComparison.Ordinal), "installer binaries should remain in the fixed Program Files Lite directory, separate from the LocalAppData AI Arena user-data root");
     Require(innoScript.Contains("Name: \"searxng\"; Description: \"Local web search engine (SearXNG, AGPL-3.0)\"", StringComparison.Ordinal), "Inno installer should expose the SearXNG component");
     Require(innoScript.Contains("SearxngLicensePage", StringComparison.Ordinal), "Inno installer should include the SearXNG AGPL gate");
     Require(innoScript.Contains("{param:SEARXNGLICENSE|}", StringComparison.Ordinal), "silent full installs should expose explicit SearXNG licence acknowledgement");
     Require(innoScript.Contains("CONTROLPLANE.md", StringComparison.Ordinal), "installer should place the authoritative PowerShell command reference beside the app");
     Require(innoScript.Contains("= 'accept'", StringComparison.Ordinal), "silent SearXNG licence acknowledgement should require the exact accept value");
-    Require(innoScript.Contains("SW_SHOWNORMAL", StringComparison.Ordinal), "Inno cleanup should not spawn hidden PowerShell helpers");
-    Require(!innoScript.Contains("SW_HIDE", StringComparison.Ordinal), "Inno cleanup should avoid hidden helper windows");
+    var stopSearxngStart = innoScript.IndexOf("procedure StopBundledSearxng;", StringComparison.Ordinal);
+    var stopSearxngEnd = innoScript.IndexOf("procedure CurUninstallStepChanged", stopSearxngStart, StringComparison.Ordinal);
+    var stopSearxngBlock = innoScript[stopSearxngStart..stopSearxngEnd];
+    Require(stopSearxngBlock.Contains("SW_SHOWNORMAL", StringComparison.Ordinal)
+        && !stopSearxngBlock.Contains("SW_HIDE", StringComparison.Ordinal),
+        "SearXNG uninstall cleanup should remain visible; only the noninteractive original-user migration may run hidden");
+    Require(innoScript.Split("SW_HIDE", StringSplitOptions.None).Length == 2
+        && innoScript.Contains("ExecAsOriginalUser(", StringComparison.Ordinal),
+        "exactly one hidden helper launch should remain, bound to original-user migration");
     Require(!innoScript.Contains("schtasks", StringComparison.OrdinalIgnoreCase), "Inno installer should not depend on the legacy scheduled-task lifecycle");
     Require(!innoScript.Contains("AI Arena SearXNG", StringComparison.OrdinalIgnoreCase), "Inno installer should not reference the legacy scheduled-task name");
     Require(innoScript.Contains("[UninstallDelete]", StringComparison.Ordinal), "Inno installer should define cleanup for runtime-only payload residue");
     Require(innoScript.Contains("Type: filesandordirs; Name: \"{app}\\searxng\"", StringComparison.Ordinal), "uninstall should remove the app-owned SearXNG payload directory");
     Require(innoScript.Contains("{app}\\searxng\\python\\pythonw.exe", StringComparison.Ordinal) && innoScript.Contains("ExecutablePath", StringComparison.Ordinal), "Inno uninstall cleanup should target only bundled SearXNG executables");
     Require(innoScript.Contains("EscapePowerShellSingleQuoted", StringComparison.Ordinal), "Inno uninstall cleanup should escape user-selected install paths");
-    Require(!innoScript.Contains("ExecutionPolicy Bypass", StringComparison.OrdinalIgnoreCase), "Inno uninstall cleanup should not bypass PowerShell execution policy");
+    Require(!innoScript.Contains("ExecutionPolicy Bypass", StringComparison.OrdinalIgnoreCase)
+        && innoScript.Contains("-ExecutionPolicy RemoteSigned", StringComparison.Ordinal),
+        "migration should honor enterprise execution policy while allowing the hash-pinned local helper");
     Require(sanityScript.Contains("Installer should not depend on the legacy scheduled-task SearXNG lifecycle", StringComparison.Ordinal), "release sanity should guard against scheduled-task lifecycle returning");
 }
 

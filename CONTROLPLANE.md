@@ -2,7 +2,7 @@
 
 AI Arena - Lite exposes a local control plane for scripts, smoke tests, and automation tools. It uses the WPF-specific local named pipe `ai-arena-wpf-control`, is enabled by default, and authenticates every request with a per-run token stored as `ai-arena-wpf-control-<user>.token` in the current user's temporary directory. The WPF namespace prevents collisions with other AI Arena implementations that may be running at the same time.
 
-The Lite display name does not rename the established `AIArena` commands, `AI_ARENA_*` environment variables, pipe, token file, install directory, or data directory. Those are compatibility identifiers for existing installations and scripts.
+The Lite display name does not rename the established `AIArena` commands, `AI_ARENA_*` environment variables, pipe, token file, or data directory. Those remain compatibility identifiers for existing installations and scripts; the app itself now installs machine-wide under `Program Files\AI Arena Lite`.
 
 This root document is the authoritative command reference for the WPF application. Its command tables cover every entry in `AIArenaControlCapabilityCatalog`; automated tests reject undocumented commands.
 
@@ -15,10 +15,10 @@ This root document is the authoritative command reference for the WPF applicatio
 The PowerShell helper lives at:
 
 ```powershell
-. "$env:LOCALAPPDATA\Programs\AI Arena\ai-arena-control.ps1"
+. "$env:ProgramFiles\AI Arena Lite\ai-arena-control.ps1"
 ```
 
-That is the default installer location. If you chose a custom installation folder, load `ai-arena-control.ps1` from that folder. From a source checkout, load `scripts\ai-arena-control.ps1` instead.
+That is the fixed installer location. From a source checkout, load `scripts\ai-arena-control.ps1` instead.
 
 Every authenticated command returns the same response envelope, including validation or confirmation failures:
 
@@ -372,7 +372,7 @@ Current event types:
 ## Smoke Test
 
 ```powershell
-. "$env:LOCALAPPDATA\Programs\AI Arena\ai-arena-control.ps1"
+. "$env:ProgramFiles\AI Arena Lite\ai-arena-control.ps1"
 Invoke-AIArena status
 Save-AIArenaScreenshot
 Get-AIArenaCapabilities

@@ -1,11 +1,11 @@
-AI Arena - Lite exposes a local authenticated PowerShell control plane for smoke tests and repeatable automation. Its established `AIArena` commands, `AI_ARENA_*` environment variables, pipe, token filename, install path, and data path remain unchanged for compatibility.
+AI Arena - Lite exposes a local authenticated PowerShell control plane for smoke tests and repeatable automation. Its established `AIArena` commands, `AI_ARENA_*` environment variables, pipe, token filename, and data path remain unchanged for compatibility; installed binaries now live machine-wide under `Program Files\AI Arena Lite`.
 
 ## Enable and load
 
 PowerShell control is enabled by default under **Settings → Debug controls** and is independent of the visual Debug master switch.
 
 ```powershell
-. "$env:LOCALAPPDATA\Programs\AI Arena\ai-arena-control.ps1"
+. "$env:ProgramFiles\AI Arena Lite\ai-arena-control.ps1"
 Get-AIArenaCapabilities
 Invoke-AIArena status
 ```

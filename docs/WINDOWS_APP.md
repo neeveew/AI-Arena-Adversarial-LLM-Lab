@@ -1,6 +1,6 @@
 # AI Arena - Lite - WPF
 
-This folder contains the native WPF AI Arena - Lite app. The executable, solution, install directory, and data-directory names intentionally retain the established `AI Arena` compatibility identity.
+This folder contains the native WPF AI Arena - Lite app. The executable, solution, and data-directory names intentionally retain the established `AI Arena` compatibility identity; installed binaries now live machine-wide under `Program Files\AI Arena Lite`.
 
 The current WPF shell includes:
 
