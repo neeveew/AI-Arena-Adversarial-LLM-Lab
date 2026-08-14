@@ -1,6 +1,6 @@
-# AI Arena - WPF
+# AI Arena - Lite - WPF
 
-This folder contains the native WPF AI Arena app.
+This folder contains the native WPF AI Arena - Lite app. The executable, solution, install directory, and data-directory names intentionally retain the established `AI Arena` compatibility identity.
 
 The current WPF shell includes:
 
@@ -58,7 +58,7 @@ The current WPF shell includes:
 - live agent cards refreshed from the selected session snapshot
 - Operator command deck with public/private/narrator routing, draft receipts, scope gates, and handoff interventions
 - optional Debug-gated AI World 3D arena with animated agents, live pulse telemetry, speaker-follow camera, minimap, inspector, legend, and speech bubbles
-- dark AI Arena layout direction
+- dark AI Arena - Lite layout direction
 - no WebView or browser UI
 - no dependency on the archived WinUI project
 - shared .NET services from `src/AIArena.Core`

@@ -49,7 +49,7 @@ function Get-AIArenaControlToken {
         return (Get-Content -LiteralPath $endpoint.TokenPath -Raw).Trim()
     }
 
-    throw "AI Arena control-plane token not found. Enable the control plane in AI Arena, pass -Token, or set AI_ARENA_CONTROL_TOKEN."
+    throw "AI Arena - Lite control-plane token not found. Enable the control plane in AI Arena - Lite, pass -Token, or set AI_ARENA_CONTROL_TOKEN."
 }
 
 function Invoke-AIArena {
@@ -198,12 +198,12 @@ function Invoke-AIArena {
                 $readTask,
                 [System.Threading.Tasks.Task]::Delay($TimeoutMs)).GetAwaiter().GetResult()
             if (-not [object]::ReferenceEquals($completedTask, $readTask)) {
-                throw "Timed out after $TimeoutMs ms waiting for AI Arena to finish '$Command'."
+                throw "Timed out after $TimeoutMs ms waiting for AI Arena - Lite to finish '$Command'."
             }
 
             $line = $readTask.GetAwaiter().GetResult()
             if ([string]::IsNullOrWhiteSpace($line)) {
-                throw 'AI Arena returned an empty response.'
+                throw 'AI Arena - Lite returned an empty response.'
             }
 
             return $line | ConvertFrom-Json
@@ -806,7 +806,7 @@ function Restore-AIArenaCheckpoint {
         [string]$Token
     )
 
-    if ($PSCmdlet.ShouldProcess("checkpoint $Id", 'Restore AI Arena session state')) {
+    if ($PSCmdlet.ShouldProcess("checkpoint $Id", 'Restore AI Arena - Lite session state')) {
         Invoke-AIArena -Command 'session.checkpoint.restore' -Args @{ id = $Id; confirm = $true } -TimeoutMs $TimeoutMs -Token $Token
     }
 }
@@ -1111,7 +1111,7 @@ function Save-AIArenaScreenshot {
 function Set-AIArenaQAWindowSize {
     <#
         .SYNOPSIS
-        Sets the current AI Arena window to a bounded QA size in DIP.
+        Sets the current AI Arena - Lite window to a bounded QA size in DIP.
     #>
     [CmdletBinding()]
     param(

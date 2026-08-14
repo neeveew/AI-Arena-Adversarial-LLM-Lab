@@ -17,6 +17,7 @@
     <sys:Double x:Key="Arena.Type.DisplaySize">22</sys:Double>
     <sys:Double x:Key="Arena.Type.PageTitleSize">20</sys:Double>
     <sys:Double x:Key="Arena.Type.TitleSize">17</sys:Double>
+    <sys:Double x:Key="Arena.Type.BrandTitleSize">16</sys:Double>
     <sys:Double x:Key="Arena.Type.HeadingSize">14</sys:Double>
     <sys:Double x:Key="Arena.Type.BodySize">12.5</sys:Double>
     <sys:Double x:Key="Arena.Type.CompactBodySize">12</sys:Double>

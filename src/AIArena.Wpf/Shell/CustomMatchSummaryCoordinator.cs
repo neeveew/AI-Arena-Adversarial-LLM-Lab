@@ -167,7 +167,7 @@ internal sealed class CustomMatchSummaryCoordinator
     internal static string CurrentSetupBrief(ArenaViewSnapshot snapshot)
     {
         return string.Join(Environment.NewLine,
-            "AI Arena current setup",
+            "AI Arena - Lite current setup",
             $"Session: {DisplayLabel(snapshot.SessionId, "unknown session")}",
             $"Readiness: {ScenarioWorkflowCoordinator.SetupReadinessStatus(snapshot)}",
             $"Model behavior: {(snapshot.FactoryMode ? $"Factory mode — attributed public group history ({FactoryConversationService.ContractVersion}); Match Setup saved but inactive" : "Arena mode — Match Setup guidance applied")}",

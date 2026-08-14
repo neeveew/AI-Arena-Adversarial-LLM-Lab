@@ -1159,7 +1159,7 @@ internal sealed class PuppeteerSharpPageRenderer : IBrowserPageRenderer
     private static readonly TimeSpan RenderTimeout = TimeSpan.FromSeconds(20);
     private const string BrowserNetworkIsolationScript = """
         (() => {
-          const blocked = () => { throw new DOMException('Blocked by AI Arena browser policy', 'SecurityError'); };
+          const blocked = () => { throw new DOMException('Blocked by AI Arena - Lite browser policy', 'SecurityError'); };
           const blockedConstructor = class { constructor() { blocked(); } };
           for (const name of ['WebSocket', 'EventSource', 'WebTransport', 'Worker', 'SharedWorker', 'RTCPeerConnection', 'webkitRTCPeerConnection']) {
             try { Object.defineProperty(globalThis, name, { value: blockedConstructor, configurable: false, writable: false }); } catch {}
@@ -1169,7 +1169,7 @@ internal sealed class PuppeteerSharpPageRenderer : IBrowserPageRenderer
           try {
             if (navigator.serviceWorker) {
               Object.defineProperty(navigator.serviceWorker, 'register', {
-                value: () => Promise.reject(new DOMException('Blocked by AI Arena browser policy', 'SecurityError')),
+                value: () => Promise.reject(new DOMException('Blocked by AI Arena - Lite browser policy', 'SecurityError')),
                 configurable: false,
                 writable: false
               });
@@ -1178,7 +1178,7 @@ internal sealed class PuppeteerSharpPageRenderer : IBrowserPageRenderer
           try {
             if (navigator.mediaDevices) {
               Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {
-                value: () => Promise.reject(new DOMException('Blocked by AI Arena browser policy', 'SecurityError')),
+                value: () => Promise.reject(new DOMException('Blocked by AI Arena - Lite browser policy', 'SecurityError')),
                 configurable: false,
                 writable: false
               });

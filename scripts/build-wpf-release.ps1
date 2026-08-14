@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.4.134-beta",
+    [string]$Version = "0.4.135-beta",
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = "Release",
     [ValidateSet('win-x64')]
@@ -18,6 +18,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+$productDisplayName = 'AI Arena - Lite: Adversarial LLM Lab'
+$productEdition = 'lite'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $securityScript = Join-Path $repoRoot "scripts\release-security.ps1"
@@ -200,7 +203,9 @@ if ($Changes.Count -eq 0) {
 
 $builtAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz'
 $changeLines = @(
-    "AI Arena $Version",
+    "$productDisplayName $Version",
+    "Product: $productDisplayName",
+    "Edition: $productEdition",
     "Built: $builtAt",
     "",
     "Changes:"
@@ -209,7 +214,10 @@ Set-Content -LiteralPath $changesPath -Value $changeLines -Encoding UTF8
 
 $markdownChanges = $Changes | ForEach-Object { "- $_" }
 $changelogLines = @(
-    "# AI Arena $Version",
+    "# $productDisplayName $Version",
+    "",
+    "Product: $productDisplayName",
+    "Edition: $productEdition",
     "",
     "Built: $builtAt",
     "",
@@ -218,7 +226,10 @@ $changelogLines = @(
 Set-Content -LiteralPath $changelogPath -Value $changelogLines -Encoding UTF8
 
 $githubNotesLines = @(
-    "# AI Arena $Version",
+    "# $productDisplayName $Version",
+    "",
+    "Product: $productDisplayName",
+    "Edition: $productEdition",
     "",
     "## Highlights"
 ) + $markdownChanges + @(
@@ -268,6 +279,8 @@ try {
 
 $manifestLines = @(
     "AI Arena Release Manifest",
+    "Product: $productDisplayName",
+    "Edition: $productEdition",
     "Version: $Version",
     "Built: $builtAt",
     "Configuration: $Configuration",

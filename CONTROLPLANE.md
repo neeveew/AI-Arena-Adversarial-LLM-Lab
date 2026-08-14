@@ -1,12 +1,14 @@
-# AI Arena WPF Control Plane
+# AI Arena - Lite WPF Control Plane
 
-AI Arena WPF exposes a local control plane for scripts, smoke tests, and automation tools. It uses the WPF-specific local named pipe `ai-arena-wpf-control`, is enabled by default, and authenticates every request with a per-run token stored as `ai-arena-wpf-control-<user>.token` in the current user's temporary directory. The WPF namespace prevents collisions with other AI Arena implementations that may be running at the same time.
+AI Arena - Lite exposes a local control plane for scripts, smoke tests, and automation tools. It uses the WPF-specific local named pipe `ai-arena-wpf-control`, is enabled by default, and authenticates every request with a per-run token stored as `ai-arena-wpf-control-<user>.token` in the current user's temporary directory. The WPF namespace prevents collisions with other AI Arena implementations that may be running at the same time.
+
+The Lite display name does not rename the established `AIArena` commands, `AI_ARENA_*` environment variables, pipe, token file, install directory, or data directory. Those are compatibility identifiers for existing installations and scripts.
 
 This root document is the authoritative command reference for the WPF application. Its command tables cover every entry in `AIArenaControlCapabilityCatalog`; automated tests reject undocumented commands.
 
 ## Settings
 
-1. Open AI Arena.
+1. Open AI Arena - Lite.
 2. Open Settings -> Debug controls.
 3. Use the PowerShell control plane toggle to enable or disable automation. It is organized with developer tools, but remains on by default and does not require Allow debug controls.
 
@@ -41,7 +43,7 @@ $result.state
 | `status` | `Invoke-AIArena status` | Returns the full app snapshot, including the compatibility `AppStatus` string and structured `Status` center state. |
 | `snapshot` | `Invoke-AIArena snapshot` | Same structured snapshot as `status`. |
 | `events.watch` | `Watch-AIArena events` | Streams JSON event lines until disconnected. |
-| `app.screenshot` | `Save-AIArenaScreenshot` | Saves the current AI Arena window visual as PNG and returns its absolute path, byte size, pixel dimensions, and current app state. Optional `.png` path. |
+| `app.screenshot` | `Save-AIArenaScreenshot` | Saves the current AI Arena - Lite window visual as PNG and returns its absolute path, byte size, pixel dimensions, and current app state. Optional `.png` path. |
 | `provider.state` | `Get-AIArenaProvider` | Returns non-secret provider configuration, readiness, role routing, health timestamps, and advertised models. |
 | `provider.config.set` | `Set-AIArenaProviderConfig -Model "google/gemma-4-e2b" -DefaultForUnassignedAgentsEnabled $false` | Atomically updates one or more active-session provider fields. Optional `-RefreshModels`. |
 | `provider.model.config.set` | `Set-AIArenaProviderModelConfig -Model "google/gemma-4-e2b" -ExpectedConfigurationIdentity $identity -HistoryPolicy rolling_80` | Atomically updates one model's durable context/history/tone settings. Routing and residency stay unchanged. |
@@ -61,7 +63,7 @@ history. Text and identities are privacy-scrubbed before they cross the pipe.
 
 ## Screenshots
 
-`Save-AIArenaScreenshot` captures the AI Arena main window, including panels rendered inside that window. Separate native WPF popup windows (for example an open View or Debug menu) are not composited into the PNG. With no path, the app creates a timestamped file at `%LOCALAPPDATA%\AI Arena\exports\screenshots\AI-Arena-yyyyMMdd-HHmmss-fff.png`. When `AI_ARENA_DATA_DIR` is set, the equivalent `exports\screenshots` directory under that data root is used instead.
+`Save-AIArenaScreenshot` captures the AI Arena - Lite main window, including panels rendered inside that window. Separate native WPF popup windows (for example an open View or Debug menu) are not composited into the PNG. With no path, the app creates a timestamped file at `%LOCALAPPDATA%\AI Arena\exports\screenshots\AI-Arena-yyyyMMdd-HHmmss-fff.png`. When `AI_ARENA_DATA_DIR` is set, the equivalent `exports\screenshots` directory under that data root is used instead.
 
 An optional relative `.png` path resolves beneath the same screenshots directory; an absolute `.png` path is also accepted. Existing files are never overwritten. The response includes the resolved absolute path, PNG byte size, pixel width and height in `data`, plus the standard fresh application `state` attached to every authenticated command. A polite in-app receipt shows the captured filename and full path without moving keyboard focus.
 
@@ -70,7 +72,7 @@ An optional relative `.png` path resolves beneath the same screenshots directory
 $capture = Save-AIArenaScreenshot
 $capture.data.path
 
-# Relative to AI Arena's screenshots directory.
+# Relative to AI Arena - Lite's screenshots directory.
 Save-AIArenaScreenshot "provider/after-refresh.png"
 
 # Explicit absolute destination.
@@ -273,7 +275,7 @@ is written into the named field, both on the UI thread.
 This matters for background automation. Simulated keystrokes go to whichever
 window the operating system currently considers foreground, which for a
 background caller is frequently somebody else's application; a script that meant
-to press `Ctrl+K` in AI Arena can type into a browser instead. Routing through
+to press `Ctrl+K` in AI Arena - Lite can type into a browser instead. Routing through
 the app's own handlers removes the question: the window can be minimised, or
 behind another, and the command still lands where it was aimed.
 

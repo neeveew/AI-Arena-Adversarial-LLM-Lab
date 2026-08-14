@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="clr-namespace:AIArena.Wpf.Controls"
         xmlns:shell="clr-namespace:AIArena.Wpf"
-        Title="AI Arena"
+        Title="AI Arena - Lite: Adversarial LLM Lab"
         Icon="/Assets/ai-arena-icon.ico"
         Width="1500"
         Height="860"
@@ -2354,7 +2354,7 @@
                                                   Visibility="Collapsed"
                                                   Margin="0,6,0,0"
                                                   AutomationProperties.Name="Show sessions with no turns"
-                                                  AutomationProperties.HelpText="Include sessions that never received a turn. A data root shared with another AI Arena build can accumulate many of these."
+                                                  AutomationProperties.HelpText="Include sessions that never received a turn. A data root shared with another AI Arena - Lite build can accumulate many of these."
                                                   ToolTip="Include sessions that never received a turn" />
                                     </StackPanel>
                                 </Grid>
@@ -4086,7 +4086,7 @@
                           IsExpanded="False"
                           Expanded="ModelProviderSettingsExpander_Expanded">
                     <StackPanel>
-                        <TextBlock Text="Connect AI Arena to LM Studio, Ollama, llama.cpp, or another compatible provider. Model discovery and agent assignments now live in the Models workspace."
+                        <TextBlock Text="Connect AI Arena - Lite to LM Studio, Ollama, llama.cpp, or another compatible provider. Model discovery and agent assignments now live in the Models workspace."
                                    Style="{StaticResource HintText}"
                                    Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                    TextWrapping="Wrap" />
@@ -4416,7 +4416,7 @@
                                     <ComboBox x:Name="AutoConfigureStrategyPicker"
                                                Style="{StaticResource FormComboBox}"
                                                VerticalAlignment="Center"
-                                               ToolTip="Choose how aggressively AI Arena should spread models across roles.">
+                                               ToolTip="Choose how aggressively AI Arena - Lite should spread models across roles.">
                                         <ComboBoxItem Content="Auto" Tag="auto" IsSelected="True" />
                                         <ComboBoxItem Content="Conservative" Tag="conservative" />
                                         <ComboBoxItem Content="Balanced" Tag="balanced" />
@@ -4970,7 +4970,7 @@
                                   SelectionChanged="VoiceTtsVoicePicker_SelectionChanged"
                                   Style="{StaticResource FormComboBox}"
                                   AutomationProperties.Name="Voice TTS voice"
-                                  AutomationProperties.HelpText="Choose an installed Windows voice for AI Arena text to speech."
+                                  AutomationProperties.HelpText="Choose an installed Windows voice for AI Arena - Lite text to speech."
                                   Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
                                   ToolTip="Choose an installed Windows voice" />
                         <Grid Margin="{DynamicResource Arena.Gap.Stack}">
@@ -5065,7 +5065,7 @@
                                   DisplayMemberPath="Name"
                                   SelectedValuePath="Id"
                                   AutomationProperties.Name="Application theme"
-                                  AutomationProperties.HelpText="Choose an AI Arena color theme. System automatically follows the Windows high-contrast preference."
+                                  AutomationProperties.HelpText="Choose an AI Arena - Lite color theme. System automatically follows the Windows high-contrast preference."
                                   ToolTip="Choose an application theme"
                                   Margin="{DynamicResource Arena.Gap.Stack.After.Tight}" />
                         <TextBlock Text="System follows the Windows high-contrast preference. Other themes stay fixed until you change them."
@@ -5139,7 +5139,7 @@
                                   Checked="ControlPlaneCheckBox_Changed"
                                   Unchecked="ControlPlaneCheckBox_Changed"
                                   Margin="{DynamicResource Arena.Gap.Stack.After.Compact}"
-                                  AutomationProperties.Name="Toggle AI Arena control plane"
+                                  AutomationProperties.Name="Toggle AI Arena - Lite control plane"
                                   AutomationProperties.HelpText="Enable or disable authenticated local PowerShell automation. Enabled by default and independent of Allow debug controls."
                                   ToolTip="Enable authenticated local PowerShell control, state inspection, and event streaming" />
                         <TextBlock Text="Organized here with developer tools, but independent of Allow debug controls. Commands use a per-run token and the local named pipe; turn this off to stop PowerShell automation for this app instance."
@@ -5236,7 +5236,7 @@
 
                 <Expander Header="Help / About" Tag="&#xE897;" Style="{StaticResource SettingsExpander}" IsExpanded="False">
                     <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
-                        <TextBlock Text="AI Arena"
+                        <TextBlock Text="AI Arena - Lite: Adversarial LLM Lab"
                                    Foreground="{DynamicResource TextBrush}"
                                    FontSize="18"
                                    FontWeight="SemiBold" />
@@ -5247,12 +5247,12 @@
                                    Margin="0,2,0,10" />
                         <TextBlock Foreground="{DynamicResource TextBrush}"
                                    TextWrapping="Wrap"
-                                   Text="Native Windows adversarial multi-agent LLM lab for running, steering, observing, and diagnosing conversations between local or OpenAI-compatible language models.&#x0a;&#x0a;Author: Dominik Fiala&#x0a;Code: Codex 5.5&#x0a;&#x0a;Licence: Shareable No-Derivatives Software Licence 1.0&#x0a;Copyright © 2026 Dominik Fiala&#x0a;&#x0a;You may share AI Arena in its original, unmodified form. Modified redistribution requires written permission from the author." />
+                                   Text="Native Windows adversarial multi-agent LLM lab for running, steering, observing, and diagnosing conversations between local or OpenAI-compatible language models.&#x0a;&#x0a;Author: Dominik Fiala&#x0a;Code: Codex 5.5&#x0a;&#x0a;Licence: Shareable No-Derivatives Software Licence 1.0&#x0a;Copyright © 2026 Dominik Fiala&#x0a;&#x0a;You may share AI Arena - Lite in its original, unmodified form. Modified redistribution requires written permission from the author." />
                         <Button x:Name="OpenReleasesButton"
                                 Click="OpenReleasesButton_Click"
                                 Style="{StaticResource SecondaryButton}"
                                 Margin="0,12,0,0"
-                                ToolTip="Open the AI Arena GitHub releases page">
+                                ToolTip="Open the AI Arena - Lite GitHub releases page">
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                                 <TextBlock Text="&#xE774;" Style="{StaticResource CommandButtonIcon}" />
                                 <TextBlock Text="Open GitHub Releases" Style="{StaticResource CommandButtonLabel}" />
@@ -5262,7 +5262,7 @@
                                 Click="OpenUserGuideButton_Click"
                                 Style="{StaticResource SecondaryButton}"
                                 Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
-                                ToolTip="Open the AI Arena user guide">
+                                ToolTip="Open the AI Arena - Lite user guide">
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                                 <TextBlock Text="&#xE897;" Style="{StaticResource CommandButtonIcon}" />
                                 <TextBlock Text="Open User Guide" Style="{StaticResource CommandButtonLabel}" />

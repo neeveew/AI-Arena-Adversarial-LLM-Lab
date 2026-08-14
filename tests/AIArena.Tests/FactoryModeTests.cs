@@ -19,7 +19,7 @@ internal static class FactoryModeTests
 
         Require(prompt.Count == 2, "standard mode should retain the system-plus-user Arena prompt");
         Require(prompt[0].Role == "system", "standard mode should retain its system role");
-        Require(prompt[0].Content.Contains("You are participating in AI Arena as the selected agent.", StringComparison.Ordinal),
+        Require(prompt[0].Content.Contains("You are participating in AI Arena - Lite as the selected agent.", StringComparison.Ordinal),
             "standard mode lost the Arena system contract");
         Require(prompt[1].Role == "user", "standard mode should retain its user role");
         Require(prompt[1].Content.Contains("Latest Operator request:", StringComparison.Ordinal),
@@ -581,7 +581,7 @@ internal static class FactoryModeTests
 
             Require(result.Ok && client.Requests.Single().Count == 2
                 && client.Requests[0][0].Role == "system"
-                && client.Requests[0][0].Content.Contains("AI Arena", StringComparison.Ordinal),
+                && client.Requests[0][0].Content.Contains("AI Arena - Lite", StringComparison.Ordinal),
                 "an unmarked legacy response must retain the legacy Arena contract instead of inheriting the current Factory toggle");
             var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;
             var replacement = loaded.Engine.Messages.Single(message => message.Turn == 2 && message.SpeakerId == "alpha");

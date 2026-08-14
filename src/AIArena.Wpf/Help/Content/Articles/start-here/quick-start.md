@@ -2,7 +2,7 @@ This path proves the complete chain from provider connection to one successful A
 
 ## 1. Start a compatible provider
 
-Start LM Studio, Ollama, your own `llama-server`, or another OpenAI-compatible service. AI Arena connects to the service; it does not silently start or replace a user-owned provider process.
+Start LM Studio, Ollama, your own `llama-server`, or another OpenAI-compatible service. AI Arena - Lite connects to the service; it does not silently start or replace a user-owned provider process.
 
 ## 2. Configure and test the connection
 

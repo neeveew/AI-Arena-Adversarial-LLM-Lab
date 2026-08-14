@@ -1,4 +1,4 @@
-Factory mode is for inspecting model behavior without AI Arena's scenario, persona, relationship, memory, tool, or narrator guidance. Provider selection, model routing, response tone, sampling, timeout, output limit, and context configuration still apply.
+Factory mode is for inspecting model behavior without AI Arena - Lite's scenario, persona, relationship, memory, tool, or narrator guidance. Provider selection, model routing, response tone, sampling, timeout, output limit, and context configuration still apply.
 
 ## Enable Factory mode
 
@@ -34,7 +34,7 @@ System and error events remain visible in the app for diagnosis but do not enter
 
 ## Context behavior
 
-Factory ignores the model's Arena Strict/Rolling 80 history setting. If retained whole public entries exceed provider context, AI Arena surfaces the provider rejection and pauses Auto Chat. It does not summarize, trim, switch models, or add a synthetic prompt.
+Factory ignores the model's Arena Strict/Rolling 80 history setting. If retained whole public entries exceed provider context, AI Arena - Lite surfaces the provider rejection and pauses Auto Chat. It does not summarize, trim, switch models, or add a synthetic prompt.
 
 Switching Arena/Factory mode does not replace the anchored root. Resetting or starting/importing a clean session requires a new public Operator root. Forking preserves the routing policy and the applicable persisted state.
 

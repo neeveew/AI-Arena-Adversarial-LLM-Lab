@@ -682,7 +682,7 @@ internal sealed partial class AgentImpactExplorerCoordinator : IDisposable
     {
         var lines = new List<string>
         {
-            "AI Arena Impact Explorer",
+            "AI Arena - Lite Impact Explorer",
             $"Schema: {snapshot.Schema}",
             $"Index availability: {snapshot.Availability}",
             $"Target: {targetLabel}",

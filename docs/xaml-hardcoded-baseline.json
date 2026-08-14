@@ -7,9 +7,9 @@
     "Margin": 181,
     "Padding": 129,
     "CornerRadius": 48,
-    "FontSize": 110
+    "FontSize": 109
   },
-  "total": 468,
+  "total": 467,
   "files": {
     "src/AIArena.Wpf/Shell/Dialogs/AiChoicePromptDialog.xaml": {
       "Margin": {
@@ -294,8 +294,7 @@
       },
       "FontSize": {
         "11": 2,
-        "12": 8,
-        "17": 1
+        "12": 8
       }
     },
     "src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml": {

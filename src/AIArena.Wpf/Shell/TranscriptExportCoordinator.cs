@@ -104,7 +104,7 @@ internal sealed class TranscriptExportCoordinator
         {
             Title = "Export transcript",
             Filter = "Markdown transcript (*.md)|*.md|Text transcript (*.txt)|*.txt",
-            FileName = $"AI Arena - {SafeFilePart(session.Id)} - transcript.md",
+            FileName = $"AI Arena - Lite - {SafeFilePart(session.Id)} - transcript.md",
             AddExtension = true,
             DefaultExt = ".md"
         };
@@ -193,7 +193,7 @@ internal sealed class TranscriptExportCoordinator
     internal static string BuildTranscriptExport(string sessionId, IReadOnlyList<TranscriptMessage> messages)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"# AI Arena Transcript - {sessionId}");
+        builder.AppendLine($"# AI Arena - Lite Transcript - {sessionId}");
         builder.AppendLine();
         builder.AppendLine($"Exported: {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz}");
         builder.AppendLine($"Visible messages: {messages.Count}");

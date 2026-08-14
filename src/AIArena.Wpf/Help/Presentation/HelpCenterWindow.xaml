@@ -5,7 +5,7 @@
         xmlns:help="clr-namespace:AIArena.Wpf.Help"
         xmlns:p="clr-namespace:AIArena.Wpf.Help.Presentation"
         xmlns:media="clr-namespace:System.Windows.Media;assembly=PresentationCore"
-        Title="AI Arena Help Center"
+        Title="AI Arena - Lite - Help Center"
         Width="1240"
         Height="820"
         MinWidth="720"
@@ -20,8 +20,8 @@
         TextOptions.TextFormattingMode="Display"
         TextOptions.TextRenderingMode="ClearType"
         AutomationProperties.AutomationId="HelpCenterWindow"
-        AutomationProperties.Name="AI Arena Help Center"
-        AutomationProperties.HelpText="Search or browse task-based guidance for AI Arena.">
+        AutomationProperties.Name="AI Arena - Lite Help Center"
+        AutomationProperties.HelpText="Search or browse task-based guidance for AI Arena - Lite.">
     <Window.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
@@ -240,7 +240,7 @@
 
                     <StackPanel x:Name="BrandBlock" Grid.Column="4" Margin="{DynamicResource Arena.Help.BrandMargin}" VerticalAlignment="Center">
                         <TextBlock Text="Help Center" Style="{StaticResource Arena.Text.Heading}" />
-                        <TextBlock Text="AI Arena  •  Shift+F1 for contextual help"
+                        <TextBlock Text="AI Arena - Lite  •  Shift+F1 for contextual help"
                                    Style="{StaticResource Arena.Text.Caption}" />
                     </StackPanel>
 
@@ -399,7 +399,7 @@
                                                 MinHeight="{DynamicResource Arena.Help.Target}"
                                                 Margin="{DynamicResource Arena.Help.ArticleActionMargin}"
                                                 AutomationProperties.Name="{Binding Label}"
-                                                AutomationProperties.HelpText="Open this feature in AI Arena." />
+                                                AutomationProperties.HelpText="Open this feature in AI Arena - Lite." />
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>

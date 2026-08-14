@@ -1,4 +1,4 @@
-AI Arena reports generation failures as typed outcomes whenever evidence supports one. Read the transcript card and Status Center before acting; different failures require different recovery.
+AI Arena - Lite reports generation failures as typed outcomes whenever evidence supports one. Read the transcript card and Status Center before acting; different failures require different recovery.
 
 ## Recovery decision table
 

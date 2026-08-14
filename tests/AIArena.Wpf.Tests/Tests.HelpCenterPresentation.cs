@@ -27,6 +27,10 @@ internal static partial class Program
     private static void HelpCenterPresentationHostsAccessibleTaskAndSearchContracts()
     {
         var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Help/Presentation/HelpCenterWindow.xaml");
+        Require(xaml.Contains("Title=\"AI Arena - Lite - Help Center\"", StringComparison.Ordinal)
+                && xaml.Contains("AutomationProperties.Name=\"AI Arena - Lite Help Center\"", StringComparison.Ordinal)
+                && xaml.Contains("AI Arena - Lite  •  Shift+F1 for contextual help", StringComparison.Ordinal),
+            "Help Center shell and accessibility identity should use the Lite product name");
         Require(xaml.Contains("AutomationProperties.AutomationId=\"HelpCenterSearchBox\"", StringComparison.Ordinal), "search should expose a stable UIA ID");
         Require(xaml.Contains("AutomationProperties.LiveSetting=\"Polite\"", StringComparison.Ordinal), "article and result changes should be politely announced");
         Require(xaml.Contains("HelpCenterHomeTasks", StringComparison.Ordinal), "the home page should expose task cards as one named landmark");

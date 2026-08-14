@@ -695,7 +695,7 @@ static void ScenarioWorkflowPreservesGenerationHistorySelection()
     Require(ScenarioWorkflowCoordinator.GenerationPresetReceiptText("geopolitical_risk_desk").Contains("Geopolitical Risk Desk", StringComparison.Ordinal), "current-topic preset receipt should include the stable label");
     Require(ScenarioWorkflowCoordinator.GenerationPresetDetails("missing").Key == "manual", "unknown preset details should fall back to manual");
     Require(ScenarioWorkflowCoordinator.GenerationPresetTooltip(ScenarioWorkflowCoordinator.GenerationPresetDetails("template_forge")).Contains("Best for:", StringComparison.Ordinal), "preset tooltip should include best-for guidance");
-    Require(ScenarioWorkflowCoordinator.GenerationPresetReceiptText("black_box_audit").Contains("AI Arena preset: Black-Box Audit", StringComparison.Ordinal), "preset receipt should include a stable title");
+    Require(ScenarioWorkflowCoordinator.GenerationPresetReceiptText("black_box_audit").Contains("AI Arena - Lite preset: Black-Box Audit", StringComparison.Ordinal), "preset receipt should include the Lite product title");
     Require(ScenarioWorkflowCoordinator.GenerationPresetCatalogSummary().Contains("preset(s) across", StringComparison.Ordinal), "preset catalog summary should include category counts");
     Require(ScenarioWorkflowCoordinator.GenerationPresetMatchLabels("benchmark_duel", "technical", "sharp", "grounded").Contains("Model Duel"), "preset matcher should identify exact benchmark recipes");
     Require(ScenarioWorkflowCoordinator.GenerationPresetMatchSummary("balanced", "technical", "normal", "grounded") == "Preset match: custom recipe.", "preset matcher should identify custom recipes");

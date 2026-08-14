@@ -2,7 +2,7 @@
 
 Updated: 2026-07-15
 
-This note captures outside product patterns worth borrowing for AI Arena. It is intentionally implementation-facing: each idea should map to a concrete UI or workflow improvement.
+This note captures outside product patterns worth borrowing for AI Arena - Lite. It is intentionally implementation-facing: each idea should map to a concrete UI or workflow improvement.
 
 ## 2026-07-14 Research Decision
 
@@ -15,7 +15,7 @@ Current primary-source guidance converges on a durable, inspectable run model ra
 - User demand is visible in OpenHands' Ask/Plan mode request, where the desired handoff preserves the planning conversation and a durable plan before execution: https://github.com/All-Hands-AI/OpenHands/issues/10433
 - Real failure reports show why checkpoint correctness matters: canceled streamed state can disappear before the next checkpoint, and nested approval workflows can lose intermediate results across resume boundaries: https://github.com/langchain-ai/langgraph/issues/5672 and https://github.com/langchain-ai/langgraph/issues/6792
 
-Decision for AI Arena:
+Decision for AI Arena - Lite:
 
 1. Build a visible runbook/task graph over the existing Agent stages, command approvals, work briefs, receipts, and checkpoints.
 2. Give every step a stable ID, owner, status, dependency list, evidence/receipt link, and resume state.
@@ -85,55 +85,55 @@ The next implementation applies the decision directly: Agent now maintains a wor
 
 1. Visual team/workflow builder
    - AutoGen Studio emphasizes building teams, agents, tools, models, and stop conditions through visual/declarative controls.
-   - AI Arena fit: extend Match Setup into a compact "team graph" view showing agents, narrator, relationship pressure, allowed tools, and termination rules.
+   - AI Arena - Lite fit: extend Match Setup into a compact "team graph" view showing agents, narrator, relationship pressure, allowed tools, and termination rules.
 
 2. Playground run control
    - Agent playgrounds make pause, stop, replay, and message flow visible during a run.
-   - AI Arena fit: keep investing in replay/new-run history, add a run timeline with pause points, and expose "why this agent spoke next" metadata.
+   - AI Arena - Lite fit: keep investing in replay/new-run history, add a run timeline with pause points, and expose "why this agent spoke next" metadata.
 
 3. Roles, tasks, and process modes
    - CrewAI centers roles, tasks, and sequential/hierarchical/hybrid processes.
-   - AI Arena fit: add Match Setup process presets such as tribunal, incident command, red-team gauntlet, consensus trap, and chaos lab with explicit role/task cards.
+   - AI Arena - Lite fit: add Match Setup process presets such as tribunal, incident command, red-team gauntlet, consensus trap, and chaos lab with explicit role/task cards.
 
 4. Human-in-the-loop checkpoints
    - OpenAI Agents SDK and CrewAI both treat human review as a first-class workflow control.
-   - AI Arena fit: add operator checkpoint cards that can pause before tool use, final verdicts, model fallback, or high-risk consensus.
+   - AI Arena - Lite fit: add operator checkpoint cards that can pause before tool use, final verdicts, model fallback, or high-risk consensus.
 
 5. Observability and traces
    - Agent systems increasingly expose traces across model calls, tool calls, handoffs, guardrails, and audio.
-   - AI Arena fit: upgrade existing telemetry into a turn trace inspector showing prompt window, selected model, latency, tokens, tool calls, narrator/TTS status, and fallback path.
+   - AI Arena - Lite fit: upgrade existing telemetry into a turn trace inspector showing prompt window, selected model, latency, tokens, tool calls, narrator/TTS status, and fallback path.
 
 6. Memory and knowledge surfaces
    - CrewAI and LangGraph-style apps treat memory/state as visible workflow ingredients.
-   - AI Arena fit: make private notes, pinned notes, narrator context, and match memory inspectable from Match Setup and transcript side panels.
+   - AI Arena - Lite fit: make private notes, pinned notes, narrator context, and match memory inspectable from Match Setup and transcript side panels.
 
 7. Exportable/replayable configurations
    - AutoGen Studio exports teams and configurations; CrewAI supports code-first and visual paths.
-   - AI Arena fit: export a match setup as JSON/Markdown, import shared arena presets, and show a diff between current match and generated history.
+   - AI Arena - Lite fit: export a match setup as JSON/Markdown, import shared arena presets, and show a diff between current match and generated history.
 
 8. Voice-first agent workflow
    - OpenAI Agents SDK explicitly treats voice workflows and speech traces as part of agent apps.
-   - AI Arena fit: start with local narrator TTS, then add "speak selected card," per-role voice styles, and a speech activity indicator in the 3D arena.
+   - AI Arena - Lite fit: start with local narrator TTS, then add "speak selected card," per-role voice styles, and a speech activity indicator in the 3D arena.
 
 9. Blind battle and benchmark modes
    - Arena-style tools make comparison engaging by anonymizing competitors, collecting preferences, and revealing identities after a decision.
-   - AI Arena fit: add benchmark-oriented presets and role packs that keep rubrics, judging criteria, preference bias, latency/cost, and tie-breaks visible.
+   - AI Arena - Lite fit: add benchmark-oriented presets and role packs that keep rubrics, judging criteria, preference bias, latency/cost, and tie-breaks visible.
 
 10. Checkpoint and interrupt language
    - LangGraph treats pause/resume checkpoints as durable workflow state rather than ad-hoc UI pauses.
-   - AI Arena fit: make operator checkpoints, replay forks, and "new run from setup" feel like explicit workflow controls with visible state.
+   - AI Arena - Lite fit: make operator checkpoints, replay forks, and "new run from setup" feel like explicit workflow controls with visible state.
 
 11. Trace and observability receipts
    - Agent tooling increasingly exposes model calls, tool calls, handoffs, retries, guardrails, cost, latency, and quality checks.
-   - AI Arena fit: keep expanding diagnostics into trace receipts, run constraints, and setup readiness rather than hiding quality signals after a run.
+   - AI Arena - Lite fit: keep expanding diagnostics into trace receipts, run constraints, and setup readiness rather than hiding quality signals after a run.
 
 12. Diegetic attention guidance in 3D conversation spaces
    - Social VR and conversational UI patterns make "who has the floor?" visible through gaze, highlighting, spatial focus, and concise status.
-   - AI Arena fit: make AI World agents look toward the active speaker, strengthen speaker floor/halo cues, and add world status that names the speaker and listeners.
+   - AI Arena - Lite fit: make AI World agents look toward the active speaker, strengthen speaker floor/halo cues, and add world status that names the speaker and listeners.
 
 13. Native 3D scenes with simple, readable geometry
    - WPF Viewport3D is a practical native scene surface when geometry stays bounded and materials/meshes are reused.
-   - AI Arena fit: invest in frozen/reused box-based scenery, lighting contrast, camera smoothing, and overlays before introducing heavier model pipelines.
+   - AI Arena - Lite fit: invest in frozen/reused box-based scenery, lighting contrast, camera smoothing, and overlays before introducing heavier model pipelines.
 
 ## Applied In 0.4.18-beta
 
@@ -608,14 +608,14 @@ Applied conclusions:
 
 ## 2026-07-15 Agent Ecosystem and Control-Surface Audit
 
-This batch separates direct demand evidence from product-direction inference. Vendor launches and protocol adoption show where the ecosystem is moving, but they do not prove that AI Arena users requested every feature below.
+This batch separates direct demand evidence from product-direction inference. Vendor launches and protocol adoption show where the ecosystem is moving, but they do not prove that AI Arena - Lite users requested every feature below.
 
 ### Primary-source findings and evidence classification
 
 Direct user-demand or behavioral signals:
 
 - An OpenHands user explicitly requested a true Ask/Plan mode followed by an Execute mode, including a read-only planning boundary: https://github.com/All-Hands-AI/OpenHands/issues/10433. This is a direct feature-demand signal, not a representative survey.
-- Anthropic reports that users approve about 93% of Claude Code permission prompts and presents sandboxing and auto mode as ways to reduce repetitive approval fatigue while retaining bounded controls: https://www.anthropic.com/engineering/claude-code-sandboxing and https://www.anthropic.com/engineering/claude-code-auto-mode. This is vendor-reported product telemetry and behavior, not AI Arena-specific feedback.
+- Anthropic reports that users approve about 93% of Claude Code permission prompts and presents sandboxing and auto mode as ways to reduce repetitive approval fatigue while retaining bounded controls: https://www.anthropic.com/engineering/claude-code-sandboxing and https://www.anthropic.com/engineering/claude-code-auto-mode. This is vendor-reported product telemetry and behavior, not AI Arena - Lite-specific feedback.
 
 Official product, engineering, and standards signals used for roadmap inference:
 
@@ -627,11 +627,11 @@ Official product, engineering, and standards signals used for roadmap inference:
 - MCP Tasks, A2A 1.0, and OpenTelemetry semantic conventions point toward durable jobs, interoperable remote agents, and standard telemetry: https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks, https://github.com/a2aproject/A2A/releases, and https://github.com/open-telemetry/semantic-conventions/releases.
 - Anthropic's long-running-agent and context-engineering guidance supports fresh-context evaluation, explicit progress artifacts, and deliberate context compaction: https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents and https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents.
 
-The items in the second group are product inferences for AI Arena. They are strong interoperability and architecture signals, but they should be validated against local usage before being treated as user-demand rankings.
+The items in the second group are product inferences for AI Arena - Lite. They are strong interoperability and architecture signals, but they should be validated against local usage before being treated as user-demand rankings.
 
 ### Current coverage and gaps
 
-| Area | Current AI Arena coverage | Material gap |
+| Area | Current AI Arena - Lite coverage | Material gap |
 | --- | --- | --- |
 | Agent execution | Durable runbook state, checkpoints, command preview/approval, receipts, bounded autonomy, workspace validation, history, and PowerShell state/control | No enforced read-only Plan mode, OS sandbox, provider-neutral structured tool-call loop, or general tool registry |
 | Collaboration | Team Draft, Critique, and Red Team workflows with deterministic review evidence | Predominantly fixed/sequential orchestration; no adaptive DAG, parallel worker pool, handoff graph, or independent evaluator agent |
@@ -688,5 +688,5 @@ Applied conclusions:
 
 - AI Lab needed a safe branch primitive distinct from clean-session creation and in-place transcript retry. Fork Current Match now clones the authoritative complete persisted state, never rewrites its source, records direct-parent lineage, and creates an independently mutable session.
 - Branching is a shared application workflow, not a UI-only shortcut. The Saved State button and `session.fork`/`New-AIArenaSessionFork` use the same exclusive mutation, audit, selection, and secret-free receipt path.
-- Honest scope matters. This increment forks only the current persisted snapshot. It does not advertise arbitrary historical-turn time travel because AI Arena does not yet persist a complete snapshot of private notes, attachments, configuration, and other causal state at every turn.
+- Honest scope matters. This increment forks only the current persisted snapshot. It does not advertise arbitrary historical-turn time travel because AI Arena - Lite does not yet persist a complete snapshot of private notes, attachments, configuration, and other causal state at every turn.
 - Collision-safe create-new semantics, parent navigation, busy refusal, source immutability, and restart-persisted lineage are required product behavior rather than incidental implementation details.

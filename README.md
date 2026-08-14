@@ -1,10 +1,14 @@
-# AI Arena: Adversarial LLM Lab
+<p align="center">
+  <img src="docs/assets/ai-arena-lite-emblem.png" width="280" alt="AI Arena - Lite green emblem">
+</p>
+
+# AI Arena - Lite: Adversarial LLM Lab
 
 A native Windows lab for running adversarial multi-agent conversations and collaborative AI team chats between local or OpenAI-compatible LLMs.
 
-[Download 0.4.134-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.134-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
+[Download 0.4.135-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.135-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
 
-AI Arena is not a chatbot and not just a model comparison board. It is a local multi-agent LLM lab where agents can debate, collaborate, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
+AI Arena - Lite is not a chatbot and not just a model comparison board. It is a local multi-agent LLM lab where agents can debate, collaborate, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
 
 The left rail exposes three first-class workspaces by default:
 
@@ -18,19 +22,13 @@ You create the cast, assign models, personas, voices, and pressure profiles, inj
 
 It is built for local experimentation with model behavior, multi-agent debate, AI collaboration, red-team style reasoning, prompt/cast design, and AI discourse analysis.
 
-## Screenshot
-
-![AI Collaborate](docs/assets/ai-collaborate.png)
-
-AI Collaborate: a wide collaborative answer surface, persistent recent collaborations, configurable rounds, and a visible team setup panel.
-
 ## Why This Exists
 
-Most LLM tools are designed to produce a final answer. AI Arena is designed to observe the process.
+Most LLM tools are designed to produce a final answer. AI Arena - Lite is designed to observe the process.
 
 The interesting part is often not the final response, but what happens before it: disagreement, role drift, narrative collapse, unsupported certainty, evidence grounding, consensus formation, and operator-induced correction.
 
-AI Arena makes those dynamics visible. The friction strip, narrator layer, memory notes, timeline, and performance inspector help you watch agents form or resist consensus under pressure.
+AI Arena - Lite makes those dynamics visible. The friction strip, narrator layer, memory notes, timeline, and performance inspector help you watch agents form or resist consensus under pressure.
 
 ## Key Features
 
@@ -53,7 +51,7 @@ AI Arena makes those dynamics visible. The friction strip, narrator layer, memor
 - Operator quick intervention chips for evidence checks, consensus breaking, private role resets, narrator judgments, repairs, scope gates, handoff notes, and next-step framing.
 - Per-agent personas, model assignments, voice styles, pressure profiles, and absurd persona-mixer constraints.
 - Optional debug voice/style cue chips and voice drift enforcement for constrained agents.
-- OpenAI-compatible provider support, including LM Studio, plus a first-class `llamacpp_native` mode for a user-installed, user-owned `llama-server`. AI Arena sends chat through `/v1/chat/completions`; it does not bundle, download, start, stop, replace, or silently reconfigure llama.cpp.
+- OpenAI-compatible provider support, including LM Studio, plus a first-class `llamacpp_native` mode for a user-installed, user-owned `llama-server`. AI Arena - Lite sends chat through `/v1/chat/completions`; it does not bundle, download, start, stop, replace, or silently reconfigure llama.cpp.
 - Capability-detected llama.cpp runtime inspection for optional `/health`, `/props`, `/slots`, router `/models`, and router model load/unload endpoints. Missing measurements stay unavailable, and model file size or parameter count is never presented as measured RAM or VRAM use.
 - Conservative llama.cpp transient handling: bounded retries are limited to 429, 503, loading, busy, unavailable, no-slot, or queue-full responses rejected before acceptance; an accepted stream is never replayed.
 - AI Lab right-rail **Model Comparison & QA** for capturing a baseline, comparing another model against the same model-neutral Match Setup and, for Factory runs, the same privacy-safe public-group context fingerprint, copying exact secret-free replay JSON and aggregate-only evidence, and reporting runtime QA as ready, partial, or blocked with unavailable evidence called out explicitly.
@@ -117,20 +115,20 @@ Model execution depends on the provider you connect to.
 
 ## Provider Setup
 
-AI Arena talks to OpenAI-compatible providers.
+AI Arena - Lite talks to OpenAI-compatible providers.
 
 For LM Studio:
 
 1. Open LM Studio.
 2. Load a model.
 3. Start the local server.
-4. Use this base URL in AI Arena:
+4. Use this base URL in AI Arena - Lite:
 
    ```text
    http://127.0.0.1:1234/v1
    ```
 
-If the provider is offline, AI Arena can still open sessions and display local data, but model turns will not run until the provider is reachable.
+If the provider is offline, AI Arena - Lite can still open sessions and display local data, but model turns will not run until the provider is reachable.
 
 For llama.cpp, install and start `llama-server` yourself, then choose the **llama.cpp** preset or `llamacpp_native` connection mode and use its OpenAI-compatible base URL, commonly:
 
@@ -138,7 +136,7 @@ For llama.cpp, install and start `llama-server` yourself, then choose the **llam
 http://127.0.0.1:8080/v1
 ```
 
-AI Arena uses `/v1/chat/completions` for model turns. Under **Settings -> Provider connection -> Local model tools**, **Inspect** and **Reconnect** probe the configured process without taking ownership of it. `/health`, `/props`, `/slots`, and router `/models` vary by llama.cpp build and mode, so unsupported evidence remains visibly unavailable. Preload and Unload are enabled only when router lifecycle support is detected. Context and GPU-layer values are treated as server startup evidence, and model file size is labelled as file size rather than inferred RAM or VRAM consumption.
+AI Arena - Lite uses `/v1/chat/completions` for model turns. Under **Settings -> Provider connection -> Local model tools**, **Inspect** and **Reconnect** probe the configured process without taking ownership of it. `/health`, `/props`, `/slots`, and router `/models` vary by llama.cpp build and mode, so unsupported evidence remains visibly unavailable. Preload and Unload are enabled only when router lifecycle support is detected. Context and GPU-layer values are treated as server startup evidence, and model file size is labelled as file size rather than inferred RAM or VRAM consumption.
 
 ## PowerShell Control
 
@@ -158,7 +156,7 @@ Test-AIArenaProvider
 
 Provider tokens use `SecureString`: `$token = Read-Host "Provider token" -AsSecureString`, then `Set-AIArenaProviderConfig -ApiToken $token`. Responses expose only whether a token is configured. `-DefaultForUnassignedAgentsEnabled $false` leaves the shared provider model configured but prevents unassigned Arena roles from silently falling back to it.
 
-AI Arena can also capture its own WPF window:
+AI Arena - Lite can also capture its own WPF window:
 
 ```powershell
 $capture = Save-AIArenaScreenshot
@@ -243,6 +241,6 @@ The generated dependency map lives at `docs/DEPENDENCY_INDEX.md`. Rebuild it wit
 
 ## Licence
 
-AI Arena is distributed under the Shareable No-Derivatives Software Licence 1.0.
+AI Arena - Lite is distributed under the Shareable No-Derivatives Software Licence 1.0.
 
-You may share AI Arena freely in its original, unmodified form. You may use it privately. You may not distribute edited, modified, forked, patched, rebuilt, or derivative versions without written permission from Dominik Fiala.
+You may share AI Arena - Lite freely in its original, unmodified form. You may use it privately. You may not distribute edited, modified, forked, patched, rebuilt, or derivative versions without written permission from Dominik Fiala.

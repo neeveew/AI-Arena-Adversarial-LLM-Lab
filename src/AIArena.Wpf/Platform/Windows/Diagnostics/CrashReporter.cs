@@ -30,7 +30,7 @@ internal static class CrashReporter
             var path = UniquePath(directory, DateTime.Now);
 
             var report = new StringBuilder()
-                .AppendLine($"AI Arena {Version()}")
+                .AppendLine($"AI Arena - Lite {Version()}")
                 .AppendLine($"When:   {DateTimeOffset.Now:O}")
                 .AppendLine($"Source: {source}")
                 .AppendLine($"OS:     {Environment.OSVersion} ({(Environment.Is64BitProcess ? "x64" : "x86")})")

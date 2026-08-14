@@ -97,7 +97,7 @@ static void OperatorTurnCoordinatorDisablesInputDuringBusyWork()
             Require(AutomationProperties.GetItemStatus(privateRouteButton) == "not selected", "private route should expose unselected automation state");
             Require(meterText.Text == "0 chars / ~0 tok | Public transcript", "operator meter should include the public route");
             Require(routeHintText.Text.Contains("Visible transcript turn", StringComparison.Ordinal), "public route hint should describe visibility");
-            Require(meterText.ToolTip?.ToString()?.Contains("AI Arena Operator Draft", StringComparison.Ordinal) == true, "operator meter should expose a receipt tooltip");
+            Require(meterText.ToolTip?.ToString()?.Contains("AI Arena - Lite Operator Draft", StringComparison.Ordinal) == true, "operator meter should expose a branded receipt tooltip");
             Require(AutomationProperties.GetHelpText(meterText).Contains("Public transcript", StringComparison.Ordinal), "operator meter should expose route automation help");
             Require(quickInterventionHintText.Text.Contains("Set Stakes -> Public", StringComparison.Ordinal), "quick intervention hint should include route labels");
             Require(quickButtons[0].ToolTip?.ToString()?.Contains("Intervention: Set Stakes", StringComparison.Ordinal) == true, "quick intervention button should expose receipt tooltip");

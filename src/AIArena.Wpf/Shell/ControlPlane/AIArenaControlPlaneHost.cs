@@ -343,7 +343,7 @@ internal sealed class AIArenaControlPlaneHost : IDisposable
         await WriteLineAsync(
             pipe,
             AIArenaControlPlaneProtocol.Serialize(
-                AIArenaControlResponse.Error(request, "busy", "AI Arena control plane has too many active clients.")),
+                AIArenaControlResponse.Error(request, "busy", "AI Arena - Lite control plane has too many active clients.")),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -420,7 +420,7 @@ internal sealed class AIArenaControlPlaneHost : IDisposable
         using var subscription = eventSource.Subscribe(queue.Enqueue);
         await WriteLineAsync(
             stream,
-            new AIArenaControlEvent("events.connected", DateTimeOffset.Now, "AI Arena event stream connected.").ToJsonLine(),
+            new AIArenaControlEvent("events.connected", DateTimeOffset.Now, "AI Arena - Lite event stream connected.").ToJsonLine(),
             cancellationToken).ConfigureAwait(false);
         while (!cancellationToken.IsCancellationRequested)
         {

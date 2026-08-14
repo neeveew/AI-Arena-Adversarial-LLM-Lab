@@ -1,10 +1,10 @@
-# AI Arena Help Center design and coverage contract
+# AI Arena - Lite Help Center design and coverage contract
 
 Status: implementation contract for the User Guide overhaul.
 
 ## Outcome
 
-The in-app User Guide becomes a modeless, offline Help Center. It is a task-oriented companion to AI Arena rather than a second settings screen or a lightly styled Markdown viewer. A reader must be able to keep it open, follow a procedure in the app, return to the same article and scroll position, and use the external `USER_GUIDE.md` as the same content in a portable form.
+The in-app User Guide becomes a modeless, offline Help Center. It is a task-oriented companion to AI Arena - Lite rather than a second settings screen or a lightly styled Markdown viewer. A reader must be able to keep it open, follow a procedure in the app, return to the same article and scroll position, and use the external `USER_GUIDE.md` as the same content in a portable form.
 
 The Help Center must never change provider configuration, model residency, routing, or session data merely because an article or help link was opened. Explicit article actions may only navigate to and focus a known app surface.
 

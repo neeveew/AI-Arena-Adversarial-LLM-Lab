@@ -121,7 +121,7 @@ public partial class MainWindow
         }
 
         _lastNavigationView = view;
-        _controlPlaneEvents.Publish("navigation.changed", "AI Arena view changed.", new { view });
+        _controlPlaneEvents.Publish("navigation.changed", "AI Arena - Lite view changed.", new { view });
     }
 
     private void PublishMatchSetupOverlayChanged(string message)
@@ -188,7 +188,7 @@ public partial class MainWindow
         }
 
         _lastThemeId = themeId;
-        _controlPlaneEvents.Publish("navigation.theme.changed", "AI Arena theme changed.", new { theme = themeId });
+        _controlPlaneEvents.Publish("navigation.theme.changed", "AI Arena - Lite theme changed.", new { theme = themeId });
     }
 
     private void PublishViewPresetChanged(string preset)

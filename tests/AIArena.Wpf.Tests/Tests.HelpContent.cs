@@ -22,6 +22,11 @@ internal static partial class Program
             && article.IntroducedVersion.Length > 0
             && article.ReviewedVersion.Length > 0), "help articles should retain canonical routes, content, and freshness metadata");
         Require(catalog.Journeys.All(journey => journey.ArticleIds.Contains(journey.StartArticleId, StringComparer.OrdinalIgnoreCase)), "each help journey should include its declared start article");
+        var home = catalog.FindArticle("home");
+        Require(home is not null
+            && home.Summary.Contains("AI Arena - Lite", StringComparison.Ordinal)
+            && home.Markdown.Contains("AI Arena - Lite: Adversarial LLM Lab", StringComparison.Ordinal),
+            "Help home metadata and content should identify the current Lite product");
     }
 
     static void HelpContentSearchRanksDeterministicallyWithHighlights()
@@ -235,6 +240,7 @@ internal static partial class Program
     static void HelpReleaseGateRequiresFreshPackagedContent()
     {
         var sanityScript = ReadWorkspaceFile("scripts/wpf-release-sanity.ps1");
+        var generatorScript = ReadWorkspaceFile("scripts/user-guide-content.ps1");
         var project = ReadWorkspaceFile("src/AIArena.Wpf/AIArena.Wpf.csproj");
         Require(sanityScript.Contains("scripts/user-guide-content.ps1", StringComparison.Ordinal)
             && sanityScript.Contains("& $userGuideContentScript -Check", StringComparison.Ordinal), "release sanity should run the canonical User Guide freshness validator");
@@ -246,6 +252,12 @@ internal static partial class Program
             && project.Contains("Help\\Content\\**\\*.md", StringComparison.Ordinal)
             && project.Contains("Help\\Content\\assets\\**\\*.png", StringComparison.Ordinal)
             && project.Contains("CopyToPublishDirectory=\"PreserveNewest\"", StringComparison.Ordinal), "WPF publish should carry the offline manifest, articles, and supported local image assets");
+        Require(generatorScript.Contains("# AI Arena - Lite Help Center", StringComparison.Ordinal)
+            && generatorScript.Contains("AI Arena - Lite: Adversarial LLM Lab is a native Windows app", StringComparison.Ordinal),
+            "portable Help generation should expose the current Lite product without renaming technical routes");
+        Require(sanityScript.Contains("User guide does not identify the current Lite product and Help Center", StringComparison.Ordinal)
+            && sanityScript.Contains("README does not expose the current Lite product name and emblem masthead", StringComparison.Ordinal),
+            "release sanity should reject stale Help and README branding");
     }
 
     static void HelpDeepLinksRejectUnsafeTargets()

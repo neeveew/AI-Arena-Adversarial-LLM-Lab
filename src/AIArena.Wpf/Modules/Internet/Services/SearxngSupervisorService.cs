@@ -381,7 +381,7 @@ public sealed class SearxngSupervisorService : IDisposable
             timeout.CancelAfter(DiagnosticSearchTimeout);
             var builder = new UriBuilder(new Uri(NormalizeBaseUri(baseUri), "search"))
             {
-                Query = $"q={Uri.EscapeDataString("AI Arena internet diagnostic")}&format=json"
+                Query = $"q={Uri.EscapeDataString("AI Arena - Lite internet diagnostic")}&format=json"
             };
             using var request = new HttpRequestMessage(HttpMethod.Get, builder.Uri);
             using var response = await httpClient.SendAsync(

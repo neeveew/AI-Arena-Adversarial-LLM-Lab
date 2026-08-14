@@ -1,6 +1,6 @@
-# AI Arena Handoff Notes
+# AI Arena - Lite Handoff Notes
 
-AI Arena is a .NET 10 WPF desktop app for adversarial multi-agent LLM lab sessions, local-provider workflows, an Agent software-building workspace, AI World, and AI Collaborate. The solution is `AI Arena - WPF.sln`.
+AI Arena - Lite: Adversarial LLM Lab is a .NET 10 WPF desktop app for adversarial multi-agent LLM lab sessions, local-provider workflows, an Agent software-building workspace, AI World, and AI Collaborate. The compatibility-stable solution name is `AI Arena - WPF.sln`.
 
 The codebase is intentionally coordinator-heavy imperative WPF code-behind rather than MVVM. Prefer bounded coordinator/helper changes that match the existing shell structure unless a dedicated refactor pass is planned.
 

@@ -138,8 +138,8 @@ public partial class App : Application
                 ? "A crash report could not be written."
                 : $"A report was saved to:{Environment.NewLine}{reportPath}";
             MessageBox.Show(
-                $"AI Arena has to close.{Environment.NewLine}{Environment.NewLine}{exception.Message}{Environment.NewLine}{Environment.NewLine}{where}",
-                "AI Arena",
+                $"AI Arena - Lite has to close.{Environment.NewLine}{Environment.NewLine}{exception.Message}{Environment.NewLine}{Environment.NewLine}{where}",
+                "AI Arena - Lite",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }

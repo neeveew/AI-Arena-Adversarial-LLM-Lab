@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.4.134-beta",
+    [string]$Version = "0.4.135-beta",
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [ValidateSet('win-x64')]
@@ -12,6 +12,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$productDisplayName = 'AI Arena - Lite: Adversarial LLM Lab'
+$productShortDisplayName = 'AI Arena - Lite'
+$productEdition = 'lite'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $Root "scripts/release-security.ps1")
 Assert-AIArenaReleaseVersion -Version $Version
@@ -29,6 +32,7 @@ $githubReleaseNotes = Join-Path $installerDir "github-release-notes.md"
 $releaseManifest = Join-Path $releaseDir "release-manifest.txt"
 $installerManifest = Join-Path $installerDir "release-manifest.txt"
 $releaseChangelog = Join-Path $releaseDir "changelog.md"
+$releaseChanges = Join-Path $releaseDir "changes.txt"
 $releaseGithubReleaseNotes = Join-Path $releaseDir "github-release-notes.md"
 $releaseExe = Join-Path $releaseDir "AI Arena.exe"
 $controlPlaneHelper = Join-Path $releaseDir "ai-arena-control.ps1"
@@ -67,6 +71,15 @@ $wpfTests = Join-Path $Root "tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj"
 $licenseFile = Join-Path $Root "LICENSE"
 $noticeFile = Join-Path $Root "NOTICE.md"
 $readmeFile = Join-Path $Root "README.md"
+$readmeEmblem = Join-Path $Root "docs/assets/ai-arena-lite-emblem.png"
+$brandAssets = @(
+    [pscustomobject]@{ Label = 'authoritative Lite emblem'; Path = (Join-Path $Root 'src/AIArena.Wpf/Assets/ai-arena-emblem-lite-green.png'); Sha256 = '805B370FF6A6479C461A9D716486B0A56A2C23AE29790E74853159CFAA9BF525' },
+    [pscustomobject]@{ Label = 'Lite icon PNG'; Path = (Join-Path $Root 'src/AIArena.Wpf/Assets/ai-arena-icon.png'); Sha256 = '64CCFFB9036BECD8A1F62692BCC8841CA9B51B92C21A362AB643D2E94955420A' },
+    [pscustomobject]@{ Label = 'Lite Windows icon'; Path = (Join-Path $Root 'src/AIArena.Wpf/Assets/ai-arena-icon.ico'); Sha256 = 'CC38F295D83163793C2FD50D6954F9775F503EDB90935954CE5D62EB144168C0' },
+    [pscustomobject]@{ Label = 'Lite Help icon'; Path = (Join-Path $Root 'src/AIArena.Wpf/Assets/ai-arena-guide-icon.png'); Sha256 = '225B8A8A2A8373409803B429537A6C24F04C880C8FA1420FAD0B7537C7E3C193' },
+    [pscustomobject]@{ Label = 'Lite navigation emblem'; Path = (Join-Path $Root 'src/AIArena.Wpf/Assets/ai-arena-emblem-lite.png'); Sha256 = '9F24EC85E1DB814542BA2D7920D6D03F7266B8889D3E57289389395DC6943006' },
+    [pscustomobject]@{ Label = 'Lite README emblem'; Path = $readmeEmblem; Sha256 = '34C8E449D9E8F2B20E82F3B26E16AECA97634E45272A6C276C6E256C4C61A89F' }
+)
 $userGuideFile = Join-Path $Root "docs/USER_GUIDE.md"
 $helpContentRoot = Join-Path $Root "src/AIArena.Wpf/Help/Content"
 $helpManifestFile = Join-Path $helpContentRoot "guide-manifest.json"
@@ -141,6 +154,7 @@ Assert-PathExists $releaseSigningReport "release signing report"
 Assert-PathExists $installerReleaseSigningReport "installer copy of release signing report"
 Assert-PathExists $installerSigningReport "installer signing report"
 Assert-PathExists $releaseChangelog "release changelog"
+Assert-PathExists $releaseChanges "release changes file"
 Assert-PathExists $releaseGithubReleaseNotes "release GitHub release notes"
 Assert-PathExists $dependencyIndexScript "dependency index script"
 Assert-PathExists $xamlBaselineScript "XAML hard-coded baseline script"
@@ -152,6 +166,14 @@ Assert-PathExists $wpfTests "WPF console test harness"
 Assert-PathExists $licenseFile "licence file"
 Assert-PathExists $noticeFile "notice file"
 Assert-PathExists $readmeFile "readme"
+Assert-PathExists $readmeEmblem "README Lite emblem"
+foreach ($brandAsset in $brandAssets) {
+    Assert-PathExists $brandAsset.Path $brandAsset.Label
+    $actualBrandHash = (Get-FileHash -LiteralPath $brandAsset.Path -Algorithm SHA256).Hash
+    if ($actualBrandHash -cne $brandAsset.Sha256) {
+        throw "Lite brand asset hash drifted for $($brandAsset.Label): expected $($brandAsset.Sha256), got $actualBrandHash. Regenerate and review the complete asset family."
+    }
+}
 Assert-PathExists $userGuideFile "user guide"
 Assert-PathExists $helpContentRoot "structured Help content"
 Assert-PathExists $helpManifestFile "structured Help manifest"
@@ -160,6 +182,17 @@ Assert-PathExists $releaseHelpManifest "published Help manifest"
 Assert-PathExists $shortcutIconFile "shortcut icon"
 Assert-PathExists $wpfProject "WPF project"
 Assert-PathExists $coreProject "core project"
+
+if ([IO.Path]::GetFileName($releaseExe) -cne 'AI Arena.exe') {
+    throw "Release executable filename drifted from the compatibility-stable AI Arena.exe name."
+}
+$releaseFileVersionInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo($releaseExe)
+if ($releaseFileVersionInfo.ProductName -cne $productDisplayName) {
+    throw "Release executable ProductName drifted: expected $productDisplayName, got '$($releaseFileVersionInfo.ProductName)'."
+}
+if ($releaseFileVersionInfo.FileDescription -cne $productShortDisplayName) {
+    throw "Release executable FileDescription drifted: expected $productShortDisplayName, got '$($releaseFileVersionInfo.FileDescription)'."
+}
 
 $installerCompileReceipt = Test-AIArenaInstallerCompileReceipt `
     -RepositoryRoot $Root `
@@ -244,10 +277,16 @@ else {
 
 $scriptText = Get-Content -LiteralPath $innoScript -Raw
 if ($scriptText -notmatch '#define MyAppName "AI Arena"') {
-    throw "Installer identity drifted: expected MyAppName to be AI Arena."
+    throw "Installer compatibility identity drifted: expected MyAppName to remain AI Arena."
 }
-if ($scriptText -notmatch '#define MyAppDisplayName "AI Arena: Adversarial LLM Lab"') {
-    throw "Installer display identity drifted: expected AI Arena: Adversarial LLM Lab."
+if ($scriptText -notmatch ('#define MyAppShortDisplayName "' + [regex]::Escape($productShortDisplayName) + '"')) {
+    throw "Installer short display identity drifted: expected $productShortDisplayName."
+}
+if ($scriptText -notmatch ('#define MyAppDisplayName "' + [regex]::Escape($productDisplayName) + '"')) {
+    throw "Installer display identity drifted: expected $productDisplayName."
+}
+if ($scriptText -notmatch '#define MyAppExeName "AI Arena\.exe"') {
+    throw "Installer executable compatibility identity drifted: expected AI Arena.exe."
 }
 if ($scriptText -notmatch ('#define MyAppVersion "' + [regex]::Escape($Version) + '"')) {
     throw "Installer version drifted: expected $Version."
@@ -257,6 +296,9 @@ if ($scriptText -notmatch ('#define MyReleaseDir "\.\.\\\.\.\\dist\\AI Arena - '
 }
 if ($scriptText -notmatch ('OutputDir=\.\.\\\.\.\\dist\\installer\\AI Arena - \{#MyAppVersion\}')) {
     throw "Installer output directory no longer points at the versioned installer folder."
+}
+if ($scriptText -notmatch 'OutputBaseFilename=AI Arena Setup \{#MyAppVersion\}') {
+    throw "Installer artifact filename drifted from the compatibility-stable AI Arena Setup name."
 }
 if ($scriptText -notmatch '#define MyReleaseUrl "https://github\.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases"') {
     throw "Installer release URL drifted."
@@ -330,23 +372,59 @@ if ($scriptText -notmatch 'Source: "\.\.\\\.\.\\src\\AIArena\.Wpf\\Assets\\ai-ar
 if ($scriptText -notmatch 'DefaultDirName=\{localappdata\}\\Programs\\\{#MyAppName\}') {
     throw "Installer no longer separates program files from the per-user AI Arena data folder."
 }
+if ($scriptText -notmatch 'DefaultGroupName=\{#MyAppShortDisplayName\}') {
+    throw "Installer Start Menu group no longer uses the Lite display name."
+}
 if ($scriptText -notmatch 'DisableDirPage=no') {
     throw "Installer no longer allows manual install directory selection."
 }
 if ($scriptText -notmatch 'UsePreviousAppDir=no') {
     throw "Installer may reuse an older path instead of the separated per-user program directory."
 }
+if ($scriptText -notmatch 'UsePreviousGroup=no') {
+    throw "Installer may retain the pre-Lite Start Menu group instead of adopting the Lite group."
+}
 if ($scriptText -notmatch 'PrivilegesRequired=lowest') {
     throw "Installer no longer uses per-user privileges."
 }
-if ($scriptText -notmatch 'Name: "\{userdesktop\}\\\{#MyAppName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
+if ($scriptText -notmatch 'Name: "\{userdesktop\}\\\{#MyAppShortDisplayName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
     throw "Per-user desktop shortcut no longer has an explicit icon."
 }
-if ($scriptText -notmatch 'Name: "\{group\}\\\{#MyAppName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
+if ($scriptText -notmatch 'Name: "\{group\}\\\{#MyAppShortDisplayName\}".*IconFilename: "\{app\}\\\{#MyAppIconName\}"') {
     throw "Start Menu shortcut no longer has an explicit icon."
 }
-if ($scriptText -notmatch 'Name: "\{group\}\\AI Arena User Guide"; Filename: "\{app\}\\USER_GUIDE\.md"') {
+if ($scriptText -notmatch 'Name: "\{group\}\\\{#MyAppShortDisplayName\} User Guide"; Filename: "\{app\}\\USER_GUIDE\.md"') {
     throw "Start Menu user guide shortcut is missing."
+}
+foreach ($legacyShortcutCleanup in @(
+    'Type: files; Name: "\{userprograms\}\\AI Arena\\AI Arena\.lnk"',
+    'Type: files; Name: "\{userprograms\}\\AI Arena\\AI Arena User Guide\.lnk"',
+    'Type: files; Name: "\{userprograms\}\\AI Arena\\AI Arena PowerShell Control\.lnk"',
+    'Type: files; Name: "\{userprograms\}\\AI Arena\\Release Notes\.lnk"',
+    'Type: files; Name: "\{userprograms\}\\AI Arena\\GitHub Releases\.lnk"',
+    'Type: dirifempty; Name: "\{userprograms\}\\AI Arena"',
+    'Type: files; Name: "\{userdesktop\}\\AI Arena\.lnk"'
+)) {
+    if ($scriptText -notmatch $legacyShortcutCleanup) {
+        throw "Installer no longer removes an exact pre-Lite default shortcut or empty legacy group: $legacyShortcutCleanup"
+    }
+}
+foreach ($supersededLiteShortcutCleanup in @(
+    'Type: files; Name: "\{userprograms\}\\AI Arena \[lite\]\\AI Arena \[lite\]\.lnk"',
+    'Type: files; Name: "\{userprograms\}\\AI Arena \[lite\]\\AI Arena \[lite\] User Guide\.lnk"',
+    'Type: files; Name: "\{userprograms\}\\AI Arena \[lite\]\\AI Arena \[lite\] PowerShell Control\.lnk"',
+    'Type: files; Name: "\{userprograms\}\\AI Arena \[lite\]\\Release Notes\.lnk"',
+    'Type: files; Name: "\{userprograms\}\\AI Arena \[lite\]\\GitHub Releases\.lnk"',
+    'Type: dirifempty; Name: "\{userprograms\}\\AI Arena \[lite\]"',
+    'Type: files; Name: "\{userdesktop\}\\AI Arena \[lite\]\.lnk"'
+)) {
+    if ($scriptText -notmatch $supersededLiteShortcutCleanup) {
+        throw "Installer no longer removes an exact superseded bracketed-Lite shortcut or empty group: $supersededLiteShortcutCleanup"
+    }
+}
+if ($scriptText -notmatch "Also delete AI Arena - Lite saved sessions" `
+    -or $scriptText -notmatch "DataDir := ExpandConstant\('\{localappdata\}\\AI Arena'\)") {
+    throw "Installer uninstall wording or compatibility-stable AI Arena data root drifted."
 }
 if ($scriptText -notmatch 'Name: "\{group\}\\Release Notes"; Filename: "\{app\}\\changes\.txt"') {
     throw "Start Menu release notes shortcut is missing."
@@ -356,6 +434,13 @@ if ($scriptText -notmatch 'Name: "\{group\}\\GitHub Releases"; Filename: "\{#MyR
 }
 
 $projectText = Get-Content -LiteralPath $wpfProject -Raw
+if ($projectText -notmatch '<AssemblyName>AI Arena</AssemblyName>') {
+    throw "WPF assembly compatibility identity drifted; executable and pack-resource names must remain AI Arena."
+}
+if ($projectText -notmatch ('<Product>' + [regex]::Escape($productDisplayName) + '</Product>') `
+    -or $projectText -notmatch ('<AssemblyTitle>' + [regex]::Escape($productShortDisplayName) + '</AssemblyTitle>')) {
+    throw "WPF PE metadata declarations do not expose the full Lite product name and short assembly title."
+}
 if ($projectText -notmatch ('<Version>' + [regex]::Escape($Version) + '</Version>')) {
     throw "WPF project Version drifted: expected $Version."
 }
@@ -387,6 +472,10 @@ if ($licenseText -notmatch 'Copyright © 2026 Dominik Fiala') {
 }
 
 $guideText = Get-Content -LiteralPath $userGuideFile -Raw
+if ($guideText -notmatch ('(?m)^# ' + [regex]::Escape($productShortDisplayName) + ' Help Center\r?$') `
+    -or $guideText -notmatch [regex]::Escape($productDisplayName)) {
+    throw "User guide does not identify the current Lite product and Help Center."
+}
 foreach ($requiredGuideSection in @(
     '## Quick Start: Your First Turn',
     '## Run Arena Mode',
@@ -403,6 +492,10 @@ foreach ($requiredGuideSection in @(
 # version bump, so it can name a version the release never produced, and readers
 # land on a tag that does not exist.
 $readmeText = Get-Content -LiteralPath $readmeFile -Raw
+if ($readmeText -notmatch ('(?m)^# ' + [regex]::Escape($productDisplayName) + '\r?$') `
+    -or $readmeText -notmatch 'docs/assets/ai-arena-lite-emblem\.png') {
+    throw "README does not expose the current Lite product name and emblem masthead."
+}
 $readmeDownload = [regex]::Match($readmeText, '\[Download\s+(?<label>[^\]]+)\]\(\s*(?<url>[^)\s]+)\s*\)')
 if (-not $readmeDownload.Success) {
     throw "README no longer advertises a download link; the release version cannot be checked."
@@ -421,11 +514,17 @@ $releaseChecksumsText = Get-Content -LiteralPath $releaseChecksums -Raw
 $installerManifestText = Get-Content -LiteralPath $installerManifest -Raw
 $releaseChangelogText = Get-Content -LiteralPath $releaseChangelog -Raw
 $installerChangelogText = Get-Content -LiteralPath $changelog -Raw
+$releaseChangesText = Get-Content -LiteralPath $releaseChanges -Raw
+$installerChangesText = Get-Content -LiteralPath $changes -Raw
 $releaseGithubReleaseNotesText = Get-Content -LiteralPath $releaseGithubReleaseNotes -Raw
 $installerGithubReleaseNotesText = Get-Content -LiteralPath $githubReleaseNotes -Raw
 $releaseExeHash = (Get-FileHash -LiteralPath $releaseExe -Algorithm SHA256).Hash
 if ($manifestText -notmatch 'AI Arena Release Manifest') {
     throw "Release manifest missing title."
+}
+if ($manifestText -notmatch ('(?m)^Product: ' + [regex]::Escape($productDisplayName) + '\r?$') `
+    -or $manifestText -notmatch ('(?m)^Edition: ' + [regex]::Escape($productEdition) + '\r?$')) {
+    throw "Release manifest does not identify the Lite product and edition."
 }
 if ($manifestText -notmatch ('Version: ' + [regex]::Escape($Version))) {
     throw "Release manifest version drifted."
@@ -507,8 +606,21 @@ if ($installerManifestText -ne $manifestText) {
 if ($installerChangelogText -ne $releaseChangelogText) {
     throw "Installer changelog copy does not match release changelog."
 }
+if ($installerChangesText -ne $releaseChangesText) {
+    throw "Installer changes copy does not match release changes file."
+}
 if ($installerGithubReleaseNotesText -ne $releaseGithubReleaseNotesText) {
     throw "Installer GitHub release notes copy does not match release GitHub release notes."
+}
+foreach ($releaseBrandArtifact in @(
+    [pscustomobject]@{ Label = 'release changelog'; Text = $releaseChangelogText },
+    [pscustomobject]@{ Label = 'release changes file'; Text = $releaseChangesText },
+    [pscustomobject]@{ Label = 'GitHub release notes'; Text = $releaseGithubReleaseNotesText }
+)) {
+    if ($releaseBrandArtifact.Text -notmatch ('(?m)^Product: ' + [regex]::Escape($productDisplayName) + '\r?$') `
+        -or $releaseBrandArtifact.Text -notmatch ('(?m)^Edition: ' + [regex]::Escape($productEdition) + '\r?$')) {
+        throw "$($releaseBrandArtifact.Label) does not identify the Lite product and edition."
+    }
 }
 
 $installerReleaseChecksums = Join-Path $installerDir 'release-checksums.sha256'
@@ -751,5 +863,5 @@ if ($installerInfo.Length -le 0) {
     throw "Installer exists but is empty: $installer"
 }
 
-Write-Host "WPF release sanity passed for AI Arena $Version"
+Write-Host "WPF release sanity passed for $productShortDisplayName $Version"
 Write-Host $installer

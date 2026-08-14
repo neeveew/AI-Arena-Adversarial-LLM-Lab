@@ -235,7 +235,7 @@ public sealed class ProviderAutoConfigureService
 
         var warnings = new List<string>
         {
-            "AI Arena can recommend a model spread; the local provider controls final GPU placement and offload.",
+            "AI Arena - Lite can recommend a model spread; the local provider controls final GPU placement and offload.",
             nativeCatalogUsed
                 ? $"{providerModeLabel} metadata is being used for model type, load state, context, size, and capabilities."
                 : "Model footprint is estimated from model names when provider metadata is unavailable."

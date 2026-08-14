@@ -1,4 +1,4 @@
-AI Arena exposes a local authenticated PowerShell control plane for smoke tests and repeatable automation. It uses a local named pipe and a per-run token under the current user's app-data directory.
+AI Arena - Lite exposes a local authenticated PowerShell control plane for smoke tests and repeatable automation. Its established `AIArena` commands, `AI_ARENA_*` environment variables, pipe, token filename, install path, and data path remain unchanged for compatibility.
 
 ## Enable and load
 

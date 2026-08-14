@@ -289,7 +289,10 @@ internal sealed record AIArenaControlSnapshot(
     bool ControlPlaneEnabled,
     AIArenaAgentControlState Agent,
     AIArenaProviderControlState Provider,
-    AIArenaApplicationStatusControlState? Status = null);
+    AIArenaApplicationStatusControlState? Status = null,
+    [property: JsonPropertyName("productId")] string ProductId = "ai_arena",
+    [property: JsonPropertyName("edition")] string Edition = "lite",
+    [property: JsonPropertyName("displayName")] string DisplayName = "AI Arena - Lite: Adversarial LLM Lab");
 
 internal sealed record AIArenaApplicationStatusItemControlState(
     string Id,

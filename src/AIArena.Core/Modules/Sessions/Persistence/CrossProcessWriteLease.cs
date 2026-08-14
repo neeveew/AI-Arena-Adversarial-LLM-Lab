@@ -65,7 +65,7 @@ internal sealed class CrossProcessWriteLease : IDisposable
         }
 
         throw new IOException(
-            $"Timed out waiting for another AI Arena process to finish writing '{fullPath}'.",
+            $"Timed out waiting for another AI Arena - Lite process to finish writing '{fullPath}'.",
             lastFailure);
     }
 

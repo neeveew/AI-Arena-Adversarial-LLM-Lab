@@ -426,7 +426,7 @@ internal sealed class AIArenaScreenshotControlService
             var pixelHeight = checked((int)Math.Ceiling(window.ActualHeight * renderDpi.DpiScaleY));
             if (pixelWidth <= 0 || pixelHeight <= 0)
             {
-                return Failure("not_available", "The AI Arena window has no renderable area.", targetPath);
+                return Failure("not_available", "The AI Arena - Lite window has no renderable area.", targetPath);
             }
 
             if (pixelWidth > MaximumDimension
@@ -435,7 +435,7 @@ internal sealed class AIArenaScreenshotControlService
             {
                 return Failure(
                     "not_available",
-                    $"The AI Arena window is too large to capture safely ({pixelWidth}x{pixelHeight}).",
+                    $"The AI Arena - Lite window is too large to capture safely ({pixelWidth}x{pixelHeight}).",
                     targetPath);
             }
 
@@ -470,7 +470,7 @@ internal sealed class AIArenaScreenshotControlService
             return new AIArenaScreenshotControlResult(
                 true,
                 "",
-                $"AI Arena screenshot saved to {targetPath}",
+                $"AI Arena - Lite screenshot saved to {targetPath}",
                 targetPath,
                 info.Length,
                 pixelWidth,
@@ -494,7 +494,7 @@ internal sealed class AIArenaScreenshotControlService
             or OverflowException
             or NotSupportedException)
         {
-            return Failure("screenshot_failed", $"AI Arena screenshot failed: {ex.Message}", targetPath);
+            return Failure("screenshot_failed", $"AI Arena - Lite screenshot failed: {ex.Message}", targetPath);
         }
         finally
         {

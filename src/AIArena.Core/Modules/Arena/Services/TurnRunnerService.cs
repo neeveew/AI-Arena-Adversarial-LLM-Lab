@@ -1375,7 +1375,7 @@ public sealed class TurnRunnerService
                 "system",
                 string.Join(
                     Environment.NewLine,
-                    "You are participating in AI Arena as the selected agent.",
+                    "You are participating in AI Arena - Lite as the selected agent.",
                     $"Selected agent: {plan.AgentName}.",
                     $"Your persona: {agent?.Persona ?? plan.AgentName}.",
                     voiceInstruction,
@@ -1998,8 +1998,8 @@ public sealed class TurnRunnerService
                 "provider_context_pressure",
                 "unavailable",
                 config.ContextLength > 0
-                    ? $"AI Arena supplied context_length={config.ContextLength}, but no provider tokenizer measured whether the serialized prompt exceeded that limit."
-                    : "No configured context-length evidence or provider tokenizer measurement is available; AI Arena did not silently claim token-level truncation.")
+                    ? $"AI Arena - Lite supplied context_length={config.ContextLength}, but no provider tokenizer measured whether the serialized prompt exceeded that limit."
+                    : "No configured context-length evidence or provider tokenizer measurement is available; AI Arena - Lite did not silently claim token-level truncation.")
         };
         if (preparedTurnContext.FactoryMode)
         {

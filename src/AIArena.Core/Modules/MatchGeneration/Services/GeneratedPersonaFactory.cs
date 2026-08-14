@@ -86,7 +86,7 @@ internal static class GeneratedPersonaFactory
         return new GeneratedPersona(
             "narrator",
             role,
-            $"{role}. Observe AI Arena as a turn-based adversarial lab. Do not join as Alpha, Beta, Gamma, or Delta. Track {pressure}, role drift, unsupported claims, evidence pressure, consensus collapse, narrative heat, and whether the exchange produces sharper constraints.");
+            $"{role}. Observe AI Arena - Lite as a turn-based adversarial lab. Do not join as Alpha, Beta, Gamma, or Delta. Track {pressure}, role drift, unsupported claims, evidence pressure, consensus collapse, narrative heat, and whether the exchange produces sharper constraints.");
     }
 
     private static string? RoleForPack(string rolePack, string agentId)

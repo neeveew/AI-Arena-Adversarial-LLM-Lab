@@ -2,11 +2,11 @@ Context, Arena history, and response tone belong to a model identity. Every Aren
 
 ## Configured versus effective context
 
-- **Provider default** stores no numeric override. AI Arena cannot truthfully calculate a bounded history budget from it.
-- An explicit **Context window** accepts 512–1,048,576 tokens and becomes AI Arena's configured budget.
+- **Provider default** stores no numeric override. AI Arena - Lite cannot truthfully calculate a bounded history budget from it.
+- An explicit **Context window** accepts 512–1,048,576 tokens and becomes AI Arena - Lite's configured budget.
 - **Effective context** is provider-observed residency evidence when the provider exposes it. It may differ from the configured value until a loaded process is replaced.
 
-The provider tokenizer and server remain authoritative. AI Arena's token estimates and receipts are planning evidence, not a promise that every provider will count identically.
+The provider tokenizer and server remain authoritative. AI Arena - Lite's token estimates and receipts are planning evidence, not a promise that every provider will count identically.
 
 ## Choose an Arena history policy
 

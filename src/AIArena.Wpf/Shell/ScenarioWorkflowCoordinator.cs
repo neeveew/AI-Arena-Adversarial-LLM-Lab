@@ -1122,7 +1122,7 @@ internal sealed class ScenarioWorkflowCoordinator
         var info = GenerationPresetDetails(preset);
         return
         [
-            $"AI Arena preset: {info.Label}",
+            $"AI Arena - Lite preset: {info.Label}",
             $"Category: {info.Category}",
             $"Summary: {info.Summary}",
             $"Best for: {info.BestFor}",
@@ -1944,7 +1944,7 @@ internal sealed class ScenarioWorkflowCoordinator
     {
         var lines = new List<string>
         {
-            $"AI Arena eval rubric: {DisplayStatusValue(item.Label)}",
+            $"AI Arena - Lite eval rubric: {DisplayStatusValue(item.Label)}",
             $"Topic: {DisplayStatusValue(item.Topic)}",
             $"Recipe: {DisplayStatusValue(item.RolePack)} / {DisplayStatusValue(item.Style)} / {DisplayStatusValue(item.Intensity)} / {DisplayStatusValue(item.Absurdity)}",
             GenerationPresetMatchSummary(item.RolePack, item.Style, item.Intensity, item.Absurdity),

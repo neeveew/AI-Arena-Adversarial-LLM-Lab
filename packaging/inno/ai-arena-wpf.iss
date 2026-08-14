@@ -1,12 +1,15 @@
 ; Inno Setup installer for the native WPF AI Arena build.
 
+; Compatibility identity: keep this value stable for the existing executable,
+; per-user install path, and upgrade lineage. Public Lite labels are separate.
 #define MyAppName "AI Arena"
-#define MyAppDisplayName "AI Arena: Adversarial LLM Lab"
-#define MyAppVersion "0.4.134-beta"
+#define MyAppShortDisplayName "AI Arena - Lite"
+#define MyAppDisplayName "AI Arena - Lite: Adversarial LLM Lab"
+#define MyAppVersion "0.4.135-beta"
 #define MyAppPublisher "Dominik Fiala"
 #define MyAppExeName "AI Arena.exe"
 #define MyAppIconName "ai-arena-icon.ico"
-#define MyReleaseDir "..\..\dist\AI Arena - 0.4.134-beta"
+#define MyReleaseDir "..\..\dist\AI Arena - 0.4.135-beta"
 #define MyReleaseUrl "https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases"
 
 [Setup]
@@ -19,10 +22,11 @@ AppPublisherURL={#MyReleaseUrl}
 AppSupportURL={#MyReleaseUrl}
 AppUpdatesURL={#MyReleaseUrl}
 DefaultDirName={localappdata}\Programs\{#MyAppName}
-DefaultGroupName={#MyAppName}
+DefaultGroupName={#MyAppShortDisplayName}
 DisableDirPage=no
 DisableProgramGroupPage=yes
 UsePreviousAppDir=no
+UsePreviousGroup=no
 OutputDir=..\..\dist\installer\AI Arena - {#MyAppVersion}
 OutputBaseFilename=AI Arena Setup {#MyAppVersion}
 SetupIconFile=..\..\src\AIArena.Wpf\Assets\ai-arena-icon.ico
@@ -38,11 +42,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Types]
 Name: "full"; Description: "Full installation"
-Name: "compact"; Description: "AI Arena only"
+Name: "compact"; Description: "{#MyAppShortDisplayName} only"
 Name: "custom"; Description: "Custom installation"; Flags: iscustom
 
 [Components]
-Name: "app"; Description: "AI Arena application"; Types: full compact custom; Flags: fixed
+Name: "app"; Description: "{#MyAppShortDisplayName} application"; Types: full compact custom; Flags: fixed
 Name: "searxng"; Description: "Local web search engine (SearXNG, AGPL-3.0)"; Types: full custom
 
 [Tasks]
@@ -59,15 +63,34 @@ Source: "..\..\CONTROLPLANE.md"; DestDir: "{app}"; Flags: ignoreversion; Compone
 Source: "..\..\src\AIArena.Wpf\Assets\ai-arena-icon.ico"; DestDir: "{app}"; DestName: "{#MyAppIconName}"; Flags: ignoreversion; Components: app
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconName}"
-Name: "{group}\AI Arena User Guide"; Filename: "{app}\USER_GUIDE.md"; IconFilename: "{app}\{#MyAppIconName}"
-Name: "{group}\AI Arena PowerShell Control"; Filename: "{app}\CONTROLPLANE.md"; IconFilename: "{app}\{#MyAppIconName}"
+Name: "{group}\{#MyAppShortDisplayName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconName}"
+Name: "{group}\{#MyAppShortDisplayName} User Guide"; Filename: "{app}\USER_GUIDE.md"; IconFilename: "{app}\{#MyAppIconName}"
+Name: "{group}\{#MyAppShortDisplayName} PowerShell Control"; Filename: "{app}\CONTROLPLANE.md"; IconFilename: "{app}\{#MyAppIconName}"
 Name: "{group}\Release Notes"; Filename: "{app}\changes.txt"; IconFilename: "{app}\{#MyAppIconName}"
 Name: "{group}\GitHub Releases"; Filename: "{#MyReleaseUrl}"; IconFilename: "{app}\{#MyAppIconName}"
-Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconName}"; Tasks: desktopicon
+Name: "{userdesktop}\{#MyAppShortDisplayName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconName}"; Tasks: desktopicon
+
+[InstallDelete]
+; Remove only the exact default shortcut names from pre-Lite installs and the
+; superseded bracketed Lite preview. Keep the stable install/data directories
+; and any user-chosen/custom shortcut locations.
+Type: files; Name: "{userprograms}\AI Arena\AI Arena.lnk"
+Type: files; Name: "{userprograms}\AI Arena\AI Arena User Guide.lnk"
+Type: files; Name: "{userprograms}\AI Arena\AI Arena PowerShell Control.lnk"
+Type: files; Name: "{userprograms}\AI Arena\Release Notes.lnk"
+Type: files; Name: "{userprograms}\AI Arena\GitHub Releases.lnk"
+Type: dirifempty; Name: "{userprograms}\AI Arena"
+Type: files; Name: "{userdesktop}\AI Arena.lnk"
+Type: files; Name: "{userprograms}\AI Arena [lite]\AI Arena [lite].lnk"
+Type: files; Name: "{userprograms}\AI Arena [lite]\AI Arena [lite] User Guide.lnk"
+Type: files; Name: "{userprograms}\AI Arena [lite]\AI Arena [lite] PowerShell Control.lnk"
+Type: files; Name: "{userprograms}\AI Arena [lite]\Release Notes.lnk"
+Type: files; Name: "{userprograms}\AI Arena [lite]\GitHub Releases.lnk"
+Type: dirifempty; Name: "{userprograms}\AI Arena [lite]"
+Type: files; Name: "{userdesktop}\AI Arena [lite].lnk"
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppShortDisplayName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 Filename: "{app}\USER_GUIDE.md"; Description: "Open user guide"; Flags: shellexec postinstall skipifsilent runasoriginaluser
 
 [UninstallDelete]
@@ -183,7 +206,7 @@ begin
     begin
       RemoveUserData :=
         MsgBox(
-          'Also delete AI Arena saved sessions, settings, templates, checkpoints, exports, logs, and cache from your user profile?'#13#10#13#10 +
+          'Also delete AI Arena - Lite saved sessions, settings, templates, checkpoints, exports, logs, and cache from your user profile?'#13#10#13#10 +
           'Choose No to uninstall the app but keep your data.',
           mbConfirmation,
           MB_YESNO) = IDYES;

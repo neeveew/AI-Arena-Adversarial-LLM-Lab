@@ -466,7 +466,7 @@ internal sealed class LlamaCppRuntimeCoordinator
         SetButtonHelp(
             controls.Reconnect,
             state.ReconnectEnabled
-                ? "Perform a fresh, uncached runtime inspection. AI Arena does not start or restart the llama-server process."
+                ? "Perform a fresh, uncached runtime inspection. AI Arena - Lite does not start or restart the llama-server process."
                 : "Runtime reconnection is unavailable while another arena operation is running.");
         SetButtonHelp(controls.Preload, LifecycleHelp(load: true, state.PreloadEnabled));
         SetButtonHelp(controls.Unload, LifecycleHelp(load: false, state.UnloadEnabled));

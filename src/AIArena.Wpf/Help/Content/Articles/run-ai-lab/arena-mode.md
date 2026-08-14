@@ -33,6 +33,6 @@ The View menu controls compact transcript, turn comparison, quality timeline, Ba
 
 ## No silent changes
 
-AI Arena does not silently switch models, shorten an included history entry, invent a summary, retry an accepted streaming request, or convert missing telemetry to zero. A typed failure card pauses the relevant run and offers only recovery actions that preserve the causal record.
+AI Arena - Lite does not silently switch models, shorten an included history entry, invent a summary, retry an accepted streaming request, or convert missing telemetry to zero. A typed failure card pauses the relevant run and offers only recovery actions that preserve the causal record.
 
 If a match is ended, Auto Chat, 1 Turn, Narrate, and per-agent run actions remain disabled until Reset or Fork establishes a new runnable state.

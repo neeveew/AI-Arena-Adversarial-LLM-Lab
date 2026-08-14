@@ -13,17 +13,17 @@ Controls use visible labels, non-color status text, focus rings, and 44-DIP targ
 
 ## Installation
 
-The self-contained installer targets `%LOCALAPPDATA%\Programs\AI Arena` by default and does not require a separate .NET installation. Installed supporting files include `LICENSE`, `NOTICE.md`, release notes, release manifest, `CONTROLPLANE.md`, and the generated full user guide.
+The self-contained installer retains the compatibility path `%LOCALAPPDATA%\Programs\AI Arena` by default and does not require a separate .NET installation. Installed supporting files include `LICENSE`, `NOTICE.md`, release notes, release manifest, `CONTROLPLANE.md`, and the generated full user guide.
 
-App data is separate under `%LOCALAPPDATA%\AI Arena` by default. Uninstalling the program does not imply deleting saved sessions and configs unless that separate removal is explicitly selected.
+App data remains separate under the compatibility path `%LOCALAPPDATA%\AI Arena` by default. Uninstalling the program does not imply deleting saved sessions and configs unless that separate removal is explicitly selected.
 
 ## Optional SearXNG component
 
 The compact app-only installation does not install SearXNG. A silent full install must explicitly accept its licence with `/TYPE=full /SEARXNGLICENSE=accept`; the installer does not infer acceptance.
 
-## AI Arena licence
+## AI Arena - Lite licence
 
-AI Arena is distributed under the **Shareable No-Derivatives Software Licence 1.0**.
+AI Arena - Lite is distributed under the **Shareable No-Derivatives Software Licence 1.0**.
 
 Copyright © 2026 Dominik Fiala.
 

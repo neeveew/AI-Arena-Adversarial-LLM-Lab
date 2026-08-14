@@ -1025,7 +1025,7 @@ static void TranscriptBattleReviewSummarizesMatch()
     Require(json.Contains("\"afterAction\"", StringComparison.Ordinal), "battle review JSON should include after action data");
     Require(json.Contains("https://example.test/ai-law", StringComparison.Ordinal), "battle review JSON should include source URLs");
     Require(lines.Any(line => line.StartsWith("Next:", StringComparison.Ordinal)), "battle review lines should include a next action");
-    Require(text.StartsWith("# AI Arena Battle Review", StringComparison.Ordinal), "battle review copy text should have a markdown title");
+    Require(text.StartsWith("# AI Arena - Lite Battle Review", StringComparison.Ordinal), "battle review copy text should have the Lite markdown title");
     Require(markdown.Contains("Sourced claims:", StringComparison.Ordinal), "battle review markdown should include sourced claims");
     Require(text.Contains("Source conflicts:", StringComparison.Ordinal), "battle review markdown should include source conflicts");
     Require(nudge.StartsWith("Operator intervention:", StringComparison.Ordinal), "battle review nudge should be ready to paste into operator turn");
@@ -1098,7 +1098,7 @@ static void TranscriptRunTraceSummarizesSpans()
     Require(lines.Any(line => line.StartsWith("Recent spans:", StringComparison.Ordinal)), "trace lines should include a recent spans section");
     Require(lines.Any(line => line.StartsWith("Triage:", StringComparison.Ordinal)), "trace lines should include triage summary");
     Require(lines.Any(line => line.StartsWith("Review queue:", StringComparison.Ordinal)), "trace lines should include a review queue");
-    Require(text.StartsWith("AI Arena Run Trace", StringComparison.Ordinal), "copied run trace should have a stable title");
+    Require(text.StartsWith("AI Arena - Lite Run Trace", StringComparison.Ordinal), "copied run trace should have the Lite product title");
     Require(text.Contains("Focus: Turn 4 Beta", StringComparison.Ordinal), "copied run trace should include triage focus");
     Require(text.Contains("Next:", StringComparison.Ordinal), "copied run trace should include the recommended next action");
     Require(text.Contains("Tool events: 2", StringComparison.Ordinal), "copied run trace should include tool count");
@@ -2105,7 +2105,7 @@ static void OperatorDraftReceiptsSummarizeRoutes()
     Require(privateAnalysis.Destination.Contains("2 active agents (alpha, beta)", StringComparison.Ordinal), "private destination should name active targets");
 
     var privateReceipt = OperatorTurnCoordinator.OperatorDraftReceiptLines(privateAnalysis, "Focus\n  the next answer");
-    Require(privateReceipt[0] == "AI Arena Operator Draft", "operator receipt should expose a stable title");
+    Require(privateReceipt[0] == "AI Arena - Lite Operator Draft", "operator receipt should expose the Lite product title");
     Require(privateReceipt.Any(line => line == "Route: Private memory"), "operator receipt should include route");
     Require(privateReceipt.Any(line => line == "Prompt: Focus the next answer"), "operator receipt should collapse prompt whitespace");
     Require(privateReceipt.Last().Contains("targeted agent response", StringComparison.Ordinal), "operator receipt should include route-aware next checks");
@@ -3848,6 +3848,64 @@ static void ReleaseScriptsProtectInstallerDistributions()
     var dependencyLock = ReadWorkspaceFile("packaging/searxng-requirements-lock.txt");
     var dependencyLockBytes = File.ReadAllBytes(FindWorkspaceFile("packaging/searxng-requirements-lock.txt"));
     var innoScript = ReadWorkspaceFile("packaging/inno/ai-arena-wpf.iss");
+    var wpfProject = ReadWorkspaceFile("src/AIArena.Wpf/AIArena.Wpf.csproj");
+
+    Require(innoScript.Contains("#define MyAppName \"AI Arena\"", StringComparison.Ordinal)
+        && innoScript.Contains("#define MyAppShortDisplayName \"AI Arena - Lite\"", StringComparison.Ordinal)
+        && innoScript.Contains("#define MyAppDisplayName \"AI Arena - Lite: Adversarial LLM Lab\"", StringComparison.Ordinal),
+        "installer should separate the compatibility identity from the Lite public names");
+    Require(innoScript.Contains("AppId={{E2F12C8E-9B8C-45C3-B9A1-A8F8E1725F61}", StringComparison.Ordinal)
+        && innoScript.Contains("#define MyAppExeName \"AI Arena.exe\"", StringComparison.Ordinal)
+        && innoScript.Contains("DefaultDirName={localappdata}\\Programs\\{#MyAppName}", StringComparison.Ordinal)
+        && innoScript.Contains("DataDir := ExpandConstant('{localappdata}\\AI Arena')", StringComparison.Ordinal),
+        "Lite branding must preserve the installer AppId, executable, install directory, and saved-data root");
+    Require(innoScript.Contains("OutputDir=..\\..\\dist\\installer\\AI Arena - {#MyAppVersion}", StringComparison.Ordinal)
+        && innoScript.Contains("OutputBaseFilename=AI Arena Setup {#MyAppVersion}", StringComparison.Ordinal),
+        "Lite branding must preserve versioned release and installer artifact filenames");
+    Require(innoScript.Contains("DefaultGroupName={#MyAppShortDisplayName}", StringComparison.Ordinal)
+        && innoScript.Contains("UsePreviousGroup=no", StringComparison.Ordinal)
+        && innoScript.Contains("{userdesktop}\\{#MyAppShortDisplayName}", StringComparison.Ordinal)
+        && innoScript.Contains("Also delete AI Arena - Lite saved sessions", StringComparison.Ordinal),
+        "installer public group, shortcut, and uninstall wording should expose the Lite brand");
+    Require(innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena\\AI Arena.lnk\"", StringComparison.Ordinal)
+        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena\\AI Arena User Guide.lnk\"", StringComparison.Ordinal)
+        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena\\AI Arena PowerShell Control.lnk\"", StringComparison.Ordinal)
+        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena\\Release Notes.lnk\"", StringComparison.Ordinal)
+        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena\\GitHub Releases.lnk\"", StringComparison.Ordinal)
+        && innoScript.Contains("Type: dirifempty; Name: \"{userprograms}\\AI Arena\"", StringComparison.Ordinal)
+        && innoScript.Contains("Type: files; Name: \"{userdesktop}\\AI Arena.lnk\"", StringComparison.Ordinal),
+        "same-AppId upgrades should remove only exact pre-Lite default shortcuts and the empty legacy group");
+    Require(innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena [lite]\\AI Arena [lite].lnk\"", StringComparison.Ordinal)
+        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena [lite]\\AI Arena [lite] User Guide.lnk\"", StringComparison.Ordinal)
+        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena [lite]\\AI Arena [lite] PowerShell Control.lnk\"", StringComparison.Ordinal)
+        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena [lite]\\Release Notes.lnk\"", StringComparison.Ordinal)
+        && innoScript.Contains("Type: files; Name: \"{userprograms}\\AI Arena [lite]\\GitHub Releases.lnk\"", StringComparison.Ordinal)
+        && innoScript.Contains("Type: dirifempty; Name: \"{userprograms}\\AI Arena [lite]\"", StringComparison.Ordinal)
+        && innoScript.Contains("Type: files; Name: \"{userdesktop}\\AI Arena [lite].lnk\"", StringComparison.Ordinal),
+        "same-AppId upgrades should remove only exact superseded bracketed-Lite shortcuts and the empty preview group");
+    Require(wpfProject.Contains("<AssemblyName>AI Arena</AssemblyName>", StringComparison.Ordinal)
+        && wpfProject.Contains("<Product>AI Arena - Lite: Adversarial LLM Lab</Product>", StringComparison.Ordinal)
+        && wpfProject.Contains("<AssemblyTitle>AI Arena - Lite</AssemblyTitle>", StringComparison.Ordinal),
+        "WPF project metadata should expose the Lite product while preserving the executable and pack-resource assembly name");
+    Require(releaseScript.Contains("$productDisplayName = 'AI Arena - Lite: Adversarial LLM Lab'", StringComparison.Ordinal)
+        && releaseScript.Contains("$productEdition = 'lite'", StringComparison.Ordinal)
+        && releaseScript.Contains("\"Product: $productDisplayName\"", StringComparison.Ordinal)
+        && releaseScript.Contains("\"Edition: $productEdition\"", StringComparison.Ordinal),
+        "human-facing release notes and manifest should identify the Lite product and edition");
+    Require(sanityScript.Contains("Installer compatibility identity drifted", StringComparison.Ordinal)
+        && sanityScript.Contains("Release manifest does not identify the Lite product and edition", StringComparison.Ordinal)
+        && sanityScript.Contains("compatibility-stable AI Arena data root", StringComparison.Ordinal)
+        && sanityScript.Contains("Release executable ProductName drifted", StringComparison.Ordinal)
+        && sanityScript.Contains("Release executable FileDescription drifted", StringComparison.Ordinal),
+        "release sanity should guard both Lite branding and backward-compatible installer/storage identities");
+    Require(sanityScript.Contains("Lite brand asset hash drifted", StringComparison.Ordinal)
+        && sanityScript.Contains("805B370FF6A6479C461A9D716486B0A56A2C23AE29790E74853159CFAA9BF525", StringComparison.Ordinal)
+        && sanityScript.Contains("64CCFFB9036BECD8A1F62692BCC8841CA9B51B92C21A362AB643D2E94955420A", StringComparison.Ordinal)
+        && sanityScript.Contains("CC38F295D83163793C2FD50D6954F9775F503EDB90935954CE5D62EB144168C0", StringComparison.Ordinal)
+        && sanityScript.Contains("225B8A8A2A8373409803B429537A6C24F04C880C8FA1420FAD0B7537C7E3C193", StringComparison.Ordinal)
+        && sanityScript.Contains("9F24EC85E1DB814542BA2D7920D6D03F7266B8889D3E57289389395DC6943006", StringComparison.Ordinal)
+        && sanityScript.Contains("34C8E449D9E8F2B20E82F3B26E16AECA97634E45272A6C276C6E256C4C61A89F", StringComparison.Ordinal),
+        "release sanity should pin the authoritative Lite emblem and every reviewed derivative without requiring Pillow at release time");
 
     Require(installerScript.Contains("Join-Path $distRoot \"installer\"", StringComparison.Ordinal) && installerScript.Contains("Join-Path $installerRoot \"AI Arena - $Version\"", StringComparison.Ordinal), "installer helper should target a versioned installer folder");
     Require(installerScript.Contains("Installer distribution already exists", StringComparison.Ordinal), "installer helper should reject existing installer folders");
@@ -3972,15 +4030,55 @@ static void ReleaseScriptsProtectInstallerDistributions()
 
 static void AppIconResourceIsPackaged()
 {
-    var appIconBytes = PackagedResourceLength("assets/ai-arena-icon.ico");
-    var guideIconBytes = PackagedResourceLength("assets/ai-arena-guide-icon.png");
+    var appIconBytes = PackagedResourceBytes("assets/ai-arena-icon.ico");
+    var guideIconBytes = PackagedResourceBytes("assets/ai-arena-guide-icon.png");
+    var navigationEmblemBytes = PackagedResourceBytes("assets/ai-arena-emblem-lite.png");
 
-    Require(appIconBytes > 0, "app icon ico should be packaged");
-    Require(guideIconBytes > 0, "user guide compact header icon should be packaged");
-    Require(guideIconBytes is > 0 and <= 10 * 1024, "user guide compact header icon should stay under 10 KB");
+    Require(appIconBytes.Length is > 0 and <= 256 * 1024, "app icon ico should be packaged and bounded");
+    Require(guideIconBytes.Length is > 0 and <= 10 * 1024, "user guide compact header icon should be packaged and stay under 10 KB");
+    Require(navigationEmblemBytes.Length is > 0 and <= 256 * 1024, "Lite navigation emblem should be packaged and stay under 256 KB");
+
+    using var iconStream = new MemoryStream(appIconBytes, writable: false);
+    var iconDecoder = new IconBitmapDecoder(
+        iconStream,
+        BitmapCreateOptions.PreservePixelFormat,
+        BitmapCacheOption.OnLoad);
+    int[] expectedSizes = [16, 24, 32, 48, 64, 128, 256];
+    var actualSizes = iconDecoder.Frames
+        .Select(frame => frame.PixelWidth)
+        .Order()
+        .ToArray();
+    Require(actualSizes.SequenceEqual(expectedSizes), "app icon should contain the reviewed 16/24/32/48/64/128/256 frame set");
+    Require(iconDecoder.Frames.All(frame => frame.PixelWidth == frame.PixelHeight), "every app icon frame should be square");
+    foreach (var frame in iconDecoder.Frames)
+    {
+        RequireTransparentRaster(frame, $"app icon {frame.PixelWidth}px frame");
+    }
+
+    var guideFrame = DecodePng(guideIconBytes, "user guide compact header icon");
+    Require(guideFrame.PixelWidth == 48 && guideFrame.PixelHeight == 48, "user guide compact header icon should be exactly 48x48");
+    RequireTransparentRaster(guideFrame, "user guide compact header icon");
+
+    var navigationFrame = DecodePng(navigationEmblemBytes, "Lite navigation emblem");
+    Require(navigationFrame.PixelWidth == 256 && navigationFrame.PixelHeight == 256, "Lite navigation emblem should be exactly 256x256");
+    RequireTransparentRaster(navigationFrame, "Lite navigation emblem");
+
+    var icon48Frame = iconDecoder.Frames.Single(frame => frame.PixelWidth == 48);
+    Require(
+        BgraPixels(guideFrame).SequenceEqual(BgraPixels(icon48Frame)),
+        "user guide compact header icon should exactly match the reviewed 48px app icon frame");
+
+    var navigationRail = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellNavigationRailControl.xaml");
+    Require(navigationRail.Contains("Source=\"/Assets/ai-arena-emblem-lite.png\"", StringComparison.Ordinal)
+            && !navigationRail.Contains("ai-arena-emblem-transparent.png", StringComparison.Ordinal),
+        "navigation rail should consume only the packaged Lite emblem");
+    Require(navigationRail.Contains("AutomationProperties.Name=\"AI Arena - Lite navigation rail\"", StringComparison.Ordinal)
+            && navigationRail.Contains("Text=\"AI Arena - Lite\"", StringComparison.Ordinal)
+            && navigationRail.Contains("Text=\"Adversarial LLM Lab\"", StringComparison.Ordinal),
+        "navigation rail should expose the compact visible and accessible Lite identity");
 }
 
-static long PackagedResourceLength(string resourceKey)
+static byte[] PackagedResourceBytes(string resourceKey)
 {
     var assembly = typeof(WindowChromeService).Assembly;
     using var stream = assembly.GetManifestResourceStream($"{assembly.GetName().Name}.g.resources");
@@ -3993,13 +4091,84 @@ static long PackagedResourceLength(string resourceKey)
                 && key.Equals(resourceKey, StringComparison.OrdinalIgnoreCase)
                 && entry.Value is Stream packagedStream)
             {
-                return packagedStream.Length;
+                if (packagedStream.CanSeek)
+                {
+                    packagedStream.Position = 0;
+                }
+
+                using var copy = new MemoryStream();
+                packagedStream.CopyTo(copy);
+                return copy.ToArray();
             }
         }
     }
 
     using var embedded = assembly.GetManifestResourceStream(resourceKey);
-    return embedded?.Length ?? -1;
+    if (embedded is null)
+    {
+        return [];
+    }
+
+    using var embeddedCopy = new MemoryStream();
+    embedded.CopyTo(embeddedCopy);
+    return embeddedCopy.ToArray();
+}
+
+static BitmapFrame DecodePng(byte[] bytes, string label)
+{
+    using var stream = new MemoryStream(bytes, writable: false);
+    var decoder = new PngBitmapDecoder(
+        stream,
+        BitmapCreateOptions.PreservePixelFormat,
+        BitmapCacheOption.OnLoad);
+    Require(decoder.Frames.Count == 1, $"{label} should contain exactly one PNG frame");
+    return decoder.Frames[0];
+}
+
+static byte[] BgraPixels(BitmapSource source)
+{
+    var converted = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
+    var stride = checked(converted.PixelWidth * 4);
+    var pixels = new byte[checked(stride * converted.PixelHeight)];
+    converted.CopyPixels(pixels, stride, 0);
+    return pixels;
+}
+
+static void RequireTransparentRaster(BitmapSource source, string label)
+{
+    var pixels = BgraPixels(source);
+    var width = source.PixelWidth;
+    var height = source.PixelHeight;
+    var transparent = 0;
+    var antialiased = 0;
+    var opaque = 0;
+    for (var index = 3; index < pixels.Length; index += 4)
+    {
+        switch (pixels[index])
+        {
+            case 0:
+                transparent++;
+                break;
+            case 255:
+                opaque++;
+                break;
+            default:
+                antialiased++;
+                break;
+        }
+    }
+
+    Require(transparent > 0, $"{label} should retain a transparent background");
+    Require(antialiased > 0, $"{label} should retain antialiased alpha edges");
+    Require(opaque > 0, $"{label} should retain opaque emblem pixels");
+    int[] cornerAlphaIndexes =
+    [
+        3,
+        ((width - 1) * 4) + 3,
+        (((height - 1) * width) * 4) + 3,
+        ((((height - 1) * width) + width - 1) * 4) + 3
+    ];
+    Require(cornerAlphaIndexes.All(index => pixels[index] == 0), $"{label} should have transparent corners");
 }
 
 static void UserGuideAppIconImageSourceLoads()
@@ -5802,6 +5971,8 @@ static void CrashesLeaveSomethingBehind()
     // from the release build people actually run. An unhandled exception closed
     // the window and left no dialog, no log and nothing to report - and the data
     // root had a logs directory nothing had written to in months.
+    Require(new DirectoryInfo(CrashReporter.ReportDirectory()).Parent?.Name == "AI Arena",
+        "Lite branding must preserve the established AI Arena data-root path for crash reports");
     string? written = null;
     try
     {
@@ -5823,7 +5994,7 @@ static void CrashesLeaveSomethingBehind()
         Require(report.Contains("crash reporter self test", StringComparison.Ordinal), "the report should carry the exception message");
         Require(report.Contains("SelfTest", StringComparison.Ordinal), "the report should say where the failure came from");
         Require(report.Contains("InvalidOperationException", StringComparison.Ordinal), "the report should carry the exception type");
-        Require(report.Contains("AI Arena", StringComparison.Ordinal), "the report should identify the build");
+        Require(report.Contains("AI Arena - Lite", StringComparison.Ordinal), "the report should identify the Lite build");
 
         // A handler that throws turns a diagnosable failure into a mystery, so
         // a null exception has to be survivable too.

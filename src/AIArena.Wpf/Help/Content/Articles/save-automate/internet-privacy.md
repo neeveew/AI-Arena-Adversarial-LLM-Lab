@@ -20,7 +20,7 @@ The following are local unless you explicitly export or send them elsewhere:
 
 ## What can leave the machine
 
-The configured provider receives prompts and selected context needed for an operation. A remote OpenAI-compatible endpoint is still remote even though AI Arena stores its own state locally. Explicit web search/fetch contacts SearXNG and selected public sites. Installer download or provider model download actions may also use the network when explicitly chosen.
+The configured provider receives prompts and selected context needed for an operation. A remote OpenAI-compatible endpoint is still remote even though AI Arena - Lite stores its own state locally. Explicit web search/fetch contacts SearXNG and selected public sites. Installer download or provider model download actions may also use the network when explicitly chosen.
 
 Never place secrets in scenarios, transcript messages, custom tones, exported setup files, or PowerShell command history. Provider API tokens are excluded from portable Match Setup, copied evidence, and normal control-plane state.
 

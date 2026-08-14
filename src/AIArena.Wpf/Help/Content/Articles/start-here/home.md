@@ -1,4 +1,4 @@
-AI Arena is a native Windows app for structured conversations between local or OpenAI-compatible language models. This Help Center is task-based: choose the outcome you need, then follow the linked article.
+AI Arena - Lite: Adversarial LLM Lab is a native Windows app for structured conversations between local or OpenAI-compatible language models. This Help Center is task-based: choose the outcome you need, then follow the linked article.
 
 > **Private by design:** The Help Center is packaged with the app and works offline. Opening or searching help does not call a provider, change a session, or enable Internet access.
 
@@ -6,7 +6,7 @@ AI Arena is a native Windows app for structured conversations between local or O
 
 | I want to… | Start here | You will finish with… |
 |---|---|---|
-| Run AI Arena for the first time | [Quick Start](help/quick-start) | A connected, assigned model and one successful turn |
+| Run AI Arena - Lite for the first time | [Quick Start](help/quick-start) | A connected, assigned model and one successful turn |
 | Load or assign a model | [Models, Residency & Routing](help/models-routing) | Provider residency and role routing configured independently |
 | Compare model behavior without Arena instructions | [Run Factory Mode](help/factory-mode) | A public-rooted group conversation with inspectable causal history |
 | Keep a long match within context | [Context, History & Tone](help/model-behavior) | An explicit context budget and a deliberate history policy |

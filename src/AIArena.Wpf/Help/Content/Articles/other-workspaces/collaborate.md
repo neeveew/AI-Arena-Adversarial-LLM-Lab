@@ -27,4 +27,4 @@ Recent Collaborations can reopen, search, filter, fork, repeat, compare, export,
 
 Search covers prompts, answers, traces, notes, model mix, health, mode, metrics, and review text. Export produces Markdown with the final answer, review packet, and trace metadata.
 
-History is local under `%LOCALAPPDATA%\AI Arena\configs\collaborate-history.json`. Provider requests still send the prompt and selected context to the configured provider; local storage does not make a remote provider private.
+History remains local under the compatibility path `%LOCALAPPDATA%\AI Arena\configs\collaborate-history.json`. Provider requests still send the prompt and selected context to the configured provider; local storage does not make a remote provider private.

@@ -1732,10 +1732,10 @@ internal sealed class InAppQaInspectorCoordinator : IDisposable
     {
         ThrowIfDisposed();
         var snapshot = current;
-        if (snapshot is null) return "AI Arena QA Inspector\nEvidence: unavailable\n";
+        if (snapshot is null) return "AI Arena - Lite QA Inspector\nEvidence: unavailable\n";
         var contract = snapshot.Contract;
         var builder = new StringBuilder();
-        builder.AppendLine("AI Arena QA Inspector");
+        builder.AppendLine("AI Arena - Lite QA Inspector");
         builder.Append("Evidence: ").AppendLine(snapshot.RelativeEvidencePath);
         builder.Append("Verdict: ").AppendLine(contract.Verdict.ToString());
         builder.Append("Currentness: ").AppendLine(snapshot.Currentness.State.ToString());

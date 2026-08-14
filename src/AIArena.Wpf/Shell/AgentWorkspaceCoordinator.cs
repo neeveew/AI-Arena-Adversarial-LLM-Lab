@@ -2727,7 +2727,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         return
         [
             new ModelChatMessage("system", $"""
-                You are {role.Name} in AI Arena Agent, a software-creation workspace.
+                You are {role.Name} in AI Arena - Lite Agent, a software-creation workspace.
                 Role: {role.Instructions}
                 Work inside this selected workspace only: {workspacePath}
                 You may propose terminal or PowerShell commands, but the app requires user preview and approval before anything runs.
@@ -4087,7 +4087,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
                 {exactDiffState}
 
-                Inspect the affected relative file before changing it. If the exact repair is proven, return complete bounded file snippets with explicit relative file paths so AI Arena can render an exact before/after diff and materialize one write command for preview.
+                Inspect the affected relative file before changing it. If the exact repair is proven, return complete bounded file snippets with explicit relative file paths so AI Arena - Lite can render an exact before/after diff and materialize one write command for preview.
                 If the exact edit is not proven, return exactly one read-only inspection command instead.
                 Do not restore packages, access the network, or claim a fix. Any write remains blocked until the operator reviews the exact command/diff and explicitly approves it.
 

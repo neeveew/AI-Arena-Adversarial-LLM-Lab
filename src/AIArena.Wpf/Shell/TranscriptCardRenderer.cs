@@ -394,7 +394,7 @@ internal sealed class TranscriptCardRenderer
         panel.Children.Add(new TextBlock
         {
             Text = inputLimit
-                ? "The provider rejected this causal prompt. AI Arena stopped without silently trimming or switching models."
+                ? "The provider rejected this causal prompt. AI Arena - Lite stopped without silently trimming or switching models."
                 : "The provider stopped at its output allowance. The partial response is preserved.",
             Margin = new Thickness(0, 4, 0, 0),
             Foreground = resourceBrush("MutedTextBrush"),

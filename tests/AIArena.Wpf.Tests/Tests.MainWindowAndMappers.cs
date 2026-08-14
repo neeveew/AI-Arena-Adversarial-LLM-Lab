@@ -521,7 +521,7 @@ static void CustomMatchSummaryCoordinatorNormalizesCardText()
     Require(constraints.Contains("1 relationship rule", StringComparison.OrdinalIgnoreCase), "run constraints should include relationship rules");
     Require(constraints.Contains("coverage 1/2", StringComparison.OrdinalIgnoreCase), "run constraints should include relationship graph coverage");
     var setupBrief = CustomMatchSummaryCoordinator.CurrentSetupBrief(snapshot);
-    Require(setupBrief.Contains("AI Arena current setup", StringComparison.Ordinal), "current setup brief should have a stable title");
+    Require(setupBrief.Contains("AI Arena - Lite current setup", StringComparison.Ordinal), "current setup brief should use the Lite product title");
     Require(setupBrief.Contains("Relationship map:", StringComparison.Ordinal), "current setup brief should include relationship map");
     Require(setupBrief.Contains("Preset match: Model Duel", StringComparison.Ordinal), "current setup brief should include preset match metadata");
     Require(setupBrief.Contains("Provider:", StringComparison.Ordinal), "current setup brief should include provider context");
@@ -939,6 +939,12 @@ static void MainWindowAgentSectionIsTopLevel()
     var agentWorkspaceToggle = XamlStartTag(xaml, "AgentWorkspaceCheckBox", "CheckBox");
     var controlPlaneToggle = XamlStartTag(xaml, "ControlPlaneCheckBox", "CheckBox");
 
+    Require(windowXaml.Contains("Title=\"AI Arena - Lite: Adversarial LLM Lab\"", StringComparison.Ordinal)
+            && windowXaml.Contains("Text=\"AI Arena - Lite: Adversarial LLM Lab\"", StringComparison.Ordinal),
+        "window and About identity should use the full Lite product name");
+    Require(topBarXaml.Contains("Open the AI Arena - Lite user guide.", StringComparison.Ordinal),
+        "top-bar Help accessibility text should use the Lite product name");
+
     Require(railHost.Contains("AgentNavigationRequested=\"AgentNavButton_Click\"", StringComparison.Ordinal), "the reusable navigation rail should forward Agent navigation into the existing shell handler");
     Require(railHost.Contains("SessionPerformanceRequested=\"SessionOverviewPerformance_MouseLeftButtonUp\"", StringComparison.Ordinal), "the reusable navigation rail should preserve session-summary activation behavior");
     Require(navButton.Contains("Content=\"Agent\"", StringComparison.Ordinal), "Agent nav button should be labeled as Agent");
@@ -949,7 +955,7 @@ static void MainWindowAgentSectionIsTopLevel()
     Require(agentWorkspaceToggle.Contains("AutomationProperties.Name=", StringComparison.Ordinal) && agentWorkspaceToggle.Contains("AutomationProperties.HelpText=", StringComparison.Ordinal), "Agent workspace toggle should explain its behavior to accessibility clients");
     Require(controlPlaneToggle.Contains("Content=\"PowerShell control plane\"", StringComparison.Ordinal), "Settings should expose the local PowerShell control-plane toggle");
     Require(controlPlaneToggle.Contains("ControlPlaneCheckBox_Changed", StringComparison.Ordinal), "control-plane toggle should persist and start or stop the host");
-    Require(controlPlaneToggle.Contains("AutomationProperties.Name=\"Toggle AI Arena control plane\"", StringComparison.Ordinal), "control-plane toggle should expose automation naming");
+    Require(controlPlaneToggle.Contains("AutomationProperties.Name=\"Toggle AI Arena - Lite control plane\"", StringComparison.Ordinal), "control-plane toggle should expose Lite automation naming");
     var debugSettingsIndex = xaml.IndexOf("x:Name=\"DebugControlsSettingsExpander\"", StringComparison.Ordinal);
     var controlPlaneToggleIndex = xaml.IndexOf("x:Name=\"ControlPlaneCheckBox\"", StringComparison.Ordinal);
     var internetSettingsIndex = xaml.IndexOf("<Expander Header=\"Internet Access\"", StringComparison.Ordinal);

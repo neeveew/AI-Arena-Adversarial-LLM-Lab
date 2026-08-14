@@ -606,7 +606,7 @@ internal sealed partial class HelpMarkdownRenderer
             Foreground = Brush(resources, "PrimaryBorderBrush", Color.FromRgb(77, 212, 239)),
             ToolTip = target.Kind switch
             {
-                HelpLinkKind.App => $"Open {label} in AI Arena",
+                HelpLinkKind.App => $"Open {label} in AI Arena - Lite",
                 HelpLinkKind.External => $"Open external website: {target.ExternalUri?.Host}",
                 _ => $"Open {label}"
             }

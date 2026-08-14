@@ -277,7 +277,7 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
         {
             if (version == diagnosticUiVersion)
             {
-                diagnosticResultText.Text = $"Internet test failed before completion: {ex.Message}{Environment.NewLine}Action: retry; if it persists, restart AI Arena and check firewall/DNS access.";
+                diagnosticResultText.Text = $"Internet test failed before completion: {ex.Message}{Environment.NewLine}Action: retry; if it persists, restart AI Arena - Lite and check firewall/DNS access.";
                 diagnosticResultText.Foreground = resourceBrush("DangerTextBrush");
                 diagnosticResultText.ToolTip = diagnosticResultText.Text;
                 statusCenter?.Fail(statusReceipt, "Internet test failed.", ex.Message);
@@ -351,7 +351,7 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
             : $"Search: failed in {FormatLatency(report.Search.Latency)} — {CleanError(report.Search.Error)} Action: {SearchFailureAction(report.Backend)}";
         var fetchLine = report.Fetch.Ok
             ? $"Direct fetch: passed in {FormatLatency(report.Fetch.Latency)} ({report.Fetch.FinalUri?.Host ?? "public HTTPS page"})."
-            : $"Direct fetch: failed in {FormatLatency(report.Fetch.Latency)} — {CleanError(report.Fetch.Error)} Action: allow AI Arena through the firewall and verify HTTPS/DNS access.";
+            : $"Direct fetch: failed in {FormatLatency(report.Fetch.Latency)} — {CleanError(report.Fetch.Error)} Action: allow AI Arena - Lite through the firewall and verify HTTPS/DNS access.";
         var usesBundledPayload = SearxngSupervisorService.IsBundledDefaultUri(report.Backend.BaseUri);
         var payloadVersion = !usesBundledPayload
             ? "external endpoint"
@@ -591,10 +591,10 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
 
         if (!backend.PayloadFound)
         {
-            return "reinstall AI Arena with the Local web search component enabled, then retry.";
+            return "reinstall AI Arena - Lite with the Local web search component enabled, then retry.";
         }
 
-        return "restart AI Arena; if it persists, check local firewall access and enabled SearXNG engines.";
+        return "restart AI Arena - Lite; if it persists, check local firewall access and enabled SearXNG engines.";
     }
 
     private static string CleanError(string error)

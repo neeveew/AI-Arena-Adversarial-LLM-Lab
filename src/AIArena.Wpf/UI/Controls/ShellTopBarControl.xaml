@@ -687,7 +687,7 @@
                                 Style="{StaticResource TopIconButton}"
                                 Margin="0"
                                 AutomationProperties.Name="Open user guide"
-                                AutomationProperties.HelpText="Open the AI Arena user guide."
+                                AutomationProperties.HelpText="Open the AI Arena - Lite user guide."
                                 ToolTip="Open user guide">
                             <TextBlock Text="&#xE897;" FontFamily="{DynamicResource Arena.Type.IconFontFamily}" FontSize="14" />
                         </Button>

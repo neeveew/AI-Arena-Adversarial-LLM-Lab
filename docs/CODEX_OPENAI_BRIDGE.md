@@ -1,6 +1,6 @@
 # Codex OpenAI Bridge
 
-`scripts/codex-openai-bridge.mjs` exposes a small local OpenAI-compatible API that lets AI Arena call the local Codex CLI as if it were a model provider.
+`scripts/codex-openai-bridge.mjs` exposes a small local OpenAI-compatible API that lets AI Arena - Lite call the local Codex CLI as if it were a model provider.
 
 ## Start
 
@@ -22,7 +22,7 @@ node "C:\AI Workspace\Codex\ai-arena\scripts\codex-openai-bridge.mjs"
 
 The bridge defaults `CODEX_BRIDGE_REASONING_EFFORT` to `low`, the lowest reasoning effort that works with the current Codex Desktop/CLI tool set. The documented `minimal` level is rejected by this Codex path while built-in tools such as `image_gen` are attached. The bridge disables reasoning summaries and defaults `CODEX_BRIDGE_WEB_SEARCH` to `enabled` so Codex can use recent public web knowledge for live topic generation and debate. Set `CODEX_BRIDGE_WEB_SEARCH=disabled` before starting the bridge to turn that off.
 
-## AI Arena Settings
+## AI Arena - Lite Settings
 
 Use the Model Provider panel:
 
@@ -38,7 +38,7 @@ Use the Model Provider panel:
 - `GET /api/v1/models`
 - `POST /api/v1/chat`
 
-Streaming requests use OpenAI-style server-sent events on `/v1/chat/completions` and LM Studio-style events on `/api/v1/chat`. If Codex emits token deltas, the bridge forwards them. If the current Codex CLI only emits a completed assistant message, the bridge streams that final message back in small chunks so AI Arena still receives a streaming response.
+Streaming requests use OpenAI-style server-sent events on `/v1/chat/completions` and LM Studio-style events on `/api/v1/chat`. If Codex emits token deltas, the bridge forwards them. If the current Codex CLI only emits a completed assistant message, the bridge streams that final message back in small chunks so AI Arena - Lite still receives a streaming response.
 
 ## Safety
 

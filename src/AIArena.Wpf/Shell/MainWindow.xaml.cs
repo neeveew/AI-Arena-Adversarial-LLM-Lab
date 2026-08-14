@@ -2126,7 +2126,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             await host.StartIfEnabledAsync();
             if (IsControlPlaneEnabled && host.IsRunning)
             {
-                _controlPlaneEvents.Publish("control.enabled", "AI Arena control plane enabled.");
+                _controlPlaneEvents.Publish("control.enabled", "AI Arena - Lite control plane enabled.");
             }
 
             return;
@@ -2363,7 +2363,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     private void TestVoiceTtsButton_Click(object sender, RoutedEventArgs e)
     {
         PersistVoiceTtsSettings("Voice TTS settings saved.");
-        SpeakVoiceTts("AI Arena voice narration is ready.", "Playing voice test.");
+        SpeakVoiceTts("AI Arena - Lite voice narration is ready.", "Playing voice test.");
     }
 
     private void StopVoiceTtsButton_Click(object sender, RoutedEventArgs e)
@@ -2412,7 +2412,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             SavedStateCoordinator.SetStatus("No saved sessions yet. Run a turn to create one.");
             SavedStateCoordinator.ApplyForkLineage(null);
             SavedStateCoordinator.UpdatePicker();
-            PopulateFallbackState("No AI Arena sessions found.");
+            PopulateFallbackState("No AI Arena - Lite sessions found.");
             return;
         }
 
@@ -3568,7 +3568,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             var imported = System.Text.Json.JsonSerializer.Deserialize<WpfSettings>(File.ReadAllText(dialog.FileName), SettingsTransferJsonOptions);
             if (imported is null)
             {
-                SetSettingsTransferStatus("Import failed: the file did not contain AI Arena settings.");
+                SetSettingsTransferStatus("Import failed: the file did not contain AI Arena - Lite settings.");
                 return;
             }
 
@@ -7299,7 +7299,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         var initializationAvailable = string.IsNullOrWhiteSpace(_controlPlaneInitializationError);
         ControlPlaneCheckBox.IsEnabled = initializationAvailable;
         var help = initializationAvailable
-            ? "Allow authenticated local PowerShell automation for this AI Arena process."
+            ? "Allow authenticated local PowerShell automation for this AI Arena - Lite process."
             : "PowerShell control plane is unavailable because its QA ownership identifier is invalid. Restart without that environment override.";
         ControlPlaneCheckBox.ToolTip = help;
         AutomationProperties.SetHelpText(ControlPlaneCheckBox, help);

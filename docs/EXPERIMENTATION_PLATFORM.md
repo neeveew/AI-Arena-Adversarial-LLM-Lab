@@ -1,4 +1,4 @@
-# AI Arena Experimentation & Verification Platform
+# AI Arena - Lite Experimentation & Verification Platform
 
 The experimentation platform turns an Arena setup into a repeatable local experiment without changing the product's privacy boundary. Experiments, evaluation, verification, and repair evidence remain on the user's machine. Provider credentials, complete prompts, transcript bodies, private memories, raw provider responses, and machine-specific absolute paths are excluded from aggregate evidence.
 

@@ -847,7 +847,7 @@ internal static partial class ProviderPromptInspection
                 context.Add(new ProviderContextExplanation(
                     "reasoning",
                     "observed",
-                    "The OpenAI-compatible adapter does not serialize AI Arena's reasoning mode because compatible providers do not share one portable field."));
+                    "The OpenAI-compatible adapter does not serialize AI Arena - Lite's reasoning mode because compatible providers do not share one portable field."));
             }
         }
     }

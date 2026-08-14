@@ -725,7 +725,7 @@ internal sealed class TranscriptAdjunctCoordinator
     public static string BattleReviewMarkdown(TranscriptBattleReview review)
     {
         var builder = new StringBuilder();
-        builder.AppendLine("# AI Arena Battle Review");
+        builder.AppendLine("# AI Arena - Lite Battle Review");
         builder.AppendLine();
         foreach (var line in BattleReviewLines(review))
         {
@@ -740,7 +740,7 @@ internal sealed class TranscriptAdjunctCoordinator
         return JsonSerializer.Serialize(
             new
             {
-                title = "AI Arena Battle Review",
+                title = "AI Arena - Lite Battle Review",
                 review.Verdict,
                 review.Severity,
                 review.Score,
@@ -880,7 +880,7 @@ internal sealed class TranscriptAdjunctCoordinator
     public static string RunTraceText(TranscriptRunTrace trace)
     {
         var builder = new StringBuilder();
-        builder.AppendLine("AI Arena Run Trace");
+        builder.AppendLine("AI Arena - Lite Run Trace");
         foreach (var line in RunTraceLines(trace))
         {
             builder.AppendLine(line);

@@ -159,6 +159,10 @@ internal static partial class Program
         var root = document.RootElement;
         Require(root.GetProperty("AppStatus").GetString() == "Legacy arena status.",
             "adding structured status state must preserve the legacy AppStatus string");
+        Require(root.GetProperty("productId").GetString() == "ai_arena"
+                && root.GetProperty("edition").GetString() == "lite"
+                && root.GetProperty("displayName").GetString() == "AI Arena - Lite: Adversarial LLM Lab",
+            "snapshot JSON should append stable product, edition, and public display identity without renaming compatibility fields");
         Require(root.GetProperty("Status").GetProperty("Items").GetArrayLength() == 4
                 && root.GetProperty("Status").GetProperty("AdditionalCount").GetInt32() == 1,
             "snapshot JSON did not append the bounded structured status projection");
@@ -1035,6 +1039,12 @@ internal static partial class Program
         Require(script.Contains("[string]$Token", StringComparison.Ordinal), "PowerShell client should expose -Token for authenticated control-plane calls");
         Require(script.Contains("AI_ARENA_CONTROL_TOKEN", StringComparison.Ordinal), "PowerShell client should support token injection through AI_ARENA_CONTROL_TOKEN");
         Require(script.Contains("Get-AIArenaControlToken", StringComparison.Ordinal), "PowerShell client should load the app-written token for debug calls");
+        Require(script.Contains("AI Arena - Lite control-plane token not found", StringComparison.Ordinal)
+            && script.Contains("waiting for AI Arena - Lite to finish", StringComparison.Ordinal)
+            && script.Contains("AI Arena - Lite returned an empty response", StringComparison.Ordinal)
+            && script.Contains("Restore AI Arena - Lite session state", StringComparison.Ordinal)
+            && script.Contains("Sets the current AI Arena - Lite window", StringComparison.Ordinal),
+            "PowerShell client should use the Lite product name in its human-facing errors, confirmations, and help");
         Require(script.Contains("[string]$Prompt", StringComparison.Ordinal), "PowerShell client should expose -Prompt for agent.send");
         Require(script.Contains("[string]$Path", StringComparison.Ordinal), "PowerShell client should expose -Path for agent.workspace.set");
         Require(script.Contains("[string]$View", StringComparison.Ordinal), "PowerShell client should expose -View for navigation.select");

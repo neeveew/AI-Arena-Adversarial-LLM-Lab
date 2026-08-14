@@ -1,0 +1,7 @@
+AI Arena - Lite 0.4.135-beta
+
+- Rebrand the Windows edition as AI Arena - Lite: Adversarial LLM Lab across the shell, Help Center, documentation, exports, diagnostics, prompts, and installer.
+- Introduce the green Lite emblem and complete Windows, navigation, Help, and README icon family with deterministic generation and release hash checks.
+- Refresh all 20 offline Help Center articles for the Lite identity and current workflows.
+- Preserve upgrade compatibility through the existing AppId, executable, install and data paths, schemas, control pipe, token file, environment variables, and automation commands.
+- Migrate exact legacy and bracketed-preview shortcuts to the new AI Arena - Lite Start Menu and desktop labels, while exposing additive Lite identity fields through the control plane.

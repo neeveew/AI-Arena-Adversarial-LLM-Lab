@@ -30,7 +30,7 @@ The optional live llama.cpp readiness probe was unavailable because no endpoint 
 
 ## Render evidence
 
-The Release build was launched with no existing AI Arena process, driven through the local control plane, captured, and then the started process was stopped.
+The Release build was launched with no existing AI Arena - Lite process, driven through the compatibility-stable local control plane, captured, and then the started process was stopped.
 
 - Image dimensions: 2250 × 1290
 - PNG size: 162,319 bytes

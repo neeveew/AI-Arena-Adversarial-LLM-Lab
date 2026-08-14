@@ -1545,7 +1545,7 @@ static void LlamaCppSettingsSurfaceStaysCapabilityDrivenAndAccessible()
     }
 
     Require(coordinator.Contains("Capabilities.ModelLifecycle", StringComparison.Ordinal), "lifecycle action enablement should consume inspected capability evidence");
-    Require(coordinator.Contains("AI Arena does not start or restart the llama-server process", StringComparison.Ordinal), "reconnect help should truthfully preserve user ownership of llama-server");
+    Require(coordinator.Contains("AI Arena - Lite does not start or restart the llama-server process", StringComparison.Ordinal), "reconnect help should truthfully preserve user ownership of llama-server");
     Require(coordinator.Contains("AutomationProperties.SetHelpText", StringComparison.Ordinal), "runtime evidence and actions should expose dynamic automation help");
     Require(coordinator.Contains("Model load and unload endpoints are unsupported", StringComparison.Ordinal), "unsupported lifecycle endpoints should remain explicit instead of silently failing");
     Require(coordinator.Contains("ApplicationStatusCenter statusCenter", StringComparison.Ordinal)

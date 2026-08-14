@@ -583,7 +583,7 @@ public sealed class NarratorService : IDisposable
                 "system",
                 string.Join(
                     Environment.NewLine,
-                    "You are the non-participating narrator for AI Arena.",
+                    "You are the non-participating narrator for AI Arena - Lite.",
                     "Write one concise narrator note for the public transcript.",
                     "Do not write as Alpha, Beta, or Gamma.",
                     InternetPromptInstruction(snapshot),
@@ -704,7 +704,7 @@ public sealed class NarratorService : IDisposable
                 "system",
                 string.Join(
                     Environment.NewLine,
-                    "You are the decision-card narrator for AI Arena.",
+                    "You are the decision-card narrator for AI Arena - Lite.",
                     "Produce a compact operator-facing decision card.",
                     "Use exactly these headings: Agreed, Conflict, Risk, Next operator move.",
                     "Use short bullet fragments. Do not claim certainty that is not supported by the transcript.",

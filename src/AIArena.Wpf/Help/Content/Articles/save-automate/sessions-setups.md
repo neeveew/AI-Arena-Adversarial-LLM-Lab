@@ -1,4 +1,4 @@
-AI Arena stores different kinds of state for different jobs. Choose the smallest operation that preserves the evidence you need.
+AI Arena - Lite stores different kinds of state for different jobs. Choose the smallest operation that preserves the evidence you need.
 
 ## Choose a save operation
 
@@ -35,6 +35,6 @@ Import validates all fields before writing and creates a new clean session. V2/V
 
 ## Local storage
 
-Sessions, checkpoints, templates, configs, exports, logs, and caches are stored in separate folders under `%LOCALAPPDATA%\AI Arena` unless `AI_ARENA_DATA_DIR` changes the data root. Uninstall data removal is a separate explicit choice.
+Sessions, checkpoints, templates, configs, exports, logs, and caches remain stored in separate folders under the compatibility path `%LOCALAPPDATA%\AI Arena` unless `AI_ARENA_DATA_DIR` changes the data root. Uninstall data removal is a separate explicit choice.
 
 Before a model evaluation, create separate baseline and candidate sessions. Keep the portable setup and causal input fixed; a session name or equal turn count alone does not prove comparability.

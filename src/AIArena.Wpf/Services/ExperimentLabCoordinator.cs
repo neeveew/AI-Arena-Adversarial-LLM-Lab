@@ -92,7 +92,7 @@ internal sealed class ExperimentLabFileDialogService : IExperimentLabFileDialogS
     {
         var dialog = new OpenFileDialog
         {
-            Filter = "AI Arena JSON artifacts (*.json)|*.json",
+            Filter = "AI Arena - Lite JSON artifacts (*.json)|*.json",
             CheckFileExists = true,
             Multiselect = false
         };
@@ -103,7 +103,7 @@ internal sealed class ExperimentLabFileDialogService : IExperimentLabFileDialogS
     {
         var dialog = new SaveFileDialog
         {
-            Filter = "AI Arena JSON artifacts (*.json)|*.json",
+            Filter = "AI Arena - Lite JSON artifacts (*.json)|*.json",
             FileName = suggestedFileName,
             AddExtension = true,
             DefaultExt = ".json",

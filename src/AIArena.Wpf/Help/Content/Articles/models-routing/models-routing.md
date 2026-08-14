@@ -6,7 +6,7 @@ The Models surface deliberately separates provider lifecycle from app routing. S
 |---|---|---|
 | **Available** | The provider advertises the model in its catalog | The model is resident or ready for a turn |
 | **Loaded** | Provider-observed evidence reports a resident model process | Any Arena role is assigned to it |
-| **Configured** | AI Arena stores behavior settings for that model identity | The provider has applied those settings to a live process |
+| **Configured** | AI Arena - Lite stores behavior settings for that model identity | The provider has applied those settings to a live process |
 | **Assigned** | A shared or explicit route points to the model | The model is loaded |
 
 **Loaded Models (N)** is pinned above the catalog and is always rendered, including when empty. Up to three loaded rows display before that region gets its own scrollbar. **Available catalog (N)** is collapsible, starts expanded, remembers its fold state for the current app run, and retains the larger virtualized scrolling area.
@@ -15,7 +15,7 @@ Search and facets apply only to Available and load-state-unavailable entries. On
 
 ## Load and unload safely
 
-For LM Studio native mode, select a row and use its state-driven **Load model** or **Unload model** action. AI Arena does not move the row just because an HTTP request returned successfully. It refreshes provider evidence and moves the row only after confirmation.
+For LM Studio native mode, select a row and use its state-driven **Load model** or **Unload model** action. AI Arena - Lite does not move the row just because an HTTP request returned successfully. It refreshes provider evidence and moves the row only after confirmation.
 
 - **Awaiting confirmation** means the request outcome is not yet proven.
 - **Unavailable** means residency cannot be observed; the catalog remains usable without inventing a load state.

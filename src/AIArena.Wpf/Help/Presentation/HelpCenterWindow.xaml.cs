@@ -171,8 +171,8 @@ internal partial class HelpCenterWindow : Window
         KeyboardNavigation.SetTabNavigation(HelpFocusScope, KeyboardNavigationMode.Cycle);
         KeyboardNavigation.SetControlTabNavigation(HelpFocusScope, KeyboardNavigationMode.Cycle);
         KeyboardNavigation.SetDirectionalNavigation(HelpFocusScope, KeyboardNavigationMode.Contained);
-        AutomationProperties.SetName(HelpFocusScope, "AI Arena Help Center");
-        AutomationProperties.SetHelpText(HelpFocusScope, "Browse topics, search the guide, and open validated AI Arena destinations.");
+        AutomationProperties.SetName(HelpFocusScope, "AI Arena - Lite Help Center");
+        AutomationProperties.SetHelpText(HelpFocusScope, "Browse topics, search the guide, and open validated AI Arena - Lite destinations.");
     }
 
     private void ApplyResponsiveBounds()

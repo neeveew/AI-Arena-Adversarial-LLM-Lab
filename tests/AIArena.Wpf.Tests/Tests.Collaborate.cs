@@ -444,7 +444,7 @@ static void CollaborateRecentCompareSummarizesRunDeltas()
     Require(summary.Contains("tokens +1k", StringComparison.Ordinal), "comparison summary should compact token delta");
 
     var markdown = CollaborateCoordinator.BuildConversationComparisonMarkdown(saved, open);
-    Require(markdown.StartsWith("# AI Arena Collaborate Compare", StringComparison.Ordinal), "comparison markdown should use a stable title");
+    Require(markdown.StartsWith("# AI Arena - Lite Collaborate Compare", StringComparison.Ordinal), "comparison markdown should use the Lite product title");
     Require(markdown.Contains("Saved chat: Release plan v1 (Needs review)", StringComparison.Ordinal), "comparison markdown should name saved chat health");
     Require(markdown.Contains("Open chat: Release plan v2 (Ready)", StringComparison.Ordinal), "comparison markdown should name open chat health");
     Require(markdown.Contains("| Trace issues | 1 | 0 | -1 better |", StringComparison.Ordinal), "comparison markdown should show issue improvement");
@@ -612,7 +612,7 @@ static void CollaborateRecentListSummarizesSavedRuns()
     Require(CollaborateCoordinator.LatestPrompt(conversation) == "Plan the release", "latest prompt helper should return the newest saved prompt");
 
     var summary = CollaborateCoordinator.BuildConversationSummary(conversation);
-    Require(summary.StartsWith("AI Arena Collaborate Summary - Release plan", StringComparison.Ordinal), "copied recent summary should use a stable title");
+    Require(summary.StartsWith("AI Arena - Lite Collaborate Summary - Release plan", StringComparison.Ordinal), "copied recent summary should use the Lite product title");
     Require(summary.Contains("Meta: 1 turn / 2 steps / ~900 tok / 1 note / 1 issue", StringComparison.Ordinal), "copied recent summary should include run metadata");
     Require(summary.Contains("Latest prompt: Plan the release", StringComparison.Ordinal), "copied recent summary should include latest prompt");
     Require(summary.Contains("Latest run review:", StringComparison.Ordinal), "copied recent summary should include run review lines");
@@ -936,7 +936,7 @@ static void CollaborateContextReceiptSummarizesPayload()
     Require(receiptLines.Any(line => line.Contains("release.md [truncated]", StringComparison.Ordinal)), "context receipt should flag truncated documents");
     Require(receiptLines.Any(line => line.Contains("Calculation: 2+2 - 4", StringComparison.Ordinal)), "context receipt should include calculation details");
     var receiptText = CollaborateCoordinator.ContextReceiptText(receiptLines);
-    Require(receiptText.StartsWith("AI Arena Context Receipt", StringComparison.Ordinal), "copied context receipt should include a stable title");
+    Require(receiptText.StartsWith("AI Arena - Lite Context Receipt", StringComparison.Ordinal), "copied context receipt should include the Lite product title");
     Require(receiptText.Contains("Run: 4 agents / 2 rounds / 7 calls", StringComparison.Ordinal), "copied context receipt should include the run plan");
     Require(CollaborateCoordinator.ContextReceiptLines("1 narrator / 1 call", "", [], 0).SequenceEqual(["Run: 1 narrator / 1 call", "Prompt: 0 chars / ~0 tok", "Prior chat: none", "Review: final answer will include a run review with trace health, token use, latency, model mix, and next action", "Context: none"]), "context receipt should expose an explicit no-context state");
 
@@ -1101,7 +1101,7 @@ static void CollaborateRunReviewSummarizesTraces()
     Require(review.Models.SequenceEqual(["model-a", "model-b"]), "run review should dedupe and sort models");
     Require(lines.Any(line => line == "Verdict: Ready to use"), "run review lines should include a verdict");
     Require(lines.Any(line => line.Contains("~2.5k tok", StringComparison.Ordinal)), "run review lines should compact token totals");
-    Require(copied.StartsWith("AI Arena Run Review", StringComparison.Ordinal), "copied run review should include a stable title");
+    Require(copied.StartsWith("AI Arena - Lite Run Review", StringComparison.Ordinal), "copied run review should include the Lite product title");
     Require(followUp.StartsWith($"Existing draft{Environment.NewLine}{Environment.NewLine}", StringComparison.Ordinal), "run review follow-up should preserve drafts first");
     Require(followUp.Contains("Next:", StringComparison.Ordinal), "run review follow-up should include the next action");
 
@@ -1155,13 +1155,13 @@ static void CollaborateConversationExportIncludesRunReviewAndTrace()
         ],
         ["Keep the arena readable"]);
 
-    Require(export.StartsWith("# AI Arena Collaborate - Robot stage plan", StringComparison.Ordinal), "collaborate export should use a stable markdown title");
+    Require(export.StartsWith("# AI Arena - Lite Collaborate - Robot stage plan", StringComparison.Ordinal), "collaborate export should use the Lite product title");
     Require(export.Contains("Exchanges: 1", StringComparison.Ordinal), "collaborate export should count exchanges");
     Require(export.Contains("Memory notes: 1", StringComparison.Ordinal), "collaborate export should count memory notes");
     Require(export.Contains("## Memory Notes", StringComparison.Ordinal), "collaborate export should include memory notes");
     Require(export.Contains("### Prompt", StringComparison.Ordinal), "collaborate export should include each prompt");
     Require(export.Contains("### Final Answer", StringComparison.Ordinal), "collaborate export should include each final answer");
-    Require(export.Contains("AI Arena Run Review", StringComparison.Ordinal), "collaborate export should include a run review packet");
+    Require(export.Contains("AI Arena - Lite Run Review", StringComparison.Ordinal), "collaborate export should include a branded run review packet");
     Require(export.Contains("Verdict: Needs review", StringComparison.Ordinal), "collaborate export should flag failed trace steps");
     Require(export.Contains("### Team Trace", StringComparison.Ordinal), "collaborate export should include trace details");
     Require(export.Contains("#### Alpha - Proposal", StringComparison.Ordinal), "collaborate export should use human-readable trace labels");

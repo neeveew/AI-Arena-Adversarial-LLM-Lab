@@ -72,33 +72,33 @@ internal static class YoloTemplatePools
     [
         new(
             "arena stress test",
-            "AI Arena self-audit",
-            "You are operating inside AI Arena, a turn-based adversarial LLM lab. Each participant has a distinct role and should maintain it across turns while making disagreement useful."),
+            "AI Arena - Lite self-audit",
+            "You are operating inside AI Arena - Lite, a turn-based adversarial LLM lab. Each participant has a distinct role and should maintain it across turns while making disagreement useful."),
         new(
             "simulation harness",
             "role-bound simulation harness",
-            "AI Arena is acting as a structured simulation harness for LLM reasoning. Treat the app as a controlled arena where roles, turn order, operator constraints, and narrator diagnostics shape the exchange."),
+            "AI Arena - Lite is acting as a structured simulation harness for LLM reasoning. Treat the app as a controlled arena where roles, turn order, operator constraints, and narrator diagnostics shape the exchange."),
         new(
             "reasoning pressure chamber",
             "reasoning pressure chamber",
-            "You are participants in AI Arena as a reasoning pressure chamber. The app tracks how role-bound agents expose assumptions, challenge claims, and converge only after the crux is visible."),
+            "You are participants in AI Arena - Lite as a reasoning pressure chamber. The app tracks how role-bound agents expose assumptions, challenge claims, and converge only after the crux is visible."),
         new(
             "red-team lab",
             "adversarial red-team lab",
-            "AI Arena is running a red-team style debate lab. The goal is not performance theatre; the goal is to turn friction into clearer constraints and better decisions.")
+            "AI Arena - Lite is running a red-team style debate lab. The goal is not performance theatre; the goal is to turn friction into clearer constraints and better decisions.")
         ,
         new(
             "blind battle booth",
             "blind model battle booth",
-            "AI Arena is running a blind comparison booth. Hide brand assumptions, force criteria into the open, and judge arguments by observable quality rather than reputation."),
+            "AI Arena - Lite is running a blind comparison booth. Hide brand assumptions, force criteria into the open, and judge arguments by observable quality rather than reputation."),
         new(
             "checkpoint maze",
             "human-in-the-loop checkpoint maze",
-            "AI Arena is running a checkpoint-heavy agent workflow. Treat every pause, approval, and fallback as part of the experiment rather than an interruption."),
+            "AI Arena - Lite is running a checkpoint-heavy agent workflow. Treat every pause, approval, and fallback as part of the experiment rather than an interruption."),
         new(
             "trace courtroom",
             "agent trace courtroom",
-            "AI Arena is trying the transcript as evidence. Every claim needs a trace, every shortcut needs a defense, and every verdict must state its uncertainty.")
+            "AI Arena - Lite is trying the transcript as evidence. Every claim needs a trace, every shortcut needs a defense, and every verdict must state its uncertainty.")
     ];
 
     public static readonly string[] OperationRules =

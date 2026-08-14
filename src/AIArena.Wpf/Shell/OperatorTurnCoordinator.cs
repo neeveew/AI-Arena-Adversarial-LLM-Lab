@@ -940,7 +940,7 @@ internal sealed class OperatorTurnCoordinator
     {
         var lines = new List<string>
         {
-            "AI Arena Operator Draft",
+            "AI Arena - Lite Operator Draft",
             $"Route: {analysis.RouteLabel}",
             $"Destination: {analysis.Destination}",
             $"Visibility: {analysis.Visibility}",

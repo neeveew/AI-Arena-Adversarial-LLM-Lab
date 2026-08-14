@@ -1,6 +1,6 @@
 # Release integrity and signing
 
-AI Arena's Windows release pipeline treats downloaded runtimes, package contents, and distributable files as separate integrity boundaries.
+AI Arena - Lite's Windows release pipeline treats downloaded runtimes, package contents, and distributable files as separate integrity boundaries. Existing executable and artifact filenames remain stable compatibility identifiers.
 
 ## Upstream lock
 

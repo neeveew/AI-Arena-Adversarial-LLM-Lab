@@ -283,7 +283,7 @@ internal sealed class AIArenaUiVerificationControlService
         {
             return WindowSizeFailure(
                 "not_available",
-                "The current AI Arena window could not be resized for QA capture.",
+                "The current AI Arena - Lite window could not be resized for QA capture.",
                 widthDip,
                 heightDip);
         }

@@ -324,7 +324,7 @@ internal sealed class CollaborateCoordinator
         {
             Title = "Export AI Collaborate chat",
             Filter = "Markdown chat (*.md)|*.md|Text chat (*.txt)|*.txt",
-            FileName = $"AI Arena Collaborate - {SafeExportFilePart(title)}.md",
+            FileName = $"AI Arena - Lite Collaborate - {SafeExportFilePart(title)}.md",
             AddExtension = true,
             DefaultExt = ".md"
         };
@@ -3495,7 +3495,7 @@ internal sealed class CollaborateCoordinator
 
     internal static string RunReviewText(CollaborateRunReview review)
     {
-        return "AI Arena Run Review" + Environment.NewLine + string.Join(Environment.NewLine, RunReviewLines(review));
+        return "AI Arena - Lite Run Review" + Environment.NewLine + string.Join(Environment.NewLine, RunReviewLines(review));
     }
 
     private static bool IsHealthyRunOutcome(string outcome)
@@ -3513,7 +3513,7 @@ internal sealed class CollaborateCoordinator
         IReadOnlyList<string> memoryNotes)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"# AI Arena Collaborate - {title}");
+        builder.AppendLine($"# AI Arena - Lite Collaborate - {title}");
         builder.AppendLine();
         builder.AppendLine($"Exported: {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz}");
         builder.AppendLine($"Exchanges: {exchanges.Count.ToString(CultureInfo.InvariantCulture)}");
@@ -3700,7 +3700,7 @@ internal sealed class CollaborateCoordinator
 
     internal static string ContextReceiptText(IReadOnlyList<string> receiptLines)
     {
-        return "AI Arena Context Receipt" + Environment.NewLine + string.Join(Environment.NewLine, receiptLines);
+        return "AI Arena - Lite Context Receipt" + Environment.NewLine + string.Join(Environment.NewLine, receiptLines);
     }
 
     private static int EstimateTokens(int chars)
@@ -4391,7 +4391,7 @@ internal sealed class CollaborateCoordinator
         var saved = ConversationMetrics(savedConversation);
         var open = ConversationMetrics(openConversation);
         var builder = new StringBuilder();
-        builder.AppendLine("# AI Arena Collaborate Compare");
+        builder.AppendLine("# AI Arena - Lite Collaborate Compare");
         builder.AppendLine();
         builder.AppendLine($"Generated: {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz}");
         builder.AppendLine($"Saved chat: {savedConversation.Title} ({ConversationReviewState(savedConversation)})");
@@ -4540,7 +4540,7 @@ internal sealed class CollaborateCoordinator
     internal static string BuildConversationSummary(CollaborateConversation conversation)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"AI Arena Collaborate Summary - {conversation.Title}");
+        builder.AppendLine($"AI Arena - Lite Collaborate Summary - {conversation.Title}");
         builder.AppendLine($"Updated: {conversation.UpdatedAt.LocalDateTime:yyyy-MM-dd HH:mm}");
         builder.AppendLine($"Mode: {ConversationModeLabel(conversation)}");
         builder.AppendLine($"Review: {ConversationReviewState(conversation)}");

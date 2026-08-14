@@ -54,7 +54,7 @@ public partial class MainWindow
             return AIArenaControlResponse.Error(
                 request,
                 "control_plane_disabled",
-                "AI Arena control plane is disabled. Enable it in Settings > Debug controls first.");
+                "AI Arena - Lite control plane is disabled. Enable it in Settings > Debug controls first.");
         }
 
         if (!AIArenaControlCommands.IsKnown(request.Command))
@@ -236,7 +236,7 @@ public partial class MainWindow
                     }
 
                     // ApplyShellCommandState announces this for both routes.
-                    return AIArenaControlResponse.Success(request, "AI Arena view changed.", BuildControlPlaneSnapshot());
+                    return AIArenaControlResponse.Success(request, "AI Arena - Lite view changed.", BuildControlPlaneSnapshot());
                 }
             case AIArenaControlCommands.NavigationThemeSet:
                 {
@@ -267,7 +267,7 @@ public partial class MainWindow
                     var themeId = ThemePalette.NormalizeId(theme);
                     // ApplyTheme announces this for both routes.
                     ShellNavigation.ApplyTheme(themeId, persist: true, rerender: true);
-                    return AIArenaControlResponse.Success(request, "AI Arena theme changed.", BuildControlPlaneSnapshot());
+                    return AIArenaControlResponse.Success(request, "AI Arena - Lite theme changed.", BuildControlPlaneSnapshot());
                 }
             case AIArenaControlCommands.NavigationProviderFocus:
                 OpenModelProviderSettings(
@@ -710,7 +710,7 @@ public partial class MainWindow
     {
         var fileName = Path.GetFileName(result.Path);
         var receiptText = $"Screenshot saved: {fileName}";
-        var helpText = $"AI Arena saved a screenshot to {result.Path} at {result.CapturedAt:HH:mm:ss}.";
+        var helpText = $"AI Arena - Lite saved a screenshot to {result.Path} at {result.CapturedAt:HH:mm:ss}.";
         SaveStatusText.Text = receiptText;
         SaveStatusText.ToolTip = result.Path;
         AutomationProperties.SetName(SaveStatusText, "Screenshot capture receipt");
