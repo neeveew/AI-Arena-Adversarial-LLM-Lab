@@ -1845,6 +1845,14 @@ static void MainWindowFactoryModeToggleExposesAutomationAndControlState()
             ?? throw new InvalidOperationException("Hosted production Factory status was not registered in its XAML namescope.");
         hostedStatus.Text = factoryStatus;
 
+        var logicalViewport = new Grid
+        {
+            Width = 960,
+            Height = 320,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top
+        };
+        logicalViewport.Children.Add(surface);
         var host = new Window
         {
             Width = 960,
@@ -1854,7 +1862,7 @@ static void MainWindowFactoryModeToggleExposesAutomationAndControlState()
             ShowInTaskbar = false,
             Left = -10000,
             Top = -10000,
-            Content = surface
+            Content = logicalViewport
         };
 
         static void DrainInput() => System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
@@ -1924,7 +1932,7 @@ static void MainWindowFactoryModeToggleExposesAutomationAndControlState()
             var statusHeights = new Dictionary<double, double>();
             foreach (var width in new[] { 960d, 1500d })
             {
-                host.Width = width;
+                logicalViewport.Width = width;
                 host.UpdateLayout();
                 DrainInput();
                 var surfaceWidth = surface.ActualWidth;

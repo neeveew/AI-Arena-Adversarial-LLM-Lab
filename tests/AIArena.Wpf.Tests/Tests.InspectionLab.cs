@@ -881,14 +881,16 @@ internal static partial class Program
             var featureFrame = new Grid
             {
                 Width = 800,
-                HorizontalAlignment = HorizontalAlignment.Left
+                Height = 760,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top
             };
             featureFrame.Children.Add(control);
             var host = new Window
             {
                 Content = featureFrame,
-                Width = 1500,
-                Height = 760,
+                Width = 800,
+                Height = 600,
                 ShowInTaskbar = false,
                 WindowStyle = WindowStyle.None,
                 Opacity = 0,
@@ -900,13 +902,14 @@ internal static partial class Program
             {
                 void ArrangeAt(double viewportWidth, double hostedControlWidth)
                 {
-                    host.Width = viewportWidth;
                     featureFrame.Width = hostedControlWidth;
                     host.UpdateLayout();
                     System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
                         System.Windows.Threading.DispatcherPriority.ApplicationIdle,
                         new Action(() => { }));
-                    control.ApplyResponsiveLayout(control.PromptFeatureRoot.ActualWidth);
+                    control.ApplyResponsiveLayout(
+                        control.PromptFeatureRoot.ActualWidth,
+                        viewportWidth);
                     host.UpdateLayout();
                 }
 

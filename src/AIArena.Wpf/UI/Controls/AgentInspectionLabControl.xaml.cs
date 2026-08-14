@@ -201,8 +201,10 @@ public partial class AgentInspectionLabControl : UserControl
     }
 
     internal void ApplyResponsiveLayout(double width)
+        => ApplyResponsiveLayout(width, HostedViewportWidth(this));
+
+    internal void ApplyResponsiveLayout(double width, double viewportWidth)
     {
-        var viewportWidth = HostedViewportWidth(this);
         CurrentLayoutTier = ResolveLayout(width, viewportWidth);
         ApplyPromptResponsiveLayout(width, viewportWidth);
         ApplyMemoryResponsiveLayout(width, viewportWidth);

@@ -261,21 +261,39 @@ internal static partial class Program
     {
         RunStaTest(() =>
         {
-            var control = HostProviderModelsOptimizationSurface(
-                ProviderModelsFacetPresentation(),
-                1500,
-                820,
-                out var host);
+            var control = new ProviderModelAssignmentsControl();
+            AttachArenaPresentationResources(control);
+            ApplyExperimentSurfaceTheme(control, ThemePalette.Resolve("dark-blue"));
+            control.ApplyPresentation(ProviderModelsFacetPresentation());
+            var logicalViewport = new Grid
+            {
+                Width = 1500,
+                Height = 820,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top
+            };
+            logicalViewport.Children.Add(control);
+            var host = new Window
+            {
+                Content = logicalViewport,
+                Width = 800,
+                Height = 600,
+                ShowInTaskbar = false,
+                WindowStyle = WindowStyle.None,
+                Opacity = 0,
+                Left = -10000,
+                Top = -10000
+            };
+            host.Show();
             try
             {
-                FlushProviderModelsDispatcher(host);
+                ArrangeProviderModelsViewport(host, logicalViewport, control, 1500);
                 Require(!control.UsesCompactLayout
                         && control.DetailSurface.ActualWidth is >= 340 and <= 380
                         && control.MasterSurface.ActualWidth > control.DetailSurface.ActualWidth * 2,
                     "the 1500-DIP Models surface did not preserve its catalog-first wide layout");
 
-                host.Width = 960;
-                FlushProviderModelsDispatcher(host);
+                ArrangeProviderModelsViewport(host, logicalViewport, control, 960);
                 Require(control.UsesCompactLayout
                         && Grid.GetRow(control.MasterSurface) == 0
                         && Grid.GetColumnSpan(control.MasterSurface) == 3
@@ -283,9 +301,8 @@ internal static partial class Program
                         && Grid.GetColumnSpan(control.DetailSurface) == 3,
                     "the 960-DIP Models surface did not stack the catalog and details panes");
 
-                host.Width = 1500;
                 control.LayoutTransform = new ScaleTransform(2, 2);
-                FlushProviderModelsDispatcher(host);
+                ArrangeProviderModelsViewport(host, logicalViewport, control, 1500);
                 Require(control.ActualWidth <= 750
                         && control.UsesCompactLayout
                         && Grid.GetRow(control.DetailSurface) == 2
@@ -309,7 +326,7 @@ internal static partial class Program
                     $"the bottom assignment target was not reachable at 200% ({targetBounds.Top:0.#}..{targetBounds.Bottom:0.#} of {control.WorkspaceScroller.ViewportHeight:0.#})");
 
                 control.LayoutTransform = Transform.Identity;
-                FlushProviderModelsDispatcher(host);
+                ArrangeProviderModelsViewport(host, logicalViewport, control, 1500);
                 Require(!control.UsesCompactLayout
                         && Grid.GetColumn(control.DetailSurface) == 2,
                     "the Models surface did not restore its wide layout after removing the 2x transform");

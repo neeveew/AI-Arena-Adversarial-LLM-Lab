@@ -682,6 +682,17 @@ internal static partial class Program
                     workspaceRoot,
                     safeSuggestion);
                 Require(safePreview.Available, "a normal exact repair diff should remain available");
+                var originalSha256 = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(sourcePath)));
+                Require(
+                    safePreview.Baselines.Count == 1,
+                    "a one-file exact repair preview should expose one managed content baseline");
+                var safeBaseline = safePreview.Baselines.Single();
+                Require(
+                    safeBaseline.Exists
+                    && safeBaseline.RelativePath.Equals(sourceRelativePath, StringComparison.Ordinal)
+                    && safeBaseline.Sha256 == originalSha256,
+                    "an exact repair preview should bind the reviewed source bytes to their managed SHA-256 baseline");
                 var guardedWrite = AgentDotNetSolutionDoctorService.BuildGuardedRepairFileWriteCommand(
                     safeSuggestion,
                     safePreview);
@@ -693,6 +704,11 @@ internal static partial class Program
                         "$workspaceRootItem.Attributes",
                         StringComparison.Ordinal),
                     "the generated apply command should reject a reparse-point workspace root");
+                Require(
+                    guardedWrite.Contains(
+                        $"ExpectedSha256 = '{originalSha256}'",
+                        StringComparison.Ordinal),
+                    "the generated apply command should carry the exact managed baseline digest shown in the preview");
 
                 var linkedWorkspaceRoot = Path.Combine(testRoot, "linked-workspace");
                 try
@@ -787,28 +803,59 @@ internal static partial class Program
                     && coordinator.DebugCommandRunEnabled,
                     "Full Access must not auto-run a Doctor repair; the file and manual Approve action should remain pending");
                 Require(
-                    coordinator.DebugCommandText.Contains("ExpectedSha256", StringComparison.Ordinal)
+                    coordinator.DebugCommandText.Contains(
+                        $"ExpectedSha256 = '{originalSha256}'",
+                        StringComparison.Ordinal)
                     && coordinator.DebugCommandText.Contains(
                         "Repair preview is stale",
                         StringComparison.Ordinal),
                     "snippet-backed repair commands should guard the exact reviewed baseline against stale writes");
                 File.WriteAllText(sourcePath, "class ExternalEdit { }");
+                var externalEditSha256 = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(sourcePath)));
+                Require(
+                    !externalEditSha256.Equals(originalSha256, StringComparison.OrdinalIgnoreCase),
+                    "the stale-preview fixture should replace the reviewed bytes with a distinct managed SHA-256 identity");
                 var stalePreview = AgentWorkspaceCommand.BuildPreview(
                     workspaceRoot,
                     "PowerShell",
                     coordinator.DebugCommandText);
+                Require(
+                    stalePreview.Ok,
+                    $"the stale-guard PowerShell command should remain previewable before execution: {stalePreview.Error}");
                 var staleApply = AgentWorkspaceCommand.RunAsync(
                         stalePreview,
                         TimeSpan.FromSeconds(15))
                     .GetAwaiter()
                     .GetResult();
+                var staleApplyDiagnostics = $"""
+                    Ok: {staleApply.Ok}
+                    ExitCode: {staleApply.ExitCode}
+                    TimedOut: {staleApply.TimedOut}
+                    Canceled: {staleApply.Canceled}
+                    Error:
+                    {staleApply.Error}
+                    StandardOutput:
+                    {staleApply.StandardOutput}
+                    StandardError:
+                    {staleApply.StandardError}
+                    """;
                 Require(
-                    !staleApply.Ok
-                    && $"{staleApply.StandardOutput}\n{staleApply.StandardError}".Contains(
+                    File.ReadAllText(sourcePath) == "class ExternalEdit { }",
+                    $"a stale repair must preserve the newer file content.\n{staleApplyDiagnostics}");
+                Require(
+                    !staleApply.Ok,
+                    $"a stale repair must not report successful execution.\n{staleApplyDiagnostics}");
+                Require(
+                    !staleApply.TimedOut
+                    && !staleApply.Canceled
+                    && staleApply.ExitCode > 0,
+                    $"the stale baseline guard should reject inside the PowerShell child instead of timing out, being canceled, or failing before launch.\n{staleApplyDiagnostics}");
+                Require(
+                    $"{staleApply.Error}\n{staleApply.StandardOutput}\n{staleApply.StandardError}".Contains(
                         "Repair preview is stale",
-                        StringComparison.OrdinalIgnoreCase)
-                    && File.ReadAllText(sourcePath) == "class ExternalEdit { }",
-                    "a file changed after diff preview must fail closed without overwriting the newer content");
+                        StringComparison.OrdinalIgnoreCase),
+                    $"a stale baseline rejection should explain that the reviewed preview is stale.\n{staleApplyDiagnostics}");
                 File.WriteAllText(sourcePath, "class Broken {");
 
                 coordinator.ControlReject();

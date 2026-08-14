@@ -20,11 +20,19 @@ internal static partial class Program
             AttachArenaPresentationResources(control);
             ApplyExperimentSurfaceTheme(control, ThemePalette.Resolve("dark-blue"));
             control.ApplyPresentation(ProviderModelsPresentation(modelCount: 240));
-            var host = new Window
+            var logicalViewport = new Grid
             {
-                Content = control,
                 Width = 1500,
                 Height = 860,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top
+            };
+            logicalViewport.Children.Add(control);
+            var host = new Window
+            {
+                Content = logicalViewport,
+                Width = 800,
+                Height = 600,
                 ShowInTaskbar = false,
                 WindowStyle = WindowStyle.None,
                 Opacity = 0,
@@ -35,7 +43,7 @@ internal static partial class Program
             host.Show();
             try
             {
-                FlushProviderModelsDispatcher(host);
+                ArrangeProviderModelsViewport(host, logicalViewport, control, 1500);
                 Require(!control.UsesCompactLayout
                         && Grid.GetRow(control.MasterSurface) == 0
                         && Grid.GetColumn(control.MasterSurface) == 0
@@ -137,8 +145,7 @@ internal static partial class Program
                 SystemMotionPreferences.SetQaAnimationsEnabledOverride(false);
                 try
                 {
-                    host.Width = 960;
-                    FlushProviderModelsDispatcher(host);
+                    ArrangeProviderModelsViewport(host, logicalViewport, control, 960);
                     Require(control.UsesCompactLayout
                             && Grid.GetRow(control.MasterSurface) == 0
                             && Grid.GetColumnSpan(control.MasterSurface) == 3
@@ -157,10 +164,9 @@ internal static partial class Program
                     SystemMotionPreferences.ClearQaOverride();
                 }
 
-                host.Width = 1500;
-                FlushProviderModelsDispatcher(host);
+                ArrangeProviderModelsViewport(host, logicalViewport, control, 1500);
                 Require(!control.UsesCompactLayout,
-                    "host-window viewport listener did not restore 72/28 layout after returning to 1500 DIP");
+                    "explicit 1500-DIP layout viewport did not restore the 72/28 Models layout");
                 Require(control.FocusSearch() && control.SearchBox.IsKeyboardFocusWithin,
                     "Models search was not keyboard focusable");
                 Require(control.FocusCatalog()
@@ -1168,6 +1174,22 @@ internal static partial class Program
             System.Windows.Threading.DispatcherPriority.ApplicationIdle,
             new Action(() => { }));
         host.UpdateLayout();
+    }
+
+    static void ArrangeProviderModelsViewport(
+        Window host,
+        FrameworkElement logicalViewport,
+        ProviderModelAssignmentsControl control,
+        double viewportWidth)
+    {
+        logicalViewport.Width = viewportWidth;
+        FlushProviderModelsDispatcher(host);
+        var contentIsScaled = control.LayoutTransform is { } transform && !transform.Value.IsIdentity;
+        control.ApplyResponsiveLayout(ProviderModelAssignmentsControl.UsesCompactLayoutAt(
+            control.ActualWidth,
+            viewportWidth,
+            contentIsScaled));
+        FlushProviderModelsDispatcher(host);
     }
 
     static void FlushProviderModelsSearchDebounce(Window host)
