@@ -3846,6 +3846,7 @@ static void ReleaseScriptsProtectInstallerDistributions()
     var releaseSecurityScript = ReadWorkspaceFile("scripts/release-security.ps1");
     var upstreamLock = ReadWorkspaceFile("packaging/upstream-lock.json");
     var dependencyLock = ReadWorkspaceFile("packaging/searxng-requirements-lock.txt");
+    var dependencyLockBytes = File.ReadAllBytes(FindWorkspaceFile("packaging/searxng-requirements-lock.txt"));
     var innoScript = ReadWorkspaceFile("packaging/inno/ai-arena-wpf.iss");
 
     Require(installerScript.Contains("Join-Path $distRoot \"installer\"", StringComparison.Ordinal) && installerScript.Contains("Join-Path $installerRoot \"AI Arena - $Version\"", StringComparison.Ordinal), "installer helper should target a versioned installer folder");
@@ -3902,7 +3903,7 @@ static void ReleaseScriptsProtectInstallerDistributions()
     Require(installerScript.Contains("certificateChainTrusted", StringComparison.Ordinal) && installerScript.Contains("timestampVerified", StringComparison.Ordinal), "installer signing reports should attest certificate and timestamp verification");
     Require(releaseSecurityScript.Contains("Test-AIArenaSha256Manifest", StringComparison.Ordinal), "release security helper should verify checksum manifests");
     Require(payloadScript.Contains("Save-VerifiedDownload", StringComparison.Ordinal) && payloadScript.Contains("Assert-FileHash", StringComparison.Ordinal), "payload downloads should be verified before extraction");
-    Require(payloadScript.Contains("--require-hashes", StringComparison.Ordinal) && payloadScript.Contains("PYTHON-REQUIREMENTS-LOCK.txt", StringComparison.Ordinal), "payload Python dependencies should install only from the reviewed hash lock");
+    Require(payloadScript.Contains("--only-binary=:all:", StringComparison.Ordinal) && payloadScript.Contains("--require-hashes", StringComparison.Ordinal) && payloadScript.Contains("PYTHON-REQUIREMENTS-LOCK.txt", StringComparison.Ordinal), "payload Python dependencies should install only wheels from the reviewed hash lock");
     Require(payloadScript.Contains("https://pypi.org/simple", StringComparison.Ordinal) && payloadScript.Contains("files.pythonhosted.org", StringComparison.Ordinal), "payload dependency installation should use and attest the official PyPI hosts");
     Require(payloadScript.Contains("Get-SafeArchiveTarget", StringComparison.Ordinal) && payloadScript.Contains("payload-inventory.json", StringComparison.Ordinal), "payload builder should reject archive traversal and emit a hashed inventory");
     Require(payloadScript.Contains("Refusing to mutate a finalized release directory", StringComparison.Ordinal) && payloadScript.Contains("release-checksums.sha256", StringComparison.Ordinal), "payload builder should not invalidate a finalized release checksum set");
@@ -3913,6 +3914,29 @@ static void ReleaseScriptsProtectInstallerDistributions()
     Require(!payloadScript.Contains("keep_only", StringComparison.Ordinal), "Arena SearXNG profile should inherit upstream engines instead of maintaining a brittle keep_only list");
     Require(upstreamLock.Contains("009D6BF7E3B2DDCA3D784FA09F90FE54336D5B60F0E0F305C37F400BF83CFD3B", StringComparison.Ordinal) && upstreamLock.Contains("B2A9F9836C6A916E3B0D4235DFB8B766D96285987A87B1B90C9B2EC61D45D7E9", StringComparison.Ordinal), "upstream lock should pin the reviewed CPython and SearXNG archive hashes");
     Require(dependencyLock.Contains("granian==2.7.6 --hash=sha256:", StringComparison.Ordinal) && dependencyLock.Contains("httpx[http2]==0.28.1 --hash=sha256:", StringComparison.Ordinal), "Python dependency lock should pin package versions and wheel hashes");
+    const string reviewedH2Lock = "h2==4.4.1 --hash=sha256:0e25f1462b23c9cb82d9eb02e28bc706dac2a68cb457c6a0d74d63c8a2a5d0e6";
+    var h2Locks = dependencyLock.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        .Select(line => line.Trim())
+        .Where(line => Regex.IsMatch(line, @"^h2(?:==|\[|\s|@)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        .ToArray();
+    Require(h2Locks.Length == 1 && h2Locks[0] == reviewedH2Lock,
+        "Python dependency lock must contain only the reviewed h2 4.4.1 Windows wheel hash and reject vulnerable h2 <= 4.4.0");
+    Require(dependencyLockBytes.Length >= 3
+        && !(dependencyLockBytes[0] == 0xEF && dependencyLockBytes[1] == 0xBB && dependencyLockBytes[2] == 0xBF)
+        && !dependencyLock.Contains("\r\n", StringComparison.Ordinal),
+        "Python dependency lock must remain LF-only UTF-8 without a BOM so its aggregate digest is reproducible");
+    const string reviewedDependencyLockSha256 = "C226BEC5ACDA13F7F084E37B018F74C96EFCF3E64EEC548EA8A2F9A1E2DFED6C";
+    var actualDependencyLockSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(dependencyLockBytes));
+    using (var upstreamLockDocument = JsonDocument.Parse(upstreamLock))
+    {
+        var recordedDependencyLockSha256 = upstreamLockDocument.RootElement
+            .GetProperty("pythonDependencies")
+            .GetProperty("sha256")
+            .GetString();
+        Require(actualDependencyLockSha256 == reviewedDependencyLockSha256
+            && recordedDependencyLockSha256 == reviewedDependencyLockSha256,
+            "upstream lock must bind the exact reviewed LF/no-BOM Python dependency-lock bytes");
+    }
     Require(sanityScript.Contains("installer changelog", StringComparison.Ordinal) && sanityScript.Contains("installer GitHub release notes", StringComparison.Ordinal), "release sanity should require installer-side release artifacts");
     Require(sanityScript.Contains("bundled SearXNG payload", StringComparison.Ordinal) && sanityScript.Contains("arena_searxng_wsgi.py", StringComparison.Ordinal), "release sanity should require the bundled SearXNG payload and JSON API boundary");
     Require(sanityScript.Contains("installed PowerShell control helper", StringComparison.Ordinal), "release sanity should require the installed PowerShell control helper");

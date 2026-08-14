@@ -7,6 +7,8 @@ versioned `.txt` change file.
 
 ## Verified
 
+- Replace the bundled vulnerable `h2` 4.3.0 dependency with reviewed `h2`
+  4.4.1 wheel bytes, and bind the exact Python lock to the upstream manifest.
 - Make Solution Doctor repair approvals verify reviewed file bytes through a
   portable streamed SHA-256 guard, including Windows PowerShell hosts where
   `Get-FileHash` is unavailable.
