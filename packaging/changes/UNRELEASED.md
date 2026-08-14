@@ -13,3 +13,5 @@ versioned `.txt` change file.
 - Keep cross-session transcript search coherent across rapid same-size external
   snapshot rewrites by hashing only inside the native timestamp ambiguity
   window, while retaining metadata-only cache hits for aged snapshots.
+- Keep the release-security fixture exit-clean in both PowerShell editions after
+  it verifies an intentionally failing harness and rejects its reusable receipt.

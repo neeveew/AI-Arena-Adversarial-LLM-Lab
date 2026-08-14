@@ -165,7 +165,13 @@ try {
     Require-Throws {
         Invoke-AIArenaReleaseVerificationHarnesses -RepositoryRoot $receiptRoot -OutputPath $failedReceiptPath -ReceiptKey (New-AIArenaReleaseVerificationKey) -Configuration Release -ProjectPath @($coreProject) -SourceCommit $fixtureCommit -SourceTree $fixtureTree
     } 'No passed receipt was created' 'A non-zero harness process result must not be representable as a passed receipt.'
+    Require ($LASTEXITCODE -eq 7) 'The failing harness fixture must preserve its exact native process exit code until the failure assertions finish.'
     Require (-not (Test-Path -LiteralPath $failedReceiptPath)) 'A failed harness execution must leave no reusable receipt file.'
+    # This native failure is deliberate and fully asserted above. Follow it with
+    # an asserted native success so both call-invoked and dot-sourced hosts see a
+    # successful automatic exit code; direct assignment would be script-scoped.
+    & $dotnet.Source --version | Out-Null
+    Require ($LASTEXITCODE -eq 0) 'The native exit-code reset probe must succeed.'
 
     $compileFixtureRoot = Join-Path $fixtureRoot 'installer-compile'
     [void](New-Item -ItemType Directory -Path $compileFixtureRoot -Force)
@@ -356,6 +362,7 @@ try {
             -Label 'Missing-timestamp fixture'
     } 'required RFC 3161 timestamp' 'A valid but untimestamped signature must be rejected.'
 
+    Require ($LASTEXITCODE -eq 0) "Successful fixture completion must not leak a native process failure; found exit code $LASTEXITCODE."
     Write-Host 'Release-security fixture tests passed.'
 }
 finally {
