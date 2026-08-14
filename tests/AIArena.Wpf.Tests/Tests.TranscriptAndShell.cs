@@ -4344,6 +4344,34 @@ static async Task CrossSessionSearchCachesCompactEquivalentProjectionsAsync()
         "a filesystem that reports no change-time evidence must use the content-hash fallback");
     Require(CrossSessionSearchService.ShouldTrustNativeChangeTime(1),
         "a positive Windows file change time should remain eligible for the metadata fast path");
+    var generationNow = new DateTimeOffset(2040, 5, 6, 7, 8, 9, TimeSpan.Zero);
+    var generationFileTime = generationNow.UtcDateTime.ToFileTimeUtc();
+    Require(CrossSessionSearchService.ShouldHashRecentNativeChangeTime(generationFileTime, generationNow),
+        "a just-observed native change time must carry content evidence while clock ticks can collide");
+    Require(
+        CrossSessionSearchService.ShouldHashRecentNativeChangeTime(
+            generationFileTime,
+            generationNow + CrossSessionSearchService.RecentNativeChangeHashWindow - TimeSpan.FromTicks(1)),
+        "native change evidence should stay guarded throughout the ambiguity window");
+    Require(
+        !CrossSessionSearchService.ShouldHashRecentNativeChangeTime(
+            generationFileTime,
+            generationNow + CrossSessionSearchService.RecentNativeChangeHashWindow),
+        "an aged native change time should return to the metadata-only fast path");
+    Require(
+        CrossSessionSearchService.ShouldHashRecentNativeChangeTime(
+            generationNow.AddMilliseconds(1).UtcDateTime.ToFileTimeUtc(),
+            generationNow),
+        "future-skewed native change evidence must fail safe to content hashing");
+    Require(CrossSessionSearchService.ShouldHashRecentNativeChangeTime(long.MaxValue, generationNow),
+        "an invalid native change time must fail safe to content hashing");
+    Require(CrossSessionSearchService.ContentHashEvidenceMatches("", "")
+            && CrossSessionSearchService.ContentHashEvidenceMatches("HASH-A", "HASH-A"),
+        "equivalent absent or present content evidence should identify the same generation");
+    Require(!CrossSessionSearchService.ContentHashEvidenceMatches("HASH-A", "")
+            && !CrossSessionSearchService.ContentHashEvidenceMatches("", "HASH-B")
+            && !CrossSessionSearchService.ContentHashEvidenceMatches("HASH-A", "HASH-B"),
+        "missing or different content evidence must not match a cached hashed generation");
 
     var metadata = new Dictionary<string, JsonElement>
     {
@@ -4486,6 +4514,90 @@ static async Task CrossSessionSearchCachesCompactEquivalentProjectionsAsync()
         Require(second.Count == 1, "a different query should reuse the cached compact fields");
         Require(afterSecond.SnapshotLoads == 1 && afterSecond.CacheHits == 1,
             "a repeated cross-session query should avoid a second snapshot load and full projection");
+
+        var transitioningClock = new MutableCrossSessionSearchTimeProvider(DateTimeOffset.UnixEpoch);
+        var transitionHashChunks = 0;
+        var transitioningService = new CrossSessionSearchService(
+            store,
+            CrossSessionSearchService.DefaultMaxCachedSessions,
+            CrossSessionSearchService.DefaultMaxCachedMessages,
+            CrossSessionSearchService.DefaultMaxCachedCharacters,
+            hashChunkObserved: _ => transitionHashChunks++,
+            timeProvider: transitioningClock);
+        Require((await transitioningService.SearchAsync("cache-mutation-original")).Count == 1
+                && transitionHashChunks > 0,
+            "the immediate native generation path should hash when its change time is inside the ambiguity window");
+        var recentTransitionHashChunks = transitionHashChunks;
+        transitioningClock.UtcNow = new DateTimeOffset(9000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        Require((await transitioningService.SearchAsync("reasoning-marker")).Count == 1,
+            "aging a cached native generation should preserve its truthful search projection");
+        Require(transitionHashChunks == recentTransitionHashChunks
+                && transitioningService.Diagnostics.SnapshotLoads == 2
+                && transitioningService.Diagnostics.CacheHits == 0,
+            "dropping recent hash evidence should perform one metadata-only reload when the stamp ages out");
+        Require((await transitioningService.SearchAsync("reasoning-marker")).Count == 1
+                && transitioningService.Diagnostics.SnapshotLoads == 2
+                && transitioningService.Diagnostics.CacheHits == 1,
+            "the aged metadata-only generation should return to stable cache hits after its one transition reload");
+
+        var agedHashChunks = 0;
+        var agedService = new CrossSessionSearchService(
+            store,
+            CrossSessionSearchService.DefaultMaxCachedSessions,
+            CrossSessionSearchService.DefaultMaxCachedMessages,
+            CrossSessionSearchService.DefaultMaxCachedCharacters,
+            hashChunkObserved: _ => agedHashChunks++,
+            timeProvider: new FixedCrossSessionSearchTimeProvider(
+                new DateTimeOffset(9000, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        Require((await agedService.SearchAsync("cache-mutation-original")).Count == 1
+                && (await agedService.SearchAsync("reasoning-marker")).Count == 1,
+            "aged native generation evidence should preserve truthful cached search results");
+        Require(agedHashChunks == 0
+                && agedService.Diagnostics.SnapshotLoads == 1
+                && agedService.Diagnostics.CacheHits == 1,
+            "aged native generation cache hits should remain on the zero-hash metadata fast path");
+
+        var delayedSnapshot = SessionStore.CreateDefaultSnapshot();
+        delayedSnapshot.Engine.Messages.Add(new DialogueMessage
+        {
+            Turn = 1,
+            Speaker = "Delayed Agent",
+            SpeakerId = "delayed-agent",
+            Text = "delayed-cache-marker-a"
+        });
+        var delayedStore = new SessionStore(Path.Combine(tempRoot, "delayed-native-fixture"));
+        await delayedStore.SaveSnapshotAsync(delayedSnapshot, "delayed-run");
+        var delayedPath = delayedStore.SnapshotPath("delayed-run");
+        var delayedWriteTime = File.GetLastWriteTimeUtc(delayedPath);
+        var delayedLength = new FileInfo(delayedPath).Length;
+        var delayedClock = new MutableCrossSessionSearchTimeProvider(DateTimeOffset.UnixEpoch);
+        var delayedService = new CrossSessionSearchService(
+            delayedStore,
+            CrossSessionSearchService.DefaultMaxCachedSessions,
+            CrossSessionSearchService.DefaultMaxCachedMessages,
+            CrossSessionSearchService.DefaultMaxCachedCharacters,
+            timeProvider: delayedClock);
+        Require((await delayedService.SearchAsync("delayed-cache-marker-a")).Count == 1
+                && delayedService.Diagnostics.SnapshotLoads == 1,
+            "the delayed external mutation fixture should cache its initial recent hashed generation");
+        var delayedJson = File.ReadAllText(delayedPath).Replace(
+            "delayed-cache-marker-a",
+            "delayed-cache-marker-b",
+            StringComparison.Ordinal);
+        File.WriteAllText(delayedPath, delayedJson);
+        Require(new FileInfo(delayedPath).Length == delayedLength,
+            "the delayed external mutation fixture must preserve snapshot length");
+        File.SetLastWriteTimeUtc(delayedPath, delayedWriteTime);
+        Require(File.GetLastWriteTimeUtc(delayedPath) == delayedWriteTime,
+            "the delayed external mutation fixture must restore its original write timestamp");
+        delayedClock.UtcNow = new DateTimeOffset(9000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        Require((await delayedService.SearchAsync("delayed-cache-marker-b")).Count == 1
+                && delayedService.Diagnostics.SnapshotLoads == 2,
+            "a same-size external rewrite hidden until its native stamp ages must reload instead of serving cached content");
+        Require((await delayedService.SearchAsync("delayed-cache-marker-b")).Count == 1
+                && delayedService.Diagnostics.SnapshotLoads == 2
+                && delayedService.Diagnostics.CacheHits == 1,
+            "the delayed external rewrite should return to stable metadata-only cache hits after reloading");
 
         var hashSnapshot = SessionStore.CreateDefaultSnapshot();
         hashSnapshot.Engine.Messages.Add(new DialogueMessage
@@ -6218,6 +6330,18 @@ static void ShellStateChangesReachTheControlPlaneFromBothRoutes()
     Require(
         searchBody.Contains("PublishSettingsOverlayChanged", StringComparison.Ordinal),
         "the settings query must be announced from the text-changed handler");
+}
+
+private sealed class FixedCrossSessionSearchTimeProvider(DateTimeOffset utcNow) : TimeProvider
+{
+    public override DateTimeOffset GetUtcNow() => utcNow;
+}
+
+private sealed class MutableCrossSessionSearchTimeProvider(DateTimeOffset utcNow) : TimeProvider
+{
+    public DateTimeOffset UtcNow { get; set; } = utcNow;
+
+    public override DateTimeOffset GetUtcNow() => UtcNow;
 }
 
 }
