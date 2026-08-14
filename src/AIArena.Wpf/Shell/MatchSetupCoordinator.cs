@@ -47,6 +47,7 @@ internal sealed class MatchSetupCoordinator
     private bool isUpdatingRivalryMatrix;
     private bool isUpdatingModelBehavior;
     private bool currentFactoryMode;
+    private RivalryMatrixRenderBaseline? rivalryMatrixBaseline;
 
     public MatchSetupCoordinator(
         SessionStore sessionStore,
@@ -102,13 +103,10 @@ internal sealed class MatchSetupCoordinator
 
     public void PopulateRivalryMatrix(ArenaViewSnapshot snapshot)
     {
-        PopulateModelBehavior(snapshot.FactoryMode);
+        string? draftRefreshStatus = null;
         isUpdatingRivalryMatrix = true;
         try
         {
-            rivalryMatrixEnabledCheckBox.IsChecked = snapshot.RivalryMatrixEnabled;
-            rivalryMatrixRows.Children.Clear();
-            rivalryMatrixControls.Clear();
             var agentIds = snapshot.Agents
                 .Where(agent => agent.Active)
                 .Select(agent => agent.Id)
@@ -121,6 +119,28 @@ internal sealed class MatchSetupCoordinator
                 .Where(link => IsValidRivalryLink(link, activeAgentIds))
                 .GroupBy(link => link.Source, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            var authoritativeSelections = agentIds
+                .Select(source => links.TryGetValue(source, out var item)
+                    ? new RivalryMatrixSelection(source, item.Target, NormalizeRivalryStance(item.Stance))
+                    : new RivalryMatrixSelection(source, "", "neutral"))
+                .ToArray();
+            var currentDraft = CaptureRivalryMatrixDraft();
+            var reconciliation = rivalryMatrixBaseline is { } previous
+                && previous.SessionId.Equals(snapshot.SessionId, StringComparison.OrdinalIgnoreCase)
+                ? ReconcileRivalryDraft(
+                    previous.Enabled,
+                    previous.Selections,
+                    currentDraft.Enabled,
+                    currentDraft.Selections,
+                    snapshot.RivalryMatrixEnabled,
+                    authoritativeSelections,
+                    activeAgentIds)
+                : new RivalryDraftReconciliation(snapshot.RivalryMatrixEnabled, authoritativeSelections, 0, 0, 0);
+            var selections = reconciliation.Selections.ToDictionary(item => item.Source, StringComparer.OrdinalIgnoreCase);
+
+            rivalryMatrixEnabledCheckBox.IsChecked = reconciliation.Enabled;
+            rivalryMatrixRows.Children.Clear();
+            rivalryMatrixControls.Clear();
 
             foreach (var source in agentIds)
             {
@@ -131,20 +151,41 @@ internal sealed class MatchSetupCoordinator
             {
                 PopulateRivalryTargetPicker(targetPicker, source, agentIds);
                 PopulateRivalryStancePicker(stancePicker);
-                var link = links.TryGetValue(source, out var item) ? item : null;
-                ShellUiHelpers.SelectComboTag(targetPicker, link?.Target ?? "");
-                ShellUiHelpers.SelectComboTag(stancePicker, NormalizeRivalryStance(link?.Stance ?? "neutral"));
+                var selection = selections[source];
+                ShellUiHelpers.SelectComboTag(targetPicker, selection.Target);
+                ShellUiHelpers.SelectComboTag(stancePicker, selection.Stance);
             }
 
             SetRivalryMatrixStatus(Summary(snapshot.RivalryMatrixEnabled, snapshot.RivalryMatrix, activeAgentIds), resourceBrush("MutedTextBrush"));
             UpdateBusyState(rivalryMatrixBusy);
+            rivalryMatrixBaseline = new RivalryMatrixRenderBaseline(
+                snapshot.SessionId,
+                snapshot.RivalryMatrixEnabled,
+                authoritativeSelections);
+            if (reconciliation.RetainedEdits > 0)
+            {
+                var savedState = snapshot.RivalryMatrixEnabled ? "enabled" : "disabled";
+                var conflictText = reconciliation.Conflicts > 0
+                    ? $" {reconciliation.Conflicts} edit(s) overlap an external change; your local value remains in the controls."
+                    : "";
+                var invalidText = reconciliation.InvalidTargets > 0
+                    ? $" {reconciliation.InvalidTargets} removed target(s) were reset to No target."
+                    : "";
+                draftRefreshStatus =
+                    $"Saved relationship matrix refreshed ({savedState}); retained {reconciliation.RetainedEdits} local draft edit(s).{conflictText}{invalidText} Apply Matrix to save your draft.";
+            }
         }
         finally
         {
             isUpdatingRivalryMatrix = false;
         }
 
-        RefreshDraftRivalryMatrixPreview();
+        RefreshDraftRivalryMatrixPreview(draftRefreshStatus);
+    }
+
+    public void PopulateModelBehavior(ArenaViewSnapshot snapshot)
+    {
+        PopulateModelBehavior(snapshot.FactoryMode);
     }
 
     public void UpdateBusyState(bool busy)
@@ -480,6 +521,127 @@ internal sealed class MatchSetupCoordinator
             statusOverride ?? Summary(enabled, plan.Links, activeAgentIds, plan.SkippedInvalidRules),
             resourceBrush(plan.Links.Count == 0 ? "MutedTextBrush" : "TextBrush"));
         PopulateRivalryMatrixPreview(enabled, plan.Links, activeAgentIds, plan.SkippedInvalidRules);
+    }
+
+    private RivalryMatrixDraft CaptureRivalryMatrixDraft()
+    {
+        return new RivalryMatrixDraft(
+            rivalryMatrixEnabledCheckBox.IsChecked == true,
+            RivalryMatrixControls()
+                .Select(row => new RivalryMatrixSelection(
+                    row.Source,
+                    ShellUiHelpers.SelectedComboTag(row.Target, ""),
+                    NormalizeRivalryStance(ShellUiHelpers.SelectedComboTag(row.Stance, "neutral"))))
+                .ToArray());
+    }
+
+    internal static RivalryDraftReconciliation ReconcileRivalryDraft(
+        bool previousEnabled,
+        IReadOnlyList<RivalryMatrixSelection> previousSelections,
+        bool draftEnabled,
+        IReadOnlyList<RivalryMatrixSelection> draftSelections,
+        bool nextEnabled,
+        IReadOnlyList<RivalryMatrixSelection> nextSelections,
+        IReadOnlyCollection<string> activeAgentIds)
+    {
+        var active = activeAgentIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var previousBySource = previousSelections
+            .GroupBy(selection => selection.Source, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => NormalizeSelection(group.First()), StringComparer.OrdinalIgnoreCase);
+        var draftBySource = draftSelections
+            .GroupBy(selection => selection.Source, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => NormalizeSelection(group.First()), StringComparer.OrdinalIgnoreCase);
+        var nextBySource = nextSelections
+            .GroupBy(selection => selection.Source, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => NormalizeSelection(group.First()), StringComparer.OrdinalIgnoreCase);
+
+        var retainedEdits = 0;
+        var conflicts = 0;
+        var invalidTargets = 0;
+        var enabled = nextEnabled;
+        if (draftEnabled != previousEnabled)
+        {
+            if (nextEnabled == draftEnabled)
+            {
+                // The authoritative refresh contains this edit (normally our
+                // own successful save), so it is no longer an unsaved draft.
+                enabled = nextEnabled;
+            }
+            else
+            {
+                retainedEdits++;
+                enabled = draftEnabled;
+                if (nextEnabled != previousEnabled)
+                {
+                    conflicts++;
+                }
+            }
+        }
+
+        var reconciled = new List<RivalryMatrixSelection>(nextSelections.Count);
+        foreach (var source in nextSelections.Select(selection => NormalizeAgentId(selection.Source)))
+        {
+            if (string.IsNullOrWhiteSpace(source) || !active.Contains(source))
+            {
+                continue;
+            }
+
+            var next = nextBySource.TryGetValue(source, out var nextSelection)
+                ? nextSelection
+                : new RivalryMatrixSelection(source, "", "neutral");
+            var previous = previousBySource.TryGetValue(source, out var previousSelection)
+                ? previousSelection
+                : next;
+            var draft = draftBySource.TryGetValue(source, out var draftSelection)
+                ? draftSelection
+                : previous;
+            if (SelectionsEqual(draft, previous))
+            {
+                reconciled.Add(next);
+                continue;
+            }
+
+            if (SelectionsEqual(draft, next))
+            {
+                // The saved value now agrees with the local control. Adopt the
+                // new baseline without claiming the already-saved edit remains.
+                reconciled.Add(next);
+                continue;
+            }
+
+            retainedEdits++;
+            if (!SelectionsEqual(next, previous) && !SelectionsEqual(next, draft))
+            {
+                conflicts++;
+            }
+
+            var target = NormalizeAgentId(draft.Target);
+            if (!string.IsNullOrWhiteSpace(target)
+                && (!active.Contains(target) || target.Equals(source, StringComparison.OrdinalIgnoreCase)))
+            {
+                target = "";
+                invalidTargets++;
+            }
+
+            reconciled.Add(new RivalryMatrixSelection(source, target, NormalizeRivalryStance(draft.Stance)));
+        }
+
+        return new RivalryDraftReconciliation(enabled, reconciled, retainedEdits, conflicts, invalidTargets);
+    }
+
+    private static RivalryMatrixSelection NormalizeSelection(RivalryMatrixSelection selection)
+    {
+        return new RivalryMatrixSelection(
+            NormalizeAgentId(selection.Source),
+            NormalizeAgentId(selection.Target),
+            NormalizeRivalryStance(selection.Stance));
+    }
+
+    private static bool SelectionsEqual(RivalryMatrixSelection left, RivalryMatrixSelection right)
+    {
+        return NormalizeAgentId(left.Source).Equals(NormalizeAgentId(right.Source), StringComparison.OrdinalIgnoreCase)
+            && NormalizeAgentId(left.Target).Equals(NormalizeAgentId(right.Target), StringComparison.OrdinalIgnoreCase)
+            && NormalizeRivalryStance(left.Stance).Equals(NormalizeRivalryStance(right.Stance), StringComparison.OrdinalIgnoreCase);
     }
 
     private RivalryMatrixPlan CurrentDraftPlan(IReadOnlyCollection<string> activeAgentIds)
@@ -1083,6 +1245,27 @@ internal sealed class MatchSetupCoordinator
         string Source,
         ComboBox Target,
         ComboBox Stance);
+
+    private sealed record RivalryMatrixDraft(
+        bool Enabled,
+        IReadOnlyList<RivalryMatrixSelection> Selections);
+
+    private sealed record RivalryMatrixRenderBaseline(
+        string SessionId,
+        bool Enabled,
+        IReadOnlyList<RivalryMatrixSelection> Selections);
+
+    internal sealed record RivalryMatrixSelection(
+        string Source,
+        string Target,
+        string Stance);
+
+    internal sealed record RivalryDraftReconciliation(
+        bool Enabled,
+        IReadOnlyList<RivalryMatrixSelection> Selections,
+        int RetainedEdits,
+        int Conflicts,
+        int InvalidTargets);
 
     internal sealed record RivalryMatrixPlan(
         IReadOnlyList<RivalryMatrixItem> Links,

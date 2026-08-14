@@ -13,6 +13,7 @@ using System.Windows.Threading;
 using AIArena.Core.Models;
 using AIArena.Core.Providers;
 using AIArena.Wpf.Models;
+using AIArena.Wpf.Controls;
 using Microsoft.Win32;
 
 namespace AIArena.Wpf;
@@ -58,7 +59,8 @@ internal sealed class CollaborateCoordinator
     private readonly IModelProviderClient modelClient;
     private readonly Dispatcher dispatcher;
     private readonly ScrollViewer chatScrollViewer;
-    private readonly StackPanel messageItems;
+    private readonly Panel messageItems;
+    private readonly VirtualizingConversationPanel? virtualMessageItems;
     private readonly TextBox promptText;
     private readonly Button planPromptButton;
     private readonly Button critiquePromptButton;
@@ -139,7 +141,7 @@ internal sealed class CollaborateCoordinator
         IModelProviderClient? modelClient,
         Dispatcher dispatcher,
         ScrollViewer chatScrollViewer,
-        StackPanel messageItems,
+        Panel messageItems,
         TextBox promptText,
         Button planPromptButton,
         Button critiquePromptButton,
@@ -181,6 +183,9 @@ internal sealed class CollaborateCoordinator
         this.dispatcher = dispatcher;
         this.chatScrollViewer = chatScrollViewer;
         this.messageItems = messageItems;
+        virtualMessageItems = messageItems as VirtualizingConversationPanel;
+        AutomationProperties.SetName(messageItems, "AI Collaborate conversation");
+        AutomationProperties.SetHelpText(messageItems, "AI Collaborate prompts and answers in chronological order.");
         this.promptText = promptText;
         this.planPromptButton = planPromptButton;
         this.critiquePromptButton = critiquePromptButton;
@@ -751,11 +756,15 @@ internal sealed class CollaborateCoordinator
 
         if (history.Count == 0)
         {
-            messageItems.Children.Clear();
+            ClearMessagePresentation();
         }
 
-        AddUserMessage(prompt);
-        var answerHost = AddAssistantMessage(out var traceItems, out var runReviewItems);
+        var pendingExchangeKey = $"collaborate-live-{Guid.NewGuid():N}";
+        AddUserMessage(prompt, $"{pendingExchangeKey}-user");
+        var answerHost = AddAssistantMessage(
+            out var traceItems,
+            out var runReviewItems,
+            $"{pendingExchangeKey}-assistant");
         ScrollToEnd();
 
         try
@@ -812,10 +821,25 @@ internal sealed class CollaborateCoordinator
             SetPromptAssistControlsEnabled(true);
             runCancellation?.Dispose();
             runCancellation = null;
+            RenderCompletedVirtualConversation();
             RefreshProviderState();
             RefreshRecentItems();
             promptText.Focus();
             ScrollToEnd();
+        }
+    }
+
+    private void RenderCompletedVirtualConversation()
+    {
+        if (virtualMessageItems is null || currentConversationId is not Guid id)
+        {
+            return;
+        }
+
+        var conversation = conversations.FirstOrDefault(item => item.Id == id);
+        if (conversation is not null)
+        {
+            RenderConversation(conversation);
         }
     }
 
@@ -1863,19 +1887,34 @@ internal sealed class CollaborateCoordinator
         };
     }
 
-    private void AddUserMessage(string text)
+    private void AddUserMessage(string text, object? key = null)
     {
-        messageItems.Children.Add(CreateMessageCard(
+        Func<UIElement> factory = () => CreateMessageCard(
             "You",
             text,
             resourceBrush("PrimaryBorderBrush"),
             HorizontalAlignment.Right,
             UserMessageMaxWidth,
             new Thickness(12),
-            0.08));
+            0.08);
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.AddRow(
+                factory,
+                key,
+                EstimateConversationRowHeight(text),
+                automationName: "Collaborate message You",
+                automationHelpText: text);
+            return;
+        }
+
+        messageItems.Children.Add(factory());
     }
 
-    private StackPanel AddAssistantMessage(out StackPanel traceItems, out StackPanel runReviewItems)
+    private StackPanel AddAssistantMessage(
+        out StackPanel traceItems,
+        out StackPanel runReviewItems,
+        object? key = null)
     {
         var answer = CreateMarkdownHost("Working...", 15);
         traceItems = new StackPanel();
@@ -1916,14 +1955,29 @@ internal sealed class CollaborateCoordinator
         stack.Children.Add(answer);
         stack.Children.Add(reviewExpander);
         stack.Children.Add(expander);
-        messageItems.Children.Add(CreateMessageCard(
+        var card = CreateMessageCard(
             "AI Collaborate",
             stack,
             resourceBrush("PrimaryBorderBrush"),
             HorizontalAlignment.Stretch,
             AssistantMessageMaxWidth,
             new Thickness(16),
-            0.06));
+            0.06);
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.AddRow(
+                () => card,
+                key,
+                280d,
+                keepAlive: true,
+                automationName: "Collaborate message AI Collaborate",
+                automationHelpText: "AI Collaborate response is streaming.");
+        }
+        else
+        {
+            messageItems.Children.Add(card);
+        }
+
         return answer;
     }
 
@@ -2070,7 +2124,7 @@ internal sealed class CollaborateCoordinator
         };
     }
 
-    private void AddTraceStep(StackPanel traceItems, CollaborateStep step)
+    private void AddTraceStep(StackPanel traceItems, CollaborateStep step, bool scrollToEnd = true)
     {
         AddTraceGroupHeaderIfNeeded(traceItems, step);
         UpdateTraceHeader(traceItems, step);
@@ -2124,7 +2178,10 @@ internal sealed class CollaborateCoordinator
             Margin = new Thickness(0, 0, 0, 10),
             Child = grid
         });
-        ScrollToEnd();
+        if (scrollToEnd)
+        {
+            ScrollToEnd();
+        }
     }
 
     private static void UpdateTraceHeader(StackPanel traceItems, CollaborateStep step)
@@ -2463,13 +2520,21 @@ internal sealed class CollaborateCoordinator
 
     private void RenderEmptyState()
     {
-        messageItems.Children.Clear();
-        messageItems.Children.Add(BuildEmptyStateCard(resourceBrush, prompt =>
+        ClearMessagePresentation();
+        Func<UIElement> factory = () => BuildEmptyStateCard(resourceBrush, prompt =>
         {
             promptText.Text = MergeStarterPrompt(promptText.Text, prompt);
             promptText.Focus();
             promptText.CaretIndex = promptText.Text.Length;
-        }));
+        });
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.AddRow(factory, "collaborate-empty", 168d, keepAlive: true);
+        }
+        else
+        {
+            messageItems.Children.Add(factory());
+        }
     }
 
     internal static Border BuildEmptyStateCard(
@@ -2541,7 +2606,18 @@ internal sealed class CollaborateCoordinator
 
     private void ScrollToEnd()
     {
-        dispatcher.BeginInvoke(() => chatScrollViewer.ScrollToEnd(), DispatcherPriority.Background);
+        dispatcher.BeginInvoke(
+            () =>
+            {
+                if (virtualMessageItems is not null)
+                {
+                    virtualMessageItems.ScrollToEnd();
+                    return;
+                }
+
+                chatScrollViewer.ScrollToEnd();
+            },
+            DispatcherPriority.Background);
     }
 
     private CollaborateRunResult ResultFromFinal(CollaborateStep final, IReadOnlyList<CollaborateStep> fallbacks)
@@ -3739,20 +3815,136 @@ internal sealed class CollaborateCoordinator
 
     private void RenderConversation(CollaborateConversation conversation)
     {
-        messageItems.Children.Clear();
-        foreach (var exchange in conversation.Exchanges)
+        ClearMessagePresentation();
+        if (virtualMessageItems is not null)
         {
-            AddUserMessage(exchange.Prompt);
-            var answerHost = AddAssistantMessage(out var traceItems, out var runReviewItems);
+            virtualMessageItems.ReplaceRows(
+                ConversationRowDefinitions(conversation),
+                refreshRealizedRows: false);
+            return;
+        }
+
+        for (var index = 0; index < conversation.Exchanges.Count; index++)
+        {
+            var exchange = conversation.Exchanges[index];
+            var exchangeKey = $"collaborate-{conversation.Id:N}-{index}";
+            AddUserMessage(exchange.Prompt, $"{exchangeKey}-user");
+            var answerHost = AddAssistantMessage(
+                out var traceItems,
+                out var runReviewItems,
+                $"{exchangeKey}-assistant");
             RenderMarkdown(answerHost, exchange.Answer, 14);
             traceItems.Children.Clear();
             foreach (var step in exchange.TraceSteps)
             {
-                AddTraceStep(traceItems, step);
+                AddTraceStep(traceItems, step, scrollToEnd: false);
             }
 
             RenderRunReview(runReviewItems, exchange.Prompt, exchange.Answer, exchange.TraceSteps, "Restored.");
         }
+
+    }
+
+    private IReadOnlyList<VirtualizingConversationPanel.ConversationRowDefinition> ConversationRowDefinitions(
+        CollaborateConversation conversation)
+    {
+        var definitions = new List<VirtualizingConversationPanel.ConversationRowDefinition>(conversation.Exchanges.Count * 2);
+        for (var index = 0; index < conversation.Exchanges.Count; index++)
+        {
+            var exchange = conversation.Exchanges[index];
+            var exchangeKey = $"collaborate-{conversation.Id:N}-{index}";
+            definitions.Add(new VirtualizingConversationPanel.ConversationRowDefinition(
+                $"{exchangeKey}-user",
+                () => CreateMessageCard(
+                    "You",
+                    exchange.Prompt,
+                    resourceBrush("PrimaryBorderBrush"),
+                    HorizontalAlignment.Right,
+                    UserMessageMaxWidth,
+                    new Thickness(12),
+                    0.08),
+                EstimateConversationRowHeight(exchange.Prompt),
+                KeepAlive: false,
+                AutomationName: "Collaborate message You",
+                AutomationHelpText: exchange.Prompt));
+            definitions.Add(new VirtualizingConversationPanel.ConversationRowDefinition(
+                $"{exchangeKey}-assistant",
+                () => CreateRestoredAssistantMessageCard(exchange),
+                EstimateConversationRowHeight(exchange.Answer, exchange.TraceSteps.Count),
+                KeepAlive: false,
+                AutomationName: "Collaborate message AI Collaborate",
+                AutomationHelpText: exchange.Answer));
+        }
+
+        return definitions;
+    }
+
+    private Border CreateRestoredAssistantMessageCard(CollaborateExchange exchange)
+    {
+        var answer = CreateMarkdownHost(exchange.Answer, 14);
+        var traceItems = new StackPanel();
+        var expander = new Expander
+        {
+            Header = TeamDebateHeader(0, 0, hasErrors: false),
+            Foreground = resourceBrush("MutedTextBrush"),
+            IsExpanded = false,
+            Margin = new Thickness(0, 10, 0, 0),
+            Content = traceItems
+        };
+        traceItems.Tag = new TraceHeaderState(expander);
+        foreach (var step in exchange.TraceSteps)
+        {
+            AddTraceStep(traceItems, step, scrollToEnd: false);
+        }
+
+        var runReviewItems = new StackPanel();
+        RenderRunReview(runReviewItems, exchange.Prompt, exchange.Answer, exchange.TraceSteps, "Restored.");
+        var reviewExpander = new Expander
+        {
+            Header = "Run Review",
+            Foreground = resourceBrush("MutedTextBrush"),
+            IsExpanded = true,
+            Margin = new Thickness(0, 10, 0, 0),
+            Content = runReviewItems
+        };
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock
+        {
+            Text = "Final Answer",
+            Foreground = resourceBrush("PrimaryBorderBrush"),
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 8)
+        });
+        stack.Children.Add(answer);
+        stack.Children.Add(reviewExpander);
+        stack.Children.Add(expander);
+        return CreateMessageCard(
+            "AI Collaborate",
+            stack,
+            resourceBrush("PrimaryBorderBrush"),
+            HorizontalAlignment.Stretch,
+            AssistantMessageMaxWidth,
+            new Thickness(16),
+            0.06);
+    }
+
+    private void ClearMessagePresentation()
+    {
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.ClearRows();
+            return;
+        }
+
+        messageItems.Children.Clear();
+    }
+
+    internal static double EstimateConversationRowHeight(string text, int traceStepCount = 0)
+    {
+        var lines = Math.Max(1, text.Count(character => character == '\n') + 1);
+        var wrappedLines = Math.Max(lines, (text.Length / 88) + 1);
+        return Math.Clamp(62d + (wrappedLines * 20d) + (traceStepCount > 0 ? 42d : 0d), 78d, 720d);
     }
 
     private static CollaborateSearchResult BuildSearchResult(

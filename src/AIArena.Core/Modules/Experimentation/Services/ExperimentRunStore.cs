@@ -1,5 +1,6 @@
+using System.Buffers;
 using System.Collections.Immutable;
-using System.Text;
+using System.Security.Cryptography;
 using System.Text.Json;
 using AIArena.Core.Models;
 
@@ -7,9 +8,11 @@ namespace AIArena.Core.Services;
 
 public sealed record ArenaExperimentRunStoreOptions(
     int MaximumRuns = ArenaExperimentRunStoreOptions.DefaultMaximumRuns,
-    int MaximumRunBytes = 512 * 1024)
+    int MaximumRunBytes = 512 * 1024,
+    int MaximumParallelDecodes = ArenaExperimentRunStoreOptions.DefaultMaximumParallelDecodes)
 {
     public const int DefaultMaximumRuns = 10_000;
+    public const int DefaultMaximumParallelDecodes = 4;
 }
 
 public sealed record ArenaExperimentRunLoadResult(
@@ -23,6 +26,12 @@ internal sealed record ArenaExperimentRunCapacityResult(
     int RequiredNewRuns,
     ImmutableArray<ArenaArtifactDiagnostic> Diagnostics);
 
+internal sealed record ArenaExperimentRunLoadMetrics(
+    int FilesConsidered,
+    int FilesRead,
+    int MaximumConcurrentDecodes,
+    int ConfiguredParallelDecodes);
+
 /// <summary>
 /// Bounded one-file-per-cell persistence. Re-saving a byte-identical cell is a
 /// no-op. Later attempts merge trial references so repeated trials remain
@@ -31,9 +40,13 @@ internal sealed record ArenaExperimentRunCapacityResult(
 public sealed class ExperimentRunStore
 {
     private const string DirectoryName = "experiment-runs";
+    private const int MaximumSinglePooledReadBytes = 8 * 1024 * 1024;
     private readonly string _root;
     private readonly ArenaExperimentRunStoreOptions _options;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private ArenaExperimentRunLoadMetrics _lastLoadMetrics = new(0, 0, 0, 0);
+    private Func<string, string, CancellationToken, Task>? _beforeDecodeAsync;
+    private Func<string, CancellationToken, Task>? _afterInitialLengthCheckAsync;
 
     public ExperimentRunStore(string root, ArenaExperimentRunStoreOptions? options = null)
     {
@@ -42,6 +55,22 @@ public sealed class ExperimentRunStore
         _options = options ?? new();
         ArgumentOutOfRangeException.ThrowIfLessThan(_options.MaximumRuns, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(_options.MaximumRunBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(_options.MaximumParallelDecodes, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(_options.MaximumParallelDecodes, 32);
+    }
+
+    internal ArenaExperimentRunLoadMetrics LastLoadMetrics => Volatile.Read(ref _lastLoadMetrics);
+
+    internal Func<string, string, CancellationToken, Task>? BeforeDecodeAsync
+    {
+        get => Volatile.Read(ref _beforeDecodeAsync);
+        set => Volatile.Write(ref _beforeDecodeAsync, value);
+    }
+
+    internal Func<string, CancellationToken, Task>? AfterInitialLengthCheckAsync
+    {
+        get => Volatile.Read(ref _afterInitialLengthCheckAsync);
+        set => Volatile.Write(ref _afterInitialLengthCheckAsync, value);
     }
 
     public async Task<ArenaArtifactWriteResult<ArenaExperimentRunContract>> SaveAsync(
@@ -232,13 +261,14 @@ public sealed class ExperimentRunStore
             var runs = ImmutableArray.CreateBuilder<ArenaExperimentRunContract>();
             var diagnostics = ImmutableArray.CreateBuilder<ArenaArtifactDiagnostic>();
             var directory = Path.Combine(_root, DirectoryName);
-            if (!Directory.Exists(directory)) return new([], []);
+            if (!Directory.Exists(directory))
+            {
+                Volatile.Write(ref _lastLoadMetrics, new(0, 0, 0, _options.MaximumParallelDecodes));
+                return new([], []);
+            }
 
-            var files = Directory.EnumerateFiles(directory, "*.json", SearchOption.TopDirectoryOnly)
-                .OrderBy(path => Path.GetFileName(path), StringComparer.Ordinal)
-                .Take(_options.MaximumRuns + 1)
-                .ToArray();
-            if (files.Length > _options.MaximumRuns)
+            var selectedFiles = SelectBoundedFiles(directory, cancellationToken);
+            if (selectedFiles.ExceededLimit)
             {
                 diagnostics.Add(ArenaExperimentPackCodec.Error(
                     "artifact.count_limit",
@@ -246,11 +276,60 @@ public sealed class ExperimentRunStore
                     "Experiment run store exceeds its bounded file count."));
             }
 
-            foreach (var path in files.Take(_options.MaximumRuns))
+            var files = selectedFiles.Paths.Length > _options.MaximumRuns
+                ? selectedFiles.Paths[.._options.MaximumRuns]
+                : selectedFiles.Paths;
+            var decodedFiles = new RunDecodeResult?[files.Length];
+            var reads = 0;
+            var activeDecodes = 0;
+            var maximumConcurrentDecodes = 0;
+            try
+            {
+                await Parallel.ForEachAsync(
+                    Enumerable.Range(0, files.Length),
+                    new ParallelOptions
+                    {
+                        CancellationToken = cancellationToken,
+                        MaxDegreeOfParallelism = _options.MaximumParallelDecodes
+                    },
+                    async (index, token) =>
+                    {
+                        Interlocked.Increment(ref reads);
+                        var active = Interlocked.Increment(ref activeDecodes);
+                        UpdateMaximum(ref maximumConcurrentDecodes, active);
+                        try
+                        {
+                            var path = files[index];
+                            var relativePath = $"{DirectoryName}/{Path.GetFileName(path)}";
+                            var beforeDecode = BeforeDecodeAsync;
+                            if (beforeDecode is not null)
+                            {
+                                await beforeDecode(path, relativePath, token).ConfigureAwait(false);
+                            }
+                            decodedFiles[index] = await DecodeFileAsync(path, relativePath, token).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            Interlocked.Decrement(ref activeDecodes);
+                        }
+                    }).ConfigureAwait(false);
+            }
+            finally
+            {
+                Volatile.Write(ref _lastLoadMetrics, new(
+                    selectedFiles.FilesConsidered,
+                    Volatile.Read(ref reads),
+                    Volatile.Read(ref maximumConcurrentDecodes),
+                    _options.MaximumParallelDecodes));
+            }
+
+            for (var index = 0; index < files.Length; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var path = files[index];
                 var relativePath = $"{DirectoryName}/{Path.GetFileName(path)}";
-                var decoded = await DecodeFileAsync(path, relativePath, cancellationToken).ConfigureAwait(false);
+                var decoded = decodedFiles[index]
+                    ?? throw new InvalidOperationException("A completed experiment-run decode produced no result.");
                 diagnostics.AddRange(decoded.Diagnostics);
                 if (decoded.Run is null) continue;
 
@@ -309,17 +388,16 @@ public sealed class ExperimentRunStore
         CancellationToken cancellationToken)
     {
         var relativePath = RelativePath(run.CellKey);
-        string json;
+        byte[] bytes;
         try
         {
-            json = ArenaContractCodec.Serialize(run);
+            bytes = ArenaContractCodec.SerializeToUtf8Bytes(run);
         }
         catch (InvalidDataException)
         {
             return Rejected(relativePath, "artifact.contract_invalid", "Experiment run does not satisfy its frozen v1 contract.");
         }
 
-        var bytes = Encoding.UTF8.GetBytes(json);
         if (bytes.Length > _options.MaximumRunBytes)
         {
             return Rejected(relativePath, "artifact.oversize", "Experiment run exceeds its bounded byte limit.");
@@ -349,14 +427,18 @@ public sealed class ExperimentRunStore
             }
 
             artifactToWrite = Merge(decoded.Run, run);
-            var mergedJson = ArenaContractCodec.Serialize(artifactToWrite);
-            if (string.Equals(mergedJson, ArenaContractCodec.Serialize(decoded.Run), StringComparison.Ordinal))
+            var mergedBytes = ArenaContractCodec.SerializeToUtf8Bytes(artifactToWrite);
+            var persistedBytes = ArenaContractCodec.SerializeToUtf8Bytes(decoded.Run);
+            if (mergedBytes.AsSpan().SequenceEqual(persistedBytes))
             {
                 return new(ArenaArtifactWriteDisposition.Duplicate, relativePath, decoded.Run, []);
             }
 
-            json = mergedJson;
-            bytes = Encoding.UTF8.GetBytes(json);
+            bytes = mergedBytes;
+            if (bytes.Length > _options.MaximumRunBytes)
+            {
+                return Rejected(relativePath, "artifact.oversize", "Merged experiment run exceeds its bounded byte limit.");
+            }
         }
         else if (!capacityReserved
                  && Directory.EnumerateFiles(directory, "*.json", SearchOption.TopDirectoryOnly).Take(_options.MaximumRuns + 1).Count()
@@ -389,20 +471,39 @@ public sealed class ExperimentRunStore
                 return Failed("artifact.oversize", relativePath, "Experiment run exceeds its bounded byte limit.");
             }
 
-            var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-            string json;
+            var afterLengthCheck = AfterInitialLengthCheckAsync;
+            if (afterLengthCheck is not null)
+            {
+                await afterLengthCheck(path, cancellationToken).ConfigureAwait(false);
+            }
+
+            var bytes = await ReadBoundedBytesAsync(
+                path,
+                _options.MaximumRunBytes,
+                cancellationToken).ConfigureAwait(false);
+            if (bytes is null)
+            {
+                return Failed("artifact.oversize", relativePath, "Experiment run exceeds its bounded byte limit.");
+            }
             JsonDocument document;
             try
             {
-                json = new UTF8Encoding(false, true).GetString(bytes);
-                document = JsonDocument.Parse(json, new JsonDocumentOptions
+                if (bytes.Length >= 3
+                    && bytes[0] == 0xEF
+                    && bytes[1] == 0xBB
+                    && bytes[2] == 0xBF)
+                {
+                    return Failed("artifact.corrupt", relativePath, "Experiment run is not strict UTF-8 JSON.");
+                }
+
+                document = JsonDocument.Parse(bytes, new JsonDocumentOptions
                 {
                     AllowTrailingCommas = false,
                     CommentHandling = JsonCommentHandling.Disallow,
                     MaxDepth = 64
                 });
             }
-            catch (Exception exception) when (exception is JsonException or DecoderFallbackException)
+            catch (JsonException)
             {
                 return Failed("artifact.corrupt", relativePath, "Experiment run is not strict UTF-8 JSON.");
             }
@@ -431,7 +532,7 @@ public sealed class ExperimentRunStore
                 }
             }
 
-            if (!ArenaContractCodec.TryDeserialize<ArenaExperimentRunContract>(json, out var run, out var issues)
+            if (!ArenaContractCodec.TryDeserialize<ArenaExperimentRunContract>(bytes, out var run, out var issues)
                 || run is null)
             {
                 return new(null,
@@ -441,7 +542,8 @@ public sealed class ExperimentRunStore
                         $"Experiment run validation failed at {issue.Path}."))]);
             }
 
-            if (!string.Equals(json, ArenaContractCodec.Serialize(run), StringComparison.Ordinal))
+            var canonicalBytes = ArenaContractCodec.SerializeToUtf8Bytes(run);
+            if (!bytes.AsSpan().SequenceEqual(canonicalBytes))
             {
                 return Failed("artifact.canonical_required", relativePath, "Experiment run must use canonical v1 JSON encoding.");
             }
@@ -454,13 +556,130 @@ public sealed class ExperimentRunStore
         }
     }
 
+    private static async Task<byte[]?> ReadBoundedBytesAsync(
+        string path,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        var limit = (long)maximumBytes + 1;
+        var useSingleBuffer = limit <= MaximumSinglePooledReadBytes;
+        var bufferLength = useSingleBuffer
+            ? (int)limit
+            : (int)Math.Min(64 * 1024L, limit);
+        var buffer = ArrayPool<byte>.Shared.Rent(bufferLength);
+        try
+        {
+            await using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 1,
+                options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (useSingleBuffer)
+            {
+                var total = 0;
+                while (total < limit)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var read = await stream.ReadAsync(
+                        buffer.AsMemory(total, (int)limit - total),
+                        cancellationToken).ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    total += read;
+                }
+
+                return total > maximumBytes
+                    ? null
+                    : buffer.AsSpan(0, total).ToArray();
+            }
+
+            using var bytes = new MemoryStream(Math.Min(maximumBytes, bufferLength));
+            long streamedTotal = 0;
+            while (streamedTotal < limit)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var read = await stream.ReadAsync(
+                    buffer.AsMemory(0, (int)Math.Min(buffer.Length, limit - streamedTotal)),
+                    cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                streamedTotal += read;
+                if (streamedTotal > maximumBytes)
+                {
+                    return null;
+                }
+
+                bytes.Write(buffer, 0, read);
+            }
+
+            return bytes.ToArray();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(buffer.AsSpan());
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
     private async Task WriteRunAsync(
         string path,
         ArenaExperimentRunContract run,
         CancellationToken cancellationToken)
     {
-        var bytes = Encoding.UTF8.GetBytes(ArenaContractCodec.Serialize(run));
+        var bytes = ArenaContractCodec.SerializeToUtf8Bytes(run);
         await ArenaExperimentPackStore.WriteAtomicallyAsync(path, bytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    private BoundedRunFiles SelectBoundedFiles(string directory, CancellationToken cancellationToken)
+    {
+        var limit = checked(_options.MaximumRuns + 1);
+        var descendingOrdinal = Comparer<string>.Create(static (left, right) =>
+            StringComparer.Ordinal.Compare(right, left));
+        var selected = new PriorityQueue<string, string>(limit, descendingOrdinal);
+        var filesConsidered = 0;
+        foreach (var path in Directory.EnumerateFiles(directory, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            filesConsidered++;
+            var name = Path.GetFileName(path);
+            if (selected.Count < limit)
+            {
+                selected.Enqueue(path, name);
+                continue;
+            }
+
+            selected.TryPeek(out _, out var largestSelectedName);
+            if (StringComparer.Ordinal.Compare(name, largestSelectedName) < 0)
+            {
+                selected.Dequeue();
+                selected.Enqueue(path, name);
+            }
+        }
+
+        var paths = selected.UnorderedItems
+            .Select(item => item.Element)
+            .OrderBy(path => Path.GetFileName(path), StringComparer.Ordinal)
+            .ToArray();
+        return new(paths, filesConsidered, filesConsidered > _options.MaximumRuns);
+    }
+
+    private static void UpdateMaximum(ref int maximum, int candidate)
+    {
+        var observed = Volatile.Read(ref maximum);
+        while (candidate > observed)
+        {
+            var prior = Interlocked.CompareExchange(ref maximum, candidate, observed);
+            if (prior == observed) return;
+            observed = prior;
+        }
     }
 
     private static ArenaExperimentRunContract Merge(
@@ -559,6 +778,11 @@ public sealed class ExperimentRunStore
     private sealed record RunDecodeResult(
         ArenaExperimentRunContract? Run,
         ImmutableArray<ArenaArtifactDiagnostic> Diagnostics);
+
+    private sealed record BoundedRunFiles(
+        string[] Paths,
+        int FilesConsidered,
+        bool ExceededLimit);
 
     internal sealed class ExecutionLease(ExperimentRunStore owner, FileStream stream) : IAsyncDisposable
     {

@@ -197,7 +197,7 @@ internal static partial class Program
             Require(response.Ok && response.Data is AIArenaSessionForkReceipt receipt && receipt.ForkSessionId == "handler-branch", "fork handler should return the shared sanitized receipt");
             Require(active?.Id == "handler-branch", "fork handler should select the created branch through the shared workflow");
 
-            var script = File.ReadAllText(FindWorkspaceFile("scripts/ai-arena-control.ps1"));
+            var script = ReadWorkspaceFile("scripts/ai-arena-control.ps1");
             Require(script.Contains("function New-AIArenaSessionFork", StringComparison.Ordinal), "PowerShell client should expose a typed session fork helper");
             Require(script.Contains("Invoke-AIArena -Command 'session.fork' -Args $forkArgs", StringComparison.Ordinal), "PowerShell fork helper should route through session.fork");
             Require(script.Contains("$PSBoundParameters.ContainsKey('Name')", StringComparison.Ordinal), "PowerShell fork helper should preserve optional automatic naming");

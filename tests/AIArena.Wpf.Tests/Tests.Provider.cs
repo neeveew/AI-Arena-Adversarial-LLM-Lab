@@ -101,7 +101,7 @@ static void ProviderOperationsPublishCausalUniversalStatuses()
     center.SetContext(new ApplicationStatusIdentity("replacement-session", "replacement-connection"));
     Require(!preload.Fail("Late preload failure."), "session/provider replacement should reject stale provider completion");
 
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     foreach (var name in new[] { "ProviderTestStatus", "AutoConfigureStatusText", "PreloadModelsStatusText", "DownloadModelStatusText" })
     {
         Require(
@@ -109,12 +109,12 @@ static void ProviderOperationsPublishCausalUniversalStatuses()
             $"{name} should keep detailed local output without duplicating the universal live announcement");
     }
 
-    var mainWindowSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var mainWindowSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
     Require(
         mainWindowSource.Contains("statusCenter: ShellTopBar.Presentation.StatusCenter", StringComparison.Ordinal),
         "MainWindow should inject the canonical application status center into provider settings");
 
-    var coordinatorSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ProviderSettingsCoordinator.cs"));
+    var coordinatorSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ProviderSettingsCoordinator.cs");
     foreach (var key in new[]
     {
         "provider.test",
@@ -1506,9 +1506,9 @@ static void LlamaCppRuntimePublishesCausalUniversalStatuses()
 
 static void LlamaCppSettingsSurfaceStaysCapabilityDrivenAndAccessible()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
-    var coordinator = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/LlamaCppRuntimeCoordinator.cs"));
-    var providerSettings = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ProviderSettingsCoordinator.cs"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
+    var coordinator = ReadWorkspaceFile("src/AIArena.Wpf/Shell/LlamaCppRuntimeCoordinator.cs");
+    var providerSettings = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ProviderSettingsCoordinator.cs");
     Require(xaml.Contains("Content=\"llama.cpp\" Tag=\"llama_cpp\"", StringComparison.Ordinal), "provider presets should expose llama.cpp");
     Require(xaml.Contains("Tag=\"llamacpp_native\"", StringComparison.Ordinal), "API modes should expose llama.cpp native mode");
     Require(providerSettings.Contains("http://127.0.0.1:8080/v1", StringComparison.Ordinal), "llama.cpp preset should use the documented local llama-server port");

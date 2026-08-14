@@ -1585,6 +1585,7 @@ public sealed partial class LocalInternetToolProvider : IInternetToolProvider, I
     private const int MaximumEnrichedSearchSources = 3;
     private const int MaximumSearchCandidatePool = 40;
     private const int MinimumSearchCandidatePool = 20;
+    private const int MaximumConcurrentSearchResultValidations = 8;
     private static readonly TimeSpan SearchEnrichmentTimeout = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan SearchResultValidationTimeout = TimeSpan.FromSeconds(4);
     private readonly HttpClient? _ownedSearchHttpClient;
@@ -1592,7 +1593,8 @@ public sealed partial class LocalInternetToolProvider : IInternetToolProvider, I
     private readonly ISearxngSearchClient _searchClient;
     private readonly IReadablePageExtractor _pageExtractor;
     private readonly IBrowserPageRenderer _browserRenderer;
-    private readonly Func<Uri, CancellationToken, Task<bool>> _searchResultDestinationValidator;
+    private readonly Func<Uri, CancellationToken, Task<bool>>? _searchResultDestinationValidator;
+    private readonly Func<string, CancellationToken, Task<bool>>? _searchResultHostValidator;
     private readonly Func<CancellationToken, Task> _ensureSearchBackendAsync;
     private readonly bool _enrichSearchResults;
 
@@ -1616,7 +1618,7 @@ public sealed partial class LocalInternetToolProvider : IInternetToolProvider, I
 
         _pageExtractor = pageExtractor ?? new SmartReaderPageExtractor();
         _browserRenderer = browserRenderer ?? new PuppeteerSharpPageRenderer();
-        _searchResultDestinationValidator = ValidateSearchResultDestinationAsync;
+        _searchResultHostValidator = ValidateSearchResultHostAsync;
         _ensureSearchBackendAsync = ensureSearchBackendAsync ?? (_ => Task.CompletedTask);
         _enrichSearchResults = enrichSearchResults ?? searchClient is null;
     }
@@ -1627,7 +1629,8 @@ public sealed partial class LocalInternetToolProvider : IInternetToolProvider, I
         IReadablePageExtractor? pageExtractor = null,
         IBrowserPageRenderer? browserRenderer = null,
         Func<Uri, CancellationToken, Task<bool>>? searchResultDestinationValidator = null,
-        bool? enrichSearchResults = null)
+        bool? enrichSearchResults = null,
+        Func<string, CancellationToken, Task<bool>>? searchResultHostValidator = null)
     {
         _publicWebFetcher = publicWebFetcher ?? throw new ArgumentNullException(nameof(publicWebFetcher));
         if (searchClient is null)
@@ -1642,7 +1645,21 @@ public sealed partial class LocalInternetToolProvider : IInternetToolProvider, I
 
         _pageExtractor = pageExtractor ?? new SmartReaderPageExtractor();
         _browserRenderer = browserRenderer ?? new PuppeteerSharpPageRenderer();
-        _searchResultDestinationValidator = searchResultDestinationValidator ?? ValidateSearchResultDestinationAsync;
+        if (searchResultDestinationValidator is not null && searchResultHostValidator is not null)
+        {
+            throw new ArgumentException("Specify either a per-destination validator or a per-host validator, not both.");
+        }
+
+        if (searchResultDestinationValidator is not null)
+        {
+            // Preserve the URI-level injection seam used by focused callers. The
+            // production path below uses the host seam so DNS work can coalesce.
+            _searchResultDestinationValidator = searchResultDestinationValidator;
+        }
+        else
+        {
+            _searchResultHostValidator = searchResultHostValidator ?? ValidateSearchResultHostAsync;
+        }
         _ensureSearchBackendAsync = _ => Task.CompletedTask;
         _enrichSearchResults = enrichSearchResults ?? searchClient is null;
     }
@@ -1721,41 +1738,144 @@ public sealed partial class LocalInternetToolProvider : IInternetToolProvider, I
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(SearchResultValidationTimeout);
-        var checks = sources.Select(async source =>
+        var candidates = new List<SearchValidationCandidate>(sources.Count);
+        for (var index = 0; index < sources.Count; index++)
         {
+            var source = sources[index];
             if (!Uri.TryCreate(source.Url, UriKind.Absolute, out var uri))
             {
-                return (Source: source, IsPublic: false);
+                continue;
             }
 
             try
             {
-                return (Source: source, IsPublic: await _searchResultDestinationValidator(uri, timeout.Token));
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
+                // URI policy is deliberately evaluated for every candidate. Only
+                // the DNS host resolution below is shared within this response.
+                PublicWebDestinationValidator.ValidateUri(uri);
+                candidates.Add(new SearchValidationCandidate(
+                    index,
+                    uri,
+                    PublicWebDestinationValidator.NormalizeHost(uri.DnsSafeHost)));
             }
             catch
             {
-                return (Source: source, IsPublic: false);
+                // Search results are untrusted input. Invalid candidates fail
+                // closed without preventing other public results from surfacing.
             }
-        }).ToArray();
+        }
 
-        var checkedSources = await Task.WhenAll(checks);
-        return checkedSources
-            .Where(item => item.IsPublic)
-            .Select(item => item.Source)
-            .ToArray();
+        if (candidates.Count == 0)
+        {
+            return [];
+        }
+
+        var accepted = new bool[sources.Count];
+        if (_searchResultHostValidator is not null)
+        {
+            var hostIndexes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var hosts = new List<string>();
+            foreach (var candidate in candidates)
+            {
+                if (!hostIndexes.ContainsKey(candidate.Host))
+                {
+                    hostIndexes[candidate.Host] = hosts.Count;
+                    hosts.Add(candidate.Host);
+                }
+            }
+
+            var validHosts = await ValidateSearchInputsBoundedAsync(
+                hosts,
+                _searchResultHostValidator,
+                cancellationToken,
+                timeout.Token).ConfigureAwait(false);
+            foreach (var candidate in candidates)
+            {
+                accepted[candidate.SourceIndex] = validHosts[hostIndexes[candidate.Host]];
+            }
+        }
+        else
+        {
+            var validDestinations = await ValidateSearchInputsBoundedAsync(
+                candidates,
+                (candidate, token) => _searchResultDestinationValidator!(candidate.Uri, token),
+                cancellationToken,
+                timeout.Token).ConfigureAwait(false);
+            for (var index = 0; index < candidates.Count; index++)
+            {
+                accepted[candidates[index].SourceIndex] = validDestinations[index];
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var filtered = new List<InternetToolSource>(candidates.Count);
+        for (var index = 0; index < sources.Count; index++)
+        {
+            if (accepted[index])
+            {
+                filtered.Add(sources[index]);
+            }
+        }
+
+        return filtered;
     }
 
-    private static async Task<bool> ValidateSearchResultDestinationAsync(
-        Uri uri,
+    private static async Task<bool[]> ValidateSearchInputsBoundedAsync<T>(
+        IReadOnlyList<T> inputs,
+        Func<T, CancellationToken, Task<bool>> validator,
+        CancellationToken callerCancellationToken,
+        CancellationToken validationCancellationToken)
+    {
+        var results = new bool[inputs.Count];
+        var nextIndex = -1;
+        var workerCount = Math.Min(MaximumConcurrentSearchResultValidations, inputs.Count);
+        var workers = new Task[workerCount];
+        for (var workerIndex = 0; workerIndex < workerCount; workerIndex++)
+        {
+            workers[workerIndex] = ValidateWorkerAsync();
+        }
+
+        await Task.WhenAll(workers).ConfigureAwait(false);
+        return results;
+
+        async Task ValidateWorkerAsync()
+        {
+            while (true)
+            {
+                callerCancellationToken.ThrowIfCancellationRequested();
+                var index = Interlocked.Increment(ref nextIndex);
+                if (index >= inputs.Count)
+                {
+                    return;
+                }
+
+                try
+                {
+                    results[index] = await validator(inputs[index], validationCancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (callerCancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    results[index] = false;
+                }
+            }
+        }
+    }
+
+    private static async Task<bool> ValidateSearchResultHostAsync(
+        string host,
         CancellationToken cancellationToken)
     {
-        await PublicWebDestinationValidator.ValidateAndResolveAsync(uri, cancellationToken);
+        await PublicWebDestinationValidator.ResolveAndValidateHostAsync(host, cancellationToken).ConfigureAwait(false);
         return true;
     }
+
+    private readonly record struct SearchValidationCandidate(
+        int SourceIndex,
+        Uri Uri,
+        string Host);
 
     private async Task<IReadOnlyList<InternetToolSource>> EnrichSearchSourcesAsync(
         IReadOnlyList<InternetToolSource> sources,

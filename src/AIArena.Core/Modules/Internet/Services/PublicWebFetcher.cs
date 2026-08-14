@@ -453,7 +453,7 @@ internal static class PublicWebDestinationValidator
         }
     }
 
-    private static string NormalizeHost(string host)
+    internal static string NormalizeHost(string host)
     {
         return host.Trim().TrimEnd('.');
     }

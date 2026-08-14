@@ -86,15 +86,35 @@ public interface IProviderRequestObserver
     void ObserveCompletion(ProviderRequestCompletionObservation completion);
 }
 
+internal enum ProviderRequestObservationDetail
+{
+    MetadataOnly,
+    RedactedPreview
+}
+
+/// <summary>
+/// Internal fast path for observers that can explicitly declare whether a
+/// redacted content preview currently has a consumer. Prepared traces have
+/// already crossed the provider-boundary privacy scrubber and never contain a
+/// deferred reference to the exact request body.
+/// </summary>
+internal interface IPreparedProviderRequestObserver : IProviderRequestObserver
+{
+    ProviderRequestObservationDetail ObservationDetail { get; }
+
+    void ObservePreparedRequest(ProviderRequestTrace trace);
+}
+
 /// <summary>
 /// Process-memory-only, bounded trace storage for the Context &amp; Prompt
 /// Inspector. This type intentionally has no persistence API.
 /// </summary>
-public sealed class ProviderRequestTraceStore : IProviderRequestObserver
+public sealed class ProviderRequestTraceStore : IPreparedProviderRequestObserver
 {
     private readonly object _sync = new();
     private readonly LinkedList<ProviderRequestTrace> _traces = [];
     private readonly int _maximumEntries;
+    private int _redactedPreviewSubscribers;
 
     public ProviderRequestTraceStore(int maximumEntries = 64)
     {
@@ -104,9 +124,39 @@ public sealed class ProviderRequestTraceStore : IProviderRequestObserver
     public void ObserveRequest(ProviderRequestTrace trace)
     {
         ArgumentNullException.ThrowIfNull(trace);
+        Add(ProviderPromptInspection.BoundForStore(trace));
+    }
+
+    void IPreparedProviderRequestObserver.ObservePreparedRequest(ProviderRequestTrace trace)
+    {
+        ArgumentNullException.ThrowIfNull(trace);
+        Add(ProviderPromptInspection.CopyPreparedForStore(trace));
+    }
+
+    ProviderRequestObservationDetail IPreparedProviderRequestObserver.ObservationDetail =>
+        Volatile.Read(ref _redactedPreviewSubscribers) > 0
+            ? ProviderRequestObservationDetail.RedactedPreview
+            : ProviderRequestObservationDetail.MetadataOnly;
+
+    /// <summary>
+    /// Keeps bounded, redacted payload previews for requests observed while the
+    /// returned lease is alive. Without a lease the store remains useful for
+    /// exact hashes, byte counts, routing, structure, roles, and completion
+    /// receipts, but retains no request content.
+    /// </summary>
+    public IDisposable SubscribeToRedactedPreviews()
+    {
+        Interlocked.Increment(ref _redactedPreviewSubscribers);
+        return new RedactedPreviewSubscription(this);
+    }
+
+    internal bool IsRedactedPreviewCaptureActive => Volatile.Read(ref _redactedPreviewSubscribers) > 0;
+
+    private void Add(ProviderRequestTrace trace)
+    {
         lock (_sync)
         {
-            _traces.AddLast(ProviderPromptInspection.BoundForStore(trace));
+            _traces.AddLast(trace);
             while (_traces.Count > _maximumEntries)
             {
                 _traces.RemoveFirst();
@@ -159,6 +209,24 @@ public sealed class ProviderRequestTraceStore : IProviderRequestObserver
             _traces.Clear();
         }
     }
+
+    private void ReleaseRedactedPreviewSubscription()
+    {
+        var remaining = Interlocked.Decrement(ref _redactedPreviewSubscribers);
+        if (remaining < 0)
+        {
+            Interlocked.Exchange(ref _redactedPreviewSubscribers, 0);
+            throw new InvalidOperationException("Provider preview subscription count became unbalanced.");
+        }
+    }
+
+    private sealed class RedactedPreviewSubscription(ProviderRequestTraceStore owner) : IDisposable
+    {
+        private ProviderRequestTraceStore? _owner = owner;
+
+        public void Dispose() =>
+            Interlocked.Exchange(ref _owner, null)?.ReleaseRedactedPreviewSubscription();
+    }
 }
 
 internal static partial class ProviderPromptInspection
@@ -170,6 +238,8 @@ internal static partial class ProviderPromptInspection
     internal const int MaximumContextEntries = 64;
     internal const int MaximumExplanationCharacters = 1024;
     private const string ScopedMemoryRedactionMarker = "[REDACTED:SCOPED_MEMORY]";
+    private const string InactivePreviewMarker = "[NOT_CAPTURED:INSPECTION_INACTIVE]";
+    private const string OversizedPreviewMarker = "[OMITTED:PAYLOAD_EXCEEDS_SAFE_PREVIEW_BOUND]";
 
     private static readonly IReadOnlySet<string> SensitivePropertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -184,15 +254,37 @@ internal static partial class ProviderPromptInspection
         byte[] exactPayload,
         string transport,
         bool requestedStreaming,
-        int attempt)
+        int attempt,
+        ProviderRequestObservationDetail observationDetail = ProviderRequestObservationDetail.RedactedPreview)
     {
         var apiMode = ModelProviderApiModes.Normalize(config.ApiMode);
-        using var document = JsonDocument.Parse(exactPayload);
-        var root = document.RootElement;
-        var canPreviewContent = exactPayload.Length <= MaximumPayloadBytesForPreview;
-        var redactedPayload = canPreviewContent
-            ? RedactJson(root)
-            : "[OMITTED:PAYLOAD_EXCEEDS_SAFE_PREVIEW_BOUND]";
+        var previewRequested = observationDetail == ProviderRequestObservationDetail.RedactedPreview;
+        var canPreviewContent = previewRequested && exactPayload.Length <= MaximumPayloadBytesForPreview;
+        string redactedPayload;
+        IReadOnlyList<ProviderPromptRoleTrace> roles;
+        bool payloadStreaming;
+        bool hasPreviousResponseId;
+        if (canPreviewContent)
+        {
+            using var document = JsonDocument.Parse(exactPayload);
+            var root = document.RootElement;
+            redactedPayload = RedactJson(root);
+            roles = ExtractRoles(root, apiMode, includeContent: true);
+            payloadStreaming = PayloadRequestsStreaming(root);
+            hasPreviousResponseId = root.TryGetProperty("previous_response_id", out _);
+        }
+        else
+        {
+            var metadata = InspectPayloadMetadata(
+                exactPayload,
+                apiMode,
+                previewRequested ? OversizedPreviewMarker : InactivePreviewMarker);
+            redactedPayload = previewRequested ? OversizedPreviewMarker : InactivePreviewMarker;
+            roles = metadata.Roles;
+            payloadStreaming = metadata.PayloadStreaming;
+            hasPreviousResponseId = metadata.HasPreviousResponseId;
+        }
+
         var truncated = !canPreviewContent || redactedPayload.Length > MaximumRedactedPayloadCharacters;
         if (redactedPayload.Length > MaximumRedactedPayloadCharacters)
         {
@@ -224,8 +316,21 @@ internal static partial class ProviderPromptInspection
                 "This provider-boundary trace can prove the final payload, but the caller supplied no upstream truncation evidence."));
         }
 
-        AddAdapterExplanations(context, config, apiMode, requestedStreaming, root);
-        if (!canPreviewContent)
+        AddAdapterExplanations(
+            context,
+            config,
+            apiMode,
+            requestedStreaming,
+            payloadStreaming,
+            hasPreviousResponseId);
+        if (!previewRequested)
+        {
+            context.Add(new ProviderContextExplanation(
+                "payload_preview",
+                "unavailable",
+                $"The exact {exactPayload.Length}-byte payload was hashed, but content capture was inactive. No raw bytes, raw strings, or deferred content were retained."));
+        }
+        else if (!canPreviewContent)
         {
             context.Add(new ProviderContextExplanation(
                 "payload_preview",
@@ -241,16 +346,16 @@ internal static partial class ProviderPromptInspection
             SafeCorrelationId(inspectionContext?.CorrelationId, requestId),
             NormalizePhase(inspectionContext?.Phase),
             apiMode,
-            transport,
+            Bound(RedactText(transport), 64),
             Bound(RedactText(config.Model), 256),
             requestedStreaming,
-            PayloadRequestsStreaming(root),
-            attempt,
+            payloadStreaming,
+            Math.Clamp(attempt, 1, 100),
             Convert.ToHexString(SHA256.HashData(exactPayload)).ToLowerInvariant(),
             exactPayload.Length,
             redactedPayload,
             truncated,
-            ExtractRoles(root, apiMode, canPreviewContent),
+            roles,
             context.Take(MaximumContextEntries).Select(BoundContextExplanation).ToArray(),
             unavailable,
             unavailable,
@@ -302,6 +407,19 @@ internal static partial class ProviderPromptInspection
             Outcome = BoundOutcome(trace.Outcome)
         };
     }
+
+    /// <summary>
+    /// Copies a trace produced by CreateTrace into immutable bounded
+    /// collections without running its already-redacted preview through the
+    /// sanitizer a second time. This is reachable only through the internal
+    /// prepared-observer contract; arbitrary public observer input continues to
+    /// use BoundForStore's defensive scrub.
+    /// </summary>
+    internal static ProviderRequestTrace CopyPreparedForStore(ProviderRequestTrace trace) => trace with
+    {
+        Roles = (trace.Roles ?? []).Take(MaximumRoleEntries).ToImmutableArray(),
+        Context = (trace.Context ?? []).Take(MaximumContextEntries).ToImmutableArray()
+    };
 
     internal static string RedactText(string? value)
     {
@@ -511,7 +629,7 @@ internal static partial class ProviderPromptInspection
                     : "[OMITTED:PAYLOAD_EXCEEDS_SAFE_PREVIEW_BOUND]";
                 roles.Add(new ProviderPromptRoleTrace(
                     index++,
-                    role,
+                    Bound(RedactText(role), 64),
                     BoundRoleContent(RedactText(content)),
                     apiMode == ModelProviderApiModes.OllamaNative
                         ? "Role was normalized by the Ollama adapter before serialization."
@@ -547,12 +665,148 @@ internal static partial class ProviderPromptInspection
         return roles;
     }
 
+    private static PayloadMetadata InspectPayloadMetadata(
+        ReadOnlySpan<byte> exactPayload,
+        string apiMode,
+        string contentMarker)
+    {
+        var roles = new List<ProviderPromptRoleTrace>();
+        var reader = new Utf8JsonReader(exactPayload, isFinalBlock: true, state: default);
+        string? rootProperty = null;
+        string? messageProperty = null;
+        var messagesDepth = -1;
+        var messageObjectDepth = -1;
+        var messageRole = "unavailable";
+        var payloadStreaming = false;
+        var hasPreviousResponseId = false;
+        var hasMessagesArray = false;
+        var hasSystemPrompt = false;
+        var hasInput = false;
+
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.PropertyName)
+            {
+                if (messageObjectDepth >= 0 && reader.CurrentDepth == messageObjectDepth + 1)
+                {
+                    messageProperty = reader.GetString();
+                }
+                else if (reader.CurrentDepth == 1)
+                {
+                    rootProperty = reader.GetString();
+                }
+
+                continue;
+            }
+
+            if (messageObjectDepth >= 0 && messageProperty is not null)
+            {
+                if (messageProperty.Equals("role", StringComparison.Ordinal)
+                    && reader.TokenType == JsonTokenType.String)
+                {
+                    messageRole = reader.GetString() ?? "unavailable";
+                }
+
+                messageProperty = null;
+            }
+
+            if (rootProperty is not null)
+            {
+                if (rootProperty.Equals("stream", StringComparison.Ordinal)
+                    && reader.TokenType == JsonTokenType.True)
+                {
+                    payloadStreaming = true;
+                }
+                else if (rootProperty.Equals("previous_response_id", StringComparison.Ordinal))
+                {
+                    hasPreviousResponseId = true;
+                }
+                else if (rootProperty.Equals("messages", StringComparison.Ordinal)
+                    && reader.TokenType == JsonTokenType.StartArray)
+                {
+                    hasMessagesArray = true;
+                    messagesDepth = reader.CurrentDepth;
+                }
+                else if (rootProperty.Equals("system_prompt", StringComparison.Ordinal)
+                    && reader.TokenType == JsonTokenType.String)
+                {
+                    hasSystemPrompt = true;
+                }
+                else if (rootProperty.Equals("input", StringComparison.Ordinal)
+                    && reader.TokenType == JsonTokenType.String)
+                {
+                    hasInput = true;
+                }
+
+                rootProperty = null;
+            }
+
+            if (messagesDepth >= 0
+                && reader.TokenType == JsonTokenType.StartObject
+                && reader.CurrentDepth == messagesDepth + 1)
+            {
+                messageObjectDepth = reader.CurrentDepth;
+                messageRole = "unavailable";
+                messageProperty = null;
+                continue;
+            }
+
+            if (messageObjectDepth >= 0
+                && reader.TokenType == JsonTokenType.EndObject
+                && reader.CurrentDepth == messageObjectDepth)
+            {
+                if (roles.Count < MaximumRoleEntries)
+                {
+                    roles.Add(new ProviderPromptRoleTrace(
+                        roles.Count,
+                        Bound(RedactText(messageRole), 64),
+                        contentMarker,
+                        apiMode == ModelProviderApiModes.OllamaNative
+                            ? "Role was normalized by the Ollama adapter before serialization. Content preview was not retained."
+                            : "Role corresponds to the serialized messages array. Content preview was not retained."));
+                }
+
+                messageObjectDepth = -1;
+                messageProperty = null;
+                continue;
+            }
+
+            if (messagesDepth >= 0
+                && reader.TokenType == JsonTokenType.EndArray
+                && reader.CurrentDepth == messagesDepth)
+            {
+                messagesDepth = -1;
+            }
+        }
+
+        if (!hasMessagesArray && hasSystemPrompt)
+        {
+            roles.Add(new ProviderPromptRoleTrace(
+                roles.Count,
+                "system",
+                contentMarker,
+                "System messages were trimmed and consolidated into system_prompt by the LM Studio native adapter. Content preview was not retained."));
+        }
+
+        if (!hasMessagesArray && roles.Count < MaximumRoleEntries && hasInput)
+        {
+            roles.Add(new ProviderPromptRoleTrace(
+                roles.Count,
+                "input",
+                contentMarker,
+                "LM Studio native serialized the non-system conversation into one input string. Content preview was not retained."));
+        }
+
+        return new PayloadMetadata(payloadStreaming, hasPreviousResponseId, roles.ToImmutableArray());
+    }
+
     private static void AddAdapterExplanations(
         ICollection<ProviderContextExplanation> context,
         ModelProviderConfig config,
         string apiMode,
         bool requestedStreaming,
-        JsonElement root)
+        bool payloadStreaming,
+        bool hasPreviousResponseId)
     {
         if (apiMode == ModelProviderApiModes.LmStudioNative)
         {
@@ -560,7 +814,7 @@ internal static partial class ProviderPromptInspection
                 "role_transformation",
                 "observed",
                 "LM Studio native transport consolidates system messages into system_prompt and serializes non-system conversation entries into one input string; blank entries are omitted and role or public-speaker attribution is encoded in that string."));
-            context.Add(root.TryGetProperty("previous_response_id", out _)
+            context.Add(hasPreviousResponseId
                 ? new ProviderContextExplanation("native_continuation", "observed", "A previous response identifier was sent but its value is intentionally redacted.")
                 : new ProviderContextExplanation("native_continuation", "observed", "No valid previous response identifier was sent; the payload contains the supplied transcript context."));
         }
@@ -570,7 +824,7 @@ internal static partial class ProviderPromptInspection
                 "role_transformation",
                 "observed",
                 "Ollama accepts system, user, assistant, and tool roles; any other supplied role is normalized to user."));
-            if (requestedStreaming && !PayloadRequestsStreaming(root))
+            if (requestedStreaming && !payloadStreaming)
             {
                 context.Add(new ProviderContextExplanation(
                     "streaming",
@@ -601,6 +855,11 @@ internal static partial class ProviderPromptInspection
     private static bool PayloadRequestsStreaming(JsonElement root) =>
         root.TryGetProperty("stream", out var stream)
         && stream.ValueKind is JsonValueKind.True;
+
+    private sealed record PayloadMetadata(
+        bool PayloadStreaming,
+        bool HasPreviousResponseId,
+        IReadOnlyList<ProviderPromptRoleTrace> Roles);
 
     private static string BoundRoleContent(string value) => Bound(value, MaximumRoleContentCharacters);
 

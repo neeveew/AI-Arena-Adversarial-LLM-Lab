@@ -164,6 +164,42 @@ public sealed class ApplicationStatusCenter
 
     public IReadOnlyList<ApplicationStatusEntry> History => Snapshot.History;
 
+    /// <summary>
+    /// Returns the next transient-expiration deadline without mutating status
+    /// state. The presentation layer can sleep until meaningful work is due
+    /// instead of polling the center every second.
+    /// </summary>
+    internal TimeSpan? TimeUntilNextExpiration
+    {
+        get
+        {
+            lock (sync)
+            {
+                DateTimeOffset? next = null;
+                foreach (var entry in currentByKey.Values)
+                {
+                    if (entry.Lifetime != ApplicationStatusLifetime.Transient)
+                    {
+                        continue;
+                    }
+
+                    var deadline = entry.UpdatedAt + successLifetime;
+                    if (next is null || deadline < next)
+                    {
+                        next = deadline;
+                    }
+                }
+
+                var now = clock();
+                return next is null
+                    ? null
+                    : next <= now
+                        ? TimeSpan.Zero
+                        : next - now;
+            }
+        }
+    }
+
     public ApplicationStatusEntry Primary => Snapshot.Primary;
 
     public string AppStatus => Snapshot.AppStatus;

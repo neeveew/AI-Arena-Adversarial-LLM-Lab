@@ -319,13 +319,29 @@ function Add-GateTrace {
 function Stop-QaProcessTree {
     param([Parameter(Mandatory)] [Diagnostics.Process]$Process)
 
-    if ($Process.HasExited) {
-        return
+    $descendantIds = @()
+    try {
+        $allProcesses = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId -ErrorAction Stop)
+        $pendingParents = [Collections.Generic.Queue[int]]::new()
+        $pendingParents.Enqueue($Process.Id)
+        while ($pendingParents.Count -gt 0) {
+            $parentId = $pendingParents.Dequeue()
+            foreach ($child in @($allProcesses | Where-Object { [int]$_.ParentProcessId -eq $parentId })) {
+                $childId = [int]$child.ProcessId
+                $descendantIds += $childId
+                $pendingParents.Enqueue($childId)
+            }
+        }
     }
+    catch { }
 
     $taskKill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
-    if (Test-Path -LiteralPath $taskKill -PathType Leaf) {
-        & $taskKill /PID $Process.Id /T /F 1>$null 2>$null
+    if (-not $Process.HasExited -and (Test-Path -LiteralPath $taskKill -PathType Leaf)) {
+        try { & $taskKill /PID $Process.Id /T /F 1>$null 2>$null } catch { }
+    }
+
+    foreach ($descendantId in @($descendantIds | Select-Object -Unique | Sort-Object -Descending)) {
+        try { Stop-Process -Id $descendantId -Force -ErrorAction Stop } catch { }
     }
 
     if (-not $Process.HasExited) {
@@ -653,6 +669,243 @@ function Invoke-FullHarness {
         else {
             $env:AIARENA_TEST_FILTER = $previousFilter
         }
+    }
+}
+
+function Invoke-ParallelCapturedCommands {
+    param(
+        [Parameter(Mandatory)] [object[]]$Command,
+        [Parameter(Mandatory)] [ValidatePattern('^[a-z0-9][a-z0-9._-]{0,63}$')] [string]$IsolationGroup,
+        [ValidateRange(1, 4)] [int]$MaximumProcesses = 4,
+        [ValidateRange(5, 7200)] [int]$TimeoutSeconds = 900
+    )
+
+    if ($Command.Count -eq 0) {
+        return @()
+    }
+    if ($Command.Count -gt $MaximumProcesses) {
+        throw "Parallel QA command count $($Command.Count) exceeds the bounded process limit $MaximumProcesses."
+    }
+
+    $groupRoot = [IO.Path]::GetFullPath((Join-Path $script:RunRoot ("work\parallel-harnesses\{0}" -f $IsolationGroup)))
+    $runPrefix = [IO.Path]::GetFullPath($script:RunRoot).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if (-not $groupRoot.StartsWith($runPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Parallel QA isolation root escaped the current run directory.'
+    }
+    [void](New-Item -ItemType Directory -Path $groupRoot -Force)
+
+    $handles = [Collections.Generic.List[object]]::new()
+    $results = [Collections.Generic.List[object]]::new()
+    $groupWatch = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        foreach ($specification in $Command) {
+            $isolationKey = [string]$specification.IsolationKey
+            if ($isolationKey -notmatch '^[a-z0-9][a-z0-9._-]{0,63}$') {
+                throw 'Parallel QA command has an unsafe isolation key.'
+            }
+            $isolationRoot = Join-Path $groupRoot $isolationKey
+            $tempRoot = Join-Path $isolationRoot 'temp'
+            $dataRoot = Join-Path $isolationRoot 'data'
+            [void](New-Item -ItemType Directory -Path $tempRoot -Force)
+            [void](New-Item -ItemType Directory -Path $dataRoot -Force)
+
+            $watch = [Diagnostics.Stopwatch]::StartNew()
+            $process = $null
+            try {
+                $process = [Diagnostics.Process]::new()
+                $process.StartInfo = [Diagnostics.ProcessStartInfo]::new()
+                $process.StartInfo.FileName = Resolve-NativeCommandPath -Command ([string]$specification.FilePath)
+                $process.StartInfo.Arguments = ((@($specification.Arguments) | ForEach-Object { ConvertTo-NativeArgument ([string]$_) }) -join ' ')
+                $process.StartInfo.WorkingDirectory = $script:RepositoryRoot
+                $process.StartInfo.UseShellExecute = $false
+                $process.StartInfo.CreateNoWindow = $true
+                $process.StartInfo.RedirectStandardOutput = $true
+                $process.StartInfo.RedirectStandardError = $true
+                $process.StartInfo.EnvironmentVariables['TEMP'] = $tempRoot
+                $process.StartInfo.EnvironmentVariables['TMP'] = $tempRoot
+                $process.StartInfo.EnvironmentVariables['AI_ARENA_DATA_DIR'] = $dataRoot
+                $process.StartInfo.EnvironmentVariables['AI_ARENA_CONTROL_OWNER'] = [Guid]::NewGuid().ToString('N')
+                foreach ($environmentName in @(
+                    'AIARENA_TEST_FILTER',
+                    'AIARENA_TEST_VERBOSE_FAILURES',
+                    'AIARENA_RUN_LIVE_BROWSER_SMOKE',
+                    'AIARENA_RUN_LIVE_INTERNET_SMOKE',
+                    'AIARENA_RUN_PROVIDER_LAYOUT_PERF',
+                    'AIARENA_CHROME_PATH',
+                    'AIARENA_SEARXNG_PAYLOAD_DIR',
+                    'AIARENA_SEARXNG_URL'
+                )) {
+                    [void]$process.StartInfo.EnvironmentVariables.Remove($environmentName)
+                }
+                $environmentOverrides = $specification.PSObject.Properties['EnvironmentVariables']
+                if ($null -ne $environmentOverrides -and $null -ne $environmentOverrides.Value) {
+                    foreach ($environmentName in @($environmentOverrides.Value.Keys)) {
+                        if ([string]$environmentName -cne 'AIARENA_RUN_PROVIDER_LAYOUT_PERF') {
+                            throw "Parallel QA command requested an unsupported environment override: $environmentName"
+                        }
+                        $process.StartInfo.EnvironmentVariables[[string]$environmentName] = [string]$environmentOverrides.Value[$environmentName]
+                    }
+                }
+                if (-not $process.Start()) {
+                    throw 'Parallel QA command did not start.'
+                }
+                $handles.Add([pscustomobject]@{
+                    Specification = $specification
+                    Process = $process
+                    StdoutTask = $process.StandardOutput.ReadToEndAsync()
+                    StderrTask = $process.StandardError.ReadToEndAsync()
+                    Watch = $watch
+                    StartFailed = $false
+                    Completed = $false
+                    TimedOut = $false
+                })
+                $process = $null
+            }
+            catch {
+                $watch.Stop()
+                if ($null -ne $process) { $process.Dispose() }
+                $handles.Add([pscustomobject]@{
+                    Specification = $specification
+                    Process = $null
+                    StdoutTask = $null
+                    StderrTask = $null
+                    Watch = $watch
+                    StartFailed = $true
+                    Completed = $true
+                    TimedOut = $false
+                })
+            }
+        }
+
+        $pending = @($handles | Where-Object { -not $_.Completed }).Count
+        while ($pending -gt 0) {
+            foreach ($handle in $handles) {
+                if ($handle.Completed) { continue }
+                $process = [Diagnostics.Process]$handle.Process
+                if ($process.HasExited) {
+                    $handle.Completed = $true
+                    $pending--
+                    continue
+                }
+                if ($handle.Watch.ElapsedMilliseconds -ge ($TimeoutSeconds * 1000)) {
+                    $handle.TimedOut = $true
+                    Stop-QaProcessTree -Process $process
+                    try { [void]$process.WaitForExit(5000) } catch { }
+                    $handle.Completed = $true
+                    $pending--
+                }
+            }
+            if ($pending -gt 0) { Start-Sleep -Milliseconds 25 }
+        }
+
+        foreach ($handle in $handles) {
+            if ($handle.StartFailed) {
+                $results.Add([pscustomobject]@{
+                    IsolationKey = [string]$handle.Specification.IsolationKey
+                    DisplayCommand = [string]$handle.Specification.DisplayCommand
+                    ExitCode = -1
+                    Stdout = ''
+                    Stderr = ''
+                    DurationMilliseconds = [long]$handle.Watch.ElapsedMilliseconds
+                    TimedOut = $false
+                    StartFailed = $true
+                    TimeoutSeconds = $TimeoutSeconds
+                })
+                continue
+            }
+
+            $process = [Diagnostics.Process]$handle.Process
+            if (-not $process.HasExited) {
+                if (-not $process.WaitForExit(5000)) {
+                    $handle.TimedOut = $true
+                    Stop-QaProcessTree -Process $process
+                    try { [void]$process.WaitForExit(5000) } catch { }
+                }
+            }
+            $outputTasks = @([Threading.Tasks.Task]$handle.StdoutTask, [Threading.Tasks.Task]$handle.StderrTask)
+            if (-not [Threading.Tasks.Task]::WaitAll($outputTasks, 2000)) {
+                $handle.TimedOut = $true
+                Stop-QaProcessTree -Process $process
+                try { [void][Threading.Tasks.Task]::WaitAll($outputTasks, 5000) } catch { }
+            }
+            $stdout = if ($handle.StdoutTask.Status -eq [Threading.Tasks.TaskStatus]::RanToCompletion) { $handle.StdoutTask.GetAwaiter().GetResult() } else { '' }
+            $stderr = if ($handle.StderrTask.Status -eq [Threading.Tasks.TaskStatus]::RanToCompletion) { $handle.StderrTask.GetAwaiter().GetResult() } else { '' }
+            $exitCode = if ($handle.TimedOut) { -1 } else { $process.ExitCode }
+            $handle.Watch.Stop()
+            $process.Dispose()
+            $handle.Process = $null
+            $results.Add([pscustomobject]@{
+                IsolationKey = [string]$handle.Specification.IsolationKey
+                DisplayCommand = [string]$handle.Specification.DisplayCommand
+                ExitCode = $exitCode
+                Stdout = $stdout
+                Stderr = $stderr
+                DurationMilliseconds = [long]$handle.Watch.ElapsedMilliseconds
+                TimedOut = [bool]$handle.TimedOut
+                StartFailed = $false
+                TimeoutSeconds = $TimeoutSeconds
+            })
+        }
+    }
+    finally {
+        foreach ($handle in $handles) {
+            if ($null -ne $handle.Process) {
+                try { Stop-QaProcessTree -Process $handle.Process } catch { }
+                $handle.Process.Dispose()
+                $handle.Process = $null
+            }
+        }
+        $groupWatch.Stop()
+        if (Test-Path -LiteralPath $groupRoot) {
+            Remove-Item -LiteralPath $groupRoot -Recurse -Force
+        }
+    }
+
+    $serialMilliseconds = [long](($results | Measure-Object -Property DurationMilliseconds -Sum).Sum)
+    return @($results | ForEach-Object {
+        $_ | Add-Member -NotePropertyName GroupDurationMilliseconds -NotePropertyValue ([long]$groupWatch.ElapsedMilliseconds) -PassThru |
+            Add-Member -NotePropertyName SerialDurationMilliseconds -NotePropertyValue $serialMilliseconds -PassThru
+    })
+}
+
+function Publish-ParallelCapturedCommandResult {
+    param([Parameter(Mandatory)] [object]$Result)
+
+    $stdout = [string]$Result.Stdout
+    $stderr = [string]$Result.Stderr
+    $stdoutLines = if ([string]::IsNullOrEmpty($stdout)) { 0 } else { ([regex]::Matches($stdout, '\r?\n')).Count + 1 }
+    $stderrLines = if ([string]::IsNullOrEmpty($stderr)) { 0 } else { ([regex]::Matches($stderr, '\r?\n')).Count + 1 }
+    $passedMarkers = ([regex]::Matches($stdout, '(?im)^\s*(?:\[pass\]|pass\b)')).Count
+    $failedMarkers = ([regex]::Matches(($stdout + "`n" + $stderr), '(?im)^\s*(?:\[fail\]|fail\b)')).Count
+    if ($passedMarkers -eq 0 -and $stdout -match '(?im)\b(?<passed>\d+)\s*/\s*(?<total>\d+)\b') {
+        $reportedPassed = [int]$Matches['passed']
+        $reportedTotal = [int]$Matches['total']
+        if ($reportedPassed -le $reportedTotal) {
+            $passedMarkers = $reportedPassed
+            $failedMarkers += ($reportedTotal - $reportedPassed)
+        }
+    }
+
+    $script:CurrentGatePassed += $passedMarkers
+    $script:CurrentGateFailed += $failedMarkers
+    Add-GateTrace "command=$($Result.DisplayCommand)"
+    Add-GateTrace ("exitCode={0}; durationMilliseconds={1}; stdoutLines={2}; stderrLines={3}" -f $Result.ExitCode, $Result.DurationMilliseconds, $stdoutLines, $stderrLines)
+    Add-GateTrace ("parallelGroupMilliseconds={0}; serialCommandMilliseconds={1}; processLimit=4" -f $Result.GroupDurationMilliseconds, $Result.SerialDurationMilliseconds)
+    Add-GateTrace ("isolation={0}; dedicatedTemp=true; dedicatedData=true; dedicatedControlOwner=true" -f $Result.IsolationKey)
+    Add-GateTrace ("deadlineSeconds={0}; timedOut={1}" -f $Result.TimeoutSeconds, ([bool]$Result.TimedOut).ToString().ToLowerInvariant())
+    Add-GateTrace ("stdoutSha256={0}; stderrSha256={1}" -f (Get-Sha256Text $stdout), (Get-Sha256Text $stderr))
+    Add-GateTrace 'outputCapturePolicy=hash-and-count-only; raw command output was discarded'
+
+    if ([bool]$Result.StartFailed) {
+        throw 'Parallel QA command failed to start.'
+    }
+    if ([bool]$Result.TimedOut) {
+        $script:CurrentGateTimedOut = $true
+        throw [TimeoutException]::new("Command exceeded its $($Result.TimeoutSeconds)-second QA deadline.")
+    }
+    if ([int]$Result.ExitCode -ne 0) {
+        if ($failedMarkers -eq 0) { $script:CurrentGateFailed++ }
+        throw "Command failed with exit code $($Result.ExitCode)."
     }
 }
 
@@ -2740,19 +2993,59 @@ for ($pass = 1; $pass -le $Passes; $pass++) {
         Add-GateTrace ("sourceFingerprintBefore={0}; sourceFingerprintAfter={1}" -f $buildSourceFingerprintBefore, $buildSourceFingerprintAfter)
     }
 
-    Add-QaGate -Id "$prefix.tests-core" -DisplayName "Core harness (pass $pass)" -Required $true -Mode 'run' -Action {
-        Invoke-FullHarness -ProjectPath $projects.core -DisplayProject 'tests/AIArena.Tests/AIArena.Tests.csproj'
+    $parallelHarnessCommands = @(
+        [pscustomobject]@{
+            IsolationKey = 'core'
+            FilePath = 'dotnet'
+            Arguments = @('run', '--project', $projects.core, '--no-build', '--no-restore', '-c', 'Release')
+            DisplayCommand = 'dotnet run --project tests/AIArena.Tests/AIArena.Tests.csproj --no-build --no-restore -c Release'
+        },
+        [pscustomobject]@{
+            IsolationKey = 'wpf'
+            FilePath = 'dotnet'
+            Arguments = @('run', '--project', $projects.wpf, '--no-build', '--no-restore', '-c', 'Release')
+            DisplayCommand = 'dotnet run --project tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj --no-build --no-restore -c Release'
+            EnvironmentVariables = @{ AIARENA_RUN_PROVIDER_LAYOUT_PERF = '1' }
+        },
+        [pscustomobject]@{
+            IsolationKey = 'code-intelligence'
+            FilePath = 'dotnet'
+            Arguments = @('run', '--project', $projects.codeIntelligence, '--no-build', '--no-restore', '-c', 'Release')
+            DisplayCommand = 'dotnet run --project tests/AIArena.CodeIntelligence.Tests/AIArena.CodeIntelligence.Tests.csproj --no-build --no-restore -c Release'
+        }
+    )
+    $hasVerificationLab = Test-Path -LiteralPath $projects.verificationLab -PathType Leaf
+    if ($hasVerificationLab) {
+        $parallelHarnessCommands += [pscustomobject]@{
+            IsolationKey = 'verification-lab'
+            FilePath = 'dotnet'
+            Arguments = @('run', '--project', $projects.verificationLab, '--no-build', '--no-restore', '-c', 'Release')
+            DisplayCommand = 'dotnet run --project tests/AIArena.VerificationLab/AIArena.VerificationLab.csproj --no-build --no-restore -c Release'
+        }
     }
-    Add-QaGate -Id "$prefix.tests-wpf" -DisplayName "WPF harness (pass $pass)" -Required $true -Mode 'run' -Action {
-        Invoke-FullHarness -ProjectPath $projects.wpf -DisplayProject 'tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj'
-    }
-    Add-QaGate -Id "$prefix.tests-code-intelligence" -DisplayName "Code Intelligence harness (pass $pass)" -Required $true -Mode 'run' -Action {
-        Invoke-FullHarness -ProjectPath $projects.codeIntelligence -DisplayProject 'tests/AIArena.CodeIntelligence.Tests/AIArena.CodeIntelligence.Tests.csproj'
+    $parallelHarnessResults = @(Invoke-ParallelCapturedCommands `
+        -Command $parallelHarnessCommands `
+        -IsolationGroup $prefix `
+        -MaximumProcesses 4 `
+        -TimeoutSeconds 1800)
+    $parallelHarnessByKey = @{}
+    foreach ($parallelHarnessResult in $parallelHarnessResults) {
+        $parallelHarnessByKey[[string]$parallelHarnessResult.IsolationKey] = $parallelHarnessResult
     }
 
-    if (Test-Path -LiteralPath $projects.verificationLab -PathType Leaf) {
+    Add-QaGate -Id "$prefix.tests-core" -DisplayName "Core harness (pass $pass)" -Required $true -Mode 'run' -Action {
+        Publish-ParallelCapturedCommandResult -Result $parallelHarnessByKey['core']
+    }
+    Add-QaGate -Id "$prefix.tests-wpf" -DisplayName "WPF harness (pass $pass)" -Required $true -Mode 'run' -Action {
+        Publish-ParallelCapturedCommandResult -Result $parallelHarnessByKey['wpf']
+    }
+    Add-QaGate -Id "$prefix.tests-code-intelligence" -DisplayName "Code Intelligence harness (pass $pass)" -Required $true -Mode 'run' -Action {
+        Publish-ParallelCapturedCommandResult -Result $parallelHarnessByKey['code-intelligence']
+    }
+
+    if ($hasVerificationLab) {
         Add-QaGate -Id "$prefix.tests-verification-lab" -DisplayName "Verification Lab harness (pass $pass)" -Required $true -Mode 'run' -Action {
-            Invoke-FullHarness -ProjectPath $projects.verificationLab -DisplayProject 'tests/AIArena.VerificationLab/AIArena.VerificationLab.csproj'
+            Publish-ParallelCapturedCommandResult -Result $parallelHarnessByKey['verification-lab']
         }
     }
     else {

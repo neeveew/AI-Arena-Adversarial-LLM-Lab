@@ -984,9 +984,9 @@ internal static partial class Program
 
     private static void ArenaEvaluationSurfaceStaysReplayableAndAccessible()
     {
-        var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
-        var source = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
-        var coordinator = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ArenaEvaluationCoordinator.cs"));
+        var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
+        var source = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
+        var coordinator = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ArenaEvaluationCoordinator.cs");
 
         foreach (var control in new[]
                  {

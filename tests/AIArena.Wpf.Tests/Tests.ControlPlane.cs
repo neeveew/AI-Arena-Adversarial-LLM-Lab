@@ -527,10 +527,13 @@ internal static partial class Program
 
     static void ControlPlaneRejectsOversizedRequests()
     {
+        ControlPlaneBufferedReadPreservesProtocol();
+
         var pipeName = $"ai-arena-test-{Guid.NewGuid():N}";
         var tokenPath = Path.Combine(Path.GetTempPath(), $"ai-arena-token-{Guid.NewGuid():N}.token");
         var hub = new AIArenaControlPlaneEventHub();
-        using var host = new AIArenaControlPlaneHost(new FakeControlTarget(), hub, pipeName, tokenPath);
+        var target = new FakeControlTarget();
+        using var host = new AIArenaControlPlaneHost(target, hub, pipeName, tokenPath);
         try
         {
             host.StartIfEnabledAsync().WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
@@ -539,6 +542,14 @@ internal static partial class Program
             Require(response.Contains("\"ok\":false", StringComparison.OrdinalIgnoreCase), "oversized requests should fail");
             Require(response.Contains("\"errorCode\":\"invalid_request\"", StringComparison.OrdinalIgnoreCase), "oversized requests should return invalid_request");
             Require(response.Contains("too large", StringComparison.OrdinalIgnoreCase), "oversized requests should report size failure");
+
+            var firstRequest = $"{{\"id\":\"first\",\"command\":\"status\",\"token\":\"{host.SessionToken}\",\"args\":{{}}}}";
+            var secondRequest = $"{{\"id\":\"second\",\"command\":\"status\",\"token\":\"{host.SessionToken}\",\"args\":{{}}}}";
+            var trailingResponse = SendRawControlRequest(
+                pipeName,
+                Encoding.UTF8.GetBytes($"{firstRequest}\n{secondRequest}\n"));
+            Require(trailingResponse.Contains("\"Id\":\"first\"", StringComparison.OrdinalIgnoreCase), $"a connection with trailing data should respond only to its first request line: {trailingResponse}");
+            Require(target.Calls == 1, $"a control-plane connection should execute at most one request even when another complete line is already buffered; calls={target.Calls}");
         }
         finally
         {
@@ -728,8 +739,8 @@ internal static partial class Program
 
     static void ControlPlaneEventQueueIsCapped()
     {
-        var host = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaControlPlaneHost.cs"));
-        var protocol = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaControlPlaneProtocol.cs"));
+        var host = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaControlPlaneHost.cs");
+        var protocol = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaControlPlaneProtocol.cs");
         Require(protocol.Contains("MaxEventQueueItems", StringComparison.Ordinal), "control-plane protocol should define a bounded event queue size");
         Require(host.Contains("events.Count < AIArenaControlPlaneProtocol.MaxEventQueueItems", StringComparison.Ordinal), "event queue should enforce the bounded size");
         Require(host.Contains("events.Dequeue();", StringComparison.Ordinal), "event queue should drop oldest events instead of growing without bound");
@@ -998,7 +1009,7 @@ internal static partial class Program
             "model-behavior switching should advertise one required non-destructive mode argument");
         Require(AIArenaControlCapabilityCatalog.All.All(item => !string.IsNullOrWhiteSpace(item.Category) && !string.IsNullOrWhiteSpace(item.Description)), "capability catalog entries should remain auditable");
 
-        var controlPlaneDocumentation = File.ReadAllText(FindWorkspaceFile("CONTROLPLANE.md"));
+        var controlPlaneDocumentation = ReadWorkspaceFile("CONTROLPLANE.md");
         foreach (var capability in AIArenaControlCapabilityCatalog.All.Where(item => item.Category != "qa"))
         {
             Require(
@@ -1582,8 +1593,8 @@ internal static partial class Program
                 var noSession = Pump(() => handler.ExecuteAsync(busyRequest));
                 Require(!noSession.Ok && noSession.ErrorCode == "session_unavailable", "the shared coordinator should return a stable no-session error");
 
-                var mainWindow = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
-                var coordinatorSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MatchSetupCoordinator.cs"));
+                var mainWindow = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
+                var coordinatorSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MatchSetupCoordinator.cs");
                 Require(mainWindow.Contains("MatchSetup.SetModelBehaviorModeAsync(factoryMode, cancellationToken)", StringComparison.Ordinal), "the control handler delegate should target the hosted MatchSetupCoordinator rather than duplicating persistence");
                 Require(coordinatorSource.Contains("var result = await SetModelBehaviorModeAsync(factoryMode);", StringComparison.Ordinal), "the visual checkbox should use the same coordinator mutation method as the control command");
             }
@@ -2414,7 +2425,7 @@ internal static partial class Program
             "a real value should read back unchanged");
 
         // And the dispatch must actually use it, or the distinction is academic.
-        var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+        var dispatch = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs");
         Require(
             dispatch.Contains("TryGetString(request, \"text\"", StringComparison.Ordinal),
             "shell.input.type should read text with the presence-aware accessor");
@@ -2423,11 +2434,11 @@ internal static partial class Program
     static void ControlPlanePublishesRequiredEventVocabulary()
     {
         var mainWindow = ReadMainWindowSource();
-        var matchSetupHandler = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaMatchSetupControlHandler.cs"));
-        var settingsHandler = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaSettingsControlHandler.cs"));
-        var agentWorkspace = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/AgentWorkspaceCoordinator.cs"));
-        var host = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaControlPlaneHost.cs"));
-        var statusPublisher = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaControlPlaneProtocol.cs"));
+        var matchSetupHandler = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaMatchSetupControlHandler.cs");
+        var settingsHandler = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaSettingsControlHandler.cs");
+        var agentWorkspace = ReadWorkspaceFile("src/AIArena.Wpf/Shell/AgentWorkspaceCoordinator.cs");
+        var host = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaControlPlaneHost.cs");
+        var statusPublisher = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaControlPlaneProtocol.cs");
         var combined = string.Concat(mainWindow, matchSetupHandler, settingsHandler, agentWorkspace, host, statusPublisher);
         Require(combined.Contains("\"status.changed\"", StringComparison.Ordinal), "control-plane should publish status changed events");
         Require(combined.Contains("\"shell.overlay.changed\"", StringComparison.Ordinal), "control-plane should publish shell overlay changes");
@@ -2461,7 +2472,7 @@ internal static partial class Program
                 && MainWindow.EndedMatchPrerequisiteMessage(null, "asking the narrator") is null,
             "an active or unavailable snapshot must not invent an ended-match prerequisite");
 
-        var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+        var dispatch = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs");
         var narrateStart = dispatch.IndexOf("case AIArenaControlCommands.ArenaNarrate", StringComparison.Ordinal);
         var narrateEnd = dispatch.IndexOf("case AIArenaControlCommands.ArenaReset", narrateStart, StringComparison.Ordinal);
         Require(narrateStart >= 0 && narrateEnd > narrateStart, "arena.narrate dispatch block should remain discoverable");

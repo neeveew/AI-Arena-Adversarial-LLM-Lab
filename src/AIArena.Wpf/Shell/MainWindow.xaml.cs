@@ -175,6 +175,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     private WpfSettings _wpfSettings = new();
     private ThemePalette _theme = ThemePalette.Resolve("system");
     private ArenaViewSnapshot? _lastRenderedSnapshot;
+    private readonly MatchSetupSnapshotRenderState _matchSetupSnapshotRenderState = new();
 
     private SavedStateWorkflowCoordinator SavedStateCoordinator =>
         _savedStateCoordinator ?? throw new InvalidOperationException("Saved-state coordinator is not initialized.");
@@ -1213,7 +1214,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             AccentForSpeaker,
             FormatCompactNumber,
             ShortModelName,
-            snapshot => AgentPerformance.Populate(snapshot),
+            snapshot => AgentPerformance.ObserveSnapshot(snapshot),
             snapshot => ProviderReachability.UpdatePopup(snapshot));
         _diagnosticsWorkflowCoordinator = new DiagnosticsWorkflowCoordinator(
             _discourseDiagnostics,
@@ -2891,6 +2892,17 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         ClosePopupOnEscape(AgentPerformanceDetailPopup, e);
     }
 
+    private void AgentPerformanceExpander_Expanded(object sender, RoutedEventArgs e)
+    {
+        _agentPerformanceCoordinator?.SetExpanded(true);
+    }
+
+    private void AgentPerformanceExpander_Collapsed(object sender, RoutedEventArgs e)
+    {
+        _agentPerformanceCoordinator?.SetExpanded(false);
+        AgentPerformance.CloseDetail();
+    }
+
     private void AgentComposerMenuButton_Click(object sender, RoutedEventArgs e)
     {
         AgentComposerControlsPopup.IsOpen = !AgentComposerControlsPopup.IsOpen;
@@ -3780,6 +3792,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     {
         AgentPerformance.CloseDetail();
         _lastRenderedSnapshot = null;
+        _matchSetupSnapshotRenderState.Reset();
         ArenaOperations.UpdateReadiness(new ArenaActionReadiness(false, "Load a valid session before running the arena."));
         TranscriptItems.ItemsSource = new object[]
         {
@@ -3826,10 +3839,54 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private void PopulateCustomMatch(ArenaViewSnapshot snapshot)
     {
-        SeedInspector.Populate(snapshot);
-        ScenarioWorkflow.PopulateGenerationHistory(snapshot);
-        CustomMatchSummary.Populate(snapshot);
-        MatchSetup.PopulateRivalryMatrix(snapshot);
+        // Match Setup is normally hidden. Keep its action/copy boundary pointed
+        // at the latest authoritative snapshot, but do not mutate its visual
+        // tree until it is visible. This also keeps unsaved control drafts alive
+        // across ordinary arena turns.
+        ScenarioWorkflow.ObserveSnapshot(snapshot);
+        _matchSetupSnapshotRenderState.Observe(snapshot);
+        RenderPendingMatchSetupSnapshot();
+    }
+
+    private void RenderPendingMatchSetupSnapshot()
+    {
+        var plan = _matchSetupSnapshotRenderState.Plan(CustomMatchPanel.Visibility == Visibility.Visible);
+        if (plan is null)
+        {
+            return;
+        }
+
+        var areas = plan.Areas;
+        if (areas.HasFlag(MatchSetupProjectionArea.ModelBehavior))
+        {
+            MatchSetup.PopulateModelBehavior(plan.Snapshot);
+        }
+
+        if (areas.HasFlag(MatchSetupProjectionArea.SeedInspector))
+        {
+            SeedInspector.Populate(plan.Snapshot);
+        }
+
+        if (areas.HasFlag(MatchSetupProjectionArea.GenerationHistory))
+        {
+            ScenarioWorkflow.PopulateGenerationHistory(plan.Snapshot);
+        }
+        else if (areas.HasFlag(MatchSetupProjectionArea.SetupFeedback))
+        {
+            ScenarioWorkflow.RefreshSetupFeedback(plan.Snapshot);
+        }
+
+        if (areas.HasFlag(MatchSetupProjectionArea.SetupSummary))
+        {
+            CustomMatchSummary.Populate(plan.Snapshot);
+        }
+
+        if (areas.HasFlag(MatchSetupProjectionArea.RivalryMatrix))
+        {
+            MatchSetup.PopulateRivalryMatrix(plan.Snapshot);
+        }
+
+        _matchSetupSnapshotRenderState.Commit(plan);
     }
 
     private Border CreateCard(string title, string body, Brush background, Brush accent)
@@ -5711,6 +5768,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
                 _arenaOperationCoordinator?.RefreshMotionPreference();
                 _appSettingsCoordinator?.RefreshMotionPreference();
+                _agentBoardCoordinator?.RefreshMotionPreference();
             },
             DispatcherPriority.Background);
     }
@@ -5732,6 +5790,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         _userGuideWindowHost.RefreshTheme(this);
         _collaborateCoordinator?.RefreshTheme();
         _agentWorkspaceCoordinator?.RefreshTheme();
+        _telemetryWorkflowCoordinator?.RefreshTheme();
     }
 
     private static Brush BlendBrush(Brush baseBrush, Brush accentBrush, double accentAmount)
@@ -5950,6 +6009,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         _providerModelsFocusReturnTarget = null;
         _providerModelsReturnSurface = ShellSurface.Lab;
         ShellNavigation.ShowCustomMatchPanel();
+        // Flush synchronously after visibility changes and before WPF presents
+        // the next frame. An open panel therefore never flashes a stale setup.
+        RenderPendingMatchSetupSnapshot();
         _activeShellSurface = ShellSurface.MatchSetup;
         ApplyShellCommandState(_activeShellSurface);
         UpdateLabViewToggleVisibility();

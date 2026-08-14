@@ -30,9 +30,16 @@ internal sealed class AgentPerformanceCoordinator
     private readonly Func<string?, int, string, string> compactPreview;
     private readonly Func<Brush, Brush, double, Brush> blendBrush;
     private readonly Func<bool> fullCardsPreferred;
+    private readonly Dictionary<string, FrameworkElement> rows = new(StringComparer.OrdinalIgnoreCase);
 
     private ArenaViewSnapshot? lastSnapshot;
     private string? activeDetailId;
+    private bool expanded;
+    private bool renderPending;
+
+    internal int DiagnosticRenderCount { get; private set; }
+    internal int DiagnosticMessageVisits { get; private set; }
+    internal IReadOnlyList<AgentPerformanceStats> LastStats { get; private set; } = [];
 
     public AgentPerformanceCoordinator(
         VoiceStyleAdherenceService voiceStyleAdherenceService,
@@ -72,36 +79,45 @@ internal sealed class AgentPerformanceCoordinator
         this.blendBrush = blendBrush;
     }
 
-    public void Populate(ArenaViewSnapshot snapshot)
+    public void ObserveSnapshot(ArenaViewSnapshot snapshot)
     {
         lastSnapshot = snapshot;
+        renderPending = true;
+        if (expanded)
+        {
+            RenderPendingSnapshot();
+        }
+    }
+
+    public void SetExpanded(bool value)
+    {
+        expanded = value;
+        if (expanded)
+        {
+            RenderPendingSnapshot();
+        }
+    }
+
+    internal void RenderPendingSnapshot()
+    {
+        if (!expanded || !renderPending || lastSnapshot is null)
+        {
+            return;
+        }
+
+        renderPending = false;
+        Populate(lastSnapshot);
+    }
+
+    private void Populate(ArenaViewSnapshot snapshot)
+    {
+        DiagnosticRenderCount++;
         var openDetailId = detailPopup.IsOpen ? activeDetailId : null;
         FrameworkElement? refreshedDetailTarget = null;
         AgentPerformanceStats? refreshedDetailStats = null;
 
-        agentPerformanceItems.Children.Clear();
-        var participants = snapshot.Agents
-            .Where(agent => agent.Active || snapshot.Messages.Any(message => message.SpeakerId.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)))
-            .Append(new AgentState(
-                "narrator",
-                "Narrator",
-                snapshot.NarratorStatus,
-                snapshot.NarratorPersona,
-                snapshot.NarratorVoiceStyle,
-                "",
-                snapshot.NarratorAccentColor,
-                snapshot.NarratorModel,
-                true,
-                snapshot.NarratorLocked,
-                [],
-                LatestInternetSourcesFor(snapshot, "narrator")))
-            .GroupBy(agent => agent.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First())
-            .ToArray();
-
-        var stats = participants
-            .Select(agent => CreateStats(snapshot, agent))
-            .ToArray();
+        var stats = ComputeStats(snapshot);
+        LastStats = stats;
 
         var maxTokens = Math.Max(1, stats.Select(item => item.Tokens).DefaultIfEmpty(0).Max());
         var fullCards = fullCardsPreferred();
@@ -115,30 +131,43 @@ internal sealed class AgentPerformanceCoordinator
                 CloseDetail();
             }
 
-            agentPerformanceItems.Children.Add(new TextBlock
+            ReconcileRows([new TextBlock
             {
                 Text = "Metrics appear after the first turn.",
                 Foreground = resourceBrush("MutedTextBrush"),
                 TextWrapping = TextWrapping.Wrap
-            });
+            }], new HashSet<string>(StringComparer.OrdinalIgnoreCase));
             return;
         }
 
         // Only the agent doing the work earns the full card; everyone else collapses to a
         // slim row so the rail stays glanceable instead of five tall cards of idle zeros.
-        var lastSpeakerId = snapshot.Messages
-            .LastOrDefault(message => !string.IsNullOrWhiteSpace(message.SpeakerId)
-                && stats.Any(item => item.AgentId.Equals(message.SpeakerId, StringComparison.OrdinalIgnoreCase)))?
-            .SpeakerId ?? "";
+        var lastSpeakerId = stats
+            .Where(item => item.LastMessageOrdinal >= 0)
+            .OrderByDescending(item => item.LastMessageOrdinal)
+            .FirstOrDefault()?.AgentId ?? "";
         var highlightId = stats.FirstOrDefault(item => IsBusyStatus(item.Status))?.AgentId ?? lastSpeakerId;
 
+        var orderedRows = new List<FrameworkElement>(stats.Count);
+        var liveIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in stats)
         {
             var expanded = fullCards
                 || (!string.IsNullOrWhiteSpace(highlightId)
                     && item.AgentId.Equals(highlightId, StringComparison.OrdinalIgnoreCase));
-            var row = expanded ? CreateRow(item, maxTokens) : CreateCompactRow(item);
-            agentPerformanceItems.Children.Add(row);
+            FrameworkElement row = expanded ? CreateRow(item, maxTokens) : CreateCompactRow(item);
+            liveIds.Add(item.AgentId);
+            if (rows.TryGetValue(item.AgentId, out var existing)
+                && CanUpdateRowInPlace(existing, row))
+            {
+                UpdateRowInPlace(existing, row);
+                row = existing;
+            }
+            else
+            {
+                rows[item.AgentId] = row;
+            }
+            orderedRows.Add(row);
             if (!string.IsNullOrWhiteSpace(openDetailId)
                 && item.AgentId.Equals(openDetailId, StringComparison.OrdinalIgnoreCase))
             {
@@ -146,6 +175,8 @@ internal sealed class AgentPerformanceCoordinator
                 refreshedDetailStats = item;
             }
         }
+
+        ReconcileRows(orderedRows, liveIds);
 
         if (agentPerformanceItems.Children.Count == 0)
         {
@@ -170,11 +201,34 @@ internal sealed class AgentPerformanceCoordinator
         }
     }
 
+    internal IReadOnlyList<AgentPerformanceStats> ComputeStats(ArenaViewSnapshot snapshot)
+    {
+        var aggregates = AggregateMessages(snapshot.Messages, out var spokenIds);
+        return snapshot.Agents
+            .Where(agent => agent.Active || spokenIds.Contains(agent.Id))
+            .Append(new AgentState(
+                "narrator",
+                "Narrator",
+                snapshot.NarratorStatus,
+                snapshot.NarratorPersona,
+                snapshot.NarratorVoiceStyle,
+                "",
+                snapshot.NarratorAccentColor,
+                snapshot.NarratorModel,
+                true,
+                snapshot.NarratorLocked,
+                []))
+            .GroupBy(agent => agent.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group => CreateStats(snapshot, group.First(), aggregates.GetValueOrDefault(group.Key)))
+            .ToArray();
+    }
+
     public void RefreshDensity()
     {
         if (lastSnapshot is not null)
         {
-            Populate(lastSnapshot);
+            renderPending = true;
+            RenderPendingSnapshot();
         }
     }
 
@@ -186,33 +240,14 @@ internal sealed class AgentPerformanceCoordinator
         detailContent.Children.Clear();
     }
 
-    private AgentPerformanceStats CreateStats(ArenaViewSnapshot snapshot, AgentState agent)
+    private AgentPerformanceStats CreateStats(
+        ArenaViewSnapshot snapshot,
+        AgentState agent,
+        AgentPerformanceAggregate? aggregate)
     {
-        var messages = snapshot.Messages
-            .Where(message => message.SpeakerId.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)
-                && !message.Kind.StartsWith("internet", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        var internetRequests = snapshot.Messages.Count(message =>
-            message.InternetRequester.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)
-            || (message.SpeakerId.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)
-                && (!string.IsNullOrWhiteSpace(message.InternetTool) || message.Kind.StartsWith("internet", StringComparison.OrdinalIgnoreCase))));
-        var failures = messages.Count(message => message.Status.Equals("error", StringComparison.OrdinalIgnoreCase));
-        var empty = messages.Count(message => string.IsNullOrWhiteSpace(message.Text) || message.Text.Contains("(empty model response)", StringComparison.OrdinalIgnoreCase));
-        var latencies = messages.Where(message => message.LatencyMs > 0).Select(message => message.LatencyMs).ToArray();
-        var tokens = messages.Sum(message => Math.Max(message.CompletionTokens, 0));
-        var context = messages.Select(message => message.PromptTokens).DefaultIfEmpty(0).Max();
-        var lastLatency = messages.LastOrDefault(message => message.LatencyMs > 0)?.LatencyMs ?? 0;
-        var averageTokensPerSecond = AverageTokensPerSecond(messages);
-        var averageTimeToFirstTokenMs = AverageTimeToFirstTokenMs(messages);
-        var activity = messages
-            .TakeLast(12)
-            .Select(message => (double)Math.Max(1, Math.Max(message.CompletionTokens, message.TotalTokens)))
-            .ToArray();
-        var internetSources = agent.InternetSources ?? LatestInternetSourcesFor(snapshot, agent.Id);
-        var voiceDiagnostics = messages
-            .Select(message => voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text))
-            .Where(diagnostic => !diagnostic.State.Equals("none", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
+        aggregate ??= new AgentPerformanceAggregate();
+        var messages = aggregate.Messages;
+        var voiceDiagnostics = aggregate.VoiceDiagnostics;
         var voiceScore = voiceDiagnostics.Length == 0
             ? 0
             : (int)Math.Round(voiceDiagnostics.Average(diagnostic => diagnostic.Score));
@@ -222,21 +257,236 @@ internal sealed class AgentPerformanceCoordinator
             string.IsNullOrWhiteSpace(agent.Name) ? displayStatusValue(agent.Id) : agent.Name,
             displayInlineStatus(agent.Status),
             agent.Model,
-            messages.Length,
-            tokens,
-            context,
-            latencies.Length == 0 ? 0 : (int)latencies.Average(),
-            lastLatency,
-            averageTokensPerSecond,
-            averageTimeToFirstTokenMs,
-            failures,
-            empty,
-            internetRequests,
+            messages.Count,
+            aggregate.Tokens,
+            aggregate.Context,
+            aggregate.LatencyCount == 0 ? 0 : (int)(aggregate.LatencyTotal / (double)aggregate.LatencyCount),
+            aggregate.LastLatency,
+            aggregate.TokensPerSecondCount == 0 ? 0 : Math.Round(aggregate.TokensPerSecondTotal / aggregate.TokensPerSecondCount, 1),
+            aggregate.TimeToFirstTokenCount == 0 ? 0 : (int)Math.Round(aggregate.TimeToFirstTokenTotal / (double)aggregate.TimeToFirstTokenCount),
+            aggregate.Failures,
+            aggregate.EmptyResponses,
+            aggregate.InternetRequests,
             voiceScore,
             RoleStyleCatalog.VoiceAdherenceState(voiceScore, voiceDiagnostics.Length),
             voiceDiagnostics.Length,
-            activity,
-            internetSources);
+            aggregate.Activity.ToArray(),
+            agent.InternetSources ?? aggregate.LatestInternetSources,
+            aggregate.LastMessageOrdinal);
+    }
+
+    private Dictionary<string, AgentPerformanceAggregate> AggregateMessages(
+        IReadOnlyList<TranscriptMessage> messages,
+        out HashSet<string> spokenIds)
+    {
+        var aggregates = new Dictionary<string, AgentPerformanceAggregate>(StringComparer.OrdinalIgnoreCase);
+        spokenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var ordinal = 0; ordinal < messages.Count; ordinal++)
+        {
+            var message = messages[ordinal];
+            DiagnosticMessageVisits++;
+            var speakerId = message.SpeakerId?.Trim() ?? "";
+            var requesterId = message.InternetRequester?.Trim() ?? "";
+            AgentPerformanceAggregate? speaker = null;
+            if (speakerId.Length > 0)
+            {
+                spokenIds.Add(speakerId);
+                speaker = GetAggregate(aggregates, speakerId);
+                speaker.LastMessageOrdinal = ordinal;
+            }
+
+            var internetMessage = message.Kind.StartsWith("internet", StringComparison.OrdinalIgnoreCase);
+            if (requesterId.Length > 0)
+            {
+                GetAggregate(aggregates, requesterId).InternetRequests++;
+            }
+            if (speaker is not null
+                && (!string.IsNullOrWhiteSpace(message.InternetTool) || internetMessage)
+                && !speakerId.Equals(requesterId, StringComparison.OrdinalIgnoreCase))
+            {
+                speaker.InternetRequests++;
+            }
+
+            if (message.InternetSources.Count > 0)
+            {
+                var sourceSummary = new AgentInternetSourceSummary(
+                    message.InternetQuery,
+                    message.InternetCheckedAt,
+                    message.InternetSources);
+                if (requesterId.Length > 0)
+                {
+                    GetAggregate(aggregates, requesterId).LatestInternetSources = sourceSummary;
+                }
+                if (speaker is not null
+                    && (requesterId.Length == 0
+                        || !requesterId.Equals(speakerId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    speaker.LatestInternetSources = sourceSummary;
+                }
+            }
+
+            if (speaker is null || internetMessage)
+            {
+                continue;
+            }
+
+            speaker.Messages.Add(message);
+            speaker.Tokens += Math.Max(message.CompletionTokens, 0);
+            speaker.Context = Math.Max(speaker.Context, message.PromptTokens);
+            if (message.LatencyMs > 0)
+            {
+                speaker.LatencyTotal += message.LatencyMs;
+                speaker.LatencyCount++;
+                speaker.LastLatency = message.LatencyMs;
+            }
+            if (message.TokensPerSecond > 0)
+            {
+                speaker.TokensPerSecondTotal += message.TokensPerSecond;
+                speaker.TokensPerSecondCount++;
+            }
+            if (message.TimeToFirstTokenMs > 0)
+            {
+                speaker.TimeToFirstTokenTotal += message.TimeToFirstTokenMs;
+                speaker.TimeToFirstTokenCount++;
+            }
+            if (message.Status.Equals("error", StringComparison.OrdinalIgnoreCase))
+            {
+                speaker.Failures++;
+            }
+            if (string.IsNullOrWhiteSpace(message.Text)
+                || message.Text.Contains("(empty model response)", StringComparison.OrdinalIgnoreCase))
+            {
+                speaker.EmptyResponses++;
+            }
+
+            speaker.Activity.Enqueue(Math.Max(1, Math.Max(message.CompletionTokens, message.TotalTokens)));
+            if (speaker.Activity.Count > 12)
+            {
+                speaker.Activity.Dequeue();
+            }
+
+            var diagnostic = voiceStyleAdherenceService.Analyze(message.VoiceStyle, message.Text);
+            if (!diagnostic.State.Equals("none", StringComparison.OrdinalIgnoreCase))
+            {
+                speaker.VoiceDiagnosticsList.Add(diagnostic);
+            }
+        }
+
+        foreach (var aggregate in aggregates.Values)
+        {
+            aggregate.FreezeDiagnostics();
+        }
+
+        return aggregates;
+    }
+
+    private static AgentPerformanceAggregate GetAggregate(
+        IDictionary<string, AgentPerformanceAggregate> aggregates,
+        string agentId)
+    {
+        if (!aggregates.TryGetValue(agentId, out var aggregate))
+        {
+            aggregate = new AgentPerformanceAggregate();
+            aggregates[agentId] = aggregate;
+        }
+
+        return aggregate;
+    }
+
+    private void ReconcileRows(
+        IReadOnlyList<FrameworkElement> orderedRows,
+        IReadOnlySet<string> liveIds)
+    {
+        foreach (var staleId in rows.Keys.Where(id => !liveIds.Contains(id)).ToArray())
+        {
+            rows.Remove(staleId);
+        }
+
+        for (var index = 0; index < orderedRows.Count; index++)
+        {
+            var row = orderedRows[index];
+            if (index < agentPerformanceItems.Children.Count
+                && ReferenceEquals(agentPerformanceItems.Children[index], row))
+            {
+                continue;
+            }
+
+            var existingIndex = agentPerformanceItems.Children.IndexOf(row);
+            if (existingIndex >= 0)
+            {
+                agentPerformanceItems.Children.RemoveAt(existingIndex);
+            }
+            agentPerformanceItems.Children.Insert(index, row);
+        }
+
+        while (agentPerformanceItems.Children.Count > orderedRows.Count)
+        {
+            agentPerformanceItems.Children.RemoveAt(agentPerformanceItems.Children.Count - 1);
+        }
+    }
+
+    private static bool CanUpdateRowInPlace(FrameworkElement current, FrameworkElement replacement) =>
+        current is ShellPopupOpenerCard && replacement is ShellPopupOpenerCard;
+
+    private static void UpdateRowInPlace(FrameworkElement current, FrameworkElement replacement)
+    {
+        if (current is not ShellPopupOpenerCard target || replacement is not ShellPopupOpenerCard source)
+        {
+            return;
+        }
+
+        var focusedElement = Keyboard.FocusedElement as FrameworkElement;
+        var focusedAutomationName = focusedElement is not null && IsLogicalDescendant(target, focusedElement)
+            ? AutomationProperties.GetName(focusedElement)
+            : "";
+
+        target.Background = source.Background;
+        target.BorderBrush = source.BorderBrush;
+        target.BorderThickness = source.BorderThickness;
+        target.CornerRadius = source.CornerRadius;
+        target.Padding = source.Padding;
+        target.Margin = source.Margin;
+        target.ToolTip = source.ToolTip;
+        target.Cursor = source.Cursor;
+        var child = source.Child;
+        source.Child = null;
+        target.Child = child;
+        target.Tag = source.Tag;
+        AutomationProperties.SetName(target, AutomationProperties.GetName(source));
+        AutomationProperties.SetHelpText(target, AutomationProperties.GetHelpText(source));
+        if (!string.IsNullOrWhiteSpace(focusedAutomationName))
+        {
+            var focusTarget = LogicalDescendants(target)
+                .FirstOrDefault(element => element.Focusable
+                    && AutomationProperties.GetName(element)
+                        .Equals(focusedAutomationName, StringComparison.Ordinal));
+            if (focusTarget is not null)
+            {
+                target.Dispatcher.BeginInvoke(
+                    () => focusTarget.Focus(),
+                    System.Windows.Threading.DispatcherPriority.Input);
+            }
+        }
+    }
+
+    private static bool IsLogicalDescendant(DependencyObject root, DependencyObject candidate) =>
+        ReferenceEquals(root, candidate)
+        || LogicalDescendants(root).Any(element => ReferenceEquals(element, candidate));
+
+    private static IEnumerable<FrameworkElement> LogicalDescendants(DependencyObject root)
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(root).OfType<DependencyObject>())
+        {
+            if (child is FrameworkElement element)
+            {
+                yield return element;
+            }
+
+            foreach (var descendant in LogicalDescendants(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 
     private static bool IsBusyStatus(string status)
@@ -583,6 +833,7 @@ internal sealed class AgentPerformanceCoordinator
 
     private void ConfigureDetailCard(Border card, AgentPerformanceStats stats, string displayTitle)
     {
+        card.Tag = stats;
         card.Focusable = true;
         KeyboardNavigation.SetIsTabStop(card, true);
         card.SetResourceReference(FrameworkElement.FocusVisualStyleProperty, "Arena.FocusVisual");
@@ -590,14 +841,23 @@ internal sealed class AgentPerformanceCoordinator
         AutomationProperties.SetHelpText(card, "Open turn, speed, context-use, quality, and failure details for this agent.");
         if (card is ShellPopupOpenerCard openerCard)
         {
-            openerCard.Invoked += (_, _) => ShowDetail(stats, card);
+            openerCard.Invoked += (_, _) =>
+            {
+                if (card.Tag is AgentPerformanceStats current)
+                {
+                    ShowDetail(current, card);
+                }
+            };
             return;
         }
 
         card.MouseLeftButtonUp += (_, e) =>
         {
             card.Focus();
-            ShowDetail(stats, card);
+            if (card.Tag is AgentPerformanceStats current)
+            {
+                ShowDetail(current, card);
+            }
             e.Handled = true;
         };
         card.KeyDown += (_, e) =>
@@ -607,7 +867,10 @@ internal sealed class AgentPerformanceCoordinator
                 return;
             }
 
-            ShowDetail(stats, card);
+            if (card.Tag is AgentPerformanceStats current)
+            {
+                ShowDetail(current, card);
+            }
             e.Handled = true;
         };
     }
@@ -1045,21 +1308,7 @@ internal sealed class AgentPerformanceCoordinator
                 : null);
     }
 
-    private static AgentInternetSourceSummary? LatestInternetSourcesFor(ArenaViewSnapshot snapshot, string agentId)
-    {
-        var message = snapshot.Messages.LastOrDefault(message =>
-            message.InternetSources.Count > 0
-            && (message.InternetRequester.Equals(agentId, StringComparison.OrdinalIgnoreCase)
-                || message.SpeakerId.Equals(agentId, StringComparison.OrdinalIgnoreCase)));
-        return message is null
-            ? null
-            : new AgentInternetSourceSummary(
-                message.InternetQuery,
-                message.InternetCheckedAt,
-                message.InternetSources);
-    }
-
-    private sealed record AgentPerformanceStats(
+    internal sealed record AgentPerformanceStats(
         string AgentId,
         string Name,
         string Status,
@@ -1078,5 +1327,33 @@ internal sealed class AgentPerformanceCoordinator
         string VoiceAdherenceState,
         int VoiceAdherenceSamples,
         IReadOnlyList<double> Activity,
-        AgentInternetSourceSummary? InternetSources);
+        AgentInternetSourceSummary? InternetSources,
+        int LastMessageOrdinal);
+
+    private sealed class AgentPerformanceAggregate
+    {
+        public List<TranscriptMessage> Messages { get; } = [];
+        public Queue<double> Activity { get; } = new();
+        public List<CoreVoiceAdherenceDiagnostic> VoiceDiagnosticsList { get; } = [];
+        public CoreVoiceAdherenceDiagnostic[] VoiceDiagnostics { get; private set; } = [];
+        public int Tokens { get; set; }
+        public int Context { get; set; }
+        public long LatencyTotal { get; set; }
+        public int LatencyCount { get; set; }
+        public int LastLatency { get; set; }
+        public double TokensPerSecondTotal { get; set; }
+        public int TokensPerSecondCount { get; set; }
+        public long TimeToFirstTokenTotal { get; set; }
+        public int TimeToFirstTokenCount { get; set; }
+        public int Failures { get; set; }
+        public int EmptyResponses { get; set; }
+        public int InternetRequests { get; set; }
+        public int LastMessageOrdinal { get; set; } = -1;
+        public AgentInternetSourceSummary? LatestInternetSources { get; set; }
+
+        public void FreezeDiagnostics()
+        {
+            VoiceDiagnostics = VoiceDiagnosticsList.ToArray();
+        }
+    }
 }

@@ -1628,7 +1628,7 @@ static void TranscriptCardRendererExposesModelStatsAndPersistentActions()
             double.IsNaN(sharedLabeledButton.Width) && sharedLabeledButton.MinHeight == 40,
             "the transcript-card action style must not shrink labeled quick-setup buttons");
 
-        var controlStyles = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Theming/ControlStyles.xaml"));
+        var controlStyles = ReadWorkspaceFile("src/AIArena.Wpf/UI/Theming/ControlStyles.xaml");
         foreach (var styleKey in new[]
         {
             TranscriptActionCoordinator.CardActionStyleKey,
@@ -2280,16 +2280,16 @@ static void CustomDialogsPreserveModalAccessibilityAndResponsiveBounds()
 
     foreach (var file in new[] { "AiChoicePromptDialog", "ConfirmDialog", "TextEditDialog" })
     {
-        var source = File.ReadAllText(FindWorkspaceFile($"src/AIArena.Wpf/Shell/Dialogs/{file}.xaml.cs"));
+        var source = ReadWorkspaceFile($"src/AIArena.Wpf/Shell/Dialogs/{file}.xaml.cs");
         Require(source.Contains("DialogChrome.PrepareModalWindow(", StringComparison.Ordinal), $"{file} should use the shared modal focus and sizing contract");
     }
 
-    var confirm = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/Dialogs/ConfirmDialog.xaml.cs"));
+    var confirm = ReadWorkspaceFile("src/AIArena.Wpf/Shell/Dialogs/ConfirmDialog.xaml.cs");
     Require(confirm.Contains("tone == ConfirmDialogTone.Danger ? CancelButton : ConfirmButton", StringComparison.Ordinal), "danger confirmations should initially focus the safe action");
 
     foreach (var file in new[] { "AiChoicePromptDialog", "TextEditDialog" })
     {
-        var xaml = File.ReadAllText(FindWorkspaceFile($"src/AIArena.Wpf/Shell/Dialogs/{file}.xaml"));
+        var xaml = ReadWorkspaceFile($"src/AIArena.Wpf/Shell/Dialogs/{file}.xaml");
         Require(xaml.Contains("PreviewKeyDown=", StringComparison.Ordinal), $"{file} should expose a keyboard submit path without breaking multiline Enter");
     }
 }
@@ -2319,7 +2319,7 @@ static void WindowChromeServicePacksColorRefs()
 
 static void AppStartsInternetBackendLazily()
 {
-    var source = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/App.xaml.cs"));
+    var source = ReadWorkspaceFile("src/AIArena.Wpf/App.xaml.cs");
     var startupStart = source.IndexOf("protected override void OnStartup", StringComparison.Ordinal);
     var ensureMethodStart = source.IndexOf("internal Task<SearxngSupervisorStatus> EnsureInternetSearchAsync", StringComparison.Ordinal);
 
@@ -3837,16 +3837,16 @@ static void InternetWorkflowFormatsActionableDiagnostics()
 
 static void ReleaseScriptsProtectInstallerDistributions()
 {
-    var installerScript = File.ReadAllText(FindWorkspaceFile("scripts/build-wpf-installer.ps1"));
-    var releaseScript = File.ReadAllText(FindWorkspaceFile("scripts/build-wpf-release.ps1"));
-    var previewScript = File.ReadAllText(FindWorkspaceFile("scripts/build-wpf-preview.ps1"));
-    var sanityScript = File.ReadAllText(FindWorkspaceFile("scripts/wpf-release-sanity.ps1"));
-    var payloadScript = File.ReadAllText(FindWorkspaceFile("scripts/build-searxng-payload.ps1"));
-    var arenaSearchGateway = File.ReadAllText(FindWorkspaceFile("packaging/arena_searxng_wsgi.py"));
-    var releaseSecurityScript = File.ReadAllText(FindWorkspaceFile("scripts/release-security.ps1"));
-    var upstreamLock = File.ReadAllText(FindWorkspaceFile("packaging/upstream-lock.json"));
-    var dependencyLock = File.ReadAllText(FindWorkspaceFile("packaging/searxng-requirements-lock.txt"));
-    var innoScript = File.ReadAllText(FindWorkspaceFile("packaging/inno/ai-arena-wpf.iss"));
+    var installerScript = ReadWorkspaceFile("scripts/build-wpf-installer.ps1");
+    var releaseScript = ReadWorkspaceFile("scripts/build-wpf-release.ps1");
+    var previewScript = ReadWorkspaceFile("scripts/build-wpf-preview.ps1");
+    var sanityScript = ReadWorkspaceFile("scripts/wpf-release-sanity.ps1");
+    var payloadScript = ReadWorkspaceFile("scripts/build-searxng-payload.ps1");
+    var arenaSearchGateway = ReadWorkspaceFile("packaging/arena_searxng_wsgi.py");
+    var releaseSecurityScript = ReadWorkspaceFile("scripts/release-security.ps1");
+    var upstreamLock = ReadWorkspaceFile("packaging/upstream-lock.json");
+    var dependencyLock = ReadWorkspaceFile("packaging/searxng-requirements-lock.txt");
+    var innoScript = ReadWorkspaceFile("packaging/inno/ai-arena-wpf.iss");
 
     Require(installerScript.Contains("Join-Path $distRoot \"installer\"", StringComparison.Ordinal) && installerScript.Contains("Join-Path $installerRoot \"AI Arena - $Version\"", StringComparison.Ordinal), "installer helper should target a versioned installer folder");
     Require(installerScript.Contains("Installer distribution already exists", StringComparison.Ordinal), "installer helper should reject existing installer folders");
@@ -3854,6 +3854,9 @@ static void ReleaseScriptsProtectInstallerDistributions()
     Require(installerScript.Contains("[switch]$ResumeFinalization", StringComparison.Ordinal), "installer helper should expose an explicit interrupted-build recovery mode");
     Require(installerScript.Contains("untouched post-compile installer directory", StringComparison.Ordinal), "installer recovery should refuse partially finalized or mutable distributions");
     Require(installerScript.Contains("Resume finalization requires an existing release directory and compiled installer", StringComparison.Ordinal), "installer recovery should require both immutable build products before finalizing");
+    Require(installerScript.Contains("Test-AIArenaInstallerCompileReceipt", StringComparison.Ordinal)
+        && installerScript.Contains("New-AIArenaInstallerCompileReceipt", StringComparison.Ordinal)
+        && sanityScript.Contains("Test-AIArenaInstallerCompileReceipt", StringComparison.Ordinal), "installer recovery and sanity must require a post-compile receipt bound to the exact installer, source, release inventory, and Inno inputs");
     Require(installerScript.Contains("build-wpf-release.ps1", StringComparison.Ordinal), "installer helper should build the release payload first");
     Require(installerScript.Contains("Version = $Version", StringComparison.Ordinal), "installer helper should pass the release version by name");
     Require(installerScript.Contains("Configuration = $Configuration", StringComparison.Ordinal), "installer helper should pass the release configuration by name");
@@ -3868,8 +3871,24 @@ static void ReleaseScriptsProtectInstallerDistributions()
     Require(releaseScript.Contains("scripts\\ai-arena-control.ps1", StringComparison.Ordinal) && releaseScript.Contains("ai-arena-control.ps1\")", StringComparison.Ordinal), "release builder should ship the PowerShell control helper beside the app");
     Require(releaseScript.Contains("changelog.md", StringComparison.Ordinal) && releaseScript.Contains("github-release-notes.md", StringComparison.Ordinal), "release builder should emit markdown release artifacts");
     Require(releaseScript.Contains("packaging\\changes\\$Version.txt", StringComparison.Ordinal), "release builder should consume versioned packaged change notes by default");
-    Require(releaseScript.Contains("'-c', $Configuration, '--no-restore'", StringComparison.Ordinal), "release builder should execute both harnesses in the requested build configuration");
+    Require(releaseScript.Contains("Invoke-AIArenaReleaseVerificationHarnesses", StringComparison.Ordinal)
+        && releaseSecurityScript.Contains("'-c', $Configuration, '--no-restore'", StringComparison.Ordinal), "release builder should execute both harnesses in the requested build configuration through the receipt-producing runner");
     Require(releaseScript.Contains("release-checksums.sha256", StringComparison.Ordinal) && releaseScript.Contains("release-signing.json", StringComparison.Ordinal), "release builder should emit checksums and a signing report");
+    Require(releaseScript.Contains("Invoke-AIArenaReleaseVerificationHarnesses", StringComparison.Ordinal)
+        && installerScript.Contains("VerificationReceiptKey", StringComparison.Ordinal)
+        && sanityScript.Contains("Test-AIArenaReleaseVerificationReceipt", StringComparison.Ordinal)
+        && releaseSecurityScript.Contains("trusted-local-release-account", StringComparison.Ordinal), "installer releases should reuse only an ephemeral-key-authenticated receipt causally produced by successful harness processes within the trusted local release account");
+    Require(sanityScript.Contains("without the pipeline-internal", StringComparison.Ordinal)
+        && sanityScript.Contains("dotnet run --project $coreTests", StringComparison.Ordinal)
+        && sanityScript.Contains("dotnet run --project $wpfTests", StringComparison.Ordinal), "standalone release sanity should rerun both harnesses when no exact receipt is supplied");
+    Require(Regex.Matches(releaseScript, "Get-AIArenaSha256Entries", RegexOptions.CultureInvariant).Count == 1
+        && releaseScript.Contains("Write-AIArenaSha256ManifestEntries", StringComparison.Ordinal)
+        && releaseScript.Contains("Checksum inventory SHA256", StringComparison.Ordinal)
+        && !releaseScript.Contains("$manifestLines += Get-AIArenaSha256Entries", StringComparison.Ordinal), "release generation should hash the payload once and bind the human manifest to that canonical inventory");
+    Require(!sanityScript.Contains("-ManifestPath $releaseManifest -AllowPreamble", StringComparison.Ordinal)
+        && sanityScript.Contains("Release manifest does not bind the canonical checksum inventory", StringComparison.Ordinal), "release sanity should independently hash the canonical inventory once instead of rehashing a duplicate human inventory");
+    Require(releaseSecurityScript.Contains("[Text.UTF8Encoding]::new($false)", StringComparison.Ordinal)
+        && releaseSecurityScript.Contains("checksum inventories byte-stable", StringComparison.Ordinal), "checksum manifests should be emitted as deterministic BOM-free UTF-8 under Windows PowerShell 5 and pwsh");
     Require(releaseScript.Contains("Resolve-AIArenaSigningConfiguration", StringComparison.Ordinal) && releaseScript.Contains("Invoke-AIArenaAuthenticodeSigning", StringComparison.Ordinal), "release builder should apply the shared Authenticode policy");
     Require(installerScript.Contains("SHA256SUMS.txt", StringComparison.Ordinal) && installerScript.Contains("installer-signing.json", StringComparison.Ordinal), "installer builder should emit distributable checksums and a signing report");
     Require(installerScript.Contains("SigningPolicy = $SigningPolicy", StringComparison.Ordinal), "installer helper should pass the signing policy into the release build");
@@ -4094,14 +4113,14 @@ static void ProviderReachabilityCoordinatorFormatsPopupState()
 
 static void ProviderReachabilityProjectsOneCoherentUiGeneration()
 {
-    var coordinatorSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ProviderReachabilityCoordinator.cs"));
+    var coordinatorSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ProviderReachabilityCoordinator.cs");
     var updateMethod = CSharpMethodBlock(coordinatorSource, "private async Task UpdateActiveProviderStatusOnlyAsync(");
     Require(updateMethod.Contains("applyProviderStatusProjection(latest, snapshot)", StringComparison.Ordinal),
         "provider reachability should publish one projection instead of updating independent surfaces");
     Require(!updateMethod.Contains("updateTopBarStatus", StringComparison.Ordinal),
         "provider reachability should not retain a split top-bar-only update path");
 
-    var windowSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var windowSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
     var projection = CSharpMethodBlock(windowSource, "private void ApplyProviderStatusProjection(");
     Require(projection.Contains("ProviderProjectionIsStale(session.LastModified, _activeSnapshotWriteUtc)", StringComparison.Ordinal),
         "provider reachability should reject a snapshot generation captured before a newer Operator save was rendered");
@@ -4312,6 +4331,334 @@ static void CrossSessionSearchAttributesAndCapsHits()
     Require(CrossSessionSearchService.Excerpt("", "x") == "", "an empty turn should produce an empty excerpt");
 }
 
+static void CrossSessionSearchCachesCompactEquivalentProjections()
+{
+    CrossSessionSearchCachesCompactEquivalentProjectionsAsync().GetAwaiter().GetResult();
+}
+
+static async Task CrossSessionSearchCachesCompactEquivalentProjectionsAsync()
+{
+    static JsonElement Json(string value) => JsonDocument.Parse(value).RootElement.Clone();
+
+    Require(!CrossSessionSearchService.ShouldTrustNativeChangeTime(0),
+        "a filesystem that reports no change-time evidence must use the content-hash fallback");
+    Require(CrossSessionSearchService.ShouldTrustNativeChangeTime(1),
+        "a positive Windows file change time should remain eligible for the metadata fast path");
+
+    var metadata = new Dictionary<string, JsonElement>
+    {
+        ["reasoning_content"] = Json("\"reasoning-marker\""),
+        ["tool_request"] = Json("""
+            {
+              "query": "query-marker",
+              "url": "https://example.test/url-marker"
+            }
+            """),
+        ["tool_result"] = Json("""
+            {
+              "sources": [
+                {
+                  "source": "source-marker",
+                  "title": "title-marker",
+                  "url": "https://example.test/source-marker",
+                  "snippet": "snippet-marker"
+                }
+              ]
+            }
+            """)
+    };
+    var snapshot = SessionStore.CreateDefaultSnapshot();
+    snapshot.Engine.Messages =
+    [
+        new DialogueMessage
+        {
+            Turn = 7,
+            Speaker = "Alpha",
+            SpeakerId = "alpha-id-marker",
+            Text = "text-marker",
+            Status = "status-marker",
+            Kind = "kind-marker",
+            Model = new ModelMetadata { Model = "model-marker" },
+            Metadata = metadata
+        },
+        new DialogueMessage
+        {
+            Turn = 8,
+            SpeakerId = "Beta",
+            Text = "cache-mutation-original",
+            Status = "",
+            Kind = "",
+            Metadata = new Dictionary<string, JsonElement>
+            {
+                ["tool_request"] = Json("\"malformed-object\""),
+                ["tool_result"] = Json("[1,2,3]")
+            }
+        }
+    ];
+
+    var session = new AIArena.Core.Models.SessionSummary(
+        "projection",
+        "projection.json",
+        true,
+        snapshot.Engine.Messages.Count,
+        0,
+        0,
+        DateTimeOffset.UnixEpoch);
+    var fullProjection = SnapshotViewMapper.FromCore(session, snapshot).Messages;
+    var compactProjection = CrossSessionSearchService.ProjectSearchMessages(snapshot);
+    Require(compactProjection.Count == fullProjection.Count, "compact search projection should preserve every transcript row");
+    foreach (var query in new[]
+             {
+                 "Alpha", "alpha-id-marker", "model-marker", "status-marker", "kind-marker", "text-marker",
+                 "reasoning-marker", "query-marker", "url-marker", "source-marker", "title-marker", "snippet-marker",
+                 "Beta", "ok", "message", "no-such-marker"
+             })
+    {
+        for (var index = 0; index < fullProjection.Count; index++)
+        {
+            Require(
+                TranscriptSearchCoordinator.TranscriptMatchesSearch(fullProjection[index], query)
+                == CrossSessionSearchService.MatchesSearch(compactProjection[index], query),
+                $"compact search semantics should match the full render projection for '{query}' at row {index}");
+        }
+    }
+
+    var performanceSnapshot = SessionStore.CreateDefaultSnapshot();
+    performanceSnapshot.Engine.Agents.Add(new DialogueAgent
+    {
+        Id = "performance-agent",
+        Name = "Performance Agent",
+        Persona = new string('p', 256),
+        PrivateNotes = { new string('n', 256) }
+    });
+    for (var index = 0; index < 2_000; index++)
+    {
+        performanceSnapshot.Engine.Messages.Add(new DialogueMessage
+        {
+            Turn = index,
+            Speaker = "Performance Agent",
+            SpeakerId = "performance-agent",
+            Text = $"searchable payload {index} {new string('x', 96)}",
+            Model = new ModelMetadata { Model = "performance-model", PromptTokens = 100, CompletionTokens = 25 }
+        });
+    }
+    var performanceSession = session with { Id = "performance", MessageCount = 2_000 };
+    _ = SnapshotViewMapper.FromCore(performanceSession, performanceSnapshot);
+    _ = CrossSessionSearchService.ProjectSearchMessages(performanceSnapshot);
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+    var fullAllocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+    var fullStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+    var fullPerformanceProjection = SnapshotViewMapper.FromCore(performanceSession, performanceSnapshot);
+    var fullElapsed = System.Diagnostics.Stopwatch.GetElapsedTime(fullStartedAt);
+    var fullAllocated = GC.GetAllocatedBytesForCurrentThread() - fullAllocatedBefore;
+    var compactAllocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+    var compactStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+    var compactPerformanceProjection = CrossSessionSearchService.ProjectSearchMessages(performanceSnapshot);
+    var compactElapsed = System.Diagnostics.Stopwatch.GetElapsedTime(compactStartedAt);
+    var compactAllocated = GC.GetAllocatedBytesForCurrentThread() - compactAllocatedBefore;
+    Require(fullPerformanceProjection.Messages.Count == compactPerformanceProjection.Count,
+        "performance projections should retain equivalent message counts");
+    Require(compactAllocated < fullAllocated,
+        $"compact search projection should allocate less than full UI mapping ({compactAllocated} vs {fullAllocated})");
+    Console.WriteLine(
+        $"RECEIPT cross-session-search baseline=full-ui-projection messages=2000 " +
+        $"baseline_elapsed_ms={fullElapsed.TotalMilliseconds:F3} baseline_allocated_bytes={fullAllocated} " +
+        $"compact_elapsed_ms={compactElapsed.TotalMilliseconds:F3} compact_allocated_bytes={compactAllocated}");
+
+    var tempRoot = Path.Combine(Path.GetTempPath(), "ai-arena-cross-session-cache", Guid.NewGuid().ToString("N"));
+    try
+    {
+        var store = new SessionStore(tempRoot);
+        await store.SaveSnapshotAsync(snapshot, "run-1");
+        var service = new CrossSessionSearchService(store);
+
+        var first = await service.SearchAsync("cache-mutation-original");
+        var afterFirst = service.Diagnostics;
+        Require(first.Count == 1 && afterFirst.SnapshotLoads == 1 && afterFirst.CompactProjections == 1,
+            "the first search should load once and build one compact projection");
+        Require(afterFirst.SessionCount == 1 && afterFirst.MessageCount == 2 && afterFirst.CharacterCount > 0,
+            "the bounded cache should retain only the compact searchable projection");
+
+        var second = await service.SearchAsync("reasoning-marker");
+        var afterSecond = service.Diagnostics;
+        Require(second.Count == 1, "a different query should reuse the cached compact fields");
+        Require(afterSecond.SnapshotLoads == 1 && afterSecond.CacheHits == 1,
+            "a repeated cross-session query should avoid a second snapshot load and full projection");
+
+        var hashSnapshot = SessionStore.CreateDefaultSnapshot();
+        hashSnapshot.Engine.Messages.Add(new DialogueMessage
+        {
+            Turn = 1,
+            Speaker = "Hash Agent",
+            SpeakerId = "hash-agent",
+            Text = $"hash-cache-marker-one {new string('z', 256 * 1024)}"
+        });
+        var hashStore = new SessionStore(Path.Combine(tempRoot, "hash-fallback-fixture"));
+        await hashStore.SaveSnapshotAsync(hashSnapshot, "hash-run");
+        var hashPath = hashStore.SnapshotPath("hash-run");
+        var hashWriteTime = File.GetLastWriteTimeUtc(hashPath);
+        var hashLength = new FileInfo(hashPath).Length;
+        var fallbackService = new CrossSessionSearchService(
+            hashStore,
+            CrossSessionSearchService.DefaultMaxCachedSessions,
+            CrossSessionSearchService.DefaultMaxCachedMessages,
+            CrossSessionSearchService.DefaultMaxCachedCharacters,
+            forceContentHashGeneration: true);
+        Require((await fallbackService.SearchAsync("hash-cache-marker-one")).Count == 1,
+            "the forced content-hash generation path did not find its initial transcript row");
+        var afterHashFirst = fallbackService.Diagnostics;
+        var rewrittenHashJson = File.ReadAllText(hashPath).Replace(
+            "hash-cache-marker-one",
+            "hash-cache-marker-two",
+            StringComparison.Ordinal);
+        File.WriteAllText(hashPath, rewrittenHashJson);
+        Require(new FileInfo(hashPath).Length == hashLength,
+            "the content-hash fallback fixture must preserve snapshot length");
+        File.SetLastWriteTimeUtc(hashPath, hashWriteTime);
+        Require(File.GetLastWriteTimeUtc(hashPath) == hashWriteTime,
+            "the content-hash fallback fixture must restore the original write timestamp");
+        Require((await fallbackService.SearchAsync("hash-cache-marker-two")).Count == 1,
+            "the content-hash fallback did not invalidate an external same-metadata rewrite");
+        Require(fallbackService.Diagnostics.SnapshotLoads == afterHashFirst.SnapshotLoads + 1,
+            "the content-hash fallback should reload only the externally rewritten session");
+
+        using (var hashCancellation = new CancellationTokenSource())
+        {
+            var observedHashChunks = 0;
+            var cancellingFallback = new CrossSessionSearchService(
+                hashStore,
+                CrossSessionSearchService.DefaultMaxCachedSessions,
+                CrossSessionSearchService.DefaultMaxCachedMessages,
+                CrossSessionSearchService.DefaultMaxCachedCharacters,
+                forceContentHashGeneration: true,
+                hashChunkObserved: chunks =>
+                {
+                    observedHashChunks = Math.Max(observedHashChunks, chunks);
+                    if (chunks >= 2)
+                    {
+                        hashCancellation.Cancel();
+                    }
+                });
+            var cancelledDuringHash = false;
+            try
+            {
+                await cancellingFallback.SearchAsync(
+                    "hash-cache-marker-two",
+                    cancellationToken: hashCancellation.Token);
+            }
+            catch (OperationCanceledException) when (hashCancellation.IsCancellationRequested)
+            {
+                cancelledDuringHash = true;
+            }
+
+            Require(cancelledDuringHash && observedHashChunks >= 2,
+                "content-hash generation did not honor cancellation after multi-chunk work began");
+        }
+
+        var snapshotPath = store.SnapshotPath("run-1");
+        var originalWriteTime = File.GetLastWriteTimeUtc(snapshotPath);
+        var originalLength = new FileInfo(snapshotPath).Length;
+        var sameSizeOriginal = snapshot.Engine.Messages[1];
+        snapshot.Engine.Messages[1] = new DialogueMessage
+        {
+            MessageId = sameSizeOriginal.MessageId,
+            Turn = sameSizeOriginal.Turn,
+            Speaker = sameSizeOriginal.Speaker,
+            SpeakerId = sameSizeOriginal.SpeakerId,
+            Text = "cache-revision-marker".PadRight(sameSizeOriginal.Text.Length, 'x'),
+            Status = sameSizeOriginal.Status,
+            Pinned = sameSizeOriginal.Pinned,
+            Kind = sameSizeOriginal.Kind,
+            CreatedAt = sameSizeOriginal.CreatedAt,
+            Model = sameSizeOriginal.Model,
+            Metadata = sameSizeOriginal.Metadata,
+            Extra = sameSizeOriginal.Extra
+        };
+        await store.SaveSnapshotAsync(snapshot, "run-1");
+        Require(new FileInfo(snapshotPath).Length == originalLength,
+            "the persistence-revision fixture must preserve snapshot length so file metadata alone cannot invalidate it");
+        File.SetLastWriteTimeUtc(snapshotPath, originalWriteTime);
+        Require(File.GetLastWriteTimeUtc(snapshotPath) == originalWriteTime,
+            "the persistence-revision fixture must restore the original write timestamp");
+        var sameMetadataMutation = await service.SearchAsync("cache-revision-marker");
+        var afterSameMetadataMutation = service.Diagnostics;
+        Require(sameMetadataMutation.Count == 1 && afterSameMetadataMutation.SnapshotLoads == 2,
+            "same-process mutation evidence should invalidate a same-size snapshot rewrite even when its file timestamp is restored");
+
+        var externallyMutatedJson = File.ReadAllText(snapshotPath).Replace(
+            "cache-revision-marker",
+            "external-cache-marker",
+            StringComparison.Ordinal);
+        Require(externallyMutatedJson.Contains("external-cache-marker", StringComparison.Ordinal),
+            "the external mutation fixture did not replace its same-length marker");
+        File.WriteAllText(snapshotPath, externallyMutatedJson);
+        Require(new FileInfo(snapshotPath).Length == originalLength,
+            "the external mutation fixture must preserve snapshot length");
+        File.SetLastWriteTimeUtc(snapshotPath, originalWriteTime);
+        Require(File.GetLastWriteTimeUtc(snapshotPath) == originalWriteTime,
+            "the external mutation fixture must restore the original write timestamp");
+        var externalMutation = await service.SearchAsync("external-cache-marker");
+        var afterExternalMutation = service.Diagnostics;
+        Require(externalMutation.Count == 1 && afterExternalMutation.SnapshotLoads == 3,
+            "filesystem change evidence should invalidate an external same-size rewrite with a restored write timestamp");
+
+        snapshot.Engine.Messages.Add(new DialogueMessage
+        {
+            Turn = 9,
+            Speaker = "Gamma",
+            SpeakerId = "gamma",
+            Text = "cache-generation-marker"
+        });
+        await store.SaveSnapshotAsync(snapshot, "run-1");
+        var mutated = await service.SearchAsync("cache-generation-marker");
+        var afterMutation = service.Diagnostics;
+        Require(mutated.Count == 1 && afterMutation.SnapshotLoads == 4,
+            "snapshot length/write generation changes should invalidate and reload the cached session");
+        Require(afterMutation.MessageCount == 3,
+            "the replacement cache entry should reflect the current session generation");
+
+        var bounded = new CrossSessionSearchService(store, maxCachedSessions: 1, maxCachedMessages: 2, maxCachedCharacters: 32);
+        Require((await bounded.SearchAsync("cache-generation-marker")).Count == 1,
+            "an over-budget projection must still be searched truthfully");
+        Require(bounded.Diagnostics.SessionCount == 0 && bounded.Diagnostics.CharacterCount == 0,
+            "an over-budget session should not retain sensitive transcript text in the cache");
+
+        File.Delete(store.SnapshotPath("run-1"));
+        Require((await service.SearchAsync("cache-generation-marker")).Count == 0,
+            "deleting a session should remove it from cross-session search");
+        Require(service.Diagnostics.SessionCount == 0,
+            "deleted sessions should be evicted from the compact cache immediately");
+
+        var corruptDirectory = Path.Combine(tempRoot, "sessions", "corrupt-run");
+        Directory.CreateDirectory(corruptDirectory);
+        File.WriteAllText(Path.Combine(corruptDirectory, "snapshot.json"), "{not-json");
+        Require((await service.SearchAsync("marker")).Count == 0,
+            "a corrupt session should be skipped without aborting cross-session search");
+
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var cancelled = false;
+        try
+        {
+            await service.SearchAsync("marker", cancellationToken: cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            cancelled = true;
+        }
+        Require(cancelled, "cross-session enumeration and message scans should honor cancellation");
+    }
+    finally
+    {
+        if (Directory.Exists(tempRoot))
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+}
+
 static void IdlePollingCadenceOnlyWhenNothingIsRunning()
 {
     Require(MainWindow.ShouldUseIdlePollingCadence(windowActive: false, arenaBusy: false, autoChatRunning: false), "a backgrounded idle shell should slow its polling");
@@ -4366,7 +4713,7 @@ static void AdvertisedShortcutsAreHandled()
     // The search tooltip promised Ctrl+F for a long time while no handler
     // existed. Any shortcut named in the UI must be reachable from the shell
     // key handler, and every shortcut the handler implements must be listed.
-    var handler = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var handler = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
     var handlerStart = handler.IndexOf("private bool TryHandleShellShortcut", StringComparison.Ordinal);
     var handlerEnd = handler.IndexOf("private void ShowShortcutsOverlay", handlerStart, StringComparison.Ordinal);
     Require(handlerStart >= 0 && handlerEnd > handlerStart, "shell shortcut handler should remain discoverable");
@@ -4427,7 +4774,7 @@ static void AdvertisedShortcutsAreHandled()
     ];
     foreach (var relativePath in markupFiles)
     {
-        var markup = File.ReadAllText(FindWorkspaceFile(relativePath));
+        var markup = ReadWorkspaceFile(relativePath);
         foreach (Match match in Regex.Matches(markup, @"\(Ctrl\+(?:Shift\+)?[A-Za-z,]+\)"))
         {
             var advertised = match.Value.Trim('(', ')');
@@ -4556,7 +4903,7 @@ static void ShellNavigationCoordinatorSelectsThemes()
         Require(theme.OperatorAccent != theme.DangerBorder, $"{theme.Name} should reserve danger red for destructive/error semantics instead of the selected public operator route");
     }
 
-    var mainWindow = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var mainWindow = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
     var handlerStart = mainWindow.IndexOf("private void OnSystemThemePreferenceChanged", StringComparison.Ordinal);
     var handlerEnd = mainWindow.IndexOf("internal static bool ShouldReapplySystemTheme", handlerStart, StringComparison.Ordinal);
     Require(handlerStart >= 0 && handlerEnd > handlerStart, "system-theme preference handler should remain discoverable");
@@ -4709,7 +5056,7 @@ static void TranscriptEmptyStateReflectsReadinessAndFilters()
     Require(filtered.Actions.SequenceEqual([
         TranscriptListCoordinator.EmptyStateAction.ClearFilters]), "filtered state should offer one direct recovery action");
 
-    var source = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptListCoordinator.cs"));
+    var source = ReadWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptListCoordinator.cs");
     Require(source.Contains("Arena.Surface.Panel", StringComparison.Ordinal)
         && source.Contains("Arena.Text.Title", StringComparison.Ordinal)
         && source.Contains("Arena.Button.Primary", StringComparison.Ordinal), "empty state should consume the shared Arena design system");
@@ -4725,7 +5072,7 @@ static void TranscriptViewCoordinatorNormalizesViewState()
     Require(TranscriptViewCoordinator.CurrentTopStripMode(new WpfSettings { TopStripMode = "telemetry" }) == "telemetry", "known top strip mode should be preserved");
     Require(TranscriptViewCoordinator.CurrentTopStripMode(new WpfSettings { TopStripMode = "hidden", ShowTranscriptDiagnostics = true }) == "hidden", "known hidden top strip mode should override legacy diagnostics flag");
     Require(TranscriptViewCoordinator.CurrentTopStripMode(new WpfSettings { TopStripMode = "weird", ShowTranscriptDiagnostics = true }) == "diagnostics", "unknown top strip mode should fall back from diagnostics flag");
-    var coordinatorSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptViewCoordinator.cs"));
+    var coordinatorSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptViewCoordinator.cs");
     Require(
         !coordinatorSource.Contains("ShouldShowPerformanceMetadata", StringComparison.Ordinal),
         "view presets should no longer decide whether transcript cards expose delivery statistics");
@@ -4740,7 +5087,7 @@ static void TranscriptViewCoordinatorNormalizesViewState()
 
 static void TranscriptViewCoordinatorAdaptsDashboardWidths()
 {
-    var coordinatorSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptViewCoordinator.cs"));
+    var coordinatorSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptViewCoordinator.cs");
     var defaultDiagnostics = TranscriptViewCoordinator.ResolveDashboardLayout(858, "diagnostics");
     Require(defaultDiagnostics.Tier == TranscriptDashboardTier.Medium, "the default center width should use the medium dashboard tier");
     Require(defaultDiagnostics.ShowDiagnostics && !defaultDiagnostics.ShowTelemetry, "diagnostics should remain visible at the default center width");
@@ -5107,7 +5454,7 @@ static void RejectedWorkspacePathsAreReportedAsFailures()
     // do was say so: the command answered "Agent workspace updated." either
     // way, so pointing at a typo, a file, or a folder that had since moved
     // reported success while the workspace was quietly emptied.
-    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    var dispatch = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs");
     var start = dispatch.IndexOf("case AIArenaControlCommands.AgentWorkspaceSet", StringComparison.Ordinal);
     Require(start >= 0, "the workspace command should remain discoverable");
     var next = dispatch.IndexOf("case AIArenaControlCommands.", start + 10, StringComparison.Ordinal);
@@ -5176,7 +5523,7 @@ static void ABlockedArenaOperationIsNotReportedAsCompleted()
     // plane could: five concurrent arena.turn calls reported five successes
     // when three turns actually happened, and the run-loop event fired for the
     // two that never ran.
-    var runner = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ArenaOperationCoordinator.cs"));
+    var runner = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ArenaOperationCoordinator.cs");
     Require(
         runner.Contains("public async Task<bool> RunAsync(", StringComparison.Ordinal),
         "the operation runner has to report whether it ran");
@@ -5189,7 +5536,7 @@ static void ABlockedArenaOperationIsNotReportedAsCompleted()
 
     // The event must not fire for work that was skipped, or the stream says a
     // turn completed when none did.
-    var arena = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ArenaRunCoordinator.cs"));
+    var arena = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ArenaRunCoordinator.cs");
     foreach (var method in new[] { "RunOneTurnAsync", "NarrateNowAsync" })
     {
         Require(
@@ -5206,7 +5553,7 @@ static void ABlockedArenaOperationIsNotReportedAsCompleted()
         "the turn event must not fire unconditionally again");
 
     // And the command has to pass the answer on rather than always succeeding.
-    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    var dispatch = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs");
     var turnCase = dispatch.IndexOf("case AIArenaControlCommands.ArenaTurn", StringComparison.Ordinal);
     Require(turnCase >= 0, "the arena.turn command should remain discoverable");
     var body = dispatch[turnCase..Math.Min(dispatch.Length, turnCase + 900)];
@@ -5257,7 +5604,7 @@ static void GenerationRefusesUnknownOptionsInsteadOfSubstituting()
         MatchGenerationService.TryNormalizeIntensity("SHARP", out var sharp) && sharp == "sharp",
         "case should not decide whether an option is real");
 
-    var service = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ScenarioGenerationControlService.cs"));
+    var service = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ScenarioGenerationControlService.cs");
     foreach (var option in new[] { "TryNormalizeStyle", "TryNormalizeIntensity", "TryNormalizeRolePack", "TryNormalizeAbsurdity" })
     {
         Require(
@@ -5294,7 +5641,7 @@ static void AnUnknownThemeIsRefusedRatherThanSubstituted()
         ThemePalette.KnownIds.All(ThemePalette.IsKnownId),
         "every offered id must actually be accepted");
 
-    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    var dispatch = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs");
     // Bounded by the next case rather than a character count, so adding a
     // comment to this branch cannot push the code being checked out of view.
     var themeCase = dispatch.IndexOf("case AIArenaControlCommands.NavigationThemeSet", StringComparison.Ordinal);
@@ -5394,7 +5741,7 @@ static void CrashesLeaveSomethingBehind()
     }
 
     // And the handlers have to actually be installed, or none of the above runs.
-    var app = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/App.xaml.cs"));
+    var app = ReadWorkspaceFile("src/AIArena.Wpf/App.xaml.cs");
 
     // The message box is modal and pumps messages, and Shutdown runs OnExit on
     // the same dispatcher, so a failure during either would re-enter the handler
@@ -5455,7 +5802,7 @@ static void SettingsAndMatchSetupDoNotShareTheWindow()
     // the settings panel covered Match Setup's close button and footer, and the
     // only way out was to close settings first. The asymmetry was the tell -
     // one direction had a deliberate hide, the other had nothing.
-    var settings = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/AppSettingsCoordinator.cs"));
+    var settings = ReadWorkspaceFile("src/AIArena.Wpf/Shell/AppSettingsCoordinator.cs");
     Require(
         settings.Contains("Opening?.Invoke()", StringComparison.Ordinal),
         "the settings overlay should announce that it is about to open");
@@ -5484,7 +5831,7 @@ static void ScreenshotsAndModalsDoNotMisreportTheApp()
     // returned an image with no dialog in it while a dialog was plainly on
     // screen. Anyone checking a dialog against that image concluded it had
     // never opened.
-    var screenshot = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaScreenshotControlService.cs"));
+    var screenshot = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ControlPlane/AIArenaScreenshotControlService.cs");
     Require(
         screenshot.Contains("RenderWithOpenDialogs", StringComparison.Ordinal),
         "the screenshot should composite dialogs over the window");
@@ -5495,7 +5842,7 @@ static void ScreenshotsAndModalsDoNotMisreportTheApp()
     // ShowDialog runs a nested message loop and does not return until the
     // palette closes, so opening it inline made a control-plane Ctrl+K wait for
     // a human and time out.
-    var palette = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.CommandPalette.cs"));
+    var palette = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.CommandPalette.cs");
     var showStart = palette.IndexOf("private void ShowCommandPalette", StringComparison.Ordinal);
     Require(showStart >= 0, "the palette entry point should remain discoverable");
 
@@ -5610,7 +5957,7 @@ static void EveryHumanDrivableEventHasASharedPublisher()
         "navigation.provider.focused"
     };
 
-    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    var dispatch = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs");
     var published = new HashSet<string>(StringComparer.Ordinal);
     foreach (System.Text.RegularExpressions.Match match in
              System.Text.RegularExpressions.Regex.Matches(dispatch, @"Publish\(""([^""]+)"""))
@@ -5626,7 +5973,7 @@ static void EveryHumanDrivableEventHasASharedPublisher()
         $"these events publish only from the control-plane dispatch and need a shared publisher: {string.Join(", ", unexplained)}");
 
     // The other half: the shell publishers must still be doing their job.
-    var shellEvents = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ShellEvents.cs"));
+    var shellEvents = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ShellEvents.cs");
     foreach (var name in new[]
     {
         "arena.run.started",
@@ -5654,7 +6001,7 @@ static void DependencyIndexCheckIgnoresLineEndings()
     // compared CRLF against LF and failed the release on an index that was
     // identical in content. It hid for a long time because the checkout that
     // generated the file was usually also the one being gated.
-    var script = File.ReadAllText(FindWorkspaceFile("scripts/dependency-index.ps1"));
+    var script = ReadWorkspaceFile("scripts/dependency-index.ps1");
     var checkStart = script.IndexOf("if ($Check)", StringComparison.Ordinal);
     Require(checkStart >= 0, "the dependency index should still have a check mode");
     var checkBlock = script[checkStart..Math.Min(script.Length, checkStart + 1400)];
@@ -5685,7 +6032,7 @@ static void EmptyAndOffStatesAreNotStyledAsFailures()
         !noSessionsLine.Contains("isDanger: true", StringComparison.Ordinal),
         "an empty data root is where every first run starts, not a failure");
 
-    var internet = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/InternetWorkflowCoordinator.cs"));
+    var internet = ReadWorkspaceFile("src/AIArena.Wpf/Shell/InternetWorkflowCoordinator.cs");
     var offHint = internet.IndexOf("Internet is off.", StringComparison.Ordinal);
     Require(offHint >= 0, "the internet-off hint should still be shown");
     var offBlock = internet[offHint..Math.Min(internet.Length, offHint + 260)];
@@ -5698,7 +6045,7 @@ static void EmptyAndOffStatesAreNotStyledAsFailures()
 
     // The flag must survive for the cases it is actually for, or this guard
     // would just be pushing every failure into the same silent grey.
-    var savedState = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/SavedStateWorkflowCoordinator.cs"));
+    var savedState = ReadWorkspaceFile("src/AIArena.Wpf/Shell/SavedStateWorkflowCoordinator.cs");
     Require(
         savedState.Contains("Checkpoint load failed.\", isDanger: true", StringComparison.Ordinal),
         "a genuine failure should still be styled as one");
@@ -5806,7 +6153,7 @@ static void ShellStateChangesReachTheControlPlaneFromBothRoutes()
         MainWindow.ShouldPublishChange("dark-blue", "DARK-BLUE"),
         "the default comparison stays ordinal so overlay keys are not accidentally merged");
 
-    var shellEvents = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ShellEvents.cs"));
+    var shellEvents = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ShellEvents.cs");
     foreach (var eventName in new[]
     {
         "navigation.changed",
@@ -5823,7 +6170,7 @@ static void ShellStateChangesReachTheControlPlaneFromBothRoutes()
 
     // If a handler publishes again, control-plane callers get the event twice
     // while UI callers still get it once, which is worse than the original bug.
-    var dispatch = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    var dispatch = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs");
     foreach (var eventName in new[]
     {
         "navigation.changed",
@@ -5844,7 +6191,7 @@ static void ShellStateChangesReachTheControlPlaneFromBothRoutes()
     })
     {
         Require(
-            !File.ReadAllText(FindWorkspaceFile(handler)).Contains("Publish(\"shell.overlay.changed\"", StringComparison.Ordinal),
+            !ReadWorkspaceFile(handler).Contains("Publish(\"shell.overlay.changed\"", StringComparison.Ordinal),
             $"{handler} must not republish shell.overlay.changed");
     }
 

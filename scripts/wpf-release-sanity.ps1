@@ -2,7 +2,12 @@ param(
     [string]$Version = "0.4.132-beta",
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
-    [string]$SigningPolicy = ""
+    [ValidateSet('win-x64')]
+    [string]$Runtime = 'win-x64',
+    [string]$SigningPolicy = "",
+    [string]$VerificationReceiptPath = "",
+    [string]$VerificationReceiptKey = "",
+    [string]$InstallerCompileReceiptPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,6 +75,10 @@ $releaseHelpManifest = Join-Path $releaseHelpContentRoot "guide-manifest.json"
 $shortcutIconFile = Join-Path $Root "src/AIArena.Wpf/Assets/ai-arena-icon.ico"
 $wpfProject = Join-Path $Root "src/AIArena.Wpf/AIArena.Wpf.csproj"
 $coreProject = Join-Path $Root "src/AIArena.Core/AIArena.Core.csproj"
+$installerCompileReceipt = $null
+if ([string]::IsNullOrWhiteSpace($InstallerCompileReceiptPath)) {
+    $InstallerCompileReceiptPath = Join-Path $Root ("artifacts/release-verification/installer-compile-{0}.json" -f $Version)
+}
 
 function Assert-PathExists {
     param([string]$Path, [string]$Label)
@@ -152,6 +161,17 @@ Assert-PathExists $shortcutIconFile "shortcut icon"
 Assert-PathExists $wpfProject "WPF project"
 Assert-PathExists $coreProject "core project"
 
+$installerCompileReceipt = Test-AIArenaInstallerCompileReceipt `
+    -RepositoryRoot $Root `
+    -ReceiptPath $InstallerCompileReceiptPath `
+    -InstallerPath $installer `
+    -ReleaseInventoryPath $releaseChecksums `
+    -InnoScriptPath $innoScript `
+    -Version $Version `
+    -Configuration $Configuration `
+    -Runtime $Runtime `
+    -SigningPolicy $SigningPolicy
+
 & $userGuideContentScript -Check
 $userGuideContentExitCode = $LASTEXITCODE
 if ($userGuideContentExitCode -ne 0) {
@@ -193,16 +213,33 @@ if ($solutionText -notmatch [regex]::Escape("tests\AIArena.Wpf.Tests\AIArena.Wpf
     throw "WPF solution does not include the WPF console test harness."
 }
 
-dotnet run --project $coreTests -c $Configuration --no-build --no-restore
-$coreTestExitCode = $LASTEXITCODE
-if ($coreTestExitCode -ne 0) {
-    throw "Core console test harness failed with exit code $coreTestExitCode."
+if ((-not [string]::IsNullOrWhiteSpace($VerificationReceiptPath)) `
+    -ne (-not [string]::IsNullOrWhiteSpace($VerificationReceiptKey))) {
+    throw 'VerificationReceiptPath and its ephemeral VerificationReceiptKey must be supplied together.'
 }
+if (-not [string]::IsNullOrWhiteSpace($VerificationReceiptPath)) {
+    [void](Test-AIArenaReleaseVerificationReceipt `
+        -RepositoryRoot $Root `
+        -ReceiptPath $VerificationReceiptPath `
+        -ReceiptKey $VerificationReceiptKey `
+        -Configuration $Configuration `
+        -ProjectPath @($coreTests, $wpfTests))
+    Write-Host "Authenticated release harness receipt matches this pipeline run, source, configuration, runner, and test assemblies."
+}
+else {
+    # Standalone sanity remains fail-closed: without the pipeline-internal
+    # receipt and its ephemeral key it independently executes both harnesses.
+    dotnet run --project $coreTests -c $Configuration --no-build --no-restore
+    $coreTestExitCode = $LASTEXITCODE
+    if ($coreTestExitCode -ne 0) {
+        throw "Core console test harness failed with exit code $coreTestExitCode."
+    }
 
-dotnet run --project $wpfTests -c $Configuration --no-build --no-restore
-$wpfTestExitCode = $LASTEXITCODE
-if ($wpfTestExitCode -ne 0) {
-    throw "WPF console test harness failed with exit code $wpfTestExitCode."
+    dotnet run --project $wpfTests -c $Configuration --no-build --no-restore
+    $wpfTestExitCode = $LASTEXITCODE
+    if ($wpfTestExitCode -ne 0) {
+        throw "WPF console test harness failed with exit code $wpfTestExitCode."
+    }
 }
 
 $scriptText = Get-Content -LiteralPath $innoScript -Raw
@@ -380,6 +417,7 @@ if ($readmeDownload.Groups['url'].Value.Trim() -ne $expectedReleaseUrl) {
 }
 
 $manifestText = Get-Content -LiteralPath $releaseManifest -Raw
+$releaseChecksumsText = Get-Content -LiteralPath $releaseChecksums -Raw
 $installerManifestText = Get-Content -LiteralPath $installerManifest -Raw
 $releaseChangelogText = Get-Content -LiteralPath $releaseChangelog -Raw
 $installerChangelogText = Get-Content -LiteralPath $changelog -Raw
@@ -442,23 +480,26 @@ foreach ($requiredFramework in @('Microsoft.NETCore.App', 'Microsoft.WindowsDesk
         throw "Installer runtimeconfig is missing included framework: $requiredFramework"
     }
 }
-if ($manifestText -notmatch [regex]::Escape($releaseExeHash)) {
-    throw "Release manifest does not include the release executable hash."
+if ($releaseChecksumsText -notmatch ('(?m)^' + [regex]::Escape($releaseExeHash) + '  AI Arena\.exe\r?$')) {
+    throw "Release checksum inventory does not include the release executable hash."
 }
-if ($manifestText -notmatch [regex]::Escape("searxng\python\pythonw.exe")) {
-    throw "Release manifest does not include the bundled SearXNG Python runtime."
+if ($releaseChecksumsText -notmatch [regex]::Escape("searxng\python\pythonw.exe")) {
+    throw "Release checksum inventory does not include the bundled SearXNG Python runtime."
 }
-if ($manifestText -notmatch [regex]::Escape("searxng\settings.yml")) {
-    throw "Release manifest does not include the bundled SearXNG settings."
+if ($releaseChecksumsText -notmatch [regex]::Escape("searxng\settings.yml")) {
+    throw "Release checksum inventory does not include the bundled SearXNG settings."
 }
-if ($manifestText -notmatch [regex]::Escape("searxng\runtime\arena_searxng_wsgi.py")) {
-    throw "Release manifest does not include the AI Arena SearXNG JSON API boundary."
+if ($releaseChecksumsText -notmatch [regex]::Escape("searxng\runtime\arena_searxng_wsgi.py")) {
+    throw "Release checksum inventory does not include the AI Arena SearXNG JSON API boundary."
 }
-if ($manifestText -notmatch [regex]::Escape("searxng\payload-inventory.json")) {
-    throw "Release manifest does not include the bundled SearXNG payload inventory."
+if ($releaseChecksumsText -notmatch [regex]::Escape("searxng\payload-inventory.json")) {
+    throw "Release checksum inventory does not include the bundled SearXNG payload inventory."
 }
-if ($manifestText -notmatch [regex]::Escape("release-checksums.sha256")) {
-    throw "Release manifest does not include the machine-readable release checksums."
+$checksumInventoryHash = (Get-FileHash -LiteralPath $releaseChecksums -Algorithm SHA256).Hash.ToUpperInvariant()
+$recordedChecksumInventoryHash = [regex]::Match($manifestText, '(?m)^Checksum inventory SHA256:\s*(?<value>[A-Fa-f0-9]{64})\s*$')
+if (-not $recordedChecksumInventoryHash.Success `
+    -or $recordedChecksumInventoryHash.Groups['value'].Value.ToUpperInvariant() -ne $checksumInventoryHash) {
+    throw "Release manifest does not bind the canonical checksum inventory."
 }
 if ($installerManifestText -ne $manifestText) {
     throw "Installer release manifest copy does not match release manifest."
@@ -482,7 +523,6 @@ if ((Get-Content -LiteralPath $installerReleaseSigningReport -Raw) -ne (Get-Cont
     -BaseDirectory $releaseDir `
     -ManifestPath $releaseChecksums `
     -ExcludeRelativePath @('release-manifest.txt'))
-[void](Test-AIArenaSha256Manifest -BaseDirectory $releaseDir -ManifestPath $releaseManifest -AllowPreamble)
 [void](Test-AIArenaSha256Manifest -BaseDirectory $installerDir -ManifestPath $installerChecksums)
 
 $upstreamLock = Get-Content -LiteralPath $upstreamLockFile -Raw | ConvertFrom-Json
@@ -593,6 +633,11 @@ if ($releaseSigningEnabled -ne $installerSigningEnabled) {
     throw "Release and installer signing-enabled records are inconsistent."
 }
 Assert-AIArenaSigningPolicyState -Policy $recordedPolicy -SigningEnabled $releaseSigningEnabled
+if ([string]$installerCompileReceipt.signing.policy -ne $recordedPolicy `
+    -or [bool]$installerCompileReceipt.signing.enabled -ne $installerSigningEnabled `
+    -or ($installerSigningEnabled -and [string]$installerCompileReceipt.signing.certificateThumbprint -ne [string]$installerSigning.certificateThumbprint)) {
+    throw 'Installer compile receipt signing identity does not match the finalized signing reports.'
+}
 if ($releaseCertificateThumbprint -ne $installerCertificateThumbprint) {
     throw "Release and installer signing-certificate records are inconsistent."
 }

@@ -520,7 +520,7 @@ static void TranscriptActionCoordinatorExposesAutomationNames()
         iconButton.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
         Require(iconButton.IsEnabled, "a reloaded transcript action should immediately adopt an idle state that changed while it was unrealized");
 
-        var listSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptListCoordinator.cs"));
+        var listSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptListCoordinator.cs");
         Require(
             listSource.Contains("transcriptActions.Prune()", StringComparison.Ordinal)
             && !listSource.Contains("transcriptActions.Clear()", StringComparison.Ordinal),

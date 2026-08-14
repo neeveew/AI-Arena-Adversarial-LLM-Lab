@@ -613,9 +613,22 @@ internal sealed class ScenarioWorkflowCoordinator
         }
     }
 
+    public void ObserveSnapshot(ArenaViewSnapshot snapshot)
+    {
+        // Copy/spec actions must always use the latest authoritative snapshot,
+        // even while Match Setup is hidden and its visual projection is deferred.
+        lastSetupSnapshot = snapshot;
+    }
+
+    public void RefreshSetupFeedback(ArenaViewSnapshot snapshot)
+    {
+        ObserveSnapshot(snapshot);
+        UpdateSetupFeedback();
+    }
+
     public void PopulateGenerationHistory(ArenaViewSnapshot snapshot)
     {
-        lastSetupSnapshot = snapshot;
+        ObserveSnapshot(snapshot);
         var previousId = SelectedGenerationHistory?.Id ?? "";
         var filter = GenerationHistoryFilter();
         var filteredHistory = FilterGenerationHistory(snapshot.GenerationHistory, filter).Take(20).ToArray();

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -33,6 +34,7 @@ internal sealed class AgentInspectionLabCoordinator : IDisposable
     private readonly Func<DateTimeOffset> clock;
     private readonly SemaphoreSlim memoryGate = new(1, 1);
     private readonly CancellationTokenSource lifetime = new();
+    private IDisposable? promptPreviewSubscription;
     private ArenaSnapshot? memorySnapshot;
     private string loadedSessionId = "";
     private string authorizedAgentId = "";
@@ -63,6 +65,9 @@ internal sealed class AgentInspectionLabCoordinator : IDisposable
         view.PromptRefreshRequested += OnPromptRefreshRequested;
         view.PromptClearRequested += OnPromptClearRequested;
         view.PromptSelectionChanged += OnPromptSelectionChanged;
+        view.PromptList.IsVisibleChanged += OnPromptVisibilityChanged;
+        view.PromptList.Loaded += OnPromptLoaded;
+        view.PromptList.Unloaded += OnPromptUnloaded;
         view.MemoryRefreshRequested += OnMemoryRefreshRequested;
         view.MemoryAgentChanged += OnMemoryAgentChanged;
         view.MemoryStateChanged += OnMemoryStateChanged;
@@ -72,11 +77,17 @@ internal sealed class AgentInspectionLabCoordinator : IDisposable
         view.MemoryExpireRequested += OnMemoryExpireRequested;
 
         RefreshPromptTraces();
+        UpdatePromptPreviewSubscription();
         RenderMemoryUnavailable("Select an agent to authorize a scoped private-memory view.");
     }
 
     internal async Task<InspectionOperationResult> InitializeAsync(CancellationToken cancellationToken = default)
     {
+        // Session changes re-establish the lease from current effective
+        // visibility so no prior inspection scope can keep preview capture
+        // alive accidentally.
+        ReleasePromptPreviewSubscription();
+        UpdatePromptPreviewSubscription();
         RefreshPromptTraces();
         return await RefreshMemoryAsync(cancellationToken);
     }
@@ -451,6 +462,9 @@ internal sealed class AgentInspectionLabCoordinator : IDisposable
         view.PromptRefreshRequested -= OnPromptRefreshRequested;
         view.PromptClearRequested -= OnPromptClearRequested;
         view.PromptSelectionChanged -= OnPromptSelectionChanged;
+        view.PromptList.IsVisibleChanged -= OnPromptVisibilityChanged;
+        view.PromptList.Loaded -= OnPromptLoaded;
+        view.PromptList.Unloaded -= OnPromptUnloaded;
         view.MemoryRefreshRequested -= OnMemoryRefreshRequested;
         view.MemoryAgentChanged -= OnMemoryAgentChanged;
         view.MemoryStateChanged -= OnMemoryStateChanged;
@@ -458,7 +472,34 @@ internal sealed class AgentInspectionLabCoordinator : IDisposable
         view.MemoryAddRequested -= OnMemoryAddRequested;
         view.MemoryCorrectRequested -= OnMemoryCorrectRequested;
         view.MemoryExpireRequested -= OnMemoryExpireRequested;
+        ReleasePromptPreviewSubscription();
         lifetime.Dispose();
+    }
+
+    private void OnPromptVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args) =>
+        UpdatePromptPreviewSubscription();
+
+    private void OnPromptLoaded(object sender, RoutedEventArgs args) =>
+        UpdatePromptPreviewSubscription();
+
+    private void OnPromptUnloaded(object sender, RoutedEventArgs args) =>
+        ReleasePromptPreviewSubscription();
+
+    private void UpdatePromptPreviewSubscription()
+    {
+        if (disposed || !view.PromptList.IsLoaded || !view.PromptList.IsVisible)
+        {
+            ReleasePromptPreviewSubscription();
+            return;
+        }
+
+        promptPreviewSubscription ??= traceStore.SubscribeToRedactedPreviews();
+    }
+
+    private void ReleasePromptPreviewSubscription()
+    {
+        promptPreviewSubscription?.Dispose();
+        promptPreviewSubscription = null;
     }
 
     private async Task<InspectionOperationResult> MutateMemoryAsync(

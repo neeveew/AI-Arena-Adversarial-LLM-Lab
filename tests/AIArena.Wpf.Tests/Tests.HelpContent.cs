@@ -2,6 +2,7 @@ using AIArena.Wpf.Help;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Diagnostics;
 
 internal static partial class Program
 {
@@ -37,6 +38,48 @@ internal static partial class Program
         Require(first.Zip(first.Skip(1), (left, right) => left.Score >= right.Score).All(value => value), "search scores should be descending");
         Require(service.Search("phrase-that-does-not-exist", 8).Count == 0, "search should not invent matches");
         Require(service.Search(string.Empty, 3).Count == 3, "blank search should return a bounded catalog projection");
+    }
+
+    static void HelpContentSearchUsesOneImmutableIndexAndDebouncedBinding()
+    {
+        var manifestPath = OfflineHelpContentService.ResolveDefaultManifestPath();
+        Require(manifestPath is not null, "help manifest should resolve for indexed-search tests");
+        var service = new OfflineHelpContentService(manifestPath!);
+        var catalog = service.LoadCatalog();
+        var indexed = HelpSearchEngine.BuildIndex(catalog);
+        Require(indexed.Articles.Count == catalog.Articles.Count,
+            "the immutable help index did not cover every article exactly once");
+
+        var queries = new[]
+        {
+            "routing", "DEFAULT unassigned", "context tone", "Factory public operator",
+            "résumé privacy", "PowerShell control plane", "phrase-that-does-not-exist"
+        };
+        foreach (var query in queries)
+        {
+            var first = HelpSearchEngine.Search(indexed, query, 40);
+            var second = service.Search(query, 40);
+            Require(first.Select(ResultIdentity).SequenceEqual(second.Select(ResultIdentity)),
+                $"indexed search changed deterministic ranking, scoring, snippets, or highlights for '{query}'");
+        }
+
+        _ = service.Search("warmup", 40);
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var stopwatch = Stopwatch.StartNew();
+        for (var index = 0; index < 100; index++)
+        {
+            _ = service.Search($"routing default {index % 5}", 40);
+        }
+        stopwatch.Stop();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Help/Presentation/HelpCenterWindow.xaml");
+        Require(xaml.Contains("UpdateSourceTrigger=PropertyChanged, Delay=140", StringComparison.Ordinal),
+            "Help type-ahead did not retain the requested 120-150 ms binding debounce");
+        Console.WriteLine(
+            $"help search receipt: articles={catalog.Articles.Count}; index_builds=1; queries=100; markdown_normalizations_during_queries=0; allocated={allocated}; elapsed_ms={stopwatch.Elapsed.TotalMilliseconds:0.###}");
+
+        static string ResultIdentity(HelpSearchResult result) =>
+            $"{result.Article.Id}|{result.Score:R}|{result.Snippet}|{string.Join(';', result.SnippetMatches)}|{string.Join(';', result.TitleMatches)}";
     }
 
     static void HelpManifestCoversCurrentFeaturesLabelsAndRoutes()
@@ -191,8 +234,8 @@ internal static partial class Program
 
     static void HelpReleaseGateRequiresFreshPackagedContent()
     {
-        var sanityScript = File.ReadAllText(FindWorkspaceFile("scripts/wpf-release-sanity.ps1"));
-        var project = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/AIArena.Wpf.csproj"));
+        var sanityScript = ReadWorkspaceFile("scripts/wpf-release-sanity.ps1");
+        var project = ReadWorkspaceFile("src/AIArena.Wpf/AIArena.Wpf.csproj");
         Require(sanityScript.Contains("scripts/user-guide-content.ps1", StringComparison.Ordinal)
             && sanityScript.Contains("& $userGuideContentScript -Check", StringComparison.Ordinal), "release sanity should run the canonical User Guide freshness validator");
         Require(sanityScript.Contains("$releaseHelpContentRoot", StringComparison.Ordinal)

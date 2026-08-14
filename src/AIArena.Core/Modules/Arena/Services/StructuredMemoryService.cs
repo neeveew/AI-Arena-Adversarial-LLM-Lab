@@ -26,6 +26,21 @@ public static partial class StructuredMemoryService
 
     public static bool NormalizeSnapshot(ArenaSnapshot snapshot)
     {
+        return NormalizeSnapshotCore(snapshot, fixedNowUtc: null);
+    }
+
+    /// <summary>
+    /// Normalizes a completion-scoped snapshot against one captured clock value.
+    /// This keeps memory expiry consistent across primary, fallback, repair, and
+    /// continuation requests belonging to the same logical completion.
+    /// </summary>
+    internal static bool NormalizeSnapshot(ArenaSnapshot snapshot, DateTimeOffset nowUtc)
+    {
+        return NormalizeSnapshotCore(snapshot, nowUtc.ToUniversalTime());
+    }
+
+    private static bool NormalizeSnapshotCore(ArenaSnapshot snapshot, DateTimeOffset? fixedNowUtc)
+    {
         ArgumentNullException.ThrowIfNull(snapshot);
         var ambiguousMessageIds = snapshot.Engine.Messages
             .Where(message => !string.IsNullOrWhiteSpace(message.MessageId))
@@ -45,7 +60,7 @@ public static partial class StructuredMemoryService
                 entry.SourceProvenanceAmbiguous = true;
                 changed = true;
             }
-            changed |= NormalizeAgent(snapshot, agent);
+            changed |= NormalizeAgent(snapshot, agent, fixedNowUtc);
         }
 
         return changed;
@@ -88,6 +103,22 @@ public static partial class StructuredMemoryService
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(agent);
         NormalizeSnapshot(snapshot);
+
+        return SelectNormalizedForPrompt(snapshot, agent, nowUtc, beforeTurn);
+    }
+
+    /// <summary>
+    /// Selects from a snapshot already normalized by the owner of a bounded
+    /// logical operation. Callers must not retain the result across turns.
+    /// </summary>
+    internal static IReadOnlyList<StructuredMemoryEntry> SelectNormalizedForPrompt(
+        ArenaSnapshot snapshot,
+        DialogueAgent agent,
+        DateTimeOffset nowUtc,
+        int? beforeTurn = null)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(agent);
 
         var branchId = snapshot.BranchReceipt?.Id?.Trim() ?? "";
         var scoped = snapshot.Engine.Agents
@@ -570,7 +601,10 @@ public static partial class StructuredMemoryService
         return new MemoryProjectionResult(excluded, unprojectable);
     }
 
-    private static bool NormalizeAgent(ArenaSnapshot snapshot, DialogueAgent agent)
+    private static bool NormalizeAgent(
+        ArenaSnapshot snapshot,
+        DialogueAgent agent,
+        DateTimeOffset? fixedNowUtc)
     {
         var changed = false;
         var incomingMirrorFingerprint = LegacyMirrorFingerprint(agent.PrivateNotes);
@@ -643,7 +677,7 @@ public static partial class StructuredMemoryService
             .SelectMany(entry => new[] { entry.SupersedesMemoryId, entry.CorrectionOfMemoryId })
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .ToHashSet(IdentityComparer);
-        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var now = (fixedNowUtc ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
         var activeEntries = agent.MemoryEntries
             .Where(entry => !retired.Contains(entry.MemoryId))
             .Where(entry => entry.ExpiresAt is null || entry.ExpiresAt.Value > now)

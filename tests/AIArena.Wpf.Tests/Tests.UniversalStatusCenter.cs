@@ -68,8 +68,6 @@ internal static partial class Program
                     "a canonical completion did not update the compact row and polite live region");
                 var announcementBeforeExpiry = control.LiveAnnouncementTarget.Text;
                 clock = clock.AddSeconds(7);
-                Require(UniversalStatusCenterControl.RefreshInterval == TimeSpan.FromSeconds(1),
-                    "the hosted center did not poll the canonical transient-expiry clock every second");
                 control.RefreshStatusCenterClock();
                 DrainUniversalStatusInput();
                 Require(control.CompactRows[0].Summary == "Ready"
@@ -95,6 +93,77 @@ internal static partial class Program
                         && control.PrimarySummary == "Provider authentication failed",
                     "the newest-first rows and priority-ranked compact affordance were incorrectly conflated");
                 Require(center.Resolve(blocker), "the deterministic blocker could not be resolved causally");
+            }
+            finally
+            {
+                host.Close();
+            }
+        });
+    }
+
+    static void UniversalStatusCenterClockIsDeadlineDrivenAndBoundsClosedHistoryWork()
+    {
+        RunStaTest(() =>
+        {
+            var now = DateTimeOffset.Now;
+            Require(
+                UniversalStatusRowPresentation.NextRelativeTimeRefreshAt(now, now) is { } nowBoundary
+                    && nowBoundary > now.AddSeconds(5)
+                    && nowBoundary < now.AddSeconds(6),
+                "the relative-time clock did not schedule the first boundary after the canonical now label");
+            Require(
+                UniversalStatusRowPresentation.NextRelativeTimeRefreshAt(now.AddSeconds(-23.4), now) is { } secondBoundary
+                    && secondBoundary > now
+                    && secondBoundary <= now.AddSeconds(1),
+                "the seconds label did not schedule its next exact display boundary");
+            Require(
+                UniversalStatusRowPresentation.NextRelativeTimeRefreshAt(now.AddMinutes(-12.25), now) is { } minuteBoundary
+                    && minuteBoundary > now
+                    && minuteBoundary <= now.AddMinutes(1),
+                "the minutes label did not schedule its next exact display boundary");
+            Require(
+                UniversalStatusRowPresentation.NextRelativeTimeRefreshAt(now.AddDays(-2), now) is null,
+                "a date-only relative label scheduled needless periodic work");
+
+            var rows = Enumerable.Range(0, 100)
+                .Select(index => StatusRow(
+                    $"clock-{index}",
+                    "App",
+                    "Info",
+                    $"Clock row {index}",
+                    now.AddMinutes(-(index + 10))))
+                .ToArray();
+            var control = HostUniversalStatusCenter(out var host);
+            try
+            {
+                DrainUniversalStatusInput();
+                Require(!control.IsClockScheduled,
+                    "the idle status center scheduled clock work for its synthetic Ready row");
+
+                control.ApplyPresentation(rows);
+                DrainUniversalStatusInput();
+                var compactBefore = control.CompactClockRefreshCount;
+                var historyBefore = control.HistoryClockRefreshCount;
+                control.RefreshStatusCenterClock();
+                Require(control.CompactClockRefreshCount - compactBefore == 4,
+                    "a closed status dashboard did not limit its clock refresh to four compact rows");
+                Require(control.HistoryClockRefreshCount == historyBefore,
+                    "a closed status dashboard refreshed its complete history");
+                Require(control.ScheduledClockInterval >= UniversalStatusCenterControl.MinimumClockInterval,
+                    "the status clock scheduled a busy-loop interval");
+
+                control.OpenDashboard(control.OpenHistoryButtonTarget);
+                DrainUniversalStatusInput();
+                compactBefore = control.CompactClockRefreshCount;
+                historyBefore = control.HistoryClockRefreshCount;
+                control.RefreshStatusCenterClock();
+                Require(control.CompactClockRefreshCount - compactBefore == 4
+                        && control.HistoryClockRefreshCount - historyBefore == 100,
+                    "an open status dashboard did not refresh exactly its compact and visible history projections");
+                control.CloseDashboard();
+
+                Console.WriteLine(
+                    $"status clock receipt: legacy_idle_wakes_10m=600; deadline_wakes_without_rows=0; closed_rows_per_wake=4; open_rows_per_wake={rows.Length + 4}");
             }
             finally
             {
@@ -259,10 +328,10 @@ internal static partial class Program
 
     static void UniversalStatusCenterShellLayoutIsPinnedAndOverlaySafe()
     {
-        var mainXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
-        var controlXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/UniversalStatusCenterControl.xaml"));
-        var topBarXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"));
-        var navigationXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellNavigationRailControl.xaml"));
+        var mainXaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
+        var controlXaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/UniversalStatusCenterControl.xaml");
+        var topBarXaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml");
+        var navigationXaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellNavigationRailControl.xaml");
 
         Require(mainXaml.Contains("x:Name=\"RightRailHost\"", StringComparison.Ordinal)
                 && mainXaml.Contains("x:Name=\"UniversalStatusCenter\"", StringComparison.Ordinal)

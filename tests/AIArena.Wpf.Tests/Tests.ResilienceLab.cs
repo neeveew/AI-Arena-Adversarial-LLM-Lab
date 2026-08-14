@@ -39,8 +39,8 @@ internal static partial class Program
             routing.ApplyResponsiveLayout(compact: false);
         });
 
-        var faultXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/FaultInjectionLabControl.xaml"));
-        var routeXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ModelRoutingOptimizerControl.xaml"));
+        var faultXaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/FaultInjectionLabControl.xaml");
+        var routeXaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ModelRoutingOptimizerControl.xaml");
         Require(faultXaml.Contains("DynamicResource CardBrush", StringComparison.Ordinal)
                 && faultXaml.Contains("WorkspacePageHeaderControl", StringComparison.Ordinal)
                 && faultXaml.Contains("PrimaryActionAutomationName=\"Arm fault profile\"", StringComparison.Ordinal)

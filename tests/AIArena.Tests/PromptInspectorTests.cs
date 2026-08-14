@@ -9,6 +9,226 @@ using AIArena.Core.Services;
 
 internal static class PromptInspectorTests
 {
+    internal static void MetadataFirstTracingPerformanceReceipt()
+    {
+        foreach (var payloadBytes in new[] { 32 * 1024, 512 * 1024, 2 * 1024 * 1024 })
+        {
+            var payload = ExactPayload(payloadBytes);
+            var config = CompatibleConfig("receipt-model");
+            var expectedHash = Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant();
+
+            var warmupStore = new ProviderRequestTraceStore();
+            warmupStore.ObserveRequest(ProviderPromptInspection.CreateTrace(
+                "warmup",
+                config,
+                payload,
+                "openai_compatible_chat",
+                requestedStreaming: false,
+                attempt: 1,
+                observationDetail: ProviderRequestObservationDetail.RedactedPreview));
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            var legacyStore = new ProviderRequestTraceStore();
+            var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            legacyStore.ObserveRequest(ProviderPromptInspection.CreateTrace(
+                "legacy-receipt",
+                config,
+                payload,
+                "openai_compatible_chat",
+                requestedStreaming: false,
+                attempt: 1,
+                observationDetail: ProviderRequestObservationDetail.RedactedPreview));
+            watch.Stop();
+            var legacyAllocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+            var legacyTrace = legacyStore.Snapshot().Single();
+            var legacyPayloadRedactionPasses = payloadBytes <= ProviderPromptInspection.MaximumPayloadBytesForPreview ? 2 : 1;
+            Require(legacyTrace.PayloadByteCount == payloadBytes && legacyTrace.PayloadSha256 == expectedHash,
+                $"legacy {payloadBytes}-byte receipt changed exact correspondence");
+            Console.WriteLine($"BASELINE prompt-trace mode=eager-store bytes={payloadBytes} elapsed_ms={watch.Elapsed.TotalMilliseconds:F3} allocated_bytes={legacyAllocated} payload_redaction_passes={legacyPayloadRedactionPasses}");
+
+            var metadataStore = new ProviderRequestTraceStore();
+            var metadataObserver = (IPreparedProviderRequestObserver)metadataStore;
+            allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+            watch.Restart();
+            metadataObserver.ObservePreparedRequest(ProviderPromptInspection.CreateTrace(
+                "metadata-receipt",
+                config,
+                payload,
+                "openai_compatible_chat",
+                requestedStreaming: false,
+                attempt: 1,
+                observationDetail: metadataObserver.ObservationDetail));
+            watch.Stop();
+            var metadataAllocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+            var metadataTrace = metadataStore.Snapshot().Single();
+            Require(metadataTrace.PayloadByteCount == payloadBytes && metadataTrace.PayloadSha256 == expectedHash,
+                $"metadata-only {payloadBytes}-byte receipt changed exact correspondence");
+            Require(metadataTrace.RedactedPayload == "[NOT_CAPTURED:INSPECTION_INACTIVE]", "metadata-only receipt retained content");
+            Require(metadataAllocated < 192 * 1024, $"metadata-only {payloadBytes}-byte receipt allocated {metadataAllocated} bytes");
+            if (payloadBytes <= ProviderPromptInspection.MaximumPayloadBytesForPreview)
+            {
+                Require(metadataAllocated * 4 < legacyAllocated,
+                    $"metadata-first tracing did not materially reduce {payloadBytes}-byte allocation work");
+            }
+            Console.WriteLine($"RECEIPT prompt-trace mode=metadata bytes={payloadBytes} elapsed_ms={watch.Elapsed.TotalMilliseconds:F3} allocated_bytes={metadataAllocated} payload_redaction_passes=0");
+
+            if (payloadBytes <= ProviderPromptInspection.MaximumPayloadBytesForPreview)
+            {
+                var previewStore = new ProviderRequestTraceStore();
+                using var subscription = previewStore.SubscribeToRedactedPreviews();
+                var previewObserver = (IPreparedProviderRequestObserver)previewStore;
+                var previewAllocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+                watch.Restart();
+                previewObserver.ObservePreparedRequest(ProviderPromptInspection.CreateTrace(
+                    "preview-receipt",
+                    config,
+                    payload,
+                    "openai_compatible_chat",
+                    requestedStreaming: false,
+                    attempt: 1,
+                    observationDetail: previewObserver.ObservationDetail));
+                watch.Stop();
+                var previewAllocated = GC.GetAllocatedBytesForCurrentThread() - previewAllocatedBefore;
+                var preview = previewStore.Snapshot().Single();
+                Require(preview.PayloadSha256 == expectedHash && preview.PayloadByteCount == payloadBytes,
+                    $"active preview changed the {payloadBytes}-byte correspondence receipt");
+                Require(previewAllocated < legacyAllocated,
+                    $"single-pass active storage did not reduce {payloadBytes}-byte eager-store allocations");
+                Console.WriteLine($"RECEIPT prompt-trace mode=preview bytes={payloadBytes} elapsed_ms={watch.Elapsed.TotalMilliseconds:F3} allocated_bytes={previewAllocated} payload_redaction_passes=1");
+            }
+        }
+    }
+
+    internal static void CapturesMetadataUntilAnInspectorSubscribes()
+    {
+        const string visiblePublicText = "PUBLIC_PREVIEW_CONTROL_TEXT";
+        const string rawSecret = "sk-proj-METADATAONLYSECRET123456789";
+        var handler = new InspectingHandler((_, _) => JsonResponse(HttpStatusCode.OK, OpenAiResponse()));
+        var store = new ProviderRequestTraceStore();
+        var client = new ModelProviderClient(new HttpClient(handler), store);
+        var config = CompatibleConfig("subscription-model");
+        var message = new ModelChatMessage("user", $"{visiblePublicText} api_key={rawSecret}");
+
+        Require(client.CompleteChatAsync(config, [message]).GetAwaiter().GetResult().Ok, "inactive metadata request failed");
+        var inactive = store.Snapshot().Single();
+        var inactiveSerialized = JsonSerializer.Serialize(inactive);
+        Require(!store.IsRedactedPreviewCaptureActive, "store defaulted to active preview capture");
+        Require(inactive.RedactedPayload == "[NOT_CAPTURED:INSPECTION_INACTIVE]"
+            && inactive.Roles.Single().RedactedContent == "[NOT_CAPTURED:INSPECTION_INACTIVE]",
+            "inactive trace retained a payload or role-content preview");
+        Require(!inactiveSerialized.Contains(visiblePublicText, StringComparison.Ordinal)
+            && !inactiveSerialized.Contains(rawSecret, StringComparison.Ordinal),
+            "inactive trace retained raw or deferred request content");
+        Require(inactive.PayloadSha256 == Convert.ToHexString(SHA256.HashData(handler.Bodies[0])).ToLowerInvariant()
+            && inactive.PayloadByteCount == handler.Bodies[0].Length,
+            "inactive trace changed exact outbound correspondence");
+
+        using (store.SubscribeToRedactedPreviews())
+        {
+            Require(store.IsRedactedPreviewCaptureActive, "preview lease did not activate capture");
+            Require(client.CompleteChatAsync(config, [message]).GetAwaiter().GetResult().Ok, "active preview request failed");
+            var active = store.Snapshot().Last();
+            var activeSerialized = JsonSerializer.Serialize(active);
+            Require(active.RedactedPayload.Contains(visiblePublicText, StringComparison.Ordinal),
+                "active inspector did not receive its bounded redacted preview");
+            Require(!activeSerialized.Contains(rawSecret, StringComparison.Ordinal)
+                && activeSerialized.Contains("[REDACTED:SECRET]", StringComparison.Ordinal),
+                "active inspector preview did not redact its credential");
+        }
+
+        Require(!store.IsRedactedPreviewCaptureActive, "disposing the last preview lease left capture active");
+        Require(client.CompleteChatAsync(config, [message]).GetAwaiter().GetResult().Ok, "post-subscription metadata request failed");
+        Require(store.Snapshot().Last().RedactedPayload == "[NOT_CAPTURED:INSPECTION_INACTIVE]",
+            "capture continued after the inspector unsubscribed");
+
+        var legacyObserver = new CapturingObserver();
+        var legacyClient = new ModelProviderClient(
+            new HttpClient(new InspectingHandler((_, _) => JsonResponse(HttpStatusCode.OK, OpenAiResponse()))),
+            legacyObserver);
+        Require(legacyClient.CompleteChatAsync(config, [new ModelChatMessage("user", visiblePublicText)]).GetAwaiter().GetResult().Ok,
+            "legacy observer compatibility request failed");
+        Require(legacyObserver.Traces.Single().RedactedPayload.Contains(visiblePublicText, StringComparison.Ordinal),
+            "legacy observer lost its existing active-preview behavior");
+    }
+
+    internal static void RedactsProviderTracePrivacyFuzz()
+    {
+        var secrets = new[]
+        {
+            "Bearer abcDEF0123456789abcDEF0123456789",
+            "Basic QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2",
+            "api_key=sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "access_token=xYz0123456789ABCdef0123456789",
+            "https://private.example.test/path?token=never-retain-this",
+            @"C:\Users\Private\arena\secret.json",
+            "/home/private/arena/secret.json"
+        };
+        var fuzzText = string.Join(" | ", secrets);
+        var payload = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            model = "privacy-model",
+            messages = new[]
+            {
+                new { role = "user", content = fuzzText },
+                new { role = $"assistant {secrets[0]} {secrets[5]}", content = "bounded" }
+            },
+            authorization = secrets[0],
+            api_key = secrets[2],
+            password = "PasswordValueNeverRetained123!",
+            endpoint = secrets[4],
+            stream = false
+        });
+        var trace = ProviderPromptInspection.CreateTrace(
+            "privacy-fuzz",
+            CompatibleConfig("privacy-model"),
+            payload,
+            "openai_compatible_chat",
+            requestedStreaming: false,
+            attempt: 1,
+            observationDetail: ProviderRequestObservationDetail.RedactedPreview);
+        var serialized = JsonSerializer.Serialize(trace);
+        foreach (var secret in secrets)
+        {
+            Require(!serialized.Contains(secret, StringComparison.Ordinal), $"provider trace leaked fuzz input: {secret}");
+        }
+
+        Require(!serialized.Contains("PasswordValueNeverRetained123!", StringComparison.Ordinal)
+            && serialized.Contains("[REDACTED:", StringComparison.Ordinal),
+            "provider trace did not redact JSON secrets");
+    }
+
+    internal static void PreviewSubscriptionsAreThreadSafeAndTraceStoreIsBounded()
+    {
+        var store = new ProviderRequestTraceStore(maximumEntries: 8);
+        var leases = new IDisposable[256];
+        Parallel.For(0, leases.Length, index => leases[index] = store.SubscribeToRedactedPreviews());
+        Require(store.IsRedactedPreviewCaptureActive, "parallel subscriptions did not activate preview capture");
+        Parallel.ForEach(leases, lease =>
+        {
+            lease.Dispose();
+            lease.Dispose();
+        });
+        Require(!store.IsRedactedPreviewCaptureActive, "parallel idempotent disposal left a preview subscription active");
+
+        var payload = ExactPayload(32 * 1024);
+        Parallel.For(0, 64, index =>
+        {
+            var trace = ProviderPromptInspection.CreateTrace(
+                $"bounded-{index}",
+                CompatibleConfig("bounded-model"),
+                payload,
+                "openai_compatible_chat",
+                requestedStreaming: false,
+                attempt: 1,
+                observationDetail: ProviderRequestObservationDetail.MetadataOnly);
+            store.ObserveRequest(trace);
+        });
+        Require(store.Snapshot().Length == 8, "concurrent trace admissions exceeded the configured bound");
+    }
+
     internal static void HashesExactProviderBytesAndRedactsAggregateViews()
     {
         const string privateMarker = "PRIVATE_MEMORY_MARKER_IS_NOT_A_SECRET";
@@ -106,6 +326,7 @@ internal static class PromptInspectorTests
         {
             var handler = new InspectingHandler((_, _) => JsonResponse(HttpStatusCode.OK, responseJson));
             var store = new ProviderRequestTraceStore();
+            using var previewSubscription = store.SubscribeToRedactedPreviews();
             var client = new ModelProviderClient(new HttpClient(handler), store);
             var config = new ModelProviderConfig
             {
@@ -274,6 +495,7 @@ internal static class PromptInspectorTests
 
         var oversizedHandler = new InspectingHandler((_, _) => JsonResponse(HttpStatusCode.OK, OpenAiResponse()));
         var oversizedStore = new ProviderRequestTraceStore();
+        using var oversizedPreviewSubscription = oversizedStore.SubscribeToRedactedPreviews();
         var oversizedClient = new ModelProviderClient(new HttpClient(oversizedHandler), oversizedStore);
         var oversizedResult = oversizedClient.CompleteChatAsync(
             config,
@@ -291,6 +513,14 @@ internal static class PromptInspectorTests
             new ThrowingObserver());
         var throwingResult = throwingClient.CompleteChatAsync(config, [new ModelChatMessage("user", "observer must not own provider outcome")]).GetAwaiter().GetResult();
         Require(throwingResult.Ok, "observer failure changed provider-call success");
+
+        var throwingPreparedClient = new ModelProviderClient(
+            new HttpClient(new InspectingHandler((_, _) => JsonResponse(HttpStatusCode.OK, OpenAiResponse()))),
+            new ThrowingPreparedObserver());
+        var throwingPreparedResult = throwingPreparedClient.CompleteChatAsync(
+            config,
+            [new ModelChatMessage("user", "prepared observer must not own provider outcome")]).GetAwaiter().GetResult();
+        Require(throwingPreparedResult.Ok, "prepared observer failure changed provider-call success");
 
         var cancellationStore = new ProviderRequestTraceStore();
         var cancellationClient = new ModelProviderClient(new HttpClient(new CancellationHandler()), cancellationStore);
@@ -372,6 +602,19 @@ internal static class PromptInspectorTests
         MaxOutputTokens = 128
     };
 
+    private static byte[] ExactPayload(int byteCount)
+    {
+        const string prefix = "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"";
+        const string suffix = "\"}],\"stream\":false}";
+        var contentLength = byteCount - Encoding.UTF8.GetByteCount(prefix) - Encoding.UTF8.GetByteCount(suffix);
+        if (contentLength < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(byteCount));
+        }
+
+        return Encoding.UTF8.GetBytes(prefix + new string('x', contentLength) + suffix);
+    }
+
     private static string OpenAiResponse() =>
         "{\"id\":\"response-1\",\"model\":\"test-model\",\"choices\":[{\"message\":{\"content\":\"ok\"}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}";
 
@@ -433,6 +676,31 @@ internal static class PromptInspectorTests
         public void ObserveRequest(ProviderRequestTrace trace) => throw new InvalidOperationException("observer request failure");
 
         public void ObserveCompletion(ProviderRequestCompletionObservation completion) => throw new InvalidOperationException("observer completion failure");
+    }
+
+    private sealed class CapturingObserver : IProviderRequestObserver
+    {
+        internal List<ProviderRequestTrace> Traces { get; } = [];
+
+        public void ObserveRequest(ProviderRequestTrace trace) => Traces.Add(trace);
+
+        public void ObserveCompletion(ProviderRequestCompletionObservation completion)
+        {
+        }
+    }
+
+    private sealed class ThrowingPreparedObserver : IPreparedProviderRequestObserver
+    {
+        public ProviderRequestObservationDetail ObservationDetail => ProviderRequestObservationDetail.MetadataOnly;
+
+        public void ObservePreparedRequest(ProviderRequestTrace trace) =>
+            throw new InvalidOperationException("prepared observer request failure");
+
+        public void ObserveRequest(ProviderRequestTrace trace) =>
+            throw new InvalidOperationException("legacy observer path must not be used");
+
+        public void ObserveCompletion(ProviderRequestCompletionObservation completion) =>
+            throw new InvalidOperationException("prepared observer completion failure");
     }
 
     private sealed class FallbackCapturingProvider : IModelProviderClient

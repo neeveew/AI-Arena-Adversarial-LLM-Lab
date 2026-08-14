@@ -255,6 +255,10 @@ public partial class ProviderModelAssignmentsControl : UserControl
     private string lastPublishedSearchQuery = "";
     private ProviderModelFacet selectedFacet = ProviderModelFacet.All;
     private int catalogContinuityGeneration;
+    private CatalogViewportAnchor? cachedCatalogViewportAnchor;
+    private int catalogContinuityLayoutCount;
+    private int catalogAnchorInspectionCount;
+    private int catalogContinuityScheduleCount;
     private bool applyingConfigurationControls;
     private string lastConfigurationModelId = "";
     private ProviderModelConfigurationSaveState lastConfigurationState = ProviderModelConfigurationSaveState.Ready;
@@ -300,6 +304,9 @@ public partial class ProviderModelAssignmentsControl : UserControl
             && ConfigureIncrementalLiveShaping(modelRowsView);
         LoadedModelsList.ItemsSource = loadedRowsView;
         ModelsList.ItemsSource = modelRowsView;
+        ModelsList.AddHandler(
+            ScrollViewer.ScrollChangedEvent,
+            new ScrollChangedEventHandler(ModelsList_ScrollChanged));
         ModelFacetCombo.ItemsSource = ModelFacetOption.Options;
         ModelFacetCombo.SelectedIndex = 0;
         IsVisibleChanged += ProviderModelAssignmentsControl_IsVisibleChanged;
@@ -355,6 +362,9 @@ public partial class ProviderModelAssignmentsControl : UserControl
     internal Border MasterSurface => MasterPane;
     internal Border DetailSurface => DetailPane;
     internal ScrollViewer WorkspaceScroller => WorkspaceScrollViewer;
+    internal int CatalogContinuityLayoutCount => catalogContinuityLayoutCount;
+    internal int CatalogAnchorInspectionCount => catalogAnchorInspectionCount;
+    internal int CatalogContinuityScheduleCount => catalogContinuityScheduleCount;
     internal ItemsControl AssignmentTargets => AssignmentTargetsItems;
     internal TextBlock AssignmentStatus => AssignmentSaveStatusText;
     internal Border AssignmentStatusSurface => AssignmentSaveStatusCard;
@@ -415,7 +425,6 @@ public partial class ProviderModelAssignmentsControl : UserControl
         ArgumentNullException.ThrowIfNull(presentation);
         Dispatcher.VerifyAccess();
         PresentationApplyCount++;
-        var continuityGeneration = ++catalogContinuityGeneration;
 
         applyingPresentation = true;
         try
@@ -429,9 +438,11 @@ public partial class ProviderModelAssignmentsControl : UserControl
             var priorSelection = SelectedModelId;
             var catalogScrollViewer = FindVisualDescendant<ScrollViewer>(ModelsList);
             var priorCatalogOffset = catalogScrollViewer?.VerticalOffset ?? 0;
-            var priorViewportAnchor = CaptureCatalogViewportAnchor(catalogScrollViewer);
+            var priorViewportAnchor = cachedCatalogViewportAnchor
+                ?? CaptureRealizedCatalogViewportAnchor(catalogScrollViewer);
             var catalogHadKeyboardFocus = ModelsList.IsKeyboardFocusWithin
                 || LoadedModelsList.IsKeyboardFocusWithin;
+            var catalogViewChanged = false;
             ProviderNameText.Text = DisplayOrFallback(presentation.ProviderName, "Provider");
             ConnectionStatusText.Text = DisplayOrFallback(presentation.ConnectionStatus, "Unavailable");
             CatalogStatusText.Text = DisplayOrFallback(presentation.CatalogStatus, "Model evidence is unavailable.");
@@ -465,7 +476,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
                 CaptureLatestPendingAssignmentAuthority(presentedModels);
                 CaptureLatestPendingConfigurationAuthority(presentedModels);
-                ReconcileModelRows(presentedModels);
+                catalogViewChanged = ReconcileModelRows(presentedModels);
                 ApplyPendingConfigurationDraft();
                 ReconcileUnconfirmedConfigurationReload(presentation);
             }
@@ -489,23 +500,22 @@ public partial class ProviderModelAssignmentsControl : UserControl
                     requestedSelection,
                     StringComparison.Ordinal))
                 ?? SelectableRows().FirstOrDefault());
-            if (catalogScrollViewer is not null && priorCatalogOffset > 0)
-            {
-                ModelsList.UpdateLayout();
-                catalogScrollViewer.ScrollToVerticalOffset(
-                    Math.Min(priorCatalogOffset, catalogScrollViewer.ScrollableHeight));
-            }
             RebuildSelectedDetail();
             UpdateCatalogSummary();
             UpdateSearchResults();
             UpdateEmptyState();
             ApplyInteractionState();
-            ScheduleCatalogContinuity(
-                requestedSelection,
-                priorCatalogOffset,
-                priorViewportAnchor,
-                catalogHadKeyboardFocus,
-                continuityGeneration);
+            var selectionChanged = !string.Equals(priorSelection, SelectedModelId, StringComparison.Ordinal);
+            if (catalogViewChanged || selectionChanged)
+            {
+                ScheduleCatalogContinuity(
+                    requestedSelection,
+                    priorCatalogOffset,
+                    priorViewportAnchor,
+                    catalogHadKeyboardFocus,
+                    restoreViewport: catalogViewChanged,
+                    ++catalogContinuityGeneration);
+            }
         }
         finally
         {
@@ -2753,7 +2763,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 : Visibility.Collapsed;
     }
 
-    private void ReconcileModelRows(IReadOnlyList<ProviderModelAssignmentPresentation> presentedModels)
+    private bool ReconcileModelRows(IReadOnlyList<ProviderModelAssignmentPresentation> presentedModels)
     {
         var desiredIds = presentedModels.Select(model => model.Id).ToHashSet(StringComparer.Ordinal);
         if (modelRows.Count == 0 && presentedModels.Count > 1)
@@ -2779,7 +2789,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
                     modelRowsView.GroupDescriptions.Clear();
                 }
 
-                ReconcileModelRowsCore(presentedModels, desiredIds);
+                _ = ReconcileModelRowsCore(presentedModels, desiredIds);
 
                 using (loadedRowsView.DeferRefresh())
                 {
@@ -2808,25 +2818,28 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 ModelsList.ItemsSource = modelRowsView;
             }
 
-            return;
+            return true;
         }
 
-        ReconcileModelRowsCore(presentedModels, desiredIds);
+        return ReconcileModelRowsCore(presentedModels, desiredIds);
     }
 
-    private void ReconcileModelRowsCore(
+    private bool ReconcileModelRowsCore(
         IReadOnlyList<ProviderModelAssignmentPresentation> presentedModels,
         IReadOnlySet<string> desiredIds)
     {
+        var catalogViewChanged = false;
         var existingById = modelRows.ToDictionary(model => model.Id, StringComparer.Ordinal);
         foreach (var stale in modelRows.Where(model => !desiredIds.Contains(model.Id)).ToArray())
         {
             modelRows.Remove(stale);
+            catalogViewChanged = true;
         }
 
         foreach (var presented in presentedModels)
         {
             var existing = existingById.TryGetValue(presented.Id, out var row);
+            var priorPlacement = existing ? CatalogPlacement(row!) : null;
             var rowChangedViewKeys = false;
             var availabilityChanged = false;
             if (!existing)
@@ -2872,16 +2885,29 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 modelRows.Add(row);
             }
 
+            if (!existing || priorPlacement != CatalogPlacement(row))
+            {
+                catalogViewChanged = true;
+            }
         }
+
+        return catalogViewChanged;
     }
+
+    private CatalogPlacementKey CatalogPlacement(ModelRowState row) => new(
+        MatchesCurrentSearch(row),
+        row.GroupOrder,
+        row.DisplayName);
 
     private void ScheduleCatalogContinuity(
         string requestedSelection,
         double priorCatalogOffset,
         CatalogViewportAnchor? priorViewportAnchor,
         bool restoreKeyboardFocus,
+        bool restoreViewport,
         int continuityGeneration)
     {
+        catalogContinuityScheduleCount++;
         _ = Dispatcher.BeginInvoke(
             DispatcherPriority.ContextIdle,
             new Action(() =>
@@ -2901,19 +2927,18 @@ public partial class ProviderModelAssignmentsControl : UserControl
                     RebuildSelectedDetail();
                 }
 
-                if (restoreKeyboardFocus)
-                {
-                    FocusCatalog();
-                }
-
                 if (selectedModel?.Availability == ProviderModelAvailability.Loaded)
                 {
                     LoadedModelsList.ScrollIntoView(selectedModel);
-                    LoadedModelsList.UpdateLayout();
+                    if (restoreKeyboardFocus
+                        && LoadedModelsList.ItemContainerGenerator.ContainerFromItem(selectedModel) is null)
+                    {
+                        LoadedModelsList.UpdateLayout();
+                        catalogContinuityLayoutCount++;
+                    }
                 }
-                else
+                else if (restoreViewport)
                 {
-                    ModelsList.UpdateLayout();
                     if (FindVisualDescendant<ScrollViewer>(ModelsList) is { } scrollViewer)
                     {
                         if (!RestoreCatalogViewportAnchor(scrollViewer, priorViewportAnchor)
@@ -2922,12 +2947,34 @@ public partial class ProviderModelAssignmentsControl : UserControl
                             scrollViewer.ScrollToVerticalOffset(
                                 Math.Min(priorCatalogOffset, scrollViewer.ScrollableHeight));
                         }
+
+                        cachedCatalogViewportAnchor = CaptureRealizedCatalogViewportAnchor(scrollViewer);
                     }
+                }
+
+                if (restoreKeyboardFocus
+                    && !ModelsList.IsKeyboardFocusWithin
+                    && !LoadedModelsList.IsKeyboardFocusWithin)
+                {
+                    FocusCatalog();
                 }
             }));
     }
 
-    private CatalogViewportAnchor? CaptureCatalogViewportAnchor(ScrollViewer? scrollViewer)
+    private void ModelsList_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (e.OriginalSource is not ScrollViewer scrollViewer
+            || (e.VerticalChange == 0
+                && e.ViewportHeightChange == 0
+                && e.ExtentHeightChange == 0))
+        {
+            return;
+        }
+
+        cachedCatalogViewportAnchor = CaptureRealizedCatalogViewportAnchor(scrollViewer);
+    }
+
+    private CatalogViewportAnchor? CaptureRealizedCatalogViewportAnchor(ScrollViewer? scrollViewer)
     {
         if (scrollViewer is null || scrollViewer.ViewportHeight <= 0)
         {
@@ -2935,10 +2982,11 @@ public partial class ProviderModelAssignmentsControl : UserControl
         }
 
         CatalogViewportAnchor? anchor = null;
-        foreach (var row in modelRows)
+        foreach (var container in EnumerateVisualDescendants<ListBoxItem>(ModelsList))
         {
-            if (ModelsList.ItemContainerGenerator.ContainerFromItem(row) is not ListBoxItem container
-                || !container.IsVisible)
+            catalogAnchorInspectionCount++;
+            if (!container.IsVisible
+                || ModelsList.ItemContainerGenerator.ItemFromContainer(container) is not ModelRowState row)
             {
                 continue;
             }
@@ -2974,9 +3022,16 @@ public partial class ProviderModelAssignmentsControl : UserControl
             return false;
         }
 
-        ModelsList.ScrollIntoView(row);
-        ModelsList.UpdateLayout();
-        if (ModelsList.ItemContainerGenerator.ContainerFromItem(row) is not ListBoxItem container)
+        var container = ModelsList.ItemContainerGenerator.ContainerFromItem(row) as ListBoxItem;
+        if (container is null)
+        {
+            ModelsList.ScrollIntoView(row);
+            ModelsList.UpdateLayout();
+            catalogContinuityLayoutCount++;
+            container = ModelsList.ItemContainerGenerator.ContainerFromItem(row) as ListBoxItem;
+        }
+
+        if (container is null)
         {
             return false;
         }
@@ -2989,7 +3044,6 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 0,
                 scrollViewer.ScrollableHeight);
             scrollViewer.ScrollToVerticalOffset(targetOffset);
-            ModelsList.UpdateLayout();
             return true;
         }
         catch (InvalidOperationException)
@@ -3282,6 +3336,24 @@ public partial class ProviderModelAssignmentsControl : UserControl
         }
 
         return null;
+    }
+
+    private static IEnumerable<T> EnumerateVisualDescendants<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T match)
+            {
+                yield return match;
+            }
+
+            foreach (var descendant in EnumerateVisualDescendants<T>(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 
     private enum ProviderModelFacet
@@ -3790,6 +3862,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         string ConnectionIdentity);
 
     private sealed record CatalogViewportAnchor(string ModelId, double RelativeY);
+    private sealed record CatalogPlacementKey(bool IsVisible, int GroupOrder, string DisplayName);
 
 }
 

@@ -9,22 +9,28 @@ internal static partial class HelpSearchEngine
     private const int MaximumQueryLength = 256;
     private const int MaximumSnippetLength = 190;
 
-    public static IReadOnlyList<HelpSearchResult> Search(HelpCatalog catalog, string? query, int maxResults)
+    internal static HelpSearchIndex BuildIndex(HelpCatalog catalog)
     {
         ArgumentNullException.ThrowIfNull(catalog);
+        return new HelpSearchIndex(catalog.Articles.Select(IndexArticle).ToArray());
+    }
+
+    public static IReadOnlyList<HelpSearchResult> Search(HelpSearchIndex index, string? query, int maxResults)
+    {
+        ArgumentNullException.ThrowIfNull(index);
         maxResults = Math.Clamp(maxResults, 1, 100);
         var normalizedQuery = Normalize(query ?? string.Empty);
         var tokens = Tokenize(normalizedQuery);
         if (tokens.Count == 0)
         {
-            return catalog.Articles
+            return index.Articles
                 .Take(maxResults)
-                .Select(article => new HelpSearchResult(article, 0, article.Summary, [], []))
+                .Select(item => new HelpSearchResult(item.Article, 0, item.Article.Summary, [], []))
                 .ToArray();
         }
 
-        return catalog.Articles
-            .Select(article => Score(article, normalizedQuery, tokens))
+        return index.Articles
+            .Select(item => Score(item, normalizedQuery, tokens))
             .Where(result => result is not null)
             .Select(result => result!)
             .OrderByDescending(result => result.Score)
@@ -35,7 +41,7 @@ internal static partial class HelpSearchEngine
             .ToArray();
     }
 
-    private static HelpSearchResult? Score(HelpArticle article, string phrase, IReadOnlyList<string> tokens)
+    private static HelpSearchIndexEntry IndexArticle(HelpArticle article)
     {
         var id = Normalize(article.Id.Replace('-', ' '));
         var title = Normalize(article.Title);
@@ -43,39 +49,56 @@ internal static partial class HelpSearchEngine
         var keywords = article.Keywords.Select(Normalize).ToArray();
         var headings = article.Headings.Select(heading => Normalize(heading.Title)).ToArray();
         var summary = Normalize(article.Summary);
-        var body = Normalize(StripMarkdown(article.Markdown));
+        var strippedMarkdown = StripMarkdown(article.Markdown);
+        var body = Normalize(strippedMarkdown);
         var searchable = string.Join(' ', new[] { id, title, summary }.Concat(aliases).Concat(keywords).Concat(headings).Append(body));
+        return new HelpSearchIndexEntry(
+            article,
+            id,
+            title,
+            aliases,
+            keywords,
+            headings,
+            summary,
+            body,
+            searchable,
+            strippedMarkdown);
+    }
 
-        if (tokens.Any(token => !searchable.Contains(token, StringComparison.Ordinal)))
+    private static HelpSearchResult? Score(HelpSearchIndexEntry item, string phrase, IReadOnlyList<string> tokens)
+    {
+        var article = item.Article;
+
+        if (tokens.Any(token => !item.Searchable.Contains(token, StringComparison.Ordinal)))
         {
             return null;
         }
 
         double score = 0;
-        if (id.Equals(phrase, StringComparison.Ordinal)) score += 650;
-        if (title.Equals(phrase, StringComparison.Ordinal)) score += 600;
-        if (title.StartsWith(phrase, StringComparison.Ordinal)) score += 260;
-        if (title.Contains(phrase, StringComparison.Ordinal)) score += 180;
-        if (aliases.Any(alias => alias.Equals(phrase, StringComparison.Ordinal))) score += 320;
-        if (keywords.Any(keyword => keyword.Equals(phrase, StringComparison.Ordinal))) score += 220;
-        if (summary.Contains(phrase, StringComparison.Ordinal)) score += 100;
-        if (body.Contains(phrase, StringComparison.Ordinal)) score += 35;
+        if (item.Id.Equals(phrase, StringComparison.Ordinal)) score += 650;
+        if (item.Title.Equals(phrase, StringComparison.Ordinal)) score += 600;
+        if (item.Title.StartsWith(phrase, StringComparison.Ordinal)) score += 260;
+        if (item.Title.Contains(phrase, StringComparison.Ordinal)) score += 180;
+        if (item.Aliases.Any(alias => alias.Equals(phrase, StringComparison.Ordinal))) score += 320;
+        if (item.Keywords.Any(keyword => keyword.Equals(phrase, StringComparison.Ordinal))) score += 220;
+        if (item.Summary.Contains(phrase, StringComparison.Ordinal)) score += 100;
+        if (item.Body.Contains(phrase, StringComparison.Ordinal)) score += 35;
 
         foreach (var token in tokens)
         {
-            if (title.Equals(token, StringComparison.Ordinal)) score += 170;
-            else if (title.StartsWith(token, StringComparison.Ordinal)) score += 125;
-            else if (ContainsWord(title, token)) score += 95;
-            else if (title.Contains(token, StringComparison.Ordinal)) score += 65;
+            if (item.Title.Equals(token, StringComparison.Ordinal)) score += 170;
+            else if (item.Title.StartsWith(token, StringComparison.Ordinal)) score += 125;
+            else if (ContainsWord(item.Title, token)) score += 95;
+            else if (item.Title.Contains(token, StringComparison.Ordinal)) score += 65;
 
-            if (aliases.Any(alias => ContainsWord(alias, token))) score += 75;
-            if (keywords.Any(keyword => ContainsWord(keyword, token))) score += 65;
-            if (headings.Any(heading => ContainsWord(heading, token))) score += 38;
-            if (ContainsWord(summary, token)) score += 28;
-            if (ContainsWord(body, token)) score += 10;
+            if (item.Aliases.Any(alias => ContainsWord(alias, token))) score += 75;
+            if (item.Keywords.Any(keyword => ContainsWord(keyword, token))) score += 65;
+            if (item.Headings.Any(heading => ContainsWord(heading, token))) score += 38;
+            if (ContainsWord(item.Summary, token)) score += 28;
+            if (ContainsWord(item.Body, token)) score += 10;
         }
 
-        var snippetSource = SelectSnippetSource(article, phrase, tokens);
+        var snippetSource = SelectSnippetSource(item, phrase, tokens);
         var snippet = CreateSnippet(snippetSource, phrase, tokens);
         return new HelpSearchResult(
             article,
@@ -85,29 +108,34 @@ internal static partial class HelpSearchEngine
             MatchRanges(article.Title, tokens));
     }
 
-    private static string SelectSnippetSource(HelpArticle article, string phrase, IReadOnlyList<string> tokens)
+    private static string SelectSnippetSource(HelpSearchIndexEntry item, string phrase, IReadOnlyList<string> tokens)
     {
-        if (ContainsQuery(article.Summary, phrase, tokens))
+        if (ContainsQuery(item.Summary, phrase, tokens, normalized: true))
         {
-            return article.Summary;
+            return item.Article.Summary;
         }
 
-        foreach (var heading in article.Headings)
+        for (var index = 0; index < item.Article.Headings.Count; index++)
         {
-            if (ContainsQuery(heading.Title, phrase, tokens))
+            var heading = item.Article.Headings[index];
+            if (ContainsQuery(item.Headings[index], phrase, tokens, normalized: true))
             {
-                return $"{heading.Title}. {StripMarkdown(article.Markdown)}";
+                return $"{heading.Title}. {item.StrippedMarkdown}";
             }
         }
 
-        return StripMarkdown(article.Markdown);
+        return item.StrippedMarkdown;
     }
 
-    private static bool ContainsQuery(string value, string phrase, IReadOnlyList<string> tokens)
+    private static bool ContainsQuery(
+        string value,
+        string phrase,
+        IReadOnlyList<string> tokens,
+        bool normalized = false)
     {
-        var normalized = Normalize(value);
-        return normalized.Contains(phrase, StringComparison.Ordinal)
-            || tokens.Any(token => normalized.Contains(token, StringComparison.Ordinal));
+        var searchable = normalized ? value : Normalize(value);
+        return searchable.Contains(phrase, StringComparison.Ordinal)
+            || tokens.Any(token => searchable.Contains(token, StringComparison.Ordinal));
     }
 
     private static string CreateSnippet(string source, string phrase, IReadOnlyList<string> tokens)
@@ -242,3 +270,17 @@ internal static partial class HelpSearchEngine
     [GeneratedRegex(@"[`*_#>|\[\](){}~-]+", RegexOptions.CultureInvariant)]
     private static partial Regex MarkdownPunctuationRegex();
 }
+
+internal sealed record HelpSearchIndex(IReadOnlyList<HelpSearchIndexEntry> Articles);
+
+internal sealed record HelpSearchIndexEntry(
+    HelpArticle Article,
+    string Id,
+    string Title,
+    IReadOnlyList<string> Aliases,
+    IReadOnlyList<string> Keywords,
+    IReadOnlyList<string> Headings,
+    string Summary,
+    string Body,
+    string Searchable,
+    string StrippedMarkdown);

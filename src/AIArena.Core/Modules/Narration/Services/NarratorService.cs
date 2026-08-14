@@ -765,7 +765,8 @@ public sealed class NarratorService : IDisposable
                 promptFactory(includedMessageIds, additionalMessage),
                 factoryMode: false),
             frozenReceipt: null,
-            eligibility: IsNarratorHistoryEligible);
+            eligibility: IsNarratorHistoryEligible,
+            selectionContract: ArenaHistoryBudgetService.NarratorPromptSelectionContract(snapshot));
 
     private static bool IsNarratorHistoryEligible(DialogueMessage message) =>
         message.Kind is "message" or "internet" or "internet_tool" or "";

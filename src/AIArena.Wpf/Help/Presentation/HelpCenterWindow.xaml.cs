@@ -38,6 +38,7 @@ internal partial class HelpCenterWindow : Window
         Owner = owner;
         ApplyResponsiveBounds();
         viewModel = new HelpCenterViewModel(contentService);
+        viewModel.PropertyChanged += ViewModel_PropertyChanged;
         DataContext = viewModel;
 
         ConfigureWindowAccessibility();
@@ -524,9 +525,13 @@ internal partial class HelpCenterWindow : Window
         e.Handled = DebugHandleShortcut(e.Key, Keyboard.Modifiers);
     }
 
-    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        Dispatcher.BeginInvoke(UpdateSearchMode, DispatcherPriority.DataBind);
+        if (e.PropertyName is nameof(HelpCenterViewModel.IsSearchMode)
+            or nameof(HelpCenterViewModel.SearchResults))
+        {
+            Dispatcher.BeginInvoke(UpdateSearchMode, DispatcherPriority.DataBind);
+        }
     }
 
     private void SearchBox_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -581,6 +586,7 @@ internal partial class HelpCenterWindow : Window
 
     private void Window_Closed(object? sender, EventArgs e)
     {
+        viewModel.PropertyChanged -= ViewModel_PropertyChanged;
         SaveCurrentScrollOffset();
         if (launcher is UIElement { IsVisible: true, IsEnabled: true } element)
         {

@@ -78,7 +78,7 @@ internal static partial class Program
                     ArenaExperimentRunState.Completed),
             "status-aware retry scope did not preserve Completed cells for continuation or allow an intentional full repeat");
 
-        var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ExperimentLabControl.xaml"));
+        var xaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ExperimentLabControl.xaml");
         Require(
             xaml.Contains("x:Name=\"ExecuteMatrixButton\"", StringComparison.Ordinal)
             && xaml.Contains("IsEnabled=\"False\"", StringComparison.Ordinal)
@@ -541,7 +541,7 @@ internal static partial class Program
 
     static void AssertPaletteAwareFocusVisualContract()
     {
-        var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Theming/DesignTokens.xaml"));
+        var xaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Theming/DesignTokens.xaml");
         var start = xaml.IndexOf("x:Key=\"Arena.FocusVisual\"", StringComparison.Ordinal);
         var focusVisual = start >= 0 ? xaml[start..] : "";
         Require(focusVisual.Contains("PrimaryBorderBrush", StringComparison.Ordinal)
@@ -744,7 +744,7 @@ internal static partial class Program
             control.SetMatrixRunning(false);
         });
 
-        var adapter = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+        var adapter = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs");
         Require(adapter.Contains("case AIArenaControlCommands.ExperimentState:", StringComparison.Ordinal)
                 && adapter.Contains("case AIArenaControlCommands.ExperimentFeatureSelect:", StringComparison.Ordinal)
                 && adapter.Contains("ResolveExperimentFeatureSelectionTarget(before, key)", StringComparison.Ordinal)
@@ -2146,9 +2146,9 @@ internal static partial class Program
 
     static void ExperimentLabShellNavigationPreservesExistingSurfaceContracts()
     {
-        var rail = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellNavigationRailControl.xaml"));
-        var window = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
-        var source = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+        var rail = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellNavigationRailControl.xaml");
+        var window = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
+        var source = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
         Require(rail.Contains("ExperimentLabNavButtonElement", StringComparison.Ordinal)
                 && rail.Contains("AutomationProperties.Name=\"Open Experiment Lab\"", StringComparison.Ordinal)
                 && rail.Contains("ExperimentLeftRailContextPanelElement", StringComparison.Ordinal),
@@ -2230,7 +2230,7 @@ internal static partial class Program
                 .Equals(repositoryRoot, StringComparison.OrdinalIgnoreCase),
             "QA Inspector production root resolution did not require and find the real repository markers");
 
-        var source = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+        var source = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
         Require(
             source.Contains("_providerRequestTraceStore = new ProviderRequestTraceStore();", StringComparison.Ordinal)
             && source.Contains("CreateObservedModelProviderClient(_providerRequestTraceStore)", StringComparison.Ordinal)
@@ -2250,7 +2250,7 @@ internal static partial class Program
 
     static void ExperimentLabProviderJudgePersistsTracedInferredEvidence()
     {
-        var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ExperimentLabControl.xaml"));
+        var xaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ExperimentLabControl.xaml");
         Require(xaml.Contains("Run provider judge", StringComparison.Ordinal)
                 && xaml.Contains("request-bound receipt", StringComparison.Ordinal)
                 && xaml.Contains("message speaker's effective configured provider route", StringComparison.Ordinal),

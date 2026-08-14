@@ -14,6 +14,7 @@ using AIArena.Core.Providers;
 using AIArena.Core.Services;
 using AIArena.Wpf.Models;
 using AIArena.Wpf.Services;
+using AIArena.Wpf.Controls;
 using Microsoft.Win32;
 using static AIArena.Wpf.Services.WorkspaceCommandHelpers;
 
@@ -74,7 +75,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private readonly TextBlock topProviderText;
     private readonly TextBlock topModeText;
     private readonly ScrollViewer chatScrollViewer;
-    private readonly StackPanel messageItems;
+    private readonly Panel messageItems;
+    private readonly VirtualizingConversationPanel? virtualMessageItems;
     private readonly TextBox promptText;
     private readonly Button planPromptButton;
     private readonly Button breakdownPromptButton;
@@ -594,7 +596,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         TextBlock topProviderText,
         TextBlock topModeText,
         ScrollViewer chatScrollViewer,
-        StackPanel messageItems,
+        Panel messageItems,
         TextBox promptText,
         Button planPromptButton,
         Button breakdownPromptButton,
@@ -671,6 +673,9 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         this.topModeText = topModeText;
         this.chatScrollViewer = chatScrollViewer;
         this.messageItems = messageItems;
+        virtualMessageItems = messageItems as VirtualizingConversationPanel;
+        AutomationProperties.SetName(messageItems, "Agent conversation");
+        AutomationProperties.SetHelpText(messageItems, "Agent workspace conversation messages in chronological order.");
         this.promptText = promptText;
         this.planPromptButton = planPromptButton;
         this.breakdownPromptButton = breakdownPromptButton;
@@ -906,10 +911,17 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return;
         }
 
-        messageItems.Children.Clear();
-        foreach (var message in messages)
+        if (virtualMessageItems is not null)
         {
-            messageItems.Children.Add(CreateMessageCard(message));
+            virtualMessageItems.ReplaceRows(MessageRowDefinitions(messages), refreshRealizedRows: true);
+        }
+        else
+        {
+            messageItems.Children.Clear();
+            foreach (var message in messages)
+            {
+                messageItems.Children.Add(CreateMessageCard(message));
+            }
         }
     }
 
@@ -1396,14 +1408,14 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
         if (messages.Count == 0)
         {
-            messageItems.Children.Clear();
+            ClearMessagePresentation();
         }
 
         var userMessage = isInternalPrompt
             ? new AgentWorkspaceMessage("system", "Agent Rescue", prompt, "Action", "", DateTimeOffset.Now)
             : new AgentWorkspaceMessage("operator", "Operator", prompt, "User", "", DateTimeOffset.Now);
         messages.Add(userMessage);
-        messageItems.Children.Add(CreateMessageCard(userMessage));
+        AddMessagePresentation(userMessage);
         PersistConversation();
         AddActivity(isInternalPrompt ? "Auto Rescue" : "Prompt", isInternalPrompt ? "Builder is being retried for a runnable command." : "Software task sent to Agent team.");
         SetBuildEvidenceSummary(currentPromptRequiresCommand
@@ -1546,7 +1558,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         {
             var stopped = new AgentWorkspaceMessage("system", "Agent", "Collaboration stopped.", "Status", "", DateTimeOffset.Now);
             messages.Add(stopped);
-            messageItems.Children.Add(CreateMessageCard(stopped));
+            AddMessagePresentation(stopped);
             PersistConversation();
             AddActivity("Stopped", "Agent collaboration cancelled.");
             phaseSummaryText.Text = "Agent collaboration stopped.";
@@ -2536,6 +2548,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     {
         public required Border Container { get; init; }
         public required TextBlock Text { get; init; }
+        public VirtualizingConversationPanel.ConversationRowHandle? VirtualHandle { get; set; }
         public StringBuilder Buffer { get; } = new();
         public DateTime LastRender { get; set; } = DateTime.MinValue;
     }
@@ -2571,7 +2584,20 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         };
         container.Child = panel;
         var card = new LiveStreamCard { Container = container, Text = text };
-        messageItems.Children.Add(container);
+        if (virtualMessageItems is not null)
+        {
+            card.VirtualHandle = virtualMessageItems.AddRow(
+                () => container,
+                $"agent-live-{Guid.NewGuid():N}",
+                VirtualizingConversationPanel.DefaultEstimatedRowHeight,
+                keepAlive: true,
+                automationName: $"Agent message {roleName}",
+                automationHelpText: $"{roleName} response is streaming.");
+        }
+        else
+        {
+            messageItems.Children.Add(container);
+        }
         ScrollToEnd();
         return card;
     }
@@ -2598,7 +2624,14 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private void RemoveLiveStreamCard(LiveStreamCard card)
     {
-        messageItems.Children.Remove(card.Container);
+        if (card.VirtualHandle is not null)
+        {
+            card.VirtualHandle.Remove();
+        }
+        else
+        {
+            messageItems.Children.Remove(card.Container);
+        }
     }
 
     private async Task<AgentStep> CompleteRoleAsync(
@@ -2644,7 +2677,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             : $"Model step failed: {step.Error}";
         var message = new AgentWorkspaceMessage(step.RoleId, step.RoleName, body, step.Ok ? "Agent" : "Error", step.Model, DateTimeOffset.Now);
         messages.Add(message);
-        messageItems.Children.Add(CreateMessageCard(message));
+        AddMessagePresentation(message);
         PersistConversation();
         SetPhase(step.RoleId, step.Ok ? "Done" : "Error", step.Ok ? $"{step.RoleName} completed." : step.Error);
         AddActivity(step.RoleName, step.Ok
@@ -2867,7 +2900,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     {
         var message = new AgentWorkspaceMessage("system", title, body, kind, "", DateTimeOffset.Now);
         messages.Add(message);
-        messageItems.Children.Add(CreateMessageCard(message));
+        AddMessagePresentation(message);
         PersistConversation();
     }
 
@@ -2880,7 +2913,18 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             kind,
             "",
             DateTimeOffset.Now);
-        messageItems.Children.Add(CreateMessageCard(message));
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.AddRow(
+                () => CreateMessageCard(message),
+                $"agent-transient-{Guid.NewGuid():N}",
+                EstimateMessageHeight(message),
+                keepAlive: false);
+        }
+        else
+        {
+            messageItems.Children.Add(CreateMessageCard(message));
+        }
     }
 
     private void AddCommandResultMessage(AgentCommandResult result, AgentWorkspaceFileReceipt receipt)
@@ -3076,8 +3120,19 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private void RenderEmptyState()
     {
-        messageItems.Children.Clear();
-        messageItems.Children.Add(BuildEmptyStateCard(resourceBrush, ApplyPromptTemplate));
+        ClearMessagePresentation();
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.AddRow(
+                () => BuildEmptyStateCard(resourceBrush, ApplyPromptTemplate),
+                "agent-empty",
+                168d,
+                keepAlive: true);
+        }
+        else
+        {
+            messageItems.Children.Add(BuildEmptyStateCard(resourceBrush, ApplyPromptTemplate));
+        }
     }
 
     internal static Border BuildEmptyStateCard(
@@ -3162,11 +3217,22 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
 
         messages.Clear();
-        messageItems.Children.Clear();
+        ClearMessagePresentation();
         foreach (var message in restoredMessages)
         {
             messages.Add(message);
-            messageItems.Children.Add(CreateMessageCard(message));
+        }
+
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.ReplaceRows(MessageRowDefinitions(messages), refreshRealizedRows: false);
+        }
+        else
+        {
+            foreach (var message in messages)
+            {
+                messageItems.Children.Add(CreateMessageCard(message));
+            }
         }
 
         AddActivity("Restored", AgentWorkspaceConversationStore.RestoreActivityDetail(messages.Count));
@@ -3252,6 +3318,62 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         AutomationProperties.SetName(card, $"Agent message {message.Title}");
         AutomationProperties.SetHelpText(card, message.Body);
         return card;
+    }
+
+    private IReadOnlyList<VirtualizingConversationPanel.ConversationRowDefinition> MessageRowDefinitions(
+        IReadOnlyList<AgentWorkspaceMessage> source)
+    {
+        return source
+            .Select((message, index) => new VirtualizingConversationPanel.ConversationRowDefinition(
+                MessageKey(message, index),
+                () => CreateMessageCard(message),
+                EstimateMessageHeight(message),
+                KeepAlive: false,
+                AutomationName: $"Agent message {message.Title}",
+                AutomationHelpText: message.Body))
+            .ToArray();
+    }
+
+    private void AddMessagePresentation(AgentWorkspaceMessage message)
+    {
+        if (virtualMessageItems is not null)
+        {
+            var index = Math.Max(0, messages.Count - 1);
+            virtualMessageItems.AddRow(
+                () => CreateMessageCard(message),
+                MessageKey(message, index),
+                EstimateMessageHeight(message),
+                automationName: $"Agent message {message.Title}",
+                automationHelpText: message.Body);
+            return;
+        }
+
+        messageItems.Children.Add(CreateMessageCard(message));
+    }
+
+    private void ClearMessagePresentation()
+    {
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.ClearRows();
+            return;
+        }
+
+        messageItems.Children.Clear();
+    }
+
+    private static string MessageKey(AgentWorkspaceMessage message, int index)
+    {
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"agent-{message.CreatedAt.UtcTicks}-{index}-{message.RoleId}-{message.Kind}");
+    }
+
+    internal static double EstimateMessageHeight(AgentWorkspaceMessage message)
+    {
+        var lines = Math.Max(1, message.Body.Count(character => character == '\n') + 1);
+        var wrappedLines = Math.Max(lines, (message.Body.Length / 92) + 1);
+        return Math.Clamp(58d + (wrappedLines * 19d), 72d, 620d);
     }
 
     private void RenderRoles()
@@ -5790,7 +5912,18 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private void ScrollToEnd()
     {
-        dispatcher.BeginInvoke(() => chatScrollViewer.ScrollToEnd(), DispatcherPriority.Background);
+        dispatcher.BeginInvoke(
+            () =>
+            {
+                if (virtualMessageItems is not null)
+                {
+                    virtualMessageItems.ScrollToEnd();
+                    return;
+                }
+
+                chatScrollViewer.ScrollToEnd();
+            },
+            DispatcherPriority.Background);
     }
 
     private ProviderPlan ProviderPlanForRole(ArenaViewSnapshot current, string roleId)

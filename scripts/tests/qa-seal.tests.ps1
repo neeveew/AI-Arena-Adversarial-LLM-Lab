@@ -143,6 +143,10 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
         'ConvertTo-SafeRelativePath',
         'Get-Sha256Text',
         'Get-Sha256File',
+        'Resolve-NativeCommandPath',
+        'ConvertTo-NativeArgument',
+        'Stop-QaProcessTree',
+        'Invoke-ParallelCapturedCommands',
         'Protect-QaText',
         'Test-QaTextPrivacy',
         'Write-Utf8NoBom',
@@ -167,6 +171,109 @@ Require ((Get-AIArenaQaMigrationEvidenceId -Schema 'ai_arena.benchmark_pack.v1')
         'Assert-QaBlockedBundleInventory',
         'Invoke-QaBlockedFallback')) {
         Import-SealFunction -Name $helper
+    }
+
+    $parallelFixtureRoot = Join-Path $repositoryRoot ('artifacts\qa-parallel-fixture-' + [Guid]::NewGuid().ToString('N'))
+    $hadRunRoot = Test-Path Variable:script:RunRoot
+    $previousRunRoot = if ($hadRunRoot) { $script:RunRoot } else { $null }
+    try {
+        [void](New-Item -ItemType Directory -Path $parallelFixtureRoot -Force)
+        $script:RunRoot = $parallelFixtureRoot
+        $parallelCommandText = '[Console]::WriteLine(($env:TEMP,$env:TMP,$env:AI_ARENA_DATA_DIR,$env:AI_ARENA_CONTROL_OWNER,$env:AIARENA_TEST_FILTER,$env:AIARENA_RUN_PROVIDER_LAYOUT_PERF -join ''|'')); Start-Sleep -Milliseconds 350; [Console]::WriteLine(''PASS parallel-fixture'')'
+        $parallelCommands = @(
+            foreach ($index in 1..4) {
+                [pscustomobject]@{
+                    IsolationKey = "fixture-$index"
+                    FilePath = (Get-Process -Id $PID).Path
+                    Arguments = @('-NoProfile', '-NonInteractive', '-Command', $parallelCommandText)
+                    DisplayCommand = "powershell parallel fixture $index"
+                    EnvironmentVariables = if ($index -eq 1) { @{ AIARENA_RUN_PROVIDER_LAYOUT_PERF = '1' } } else { @{} }
+                }
+            }
+        )
+        $parallelResults = @(Invoke-ParallelCapturedCommands -Command $parallelCommands -IsolationGroup 'fixture' -MaximumProcesses 4 -TimeoutSeconds 30)
+        Require ($parallelResults.Count -eq 4) 'Parallel QA helper did not return one result per command.'
+        Require (($parallelResults.IsolationKey -join ',') -ceq 'fixture-1,fixture-2,fixture-3,fixture-4') 'Parallel QA helper changed deterministic evidence order.'
+        $serialMilliseconds = [long]$parallelResults[0].SerialDurationMilliseconds
+        $groupMilliseconds = [long]$parallelResults[0].GroupDurationMilliseconds
+        Require ($serialMilliseconds -ge 1200 -and $groupMilliseconds -lt ($serialMilliseconds * 0.75)) 'Parallel QA helper did not materially reduce four-command wall time.'
+        Write-Host ("QA PARALLEL receipt commands=4 serial_ms={0} parallel_ms={1} process_limit=4 isolated_roots=4" -f $serialMilliseconds, $groupMilliseconds)
+        $owners = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $tempRoots = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        $dataRoots = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($result in $parallelResults) {
+            Require (-not $result.StartFailed -and -not $result.TimedOut -and $result.ExitCode -eq 0) 'Parallel QA fixture command failed.'
+            $environmentLine = @(([string]$result.Stdout -split '\r?\n') | Where-Object { $_ -match '\|' } | Select-Object -First 1)
+            Require ($environmentLine.Count -eq 1) 'Parallel QA fixture did not report its isolated environment.'
+            $parts = $environmentLine[0].Split('|')
+            Require ($parts.Count -eq 6 -and $parts[0] -ceq $parts[1] -and [string]::IsNullOrEmpty($parts[4])) 'Parallel QA TEMP/TMP/filter isolation drifted.'
+            $expectedPerf = if ($result.IsolationKey -ceq 'fixture-1') { '1' } else { '' }
+            Require ($parts[5] -ceq $expectedPerf) 'Parallel QA did not apply the explicit Models performance override only to its WPF-style command.'
+            Require ($parts[3] -match '^[a-f0-9]{32}$') 'Parallel QA control owner was not a private GUID namespace.'
+            [void]$tempRoots.Add($parts[0])
+            [void]$dataRoots.Add($parts[2])
+            [void]$owners.Add($parts[3])
+        }
+        Require ($tempRoots.Count -eq 4 -and $dataRoots.Count -eq 4 -and $owners.Count -eq 4) 'Parallel QA commands shared temporary, data, or control state.'
+
+        $processLimitRejected = $false
+        try {
+            [void](Invoke-ParallelCapturedCommands -Command @($parallelCommands + $parallelCommands[0]) -IsolationGroup 'over-limit' -MaximumProcesses 4 -TimeoutSeconds 30)
+        }
+        catch {
+            $processLimitRejected = $_.Exception.Message -match 'bounded process limit'
+        }
+        Require $processLimitRejected 'Parallel QA helper accepted work above its four-process ceiling.'
+
+        $failureCommands = @(
+            [pscustomobject]@{
+                IsolationKey = 'pass-command'
+                FilePath = (Get-Process -Id $PID).Path
+                Arguments = @('-NoProfile', '-NonInteractive', '-Command', "[Console]::WriteLine('PASS attributed'); exit 0")
+                DisplayCommand = 'powershell passing attribution fixture'
+            },
+            [pscustomobject]@{
+                IsolationKey = 'fail-command'
+                FilePath = (Get-Process -Id $PID).Path
+                Arguments = @('-NoProfile', '-NonInteractive', '-Command', "[Console]::WriteLine('FAIL attributed'); exit 7")
+                DisplayCommand = 'powershell failing attribution fixture'
+            }
+        )
+        $failureResults = @(Invoke-ParallelCapturedCommands -Command $failureCommands -IsolationGroup 'failure-attribution' -MaximumProcesses 4 -TimeoutSeconds 30)
+        Require (($failureResults.IsolationKey -join ',') -ceq 'pass-command,fail-command') 'Parallel QA failure evidence lost deterministic command identity.'
+        Require ($failureResults[0].ExitCode -eq 0 -and $failureResults[1].ExitCode -eq 7) 'Parallel QA failure was attributed to the wrong gate.'
+
+        $timeoutResult = @(Invoke-ParallelCapturedCommands -Command @(
+            [pscustomobject]@{
+                IsolationKey = 'timeout-command'
+                FilePath = (Get-Process -Id $PID).Path
+                Arguments = @('-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 30')
+                DisplayCommand = 'powershell timeout fixture'
+            }) -IsolationGroup 'timeout-cleanup' -MaximumProcesses 4 -TimeoutSeconds 5)
+        Require ($timeoutResult.Count -eq 1 -and $timeoutResult[0].TimedOut -and $timeoutResult[0].ExitCode -eq -1) 'Parallel QA timeout did not fail closed with command identity intact.'
+
+        $leakedHandleCommand = '$child = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList @(''-NoProfile'',''-NonInteractive'',''-Command'',''Start-Sleep -Seconds 30'') -NoNewWindow -PassThru; [Console]::WriteLine("child=$($child.Id)")'
+        $leakedHandleWatch = [Diagnostics.Stopwatch]::StartNew()
+        $leakedHandleResult = @(Invoke-ParallelCapturedCommands -Command @(
+            [pscustomobject]@{
+                IsolationKey = 'leaked-output-handle'
+                FilePath = (Get-Process -Id $PID).Path
+                Arguments = @('-NoProfile', '-NonInteractive', '-Command', $leakedHandleCommand)
+                DisplayCommand = 'powershell leaked descendant output fixture'
+            }) -IsolationGroup 'leaked-output-cleanup' -MaximumProcesses 4 -TimeoutSeconds 10)
+        $leakedHandleWatch.Stop()
+        Require ($leakedHandleResult.Count -eq 1 -and $leakedHandleResult[0].TimedOut -and $leakedHandleResult[0].ExitCode -eq -1) 'Parallel QA did not fail closed when a descendant retained redirected output handles.'
+        Require ($leakedHandleWatch.ElapsedMilliseconds -lt 9000) 'Parallel QA blocked indefinitely draining output inherited by a leaked descendant.'
+        Require (-not (Test-Path -LiteralPath (Join-Path $parallelFixtureRoot 'work\parallel-harnesses\fixture'))) 'Parallel QA helper retained isolated child state in the evidence bundle.'
+        Require (-not (Test-Path -LiteralPath (Join-Path $parallelFixtureRoot 'work\parallel-harnesses\timeout-cleanup'))) 'Parallel QA timeout retained child state in the evidence bundle.'
+        Require (-not (Test-Path -LiteralPath (Join-Path $parallelFixtureRoot 'work\parallel-harnesses\leaked-output-cleanup'))) 'Parallel QA leaked-descendant cleanup retained isolated child state in the evidence bundle.'
+    }
+    finally {
+        if ($hadRunRoot) { $script:RunRoot = $previousRunRoot }
+        else { Remove-Variable -Name RunRoot -Scope Script -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $parallelFixtureRoot) {
+            Remove-Item -LiteralPath $parallelFixtureRoot -Recurse -Force
+        }
     }
 
     function New-PartialRenderFallbackScopeFixture {

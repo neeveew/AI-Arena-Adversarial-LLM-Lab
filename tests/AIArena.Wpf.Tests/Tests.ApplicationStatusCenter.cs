@@ -255,13 +255,13 @@ internal static partial class Program
 
     private static void ApplicationStatusCenterCoversResidualShellFeedback()
     {
-        var mainWindowSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
-        var mainWindowXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
-        var shellTopBarSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml.cs"));
-        var sessionOverviewSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/SessionOverviewCoordinator.cs"));
-        var scenarioSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ScenarioWorkflowCoordinator.cs"));
-        var transcriptMutationSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptMutationCoordinator.cs"));
-        var internetSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/InternetWorkflowCoordinator.cs"));
+        var mainWindowSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
+        var mainWindowXaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
+        var shellTopBarSource = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml.cs");
+        var sessionOverviewSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/SessionOverviewCoordinator.cs");
+        var scenarioSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ScenarioWorkflowCoordinator.cs");
+        var transcriptMutationSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptMutationCoordinator.cs");
+        var internetSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/InternetWorkflowCoordinator.cs");
 
         var settingsStatusHelper = CSharpMethodBlock(mainWindowSource, "private void SetSettingsTransferStatus");
         Require(settingsStatusHelper.Contains("SetApplicationStatus", StringComparison.Ordinal)

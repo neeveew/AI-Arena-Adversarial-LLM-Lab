@@ -1033,13 +1033,25 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         var requestId = Guid.NewGuid().ToString("N");
         try
         {
-            _requestObserver.ObserveRequest(ProviderPromptInspection.CreateTrace(
+            var preparedObserver = _requestObserver as IPreparedProviderRequestObserver;
+            var observationDetail = preparedObserver?.ObservationDetail
+                ?? ProviderRequestObservationDetail.RedactedPreview;
+            var trace = ProviderPromptInspection.CreateTrace(
                 requestId,
                 config,
                 exactPayload,
                 transport,
                 requestedStreaming,
-                attempt));
+                attempt,
+                observationDetail);
+            if (preparedObserver is not null)
+            {
+                preparedObserver.ObservePreparedRequest(trace);
+            }
+            else
+            {
+                _requestObserver.ObserveRequest(trace);
+            }
         }
         catch (Exception)
         {

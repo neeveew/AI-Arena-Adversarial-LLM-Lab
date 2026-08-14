@@ -23,7 +23,8 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
 {
     internal const int CompactRowCount = 4;
     internal const double DashboardWidth = 380;
-    internal static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(1);
+    internal static readonly TimeSpan MinimumClockInterval = TimeSpan.FromMilliseconds(50);
+    internal static readonly TimeSpan MaximumClockInterval = TimeSpan.FromDays(1);
 
     private readonly DispatcherTimer relativeTimeTimer;
     private UniversalStatusRowPresentation? selectedHistoryRow;
@@ -38,18 +39,18 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
     private string activeCountLabel = "Ready";
     private string historyCountLabel = "No recent activity";
     private bool canClearCompleted;
+    private int clockWakeCount;
+    private int compactClockRefreshCount;
+    private int historyClockRefreshCount;
 
     public UniversalStatusCenterControl()
     {
         InitializeComponent();
         EnsureFourCompactRows();
         SelectedHistoryRow = CompactRows[0];
-        relativeTimeTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
-        {
-            Interval = RefreshInterval
-        };
+        relativeTimeTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher);
         relativeTimeTimer.Tick += (_, _) => RefreshStatusCenterClock();
-        Loaded += (_, _) => relativeTimeTimer.Start();
+        Loaded += (_, _) => ScheduleNextClockWake();
         Unloaded += (_, _) => relativeTimeTimer.Stop();
     }
 
@@ -127,6 +128,11 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
     internal Popup HistoryPopupTarget => HistoryPopup;
     internal Button OpenHistoryButtonTarget => OpenHistoryButton;
     internal Button CloseHistoryButtonTarget => CloseHistoryButton;
+    internal int ClockWakeCount => clockWakeCount;
+    internal int CompactClockRefreshCount => compactClockRefreshCount;
+    internal int HistoryClockRefreshCount => historyClockRefreshCount;
+    internal bool IsClockScheduled => relativeTimeTimer.IsEnabled;
+    internal TimeSpan ScheduledClockInterval => relativeTimeTimer.Interval;
     internal Button ClearCompletedButtonTarget => ClearCompletedButton;
     internal Button NavigateStatusButtonTarget => NavigateStatusButton;
     internal TextBlock LiveAnnouncementTarget => LiveAnnouncementText;
@@ -200,6 +206,7 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
         };
         CanClearCompleted = history.Any(row => row.CanClear);
         PresentationChanged?.Invoke(this, EventArgs.Empty);
+        ScheduleNextClockWake();
     }
 
     private void StatusCenter_Changed(object? sender, ApplicationStatusChangedEventArgs e)
@@ -368,6 +375,8 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
 
     private void HistoryPopup_Opened(object? sender, EventArgs e)
     {
+        RefreshRelativeTimes(includeHistory: true);
+        ScheduleNextClockWake();
         HistoryDashboardTransform.BeginAnimation(
             System.Windows.Media.TranslateTransform.XProperty,
             new DoubleAnimation(24, 0, TimeSpan.FromMilliseconds(160))
@@ -401,6 +410,7 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
         focusReturnTarget = null;
         focusReturnStatusId = null;
         HistoryPopup.PlacementTarget = StatusCenterCard;
+        ScheduleNextClockWake();
         if (target is not UIElement element)
         {
             return;
@@ -571,19 +581,71 @@ public partial class UniversalStatusCenterControl : UserControl, INotifyProperty
         }
     }
 
-    private void RefreshRelativeTimes()
+    private void RefreshRelativeTimes(bool includeHistory)
     {
         var now = DateTimeOffset.Now;
-        foreach (var row in HistoryRows.Concat(CompactRows).Distinct())
+        foreach (var row in CompactRows)
         {
             row.RefreshRelativeTime(now);
+            compactClockRefreshCount++;
+        }
+
+        if (!includeHistory)
+        {
+            return;
+        }
+
+        foreach (var row in HistoryRows)
+        {
+            row.RefreshRelativeTime(now);
+            historyClockRefreshCount++;
         }
     }
 
     internal void RefreshStatusCenterClock()
     {
+        relativeTimeTimer.Stop();
+        clockWakeCount++;
         boundStatusCenter?.RefreshExpirations();
-        RefreshRelativeTimes();
+        RefreshRelativeTimes(IsDashboardOpen);
+        ScheduleNextClockWake();
+    }
+
+    private void ScheduleNextClockWake()
+    {
+        relativeTimeTimer.Stop();
+        if (!IsLoaded)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.Now;
+        var expirationDelay = boundStatusCenter?.TimeUntilNextExpiration;
+        DateTimeOffset? next = expirationDelay is null ? null : now + expirationDelay.Value;
+        var displayedRows = IsDashboardOpen
+            ? CompactRows.Concat(HistoryRows)
+            : CompactRows;
+        foreach (var row in displayedRows)
+        {
+            var rowDeadline = UniversalStatusRowPresentation.NextRelativeTimeRefreshAt(row.Timestamp, now);
+            if (rowDeadline is not null && (next is null || rowDeadline < next))
+            {
+                next = rowDeadline;
+            }
+        }
+
+        if (next is null)
+        {
+            return;
+        }
+
+        var delay = next.Value - now;
+        relativeTimeTimer.Interval = delay < MinimumClockInterval
+            ? MinimumClockInterval
+            : delay > MaximumClockInterval
+                ? MaximumClockInterval
+                : delay;
+        relativeTimeTimer.Start();
     }
 
     private static void ReplaceRows(
@@ -703,7 +765,7 @@ internal sealed class UniversalStatusRowPresentation : INotifyPropertyChanged
         "",
         "Ready",
         "No meaningful application activity requires attention.",
-        DateTimeOffset.Now);
+        default);
 
     internal static UniversalStatusRowPresentation Placeholder(int index) => new(
         $"placeholder-{index}",
@@ -745,5 +807,36 @@ internal sealed class UniversalStatusRowPresentation : INotifyPropertyChanged
         }
 
         return timestamp.ToLocalTime().ToString("MMM d");
+    }
+
+    internal static DateTimeOffset? NextRelativeTimeRefreshAt(DateTimeOffset timestamp, DateTimeOffset now)
+    {
+        if (timestamp == default)
+        {
+            return null;
+        }
+
+        var elapsed = now - timestamp;
+        if (elapsed <= TimeSpan.FromSeconds(5))
+        {
+            return timestamp.AddSeconds(5).AddTicks(1);
+        }
+
+        if (elapsed < TimeSpan.FromMinutes(1))
+        {
+            return timestamp.AddSeconds(Math.Floor(elapsed.TotalSeconds) + 1);
+        }
+
+        if (elapsed < TimeSpan.FromHours(1))
+        {
+            return timestamp.AddMinutes(Math.Floor(elapsed.TotalMinutes) + 1);
+        }
+
+        if (elapsed < TimeSpan.FromDays(1))
+        {
+            return timestamp.AddHours(Math.Floor(elapsed.TotalHours) + 1);
+        }
+
+        return null;
     }
 }

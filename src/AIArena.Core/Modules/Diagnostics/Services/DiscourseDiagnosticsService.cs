@@ -7,6 +7,9 @@ public sealed class DiscourseDiagnosticsService
 {
     private const int WindowSize = 8;
 
+    private static readonly IReadOnlyDictionary<string, string> EmptyPersonas =
+        new Dictionary<string, string>();
+
     private static readonly string[] AgreementPhrases =
     [
         "i agree", "correct", "exactly", "yes", "as alpha said", "as beta said", "as gamma said", "as delta said",
@@ -60,24 +63,60 @@ public sealed class DiscourseDiagnosticsService
 
     public FrictionDiagnostics Analyze(IEnumerable<DiscourseTurn> turns, IReadOnlyDictionary<string, string>? personas = null)
     {
-        var newest = turns
-            .OrderByDescending(turn => turn.Turn)
-            .ThenByDescending(turn => turn.CreatedAt)
-            .ToArray();
-        var recentEvidenceWindow = newest.Take(WindowSize).ToArray();
-        var recentConversation = newest
-            .Where(turn => !IsSystemTurn(turn))
-            .Take(WindowSize)
-            .ToArray();
+        ArgumentNullException.ThrowIfNull(turns);
+
+        DiscourseTurn[] recentEvidenceWindow;
+        DiscourseTurn[] recentConversation;
+        if (turns is IReadOnlyList<DiscourseTurn> orderedCandidate
+            && IsOrderedAscending(orderedCandidate))
+        {
+            // Transcript projections are already ordered oldest-to-newest. Read only
+            // the newest key groups so equal Turn/CreatedAt values retain LINQ's
+            // stable source order without sorting or materializing the full history.
+            recentEvidenceWindow = SelectOrderedNewest(orderedCandidate, excludeSystemTurns: false);
+            recentConversation = SelectOrderedNewest(orderedCandidate, excludeSystemTurns: true);
+        }
+        else
+        {
+            // Arbitrary callers retain the exact OrderByDescending/ThenByDescending
+            // contract through two bounded stable collectors. This is the safe
+            // fallback for edits, retries, and out-of-order input.
+            (recentEvidenceWindow, recentConversation) = SelectNewestBounded(turns);
+        }
+
+        return AnalyzeWindows(recentEvidenceWindow, recentConversation, personas ?? EmptyPersonas);
+    }
+
+    /// <summary>
+    /// Analyzes an oldest-to-newest projection ordered by Turn and CreatedAt.
+    /// Callers that maintain that invariant can avoid validating the full prefix
+    /// and map only newly appended turns.
+    /// </summary>
+    public FrictionDiagnostics AnalyzeOrdered(
+        IReadOnlyList<DiscourseTurn> orderedTurns,
+        IReadOnlyDictionary<string, string>? personas = null)
+    {
+        ArgumentNullException.ThrowIfNull(orderedTurns);
+        return AnalyzeWindows(
+            SelectOrderedNewest(orderedTurns, excludeSystemTurns: false),
+            SelectOrderedNewest(orderedTurns, excludeSystemTurns: true),
+            personas ?? EmptyPersonas);
+    }
+
+    private static FrictionDiagnostics AnalyzeWindows(
+        IReadOnlyList<DiscourseTurn> recentEvidenceWindow,
+        IReadOnlyList<DiscourseTurn> recentConversation,
+        IReadOnlyDictionary<string, string> personas)
+    {
 
         var consensus = AnalyzeConsensus(recentConversation);
-        var roleDrift = AnalyzeRoleDrift(recentConversation, personas ?? new Dictionary<string, string>());
+        var roleDrift = AnalyzeRoleDrift(recentConversation, personas);
         var unsupported = AnalyzeUnsupportedClaims(recentConversation);
         var evidence = AnalyzeEvidencePressure(recentEvidenceWindow);
         var sourceConflicts = AnalyzeSourceConflicts(recentConversation);
         var narrative = AnalyzeNarrativeHeat(recentConversation);
         var state = FrictionState(
-            recentConversation.Length,
+            recentConversation.Count,
             consensus,
             roleDrift,
             unsupported,
@@ -111,6 +150,114 @@ public sealed class DiscourseDiagnosticsService
             sourceConflicts.Score,
             sourceConflicts.Label);
     }
+
+    private static bool IsOrderedAscending(IReadOnlyList<DiscourseTurn> turns)
+    {
+        for (var index = 1; index < turns.Count; index++)
+        {
+            if (CompareKeys(turns[index - 1], turns[index]) > 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static DiscourseTurn[] SelectOrderedNewest(
+        IReadOnlyList<DiscourseTurn> turns,
+        bool excludeSystemTurns)
+    {
+        if (turns.Count == 0)
+        {
+            return [];
+        }
+
+        var selected = new List<DiscourseTurn>(WindowSize);
+        var groupEnd = turns.Count - 1;
+        while (groupEnd >= 0 && selected.Count < WindowSize)
+        {
+            var groupStart = groupEnd;
+            while (groupStart > 0 && CompareKeys(turns[groupStart - 1], turns[groupEnd]) == 0)
+            {
+                groupStart--;
+            }
+
+            // Descending LINQ ordering reverses key groups, not members inside an
+            // equal-key group. Iterating the group forward preserves that detail.
+            for (var index = groupStart; index <= groupEnd && selected.Count < WindowSize; index++)
+            {
+                var turn = turns[index];
+                if (!excludeSystemTurns || !IsSystemTurn(turn))
+                {
+                    selected.Add(turn);
+                }
+            }
+
+            groupEnd = groupStart - 1;
+        }
+
+        return selected.ToArray();
+    }
+
+    private static (DiscourseTurn[] Evidence, DiscourseTurn[] Conversation) SelectNewestBounded(
+        IEnumerable<DiscourseTurn> turns)
+    {
+        var evidence = new List<RankedTurn>(WindowSize);
+        var conversation = new List<RankedTurn>(WindowSize);
+        long ordinal = 0;
+        foreach (var turn in turns)
+        {
+            var ranked = new RankedTurn(turn, ordinal++);
+            InsertNewest(evidence, ranked);
+            if (!IsSystemTurn(turn))
+            {
+                InsertNewest(conversation, ranked);
+            }
+        }
+
+        return (
+            evidence.Select(item => item.Turn).ToArray(),
+            conversation.Select(item => item.Turn).ToArray());
+    }
+
+    private static void InsertNewest(List<RankedTurn> selected, RankedTurn candidate)
+    {
+        var index = 0;
+        while (index < selected.Count && !ComesBefore(candidate, selected[index]))
+        {
+            index++;
+        }
+
+        if (index >= WindowSize)
+        {
+            return;
+        }
+
+        selected.Insert(index, candidate);
+        if (selected.Count > WindowSize)
+        {
+            selected.RemoveAt(WindowSize);
+        }
+    }
+
+    private static bool ComesBefore(RankedTurn left, RankedTurn right)
+    {
+        var keyComparison = CompareKeys(left.Turn, right.Turn);
+        return keyComparison != 0
+            ? keyComparison > 0
+            : left.Ordinal < right.Ordinal;
+    }
+
+    private static int CompareKeys(DiscourseTurn left, DiscourseTurn right)
+    {
+        var turnComparison = left.Turn.CompareTo(right.Turn);
+        return turnComparison != 0
+            ? turnComparison
+            : Comparer<double>.Default.Compare(left.CreatedAt, right.CreatedAt);
+    }
+
+    private sealed record RankedTurn(DiscourseTurn Turn, long Ordinal);
 
     private static MetricDiagnostic AnalyzeConsensus(IReadOnlyList<DiscourseTurn> turns)
     {

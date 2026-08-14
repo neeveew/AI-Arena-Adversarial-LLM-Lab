@@ -706,7 +706,7 @@ internal static partial class Program
                 "each detached registered root should respond to its own narrow arranged width without relying on the discarded tab host");
         });
 
-        var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/AgentInspectionLabControl.xaml"));
+        var xaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/AgentInspectionLabControl.xaml");
         Require(
             xaml.Contains("{DynamicResource AppBackgroundBrush}", StringComparison.Ordinal)
             && xaml.Contains("{DynamicResource TextBrush}", StringComparison.Ordinal)
@@ -721,6 +721,119 @@ internal static partial class Program
             && xaml.Contains("AutomationProperties.Name=\"Structured memory entries\"", StringComparison.Ordinal)
             && xaml.Contains("AutomationProperties.LiveSetting=\"Polite\"", StringComparison.Ordinal),
             "lists and status changes should remain keyboard and automation discoverable");
+    }
+
+    static void InspectionLabScopesPromptPreviewCaptureToVisibility()
+    {
+        RunStaTest(() =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ai-arena-inspection-preview-scope-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var traceStore = new ProviderRequestTraceStore(maximumEntries: 16);
+            var control = new AgentInspectionLabControl();
+            using var coordinator = new AgentInspectionLabCoordinator(
+                control,
+                traceStore,
+                new SessionStore(root),
+                () => null);
+            var promptFeature = control.DetachFeatureRegistrations()
+                .Single(item => item.Key == AgentInspectionLabControl.PromptInspectorFeatureKey)
+                .Content;
+            using var http = new HttpClient(new TestHttpMessageHandler(_ => new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"choices":[{"message":{"content":"ok"}}]}""",
+                    System.Text.Encoding.UTF8,
+                    "application/json")
+            }));
+            var provider = MainWindow.CreateObservedModelProviderClient(traceStore, http);
+            var config = new ModelProviderConfig
+            {
+                BaseUrl = "http://127.0.0.1:1234/v1",
+                Model = "visibility-scope-model",
+                Timeout = 2
+            };
+
+            ProviderRequestTrace Probe(string marker)
+            {
+                var result = provider.CompleteChatAsync(
+                    config,
+                    [new ModelChatMessage("user", marker)]).GetAwaiter().GetResult();
+                Require(result.Ok, $"visibility-scope provider probe '{marker}' failed");
+                return traceStore.Snapshot().Last();
+            }
+
+            var inactive = Probe("PROMPT_PREVIEW_BEFORE_LOAD");
+            Require(inactive.RedactedPayload == "[NOT_CAPTURED:INSPECTION_INACTIVE]",
+                "an unhosted Prompt Inspector activated content capture");
+
+            var host = new Window
+            {
+                Content = promptFeature,
+                Width = 900,
+                Height = 700,
+                ShowInTaskbar = false,
+                WindowStyle = WindowStyle.None,
+                Opacity = 0,
+                Left = -10000,
+                Top = -10000
+            };
+            host.Show();
+            try
+            {
+                host.UpdateLayout();
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+                    new Action(() => { }));
+                var visible = Probe("PROMPT_PREVIEW_WHILE_VISIBLE");
+                Require(visible.RedactedPayload.Contains("PROMPT_PREVIEW_WHILE_VISIBLE", StringComparison.Ordinal),
+                    "a loaded visible Prompt Inspector did not activate its redacted preview lease");
+
+                RunInspectionDispatcherTask(() => coordinator.InitializeAsync());
+                promptFeature.Visibility = Visibility.Collapsed;
+                host.UpdateLayout();
+                var hiddenAfterSessionRefresh = Probe("PROMPT_PREVIEW_AFTER_SESSION_REFRESH_HIDDEN");
+                Require(hiddenAfterSessionRefresh.RedactedPayload == "[NOT_CAPTURED:INSPECTION_INACTIVE]",
+                    "session refresh leaked an extra preview lease after the Prompt Inspector was hidden");
+
+                promptFeature.Visibility = Visibility.Visible;
+                host.UpdateLayout();
+                var reloaded = Probe("PROMPT_PREVIEW_AFTER_RESHOW");
+                Require(reloaded.RedactedPayload.Contains("PROMPT_PREVIEW_AFTER_RESHOW", StringComparison.Ordinal),
+                    "showing the Prompt Inspector again did not reacquire preview capture");
+
+                host.Content = null;
+                host.UpdateLayout();
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+                    new Action(() => { }));
+                var unloaded = Probe("PROMPT_PREVIEW_AFTER_UNLOAD");
+                Require(unloaded.RedactedPayload == "[NOT_CAPTURED:INSPECTION_INACTIVE]",
+                    "unloading the Prompt Inspector left preview capture active");
+
+                host.Content = promptFeature;
+                host.UpdateLayout();
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+                    new Action(() => { }));
+                var loadedAgain = Probe("PROMPT_PREVIEW_AFTER_RELOAD");
+                Require(loadedAgain.RedactedPayload.Contains("PROMPT_PREVIEW_AFTER_RELOAD", StringComparison.Ordinal),
+                    "reloading the Prompt Inspector did not reacquire preview capture");
+
+                coordinator.Dispose();
+                var afterDispose = Probe("PROMPT_PREVIEW_AFTER_DISPOSE");
+                Require(afterDispose.RedactedPayload == "[NOT_CAPTURED:INSPECTION_INACTIVE]",
+                    "disposing the inspection coordinator left preview capture active");
+            }
+            finally
+            {
+                host.Close();
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+            }
+        });
     }
 
     static void InspectionLabHostsResponsiveThemeAndVirtualizationContracts()

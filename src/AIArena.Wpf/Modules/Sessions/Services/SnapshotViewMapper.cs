@@ -22,6 +22,7 @@ public static class SnapshotViewMapper
         var sharedConfig = Config(snapshot, "shared");
         var resolvedSharedConfig = ModelRuntimeSettingsRegistry.Resolve(snapshot, sharedConfig);
         var factoryGroup = new FactoryConversationService().Inspect(snapshot);
+        var transcriptProjection = ProjectTranscript(snapshot);
         return new RenderSnapshot(
             session.Id,
             session.SnapshotPath,
@@ -73,8 +74,8 @@ public static class SnapshotViewMapper
             sharedConfig.LastError,
             snapshot.Engine.Internet.UseInternet,
             sharedConfig.LastTestOk,
-            ParseMessages(snapshot.Engine.Messages, snapshot),
-            ParseAgents(snapshot.Engine.Agents, snapshot))
+            transcriptProjection.Messages,
+            ParseAgents(snapshot.Engine.Agents, snapshot, transcriptProjection.LatestInternetByAgent))
         {
             FactoryMode = snapshot.Engine.FactoryMode,
             DefaultForUnassignedAgentsEnabled = snapshot.Engine.DefaultForUnassignedAgentsEnabled,
@@ -233,55 +234,139 @@ public static class SnapshotViewMapper
         return string.IsNullOrWhiteSpace(value) ? "-" : value;
     }
 
-    private static IReadOnlyList<TranscriptMessage> ParseMessages(IReadOnlyList<DialogueMessage> messages, CoreSnapshot snapshot)
+    private static TranscriptProjection ProjectTranscript(CoreSnapshot snapshot)
     {
-        return messages
-            .Select(message =>
+        var messages = snapshot.Engine.Messages;
+        if (messages.Count == 0)
+        {
+            return new TranscriptProjection([], new Dictionary<string, AgentInternetSourceSummary>(StringComparer.OrdinalIgnoreCase));
+        }
+
+        var voiceStylesByAgent = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var agent in snapshot.Engine.Agents)
+        {
+            voiceStylesByAgent.TryAdd(agent.Id, agent.VoiceStyle ?? "");
+        }
+
+        var projectedMessages = new TranscriptMessage[messages.Count];
+        var latestInternetByAgent = new Dictionary<string, AgentInternetSourceSummary>(StringComparer.OrdinalIgnoreCase);
+        if (MessagesAreOrderedByTurn(messages))
+        {
+            for (var index = messages.Count - 1; index >= 0; index--)
             {
-                var request = MetadataObject(message, "tool_request");
-                var result = MetadataObject(message, "tool_result");
-                var receipt = ParseHistoryBudgetReceipt(MetadataObject(message, "arena_history_budget_receipt"));
-                return new TranscriptMessage(
-                    message.Turn,
-                    DisplayValue(string.IsNullOrWhiteSpace(message.Speaker) ? message.SpeakerId : message.Speaker),
-                    DisplayValue(string.IsNullOrWhiteSpace(message.SpeakerId) ? message.Speaker : message.SpeakerId),
-                    message.CreatedAt,
-                    DisplayValue(message.Model.Model),
-                    message.Model.LatencyMs,
-                    message.Model.PromptTokens,
-                    message.Model.CompletionTokens,
-                    message.Model.TotalTokens,
-                    string.IsNullOrWhiteSpace(message.Status) ? "ok" : message.Status,
-                    VoiceStyleForMessage(message, snapshot),
-                    message.Pinned,
-                    string.IsNullOrWhiteSpace(message.Kind) ? "message" : message.Kind,
-                    message.Text,
-                    MetadataString(message, "reasoning_content"),
-                    JsonString(request, "requester_id"),
-                    JsonString(request, "tool"),
-                    JsonString(request, "query", JsonString(result, "query")),
-                    JsonString(request, "url", JsonString(result, "url")),
-                    JsonString(request, "reason"),
-                    JsonString(result, "summary"),
-                    FormatCheckedAt(JsonProperty(result, "checked_at")),
-                    JsonBool(result, "cached"),
-                    ParseInternetSources(JsonProperty(result, "sources")),
-                    message.Model.TokensPerSecond,
-                    message.Model.TimeToFirstTokenMs,
-                    MetadataString(message, "provider_response_id"),
-                    message.Model.ModelLoadTimeMs)
-                {
-                    CompletionFailureKind = NormalizeCompletionFailureKind(
-                        MetadataString(message, "completion_failure_kind")),
-                    CompletionStopReason = NormalizeCompletionStopReason(
-                        MetadataString(message, "completion_stop_reason")),
-                    ProviderStatusCode = MetadataInt(message, "provider_status_code"),
-                    ProviderErrorCode = ModelCompletionOutcomeClassifier.PrivacySafeProviderErrorCode(
-                        MetadataString(message, "provider_error_code")),
-                    HistoryBudgetReceipt = receipt
-                };
-            })
-            .ToArray();
+                ProjectMessage(
+                    messages[index],
+                    index,
+                    snapshot.Engine.Narrator.VoiceStyle,
+                    voiceStylesByAgent,
+                    projectedMessages,
+                    latestInternetByAgent);
+            }
+        }
+        else
+        {
+            var orderedIndices = Enumerable.Range(0, messages.Count).ToArray();
+            Array.Sort(orderedIndices, (left, right) =>
+            {
+                var byTurn = messages[right].Turn.CompareTo(messages[left].Turn);
+                return byTurn != 0 ? byTurn : right.CompareTo(left);
+            });
+            foreach (var index in orderedIndices)
+            {
+                ProjectMessage(
+                    messages[index],
+                    index,
+                    snapshot.Engine.Narrator.VoiceStyle,
+                    voiceStylesByAgent,
+                    projectedMessages,
+                    latestInternetByAgent);
+            }
+        }
+
+        return new TranscriptProjection(projectedMessages, latestInternetByAgent);
+    }
+
+    private static bool MessagesAreOrderedByTurn(IReadOnlyList<DialogueMessage> messages)
+    {
+        for (var index = 1; index < messages.Count; index++)
+        {
+            if (messages[index - 1].Turn > messages[index].Turn)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void ProjectMessage(
+        DialogueMessage message,
+        int index,
+        string narratorVoiceStyle,
+        IReadOnlyDictionary<string, string> voiceStylesByAgent,
+        TranscriptMessage[] projectedMessages,
+        Dictionary<string, AgentInternetSourceSummary> latestInternetByAgent)
+    {
+        var request = MetadataObject(message, "tool_request");
+        var result = MetadataObject(message, "tool_result");
+        var requesterId = JsonString(request, "requester_id");
+        var latestRequesterId = string.IsNullOrWhiteSpace(requesterId) ? message.SpeakerId : requesterId;
+        var latestRequesterKey = string.IsNullOrWhiteSpace(latestRequesterId) ? "" : latestRequesterId.Trim();
+        var canAttachLatestSources = latestRequesterKey.Length > 0
+            && !latestInternetByAgent.ContainsKey(latestRequesterKey);
+        var checkedAt = FormatCheckedAt(JsonProperty(result, "checked_at"));
+        var query = JsonString(request, "query", JsonString(result, "query"));
+        var sources = ParseInternetSources(JsonProperty(result, "sources"), canAttachLatestSources);
+        var receipt = ParseHistoryBudgetReceipt(MetadataObject(message, "arena_history_budget_receipt"));
+
+        projectedMessages[index] = new TranscriptMessage(
+            message.Turn,
+            DisplayValue(string.IsNullOrWhiteSpace(message.Speaker) ? message.SpeakerId : message.Speaker),
+            DisplayValue(string.IsNullOrWhiteSpace(message.SpeakerId) ? message.Speaker : message.SpeakerId),
+            message.CreatedAt,
+            DisplayValue(message.Model.Model),
+            message.Model.LatencyMs,
+            message.Model.PromptTokens,
+            message.Model.CompletionTokens,
+            message.Model.TotalTokens,
+            string.IsNullOrWhiteSpace(message.Status) ? "ok" : message.Status,
+            VoiceStyleForMessage(message, narratorVoiceStyle, voiceStylesByAgent),
+            message.Pinned,
+            string.IsNullOrWhiteSpace(message.Kind) ? "message" : message.Kind,
+            message.Text,
+            MetadataString(message, "reasoning_content"),
+            requesterId,
+            JsonString(request, "tool"),
+            query,
+            JsonString(request, "url", JsonString(result, "url")),
+            JsonString(request, "reason"),
+            JsonString(result, "summary"),
+            checkedAt,
+            JsonBool(result, "cached"),
+            sources.DisplaySources,
+            message.Model.TokensPerSecond,
+            message.Model.TimeToFirstTokenMs,
+            MetadataString(message, "provider_response_id"),
+            message.Model.ModelLoadTimeMs)
+        {
+            CompletionFailureKind = NormalizeCompletionFailureKind(
+                MetadataString(message, "completion_failure_kind")),
+            CompletionStopReason = NormalizeCompletionStopReason(
+                MetadataString(message, "completion_stop_reason")),
+            ProviderStatusCode = MetadataInt(message, "provider_status_code"),
+            ProviderErrorCode = ModelCompletionOutcomeClassifier.PrivacySafeProviderErrorCode(
+                MetadataString(message, "provider_error_code")),
+            HistoryBudgetReceipt = receipt
+        };
+
+        if (canAttachLatestSources && sources.DisplaySources.Count > 0)
+        {
+            latestInternetByAgent[latestRequesterKey] = new AgentInternetSourceSummary(
+                query,
+                checkedAt,
+                sources.DisplaySources,
+                sources.Items);
+        }
     }
 
     private static int NormalizeConfiguredContextWindow(int value) => value == 0
@@ -368,7 +453,10 @@ public static class SnapshotViewMapper
                 : "unknown");
     }
 
-    private static string VoiceStyleForMessage(DialogueMessage message, CoreSnapshot snapshot)
+    private static string VoiceStyleForMessage(
+        DialogueMessage message,
+        string narratorVoiceStyle,
+        IReadOnlyDictionary<string, string> voiceStylesByAgent)
     {
         if (MetadataString(message, "prompt_mode").Equals("factory", StringComparison.OrdinalIgnoreCase))
         {
@@ -383,19 +471,21 @@ public static class SnapshotViewMapper
 
         if (message.SpeakerId.Equals("narrator", StringComparison.OrdinalIgnoreCase))
         {
-            return snapshot.Engine.Narrator.VoiceStyle;
+            return narratorVoiceStyle;
         }
 
-        return snapshot.Engine.Agents
-            .FirstOrDefault(agent => agent.Id.Equals(message.SpeakerId, StringComparison.OrdinalIgnoreCase))
-            ?.VoiceStyle ?? "";
+        return voiceStylesByAgent.TryGetValue(message.SpeakerId, out var voiceStyle)
+            ? voiceStyle
+            : "";
     }
 
-    private static IReadOnlyList<AgentState> ParseAgents(IReadOnlyList<DialogueAgent> agents, CoreSnapshot snapshot)
+    private static IReadOnlyList<AgentState> ParseAgents(
+        IReadOnlyList<DialogueAgent> agents,
+        CoreSnapshot snapshot,
+        IReadOnlyDictionary<string, AgentInternetSourceSummary> latestInternetByAgent)
     {
         var sharedConfig = Config(snapshot, "shared");
         var sharedModel = sharedConfig.Model.Trim();
-        var latestInternetByAgent = LatestInternetSourcesByAgent(snapshot.Engine.Messages);
         return agents
             .Select(agent =>
             {
@@ -422,41 +512,6 @@ public static class SnapshotViewMapper
                     internetSources);
             })
             .ToArray();
-    }
-
-    private static IReadOnlyDictionary<string, AgentInternetSourceSummary> LatestInternetSourcesByAgent(IReadOnlyList<DialogueMessage> messages)
-    {
-        var latest = new Dictionary<string, AgentInternetSourceSummary>(StringComparer.OrdinalIgnoreCase);
-        foreach (var message in messages.OrderBy(message => message.Turn))
-        {
-            var request = MetadataObject(message, "tool_request");
-            var result = MetadataObject(message, "tool_result");
-            var sourcesElement = JsonProperty(result, "sources");
-            var sources = ParseInternetSources(sourcesElement);
-            if (sources.Count == 0)
-            {
-                continue;
-            }
-
-            var requesterId = JsonString(request, "requester_id");
-            if (string.IsNullOrWhiteSpace(requesterId))
-            {
-                requesterId = message.SpeakerId;
-            }
-
-            if (string.IsNullOrWhiteSpace(requesterId))
-            {
-                continue;
-            }
-
-            latest[requesterId.Trim()] = new AgentInternetSourceSummary(
-                JsonString(request, "query", JsonString(result, "query")),
-                FormatCheckedAt(JsonProperty(result, "checked_at")),
-                sources,
-                ParseInternetSourceItems(sourcesElement));
-        }
-
-        return latest;
     }
 
     private static IReadOnlyList<GenerationHistoryItem> ParseGenerationHistory(CoreSnapshot snapshot)
@@ -575,51 +630,40 @@ public static class SnapshotViewMapper
             : value ?? "";
     }
 
-    private static IReadOnlyList<string> ParseInternetSources(JsonElement sources)
+    private static ParsedInternetSources ParseInternetSources(JsonElement sources, bool includeItems)
     {
         if (sources.ValueKind != JsonValueKind.Array)
         {
-            return [];
+            return new ParsedInternetSources([], []);
         }
 
-        return sources.EnumerateArray()
-            .Select(source =>
-            {
-                var title = JsonString(source, "title");
-                var url = JsonString(source, "url");
-                var name = JsonString(source, "source");
-                var snippet = JsonString(source, "snippet");
-                return string.Join(" - ", new[] { name, title, url, snippet }.Where(item => !string.IsNullOrWhiteSpace(item)));
-            })
-            .Where(item => !string.IsNullOrWhiteSpace(item))
-            .ToArray();
-    }
-
-    private static IReadOnlyList<AgentInternetSourceItem> ParseInternetSourceItems(JsonElement sources)
-    {
-        if (sources.ValueKind != JsonValueKind.Array)
+        var displaySources = new List<string>();
+        List<AgentInternetSourceItem>? items = includeItems ? [] : null;
+        foreach (var source in sources.EnumerateArray())
         {
-            return [];
+            var title = JsonString(source, "title");
+            var url = JsonString(source, "url");
+            var name = JsonString(source, "source");
+            var snippet = JsonString(source, "snippet");
+            var display = string.Join(
+                " - ",
+                new[] { name, title, url, snippet }.Where(item => !string.IsNullOrWhiteSpace(item)));
+            if (string.IsNullOrWhiteSpace(display))
+            {
+                continue;
+            }
+
+            displaySources.Add(display);
+            items?.Add(new AgentInternetSourceItem(
+                title,
+                DomainLabel(url),
+                url,
+                snippet,
+                FormatCheckedAt(JsonProperty(source, "published_at")),
+                display));
         }
 
-        return sources.EnumerateArray()
-            .Select(source =>
-            {
-                var title = JsonString(source, "title");
-                var url = JsonString(source, "url");
-                var name = JsonString(source, "source");
-                var snippet = JsonString(source, "snippet");
-                var display = string.Join(" - ", new[] { name, title, url, snippet }.Where(item => !string.IsNullOrWhiteSpace(item)));
-                return new AgentInternetSourceItem(
-                    title,
-                    DomainLabel(url),
-                    url,
-                    snippet,
-                    FormatCheckedAt(JsonProperty(source, "published_at")),
-                    display);
-            })
-            .Where(item => !string.IsNullOrWhiteSpace(item.DisplayText))
-            .ToArray();
+        return new ParsedInternetSources(displaySources.ToArray(), items?.ToArray() ?? []);
     }
 
     private static string DomainLabel(string url)
@@ -628,4 +672,12 @@ public static class SnapshotViewMapper
             ? uri.Host.Replace("www.", "", StringComparison.OrdinalIgnoreCase)
             : "";
     }
+
+    private sealed record TranscriptProjection(
+        IReadOnlyList<TranscriptMessage> Messages,
+        IReadOnlyDictionary<string, AgentInternetSourceSummary> LatestInternetByAgent);
+
+    private readonly record struct ParsedInternetSources(
+        IReadOnlyList<string> DisplaySources,
+        IReadOnlyList<AgentInternetSourceItem> Items);
 }

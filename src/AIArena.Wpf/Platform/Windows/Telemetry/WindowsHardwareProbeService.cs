@@ -79,7 +79,12 @@ public static class WindowsHardwareProbeService
             var gpus = new List<WindowsGpuProbe>();
             using var searcher = new ManagementObjectSearcher(
                 "root\\CIMV2",
-                "SELECT Name, AdapterRAM FROM Win32_VideoController");
+                "SELECT Name, AdapterRAM FROM Win32_VideoController",
+                new System.Management.EnumerationOptions
+                {
+                    ReturnImmediately = false,
+                    Timeout = SystemTelemetryService.GpuWmiQueryTimeout
+                });
             foreach (ManagementBaseObject adapter in searcher.Get())
             {
                 var name = adapter["Name"]?.ToString();

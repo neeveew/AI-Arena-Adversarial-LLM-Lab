@@ -772,6 +772,47 @@ function Get-AIArenaSha256Entries {
     return @($entries | Sort-Object RelativePath)
 }
 
+function Write-AIArenaSha256ManifestEntries {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BaseDirectory,
+        [Parameter(Mandatory = $true)]
+        [string]$OutputPath,
+        [Parameter(Mandatory = $true)]
+        [object[]]$Entries
+    )
+
+    $base = [IO.Path]::GetFullPath($BaseDirectory)
+    $output = [IO.Path]::GetFullPath($OutputPath)
+    Assert-AIArenaPathWithinDirectory -Path $output -Directory $base -Label 'Checksum manifest'
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $lines = foreach ($entry in @($Entries | Sort-Object RelativePath)) {
+        $relative = ([string]$entry.RelativePath -replace '/', '\').TrimStart('\')
+        Assert-AIArenaSha256 -Value ([string]$entry.Hash) -Label "Checksum for $relative"
+        if ([string]::IsNullOrWhiteSpace($relative) -or $relative -match '[\r\n]' -or -not $seen.Add($relative)) {
+            throw "Cannot write an empty, duplicate, or line-breaking checksum path: $relative"
+        }
+
+        "$(([string]$entry.Hash).ToUpperInvariant())  $relative"
+    }
+
+    $temporary = "$output.tmp-$([Guid]::NewGuid().ToString('N'))"
+    try {
+        # Windows PowerShell 5's Set-Content -Encoding UTF8 emits a BOM. Keep
+        # checksum inventories byte-stable across Windows PowerShell and pwsh.
+        $lineArray = @($lines)
+        $manifestText = if ($lineArray.Count -gt 0) { ($lineArray -join "`n") + "`n" } else { '' }
+        [IO.File]::WriteAllText($temporary, $manifestText, [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporary -Destination $output -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporary) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
+    }
+}
+
 function New-AIArenaSha256Manifest {
     [CmdletBinding()]
     param(
@@ -787,12 +828,180 @@ function New-AIArenaSha256Manifest {
     Assert-AIArenaPathWithinDirectory -Path $output -Directory $base -Label 'Checksum manifest'
     $relativeOutput = $output.Substring($base.TrimEnd('\', '/').Length).TrimStart('\', '/')
     $exclusions = @($ExcludeRelativePath) + $relativeOutput
-    $lines = Get-AIArenaSha256Entries -BaseDirectory $base -ExcludeRelativePath $exclusions |
-        ForEach-Object { "$($_.Hash)  $($_.RelativePath)" }
+    $entries = @(Get-AIArenaSha256Entries -BaseDirectory $base -ExcludeRelativePath $exclusions)
+    Write-AIArenaSha256ManifestEntries -BaseDirectory $base -OutputPath $output -Entries $entries
+}
+
+function Get-AIArenaReleaseVerificationSourceIdentity {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryRoot
+    )
+
+    $root = [IO.Path]::GetFullPath($RepositoryRoot)
+    $commit = (& git -C $root rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commit)) {
+        throw 'Release verification could not resolve the current Git commit.'
+    }
+
+    $srcTree = (& git -C $root rev-parse 'HEAD:src' 2>$null)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($srcTree)) {
+        throw 'Release verification could not resolve the committed src tree.'
+    }
+
+    return [pscustomobject][ordered]@{
+        Commit = $commit.Trim()
+        SrcTree = $srcTree.Trim()
+    }
+}
+
+function Get-AIArenaReleaseVerificationHarnesses {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Debug', 'Release')]
+        [string]$Configuration,
+        [Parameter(Mandatory = $true)]
+        [string[]]$ProjectPath
+    )
+
+    $root = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
+    $rootPrefix = $root + [IO.Path]::DirectorySeparatorChar
+    $harnesses = foreach ($project in $ProjectPath) {
+        $fullProject = [IO.Path]::GetFullPath($project)
+        if (-not $fullProject.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) `
+            -or -not (Test-Path -LiteralPath $fullProject -PathType Leaf)) {
+            throw "Release-verification project is missing or outside the repository: $project"
+        }
+
+        [xml]$projectXml = Get-Content -LiteralPath $fullProject -Raw
+        $targetFrameworkNode = $projectXml.SelectSingleNode('//PropertyGroup/TargetFramework')
+        $targetFramework = if ($null -ne $targetFrameworkNode) { ([string]$targetFrameworkNode.InnerText).Trim() } else { '' }
+        if ([string]::IsNullOrWhiteSpace($targetFramework)) {
+            throw "Release-verification project must declare one TargetFramework: $fullProject"
+        }
+
+        $assemblyNameNode = $projectXml.SelectSingleNode('//PropertyGroup/AssemblyName')
+        $assemblyName = if ($null -ne $assemblyNameNode) { ([string]$assemblyNameNode.InnerText).Trim() } else { '' }
+        if ([string]::IsNullOrWhiteSpace($assemblyName)) {
+            $assemblyName = [IO.Path]::GetFileNameWithoutExtension($fullProject)
+        }
+
+        $assembly = Join-Path (Split-Path -Parent $fullProject) ("bin\{0}\{1}\{2}.dll" -f $Configuration, $targetFramework, $assemblyName)
+        if (-not (Test-Path -LiteralPath $assembly -PathType Leaf)) {
+            throw "Release-verification test assembly is missing: $assembly"
+        }
+
+        $relativeProject = $fullProject.Substring($rootPrefix.Length).Replace('\', '/')
+        $file = Get-Item -LiteralPath $assembly
+        [pscustomobject][ordered]@{
+            project = $relativeProject
+            targetFramework = $targetFramework
+            assembly = $file.Name
+            bytes = [long]$file.Length
+            sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToUpperInvariant()
+        }
+    }
+
+    return @($harnesses | Sort-Object project)
+}
+
+function New-AIArenaReleaseVerificationKey {
+    [CmdletBinding()]
+    param()
+
+    $bytes = New-Object byte[] 32
+    $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $generator.GetBytes($bytes)
+        return [Convert]::ToBase64String($bytes)
+    }
+    finally {
+        $generator.Dispose()
+    }
+}
+
+function ConvertFrom-AIArenaReleaseVerificationKey {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ReceiptKey
+    )
+
+    try {
+        $bytes = [Convert]::FromBase64String($ReceiptKey)
+    }
+    catch {
+        throw 'Release-verification receipt key must be valid Base64.'
+    }
+    if ($bytes.Length -ne 32) {
+        throw 'Release-verification receipt key must contain exactly 256 bits.'
+    }
+
+    return $bytes
+}
+
+function Get-AIArenaHmacSha256 {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [byte[]]$Key,
+        [Parameter(Mandatory = $true)]
+        [byte[]]$Value
+    )
+
+    $hmac = [Security.Cryptography.HMACSHA256]::new($Key)
+    try {
+        return $hmac.ComputeHash($Value)
+    }
+    finally {
+        $hmac.Dispose()
+    }
+}
+
+function Test-AIArenaByteArrayEqual {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [byte[]]$Left,
+        [Parameter(Mandatory = $true)]
+        [byte[]]$Right
+    )
+
+    if ($Left.Length -ne $Right.Length) {
+        return $false
+    }
+
+    $difference = 0
+    for ($index = 0; $index -lt $Left.Length; $index++) {
+        $difference = $difference -bor ($Left[$index] -bxor $Right[$index])
+    }
+    return $difference -eq 0
+}
+
+function Write-AIArenaUtf8NoBomJson {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Value,
+        [Parameter(Mandatory = $true)]
+        [string]$OutputPath,
+        [int]$Depth = 10
+    )
+
+    $output = [IO.Path]::GetFullPath($OutputPath)
+    $parent = Split-Path -Parent $output
+    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+        [void](New-Item -ItemType Directory -Path $parent -Force)
+    }
 
     $temporary = "$output.tmp-$([Guid]::NewGuid().ToString('N'))"
     try {
-        Set-Content -LiteralPath $temporary -Value $lines -Encoding UTF8
+        $json = ($Value | ConvertTo-Json -Depth $Depth) + "`n"
+        [IO.File]::WriteAllText($temporary, $json, [Text.UTF8Encoding]::new($false))
         Move-Item -LiteralPath $temporary -Destination $output -Force
     }
     finally {
@@ -800,6 +1009,458 @@ function New-AIArenaSha256Manifest {
             Remove-Item -LiteralPath $temporary -Force
         }
     }
+}
+
+function Invoke-AIArenaReleaseVerificationHarnesses {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Debug', 'Release')]
+        [string]$Configuration,
+        [Parameter(Mandatory = $true)]
+        [string[]]$ProjectPath,
+        [string]$OutputPath = '',
+        [string]$ReceiptKey = '',
+        [string]$SourceCommit = '',
+        [string]$SourceTree = ''
+    )
+
+    $writeReceipt = -not [string]::IsNullOrWhiteSpace($OutputPath)
+    if ($writeReceipt -ne (-not [string]::IsNullOrWhiteSpace($ReceiptKey))) {
+        throw 'Release-verification receipt output and its ephemeral key must be supplied together.'
+    }
+    if ($writeReceipt -and (Test-Path -LiteralPath $OutputPath)) {
+        throw "Release-verification receipt output already exists: $OutputPath"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($SourceCommit) -or [string]::IsNullOrWhiteSpace($SourceTree)) {
+        $source = Get-AIArenaReleaseVerificationSourceIdentity -RepositoryRoot $RepositoryRoot
+        $SourceCommit = $source.Commit
+        $SourceTree = $source.SrcTree
+    }
+
+    $root = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
+    $rootPrefix = $root + [IO.Path]::DirectorySeparatorChar
+    $dotnet = Get-Command dotnet -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    $dotnetFile = Get-Item -LiteralPath $dotnet.Source
+    $runId = [Guid]::NewGuid().ToString('N')
+    $executions = @()
+
+    foreach ($project in $ProjectPath) {
+        $fullProject = [IO.Path]::GetFullPath($project)
+        if (-not $fullProject.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) `
+            -or -not (Test-Path -LiteralPath $fullProject -PathType Leaf)) {
+            throw "Release-verification project is missing or outside the repository: $project"
+        }
+        $relativeProject = $fullProject.Substring($rootPrefix.Length).Replace('\', '/')
+        $arguments = @('run', '--project', $fullProject, '-c', $Configuration, '--no-restore')
+        $startedUtc = [DateTime]::UtcNow
+        & $dotnet.Source @arguments
+        $exitCode = $LASTEXITCODE
+        $completedUtc = [DateTime]::UtcNow
+        if ($exitCode -ne 0) {
+            throw "Release verification harness failed for $relativeProject with exit code $exitCode. No passed receipt was created."
+        }
+
+        $artifact = @(Get-AIArenaReleaseVerificationHarnesses `
+            -RepositoryRoot $RepositoryRoot `
+            -Configuration $Configuration `
+            -ProjectPath @($fullProject))[0]
+        $executions += [pscustomobject][ordered]@{
+            project = $artifact.project
+            targetFramework = $artifact.targetFramework
+            assembly = $artifact.assembly
+            bytes = $artifact.bytes
+            sha256 = $artifact.sha256
+            arguments = @('run', '--project', $artifact.project, '-c', $Configuration, '--no-restore')
+            startedUtc = $startedUtc.ToString('o')
+            completedUtc = $completedUtc.ToString('o')
+            exitCode = [int]$exitCode
+            outcome = 'passed'
+        }
+    }
+
+    if (-not $writeReceipt) {
+        return @($executions)
+    }
+
+    # This receipt authenticates hand-off between cooperating processes in one
+    # release invocation. It is not a security boundary against malicious code
+    # already running as the same local user, which can alter the scripts or
+    # observe process memory. The local release account is a trusted boundary.
+    $payload = [pscustomobject][ordered]@{
+        schema = 'ai_arena.release_verification_payload.v2'
+        formatVersion = 2
+        runId = $runId
+        generatedUtc = [DateTime]::UtcNow.ToString('o')
+        sourceCommit = $SourceCommit
+        sourceTree = $SourceTree
+        configuration = $Configuration
+        runner = [pscustomobject][ordered]@{
+            name = $dotnetFile.Name
+            bytes = [long]$dotnetFile.Length
+            sha256 = (Get-FileHash -LiteralPath $dotnetFile.FullName -Algorithm SHA256).Hash.ToUpperInvariant()
+        }
+        harnesses = @($executions | Sort-Object project)
+    }
+    $payloadJson = $payload | ConvertTo-Json -Depth 10 -Compress
+    $payloadBytes = [Text.Encoding]::UTF8.GetBytes($payloadJson)
+    $keyBytes = ConvertFrom-AIArenaReleaseVerificationKey -ReceiptKey $ReceiptKey
+    try {
+        $authentication = Get-AIArenaHmacSha256 -Key $keyBytes -Value $payloadBytes
+        $receipt = [pscustomobject][ordered]@{
+            schema = 'ai_arena.release_verification_receipt.v2'
+            formatVersion = 2
+            trustBoundary = 'trusted-local-release-account'
+            payloadBase64 = [Convert]::ToBase64String($payloadBytes)
+            hmacSha256 = ([BitConverter]::ToString($authentication) -replace '-', '')
+        }
+        Write-AIArenaUtf8NoBomJson -Value $receipt -OutputPath $OutputPath
+    }
+    finally {
+        [Array]::Clear($keyBytes, 0, $keyBytes.Length)
+    }
+
+    return [IO.Path]::GetFullPath($OutputPath)
+}
+
+function Test-AIArenaReleaseVerificationReceipt {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$ReceiptPath,
+        [Parameter(Mandatory = $true)]
+        [string]$ReceiptKey,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Debug', 'Release')]
+        [string]$Configuration,
+        [Parameter(Mandatory = $true)]
+        [string[]]$ProjectPath,
+        [string]$SourceCommit = '',
+        [string]$SourceTree = ''
+    )
+
+    if (-not (Test-Path -LiteralPath $ReceiptPath -PathType Leaf)) {
+        throw "Release-verification receipt is missing: $ReceiptPath"
+    }
+    if ([string]::IsNullOrWhiteSpace($SourceCommit) -or [string]::IsNullOrWhiteSpace($SourceTree)) {
+        $source = Get-AIArenaReleaseVerificationSourceIdentity -RepositoryRoot $RepositoryRoot
+        $SourceCommit = $source.Commit
+        $SourceTree = $source.SrcTree
+    }
+
+    $receipt = Get-Content -LiteralPath $ReceiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$receipt.schema -ne 'ai_arena.release_verification_receipt.v2' -or [int]$receipt.formatVersion -ne 2) {
+        throw 'Release-verification receipt has an unsupported schema or format version.'
+    }
+    if ([string]$receipt.trustBoundary -ne 'trusted-local-release-account') {
+        throw 'Release-verification receipt has an invalid trust-boundary declaration.'
+    }
+
+    try {
+        $payloadBytes = [Convert]::FromBase64String([string]$receipt.payloadBase64)
+        $recordedAuthentication = [byte[]]::new(32)
+        $authenticationText = [string]$receipt.hmacSha256
+        if ($authenticationText -notmatch '^[A-Fa-f0-9]{64}$') {
+            throw 'invalid digest'
+        }
+        for ($index = 0; $index -lt 32; $index++) {
+            $recordedAuthentication[$index] = [Convert]::ToByte($authenticationText.Substring($index * 2, 2), 16)
+        }
+    }
+    catch {
+        throw 'Release-verification receipt encoding is invalid.'
+    }
+
+    $keyBytes = ConvertFrom-AIArenaReleaseVerificationKey -ReceiptKey $ReceiptKey
+    try {
+        $expectedAuthentication = Get-AIArenaHmacSha256 -Key $keyBytes -Value $payloadBytes
+        if (-not (Test-AIArenaByteArrayEqual -Left $recordedAuthentication -Right $expectedAuthentication)) {
+            throw 'Release-verification receipt authentication failed; it was modified or did not come from this pipeline invocation.'
+        }
+    }
+    finally {
+        [Array]::Clear($keyBytes, 0, $keyBytes.Length)
+    }
+
+    $payload = [Text.Encoding]::UTF8.GetString($payloadBytes) | ConvertFrom-Json
+    if ([string]$payload.schema -ne 'ai_arena.release_verification_payload.v2' -or [int]$payload.formatVersion -ne 2) {
+        throw 'Release-verification payload has an unsupported schema or format version.'
+    }
+    if ([string]$payload.sourceCommit -ne $SourceCommit -or [string]$payload.sourceTree -ne $SourceTree) {
+        throw 'Release-verification receipt does not match the current commit and src tree.'
+    }
+    if ([string]$payload.configuration -ne $Configuration) {
+        throw "Release-verification receipt configuration does not match $Configuration."
+    }
+
+    $dotnet = Get-Command dotnet -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    $dotnetFile = Get-Item -LiteralPath $dotnet.Source
+    if ([string]$payload.runner.name -ne $dotnetFile.Name `
+        -or [long]$payload.runner.bytes -ne [long]$dotnetFile.Length `
+        -or [string]$payload.runner.sha256 -ne (Get-FileHash -LiteralPath $dotnetFile.FullName -Algorithm SHA256).Hash.ToUpperInvariant()) {
+        throw 'Release-verification receipt runner identity is stale or invalid.'
+    }
+
+    $expected = @(Get-AIArenaReleaseVerificationHarnesses `
+        -RepositoryRoot $RepositoryRoot `
+        -Configuration $Configuration `
+        -ProjectPath $ProjectPath)
+    $recorded = @($payload.harnesses | Sort-Object project)
+    if ($recorded.Count -ne $expected.Count) {
+        throw 'Release-verification receipt harness count does not match.'
+    }
+    for ($index = 0; $index -lt $expected.Count; $index++) {
+        $actual = $recorded[$index]
+        $wanted = $expected[$index]
+        $wantedArguments = @('run', '--project', [string]$wanted.project, '-c', $Configuration, '--no-restore')
+        $actualArguments = @($actual.arguments)
+        if ([string]$actual.project -ne [string]$wanted.project `
+            -or [string]$actual.targetFramework -ne [string]$wanted.targetFramework `
+            -or [string]$actual.assembly -ne [string]$wanted.assembly `
+            -or [long]$actual.bytes -ne [long]$wanted.bytes `
+            -or [string]$actual.sha256 -ne [string]$wanted.sha256 `
+            -or [int]$actual.exitCode -ne 0 `
+            -or [string]$actual.outcome -ne 'passed' `
+            -or ($actualArguments -join "`n") -ne ($wantedArguments -join "`n")) {
+            throw "Release-verification receipt is stale or invalid for $($wanted.project)."
+        }
+    }
+
+    return $true
+}
+
+function Get-AIArenaSha256FileIdentity {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Label
+    )
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+        throw "$Label is missing: $fullPath"
+    }
+    $file = Get-Item -LiteralPath $fullPath
+    return [pscustomobject][ordered]@{
+        name = $file.Name
+        bytes = [long]$file.Length
+        sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToUpperInvariant()
+    }
+}
+
+function Protect-AIArenaInstallerCompileDigest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [byte[]]$Digest
+    )
+
+    if ($null -eq ('System.Security.Cryptography.ProtectedData' -as [type])) {
+        Add-Type -AssemblyName System.Security
+    }
+    $entropy = [Text.Encoding]::UTF8.GetBytes('AI Arena installer compile receipt v1')
+    return [Security.Cryptography.ProtectedData]::Protect(
+        $Digest,
+        $entropy,
+        [Security.Cryptography.DataProtectionScope]::CurrentUser)
+}
+
+function Unprotect-AIArenaInstallerCompileDigest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [byte[]]$ProtectedDigest
+    )
+
+    if ($null -eq ('System.Security.Cryptography.ProtectedData' -as [type])) {
+        Add-Type -AssemblyName System.Security
+    }
+    $entropy = [Text.Encoding]::UTF8.GetBytes('AI Arena installer compile receipt v1')
+    return [Security.Cryptography.ProtectedData]::Unprotect(
+        $ProtectedDigest,
+        $entropy,
+        [Security.Cryptography.DataProtectionScope]::CurrentUser)
+}
+
+function New-AIArenaInstallerCompileReceipt {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)][string]$OutputPath,
+        [Parameter(Mandatory = $true)][string]$InstallerPath,
+        [Parameter(Mandatory = $true)][string]$ReleaseInventoryPath,
+        [Parameter(Mandatory = $true)][string]$InnoScriptPath,
+        [Parameter(Mandatory = $true)][string]$InnoCompilerPath,
+        [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][ValidateSet('Debug', 'Release')][string]$Configuration,
+        [Parameter(Mandatory = $true)][string]$Runtime,
+        [Parameter(Mandatory = $true)][ValidateSet('Optional', 'Required', 'Disabled')][string]$SigningPolicy,
+        [Parameter(Mandatory = $true)][bool]$SigningEnabled,
+        [string]$SigningCertificateThumbprint = '',
+        [string]$SourceCommit = '',
+        [string]$SourceTree = ''
+    )
+
+    if ((Split-Path -Leaf ([IO.Path]::GetFullPath($InstallerPath))) -ne "AI Arena Setup $Version.exe") {
+        throw 'Installer compile receipt target does not match the versioned installer name.'
+    }
+    if ((Split-Path -Leaf ([IO.Path]::GetFullPath($ReleaseInventoryPath))) -ne 'release-checksums.sha256') {
+        throw 'Installer compile receipt must bind the canonical release-checksums.sha256 inventory.'
+    }
+    if ([string]::IsNullOrWhiteSpace($SourceCommit) -or [string]::IsNullOrWhiteSpace($SourceTree)) {
+        $source = Get-AIArenaReleaseVerificationSourceIdentity -RepositoryRoot $RepositoryRoot
+        $SourceCommit = $source.Commit
+        $SourceTree = $source.SrcTree
+    }
+    $compilerPath = [IO.Path]::GetFullPath($InnoCompilerPath)
+    Assert-AIArenaTrustedExecutable -Path $compilerPath -Label 'Inno Setup compiler used for compile receipt'
+    $compilerSignature = Get-AuthenticodeSignature -LiteralPath $compilerPath
+    $payload = [pscustomobject][ordered]@{
+        schema = 'ai_arena.installer_compile_payload.v1'
+        formatVersion = 1
+        generatedUtc = [DateTime]::UtcNow.ToString('o')
+        sourceCommit = $SourceCommit
+        sourceTree = $SourceTree
+        version = $Version
+        configuration = $Configuration
+        runtime = $Runtime
+        signing = [pscustomobject][ordered]@{
+            policy = $SigningPolicy
+            enabled = $SigningEnabled
+            certificateThumbprint = if ($SigningEnabled) { $SigningCertificateThumbprint } else { $null }
+        }
+        installer = Get-AIArenaSha256FileIdentity -Path $InstallerPath -Label 'Compiled installer'
+        releaseInventory = Get-AIArenaSha256FileIdentity -Path $ReleaseInventoryPath -Label 'Release checksum inventory'
+        inno = [pscustomobject][ordered]@{
+            script = Get-AIArenaSha256FileIdentity -Path $InnoScriptPath -Label 'Inno Setup script'
+            compiler = Get-AIArenaSha256FileIdentity -Path $compilerPath -Label 'Inno Setup compiler'
+            compilerPath = $compilerPath
+            compilerSignatureStatus = $compilerSignature.Status.ToString()
+            compilerSignerThumbprint = if ($null -ne $compilerSignature.SignerCertificate) { $compilerSignature.SignerCertificate.Thumbprint } else { $null }
+        }
+    }
+    $payloadJson = $payload | ConvertTo-Json -Depth 10 -Compress
+    $payloadBytes = [Text.Encoding]::UTF8.GetBytes($payloadJson)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $sha.ComputeHash($payloadBytes)
+    }
+    finally {
+        $sha.Dispose()
+    }
+    # DPAPI makes stale/cross-account receipt substitution fail closed while
+    # still allowing interrupted finalization to resume under the same release
+    # account. As with the ephemeral harness receipt, malicious code already
+    # running as that account is outside this local build-pipeline boundary.
+    $protectedDigest = Protect-AIArenaInstallerCompileDigest -Digest $digest
+    $receipt = [pscustomobject][ordered]@{
+        schema = 'ai_arena.installer_compile_receipt.v1'
+        formatVersion = 1
+        trustBoundary = 'windows-current-user-release-account'
+        payloadBase64 = [Convert]::ToBase64String($payloadBytes)
+        protectedDigestBase64 = [Convert]::ToBase64String($protectedDigest)
+    }
+    Write-AIArenaUtf8NoBomJson -Value $receipt -OutputPath $OutputPath
+    return [IO.Path]::GetFullPath($OutputPath)
+}
+
+function Test-AIArenaInstallerCompileReceipt {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)][string]$ReceiptPath,
+        [Parameter(Mandatory = $true)][string]$InstallerPath,
+        [Parameter(Mandatory = $true)][string]$ReleaseInventoryPath,
+        [Parameter(Mandatory = $true)][string]$InnoScriptPath,
+        [string]$InnoCompilerPath = '',
+        [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][ValidateSet('Debug', 'Release')][string]$Configuration,
+        [Parameter(Mandatory = $true)][string]$Runtime,
+        [string]$SigningPolicy = '',
+        [string]$SourceCommit = '',
+        [string]$SourceTree = ''
+    )
+
+    if (-not (Test-Path -LiteralPath $ReceiptPath -PathType Leaf)) {
+        throw "Installer compile receipt is missing: $ReceiptPath"
+    }
+    $receipt = Get-Content -LiteralPath $ReceiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$receipt.schema -ne 'ai_arena.installer_compile_receipt.v1' `
+        -or [int]$receipt.formatVersion -ne 1 `
+        -or [string]$receipt.trustBoundary -ne 'windows-current-user-release-account') {
+        throw 'Installer compile receipt has an unsupported schema, format, or trust boundary.'
+    }
+    try {
+        $payloadBytes = [Convert]::FromBase64String([string]$receipt.payloadBase64)
+        $protectedDigest = [Convert]::FromBase64String([string]$receipt.protectedDigestBase64)
+        $recordedDigest = Unprotect-AIArenaInstallerCompileDigest -ProtectedDigest $protectedDigest
+    }
+    catch {
+        throw 'Installer compile receipt authentication could not be verified for the current Windows user.'
+    }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $expectedDigest = $sha.ComputeHash($payloadBytes)
+    }
+    finally {
+        $sha.Dispose()
+    }
+    if (-not (Test-AIArenaByteArrayEqual -Left $recordedDigest -Right $expectedDigest)) {
+        throw 'Installer compile receipt authentication failed; its payload was modified.'
+    }
+    $payload = [Text.Encoding]::UTF8.GetString($payloadBytes) | ConvertFrom-Json
+    if ([string]$payload.schema -ne 'ai_arena.installer_compile_payload.v1' -or [int]$payload.formatVersion -ne 1) {
+        throw 'Installer compile receipt payload has an unsupported schema or format.'
+    }
+    if ([string]::IsNullOrWhiteSpace($SourceCommit) -or [string]::IsNullOrWhiteSpace($SourceTree)) {
+        $source = Get-AIArenaReleaseVerificationSourceIdentity -RepositoryRoot $RepositoryRoot
+        $SourceCommit = $source.Commit
+        $SourceTree = $source.SrcTree
+    }
+    if ([string]$payload.sourceCommit -ne $SourceCommit -or [string]$payload.sourceTree -ne $SourceTree) {
+        throw 'Installer compile receipt does not match the current commit and src tree.'
+    }
+    if ([string]$payload.version -ne $Version `
+        -or [string]$payload.configuration -ne $Configuration `
+        -or [string]$payload.runtime -ne $Runtime) {
+        throw 'Installer compile receipt does not match the requested version, configuration, and runtime.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SigningPolicy) -and [string]$payload.signing.policy -ne $SigningPolicy) {
+        throw 'Installer compile receipt does not match the requested signing policy.'
+    }
+
+    $installerIdentity = Get-AIArenaSha256FileIdentity -Path $InstallerPath -Label 'Compiled installer'
+    $inventoryIdentity = Get-AIArenaSha256FileIdentity -Path $ReleaseInventoryPath -Label 'Release checksum inventory'
+    $scriptIdentity = Get-AIArenaSha256FileIdentity -Path $InnoScriptPath -Label 'Inno Setup script'
+    $compilerPath = if ([string]::IsNullOrWhiteSpace($InnoCompilerPath)) { [string]$payload.inno.compilerPath } else { [IO.Path]::GetFullPath($InnoCompilerPath) }
+    $compilerIdentity = Get-AIArenaSha256FileIdentity -Path $compilerPath -Label 'Inno Setup compiler'
+    $compilerSignature = Get-AuthenticodeSignature -LiteralPath $compilerPath
+    foreach ($comparison in @(
+        [pscustomobject]@{ Actual = $payload.installer; Expected = $installerIdentity; Label = 'installer bytes' },
+        [pscustomobject]@{ Actual = $payload.releaseInventory; Expected = $inventoryIdentity; Label = 'release inventory' },
+        [pscustomobject]@{ Actual = $payload.inno.script; Expected = $scriptIdentity; Label = 'Inno script' },
+        [pscustomobject]@{ Actual = $payload.inno.compiler; Expected = $compilerIdentity; Label = 'Inno compiler' }
+    )) {
+        if ([string]$comparison.Actual.name -ne [string]$comparison.Expected.name `
+            -or [long]$comparison.Actual.bytes -ne [long]$comparison.Expected.bytes `
+            -or [string]$comparison.Actual.sha256 -ne [string]$comparison.Expected.sha256) {
+            throw "Installer compile receipt is stale or invalid for $($comparison.Label)."
+        }
+    }
+    if ([string]$payload.inno.compilerPath -ne [IO.Path]::GetFullPath($compilerPath) `
+        -or [string]$payload.inno.compilerSignatureStatus -ne $compilerSignature.Status.ToString() `
+        -or [string]$payload.inno.compilerSignerThumbprint -ne $(if ($null -ne $compilerSignature.SignerCertificate) { $compilerSignature.SignerCertificate.Thumbprint } else { '' })) {
+        throw 'Installer compile receipt Inno compiler provenance is stale or invalid.'
+    }
+
+    return $payload
 }
 
 function Test-AIArenaSha256Manifest {

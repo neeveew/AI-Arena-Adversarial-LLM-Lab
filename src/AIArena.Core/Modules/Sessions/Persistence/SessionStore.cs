@@ -20,6 +20,7 @@ public sealed class SessionStore
     private const int SnapshotSaveRetries = 24;
     private const int MaxForkNameAttempts = 10_000;
     private const int MaxSafeCheckpointIdLength = 128;
+    internal const int SnapshotMutationGenerationCapacity = 4_096;
     private static readonly TimeSpan SnapshotSaveRetryDelay = TimeSpan.FromMilliseconds(125);
     private static readonly TimeSpan SnapshotWriteLeaseTimeout = TimeSpan.FromSeconds(45);
     private static readonly KeyedAsyncLockRegistry SnapshotWriteLocks = new(StringComparer.OrdinalIgnoreCase);
@@ -35,6 +36,11 @@ public sealed class SessionStore
     /// <summary>Event log path to its last observed write stamp and line count.</summary>
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime WriteUtc, long Length, int Count)> EventLineCountCache =
         new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object SnapshotMutationGenerationGate = new();
+    private static readonly Dictionary<string, (long Stamp, LinkedListNode<string> RecencyNode)> SnapshotMutationGenerations =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly LinkedList<string> SnapshotMutationGenerationRecency = new();
+    private static long snapshotMutationSequence;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -106,20 +112,6 @@ public sealed class SessionStore
         {
             return null;
         }
-    }
-
-    private static ArenaSnapshot SnapshotForPersistence(ArenaSnapshot snapshot)
-    {
-        if (!snapshot.Configs.Values.Any(config => !string.IsNullOrEmpty(config.ApiToken)))
-        {
-            return snapshot;
-        }
-
-        // Work on a deep clone so the caller's in-memory snapshot keeps usable tokens.
-        var json = JsonSerializer.Serialize(snapshot, JsonOptions);
-        var clone = JsonSerializer.Deserialize<ArenaSnapshot>(json, JsonOptions) ?? snapshot;
-        TransformConfigTokens(clone, ProtectSecret);
-        return clone;
     }
 
     private static void TransformConfigTokens(ArenaSnapshot snapshot, Func<string, string> transform)
@@ -222,17 +214,18 @@ public sealed class SessionStore
         snapshot.PersistenceRevision = nextRevision;
         try
         {
-            var persisted = SnapshotForPersistence(snapshot);
+            var persistenceJsonOptions = SnapshotPersistenceJson.CreateOptions(JsonOptions, ProtectSecret);
             await using (var stream = new FileStream(
                 tempPath,
                 FileMode.CreateNew,
                 FileAccess.Write,
                 FileShare.Read))
             {
-                await JsonSerializer.SerializeAsync(stream, persisted, JsonOptions, cancellationToken);
+                await JsonSerializer.SerializeAsync(stream, snapshot, persistenceJsonOptions, cancellationToken);
             }
 
             await ReplaceSnapshotFileAsync(tempPath, fullPath, cancellationToken);
+            RecordSnapshotMutation(fullPath);
         }
         catch
         {
@@ -290,18 +283,62 @@ public sealed class SessionStore
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-            return document.RootElement.TryGetProperty("persistence_revision", out var revision)
-                && revision.ValueKind == JsonValueKind.Number
-                && revision.TryGetInt64(out var value)
-                ? Math.Max(0, value)
-                : 0;
+            return await PersistenceRevisionReader.ReadAsync(stream, cancellationToken);
         }
         catch (JsonException)
         {
-            // Preserve the existing recovery behavior: a valid snapshot can replace
-            // a corrupt/legacy file whose revision cannot be read.
+            // A valid snapshot may replace a corrupt or legacy file whose
+            // durable generation cannot be trusted.
             return 0;
+        }
+    }
+
+    public long SnapshotMutationGeneration(string sessionId = "default")
+    {
+        var fullPath = Path.GetFullPath(SnapshotPath(sessionId));
+        lock (SnapshotMutationGenerationGate)
+        {
+            return SnapshotMutationGenerations.TryGetValue(fullPath, out var entry)
+                ? entry.Stamp
+                : 0;
+        }
+    }
+
+    internal static int SnapshotMutationGenerationCount
+    {
+        get
+        {
+            lock (SnapshotMutationGenerationGate)
+            {
+                return SnapshotMutationGenerations.Count;
+            }
+        }
+    }
+
+    internal static void RecordSnapshotMutation(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        lock (SnapshotMutationGenerationGate)
+        {
+            var stamp = checked(++snapshotMutationSequence);
+            if (SnapshotMutationGenerations.Remove(fullPath, out var previous))
+            {
+                SnapshotMutationGenerationRecency.Remove(previous.RecencyNode);
+            }
+
+            var node = SnapshotMutationGenerationRecency.AddFirst(fullPath);
+            SnapshotMutationGenerations[fullPath] = (stamp, node);
+            while (SnapshotMutationGenerations.Count > SnapshotMutationGenerationCapacity)
+            {
+                var oldest = SnapshotMutationGenerationRecency.Last;
+                if (oldest is null)
+                {
+                    break;
+                }
+
+                SnapshotMutationGenerationRecency.RemoveLast();
+                SnapshotMutationGenerations.Remove(oldest.Value);
+            }
         }
     }
 
@@ -1273,20 +1310,21 @@ public sealed class SessionStore
         snapshot.PersistenceRevision = 1;
         try
         {
-            var persisted = SnapshotForPersistence(snapshot);
+            var persistenceJsonOptions = SnapshotPersistenceJson.CreateOptions(JsonOptions, ProtectSecret);
             await using (var stream = new FileStream(
                 tempPath,
                 FileMode.CreateNew,
                 FileAccess.Write,
                 FileShare.Read))
             {
-                await JsonSerializer.SerializeAsync(stream, persisted, JsonOptions, cancellationToken);
+                await JsonSerializer.SerializeAsync(stream, snapshot, persistenceJsonOptions, cancellationToken);
             }
 
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 File.Move(tempPath, fullPath);
+                RecordSnapshotMutation(fullPath);
                 return true;
             }
             catch (IOException) when (File.Exists(fullPath))
@@ -1604,7 +1642,7 @@ public sealed class SessionStore
             SessionId = sessionId,
             AppVersion = "wpf-beta",
             CreatedAt = now.ToUnixTimeSeconds(),
-            Snapshot = SnapshotForPersistence(snapshot)
+            Snapshot = snapshot
         };
 
         var checkpointDir = CheckpointDirectory(sessionId);
@@ -1616,7 +1654,8 @@ public sealed class SessionStore
         {
             await using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
             {
-                await JsonSerializer.SerializeAsync(stream, record, JsonOptions, cancellationToken);
+                var persistenceJsonOptions = SnapshotPersistenceJson.CreateOptions(JsonOptions, ProtectSecret);
+                await JsonSerializer.SerializeAsync(stream, record, persistenceJsonOptions, cancellationToken);
             }
 
             await ReplaceSnapshotFileAsync(tempPath, fullPath, cancellationToken);

@@ -120,7 +120,7 @@ static void AgentRunbookPersistsStableWorkflowAndRecoversInterruptions()
         Require(loaded.AgentRunbook.Checkpoints.Count == AgentRunbookService.MaxCheckpoints, "persisted runbook checkpoints should retain the bounded audit window");
     });
 
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     Require(xaml.Contains("Text=\"Runbook\"", StringComparison.Ordinal), "Agent right rail should label the durable workflow as Runbook");
     Require(xaml.Contains("x:Name=\"AgentRunbookMetaText\"", StringComparison.Ordinal), "Agent runbook should expose visible identity and checkpoint metadata");
 }
@@ -238,6 +238,8 @@ static void AgentBoardCoordinatorDisablesModeButtonsWhileBusy()
         try
         {
             var panel = new StackPanel();
+            AgentState? lastRunAgent = null;
+            var motionEnabled = true;
             Brush testBrush(string key) => key.Contains("Danger", StringComparison.OrdinalIgnoreCase)
                 ? Brushes.IndianRed
                 : key.Contains("Muted", StringComparison.OrdinalIgnoreCase)
@@ -254,12 +256,17 @@ static void AgentBoardCoordinatorDisablesModeButtonsWhileBusy()
                 (left, _, _) => left,
                 testBrush,
                 value => value,
-                _ => Task.CompletedTask,
+                agent =>
+                {
+                    lastRunAgent = agent;
+                    return Task.CompletedTask;
+                },
                 (_, _) => { },
                 (_, _, action, _) => action(),
                 (_, _) => Task.CompletedTask,
                 _ => Task.CompletedTask,
-                _ => { });
+                _ => { },
+                () => motionEnabled);
 
             var snapshot = SnapshotForOverviewTest(
                 providerOnline: true,
@@ -272,6 +279,11 @@ static void AgentBoardCoordinatorDisablesModeButtonsWhileBusy()
                     new AgentState("alpha", "Alpha", "waiting", "Persona", "default", "", "#35D6FF", "alpha-model", true, false, [])
                 ]);
             coordinator.Populate(snapshot, "alpha");
+
+            var originalAgentCard = coordinator.DiagnosticCardFor("alpha");
+            var originalNarratorCard = coordinator.DiagnosticCardFor("narrator");
+            Require(coordinator.DiagnosticCardCreations == 2,
+                "the initial roster should create one durable agent card and one Narrator card");
 
             var buttons = DescendantButtons(panel).ToArray();
             Require(buttons.Length == 3, $"expected one agent run action, one overflow action, and the narrator action, got {buttons.Length}");
@@ -323,6 +335,13 @@ static void AgentBoardCoordinatorDisablesModeButtonsWhileBusy()
             coordinator.Populate(pausedSnapshot, null);
             var pausedButtons = DescendantButtons(panel).ToArray();
             var resumeButton = ButtonByToolTip(pausedButtons, "Resume Alpha");
+            Require(ReferenceEquals(originalAgentCard, coordinator.DiagnosticCardFor("alpha"))
+                    && ReferenceEquals(originalNarratorCard, coordinator.DiagnosticCardFor("narrator"))
+                    && ReferenceEquals(runButton, resumeButton)
+                    && ReferenceEquals(overflowButton, ButtonByToolTip(pausedButtons, "More actions")),
+                "status-only changes should retain card, primary action, overflow, and Narrator control identity");
+            Require(coordinator.DiagnosticCardCreations == 2,
+                "status-only changes should not recreate Live Agent cards");
             Require(resumeButton.MinWidth == 32 && resumeButton.IsEnabled, "a paused agent should replace the inline run action with a compact Resume action");
             Require(AutomationProperties.GetName(resumeButton) == "Resume Alpha", "the paused primary action should expose its Resume outcome to UI Automation");
             var pausedMenu = ButtonByToolTip(pausedButtons, "More actions").ContextMenu
@@ -331,6 +350,43 @@ static void AgentBoardCoordinatorDisablesModeButtonsWhileBusy()
                 "a paused row should not duplicate Resume inside its overflow menu");
             Require(pausedMenu.Items.OfType<MenuItem>().Any(item => (item.Header?.ToString() ?? "").Equals("Solo agent", StringComparison.Ordinal)),
                 "a paused row should preserve the Solo callback in overflow");
+
+            var refreshedAgent = new AgentState(
+                "alpha", "Alpha Updated", "running", "Updated persona", "default", "", "#35D6FF", "updated-model", true, false, []);
+            var refreshedSnapshot = snapshot with { Agents = [refreshedAgent] };
+            coordinator.Populate(refreshedSnapshot, "alpha");
+            var firstSweep = coordinator.DiagnosticActivitySweepFor("alpha");
+            coordinator.Populate(refreshedSnapshot, "alpha");
+            Require(firstSweep is not null && ReferenceEquals(firstSweep, coordinator.DiagnosticActivitySweepFor("alpha")),
+                "unchanged running state should not restart the retained card activity animation");
+            motionEnabled = false;
+            coordinator.RefreshMotionPreference();
+            var reducedMotionSweep = coordinator.DiagnosticActivitySweepFor("alpha");
+            Require(reducedMotionSweep is not null && !ReferenceEquals(firstSweep, reducedMotionSweep)
+                    && reducedMotionSweep.Width == 52,
+                "a reduced-motion preference change should replace an infinite retained sweep with its static form");
+            coordinator.RefreshMotionPreference();
+            Require(ReferenceEquals(reducedMotionSweep, coordinator.DiagnosticActivitySweepFor("alpha")),
+                "an unchanged reduced-motion preference should not recreate the static sweep");
+            runButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Require(ReferenceEquals(lastRunAgent, refreshedAgent),
+                "retained primary actions must resolve the latest AgentState instead of a stale snapshot closure");
+            Require(AutomationProperties.GetName(runButton) == "Run one turn for Alpha Updated"
+                    && (runButton.ToolTip?.ToString() ?? "").Contains("Alpha Updated", StringComparison.Ordinal),
+                "retained controls should refresh visible and UI Automation state");
+
+            var beta = new AgentState("beta", "Beta", "waiting", "Persona", "default", "", "#FFD166", "beta-model", true, false, []);
+            coordinator.Populate(refreshedSnapshot with { Agents = [refreshedAgent, beta] }, "alpha");
+            Require(coordinator.DiagnosticCardCreations == 3 && coordinator.DiagnosticCardFor("beta") is not null,
+                "roster additions should create only the new participant card");
+            coordinator.Populate(refreshedSnapshot with { Agents = [beta] }, "beta");
+            Require(coordinator.DiagnosticCardFor("alpha") is null
+                    && coordinator.DiagnosticCardFor("beta") is not null
+                    && ReferenceEquals(originalNarratorCard, coordinator.DiagnosticCardFor("narrator")),
+                "roster removals should remove only the departed card and retain Narrator identity");
+            Console.WriteLine(
+                $"RECEIPT live-agent-cards baseline_same-roster_rebuilds=2 after_same-roster_creations=0 " +
+                $"total_creations={coordinator.DiagnosticCardCreations} updates={coordinator.DiagnosticCardUpdates}");
         }
         finally
         {

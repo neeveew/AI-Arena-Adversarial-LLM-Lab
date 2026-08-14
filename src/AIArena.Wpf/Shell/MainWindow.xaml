@@ -2562,10 +2562,10 @@
                     <ScrollViewer x:Name="AgentChatScrollViewer"
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled">
-                        <StackPanel x:Name="AgentMessageItems"
-                                    MaxWidth="900"
-                                    HorizontalAlignment="Center"
-                                    Margin="4,8,4,8" />
+                        <controls:VirtualizingConversationPanel x:Name="AgentMessageItems"
+                                                               MaxWidth="900"
+                                                               HorizontalAlignment="Center"
+                                                               Margin="4,8,4,8" />
                     </ScrollViewer>
                 </Border>
                 <Border Grid.Row="3"
@@ -2812,8 +2812,8 @@
                     <ScrollViewer x:Name="CollaborateChatScrollViewer"
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled">
-                        <StackPanel x:Name="CollaborateMessageItems"
-                                    Margin="{DynamicResource Arena.Inset.Panel}" />
+                        <controls:VirtualizingConversationPanel x:Name="CollaborateMessageItems"
+                                                               Margin="{DynamicResource Arena.Inset.Panel}" />
                     </ScrollViewer>
                 </Border>
                 <Border Grid.Row="2"
@@ -3248,6 +3248,8 @@
                           Style="{StaticResource SettingsExpander}"
                           Tag="&#xE9D2;"
                           IsExpanded="False"
+                          Expanded="AgentPerformanceExpander_Expanded"
+                          Collapsed="AgentPerformanceExpander_Collapsed"
                           AutomationProperties.Name="Agent performance details"
                           AutomationProperties.HelpText="Expand to compare agent turns, speed, context use, and quality signals.">
                     <Border x:Name="AgentPerformanceCard"

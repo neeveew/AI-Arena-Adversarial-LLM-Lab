@@ -45,7 +45,7 @@ static void MainWindowShutdownRecloseIsDeferred()
         Require(closeCount == 1, "Shutdown cleanup should schedule exactly one deferred close.");
     });
 
-    var source = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var source = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
     var closingStart = source.IndexOf("private async void MainWindow_Closing", StringComparison.Ordinal);
     var closingEnd = source.IndexOf("internal static void ScheduleCloseAfterCleanup", closingStart, StringComparison.Ordinal);
     Require(closingStart >= 0 && closingEnd > closingStart, "the async window shutdown handler should remain discoverable");
@@ -106,7 +106,7 @@ static void MainWindowShutdownRecloseIsDeferred()
         source.Contains("PersistInternetSettingForActiveSessionAsync", StringComparison.Ordinal),
         "the direct Internet toggle should persist through a dedicated active-session path");
 
-    var providerSettingsSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ProviderSettingsCoordinator.cs"));
+    var providerSettingsSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ProviderSettingsCoordinator.cs");
     Require(
         providerSettingsSource.Contains("Func<AIArena.Core.Models.ArenaSnapshot, string, CancellationToken, Task>", StringComparison.Ordinal)
         && providerSettingsSource.Contains("Func<string, CancellationToken, Task> refreshActiveSessionAsync", StringComparison.Ordinal)
@@ -116,7 +116,7 @@ static void MainWindowShutdownRecloseIsDeferred()
         && providerSettingsSource.Contains("providerRuntime.TestAsync(session.Id, allRoles: false, cancellationToken)", StringComparison.Ordinal),
         "provider persistence and reachability delegates should preserve tracked cancellation through their final stages");
 
-    var sessionMutationSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ArenaSessionMutationCoordinator.cs"));
+    var sessionMutationSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ArenaSessionMutationCoordinator.cs");
     Require(
         sessionMutationSource.Contains("await refreshActiveSessionAsync(\"Session settings applied.\")", StringComparison.Ordinal)
         && !sessionMutationSource.Contains("refreshProviderReachabilityAsync", StringComparison.Ordinal),
@@ -697,8 +697,8 @@ static void MainWindowComboBoxTemplateUsesThemeResources()
 {
     // The shell adopts the Arena control system, so the combo box template lives in
     // the shared dictionary while the window keeps only intent-level styles.
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
-    var controlStyles = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Theming/ControlStyles.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
+    var controlStyles = ReadWorkspaceFile("src/AIArena.Wpf/UI/Theming/ControlStyles.xaml");
     foreach (var markup in new[] { xaml, controlStyles })
     {
         Require(!markup.Contains("SystemColors.WindowBrushKey", StringComparison.Ordinal), "combo box template should not pin popup window color to one theme");
@@ -718,7 +718,7 @@ static void ThemeBrushDefaultsMirrorTheDefaultPalette()
     // while they lived in MainWindow.xaml - three Nav brushes held literals for
     // values ThemePalette computes, and nothing compared the two. This pins the
     // mirror so the designer cannot start lying about the shipped theme again.
-    var markup = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Theming/ThemeBrushes.xaml"));
+    var markup = ReadWorkspaceFile("src/AIArena.Wpf/UI/Theming/ThemeBrushes.xaml");
     var theme = ThemePalette.Resolve("dark-arena");
 
     var expected = new (string Key, Color Color)[]
@@ -772,7 +772,7 @@ static void ThemeBrushDefaultsMirrorTheDefaultPalette()
     }
 
     // The window must not reintroduce its own copies; the application scope owns them.
-    var window = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var window = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     Require(
         !window.Contains("<SolidColorBrush x:Key=\"AppBackgroundBrush\"", StringComparison.Ordinal),
         "MainWindow.xaml should not redeclare themed brushes that ThemeBrushes.xaml owns");
@@ -780,7 +780,7 @@ static void ThemeBrushDefaultsMirrorTheDefaultPalette()
 
 static ResourceDictionary LoadDesignTokenDictionary()
 {
-    var markup = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Theming/DesignTokens.xaml"));
+    var markup = ReadWorkspaceFile("src/AIArena.Wpf/UI/Theming/DesignTokens.xaml");
     return (ResourceDictionary)XamlReader.Parse(markup);
 }
 
@@ -861,7 +861,7 @@ static void DesignTokenResourcesMatchTheirWpfContract()
             }
         }
 
-        var appMarkup = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/App.xaml"));
+        var appMarkup = ReadWorkspaceFile("src/AIArena.Wpf/App.xaml");
         var brushesIndex = appMarkup.IndexOf("ThemeBrushes.xaml", StringComparison.Ordinal);
         var tokensIndex = appMarkup.IndexOf("DesignTokens.xaml", StringComparison.Ordinal);
         var controlsIndex = appMarkup.IndexOf("ControlStyles.xaml", StringComparison.Ordinal);
@@ -875,7 +875,7 @@ static void DesignTokenResourcesMatchTheirWpfContract()
 
 static void MainWindowCollaboratePromptUsesMultilineAlignment()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     var prompt = XamlElementBlock(xaml, "CollaboratePromptText", "TextBox");
 
     Require(prompt.Contains("AcceptsReturn=\"True\"", StringComparison.Ordinal), "collaborate composer should remain multiline");
@@ -886,7 +886,7 @@ static void MainWindowCollaboratePromptUsesMultilineAlignment()
 
 static void MainWindowCollaboratePromptAssistButtonsStayCompact()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     foreach (var name in new[]
              {
                  "CollaboratePlanPromptButton",
@@ -926,11 +926,11 @@ static void MainWindowCollaboratePromptAssistButtonsStayCompact()
 
 static void MainWindowAgentSectionIsTopLevel()
 {
-    var windowXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
-    var topBarXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"));
+    var windowXaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
+    var topBarXaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml");
     var xaml = windowXaml + Environment.NewLine + topBarXaml;
-    var railXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellNavigationRailControl.xaml"));
-    var code = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var railXaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellNavigationRailControl.xaml");
+    var code = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
     var railHost = XamlStartTag(xaml, "ShellNavigationRail", "controls:ShellNavigationRailControl");
     var navButton = XamlStartTag(railXaml, "AgentNavButtonElement", "Button");
     var panel = XamlStartTag(xaml, "AgentWorkspacePanel", "Grid");
@@ -1110,7 +1110,7 @@ static void MainWindowContextualCommandHostsAndProviderMetricsStayWired()
 
 static void MainWindowNavigationTransitionsPreserveContext()
 {
-    var source = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var source = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
 
     var surfaceMethods = new Dictionary<string, ShellSurface>
     {
@@ -1129,7 +1129,7 @@ static void MainWindowNavigationTransitionsPreserveContext()
         Require(applyCommands > selectSurface, $"{signature} should apply contextual commands after selecting {surface}");
     }
 
-    var modelsSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.Models.cs"));
+    var modelsSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.Models.cs");
     var showModels = CSharpMethodBlock(modelsSource, "private void ShowProviderModelsPanel()");
     Require(showModels.Contains("ShellNavigation.ShowProviderModelsPanel()", StringComparison.Ordinal), "Models should use the shell surface transition rather than an independent window");
     Require(showModels.Contains("_activeShellSurface = ShellSurface.Models", StringComparison.Ordinal), "Models should publish its contextual shell surface");
@@ -1422,7 +1422,7 @@ static string CSharpMethodBlock(string source, string signature)
 
 static void MainWindowAgentCommandRailExposesApprovalContract()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     var shellStart = xaml.IndexOf("AgentCommandShellPicker", StringComparison.Ordinal);
     var shellEnd = xaml.IndexOf("AgentCommandText", shellStart, StringComparison.Ordinal);
     Require(shellStart >= 0 && shellEnd > shellStart, "Agent command shell picker should appear before the command editor");
@@ -1588,8 +1588,8 @@ static void MainWindowAgentCommandRailExposesApprovalContract()
 
 static void MainWindowExportButtonSwitchesContext()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"));
-    var code = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml");
+    var code = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
     var button = XamlStartTag(xaml, "ExportTranscriptBottomButton", "Button");
     var status = XamlStartTag(xaml, "ExportStatusText", "TextBlock");
 
@@ -1615,8 +1615,8 @@ static void MainWindowExportButtonSwitchesContext()
 
 static void MainWindowMatchSetupControlsExposeAutomation()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
-    var topBarXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
+    var topBarXaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml");
     foreach (var name in new[]
              {
                  "MatchSetupButton",
@@ -1676,7 +1676,7 @@ static void MainWindowMatchSetupControlsExposeAutomation()
     Require(xaml.Contains("<ComboBoxItem Content=\"Current Topics\" Tag=\"current_topics\"", StringComparison.Ordinal), "generation history filter should include Current Topics");
 
     Require(!xaml.Contains("AiChoiceTopicPromptText", StringComparison.Ordinal), "AI Choice topic prompt should live in the click dialog, not the setup toolbar");
-    var aiChoiceDialog = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/Dialogs/AiChoicePromptDialog.xaml"));
+    var aiChoiceDialog = ReadWorkspaceFile("src/AIArena.Wpf/Shell/Dialogs/AiChoicePromptDialog.xaml");
     var aiChoiceTopicPrompt = XamlStartTag(aiChoiceDialog, "PromptText", "TextBox");
     Require(aiChoiceTopicPrompt.Contains("AutomationProperties.Name=\"", StringComparison.Ordinal), "AI Choice dialog topic prompt should expose an automation name");
     Require(aiChoiceTopicPrompt.Contains("AutomationProperties.HelpText=\"", StringComparison.Ordinal), "AI Choice dialog topic prompt should expose automation help text");
@@ -1760,8 +1760,8 @@ static void MainWindowFactoryModeToggleExposesAutomationAndControlState()
 {
     var mainWindowXamlPath = FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     var xaml = File.ReadAllText(mainWindowXamlPath);
-    var coordinatorCode = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MatchSetupCoordinator.cs"));
-    var mainWindowCode = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var coordinatorCode = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MatchSetupCoordinator.cs");
+    var mainWindowCode = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
     var modeCard = XamlStartTag(xaml, "ModelBehaviorModeCard", "Border");
     var toggle = XamlStartTag(xaml, "ApplyMatchSetupToModelsCheckBox", "CheckBox");
     var status = XamlStartTag(xaml, "ApplyMatchSetupToModelsStatusText", "TextBlock");
@@ -1962,7 +1962,7 @@ static void MainWindowFactoryModeToggleExposesAutomationAndControlState()
 
 static void AiLabHeaderAvoidsDuplicateMatchSetupAction()
 {
-    var shellXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var shellXaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     var header = XamlStartTag(shellXaml, "ArenaWorkspaceHeader", "controls:WorkspacePageHeaderControl");
     Require(
         !header.Contains("PrimaryActionText=\"Match setup\"", StringComparison.Ordinal)
@@ -1972,7 +1972,7 @@ static void AiLabHeaderAvoidsDuplicateMatchSetupAction()
         && header.Contains("PrimaryActionRequested=\"TranscriptFiltersButton_Click\"", StringComparison.Ordinal),
         "the compact AI Lab header should use its one action for transient transcript filters instead of duplicating Match setup");
 
-    var topBarXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"));
+    var topBarXaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml");
     var matchSetup = XamlStartTag(topBarXaml, "MatchSetupButton", "Button");
     Require(
         matchSetup.Contains("Content=\"Match setup\"", StringComparison.Ordinal)
@@ -1997,10 +1997,10 @@ static void AiLabHeaderAvoidsDuplicateMatchSetupAction()
         && eventParameter.ParameterType == typeof(SelectionChangedEventArgs),
         "the production turn selector should bind an exact SelectionChangedEventArgs bridge that WPF can load at runtime");
     var filtersOpened = CSharpMethodBlock(
-        File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs")),
+        ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"),
         "private void TranscriptFiltersPopup_Opened(object? sender, EventArgs e)");
     var resetFilters = CSharpMethodBlock(
-        File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs")),
+        ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"),
         "private void ResetTranscriptFiltersButton_Click(object sender, RoutedEventArgs e)");
     Require(filtersOpened.Contains("SelectedTranscriptTurnFilterEntry()", StringComparison.Ordinal)
         && resetFilters.Contains("SelectedTranscriptTurnFilterEntry().Focus()", StringComparison.Ordinal),
@@ -2035,7 +2035,7 @@ static void AiLabHeaderAvoidsDuplicateMatchSetupAction()
 
 static void MainWindowMatchSetupMatrixHasClearAction()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     var clear = XamlStartTag(xaml, "ClearRivalryMatrixButton", "Button");
     var apply = XamlStartTag(xaml, "ApplyRivalryMatrixButton", "Button");
     var status = XamlElementBlock(xaml, "RivalryMatrixStatusText", "TextBlock");
@@ -2049,7 +2049,7 @@ static void MainWindowMatchSetupMatrixHasClearAction()
 
 static void MainWindowOperatorQuickInterventionsExposeAutomation()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     var meter = XamlStartTag(xaml, "OperatorTurnMeterText", "TextBlock");
     Require(meter.Contains("0 chars / ~0 tok | Public transcript", StringComparison.Ordinal), "operator meter should advertise the default public route");
     Require(meter.Contains("AutomationProperties.Name=\"Operator draft meter\"", StringComparison.Ordinal), "operator meter should expose an automation name");
@@ -2085,7 +2085,7 @@ static void MainWindowOperatorQuickInterventionsExposeAutomation()
 
 static void MainWindowVoiceTtsSettingsExposeAutomation()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     foreach (var name in new[]
              {
                  "VoiceTtsEnabledCheckBox",
@@ -2151,7 +2151,7 @@ static void MainWindowVoiceTtsSettingsExposeAutomation()
 
 static void MainWindowOperatorTurnTextUsesMultilineScrollAffordance()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     var editor = XamlElementBlock(xaml, "OperatorTurnText", "TextBox");
 
     Require(editor.Contains("AcceptsReturn=\"True\"", StringComparison.Ordinal), "operator turn editor should remain multiline");
@@ -2163,7 +2163,7 @@ static void MainWindowOperatorTurnTextUsesMultilineScrollAffordance()
 
 static void MainWindowTranscriptSearchPopupSizesResponsively()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml");
     var popupFrame = XamlStartTag(xaml, "TranscriptSearchPopupFrame", "Grid");
 
     Require(!popupFrame.Contains(" Width=\"760\"", StringComparison.Ordinal), "transcript search popup should not hard-code a fixed width");
@@ -2174,12 +2174,12 @@ static void MainWindowTranscriptSearchPopupSizesResponsively()
 
 static void MainWindowOverlaysPreserveKeyboardAndAccessibilityContracts()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"))
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml")
         + Environment.NewLine
-        + File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"))
+        + ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml")
         + Environment.NewLine
-        + File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellNavigationRailControl.xaml"));
-    var source = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+        + ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellNavigationRailControl.xaml");
+    var source = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
 
     var settingsScrim = XamlStartTag(xaml, "AppSettingsScrim", "Border");
     Require(settingsScrim.Contains("MouseLeftButtonUp=\"AppSettingsScrim_MouseLeftButtonUp\"", StringComparison.Ordinal), "settings scrim should dismiss the drawer on pointer activation");
@@ -2323,11 +2323,11 @@ static void MainWindowOverlaysPreserveKeyboardAndAccessibilityContracts()
         && closeMatchSetup.Contains("GenerationCopyPopup.IsOpen = false", StringComparison.Ordinal),
         "closing Match Setup should close its transfer and generated-match popup windows before restoring the prior surface");
 
-    var diagnosticsSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/DiagnosticsWorkflowCoordinator.cs"));
+    var diagnosticsSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/DiagnosticsWorkflowCoordinator.cs");
     Require(diagnosticsSource.Contains("openerCard.Invoked += DiagnosticChip_Invoked", StringComparison.Ordinal)
         && xaml.Contains("<shell:ShellPopupOpenerCard x:Name=\"FrictionChip\"", StringComparison.Ordinal),
         "diagnostic popup openers should use the peer-backed shared keyboard and automation invocation contract");
-    var performanceSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/AgentPerformanceCoordinator.cs"));
+    var performanceSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/AgentPerformanceCoordinator.cs");
     Require(performanceSource.Contains("ConfigureDetailCard(card, stats, displayTitle)", StringComparison.Ordinal)
         && performanceSource.Contains("new ShellPopupOpenerCard", StringComparison.Ordinal)
         && performanceSource.Contains("openerCard.Invoked +=", StringComparison.Ordinal),
@@ -2547,15 +2547,15 @@ static void HostedMainWindowPopupKeyboardContract()
 
 static void MainWindowAdaptiveShellLayoutStaysWired()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
-    var topBarXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml"));
-    var railXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellNavigationRailControl.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
+    var topBarXaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellTopBarControl.xaml");
+    var railXaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ShellNavigationRailControl.xaml");
     var windowTag = xaml[..(xaml.IndexOf('>') + 1)];
     var topBarLayout = XamlStartTag(topBarXaml, "TopBarLayoutGrid", "Grid");
     var topBarStatus = XamlStartTag(topBarXaml, "TopBarStatus", "Grid");
     var topBarCommands = XamlStartTag(topBarXaml, "TopBarCommandPanel", "WrapPanel");
     var saveStatusProxy = XamlStartTag(topBarXaml, "SaveStatusText", "TextBlock");
-    var statusCenterXaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/UniversalStatusCenterControl.xaml"));
+    var statusCenterXaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/UniversalStatusCenterControl.xaml");
     var statusCard = XamlStartTag(statusCenterXaml, "StatusCenterCard", "Border");
     var statusText = XamlStartTag(statusCenterXaml, "LiveAnnouncementText", "TextBlock");
     var transcriptSearchPopup = XamlStartTag(topBarXaml, "TranscriptSearchPopup", "Popup");
@@ -2599,7 +2599,7 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
     Require(topBarCommands.Contains("Grid.Row=\"1\"", StringComparison.Ordinal) && topBarCommands.Contains("Grid.ColumnSpan=\"2\"", StringComparison.Ordinal), "the top bar should fail safe to the narrow two-row arrangement before its first size pass");
     Require(topBarCommands.Contains("HorizontalAlignment=\"Right\"", StringComparison.Ordinal), "stacked top-bar commands should remain visually anchored to the right");
     Require(topBarCommands.Contains("VerticalAlignment=\"Center\"", StringComparison.Ordinal), "inline top-bar commands should share the primary-row centerline with the metrics");
-    var mainWindowSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var mainWindowSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
     Require(mainWindowSource.Contains("Grid.SetRow(TopBarCommandPanel, stacked ? 1 : 0);", StringComparison.Ordinal), "the adaptive shell should move commands between the narrow command row and shared primary row");
     Require(mainWindowSource.Contains("ShellNavigationRail.Presentation = ShellTopBar.Presentation;", StringComparison.Ordinal), "the navigation rail and top bar should share the exact shell presentation model instance");
     Require(transcriptSearchPopup.Contains("PlacementTarget=\"{Binding ElementName=TopBarLayoutGrid}\"", StringComparison.Ordinal), "the transcript search popup should open below the complete multi-row top bar");
@@ -2682,7 +2682,7 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
         Require(changedProperties.Contains(propertyName), $"{propertyName} should notify the shared status binding when its projection changes");
     }
 
-    var screenshotSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs"));
+    var screenshotSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.ControlPlane.cs");
     Require(screenshotSource.Contains("ShowTransientStatus(receiptText, result.Path, helpText)", StringComparison.Ordinal), "screenshot receipts should move through the shared status presentation");
     Require(screenshotSource.Contains("ClearTransientStatus(generation)", StringComparison.Ordinal), "screenshot receipt expiry should clear only its own generation");
     Require(!screenshotSource.Contains("SetTransientStatusVisible", StringComparison.Ordinal), "screenshot receipts should not use the retired visibility-only status API");
@@ -2703,7 +2703,7 @@ static void MainWindowAdaptiveShellLayoutStaysWired()
     Require(xaml.Contains("x:Name=\"SettingsPendingChangesText\"", StringComparison.Ordinal), "settings should expose an exact pending-change receipt");
     Require(xaml.Contains("x:Name=\"ApplySettingsLabel\"", StringComparison.Ordinal), "settings should update the Apply label with the pending-change count");
 
-    var source = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var source = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
     Require(source.Contains("PreserveCurrentSessionSettingsDraft();", StringComparison.Ordinal), "same-session refreshes should capture pending Apply-only settings before snapshot rendering");
     Require(source.Contains("ReconcileSessionSettingsAfterSnapshot", StringComparison.Ordinal), "snapshot rendering should restore per-session drafts after updating their persisted baseline");
     Require(source.Contains("Unapplied session changes", StringComparison.Ordinal), "app exit should ask before discarding unapplied session drafts");
@@ -2817,7 +2817,7 @@ static void MainWindowEmptyExportStatusReleasesToolbarSpace()
 
 static void MainWindowRightRailCollapsePreservesKeyboardContext()
 {
-    var source = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+    var source = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
     var methodStart = source.IndexOf("private void ApplyRightRailCollapsed()", StringComparison.Ordinal);
     var methodEnd = source.IndexOf("internal static bool ShouldAutoCollapseRightRail", methodStart, StringComparison.Ordinal);
     Require(methodStart >= 0 && methodEnd > methodStart, "the right-rail layout method should remain discoverable");
@@ -2970,7 +2970,7 @@ static void MainWindowDebugControlsRemainDiscoverable()
 
 static void MainWindowInternetSettingsUseOneDirectToggle()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
 
     Require(xaml.Contains("x:Name=\"UseInternetCheckBox\"", StringComparison.Ordinal), "internet settings should keep the direct enable toggle");
     Require(xaml.Contains("x:Name=\"InternetBackendStatusText\"", StringComparison.Ordinal), "internet settings should keep backend health visibility");
@@ -3048,7 +3048,7 @@ static void MainWindowModelProviderUsesProgressiveDisclosure()
     Require(!document.Descendants().Any(element => string.Equals((string?)element.Attribute(xamlNamespace + "Name"), "ActiveParticipantsPicker", StringComparison.Ordinal)), "Settings should not duplicate the Match Setup participant picker");
     Require(Named("StreamModelResponsesCheckBox").Ancestors().Contains(Named("AgentSettingsExpander")), "Agent streaming should live with Agent workspace settings");
     Require(Named("UseDefaultModelForAllRolesButton").Descendants().Any(element => (string?)element.Attribute("Text") == "Use default for every role"), "role inheritance should be described as following the default model");
-    var providerSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/ProviderSettingsCoordinator.cs"));
+    var providerSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ProviderSettingsCoordinator.cs");
     var preloadLifecycle = CSharpMethodBlock(providerSource, "public async Task PreloadSelectedModelsAsync(");
     var unloadLifecycle = CSharpMethodBlock(providerSource, "public async Task UnloadSelectedModelsAsync(");
     Require(preloadLifecycle.Contains("RunLifecycleLockedAsync", StringComparison.Ordinal)
@@ -3135,7 +3135,7 @@ static void SettingsSearchExpandsNestedDisclosuresAndRestoresState()
     MainWindow.RestoreSettingsExpansion(expanders, priorExpansion);
     Require(reasoning.Visibility == Visibility.Visible && !reasoning.IsExpanded, "clearing search should restore a previously collapsed subsection");
     Require(downloads.Visibility == Visibility.Visible && downloads.IsExpanded, "clearing search should restore a previously expanded subsection");
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     Require(xaml.Contains("x:Name=\"SettingsSearchFeedbackText\"", StringComparison.Ordinal)
         && xaml.Contains("AutomationProperties.LiveSetting=\"Polite\"", StringComparison.Ordinal), "settings search should announce its visible result count or empty state");
     Require(xaml.Contains("x:Name=\"SettingsSearchClearButton\"", StringComparison.Ordinal)

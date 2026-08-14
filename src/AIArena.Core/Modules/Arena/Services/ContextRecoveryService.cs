@@ -198,7 +198,11 @@ public sealed class ContextRecoveryService
                         "Continue the same public answer exactly where it stopped. Do not restart, repeat, summarize, or mention the output limit."));
                     return ModelResponseToneInstructions.Apply(config, messages, factoryMode: false);
                 },
-                frozen);
+                frozen,
+                selectionContract: ArenaHistoryBudgetService.ArenaTurnPromptSelectionContract(
+                    snapshot,
+                    original.Turn,
+                    transcriptAfterTurn: null));
             if (!budgeted.Ok)
             {
                 await AppendContinuationFailedEventAsync(sessionId, original, attemptId,

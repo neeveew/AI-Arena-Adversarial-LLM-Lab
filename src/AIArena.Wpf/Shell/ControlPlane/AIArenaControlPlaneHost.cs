@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO;
 using System.IO.Pipes;
 using System.Security.Cryptography;
@@ -7,6 +8,8 @@ namespace AIArena.Wpf;
 
 internal sealed class AIArenaControlPlaneHost : IDisposable
 {
+    internal const int RequestReadBufferBytes = 4 * 1024;
+
     private readonly IAIArenaControlTarget target;
     private readonly IAIArenaControlEventSource eventSource;
     private readonly string pipeName;
@@ -344,44 +347,71 @@ internal sealed class AIArenaControlPlaneHost : IDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<string> ReadBoundedLineAsync(Stream stream, CancellationToken cancellationToken)
+    internal static async Task<string> ReadBoundedLineAsync(Stream stream, CancellationToken cancellationToken)
     {
-        using var buffer = new MemoryStream();
-        var tooLarge = false;
-        var oneByte = new byte[1];
-        while (true)
+        var readBuffer = ArrayPool<byte>.Shared.Rent(RequestReadBufferBytes);
+        try
         {
-            var read = await stream.ReadAsync(oneByte, cancellationToken).ConfigureAwait(false);
-            if (read == 0)
+            var requestBuffer = ArrayPool<byte>.Shared.Rent(AIArenaControlPlaneProtocol.MaxRequestBytes);
+            var requestLength = 0;
+            try
             {
-                break;
-            }
+                var tooLarge = false;
+                var reachedLineEnd = false;
+                while (!reachedLineEnd)
+                {
+                    var read = await stream
+                        .ReadAsync(readBuffer.AsMemory(0, RequestReadBufferBytes), cancellationToken)
+                        .ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        break;
+                    }
 
-            if (oneByte[0] == (byte)'\n')
+                    for (var index = 0; index < read; index++)
+                    {
+                        var value = readBuffer[index];
+                        if (value == (byte)'\n')
+                        {
+                            // The protocol accepts exactly one request per connection. Any bytes
+                            // delivered after its first line are intentionally discarded on close.
+                            reachedLineEnd = true;
+                            break;
+                        }
+
+                        if (value == (byte)'\r')
+                        {
+                            continue;
+                        }
+
+                        if (requestLength >= AIArenaControlPlaneProtocol.MaxRequestBytes)
+                        {
+                            tooLarge = true;
+                            continue;
+                        }
+
+                        requestBuffer[requestLength++] = value;
+                    }
+                }
+
+                if (tooLarge)
+                {
+                    throw new InvalidDataException("Request body is too large.");
+                }
+
+                return Encoding.UTF8.GetString(requestBuffer, 0, requestLength);
+            }
+            finally
             {
-                break;
+                CryptographicOperations.ZeroMemory(requestBuffer.AsSpan(0, requestLength));
+                ArrayPool<byte>.Shared.Return(requestBuffer);
             }
-
-            if (oneByte[0] == (byte)'\r')
-            {
-                continue;
-            }
-
-            if (buffer.Length >= AIArenaControlPlaneProtocol.MaxRequestBytes)
-            {
-                tooLarge = true;
-                continue;
-            }
-
-            buffer.WriteByte(oneByte[0]);
         }
-
-        if (tooLarge)
+        finally
         {
-            throw new InvalidDataException("Request body is too large.");
+            CryptographicOperations.ZeroMemory(readBuffer.AsSpan());
+            ArrayPool<byte>.Shared.Return(readBuffer);
         }
-
-        return Encoding.UTF8.GetString(buffer.ToArray());
     }
 
     private async Task StreamEventsAsync(Stream stream, CancellationToken cancellationToken)

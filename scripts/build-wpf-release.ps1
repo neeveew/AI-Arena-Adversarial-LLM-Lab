@@ -11,7 +11,9 @@ param(
     [string]$SigningPolicy = 'Optional',
     [string]$SigningCertificateThumbprint = $env:AIARENA_SIGNING_CERT_THUMBPRINT,
     [string]$SignTool = "",
-    [string]$TimestampUrl = 'http://timestamp.digicert.com'
+    [string]$TimestampUrl = 'http://timestamp.digicert.com',
+    [string]$VerificationReceiptPath = '',
+    [string]$VerificationReceiptKey = ''
 )
 
 $ErrorActionPreference = "Stop"
@@ -68,9 +70,25 @@ if ((Test-Path -LiteralPath $output) -and $Force) {
     Remove-Item -LiteralPath $output -Recurse -Force
 }
 
+if ((-not [string]::IsNullOrWhiteSpace($VerificationReceiptPath)) `
+    -ne (-not [string]::IsNullOrWhiteSpace($VerificationReceiptKey))) {
+    throw 'VerificationReceiptPath and VerificationReceiptKey must be supplied together.'
+}
+if (-not [string]::IsNullOrWhiteSpace($VerificationReceiptPath)) {
+    [void](Invoke-AIArenaReleaseVerificationHarnesses `
+        -RepositoryRoot $repoRoot `
+        -Configuration $Configuration `
+        -ProjectPath @($coreTests, $wpfTests) `
+        -OutputPath $VerificationReceiptPath `
+        -ReceiptKey $VerificationReceiptKey)
+}
+else {
+    [void](Invoke-AIArenaReleaseVerificationHarnesses `
+        -RepositoryRoot $repoRoot `
+        -Configuration $Configuration `
+        -ProjectPath @($coreTests, $wpfTests))
+}
 $dotnet = Get-Command dotnet -CommandType Application -ErrorAction Stop | Select-Object -First 1
-Invoke-AIArenaNativeCommand -FilePath $dotnet.Source -ArgumentList @('run', '--project', $coreTests, '-c', $Configuration, '--no-restore') -Label 'Core test harness'
-Invoke-AIArenaNativeCommand -FilePath $dotnet.Source -ArgumentList @('run', '--project', $wpfTests, '-c', $Configuration, '--no-restore') -Label 'WPF test harness'
 
 # ReadyToRun precompiles the hot startup path. Measured on a self-contained
 # build: warm launch to a responsive shell drops from about 1230 ms to 1110 ms,
@@ -218,10 +236,14 @@ $githubNotesLines = @(
 )
 Set-Content -LiteralPath $githubNotesPath -Value $githubNotesLines -Encoding UTF8
 
-New-AIArenaSha256Manifest `
+$releaseChecksumEntries = @(Get-AIArenaSha256Entries `
+    -BaseDirectory $output `
+    -ExcludeRelativePath @('release-manifest.txt', 'release-checksums.sha256'))
+Write-AIArenaSha256ManifestEntries `
     -BaseDirectory $output `
     -OutputPath $releaseChecksumsPath `
-    -ExcludeRelativePath @('release-manifest.txt')
+    -Entries $releaseChecksumEntries
+$releaseChecksumsHash = (Get-FileHash -LiteralPath $releaseChecksumsPath -Algorithm SHA256).Hash.ToUpperInvariant()
 
 # Record which source produced this payload. Without it a release cannot be told
 # apart from one built before a later source commit, which is how an installer
@@ -255,11 +277,10 @@ $manifestLines = @(
     "Signing enabled: $($signing.Enabled)",
     "Source commit: $($sourceState.Commit)",
     "Source tree (src): $($sourceState.SrcTree)",
-    "",
-    "SHA256:"
+    "Checksum inventory: release-checksums.sha256",
+    "Checksum inventory SHA256: $releaseChecksumsHash",
+    "Checksum entries: $($releaseChecksumEntries.Count)"
 )
-$manifestLines += Get-AIArenaSha256Entries -BaseDirectory $output -ExcludeRelativePath @('release-manifest.txt') |
-    ForEach-Object { "$($_.Hash)  $($_.RelativePath)" }
 Set-Content -LiteralPath $manifestPath -Value $manifestLines -Encoding UTF8
 
 Write-Host "WPF release build created:"

@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Collections.Immutable;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -65,6 +67,24 @@ public static partial class ArenaContractPrivacyRules
         try
         {
             using var document = JsonDocument.Parse(json, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = 64
+            });
+            return Inspect(document.RootElement);
+        }
+        catch (JsonException ex)
+        {
+            return [new ArenaContractValidationIssue("json.invalid", "$", ex.Message)];
+        }
+    }
+
+    internal static ImmutableArray<ArenaContractValidationIssue> InspectUtf8(ReadOnlyMemory<byte> utf8Json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(utf8Json, new JsonDocumentOptions
             {
                 AllowTrailingCommas = false,
                 CommentHandling = JsonCommentHandling.Disallow,
@@ -198,6 +218,130 @@ public static partial class ArenaContractCodec
                 [new ArenaContractValidationIssue("contract.null", "$", "Contract is required.")]);
         }
 
+        var issues = ValidateDomain(contract);
+
+        try
+        {
+            issues.AddRange(ArenaContractPrivacyRules.Inspect(
+                JsonSerializer.SerializeToElement(contract, contract.GetType(), JsonOptions)));
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        {
+            Add(issues, "contract.serialization", "$", ex.Message);
+        }
+
+        return new ArenaContractValidationResult(Sort(issues));
+    }
+
+    public static string Serialize<T>(T contract, bool indented = false)
+        where T : class, IArenaVersionedContract
+    {
+        var payload = CreateCanonicalPayload(contract, indented);
+        return Encoding.UTF8.GetString(payload.WrittenSpan);
+    }
+
+    /// <summary>
+    /// Produces the same privacy-validated canonical wire bytes used by the
+    /// string, hashing, and persistence facades without an intermediate string.
+    /// </summary>
+    public static byte[] SerializeToUtf8Bytes<T>(T contract, bool indented = false)
+        where T : class, IArenaVersionedContract =>
+        CreateCanonicalPayload(contract, indented).WrittenSpan.ToArray();
+
+    /// <summary>
+    /// Hashes the privacy-validated canonical UTF-8 wire representation without
+    /// first materializing its string facade.
+    /// </summary>
+    public static string ComputeSha256<T>(T contract)
+        where T : class, IArenaVersionedContract
+    {
+        var payload = CreateCanonicalPayload(contract, indented: false);
+        return Convert.ToHexStringLower(SHA256.HashData(payload.WrittenSpan));
+    }
+
+    public static bool TryDeserialize<T>(
+        string json,
+        out T? contract,
+        out ImmutableArray<ArenaContractValidationIssue> issues)
+        where T : class, IArenaVersionedContract
+    {
+        contract = null;
+        try
+        {
+            var sourceIssues = ArenaContractPrivacyRules.InspectJson(json);
+            if (!sourceIssues.IsEmpty)
+            {
+                issues = sourceIssues;
+                return false;
+            }
+
+            contract = JsonSerializer.Deserialize<T>(json, JsonOptions);
+            issues = contract is null
+                ? [new ArenaContractValidationIssue("contract.null", "$", "Contract is required.")]
+                : Sort(ValidateDomain(contract));
+            if (!issues.IsEmpty)
+            {
+                contract = null;
+                return false;
+            }
+
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            issues = [new ArenaContractValidationIssue("json.invalid", "$", ex.Message)];
+            return false;
+        }
+        catch (NotSupportedException ex)
+        {
+            issues = [new ArenaContractValidationIssue("json.unsupported", "$", ex.Message)];
+            return false;
+        }
+    }
+
+    internal static bool TryDeserialize<T>(
+        ReadOnlyMemory<byte> utf8Json,
+        out T? contract,
+        out ImmutableArray<ArenaContractValidationIssue> issues)
+        where T : class, IArenaVersionedContract
+    {
+        contract = null;
+        try
+        {
+            var sourceIssues = ArenaContractPrivacyRules.InspectUtf8(utf8Json);
+            if (!sourceIssues.IsEmpty)
+            {
+                issues = sourceIssues;
+                return false;
+            }
+
+            contract = JsonSerializer.Deserialize<T>(utf8Json.Span, JsonOptions);
+            issues = contract is null
+                ? [new ArenaContractValidationIssue("contract.null", "$", "Contract is required.")]
+                : Sort(ValidateDomain(contract));
+            if (!issues.IsEmpty)
+            {
+                contract = null;
+                return false;
+            }
+
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            issues = [new ArenaContractValidationIssue("json.invalid", "$", ex.Message)];
+            return false;
+        }
+        catch (NotSupportedException ex)
+        {
+            issues = [new ArenaContractValidationIssue("json.unsupported", "$", ex.Message)];
+            return false;
+        }
+    }
+
+    private static ImmutableArray<ArenaContractValidationIssue>.Builder ValidateDomain<T>(T contract)
+        where T : class, IArenaVersionedContract
+    {
         var issues = ImmutableArray.CreateBuilder<ArenaContractValidationIssue>();
         if (!SchemaByType.TryGetValue(contract.GetType(), out var expectedSchema))
         {
@@ -226,23 +370,30 @@ public static partial class ArenaContractCodec
             case ArenaQaEvidenceContract value: ValidateQaEvidence(value, issues); break;
         }
 
+        return issues;
+    }
+
+    private static ArrayBufferWriter<byte> CreateCanonicalPayload<T>(T contract, bool indented)
+        where T : class, IArenaVersionedContract
+    {
+        if (contract is null)
+        {
+            throw new InvalidDataException("contract.null at $: Contract is required.");
+        }
+
+        var issues = ValidateDomain(contract);
+        JsonElement element = default;
         try
         {
-            issues.AddRange(ArenaContractPrivacyRules.Inspect(
-                JsonSerializer.SerializeToElement(contract, contract.GetType(), JsonOptions)));
+            element = JsonSerializer.SerializeToElement(contract, contract.GetType(), JsonOptions);
+            issues.AddRange(ArenaContractPrivacyRules.Inspect(element));
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
             Add(issues, "contract.serialization", "$", ex.Message);
         }
 
-        return new ArenaContractValidationResult(Sort(issues));
-    }
-
-    public static string Serialize<T>(T contract, bool indented = false)
-        where T : class, IArenaVersionedContract
-    {
-        var validation = Validate(contract);
+        var validation = new ArenaContractValidationResult(Sort(issues));
         if (!validation.IsValid)
         {
             throw new InvalidDataException(string.Join(
@@ -250,53 +401,13 @@ public static partial class ArenaContractCodec
                 validation.Issues.Select(issue => $"{issue.Code} at {issue.Path}: {issue.Message}")));
         }
 
-        var element = JsonSerializer.SerializeToElement(contract, contract.GetType(), JsonOptions);
-        using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = indented }))
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = indented }))
         {
             WriteCanonical(element, writer);
         }
 
-        return Encoding.UTF8.GetString(stream.ToArray());
-    }
-
-    public static bool TryDeserialize<T>(
-        string json,
-        out T? contract,
-        out ImmutableArray<ArenaContractValidationIssue> issues)
-        where T : class, IArenaVersionedContract
-    {
-        contract = null;
-        try
-        {
-            var sourceIssues = ArenaContractPrivacyRules.InspectJson(json);
-            if (!sourceIssues.IsEmpty)
-            {
-                issues = sourceIssues;
-                return false;
-            }
-
-            contract = JsonSerializer.Deserialize<T>(json, JsonOptions);
-            var validation = Validate(contract);
-            issues = validation.Issues;
-            if (!validation.IsValid)
-            {
-                contract = null;
-                return false;
-            }
-
-            return true;
-        }
-        catch (JsonException ex)
-        {
-            issues = [new ArenaContractValidationIssue("json.invalid", "$", ex.Message)];
-            return false;
-        }
-        catch (NotSupportedException ex)
-        {
-            issues = [new ArenaContractValidationIssue("json.unsupported", "$", ex.Message)];
-            return false;
-        }
+        return buffer;
     }
 
     private static void ValidateExperiment(

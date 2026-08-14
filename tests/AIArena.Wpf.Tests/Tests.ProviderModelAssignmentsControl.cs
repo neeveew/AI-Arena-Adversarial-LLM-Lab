@@ -173,8 +173,8 @@ internal static partial class Program
                 SystemMotionPreferences.ClearQaOverride();
             }
 
-            var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ProviderModelAssignmentsControl.xaml"));
-            var codeBehind = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/ProviderModelAssignmentsControl.xaml.cs"));
+            var xaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ProviderModelAssignmentsControl.xaml");
+            var codeBehind = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/ProviderModelAssignmentsControl.xaml.cs");
             Require(!xaml.Contains("Storyboard", StringComparison.Ordinal)
                     && !xaml.Contains("Animation", StringComparison.Ordinal)
                     && !xaml.Contains("GPU", StringComparison.OrdinalIgnoreCase)

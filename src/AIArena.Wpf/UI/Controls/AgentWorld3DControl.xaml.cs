@@ -42,7 +42,14 @@ public partial class AgentWorld3DControl : UserControl
     private readonly Func<bool> animationsEnabledProvider;
     private readonly bool observeSystemMotionPreferences;
     private readonly Model3DGroup sceneGroup = new();
+    // Keep the two scenery roots stable. Snapshot reconciliation replaces only the
+    // children whose inputs changed, which avoids detaching the entire visual scene
+    // (and all avatar transforms) on every arena update.
+    private readonly Model3DGroup staticSceneGroup = new();
+    private readonly Model3DGroup skylineSceneGroup = new();
     private readonly List<WorldAgentVisual> agentVisuals = [];
+    private readonly Dictionary<string, LegendVisual> legendVisuals = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CueVisual> cueVisuals = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Ellipse> miniMapMarkers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, MiniMapMarkerRenderState> miniMapMarkerStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> activeMiniMapAgentIds = new(StringComparer.OrdinalIgnoreCase);
@@ -114,12 +121,23 @@ public partial class AgentWorld3DControl : UserControl
     private string worldStatusSummary = "Waiting for arena snapshot.";
     private string worldBadgeLabel = "";
     private int snapshotApplyCount;
-    // Content+theme signature of the last rendered world; identical re-applies skip the
-    // full scene teardown/rebuild and let the running animation carry on.
+    // Content+theme signature of the last rendered world; identical re-applies skip
+    // reconciliation and let the running animation carry on.
     private string lastWorldSignature = "";
+    private string lastThemeSignature = "";
+    private string lastSkylineSignature = "";
     private int sceneRebuildCount;
+    private int staticGeometryRefreshCount;
+    private int skylineRefreshCount;
+    private int avatarVisualCreationCount;
+    private int avatarGeometryRefreshCount;
+    private int overlayElementCreationCount;
+    private int legendElementCreationCount;
+    private int cueElementCreationCount;
+    private int geometryModelCreationCount;
+    private int sceneStructuralOperationCount;
     private static readonly Color NeutralStageLightColor = Color.FromRgb(116, 136, 214);
-    // Reused across scene rebuilds so its colour can ease toward the speaker's accent each frame.
+    // Reused across scene reconciliations so its colour can ease toward the speaker's accent each frame.
     private readonly DirectionalLight speakerAccentLight = new(NeutralStageLightColor, new Vector3D(-0.28, -0.42, 0.88));
 
     // Static obstacles (center X, center Z, radius) the agents navigate around. Built with
@@ -132,10 +150,73 @@ public partial class AgentWorld3DControl : UserControl
         (-5.6, 2.4, 0.5),  // data pylon
         (5.6, -2.4, 0.5)   // data pylon
     ];
+    private static readonly (string Key, Color Fallback)[] WorldThemeResources =
+    [
+        ("PrimaryBorderBrush", Color.FromRgb(46, 168, 137)),
+        ("PanelBrush", Color.FromRgb(24, 35, 31)),
+        ("InputBrush", Color.FromRgb(13, 23, 20)),
+        ("PrimaryBrush", Color.FromRgb(16, 84, 68)),
+        ("ControlBorderBrush", Color.FromRgb(72, 100, 90)),
+        ("AssistBorderBrush", Color.FromRgb(225, 125, 182)),
+        ("BetaAccentBrush", Color.FromRgb(240, 195, 106)),
+        ("CardBrush", Color.FromRgb(20, 32, 27)),
+        ("DeltaAccentBrush", Color.FromRgb(158, 166, 255)),
+        ("DangerTextBrush", Color.FromRgb(255, 123, 130)),
+        ("DangerBorderBrush", Color.FromRgb(238, 94, 112)),
+        ("MutedTextBrush", Color.FromRgb(184, 199, 191)),
+        ("DisabledBorderBrush", Color.FromRgb(39, 52, 47)),
+        ("TextBrush", Color.FromRgb(221, 231, 226))
+    ];
 
     internal int DebugAvatarVisualCount => agentVisuals.Count;
 
     internal int DebugSnapshotApplyCount => snapshotApplyCount;
+
+    internal int DebugStaticGeometryRefreshCount => staticGeometryRefreshCount;
+
+    internal int DebugSkylineRefreshCount => skylineRefreshCount;
+
+    internal int DebugAvatarVisualCreationCount => avatarVisualCreationCount;
+
+    internal int DebugAvatarGeometryRefreshCount => avatarGeometryRefreshCount;
+
+    internal int DebugOverlayElementCreationCount => overlayElementCreationCount;
+
+    internal int DebugLegendElementCreationCount => legendElementCreationCount;
+
+    internal int DebugCueElementCreationCount => cueElementCreationCount;
+
+    internal int DebugGeometryModelCreationCount => geometryModelCreationCount;
+
+    internal int DebugSceneStructuralOperationCount => sceneStructuralOperationCount;
+
+    internal object DebugStaticSceneElement => staticSceneGroup;
+
+    internal object DebugSkylineSceneElement => skylineSceneGroup;
+
+    internal IReadOnlyList<object> DebugAgentModelElements => agentVisuals
+        .Select(visual => (object)visual.Model)
+        .ToArray();
+
+    internal IReadOnlyList<object> DebugAgentTransformElements => agentVisuals
+        .Select(visual => (object)visual.Translate)
+        .ToArray();
+
+    internal IReadOnlyList<object> DebugAgentNameTagElements => agentVisuals
+        .Select(visual => (object)visual.NameTag)
+        .ToArray();
+
+    internal IReadOnlyList<object> DebugAgentBubbleElements => agentVisuals
+        .Select(visual => (object)visual.Bubble)
+        .ToArray();
+
+    internal IReadOnlyList<object> DebugLegendElements => WorldLegendItems.Children
+        .Cast<object>()
+        .ToArray();
+
+    internal IReadOnlyList<object> DebugCueElements => WorldCueItems.Children
+        .Cast<object>()
+        .ToArray();
 
     internal bool DebugIsAnimationRunning => animationTimer.IsEnabled;
 
@@ -565,6 +646,16 @@ public partial class AgentWorld3DControl : UserControl
 
     public void ApplySnapshot(ArenaViewSnapshot snapshot)
     {
+        ApplySnapshotCore(snapshot, forceFullRebuild: false);
+    }
+
+    internal void DebugApplySnapshotWithFullRebuild(ArenaViewSnapshot snapshot)
+    {
+        ApplySnapshotCore(snapshot, forceFullRebuild: true);
+    }
+
+    private void ApplySnapshotCore(ArenaViewSnapshot snapshot, bool forceFullRebuild)
+    {
         snapshotApplyCount++;
         var firstSnapshot = currentWorld is null;
         var previousSessionId = currentWorld?.SessionId ?? "";
@@ -572,10 +663,10 @@ public partial class AgentWorld3DControl : UserControl
         var sessionChanged = !string.IsNullOrWhiteSpace(previousSessionId) &&
             !previousSessionId.Equals(currentWorld.SessionId, StringComparison.OrdinalIgnoreCase);
 
-        // Rebuild-diffing: when nothing render-affecting changed (a common case on refresh
-        // ticks and view switches), keep the existing scene and let the animation timer run.
+        // Identical refresh ticks are common while AI World is visible. They need no
+        // projection or render-tree work at all.
         var signature = WorldSignature(currentWorld);
-        if (!firstSnapshot && !sessionChanged && agentVisuals.Count > 0 && signature == lastWorldSignature)
+        if (!forceFullRebuild && !firstSnapshot && !sessionChanged && signature == lastWorldSignature)
         {
             return;
         }
@@ -592,7 +683,15 @@ public partial class AgentWorld3DControl : UserControl
             ResetWorldViewState();
         }
 
-        RebuildScene();
+        if (forceFullRebuild)
+        {
+            RebuildScene();
+        }
+        else
+        {
+            ReconcileScene(resetAgentPositions: sessionChanged);
+        }
+
         EnsureSelection();
         PopulateCuePanel();
         PopulateLegend();
@@ -606,19 +705,33 @@ public partial class AgentWorld3DControl : UserControl
 
     private string WorldSignature(AgentWorldSnapshot world)
     {
-        // Records' generated ToString covers every render-affecting field, so any content
-        // change busts the cache. Theme colours are appended so a recolour also rebuilds.
+        // Records' generated ToString covers every projected field. The theme signature
+        // includes every resource consumed by the 3D and overlay renderers.
         var builder = new System.Text.StringBuilder();
         builder.Append(world.TurnIndex).Append('|').Append(world.MessageCount).Append('|');
         builder.Append(world.Pulse).Append('|');
+        foreach (var cue in world.Cues)
+        {
+            builder.Append(cue).Append('\n');
+        }
+
         foreach (var avatar in world.Avatars)
         {
             builder.Append(avatar).Append('\n');
         }
 
-        builder.Append(ResourceColor("PrimaryBorderBrush", Colors.Black)).Append('|');
-        builder.Append(ResourceColor("PanelBrush", Colors.Black)).Append('|');
-        builder.Append(ResourceColor("InputBrush", Colors.Black));
+        builder.Append(ThemeSignature());
+        return builder.ToString();
+    }
+
+    private string ThemeSignature()
+    {
+        var builder = new System.Text.StringBuilder(256);
+        foreach (var (key, fallback) in WorldThemeResources)
+        {
+            builder.Append(ResourceColor(key, fallback)).Append('|');
+        }
+
         return builder.ToString();
     }
 
@@ -636,15 +749,23 @@ public partial class AgentWorld3DControl : UserControl
             StringComparer.OrdinalIgnoreCase);
 
         sceneGroup.Children.Clear();
+        sceneStructuralOperationCount++;
+        staticSceneGroup.Children.Clear();
+        skylineSceneGroup.Children.Clear();
         agentVisuals.Clear();
         OverlayCanvas.Children.Clear();
+        legendVisuals.Clear();
+        cueVisuals.Clear();
+        WorldLegendItems.Children.Clear();
+        WorldCueItems.Children.Clear();
         miniMapRosterDirty = true;
         miniMapStyleDirty = true;
 
-        foreach (var item in BuildWorldGeometry())
-        {
-            sceneGroup.Children.Add(item);
-        }
+        RefreshStaticGeometry();
+        RefreshSkylineGeometry();
+        sceneGroup.Children.Add(staticSceneGroup);
+        sceneGroup.Children.Add(skylineSceneGroup);
+        sceneStructuralOperationCount += 2;
 
         if (currentWorld is null)
         {
@@ -666,15 +787,148 @@ public partial class AgentWorld3DControl : UserControl
 
             sceneGroup.Children.Add(visual.Shadow);
             sceneGroup.Children.Add(visual.Model);
+            sceneStructuralOperationCount += 2;
             agentVisuals.Add(visual);
             OverlayCanvas.Children.Add(visual.AttentionHalo);
             OverlayCanvas.Children.Add(visual.NameTag);
             OverlayCanvas.Children.Add(visual.Bubble);
+            sceneStructuralOperationCount += 3;
         }
 
         AnimateAgents();
         PositionOverlays();
         PositionMiniMap();
+    }
+
+    private void ReconcileScene(bool resetAgentPositions)
+    {
+        var themeSignature = ThemeSignature();
+        var themeChanged = !themeSignature.Equals(lastThemeSignature, StringComparison.Ordinal);
+        if (themeChanged || staticSceneGroup.Children.Count == 0)
+        {
+            RefreshStaticGeometry();
+        }
+
+        var skylineSignature = SkylineSignature(currentWorld);
+        if (themeChanged || !skylineSignature.Equals(lastSkylineSignature, StringComparison.Ordinal))
+        {
+            RefreshSkylineGeometry();
+        }
+
+        EnsureSceneRoots();
+        ReconcileAgents(themeChanged, resetAgentPositions);
+        lastThemeSignature = themeSignature;
+        lastSkylineSignature = skylineSignature;
+        AnimateAgents();
+        PositionOverlays();
+        PositionMiniMap();
+    }
+
+    private void EnsureSceneRoots()
+    {
+        if (!sceneGroup.Children.Contains(staticSceneGroup))
+        {
+            sceneGroup.Children.Insert(0, staticSceneGroup);
+            sceneStructuralOperationCount++;
+        }
+
+        if (!sceneGroup.Children.Contains(skylineSceneGroup))
+        {
+            sceneGroup.Children.Insert(Math.Min(1, sceneGroup.Children.Count), skylineSceneGroup);
+            sceneStructuralOperationCount++;
+        }
+    }
+
+    private void RefreshStaticGeometry()
+    {
+        staticGeometryRefreshCount++;
+        staticSceneGroup.Children.Clear();
+        foreach (var item in BuildStaticWorldGeometry())
+        {
+            staticSceneGroup.Children.Add(item);
+        }
+
+        lastThemeSignature = ThemeSignature();
+        miniMapStyleDirty = true;
+    }
+
+    private void RefreshSkylineGeometry()
+    {
+        skylineRefreshCount++;
+        skylineSceneGroup.Children.Clear();
+        foreach (var item in BuildSkylineGeometry())
+        {
+            skylineSceneGroup.Children.Add(item);
+        }
+
+        lastSkylineSignature = SkylineSignature(currentWorld);
+    }
+
+    private void ReconcileAgents(bool themeChanged, bool resetAgentPositions)
+    {
+        var desired = currentWorld?.Avatars ?? [];
+        var existingById = agentVisuals.ToDictionary(
+            visual => visual.Avatar.Id,
+            StringComparer.OrdinalIgnoreCase);
+        var desiredIds = new HashSet<string>(desired.Select(avatar => avatar.Id), StringComparer.OrdinalIgnoreCase);
+        var rosterChanged = desired.Count != agentVisuals.Count ||
+            agentVisuals.Any(visual => !desiredIds.Contains(visual.Avatar.Id));
+
+        foreach (var visual in agentVisuals)
+        {
+            if (desiredIds.Contains(visual.Avatar.Id))
+            {
+                continue;
+            }
+
+            sceneGroup.Children.Remove(visual.Shadow);
+            sceneGroup.Children.Remove(visual.Model);
+            OverlayCanvas.Children.Remove(visual.AttentionHalo);
+            OverlayCanvas.Children.Remove(visual.NameTag);
+            OverlayCanvas.Children.Remove(visual.Bubble);
+            sceneStructuralOperationCount += 5;
+        }
+
+        var next = new List<WorldAgentVisual>(desired.Count);
+        foreach (var avatar in desired)
+        {
+            if (!existingById.TryGetValue(avatar.Id, out var existing))
+            {
+                var added = BuildAgentVisual(avatar);
+                sceneGroup.Children.Add(added.Shadow);
+                sceneGroup.Children.Add(added.Model);
+                OverlayCanvas.Children.Add(added.AttentionHalo);
+                OverlayCanvas.Children.Add(added.NameTag);
+                OverlayCanvas.Children.Add(added.Bubble);
+                sceneStructuralOperationCount += 5;
+                next.Add(added);
+                rosterChanged = true;
+                continue;
+            }
+
+            var geometryChanged = themeChanged ||
+                !AgentGeometrySignature(existing.Avatar).Equals(AgentGeometrySignature(avatar), StringComparison.Ordinal);
+            var updated = geometryChanged
+                ? BuildAgentVisual(avatar, existing)
+                : UpdateAgentProjection(existing, avatar);
+            if (resetAgentPositions)
+            {
+                updated.Translate.OffsetX = avatar.X;
+                updated.Translate.OffsetY = 0;
+                updated.Translate.OffsetZ = avatar.Z;
+                updated.ShadowTranslate.OffsetX = avatar.X;
+                updated.ShadowTranslate.OffsetZ = avatar.Z;
+            }
+
+            next.Add(updated);
+        }
+
+        agentVisuals.Clear();
+        agentVisuals.AddRange(next);
+        if (rosterChanged)
+        {
+            miniMapRosterDirty = true;
+        }
     }
 
     private static string WorldStatus(AgentWorldSnapshot world)
@@ -766,7 +1020,7 @@ public partial class AgentWorld3DControl : UserControl
         return Math.Max(0, value).ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private IEnumerable<Model3D> BuildWorldGeometry()
+    private IEnumerable<Model3D> BuildStaticWorldGeometry()
     {
         var models = new List<Model3D>
         {
@@ -804,36 +1058,8 @@ public partial class AgentWorld3DControl : UserControl
         models.Add(CreateBox(new Point3D(4.4, 0.076, 0), 0.18, 0.035, 10.4, Blend(accent, Colors.Black, 0.24), 0.48));
         models.AddRange(CreateArenaConsoleGeometry(accent, assist, beta));
 
-        // Token skyline: the back row of towers reads each active agent's latest token load,
-        // so the arena grows a live bar chart as the debate runs. Heights are quantized so the
-        // shared box-mesh cache keeps reusing geometry across turns.
-        var towerBase = Blend(ResourceColor("CardBrush", Color.FromRgb(20, 32, 27)), Colors.White, 0.05);
-        var fallbackHeights = new[] { 0.6, 0.78, 0.52, 0.7, 0.58, 0.84, 0.5, 0.74, 0.56 };
-        var towerAvatars = currentWorld?.Avatars ?? [];
-        var maxTokens = Math.Max(1, towerAvatars.Select(item => item.TotalTokens).DefaultIfEmpty(0).Max());
-        for (var index = 0; index < fallbackHeights.Length; index++)
-        {
-            var x = -7.2 + (index * 1.8);
-            double h;
-            Color cap;
-            if (towerAvatars.Count > 0)
-            {
-                var avatar = towerAvatars[index % towerAvatars.Count];
-                var normalized = Math.Clamp(avatar.TotalTokens / (double)maxTokens, 0, 1);
-                h = Math.Round((0.45 + (normalized * 1.6)) / 0.05) * 0.05;
-                cap = Blend(AccentColor(avatar), Colors.White, 0.18);
-            }
-            else
-            {
-                h = fallbackHeights[index];
-                cap = Blend(accent, Colors.White, 0.18);
-            }
-
-            models.Add(CreateBox(new Point3D(x, h / 2, -6.75), 0.42, h, 0.34, towerBase));
-            models.Add(CreateBox(new Point3D(x, h + 0.055, -6.75), 0.52, 0.08, 0.42, cap, 0.85));
-        }
-
         // Data pylons - in-arena obstacles the agents must navigate around (see WorldObstacles).
+        var towerBase = Blend(ResourceColor("CardBrush", Color.FromRgb(20, 32, 27)), Colors.White, 0.05);
         var pylonAccents = new[] { accent, assist, beta, ResourceColor("DeltaAccentBrush", Color.FromRgb(158, 166, 255)) };
         var pylonSpots = WorldObstacles.Skip(1).ToArray();
         for (var index = 0; index < pylonSpots.Length; index++)
@@ -846,6 +1072,77 @@ public partial class AgentWorld3DControl : UserControl
         }
 
         return models;
+    }
+
+    private IEnumerable<Model3D> BuildSkylineGeometry()
+    {
+        // Token skyline: only this small group changes with token telemetry. Heights are
+        // quantized so the shared mesh cache continues to reuse render-thread resources.
+        var models = new List<Model3D>();
+        var accent = ResourceColor("PrimaryBorderBrush", Color.FromRgb(46, 168, 137));
+        var towerBase = Blend(ResourceColor("CardBrush", Color.FromRgb(20, 32, 27)), Colors.White, 0.05);
+        var fallbackHeights = new[] { 0.6, 0.78, 0.52, 0.7, 0.58, 0.84, 0.5, 0.74, 0.56 };
+        var towerAvatars = currentWorld?.Avatars ?? [];
+        var maxTokens = Math.Max(1, towerAvatars.Select(item => item.TotalTokens).DefaultIfEmpty(0).Max());
+        for (var index = 0; index < fallbackHeights.Length; index++)
+        {
+            var x = -7.2 + (index * 1.8);
+            double height;
+            Color cap;
+            if (towerAvatars.Count > 0)
+            {
+                var avatar = towerAvatars[index % towerAvatars.Count];
+                var normalized = Math.Clamp(avatar.TotalTokens / (double)maxTokens, 0, 1);
+                height = Math.Round((0.45 + (normalized * 1.6)) / 0.05) * 0.05;
+                cap = Blend(AccentColor(avatar), Colors.White, 0.18);
+            }
+            else
+            {
+                height = fallbackHeights[index];
+                cap = Blend(accent, Colors.White, 0.18);
+            }
+
+            models.Add(CreateBox(new Point3D(x, height / 2, -6.75), 0.42, height, 0.34, towerBase));
+            models.Add(CreateBox(new Point3D(x, height + 0.055, -6.75), 0.52, 0.08, 0.42, cap, 0.85));
+        }
+
+        return models;
+    }
+
+    private static string SkylineSignature(AgentWorldSnapshot? world)
+    {
+        if (world is null || world.Avatars.Count == 0)
+        {
+            return "empty";
+        }
+
+        var builder = new System.Text.StringBuilder(9 * 24);
+        var maxTokens = Math.Max(1, world.Avatars.Select(item => item.TotalTokens).DefaultIfEmpty(0).Max());
+        for (var index = 0; index < 9; index++)
+        {
+            var avatar = world.Avatars[index % world.Avatars.Count];
+            var normalized = Math.Clamp(avatar.TotalTokens / (double)maxTokens, 0, 1);
+            var height = Math.Round((0.45 + (normalized * 1.6)) / 0.05) * 0.05;
+            builder.Append(height.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)).Append(':')
+                .Append(avatar.AccentColor).Append('|');
+        }
+
+        return builder.ToString();
+    }
+
+    private static string AgentGeometrySignature(AgentWorldAvatar avatar)
+    {
+        return string.Join('|',
+            avatar.AccentColor,
+            avatar.VoiceStyle,
+            avatar.PressureProfile,
+            avatar.Locked,
+            avatar.Speaking,
+            avatar.Thinking,
+            avatar.HasError,
+            avatar.HasToolActivity,
+            avatar.HasInternetActivity,
+            IsNarrator(avatar));
     }
 
     private IEnumerable<Model3D> CreateArenaConsoleGeometry(Color accent, Color assist, Color beta)
@@ -885,14 +1182,25 @@ public partial class AgentWorld3DControl : UserControl
         }
     }
 
-    private WorldAgentVisual BuildAgentVisual(AgentWorldAvatar avatar)
+    private WorldAgentVisual BuildAgentVisual(AgentWorldAvatar avatar, WorldAgentVisual? existing = null)
     {
+        if (existing is null)
+        {
+            avatarVisualCreationCount++;
+        }
+        else
+        {
+            avatarGeometryRefreshCount++;
+        }
+
         var accent = AccentColor(avatar);
         var shell = Blend(ResourceColor("PanelBrush", Color.FromRgb(24, 35, 31)), accent, 0.16);
         var trim = Blend(accent, Colors.White, 0.22);
         var dark = Blend(ResourceColor("InputBrush", Color.FromRgb(13, 23, 20)), Colors.Black, 0.22);
-        var model = new Model3DGroup();
-        var shadow = new Model3DGroup();
+        var model = existing?.Model ?? new Model3DGroup();
+        var shadow = existing?.Shadow ?? new Model3DGroup();
+        model.Children.Clear();
+        shadow.Children.Clear();
         var gesture = new AgentGestureRig(
             new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0),
             new AxisAngleRotation3D(new Vector3D(1, 0, 0), 0),
@@ -990,39 +1298,56 @@ public partial class AgentWorld3DControl : UserControl
             model.Children.Add(CreateBox(new Point3D(0, 0.42, -0.03), 0.78, 0.03, 0.56, Blend(accent, Colors.Black, 0.58), 0.34));
         }
 
-        var transform = new Transform3DGroup();
-        var scale = new ScaleTransform3D(1, 1, 1);
-        var rotate = new AxisAngleRotation3D(new Vector3D(0, 1, 0), ToDegrees(avatar.FacingRadians));
-        var translate = new TranslateTransform3D(avatar.X, 0, avatar.Z);
-        transform.Children.Add(scale);
-        transform.Children.Add(new RotateTransform3D(gesture.BodyLean, new Point3D(0, 0.08, 0)));
-        transform.Children.Add(new RotateTransform3D(rotate));
-        transform.Children.Add(translate);
-        model.Transform = transform;
+        var scale = existing?.Scale ?? new ScaleTransform3D(1, 1, 1);
+        var rotate = existing?.Rotate ?? new AxisAngleRotation3D(new Vector3D(0, 1, 0), ToDegrees(avatar.FacingRadians));
+        var translate = existing?.Translate ?? new TranslateTransform3D(avatar.X, 0, avatar.Z);
+        if (existing is null)
+        {
+            var transform = new Transform3DGroup();
+            transform.Children.Add(scale);
+            transform.Children.Add(new RotateTransform3D(gesture.BodyLean, new Point3D(0, 0.08, 0)));
+            transform.Children.Add(new RotateTransform3D(rotate));
+            transform.Children.Add(translate);
+            model.Transform = transform;
+        }
+        else if (model.Transform is Transform3DGroup existingTransform && existingTransform.Children.Count >= 2)
+        {
+            existingTransform.Children[1] = new RotateTransform3D(gesture.BodyLean, new Point3D(0, 0.08, 0));
+        }
 
-        var shadowTransform = new Transform3DGroup();
-        var shadowScale = new ScaleTransform3D(1, 1, 1);
-        var shadowTranslate = new TranslateTransform3D(avatar.X, 0, avatar.Z);
-        shadowTransform.Children.Add(shadowScale);
-        shadowTransform.Children.Add(shadowTranslate);
-        shadow.Transform = shadowTransform;
+        var shadowScale = existing?.ShadowScale ?? new ScaleTransform3D(1, 1, 1);
+        var shadowTranslate = existing?.ShadowTranslate ?? new TranslateTransform3D(avatar.X, 0, avatar.Z);
+        if (existing is null)
+        {
+            var shadowTransform = new Transform3DGroup();
+            shadowTransform.Children.Add(shadowScale);
+            shadowTransform.Children.Add(shadowTranslate);
+            shadow.Transform = shadowTransform;
+        }
 
-        var attentionScale = new ScaleTransform(1, 1);
-        var attentionHalo = CreateAttentionHalo(accent, attentionScale);
-        var nameTag = CreateNameTag(avatar, accent);
-        var bubble = CreateBubble(avatar, accent);
-        nameTag.Tag = avatar.Id;
-        nameTag.Cursor = Cursors.Hand;
-        nameTag.Focusable = true;
-        nameTag.IsHitTestVisible = true;
-        nameTag.MouseLeftButtonUp += AgentOverlay_MouseLeftButtonUp;
-        nameTag.KeyDown += AgentOverlay_KeyDown;
-        bubble.DataContext = avatar.Id;
-        bubble.Cursor = Cursors.Hand;
-        bubble.Focusable = avatar.Speaking;
-        bubble.IsHitTestVisible = true;
-        bubble.MouseLeftButtonUp += AgentOverlay_MouseLeftButtonUp;
-        bubble.KeyDown += AgentOverlay_KeyDown;
+        var attentionScale = existing?.AttentionHaloScale ?? new ScaleTransform(1, 1);
+        var attentionHalo = existing?.AttentionHalo ?? CreateAttentionHalo(accent, attentionScale);
+        var nameTag = existing?.NameTag ?? CreateNameTag(avatar, accent);
+        var bubble = existing?.Bubble ?? CreateBubble(avatar, accent);
+        if (existing is null)
+        {
+            overlayElementCreationCount += 3;
+            nameTag.Tag = avatar.Id;
+            nameTag.Cursor = Cursors.Hand;
+            nameTag.Focusable = true;
+            nameTag.IsHitTestVisible = true;
+            nameTag.MouseLeftButtonUp += AgentOverlay_MouseLeftButtonUp;
+            nameTag.KeyDown += AgentOverlay_KeyDown;
+            bubble.DataContext = avatar.Id;
+            bubble.Cursor = Cursors.Hand;
+            bubble.IsHitTestVisible = true;
+            bubble.MouseLeftButtonUp += AgentOverlay_MouseLeftButtonUp;
+            bubble.KeyDown += AgentOverlay_KeyDown;
+        }
+
+        UpdateAttentionHalo(attentionHalo, accent);
+        UpdateNameTag(nameTag, avatar, accent, updateStyle: existing is not null && existing.Accent != accent);
+        UpdateBubble(bubble, avatar, accent);
         return new WorldAgentVisual(
             avatar,
             accent,
@@ -1046,6 +1371,101 @@ public partial class AgentWorld3DControl : UserControl
             narratorIdentityPartCount,
             activityPropPartCount,
             voicePressurePartCount);
+    }
+
+    private WorldAgentVisual UpdateAgentProjection(WorldAgentVisual existing, AgentWorldAvatar avatar)
+    {
+        var accent = AccentColor(avatar);
+        UpdateNameTag(existing.NameTag, avatar, accent, updateStyle: existing.Accent != accent);
+        UpdateBubble(existing.Bubble, avatar, accent);
+        return existing with
+        {
+            Avatar = avatar,
+            Accent = accent,
+            FollowBadgeLabel = $"FOLLOWING {avatar.Name.ToUpperInvariant()}"
+        };
+    }
+
+    private static void UpdateAttentionHalo(Grid halo, Color accent)
+    {
+        if (halo.Tag is Color previous && previous == accent)
+        {
+            return;
+        }
+
+        halo.Tag = accent;
+        var outerStroke = BrushFrom(Color.FromArgb(210, accent.R, accent.G, accent.B));
+        var innerStroke = BrushFrom(Color.FromArgb(150, 255, 255, 255));
+        var fill = BrushFrom(Color.FromArgb(28, accent.R, accent.G, accent.B));
+        var ellipses = halo.Children.OfType<Ellipse>().ToArray();
+        if (ellipses.Length >= 2)
+        {
+            ellipses[0].Fill = fill;
+            ellipses[0].Stroke = outerStroke;
+            ellipses[1].Stroke = innerStroke;
+        }
+
+        foreach (var line in halo.Children.OfType<Line>())
+        {
+            line.Stroke = outerStroke;
+        }
+    }
+
+    private static void UpdateNameTag(Border tag, AgentWorldAvatar avatar, Color accent, bool updateStyle)
+    {
+        if (tag.Child is StackPanel stack)
+        {
+            var texts = stack.Children.OfType<TextBlock>().ToArray();
+            if (texts.Length >= 2)
+            {
+                texts[0].Text = avatar.Name;
+                texts[1].Text = NameTagStatus(avatar);
+                if (updateStyle)
+                {
+                    texts[1].Foreground = BrushFrom(Blend(accent, Colors.White, 0.36));
+                }
+            }
+        }
+
+        tag.Tag = avatar.Id;
+        if (updateStyle)
+        {
+            tag.BorderBrush = BrushFrom(Color.FromArgb(210, accent.R, accent.G, accent.B));
+        }
+        AutomationProperties.SetName(tag, $"{avatar.Name}, {NameTagStatus(avatar)}");
+        AutomationProperties.SetHelpText(tag, $"Select and focus this agent. {LegendDetail(avatar)}");
+        AutomationProperties.SetItemStatus(tag, LegendDetail(avatar));
+    }
+
+    private static void UpdateBubble(Border bubble, AgentWorldAvatar avatar, Color accent)
+    {
+        bubble.DataContext = avatar.Id;
+        bubble.Focusable = avatar.Speaking;
+        bubble.Visibility = avatar.Speaking ? Visibility.Visible : Visibility.Collapsed;
+        bubble.ToolTip = avatar.BubbleText;
+        AutomationProperties.SetName(bubble, BubbleAutomationName(avatar));
+        AutomationProperties.SetHelpText(bubble, string.IsNullOrWhiteSpace(avatar.BubbleText)
+            ? $"Speech bubble for {avatar.Name}."
+            : avatar.BubbleText);
+        AutomationProperties.SetItemStatus(bubble, avatar.Speaking ? "speaking" : "hidden");
+        if (bubble.Tag is not BubbleChrome chrome)
+        {
+            return;
+        }
+
+        chrome.Header.Text = avatar.BubbleTurn > 0 ? $"{avatar.Name} | turn {avatar.BubbleTurn}" : avatar.Name;
+        chrome.Text.Text = avatar.BubbleText;
+        if (chrome.Accent != accent)
+        {
+            chrome.Accent = accent;
+            chrome.Header.Foreground = BrushFrom(Color.FromArgb(236, accent.R, accent.G, accent.B));
+            chrome.BodyBrush = BrushFrom(Color.FromArgb(232, 14, 22, 20));
+            chrome.SelectedBodyBrush = BrushFrom(Color.FromArgb(246, 14, 22, 20));
+            chrome.BorderBrush = BrushFrom(Color.FromArgb(235, accent.R, accent.G, accent.B));
+            chrome.SelectedBorderBrush = BrushFrom(Color.FromArgb(255, 255, 255, 255));
+        }
+        chrome.Selected = null;
+        chrome.AutomationStatus = "";
     }
 
     private int AddVoicePressureCues(Model3DGroup model, AgentWorldAvatar avatar, Color accent, Color trim)
@@ -1205,7 +1625,8 @@ public partial class AgentWorld3DControl : UserControl
             IsHitTestVisible = false,
             Opacity = 0,
             RenderTransformOrigin = new Point(0.5, 0.5),
-            RenderTransform = scale
+            RenderTransform = scale,
+            Tag = accent
         };
 
         halo.Children.Add(new Ellipse
@@ -1323,7 +1744,7 @@ public partial class AgentWorld3DControl : UserControl
             MaxWidth = 270,
             Effect = null,
             ToolTip = avatar.BubbleText,
-            Tag = new BubbleChrome(body, pointer, pointerTransform, bodyBrush, selectedBodyBrush, borderBrush, selectedBorderBrush)
+            Tag = new BubbleChrome(body, pointer, pointerTransform, header, text, accent, bodyBrush, selectedBodyBrush, borderBrush, selectedBorderBrush)
         };
         AutomationProperties.SetName(bubble, BubbleAutomationName(avatar));
         AutomationProperties.SetHelpText(bubble, string.IsNullOrWhiteSpace(avatar.BubbleText)
@@ -1335,37 +1756,75 @@ public partial class AgentWorld3DControl : UserControl
 
     private void PopulateLegend()
     {
-        WorldLegendItems.Children.Clear();
         if (currentWorld is null || currentWorld.Avatars.Count == 0)
         {
+            WorldLegendItems.Children.Clear();
+            legendVisuals.Clear();
             WorldLegendPanel.Visibility = Visibility.Collapsed;
             return;
         }
 
         WorldLegendPanel.Visibility = Visibility.Visible;
-        foreach (var avatar in currentWorld.Avatars)
+        var desiredIds = new HashSet<string>(
+            currentWorld.Avatars.Select(avatar => avatar.Id),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var staleId in legendVisuals.Keys.Where(id => !desiredIds.Contains(id)).ToArray())
         {
-            WorldLegendItems.Children.Add(CreateLegendChip(avatar, AccentColor(avatar)));
+            WorldLegendItems.Children.Remove(legendVisuals[staleId].Chip);
+            legendVisuals.Remove(staleId);
+        }
+
+        for (var index = 0; index < currentWorld.Avatars.Count; index++)
+        {
+            var avatar = currentWorld.Avatars[index];
+            if (!legendVisuals.TryGetValue(avatar.Id, out var visual))
+            {
+                visual = CreateLegendChip(avatar, AccentColor(avatar));
+                legendVisuals[avatar.Id] = visual;
+                legendElementCreationCount++;
+            }
+
+            UpdateLegendChip(visual, avatar, AccentColor(avatar));
+            EnsurePanelChildAt(WorldLegendItems, visual.Chip, index);
         }
     }
 
     private void PopulateCuePanel()
     {
-        WorldCueItems.Children.Clear();
         if (currentWorld is null || currentWorld.Avatars.Count == 0 || currentWorld.Cues.Count == 0)
         {
+            WorldCueItems.Children.Clear();
+            cueVisuals.Clear();
             WorldCuePanel.Visibility = Visibility.Collapsed;
             return;
         }
 
         WorldCuePanel.Visibility = Visibility.Visible;
-        foreach (var cue in currentWorld.Cues)
+        var keys = CueKeys(currentWorld.Cues);
+        var desiredKeys = new HashSet<string>(keys, StringComparer.OrdinalIgnoreCase);
+        foreach (var staleKey in cueVisuals.Keys.Where(key => !desiredKeys.Contains(key)).ToArray())
         {
-            WorldCueItems.Children.Add(CreateWorldCueChip(cue));
+            WorldCueItems.Children.Remove(cueVisuals[staleKey].Chip);
+            cueVisuals.Remove(staleKey);
+        }
+
+        for (var index = 0; index < currentWorld.Cues.Count; index++)
+        {
+            var cue = currentWorld.Cues[index];
+            var key = keys[index];
+            if (!cueVisuals.TryGetValue(key, out var visual))
+            {
+                visual = CreateWorldCueChip(cue);
+                cueVisuals[key] = visual;
+                cueElementCreationCount++;
+            }
+
+            UpdateWorldCueChip(visual, cue);
+            EnsurePanelChildAt(WorldCueItems, visual.Chip, index);
         }
     }
 
-    private Border CreateWorldCueChip(AgentWorldCue cue)
+    private CueVisual CreateWorldCueChip(AgentWorldCue cue)
     {
         var accent = CueAccent(cue.Severity);
         var label = new TextBlock
@@ -1402,7 +1861,39 @@ public partial class AgentWorld3DControl : UserControl
         AutomationProperties.SetName(chip, $"World cue {cue.Label}: {cue.Detail}");
         AutomationProperties.SetHelpText(chip, $"AI World live cue. Severity {cue.Severity}. {cue.Detail}");
         AutomationProperties.SetItemStatus(chip, cue.Severity);
-        return chip;
+        return new CueVisual(chip, label, detail);
+    }
+
+    private void UpdateWorldCueChip(CueVisual visual, AgentWorldCue cue)
+    {
+        var accent = CueAccent(cue.Severity);
+        visual.Label.Text = cue.Label.ToUpperInvariant();
+        visual.Label.Foreground = BrushFrom(Blend(accent, Colors.White, 0.32));
+        visual.Detail.Text = cue.Detail;
+        visual.Detail.Foreground = ResourceBrush("TextBrush", Colors.White);
+        visual.Chip.BorderBrush = BrushFrom(Color.FromArgb(215, accent.R, accent.G, accent.B));
+        visual.Chip.ToolTip = $"{cue.Label}: {cue.Detail}";
+        AutomationProperties.SetName(visual.Chip, $"World cue {cue.Label}: {cue.Detail}");
+        AutomationProperties.SetHelpText(visual.Chip, $"AI World live cue. Severity {cue.Severity}. {cue.Detail}");
+        AutomationProperties.SetItemStatus(visual.Chip, cue.Severity);
+    }
+
+    private static IReadOnlyList<string> CueKeys(IReadOnlyList<AgentWorldCue> cues)
+    {
+        var occurrences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var keys = new string[cues.Count];
+        for (var index = 0; index < cues.Count; index++)
+        {
+            var cue = cues[index];
+            // Cue kind is the stable semantic slot. Agent and detail changes update the
+            // existing chip rather than replacing its focus/automation identity.
+            var basis = cue.Kind;
+            occurrences.TryGetValue(basis, out var occurrence);
+            occurrences[basis] = occurrence + 1;
+            keys[index] = $"{basis}|{occurrence}";
+        }
+
+        return keys;
     }
 
     private Color CueAccent(string severity)
@@ -1416,7 +1907,7 @@ public partial class AgentWorld3DControl : UserControl
                     : ResourceColor("MutedTextBrush", Color.FromRgb(184, 199, 191));
     }
 
-    private Border CreateLegendChip(AgentWorldAvatar avatar, Color accent)
+    private LegendVisual CreateLegendChip(AgentWorldAvatar avatar, Color accent)
     {
         var label = new TextBlock
         {
@@ -1452,18 +1943,8 @@ public partial class AgentWorld3DControl : UserControl
         };
         content.Children.Add(dot);
         content.Children.Add(text);
-        foreach (var eventChip in EventLabels(avatar).Take(2))
-        {
-            content.Children.Add(new TextBlock
-            {
-                Text = eventChip,
-                Foreground = BrushFrom(Blend(accent, Colors.White, 0.35)),
-                FontSize = 10,
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(7, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            });
-        }
+        var events = new StackPanel { Orientation = Orientation.Horizontal };
+        content.Children.Add(events);
 
         var chip = new Border
         {
@@ -1483,7 +1964,72 @@ public partial class AgentWorld3DControl : UserControl
         AutomationProperties.SetName(chip, $"{avatar.Name}, {NameTagStatus(avatar)}");
         AutomationProperties.SetHelpText(chip, $"Select and focus this agent. {LegendDetail(avatar)}");
         AutomationProperties.SetItemStatus(chip, LegendDetail(avatar));
-        return chip;
+        return new LegendVisual(chip, dot, label, detail, events);
+    }
+
+    private void UpdateLegendChip(LegendVisual visual, AgentWorldAvatar avatar, Color accent)
+    {
+        visual.Label.Text = avatar.Name;
+        visual.Detail.Text = LegendDetail(avatar);
+        visual.Detail.Foreground = avatar.Speaking
+            ? BrushFrom(Blend(accent, Colors.White, 0.28))
+            : ResourceBrush("MutedTextBrush", Color.FromRgb(184, 199, 191));
+        visual.Dot.Fill = BrushFrom(accent);
+        visual.Chip.Tag = avatar.Id;
+        visual.Chip.Background = BrushFrom(Color.FromArgb(
+            avatar.Id.Equals(selectedAgentId, StringComparison.OrdinalIgnoreCase) ? (byte)238 : avatar.Speaking ? (byte)232 : (byte)184,
+            12,
+            19,
+            17));
+        visual.Chip.BorderBrush = BrushFrom(Color.FromArgb(avatar.Speaking ? (byte)245 : (byte)150, accent.R, accent.G, accent.B));
+        AutomationProperties.SetName(visual.Chip, $"{avatar.Name}, {NameTagStatus(avatar)}");
+        AutomationProperties.SetHelpText(visual.Chip, $"Select and focus this agent. {LegendDetail(avatar)}");
+        AutomationProperties.SetItemStatus(visual.Chip, LegendDetail(avatar));
+
+        var labels = EventLabels(avatar).Take(2).ToArray();
+        while (visual.Events.Children.Count > labels.Length)
+        {
+            visual.Events.Children.RemoveAt(visual.Events.Children.Count - 1);
+        }
+
+        while (visual.Events.Children.Count < labels.Length)
+        {
+            visual.Events.Children.Add(new TextBlock
+            {
+                FontSize = 10,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(7, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+        }
+
+        for (var index = 0; index < labels.Length; index++)
+        {
+            var text = (TextBlock)visual.Events.Children[index];
+            text.Text = labels[index];
+            text.Foreground = BrushFrom(Blend(accent, Colors.White, 0.35));
+        }
+    }
+
+    private static void EnsurePanelChildAt(Panel panel, UIElement child, int index)
+    {
+        var currentIndex = panel.Children.IndexOf(child);
+        if (currentIndex == index)
+        {
+            return;
+        }
+
+        var restoreFocus = child.IsKeyboardFocusWithin;
+        if (currentIndex >= 0)
+        {
+            panel.Children.RemoveAt(currentIndex);
+        }
+
+        panel.Children.Insert(Math.Min(index, panel.Children.Count), child);
+        if (restoreFocus && child is IInputElement input)
+        {
+            Keyboard.Focus(input);
+        }
     }
 
     private void EnsureSelection()
@@ -3527,6 +4073,7 @@ public partial class AgentWorld3DControl : UserControl
 
     private GeometryModel3D CreateBox(Point3D center, double width, double height, double depth, Color color, double opacity = 1)
     {
+        geometryModelCreationCount++;
         var material = Material(color, opacity);
         return new GeometryModel3D(CreateBoxMesh(width, height, depth), material)
         {
@@ -3546,6 +4093,7 @@ public partial class AgentWorld3DControl : UserControl
         Point3D pivot,
         double opacity = 1)
     {
+        geometryModelCreationCount++;
         var material = Material(color, opacity);
         var transform = new Transform3DGroup();
         transform.Children.Add(new TranslateTransform3D(center.X, center.Y, center.Z));
@@ -3594,6 +4142,7 @@ public partial class AgentWorld3DControl : UserControl
 
     private GeometryModel3D CreateSphere(Point3D center, double radius, Color color, double opacity = 1)
     {
+        geometryModelCreationCount++;
         var material = Material(color, opacity);
         return new GeometryModel3D(CreateSphereMesh(radius), material)
         {
@@ -3604,6 +4153,7 @@ public partial class AgentWorld3DControl : UserControl
 
     private GeometryModel3D CreateCylinder(Point3D center, double radius, double height, Color color, double opacity = 1)
     {
+        geometryModelCreationCount++;
         var material = Material(color, opacity);
         return new GeometryModel3D(CreateCylinderMesh(radius, height), material)
         {
@@ -4300,6 +4850,18 @@ public partial class AgentWorld3DControl : UserControl
         bool Speaking,
         string Status);
 
+    private sealed record LegendVisual(
+        Border Chip,
+        Ellipse Dot,
+        TextBlock Label,
+        TextBlock Detail,
+        StackPanel Events);
+
+    private sealed record CueVisual(
+        Border Chip,
+        TextBlock Label,
+        TextBlock Detail);
+
     internal readonly record struct AgentWorldRenderPolicy(
         bool RunContinuousAnimation,
         bool RenderStableFrame);
@@ -4343,15 +4905,38 @@ public partial class AgentWorld3DControl : UserControl
         }
     }
 
-    private sealed record BubbleChrome(
-        Border Body,
-        Polygon Pointer,
-        TranslateTransform PointerTransform,
-        Brush BodyBrush,
-        Brush SelectedBodyBrush,
-        Brush BorderBrush,
-        Brush SelectedBorderBrush)
+    private sealed class BubbleChrome(
+        Border body,
+        Polygon pointer,
+        TranslateTransform pointerTransform,
+        TextBlock header,
+        TextBlock text,
+        Color accent,
+        Brush bodyBrush,
+        Brush selectedBodyBrush,
+        Brush borderBrush,
+        Brush selectedBorderBrush)
     {
+        public Border Body { get; } = body;
+
+        public Polygon Pointer { get; } = pointer;
+
+        public TranslateTransform PointerTransform { get; } = pointerTransform;
+
+        public TextBlock Header { get; } = header;
+
+        public TextBlock Text { get; } = text;
+
+        public Color Accent { get; set; } = accent;
+
+        public Brush BodyBrush { get; set; } = bodyBrush;
+
+        public Brush SelectedBodyBrush { get; set; } = selectedBodyBrush;
+
+        public Brush BorderBrush { get; set; } = borderBrush;
+
+        public Brush SelectedBorderBrush { get; set; } = selectedBorderBrush;
+
         public bool? Selected { get; set; }
 
         public string AutomationStatus { get; set; } = "";

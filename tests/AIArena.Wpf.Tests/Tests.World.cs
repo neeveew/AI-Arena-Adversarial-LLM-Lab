@@ -650,7 +650,7 @@ static void AgentWorldSkipsRebuildForUnchangedSnapshots()
 
         Require(rebuildsAfterFirst >= 1, "first snapshot should build the scene");
         Require(rebuildsAfterIdenticalReapplies == rebuildsAfterFirst, "identical snapshot re-applies should skip the scene rebuild");
-        Require(rebuildsAfterChange == rebuildsAfterFirst + 1, "a changed snapshot should rebuild the scene exactly once");
+        Require(rebuildsAfterChange == rebuildsAfterFirst, "a changed snapshot should reconcile the scene without a full rebuild");
     });
 }
 
@@ -1027,7 +1027,7 @@ static void AgentWorldMaterialCacheIsBoundedWithoutInvalidatingLiveGeometry()
 
 static void AgentWorldInspectorCloseButtonExposesAutomationName()
 {
-    var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/AgentWorld3DControl.xaml"));
+    var xaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/AgentWorld3DControl.xaml");
     var button = XamlElementBlock(xaml, "InspectorCloseButton", "Button");
 
     Require(button.Contains("ToolTip=\"Close agent inspector\"", StringComparison.Ordinal), "inspector close button should expose a tooltip");

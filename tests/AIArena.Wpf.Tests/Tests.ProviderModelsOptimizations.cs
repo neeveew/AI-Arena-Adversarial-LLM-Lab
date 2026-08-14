@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -312,6 +313,134 @@ internal static partial class Program
                 Require(!control.UsesCompactLayout
                         && Grid.GetColumn(control.DetailSurface) == 2,
                     "the Models surface did not restore its wide layout after removing the 2x transform");
+            }
+            finally
+            {
+                host.Close();
+            }
+        });
+    }
+
+    static void ProviderModelsOptimizationAvoidsStableCatalogLayoutWork()
+    {
+        RunStaTest(() =>
+        {
+            const int modelCount = 1_000;
+            var initial = ProviderModelsOptimizationPresentation(modelCount, "model-501");
+            var control = HostProviderModelsOptimizationSurface(initial, 1500, 820, out var host);
+            try
+            {
+                FlushProviderModelsDispatcher(host);
+                var selected = ProviderModelsOptimizationRow(control, "model-501");
+                control.CatalogList.ScrollIntoView(selected);
+                FlushProviderModelsDispatcher(host);
+                Require(control.FocusCatalog(), "the scale fixture could not focus its catalog anchor");
+                FlushProviderModelsDispatcher(host);
+
+                var stableSchedulesBefore = control.CatalogContinuityScheduleCount;
+                var stableLayoutsBefore = control.CatalogContinuityLayoutCount;
+                var stableInspectionsBefore = control.CatalogAnchorInspectionCount;
+                var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+                var stopwatch = Stopwatch.StartNew();
+                for (var iteration = 0; iteration < 5; iteration++)
+                {
+                    control.ApplyPresentation(initial with
+                    {
+                        PresentationIdentity = $"models-layout-stable-{iteration}"
+                    });
+                }
+                stopwatch.Stop();
+                var stableAllocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+                FlushProviderModelsDispatcher(host);
+
+                Require(control.CatalogContinuityScheduleCount == stableSchedulesBefore,
+                    "an identity-only stable refresh scheduled catalog continuity work");
+                Require(control.CatalogContinuityLayoutCount == stableLayoutsBefore,
+                    "an identity-only stable refresh forced a catalog layout");
+                Require(control.CatalogAnchorInspectionCount == stableInspectionsBefore,
+                    "an identity-only stable refresh rescanned realized or unrealized catalog rows");
+
+                var anchorBefore = ProviderModelsOptimizationViewportAnchor(control);
+                var schedulesBeforeMove = control.CatalogContinuityScheduleCount;
+                var layoutsBeforeMove = control.CatalogContinuityLayoutCount;
+                var inspectionsBeforeMove = control.CatalogAnchorInspectionCount;
+                var moved = initial.Models.Select(model => model.Id == "model-496"
+                    ? model with
+                    {
+                        Availability = ProviderModelAvailability.Available,
+                        Status = "Available",
+                        CanLoad = true,
+                        CanUnload = false
+                    }
+                    : model).ToArray();
+                control.ApplyPresentation(initial with
+                {
+                    Models = moved,
+                    PresentationIdentity = "models-layout-structural-move"
+                });
+                FlushProviderModelsDispatcher(host);
+
+                var anchorAfter = ProviderModelsOptimizationViewportAnchor(control);
+                var inspectedForMove = control.CatalogAnchorInspectionCount - inspectionsBeforeMove;
+                Require(control.CatalogContinuityScheduleCount - schedulesBeforeMove == 1,
+                    "one structural catalog move did not schedule exactly one continuity correction");
+                Require(control.CatalogContinuityLayoutCount - layoutsBeforeMove <= 1,
+                    "one structural catalog move forced more than one deferred layout");
+                Require(inspectedForMove < 256,
+                    $"one structural move inspected {inspectedForMove} containers instead of a viewport-bounded set");
+                Require(anchorAfter.Id == anchorBefore.Id
+                        && Math.Abs(anchorAfter.RelativeTop - anchorBefore.RelativeTop) <= 1,
+                    $"the optimized continuity correction moved {anchorBefore.Id}@{anchorBefore.RelativeTop:0.##} to {anchorAfter.Id}@{anchorAfter.RelativeTop:0.##}");
+                Require(control.CatalogList.IsKeyboardFocusWithin,
+                    "the optimized continuity correction dropped catalog keyboard focus");
+
+                Console.WriteLine(
+                    $"provider catalog stable receipt: rows={modelCount}; applies=5; layouts=0; schedules=0; inspections=0; allocated={stableAllocated}; elapsed_ms={stopwatch.Elapsed.TotalMilliseconds:0.###}");
+            }
+            finally
+            {
+                host.Close();
+            }
+        });
+    }
+
+    static void ProviderModelsOptimizationMeasuresTenThousandStableRows()
+    {
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable("AIARENA_RUN_PROVIDER_LAYOUT_PERF"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        RunStaTest(() =>
+        {
+            const int modelCount = 10_000;
+            var initial = ProviderModelsOptimizationPresentation(modelCount, "model-5001");
+            var control = HostProviderModelsOptimizationSurface(initial, 1500, 820, out var host);
+            try
+            {
+                FlushProviderModelsDispatcher(host);
+                var schedulesBefore = control.CatalogContinuityScheduleCount;
+                var layoutsBefore = control.CatalogContinuityLayoutCount;
+                var inspectionsBefore = control.CatalogAnchorInspectionCount;
+                var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+                var stopwatch = Stopwatch.StartNew();
+                control.ApplyPresentation(initial with
+                {
+                    PresentationIdentity = "models-layout-10000-stable"
+                });
+                stopwatch.Stop();
+                var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+                FlushProviderModelsDispatcher(host);
+
+                Require(control.CatalogContinuityScheduleCount == schedulesBefore
+                        && control.CatalogContinuityLayoutCount == layoutsBefore
+                        && control.CatalogAnchorInspectionCount == inspectionsBefore,
+                    "the 10,000-row stable refresh performed continuity layout or viewport inspection work");
+                Console.WriteLine(
+                    $"provider catalog 10000 receipt: layouts=0; schedules=0; inspections=0; allocated={allocated}; elapsed_ms={stopwatch.Elapsed.TotalMilliseconds:0.###}");
             }
             finally
             {

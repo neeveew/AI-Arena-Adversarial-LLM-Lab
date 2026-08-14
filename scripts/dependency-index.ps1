@@ -215,7 +215,7 @@ $moduleRows = @($typeRows |
 
 $serviceRows = @($typeRows |
     Where-Object IsServiceLike |
-    Sort-Object Module, Name)
+    Sort-Object Module, Name, Path, Kind)
 
 $lines = [System.Collections.Generic.List[string]]::new()
 $generatedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss zzz")
@@ -316,5 +316,8 @@ if (-not (Test-Path -LiteralPath $outputDir)) {
     New-Item -ItemType Directory -Path $outputDir | Out-Null
 }
 
-Set-Content -LiteralPath $resolvedOutputPath -Value $document -Encoding UTF8
+[System.IO.File]::WriteAllText(
+    $resolvedOutputPath,
+    $document,
+    [System.Text.UTF8Encoding]::new($false))
 Write-Host "Wrote dependency index: $resolvedOutputPath"

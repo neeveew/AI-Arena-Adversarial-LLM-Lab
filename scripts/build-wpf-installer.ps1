@@ -59,6 +59,11 @@ $artifactNames = @(
 $installer = Join-Path $installerDir "AI Arena Setup $Version.exe"
 $installerSigningPath = Join-Path $installerDir 'installer-signing.json'
 $installerChecksums = Join-Path $installerDir 'SHA256SUMS.txt'
+$verificationReceiptPath = ''
+$verificationReceiptKey = ''
+$verificationRoot = Join-Path $repoRoot 'artifacts\release-verification'
+$installerCompileReceiptPath = Join-Path $verificationRoot ("installer-compile-{0}.json" -f $Version)
+$releaseChecksumsPath = Join-Path $releaseDir 'release-checksums.sha256'
 
 $innoText = Get-Content -LiteralPath $innoScript -Raw
 if ($innoText -notmatch ('#define MyAppVersion "' + [regex]::Escape($Version) + '"') `
@@ -104,6 +109,13 @@ if ($Changes.Count -gt 0) {
 }
 
 if (-not $ResumeFinalization.IsPresent) {
+    if (-not (Test-Path -LiteralPath $verificationRoot -PathType Container)) {
+        [void](New-Item -ItemType Directory -Path $verificationRoot -Force)
+    }
+    $verificationReceiptPath = Join-Path $verificationRoot ("{0}-{1}.json" -f $Version, [Guid]::NewGuid().ToString('N'))
+    $verificationReceiptKey = New-AIArenaReleaseVerificationKey
+    $releaseArgs.VerificationReceiptPath = $verificationReceiptPath
+    $releaseArgs.VerificationReceiptKey = $verificationReceiptKey
     & $releaseScript @releaseArgs
 }
 
@@ -128,11 +140,73 @@ if (-not $ResumeFinalization.IsPresent) {
     }
     $innoCompilerFull = [IO.Path]::GetFullPath($InnoCompiler)
     Assert-AIArenaTrustedExecutable -Path $innoCompilerFull -Label 'Inno Setup compiler'
+    if (Test-Path -LiteralPath $installerCompileReceiptPath) {
+        Remove-Item -LiteralPath $installerCompileReceiptPath -Force
+    }
     Invoke-AIArenaNativeCommand -FilePath $innoCompilerFull -ArgumentList @($innoScript) -Label 'Inno Setup installer compilation'
 }
 
 if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
     throw "Inno Setup did not create the expected installer: $installer"
+}
+
+$installerSignatureRecords = @()
+$installerCompileReceipt = $null
+if (-not $ResumeFinalization.IsPresent) {
+    $installerSignatureRecords = @(Invoke-AIArenaAuthenticodeSigning -Configuration $signing -Path @($installer))
+    [void](New-AIArenaInstallerCompileReceipt `
+        -RepositoryRoot $repoRoot `
+        -OutputPath $installerCompileReceiptPath `
+        -InstallerPath $installer `
+        -ReleaseInventoryPath $releaseChecksumsPath `
+        -InnoScriptPath $innoScript `
+        -InnoCompilerPath $innoCompilerFull `
+        -Version $Version `
+        -Configuration $Configuration `
+        -Runtime $Runtime `
+        -SigningPolicy $SigningPolicy `
+        -SigningEnabled ([bool]$signing.Enabled) `
+        -SigningCertificateThumbprint ([string]$signing.CertificateThumbprint))
+}
+else {
+    $installerCompileReceipt = Test-AIArenaInstallerCompileReceipt `
+        -RepositoryRoot $repoRoot `
+        -ReceiptPath $installerCompileReceiptPath `
+        -InstallerPath $installer `
+        -ReleaseInventoryPath $releaseChecksumsPath `
+        -InnoScriptPath $innoScript `
+        -Version $Version `
+        -Configuration $Configuration `
+        -Runtime $Runtime `
+        -SigningPolicy $SigningPolicy
+    if ([bool]$installerCompileReceipt.signing.enabled -ne [bool]$signing.Enabled `
+        -or ([bool]$signing.Enabled -and [string]$installerCompileReceipt.signing.certificateThumbprint -ne [string]$signing.CertificateThumbprint)) {
+        throw 'Installer compile receipt signing identity does not match the requested finalization policy.'
+    }
+
+    $installerSignature = Get-AuthenticodeSignature -LiteralPath $installer
+    $signatureVerification = $null
+    if ($signing.Enabled) {
+        Invoke-AIArenaNativeCommand `
+            -FilePath $signing.SignToolPath `
+            -ArgumentList @('verify', '/pa', '/all', '/v', '/tw', $installer) `
+            -Label 'SignTool verification of resumed installer'
+        $signatureVerification = Assert-AIArenaAuthenticodeSignature `
+            -Signature $installerSignature `
+            -ExpectedSignerThumbprint $signing.CertificateThumbprint `
+            -RequireTimestamp `
+            -Label 'Resumed installer'
+    }
+    elseif ($installerSignature.Status -ne [System.Management.Automation.SignatureStatus]::NotSigned) {
+        throw "Resume finalization expected an unsigned installer, but Authenticode status is $($installerSignature.Status)."
+    }
+    $installerSignatureRecords = @([pscustomobject]@{
+        path = $installer
+        status = $installerSignature.Status.ToString()
+        signerThumbprint = if ($null -ne $installerSignature.SignerCertificate) { $installerSignature.SignerCertificate.Thumbprint } else { $null }
+        timeStamperThumbprint = if ($null -ne $installerSignature.TimeStamperCertificate) { $installerSignature.TimeStamperCertificate.Thumbprint } else { $null }
+        timestampVerified = if ($null -ne $signatureVerification) { [bool]$signatureVerification.TimestampVerified } else { $false }
+    })
 }
 
 foreach ($name in $artifactNames) {
@@ -148,7 +222,6 @@ foreach ($name in $artifactNames) {
     Copy-Item -LiteralPath $source -Destination $target
 }
 
-$installerSignatureRecords = @(Invoke-AIArenaAuthenticodeSigning -Configuration $signing -Path @($installer))
 $releaseExe = Join-Path $releaseDir 'AI Arena.exe'
 $releaseExeSignature = Get-AuthenticodeSignature -LiteralPath $releaseExe
 $installerSigning = [ordered]@{
@@ -189,7 +262,18 @@ $installerSigning | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $installe
 
 New-AIArenaSha256Manifest -BaseDirectory $installerDir -OutputPath $installerChecksums
 
-& $sanityScript -Version $Version -Configuration $Configuration -SigningPolicy $SigningPolicy
+$sanityArgs = @{
+    Version = $Version
+    Configuration = $Configuration
+    Runtime = $Runtime
+    SigningPolicy = $SigningPolicy
+    InstallerCompileReceiptPath = $installerCompileReceiptPath
+}
+if (-not [string]::IsNullOrWhiteSpace($verificationReceiptPath)) {
+    $sanityArgs.VerificationReceiptPath = $verificationReceiptPath
+    $sanityArgs.VerificationReceiptKey = $verificationReceiptKey
+}
+& $sanityScript @sanityArgs
 
 Write-Host "WPF installer distribution created:"
 Write-Host $installerDir

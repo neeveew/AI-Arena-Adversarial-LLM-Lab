@@ -63,6 +63,25 @@ public sealed record ArenaBudgetedPrompt(
 }
 
 /// <summary>
+/// Selects how Rolling-80 may search the caller's exact prompt sequence.
+/// <see cref="DeterministicNonIncreasingEstimatedTokens"/> is an assertion by
+/// the caller about the actual value returned by <see cref="ArenaHistoryBudgetService.EstimateTokens"/>
+/// after each successive oldest nonmandatory entry is removed. It is not a
+/// general claim that the prompt looks additive or monotonic.
+/// </summary>
+public enum ArenaHistoryPromptSelectionContract
+{
+    /// <summary>Evaluate every removal in order; valid for any prompt factory.</summary>
+    LegacyExact = 0,
+
+    /// <summary>
+    /// The factory is deterministic and its estimated-token sequence is
+    /// non-increasing for the service's exact oldest-first removal order.
+    /// </summary>
+    DeterministicNonIncreasingEstimatedTokens = 1
+}
+
+/// <summary>
 /// Deterministic Arena-only whole-entry retention. Factory callers never invoke
 /// this service and retain the public_group_v1 root-plus-49 contract unchanged.
 /// </summary>
@@ -78,13 +97,17 @@ public static class ArenaHistoryBudgetService
         int? transcriptAfterTurn,
         Func<IReadOnlySet<string>?, IReadOnlyList<ModelChatMessage>> promptFactory,
         ArenaHistoryBudgetReceipt? frozenReceipt = null,
-        Func<DialogueMessage, bool>? eligibility = null)
+        Func<DialogueMessage, bool>? eligibility = null,
+        ArenaHistoryPromptSelectionContract selectionContract = ArenaHistoryPromptSelectionContract.LegacyExact,
+        IReadOnlyList<DialogueMessage>? preparedEligibleMessages = null,
+        int? preparedTurnCount = null,
+        bool? preparedFactoryMode = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(promptFactory);
 
-        if (snapshot.Engine.FactoryMode)
+        if (preparedFactoryMode ?? snapshot.Engine.FactoryMode)
         {
             return new ArenaBudgetedPrompt(promptFactory(null), null, "");
         }
@@ -96,16 +119,13 @@ public static class ArenaHistoryBudgetService
             return new ArenaBudgetedPrompt(promptFactory(null), null, "");
         }
 
-        var causalBeforeTurn = beforeTurn ?? checked(snapshot.Engine.TurnCount + 1);
-        var eligible = snapshot.Engine.Messages
-            .Where(message => eligibility?.Invoke(message) ?? message.Kind is "message" or "internet" or "")
-            .Where(message => message.Status.Equals("ok", StringComparison.OrdinalIgnoreCase))
-            .Where(message => !string.IsNullOrWhiteSpace(message.Text))
-            .Where(message => message.Turn < causalBeforeTurn)
-            .Where(message => transcriptAfterTurn is null || message.Turn > transcriptAfterTurn.Value)
-            .OrderBy(message => message.Turn)
-            .ThenBy(message => message.CreatedAt)
-            .ToList();
+        var causalBeforeTurn = beforeTurn ?? checked((preparedTurnCount ?? snapshot.Engine.TurnCount) + 1);
+        var eligible = preparedEligibleMessages?.ToList()
+            ?? EligibleMessages(
+                snapshot,
+                causalBeforeTurn,
+                transcriptAfterTurn,
+                eligibility);
         var identities = EligibleIdentities(eligible);
 
         IReadOnlyList<string> includedIds;
@@ -158,29 +178,35 @@ public static class ArenaHistoryBudgetService
         {
             mandatoryIds.Add(newestDialogueId);
         }
-        var mutable = includedIds.ToList();
-        IReadOnlyList<ModelChatMessage> messages;
-        int estimated;
-        while (true)
+        PromptSelection selection;
+        if (frozenReceipt is not null)
         {
-            var selectedSet = mutable.ToHashSet(StringComparer.Ordinal);
-            messages = promptFactory(selectedSet);
-            estimated = EstimateTokens(messages);
-            if (frozenReceipt is not null || estimated <= inputBudget)
-            {
-                break;
-            }
-
-            var removable = mutable.FirstOrDefault(id => !mandatoryIds.Contains(id));
-            if (string.IsNullOrEmpty(removable))
-            {
-                break;
-            }
-
-            mutable.Remove(removable);
+            selection = BuildExactCandidate(includedIds, promptFactory);
+        }
+        else if (selectionContract == ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens
+            && TrySelectWithAssertedMonotonicSequence(
+                includedIds,
+                mandatoryIds,
+                inputBudget,
+                promptFactory,
+                out var optimized))
+        {
+            selection = optimized;
+        }
+        else
+        {
+            selection = SelectLegacyExact(
+                includedIds,
+                mandatoryIds,
+                inputBudget,
+                promptFactory);
         }
 
-        var retained = identities.Where(item => mutable.Contains(item.Id, StringComparer.Ordinal)).ToList();
+        var retainedSet = selection.IncludedIds.ToHashSet(StringComparer.Ordinal);
+        var retained = identities.Where(item => retainedSet.Contains(item.Id)).ToList();
+        var messages = selection.Messages;
+        var estimated = selection.EstimatedTokens;
+
         var receipt = new ArenaHistoryBudgetReceipt
         {
             ConfiguredContextWindow = contextWindow,
@@ -206,6 +232,101 @@ public static class ArenaHistoryBudgetService
         return new ArenaBudgetedPrompt(messages, receipt, "");
     }
 
+    /// <summary>
+    /// Conservatively proves the concrete Arena turn prompt's estimated-token
+    /// sequence is non-increasing. Internet grounding is selection-dependent,
+    /// and an unpinned latest-Operator/empty-transcript branch is not asserted.
+    /// </summary>
+    internal static ArenaHistoryPromptSelectionContract ArenaTurnPromptSelectionContract(
+        ArenaSnapshot snapshot,
+        int? beforeTurn,
+        int? transcriptAfterTurn,
+        IReadOnlyList<DialogueMessage>? preparedEligibleMessages = null,
+        bool? preparedUseInternet = null,
+        int? preparedTurnCount = null)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (preparedUseInternet ?? snapshot.Engine.Internet.UseInternet)
+        {
+            return ArenaHistoryPromptSelectionContract.LegacyExact;
+        }
+
+        var causalBeforeTurn = beforeTurn ?? checked((preparedTurnCount ?? snapshot.Engine.TurnCount) + 1);
+        var eligible = preparedEligibleMessages?.ToList()
+            ?? EligibleMessages(snapshot, causalBeforeTurn, transcriptAfterTurn, eligibility: null);
+        if (eligible.Count == 0)
+        {
+            return ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens;
+        }
+
+        var latestOperatorIndex = eligible.FindLastIndex(message =>
+            message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase));
+        var latestOperator = latestOperatorIndex < 0 ? null : eligible[latestOperatorIndex];
+        if (latestOperator is not null && !IsDialogue(latestOperator))
+        {
+            return ArenaHistoryPromptSelectionContract.LegacyExact;
+        }
+
+        // BuildPrompt's stable OrderByDescending(Turn).First() chooses the
+        // earliest row within the newest turn, while mandatory retention takes
+        // the last row in full Turn/CreatedAt order. If those differ, the
+        // Latest Operator request could change after a removal.
+        var latestDialogueOperatorTurn = eligible
+            .Where(message => IsDialogue(message)
+                && message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase))
+            .Select(message => (int?)message.Turn)
+            .Max();
+        var promptLatestOperatorIndex = latestDialogueOperatorTurn is null
+            ? -1
+            : eligible.FindIndex(message => message.Turn == latestDialogueOperatorTurn.Value
+                && IsDialogue(message)
+                && message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase));
+        if (promptLatestOperatorIndex >= 0 && promptLatestOperatorIndex != latestOperatorIndex)
+        {
+            return ArenaHistoryPromptSelectionContract.LegacyExact;
+        }
+
+        // BuildPrompt emits every eligible row in its transcript. At least one
+        // row must remain mandatory so its empty/non-empty branch cannot flip.
+        var hasMandatoryTranscriptRow = latestOperator is not null || eligible.Any(IsDialogue);
+        return hasMandatoryTranscriptRow
+            ? ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens
+            : ArenaHistoryPromptSelectionContract.LegacyExact;
+    }
+
+    /// <summary>
+    /// Conservatively proves the concrete Narrator/Decision Card prompt's
+    /// estimated-token sequence is non-increasing. Transcript presence is
+    /// pinned by the newest dialogue row. Context presence must likewise be
+    /// invariant (empty throughout or pinned by a mandatory context row).
+    /// </summary>
+    internal static ArenaHistoryPromptSelectionContract NarratorPromptSelectionContract(ArenaSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var causalBeforeTurn = checked(snapshot.Engine.TurnCount + 1);
+        var eligible = EligibleMessages(
+            snapshot,
+            causalBeforeTurn,
+            transcriptAfterTurn: null,
+            message => message.Kind is "message" or "internet" or "internet_tool" or "");
+        if (eligible.Count == 0)
+        {
+            return ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens;
+        }
+
+        var latestOperator = eligible
+            .Where(message => message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase))
+            .LastOrDefault();
+        var newestDialogue = eligible.Where(IsDialogue).LastOrDefault();
+        var contextRows = eligible.Where(IsNarratorContextRow).ToArray();
+        var contextPresenceIsPinned = contextRows.Length == 0
+            || latestOperator is not null && IsNarratorContextRow(latestOperator)
+            || newestDialogue is not null && IsNarratorContextRow(newestDialogue);
+        return contextPresenceIsPinned
+            ? ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens
+            : ArenaHistoryPromptSelectionContract.LegacyExact;
+    }
+
     public static int EstimateTokens(IReadOnlyList<ModelChatMessage> messages)
     {
         ArgumentNullException.ThrowIfNull(messages);
@@ -218,6 +339,128 @@ public static class ArenaHistoryBudgetService
         }
 
         return (int)Math.Min(int.MaxValue, total);
+    }
+
+    private static PromptSelection SelectLegacyExact(
+        IReadOnlyList<string> includedIds,
+        IReadOnlySet<string> mandatoryIds,
+        int inputBudget,
+        Func<IReadOnlySet<string>?, IReadOnlyList<ModelChatMessage>> promptFactory)
+    {
+        var mutable = includedIds.ToList();
+        while (true)
+        {
+            var candidate = BuildExactCandidate(mutable, promptFactory);
+            if (candidate.EstimatedTokens <= inputBudget)
+            {
+                return candidate;
+            }
+
+            var removableIndex = mutable.FindIndex(id => !mandatoryIds.Contains(id));
+            if (removableIndex < 0)
+            {
+                return candidate;
+            }
+
+            mutable.RemoveAt(removableIndex);
+        }
+    }
+
+    private static bool TrySelectWithAssertedMonotonicSequence(
+        IReadOnlyList<string> includedIds,
+        IReadOnlySet<string> mandatoryIds,
+        int inputBudget,
+        Func<IReadOnlySet<string>?, IReadOnlyList<ModelChatMessage>> promptFactory,
+        out PromptSelection selection)
+    {
+        var removalOrder = includedIds.Where(id => !mandatoryIds.Contains(id)).ToArray();
+        var cache = new Dictionary<int, PromptSelection>();
+
+        PromptSelection At(int removalCount)
+        {
+            if (cache.TryGetValue(removalCount, out var cached))
+            {
+                return cached;
+            }
+
+            var removed = removalCount == 0
+                ? null
+                : removalOrder.Take(removalCount).ToHashSet(StringComparer.Ordinal);
+            var candidateIds = removed is null
+                ? includedIds.ToList()
+                : includedIds.Where(id => !removed.Contains(id)).ToList();
+            var candidate = BuildExactCandidate(candidateIds, promptFactory);
+            cache[removalCount] = candidate;
+            return candidate;
+        }
+
+        var first = At(0);
+        var selectedRemovalCount = 0;
+        if (first.EstimatedTokens > inputBudget)
+        {
+            var maximumRemovalCount = removalOrder.Length;
+            var last = At(maximumRemovalCount);
+            if (last.EstimatedTokens > inputBudget)
+            {
+                selectedRemovalCount = maximumRemovalCount;
+            }
+            else
+            {
+                var knownOver = 0;
+                var knownFit = maximumRemovalCount;
+                while (knownFit - knownOver > 1)
+                {
+                    var midpoint = knownOver + (knownFit - knownOver) / 2;
+                    if (At(midpoint).EstimatedTokens <= inputBudget)
+                    {
+                        knownFit = midpoint;
+                    }
+                    else
+                    {
+                        knownOver = midpoint;
+                    }
+                }
+
+                selectedRemovalCount = knownFit;
+                // Exact boundary certification is part of the assertion
+                // contract. It is intentionally cached when binary search has
+                // already visited either side.
+                _ = At(selectedRemovalCount - 1);
+            }
+        }
+
+        selection = At(selectedRemovalCount);
+        var selectedFits = selection.EstimatedTokens <= inputBudget;
+        var boundaryIsCertified = selectedRemovalCount == 0
+            ? selectedFits || removalOrder.Length == 0
+            : selectedFits
+                ? At(selectedRemovalCount - 1).EstimatedTokens > inputBudget
+                : selectedRemovalCount == removalOrder.Length;
+        var observedSequence = cache
+            .OrderBy(pair => pair.Key)
+            .Select(pair => pair.Value.EstimatedTokens)
+            .ToArray();
+        var observedMonotonic = observedSequence
+            .Zip(observedSequence.Skip(1), (earlier, later) => later <= earlier)
+            .All(value => value);
+        if (boundaryIsCertified && observedMonotonic)
+        {
+            return true;
+        }
+
+        // The caller's assertion was contradicted by exact prompt bytes. Do
+        // not guess: the caller will run the unchanged sequential oracle.
+        selection = default!;
+        return false;
+    }
+
+    private static PromptSelection BuildExactCandidate(
+        IReadOnlyList<string> includedIds,
+        Func<IReadOnlySet<string>?, IReadOnlyList<ModelChatMessage>> promptFactory)
+    {
+        var selectedSet = includedIds.ToHashSet(StringComparer.Ordinal);
+        var messages = promptFactory(selectedSet);
+        return new PromptSelection(includedIds, messages, EstimateTokens(messages));
     }
 
     public static bool TryReadReceipt(DialogueMessage message, out ArenaHistoryBudgetReceipt receipt)
@@ -281,6 +524,27 @@ public static class ArenaHistoryBudgetService
         return result;
     }
 
+    private static List<DialogueMessage> EligibleMessages(
+        ArenaSnapshot snapshot,
+        int causalBeforeTurn,
+        int? transcriptAfterTurn,
+        Func<DialogueMessage, bool>? eligibility) => snapshot.Engine.Messages
+        .Where(message => eligibility?.Invoke(message) ?? message.Kind is "message" or "internet" or "")
+        .Where(message => message.Status.Equals("ok", StringComparison.OrdinalIgnoreCase))
+        .Where(message => !string.IsNullOrWhiteSpace(message.Text))
+        .Where(message => message.Turn < causalBeforeTurn)
+        .Where(message => transcriptAfterTurn is null || message.Turn > transcriptAfterTurn.Value)
+        .OrderBy(message => message.Turn)
+        .ThenBy(message => message.CreatedAt)
+        .ToList();
+
+    private static bool IsDialogue(DialogueMessage message) => message.Kind is "message" or "";
+
+    private static bool IsNarratorContextRow(DialogueMessage message) =>
+        message.Kind.Equals("internet", StringComparison.OrdinalIgnoreCase)
+        || message.Kind.Equals("internet_tool", StringComparison.OrdinalIgnoreCase)
+        || message.SpeakerId.Equals("internet", StringComparison.OrdinalIgnoreCase);
+
     private static string ContextFingerprint(IReadOnlyList<IdentifiedMessage> messages)
     {
         var canonical = string.Join(
@@ -290,4 +554,9 @@ public static class ArenaHistoryBudgetService
     }
 
     private sealed record IdentifiedMessage(string Id, DialogueMessage Message);
+
+    private sealed record PromptSelection(
+        IReadOnlyList<string> IncludedIds,
+        IReadOnlyList<ModelChatMessage> Messages,
+        int EstimatedTokens);
 }

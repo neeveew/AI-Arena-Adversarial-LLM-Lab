@@ -60,7 +60,7 @@ internal static partial class Program
             agentExpanded: false);
         Require(!ambiguousExpanded.Internet && !ambiguousExpanded.Debug && !ambiguousExpanded.Agent, "multiple expanded settings without focus should fall back to general provider guidance");
 
-        var mainWindowSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs"));
+        var mainWindowSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
         Require(mainWindowSource.Contains("case Key.F1 when shift:", StringComparison.Ordinal), "Shift+F1 should invoke contextual help without replacing the F1 shortcut list");
         Require(MainWindow.ShellShortcuts.Any(item => item.Keys == "Shift+F1"), "contextual help should be discoverable in the shortcut list");
 

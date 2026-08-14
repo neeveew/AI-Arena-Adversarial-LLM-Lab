@@ -23,16 +23,22 @@ internal sealed partial class OfflineHelpContentService : IHelpContentService
 
     private readonly HelpCatalog catalog;
     private readonly HelpMarkdownRenderer renderer;
+    private readonly HelpSearchIndex searchIndex;
+    private readonly IReadOnlySet<string> articleIds;
 
     public OfflineHelpContentService(string manifestPath)
     {
         catalog = LoadFromManifest(manifestPath);
+        searchIndex = HelpSearchEngine.BuildIndex(catalog);
+        articleIds = catalog.Articles.Select(article => article.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         renderer = new HelpMarkdownRenderer(catalog, TryResolveLink, Path.GetDirectoryName(Path.GetFullPath(manifestPath)));
     }
 
     internal OfflineHelpContentService(HelpCatalog catalog)
     {
         this.catalog = ValidateCatalog(catalog);
+        searchIndex = HelpSearchEngine.BuildIndex(this.catalog);
+        articleIds = this.catalog.Articles.Select(article => article.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         renderer = new HelpMarkdownRenderer(this.catalog, TryResolveLink);
     }
 
@@ -40,7 +46,7 @@ internal sealed partial class OfflineHelpContentService : IHelpContentService
 
     public IReadOnlyList<HelpSearchResult> Search(string? query, int maxResults = 20)
     {
-        return HelpSearchEngine.Search(catalog, query, maxResults);
+        return HelpSearchEngine.Search(searchIndex, query, maxResults);
     }
 
     public FlowDocument BuildDocument(string articleId, FrameworkElement resources)
@@ -53,7 +59,6 @@ internal sealed partial class OfflineHelpContentService : IHelpContentService
 
     public bool TryResolveLink(string? rawLink, out HelpLinkTarget target)
     {
-        var articleIds = catalog.Articles.Select(article => article.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         return HelpDeepLink.TryParse(rawLink, articleIds, out target);
     }
 

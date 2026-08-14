@@ -7,6 +7,7 @@ using AIArena.Wpf.Controls;
 using AIArena.Wpf.Models;
 using AIArena.Wpf.Services;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Runtime.ExceptionServices;
 using System.Resources;
 using System.Text.Json;
@@ -21,6 +22,15 @@ using System.Windows.Media.Imaging;
 
 internal static partial class Program
 {
+static readonly Lazy<string> WorkspaceRootCache = new(LocateWorkspaceRoot, LazyThreadSafetyMode.ExecutionAndPublication);
+static readonly ConcurrentDictionary<string, string> WorkspaceSourceCache = new(StringComparer.OrdinalIgnoreCase);
+static readonly Lazy<string> MainWindowSourceCache = new(BuildMainWindowSource, LazyThreadSafetyMode.ExecutionAndPublication);
+static int workspaceRootProbeCount;
+static int workspaceSourceDiskReadCount;
+
+static int WorkspaceRootProbeCount => Volatile.Read(ref workspaceRootProbeCount);
+static int WorkspaceSourceDiskReadCount => Volatile.Read(ref workspaceSourceDiskReadCount);
+
 static string LmStudioCatalogJson()
 {
     return """
@@ -431,7 +441,9 @@ static void WithTempSettingsStore(Action<WpfSettingsStore> action)
 /// whole class rather than one file. Control-plane code is appended last and is
 /// contiguous, which keeps ordering assertions inside it meaningful.
 /// </summary>
-static string ReadMainWindowSource()
+static string ReadMainWindowSource() => MainWindowSourceCache.Value;
+
+static string BuildMainWindowSource()
 {
     // MainWindow is split across partials, and listing them by hand went stale
     // twice: a guard silently stopped covering whatever had moved into a new
@@ -444,24 +456,51 @@ static string ReadMainWindowSource()
         .ToList();
 
     Require(partials.Count >= 3, $"MainWindow should still be split across partials, found {partials.Count}");
-    return string.Join(Environment.NewLine, partials.Select(File.ReadAllText));
+    return string.Join(
+        Environment.NewLine,
+        partials.Select(path => ReadWorkspaceFile(Path.GetRelativePath(WorkspaceRootCache.Value, path))));
 }
 
 static string FindWorkspaceFile(string relativePath)
 {
+    var path = Path.GetFullPath(Path.Combine(WorkspaceRootCache.Value, relativePath));
+    if (File.Exists(path))
+    {
+        return path;
+    }
+
+    throw new FileNotFoundException($"Could not locate workspace file: {relativePath}", relativePath);
+}
+
+static string ReadWorkspaceFile(string relativePath)
+{
+    var normalized = relativePath.Replace('\\', '/');
+    return WorkspaceSourceCache.GetOrAdd(normalized, static path =>
+    {
+        Interlocked.Increment(ref workspaceSourceDiskReadCount);
+        return File.ReadAllText(FindWorkspaceFile(path));
+    });
+}
+
+static string ReadWorkspaceFileUncached(string relativePath) =>
+    File.ReadAllText(FindWorkspaceFile(relativePath));
+
+static string LocateWorkspaceRoot()
+{
     var directory = new DirectoryInfo(AppContext.BaseDirectory);
     while (directory is not null)
     {
-        var path = Path.Combine(directory.FullName, relativePath);
-        if (File.Exists(path))
+        Interlocked.Increment(ref workspaceRootProbeCount);
+        if (File.Exists(Path.Combine(directory.FullName, "AI Arena - WPF.sln"))
+            && File.Exists(Path.Combine(directory.FullName, "src", "AIArena.Wpf", "AIArena.Wpf.csproj")))
         {
-            return path;
+            return directory.FullName;
         }
 
         directory = directory.Parent;
     }
 
-    throw new FileNotFoundException($"Could not locate workspace file: {relativePath}", relativePath);
+    throw new DirectoryNotFoundException("Could not locate the AI Arena workspace root.");
 }
 
 static string XamlElementBlock(string xaml, string elementName, string elementType)

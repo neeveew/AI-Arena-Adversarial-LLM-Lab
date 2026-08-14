@@ -1,4 +1,8 @@
 using System.Net;
+using System.Diagnostics;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
@@ -7,6 +11,518 @@ using AIArena.Core.Services;
 
 internal static class ContextWindowTests
 {
+    public static void RollingBudgetPerformanceReceipt()
+    {
+        // This executable receipt deliberately uses a small, deterministic
+        // prompt factory so call count is stable while allocation/time remain
+        // useful before/after diagnostics rather than pass/fail thresholds.
+        var baselines = new Dictionary<int, (int Calls, long AllocatedBytes, double ElapsedMs)>
+        {
+            [60] = (33, 299_368, 0.757),
+            [500] = (263, 15_910_336, 16.295),
+            [5_000] = (2_614, 1_514_873_416, 1_317.488)
+        };
+        _ = MeasureRollingBudget(
+            16,
+            ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens);
+        foreach (var entryCount in baselines.Keys)
+        {
+            var baseline = baselines[entryCount];
+            Console.WriteLine(
+                $"BASELINE_RECEIPT rolling80 entries={entryCount} calls={baseline.Calls} " +
+                $"allocated_bytes={baseline.AllocatedBytes} elapsed_ms={baseline.ElapsedMs:F3}");
+            var receipt = MeasureRollingBudget(
+                entryCount,
+                ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens);
+            Console.WriteLine(
+                $"OPTIMIZED_RECEIPT rolling80 entries={entryCount} calls={receipt.Calls} " +
+                $"allocated_bytes={receipt.AllocatedBytes} elapsed_ms={receipt.Elapsed.TotalMilliseconds:F3}");
+            Require(receipt.Result.Receipt is { OmittedEntryCount: > 0 },
+                $"the {entryCount}-entry performance fixture must exercise rolling omission");
+            Require(receipt.Calls <= 20 && receipt.Calls * 2 < baseline.Calls,
+                $"the {entryCount}-entry optimized selector did not materially reduce exact prompt builds");
+        }
+    }
+
+    public static void RollingBudgetOptimizedMatchesLegacyOracle()
+    {
+        var random = new Random(0x5A17);
+        for (var scenario = 0; scenario < 160; scenario++)
+        {
+            var snapshot = SessionStore.CreateDefaultSnapshot();
+            snapshot.Engine.Messages.Clear();
+            var entryCount = random.Next(0, 90);
+            for (var index = 0; index < entryCount; index++)
+            {
+                var kind = index % 9 == 0 ? "internet" : index % 13 == 0 ? "" : "message";
+                var status = index % 17 == 0 ? "error" : "ok";
+                var text = index % 19 == 0
+                    ? " "
+                    : $"FUZZ_{scenario:D3}_{index:D3}_{new string((char)('a' + index % 20), random.Next(8, 180))}{(index % 7 == 0 ? " 🧪" : "")}";
+                snapshot.Engine.Messages.Add(new DialogueMessage
+                {
+                    MessageId = index % 11 == 0 ? null : index % 7 == 0 ? "duplicate-id" : $"message-{scenario}-{index}",
+                    Turn = index / 2 + 1,
+                    SpeakerId = index % 10 == 4 ? "operator" : index % 3 == 0 ? "gamma" : "beta",
+                    Speaker = index % 10 == 4 ? "Operator" : index % 3 == 0 ? "Gamma" : "Beta",
+                    Text = text,
+                    Status = status,
+                    Kind = kind,
+                    CreatedAt = index % 4
+                });
+            }
+
+            snapshot.Engine.TurnCount = Math.Max(1, entryCount + 2);
+            int? beforeTurn = scenario % 4 == 0 ? Math.Max(1, entryCount / 3) : null;
+            int? afterTurn = scenario % 6 == 0 ? entryCount / 12 : null;
+            var config = Config(
+                $"fuzz-{scenario}",
+                context: random.Next(512, 3_000),
+                historyPolicy: ModelHistoryPolicies.Rolling80,
+                maxOutputTokens: random.Next(0, 180));
+            var eligible = LegacyEligibleIdentities(snapshot, beforeTurn, afterTurn, eligibility: null);
+
+            IReadOnlyList<ModelChatMessage> Factory(IReadOnlySet<string>? includedIds)
+            {
+                var retained = includedIds is null
+                    ? eligible
+                    : eligible.Where(item => includedIds.Contains(item.Id)).ToList();
+                return
+                [
+                    new ModelChatMessage("system", $"stable-system-{scenario}"),
+                    new ModelChatMessage(
+                        "user",
+                        "stable-root\n" + string.Join('\n', retained.Select(item => $"{item.Id}|{item.Message.Text}")))
+                ];
+            }
+
+            var legacy = LegacyArenaHistoryBuild(snapshot, config, beforeTurn, afterTurn, Factory);
+            var optimized = ArenaHistoryBudgetService.Build(
+                snapshot,
+                config,
+                beforeTurn,
+                afterTurn,
+                Factory,
+                selectionContract: ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens);
+            RequireBudgetEquivalent(legacy, optimized, $"fuzz scenario {scenario}");
+        }
+
+        var oversized = SessionStore.CreateDefaultSnapshot();
+        oversized.Engine.Messages.Clear();
+        oversized.Engine.Messages.Add(Message(1, "gamma", "Gamma", new string('r', 4_000)));
+        oversized.Engine.Messages.Add(Message(2, "operator", "Operator", new string('o', 8_000)));
+        oversized.Engine.Messages.Add(Message(3, "beta", "Beta", new string('d', 8_000)));
+        oversized.Engine.TurnCount = 3;
+        var tiny = Config("oversized-oracle", 512, ModelHistoryPolicies.Rolling80, 64);
+        var oversizedEligible = LegacyEligibleIdentities(oversized, null, null, null);
+        IReadOnlyList<ModelChatMessage> OversizedFactory(IReadOnlySet<string>? ids) =>
+        [
+            new ModelChatMessage(
+                "user",
+                string.Join('\n', oversizedEligible.Where(item => ids is null || ids.Contains(item.Id)).Select(item => item.Message.Text)))
+        ];
+        RequireBudgetEquivalent(
+            LegacyArenaHistoryBuild(oversized, tiny, null, null, OversizedFactory),
+            ArenaHistoryBudgetService.Build(
+                oversized,
+                tiny,
+                null,
+                null,
+                OversizedFactory,
+                selectionContract: ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens),
+            "oversized mandatory rows");
+
+        var allMandatory = SessionStore.CreateDefaultSnapshot();
+        allMandatory.Engine.Messages.Clear();
+        allMandatory.Engine.Messages.Add(Message(1, "operator", "Operator", new string('m', 10_000)));
+        allMandatory.Engine.TurnCount = 1;
+        var mandatoryCalls = 0;
+        IReadOnlyList<ModelChatMessage> AllMandatoryFactory(IReadOnlySet<string>? ids)
+        {
+            mandatoryCalls++;
+            return [new ModelChatMessage("user", allMandatory.Engine.Messages[0].Text)];
+        }
+        var mandatoryResult = ArenaHistoryBudgetService.Build(
+            allMandatory,
+            tiny,
+            null,
+            null,
+            AllMandatoryFactory,
+            selectionContract: ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens);
+        Require(!mandatoryResult.Ok && mandatoryCalls == 1,
+            "an all-mandatory oversized prompt must exact-build once and fail without a redundant fallback scan");
+
+        var retrySnapshot = SessionStore.CreateDefaultSnapshot();
+        retrySnapshot.Engine.Messages.Clear();
+        for (var turn = 1; turn <= 12; turn++)
+        {
+            var row = Message(
+                turn,
+                turn == 11 ? "operator" : "beta",
+                turn == 11 ? "Operator" : "Beta",
+                $"RETRY_{turn:D2}_{new string('q', 180)}");
+            row.MessageId = turn is 3 or 7 ? null : turn is 4 or 8 ? "retry-duplicate" : row.MessageId;
+            retrySnapshot.Engine.Messages.Add(row);
+        }
+
+        retrySnapshot.Engine.TurnCount = 12;
+        var retryConfig = Config("retry-oracle", 1_024, ModelHistoryPolicies.Rolling80, 64);
+        const int retryBoundary = 13;
+        IReadOnlyList<ModelChatMessage> RetryFactory(IReadOnlySet<string>? ids)
+        {
+            var rows = LegacyEligibleIdentities(retrySnapshot, retryBoundary, null, null)
+                .Where(item => ids is null || ids.Contains(item.Id));
+            return [new ModelChatMessage("user", string.Join('\n', rows.Select(item => item.Message.Text)))];
+        }
+        var originalLegacy = LegacyArenaHistoryBuild(
+            retrySnapshot,
+            retryConfig,
+            retryBoundary,
+            null,
+            RetryFactory);
+        var originalOptimized = ArenaHistoryBudgetService.Build(
+            retrySnapshot,
+            retryConfig,
+            retryBoundary,
+            null,
+            RetryFactory,
+            selectionContract: ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens);
+        RequireBudgetEquivalent(originalLegacy, originalOptimized, "retry receipt origin");
+        var frozen = originalOptimized.Receipt
+            ?? throw new InvalidOperationException("retry fixture did not produce a frozen receipt");
+        retrySnapshot.Engine.Messages.Add(Message(13, "gamma", "Gamma", "future row excluded by causal boundary"));
+        retrySnapshot.Engine.TurnCount = 13;
+        RequireBudgetEquivalent(
+            LegacyArenaHistoryBuild(
+                retrySnapshot,
+                retryConfig,
+                retryBoundary,
+                null,
+                RetryFactory,
+                frozen),
+            ArenaHistoryBudgetService.Build(
+                retrySnapshot,
+                retryConfig,
+                retryBoundary,
+                null,
+                RetryFactory,
+                frozen,
+                selectionContract: ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens),
+            "frozen retry IDs and fingerprint");
+        var retainedId = frozen.IncludedMessageIds[0];
+        var retained = LegacyEligibleIdentities(retrySnapshot, retryBoundary, null, null)
+            .Single(item => item.Id == retainedId)
+            .Message;
+        var retainedIndex = retrySnapshot.Engine.Messages.IndexOf(retained);
+        retrySnapshot.Engine.Messages[retainedIndex] = new DialogueMessage
+        {
+            MessageId = retained.MessageId,
+            Turn = retained.Turn,
+            Speaker = retained.Speaker,
+            SpeakerId = retained.SpeakerId,
+            Text = retained.Text + " mutated",
+            Status = retained.Status,
+            Pinned = retained.Pinned,
+            Kind = retained.Kind,
+            CreatedAt = retained.CreatedAt,
+            Model = retained.Model,
+            Metadata = retained.Metadata,
+            Extra = retained.Extra
+        };
+        RequireBudgetEquivalent(
+            LegacyArenaHistoryBuild(
+                retrySnapshot,
+                retryConfig,
+                retryBoundary,
+                null,
+                RetryFactory,
+                frozen),
+            ArenaHistoryBudgetService.Build(
+                retrySnapshot,
+                retryConfig,
+                retryBoundary,
+                null,
+                RetryFactory,
+                frozen,
+                selectionContract: ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens),
+            "mutated frozen fingerprint rejection");
+
+        var strictConfig = Config("strict-bypass", 2_048, ModelHistoryPolicies.Strict, 64);
+        var bypassMessages = new[] { new ModelChatMessage("user", "exact bypass bytes") };
+        RequireBudgetEquivalent(
+            LegacyArenaHistoryBuild(retrySnapshot, strictConfig, null, null, _ => bypassMessages),
+            ArenaHistoryBudgetService.Build(
+                retrySnapshot,
+                strictConfig,
+                null,
+                null,
+                _ => bypassMessages,
+                selectionContract: ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens),
+            "strict policy bypass");
+        retrySnapshot.Engine.FactoryMode = true;
+        RequireBudgetEquivalent(
+            LegacyArenaHistoryBuild(retrySnapshot, retryConfig, null, null, _ => bypassMessages),
+            ArenaHistoryBudgetService.Build(
+                retrySnapshot,
+                retryConfig,
+                null,
+                null,
+                _ => bypassMessages,
+                selectionContract: ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens),
+            "Factory mode bypass");
+    }
+
+    public static void RollingBudgetProductionContractsPreservePromptBytes()
+    {
+        var snapshot = SessionStore.CreateDefaultSnapshot();
+        snapshot.Engine.Messages.Clear();
+        for (var turn = 1; turn <= 24; turn++)
+        {
+            snapshot.Engine.Messages.Add(Message(
+                turn,
+                turn is 19 or 23 ? "operator" : turn % 2 == 0 ? "beta" : "gamma",
+                turn is 19 or 23 ? "Operator" : turn % 2 == 0 ? "Beta" : "Gamma",
+                $"PRODUCTION_{turn:D2}_{new string((char)('a' + turn % 20), 260)}"));
+        }
+
+        snapshot.Engine.TurnCount = 24;
+        snapshot.Engine.Internet.UseInternet = false;
+        var config = Config(
+            "production-prompt",
+            2_048,
+            ModelHistoryPolicies.Rolling80,
+            maxOutputTokens: 128,
+            responseTone: ModelResponseTones.Direct);
+        var plan = new OneTurnPlan(true, "alpha", "Alpha", config, null, "");
+        IReadOnlyList<ModelChatMessage> ArenaFactory(IReadOnlySet<string>? ids) =>
+            ModelResponseToneInstructions.Apply(
+                config,
+                TurnRunnerService.BuildPrompt(snapshot, plan, includedTranscriptMessageIds: ids),
+                factoryMode: false);
+        var arenaContract = ArenaHistoryBudgetService.ArenaTurnPromptSelectionContract(snapshot, null, null);
+        Require(arenaContract == ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens,
+            "an internet-off Arena prompt with pinned dialogue must qualify for the exact monotonic selector");
+        RequireBudgetEquivalent(
+            LegacyArenaHistoryBuild(snapshot, config, null, null, ArenaFactory),
+            ArenaHistoryBudgetService.Build(snapshot, config, null, null, ArenaFactory, selectionContract: arenaContract),
+            "actual Arena prompt bytes");
+
+        const int causalBeforeTurn = 21;
+        const int transcriptAfterTurn = 4;
+        IReadOnlyList<ModelChatMessage> CausalArenaFactory(IReadOnlySet<string>? ids) =>
+            ModelResponseToneInstructions.Apply(
+                config,
+                TurnRunnerService.BuildPrompt(
+                    snapshot,
+                    plan,
+                    beforeTurn: causalBeforeTurn,
+                    transcriptAfterTurn: transcriptAfterTurn,
+                    includedTranscriptMessageIds: ids),
+                factoryMode: false);
+        var causalContract = ArenaHistoryBudgetService.ArenaTurnPromptSelectionContract(
+            snapshot,
+            causalBeforeTurn,
+            transcriptAfterTurn);
+        RequireBudgetEquivalent(
+            LegacyArenaHistoryBuild(
+                snapshot,
+                config,
+                causalBeforeTurn,
+                transcriptAfterTurn,
+                CausalArenaFactory),
+            ArenaHistoryBudgetService.Build(
+                snapshot,
+                config,
+                causalBeforeTurn,
+                transcriptAfterTurn,
+                CausalArenaFactory,
+                selectionContract: causalContract),
+            "actual causal Arena prompt bytes");
+
+        var narratorSnapshot = SessionStore.CreateDefaultSnapshot();
+        narratorSnapshot.Engine.Messages.Clear();
+        for (var turn = 1; turn <= 18; turn++)
+        {
+            narratorSnapshot.Engine.Messages.Add(Message(
+                turn,
+                turn == 17 ? "operator" : "beta",
+                turn == 17 ? "Operator" : "Beta",
+                $"NARRATOR_{turn:D2}_{new string('n', 220)}"));
+        }
+
+        narratorSnapshot.Engine.Messages.Add(new DialogueMessage
+        {
+            MessageId = "narrator-context-19",
+            Turn = 19,
+            SpeakerId = "operator",
+            Speaker = "Operator",
+            Text = $"PINNED_CONTEXT_{new string('c', 220)}",
+            Status = "ok",
+            Kind = "internet",
+            CreatedAt = 19
+        });
+        narratorSnapshot.Engine.Messages.Add(Message(20, "beta", "Beta", $"LATEST_DIALOGUE_{new string('d', 220)}"));
+        narratorSnapshot.Engine.TurnCount = 20;
+        var narratorContract = ArenaHistoryBudgetService.NarratorPromptSelectionContract(narratorSnapshot);
+        Require(narratorContract == ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens,
+            "a narrator context section pinned by a mandatory row must qualify for exact monotonic selection");
+        foreach (var promptName in new[] { "BuildNarratorPrompt", "BuildDecisionCardPrompt" })
+        {
+            IReadOnlyList<ModelChatMessage> NarratorFactory(IReadOnlySet<string>? ids) =>
+                ModelResponseToneInstructions.Apply(
+                    config,
+                    InvokeNarratorPrompt(promptName, narratorSnapshot, ids),
+                    factoryMode: false);
+            Func<DialogueMessage, bool> eligibility = message =>
+                message.Kind is "message" or "internet" or "internet_tool" or "";
+            RequireBudgetEquivalent(
+                LegacyArenaHistoryBuild(narratorSnapshot, config, null, null, NarratorFactory, eligibility: eligibility),
+                ArenaHistoryBudgetService.Build(
+                    narratorSnapshot,
+                    config,
+                    null,
+                    null,
+                    NarratorFactory,
+                    eligibility: eligibility,
+                    selectionContract: narratorContract),
+                $"actual {promptName} bytes");
+        }
+
+        snapshot.Engine.Internet.UseInternet = true;
+        Require(ArenaHistoryBudgetService.ArenaTurnPromptSelectionContract(snapshot, null, null)
+                == ArenaHistoryPromptSelectionContract.LegacyExact,
+            "selection-dependent grounding must force the legacy exact scan");
+        var groundingCalls = 0;
+        IReadOnlyList<ModelChatMessage> GroundingFactory(IReadOnlySet<string>? ids)
+        {
+            groundingCalls++;
+            return ArenaFactory(ids);
+        }
+
+        var groundedLegacy = LegacyArenaHistoryBuild(snapshot, config, null, null, GroundingFactory);
+        var legacyGroundingCalls = groundingCalls;
+        groundingCalls = 0;
+        var grounded = ArenaHistoryBudgetService.Build(
+            snapshot,
+            config,
+            null,
+            null,
+            GroundingFactory,
+            selectionContract: ArenaHistoryBudgetService.ArenaTurnPromptSelectionContract(snapshot, null, null));
+        RequireBudgetEquivalent(groundedLegacy, grounded, "grounding-dependent Arena bytes");
+        Require(groundingCalls == legacyGroundingCalls,
+            "grounding-dependent prompts must retain the exact legacy evaluation count and order");
+
+        var unsafeOperator = SessionStore.CreateDefaultSnapshot();
+        unsafeOperator.Engine.Messages.Clear();
+        unsafeOperator.Engine.Messages.Add(Message(1, "beta", "Beta", "public dialogue"));
+        unsafeOperator.Engine.Messages.Add(new DialogueMessage
+        {
+            MessageId = "operator-tool-row",
+            Turn = 2,
+            SpeakerId = "operator",
+            Speaker = "Operator",
+            Text = "non-dialogue operator row",
+            Status = "ok",
+            Kind = "internet",
+            CreatedAt = 2
+        });
+        unsafeOperator.Engine.TurnCount = 2;
+        unsafeOperator.Engine.Internet.UseInternet = false;
+        Require(ArenaHistoryBudgetService.ArenaTurnPromptSelectionContract(unsafeOperator, null, null)
+                == ArenaHistoryPromptSelectionContract.LegacyExact,
+            "a latest Operator row outside public dialogue must retain the legacy exact scan");
+
+        var ambiguousOperator = SessionStore.CreateDefaultSnapshot();
+        ambiguousOperator.Engine.Messages.Clear();
+        ambiguousOperator.Engine.Messages.Add(new DialogueMessage
+        {
+            MessageId = "operator-same-turn-early",
+            Turn = 1,
+            SpeakerId = "operator",
+            Speaker = "Operator",
+            Text = "earliest same-turn request",
+            Status = "ok",
+            Kind = "message",
+            CreatedAt = 1
+        });
+        ambiguousOperator.Engine.Messages.Add(new DialogueMessage
+        {
+            MessageId = "operator-same-turn-late",
+            Turn = 1,
+            SpeakerId = "operator",
+            Speaker = "Operator",
+            Text = "mandatory same-turn request",
+            Status = "ok",
+            Kind = "message",
+            CreatedAt = 2
+        });
+        ambiguousOperator.Engine.TurnCount = 1;
+        Require(ArenaHistoryBudgetService.ArenaTurnPromptSelectionContract(ambiguousOperator, null, null)
+                == ArenaHistoryPromptSelectionContract.LegacyExact,
+            "same-turn Operator ordering that can change Latest Operator text must retain the legacy scan");
+
+        var unsafeNarrator = SessionStore.CreateDefaultSnapshot();
+        unsafeNarrator.Engine.Messages.Clear();
+        unsafeNarrator.Engine.Messages.Add(new DialogueMessage
+        {
+            MessageId = "unpinned-context",
+            Turn = 1,
+            SpeakerId = "internet",
+            Speaker = "Internet",
+            Text = "context whose section can disappear",
+            Status = "ok",
+            Kind = "internet",
+            CreatedAt = 1
+        });
+        unsafeNarrator.Engine.Messages.Add(Message(2, "beta", "Beta", "pinned dialogue"));
+        unsafeNarrator.Engine.TurnCount = 2;
+        Require(ArenaHistoryBudgetService.NarratorPromptSelectionContract(unsafeNarrator)
+                == ArenaHistoryPromptSelectionContract.LegacyExact,
+            "an unpinned narrator context section must retain the legacy exact scan");
+    }
+
+    public static void RollingBudgetContradictedAssertionFallsBackExactly()
+    {
+        var snapshot = SessionStore.CreateDefaultSnapshot();
+        snapshot.Engine.Messages.Clear();
+        for (var turn = 1; turn <= 10; turn++)
+        {
+            snapshot.Engine.Messages.Add(Message(
+                turn,
+                turn == 10 ? "operator" : "beta",
+                turn == 10 ? "Operator" : "Beta",
+                $"row-{turn}"));
+        }
+
+        snapshot.Engine.TurnCount = 10;
+        var config = Config("nonmonotonic", 512, ModelHistoryPolicies.Rolling80, maxOutputTokens: 0);
+        var legacyCalls = 0;
+        IReadOnlyList<ModelChatMessage> LegacyFactory(IReadOnlySet<string>? ids)
+        {
+            legacyCalls++;
+            return NonmonotonicPrompt(ids, snapshot.Engine.Messages.Count);
+        }
+        var legacy = LegacyArenaHistoryBuild(snapshot, config, null, null, LegacyFactory);
+
+        var attemptedCalls = 0;
+        IReadOnlyList<ModelChatMessage> AttemptedFactory(IReadOnlySet<string>? ids)
+        {
+            attemptedCalls++;
+            return NonmonotonicPrompt(ids, snapshot.Engine.Messages.Count);
+        }
+        var attempted = ArenaHistoryBudgetService.Build(
+            snapshot,
+            config,
+            null,
+            null,
+            AttemptedFactory,
+            selectionContract: ArenaHistoryPromptSelectionContract.DeterministicNonIncreasingEstimatedTokens);
+        RequireBudgetEquivalent(legacy, attempted, "contradicted monotonic assertion fallback");
+        Require(legacyCalls == 2 && attemptedCalls > legacyCalls,
+            "a contradicted assertion must abandon its binary probe and rerun the legacy sequential oracle");
+    }
+
     public static void DistinguishesCleanAndLegacyModelDefaults()
     {
         var clean = SessionStore.CreateDefaultSnapshot();
@@ -766,6 +1282,206 @@ internal static class ContextWindowTests
         HistoryPolicy = ModelHistoryPolicies.Strict
     };
 
+    private static ArenaBudgetedPrompt LegacyArenaHistoryBuild(
+        ArenaSnapshot snapshot,
+        ModelProviderConfig config,
+        int? beforeTurn,
+        int? transcriptAfterTurn,
+        Func<IReadOnlySet<string>?, IReadOnlyList<ModelChatMessage>> promptFactory,
+        ArenaHistoryBudgetReceipt? frozenReceipt = null,
+        Func<DialogueMessage, bool>? eligibility = null)
+    {
+        if (snapshot.Engine.FactoryMode)
+        {
+            return new ArenaBudgetedPrompt(promptFactory(null), null, "");
+        }
+
+        var policy = ModelHistoryPolicies.NormalizeHistoryPolicy(config.HistoryPolicy);
+        var contextWindow = ModelRuntimeSettingsRegistry.EffectiveConfiguredContextWindow(config);
+        if (frozenReceipt is null && (policy != ModelHistoryPolicies.Rolling80 || contextWindow <= 0))
+        {
+            return new ArenaBudgetedPrompt(promptFactory(null), null, "");
+        }
+
+        var causalBeforeTurn = beforeTurn ?? checked(snapshot.Engine.TurnCount + 1);
+        var identities = LegacyEligibleIdentities(snapshot, beforeTurn, transcriptAfterTurn, eligibility);
+        IReadOnlyList<string> includedIds;
+        if (frozenReceipt is not null)
+        {
+            if (!string.Equals(frozenReceipt.Contract, ArenaHistoryBudgetReceipt.ContractVersion, StringComparison.Ordinal)
+                || frozenReceipt.BeforeTurn != causalBeforeTurn)
+            {
+                return new ArenaBudgetedPrompt([], null, "The saved Arena history receipt does not match this causal retry boundary.");
+            }
+
+            var eligibleSet = identities.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+            if (frozenReceipt.IncludedMessageIds.Any(id => !eligibleSet.Contains(id)))
+            {
+                return new ArenaBudgetedPrompt([], null, "The saved Arena history receipt references transcript entries that are no longer available.");
+            }
+
+            var selected = identities
+                .Where(item => frozenReceipt.IncludedMessageIds.Contains(item.Id, StringComparer.Ordinal))
+                .ToList();
+            if (!string.Equals(LegacyContextFingerprint(selected), frozenReceipt.ContextFingerprint, StringComparison.Ordinal))
+            {
+                return new ArenaBudgetedPrompt([], null, "The saved Arena history context no longer matches the original retry evidence.");
+            }
+
+            includedIds = selected.Select(item => item.Id).ToArray();
+        }
+        else
+        {
+            includedIds = identities.Select(item => item.Id).ToList();
+        }
+
+        var outputReserve = Math.Max(0, config.MaxOutputTokens);
+        var targetTotal = Math.Max(1, (int)Math.Floor(contextWindow * (ArenaHistoryBudgetService.TargetPercent / 100d)));
+        var inputBudget = Math.Max(1, targetTotal - outputReserve);
+        var mandatoryIds = identities
+            .Where(item => item.Message.SpeakerId.Equals("operator", StringComparison.OrdinalIgnoreCase))
+            .TakeLast(1)
+            .Select(item => item.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var newestDialogueId = identities
+            .Where(item => item.Message.Kind is "message" or "")
+            .TakeLast(1)
+            .Select(item => item.Id)
+            .FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(newestDialogueId))
+        {
+            mandatoryIds.Add(newestDialogueId);
+        }
+
+        var mutable = includedIds.ToList();
+        IReadOnlyList<ModelChatMessage> messages;
+        int estimated;
+        while (true)
+        {
+            messages = promptFactory(mutable.ToHashSet(StringComparer.Ordinal));
+            estimated = ArenaHistoryBudgetService.EstimateTokens(messages);
+            if (frozenReceipt is not null || estimated <= inputBudget)
+            {
+                break;
+            }
+
+            var removable = mutable.FirstOrDefault(id => !mandatoryIds.Contains(id));
+            if (string.IsNullOrEmpty(removable))
+            {
+                break;
+            }
+
+            mutable.Remove(removable);
+        }
+
+        var retained = identities.Where(item => mutable.Contains(item.Id, StringComparer.Ordinal)).ToList();
+        var receipt = new ArenaHistoryBudgetReceipt
+        {
+            ConfiguredContextWindow = contextWindow,
+            InputTokenBudget = inputBudget,
+            OutputTokenReserve = outputReserve,
+            EstimatedPromptTokens = estimated,
+            EligibleEntryCount = identities.Count,
+            IncludedEntryCount = retained.Count,
+            OmittedEntryCount = Math.Max(0, identities.Count - retained.Count),
+            IncludedMessageIds = retained.Select(item => item.Id).ToList(),
+            ContextFingerprint = LegacyContextFingerprint(retained),
+            BeforeTurn = causalBeforeTurn
+        };
+        return estimated > inputBudget
+            ? new ArenaBudgetedPrompt(
+                messages,
+                receipt,
+                $"Input context estimate {estimated} tokens exceeds the Rolling 80 input budget of {inputBudget}; retained mandatory prompt text was not truncated.",
+                ModelCompletionFailureKind.ContextLimitExceeded)
+            : new ArenaBudgetedPrompt(messages, receipt, "");
+    }
+
+    private static List<LegacyIdentifiedMessage> LegacyEligibleIdentities(
+        ArenaSnapshot snapshot,
+        int? beforeTurn,
+        int? transcriptAfterTurn,
+        Func<DialogueMessage, bool>? eligibility)
+    {
+        var causalBeforeTurn = beforeTurn ?? checked(snapshot.Engine.TurnCount + 1);
+        var eligible = snapshot.Engine.Messages
+            .Where(message => eligibility?.Invoke(message) ?? message.Kind is "message" or "internet" or "")
+            .Where(message => message.Status.Equals("ok", StringComparison.OrdinalIgnoreCase))
+            .Where(message => !string.IsNullOrWhiteSpace(message.Text))
+            .Where(message => message.Turn < causalBeforeTurn)
+            .Where(message => transcriptAfterTurn is null || message.Turn > transcriptAfterTurn.Value)
+            .OrderBy(message => message.Turn)
+            .ThenBy(message => message.CreatedAt)
+            .ToList();
+        var occurrences = new Dictionary<string, int>(StringComparer.Ordinal);
+        var result = new List<LegacyIdentifiedMessage>(eligible.Count);
+        foreach (var message in eligible)
+        {
+            var baseId = DialogueMessageIdentity.Resolve(message);
+            occurrences.TryGetValue(baseId, out var occurrence);
+            occurrences[baseId] = occurrence + 1;
+            result.Add(new LegacyIdentifiedMessage(
+                occurrence == 0 ? baseId : $"{baseId}:{occurrence}",
+                message));
+        }
+
+        return result;
+    }
+
+    private static string LegacyContextFingerprint(IReadOnlyList<LegacyIdentifiedMessage> messages)
+    {
+        var canonical = string.Join(
+            "\n",
+            messages.Select(item => $"{item.Id}|{DialogueMessageIdentity.Fingerprint(item.Message)}"));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+    }
+
+    private static void RequireBudgetEquivalent(
+        ArenaBudgetedPrompt expected,
+        ArenaBudgetedPrompt actual,
+        string scenario)
+    {
+        Require(expected.Ok == actual.Ok
+            && expected.Error == actual.Error
+            && expected.FailureKind == actual.FailureKind,
+            $"{scenario}: result/error contract diverged from the legacy oracle");
+        Require(expected.Messages.Count == actual.Messages.Count
+            && expected.Messages.Zip(actual.Messages).All(pair =>
+                pair.First.Role == pair.Second.Role && pair.First.Content == pair.Second.Content),
+            $"{scenario}: exact provider prompt bytes diverged from the legacy oracle");
+        Require(JsonSerializer.Serialize(expected.Receipt) == JsonSerializer.Serialize(actual.Receipt),
+            $"{scenario}: IDs, fingerprint, counts, or receipt evidence diverged from the legacy oracle");
+    }
+
+    private static IReadOnlyList<ModelChatMessage> InvokeNarratorPrompt(
+        string methodName,
+        ArenaSnapshot snapshot,
+        IReadOnlySet<string>? includedIds)
+    {
+        var method = typeof(NarratorService).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException($"Narrator prompt factory {methodName} was not found.");
+        var arguments = methodName == "BuildNarratorPrompt"
+            ? new object?[] { snapshot, "summarize exactly", includedIds }
+            : new object?[] { snapshot, includedIds };
+        return method.Invoke(null, arguments) as IReadOnlyList<ModelChatMessage>
+            ?? throw new InvalidOperationException($"Narrator prompt factory {methodName} returned no messages.");
+    }
+
+    private static IReadOnlyList<ModelChatMessage> NonmonotonicPrompt(
+        IReadOnlySet<string>? includedIds,
+        int totalEntries)
+    {
+        var removalCount = totalEntries - (includedIds?.Count ?? totalEntries);
+        var contentLength = removalCount switch
+        {
+            0 => 4_000,
+            1 => 100,
+            4 => 5_000,
+            _ => 100
+        };
+        return [new ModelChatMessage("user", new string('x', contentLength))];
+    }
+
     private static DialogueMessage Message(int turn, string speakerId, string speaker, string text) => new()
     {
         MessageId = $"message-{turn}",
@@ -777,6 +1493,60 @@ internal static class ContextWindowTests
         Kind = "message",
         CreatedAt = turn
     };
+
+    private static RollingBudgetMeasurement MeasureRollingBudget(
+        int entryCount,
+        ArenaHistoryPromptSelectionContract selectionContract)
+    {
+        var snapshot = SessionStore.CreateDefaultSnapshot();
+        snapshot.Engine.Messages.Clear();
+        for (var index = 0; index < entryCount; index++)
+        {
+            var turn = index + 1;
+            snapshot.Engine.Messages.Add(Message(
+                turn,
+                turn == entryCount ? "operator" : "beta",
+                turn == entryCount ? "Operator" : "Beta",
+                $"ROW_{turn:D5}_{new string((char)('a' + index % 20), 56)}"));
+        }
+
+        snapshot.Engine.TurnCount = entryCount;
+        var config = Config(
+            "rolling-performance",
+            context: Math.Max(ModelRuntimeSettingsRegistry.MinimumConfiguredContextWindow, entryCount * 10),
+            historyPolicy: ModelHistoryPolicies.Rolling80,
+            maxOutputTokens: 0);
+        var calls = 0;
+        IReadOnlyList<ModelChatMessage> PromptFactory(IReadOnlySet<string>? includedIds)
+        {
+            calls++;
+            var content = string.Join(
+                '\n',
+                snapshot.Engine.Messages
+                    .Where(message => includedIds is null || includedIds.Contains(message.MessageId!))
+                    .Select(message => message.Text));
+            return [new ModelChatMessage("user", content)];
+        }
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var stopwatch = Stopwatch.StartNew();
+        var result = ArenaHistoryBudgetService.Build(
+            snapshot,
+            config,
+            beforeTurn: null,
+            transcriptAfterTurn: null,
+            PromptFactory,
+            selectionContract: selectionContract);
+        stopwatch.Stop();
+        return new RollingBudgetMeasurement(
+            result,
+            calls,
+            GC.GetAllocatedBytesForCurrentThread() - allocatedBefore,
+            stopwatch.Elapsed);
+    }
 
     private static void Require(bool condition, string message)
     {
@@ -855,4 +1625,12 @@ internal static class ContextWindowTests
     }
 
     private sealed record AdapterCase(string Name, string ApiMode, string BaseUrl, string LimitedResponse);
+
+    private sealed record LegacyIdentifiedMessage(string Id, DialogueMessage Message);
+
+    private sealed record RollingBudgetMeasurement(
+        ArenaBudgetedPrompt Result,
+        int Calls,
+        long AllocatedBytes,
+        TimeSpan Elapsed);
 }

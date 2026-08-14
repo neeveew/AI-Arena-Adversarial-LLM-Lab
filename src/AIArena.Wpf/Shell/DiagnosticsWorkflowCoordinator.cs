@@ -21,6 +21,15 @@ internal sealed record DiagnosticHistoryPoint(
     int EvidencePressure,
     int NarrativeHeat);
 
+internal sealed record DiagnosticProjectionReceipt(
+    string Mode,
+    int InputCount,
+    int Stride,
+    int SortedItems,
+    int MappedTurns,
+    int AnalyzedWindows,
+    int RetainedPoints);
+
 internal enum DiagnosticVisualTone
 {
     Neutral,
@@ -30,7 +39,6 @@ internal enum DiagnosticVisualTone
 
 internal sealed class DiagnosticsWorkflowCoordinator
 {
-    private const int HistoryLimit = 36;
     private const int WindowSize = 8;
 
     private readonly DiscourseDiagnosticsService discourseDiagnostics;
@@ -72,6 +80,7 @@ internal sealed class DiagnosticsWorkflowCoordinator
 
     private CoreFrictionDiagnostics? lastDiagnostics;
     private DiagnosticSeriesSet lastDiagnosticSeries = new(Array.Empty<DiagnosticHistoryPoint>(), 0);
+    private readonly DiagnosticsProjectionCache projectionCache;
 
     public DiagnosticsWorkflowCoordinator(
         DiscourseDiagnosticsService discourseDiagnostics,
@@ -112,6 +121,7 @@ internal sealed class DiagnosticsWorkflowCoordinator
         Func<Brush, Brush, double, Brush> blendBrush)
     {
         this.discourseDiagnostics = discourseDiagnostics;
+        projectionCache = new DiagnosticsProjectionCache(discourseDiagnostics);
         this.metricsGrid = metricsGrid;
         this.emptyState = emptyState;
         this.frictionChip = frictionChip;
@@ -192,6 +202,7 @@ internal sealed class DiagnosticsWorkflowCoordinator
         emptyState.Visibility = hasScoredTurns ? Visibility.Collapsed : Visibility.Visible;
         if (!hasScoredTurns)
         {
+            projectionCache.Reset();
             lastDiagnostics = null;
             lastDiagnosticSeries = new DiagnosticSeriesSet([], 0);
             ResetTileVisuals();
@@ -199,8 +210,9 @@ internal sealed class DiagnosticsWorkflowCoordinator
             return;
         }
 
-        var diagnostics = discourseDiagnostics.Analyze(messages.Select(ToDiscourseTurn), agentPersonas());
-        var series = BuildSeries(messages);
+        var projection = projectionCache.Project(messages, agentPersonas());
+        var diagnostics = projection.Diagnostics;
+        var series = projection.Series;
         lastDiagnostics = diagnostics;
         lastDiagnosticSeries = series;
         SetTile(
@@ -273,20 +285,11 @@ internal sealed class DiagnosticsWorkflowCoordinator
 
     public DiagnosticHistoryPoint PointForWindow(IReadOnlyList<TranscriptMessage> orderedMessages, int endExclusive)
     {
-        var end = Math.Clamp(endExclusive, 1, orderedMessages.Count);
-        var start = Math.Max(0, end - WindowSize);
-        var window = orderedMessages
-            .Skip(start)
-            .Take(end - start)
-            .Select(ToDiscourseTurn);
-        var diagnostics = discourseDiagnostics.Analyze(window, agentPersonas());
-        return new DiagnosticHistoryPoint(
-            FrictionScore(diagnostics.StateLabel),
-            diagnostics.ConsensusPercent,
-            diagnostics.RoleDriftPercent,
-            diagnostics.UnsupportedClaimCount,
-            diagnostics.EvidencePressureScore,
-            diagnostics.NarrativeHeatScore);
+        return DiagnosticsProjectionCache.PointForWindow(
+            discourseDiagnostics,
+            orderedMessages,
+            endExclusive,
+            agentPersonas());
     }
 
     public Brush AccentForState(string label)
@@ -723,39 +726,6 @@ internal sealed class DiagnosticsWorkflowCoordinator
         };
     }
 
-    private DiagnosticSeriesSet BuildSeries(IReadOnlyList<TranscriptMessage> messages)
-    {
-        var ordered = messages
-            .OrderBy(message => message.Turn)
-            .ThenBy(message => message.CreatedAt)
-            .ToArray();
-        if (ordered.Length == 0)
-        {
-            return new DiagnosticSeriesSet([], 0);
-        }
-
-        var stride = Math.Max(1, (int)Math.Ceiling(ordered.Length / (double)HistoryLimit));
-        var points = new List<DiagnosticHistoryPoint>();
-        for (var end = 1; end <= ordered.Length; end += stride)
-        {
-            points.Add(PointForWindow(ordered, end));
-        }
-
-        if (points.Count == 0 || points[^1] != PointForWindow(ordered, ordered.Length))
-        {
-            points.Add(PointForWindow(ordered, ordered.Length));
-        }
-
-        if (points.Count > HistoryLimit)
-        {
-            points = points.Skip(points.Count - HistoryLimit).ToList();
-        }
-
-        return new DiagnosticSeriesSet(
-            points,
-            points.Select(point => point.UnsupportedClaims).DefaultIfEmpty(0).Max());
-    }
-
     private int? PreviousScore(MetricSparklineControl? sparkline, DiagnosticSeriesSet series)
     {
         if (series.Points.Count < 2)
@@ -859,13 +829,401 @@ internal sealed class DiagnosticsWorkflowCoordinator
     }
 
 
-    private sealed record DiagnosticSeriesSet(
-        IReadOnlyList<DiagnosticHistoryPoint> Points,
-        int UnsupportedClaimsMax);
-
     private sealed record DiagnosticExplanationSpec(
         string Title,
         string Meaning,
         string OperatorNudge,
         IReadOnlyList<string> EvidenceTerms);
+}
+
+internal sealed record DiagnosticSeriesSet(
+    IReadOnlyList<DiagnosticHistoryPoint> Points,
+    int UnsupportedClaimsMax);
+
+internal sealed record DiagnosticsProjection(
+    CoreFrictionDiagnostics Diagnostics,
+    DiagnosticSeriesSet Series,
+    DiagnosticProjectionReceipt Receipt);
+
+/// <summary>
+/// Maintains the diagnostics projection for the common append-only transcript
+/// path. Any mutation that can change historical ordering or scoring falls back
+/// to the legacy-equivalent stable rebuild.
+/// </summary>
+internal sealed class DiagnosticsProjectionCache
+{
+    private const int HistoryLimit = 36;
+    private const int WindowSize = 8;
+
+    private readonly DiscourseDiagnosticsService discourseDiagnostics;
+    private List<DiagnosticMessageStamp> sourceStamps = [];
+    private List<CoreDiscourseTurn> orderedTurns = [];
+    private List<DiagnosticSeriesSample> samples = [];
+    private KeyValuePair<string, string>[] personaSnapshot = [];
+    private int stride;
+    private bool sourceWasOrdered;
+    private CoreFrictionDiagnostics? diagnostics;
+
+    public DiagnosticsProjectionCache(DiscourseDiagnosticsService discourseDiagnostics)
+    {
+        this.discourseDiagnostics = discourseDiagnostics;
+    }
+
+    public DiagnosticProjectionReceipt LastReceipt { get; private set; } =
+        new("reset", 0, 0, 0, 0, 0, 0);
+
+    public DiagnosticsProjection Project(
+        IReadOnlyList<TranscriptMessage> messages,
+        IReadOnlyDictionary<string, string> personas)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        ArgumentNullException.ThrowIfNull(personas);
+
+        var incomingPersonaSnapshot = SnapshotPersonas(personas);
+        var incomingOrdered = IsOrderedAscending(messages);
+        var appendCount = AppendCount(messages, incomingOrdered, incomingPersonaSnapshot);
+        if (appendCount >= 0)
+        {
+            return AppendOrReuse(messages, personas, incomingPersonaSnapshot, appendCount);
+        }
+
+        return Rebuild(messages, personas, incomingPersonaSnapshot, incomingOrdered);
+    }
+
+    public void Reset()
+    {
+        sourceStamps = [];
+        orderedTurns = [];
+        samples = [];
+        personaSnapshot = [];
+        stride = 0;
+        sourceWasOrdered = false;
+        diagnostics = null;
+        LastReceipt = new DiagnosticProjectionReceipt("reset", 0, 0, 0, 0, 0, 0);
+    }
+
+    private int AppendCount(
+        IReadOnlyList<TranscriptMessage> messages,
+        bool incomingOrdered,
+        IReadOnlyList<KeyValuePair<string, string>> incomingPersonaSnapshot)
+    {
+        if (diagnostics is null
+            || !sourceWasOrdered
+            || !incomingOrdered
+            || !PersonasEqual(personaSnapshot, incomingPersonaSnapshot)
+            || messages.Count < sourceStamps.Count)
+        {
+            return -1;
+        }
+
+        for (var index = 0; index < sourceStamps.Count; index++)
+        {
+            if (!sourceStamps[index].MatchesDiagnosticInput(messages[index]))
+            {
+                return -1;
+            }
+        }
+
+        return messages.Count - sourceStamps.Count;
+    }
+
+    private DiagnosticsProjection AppendOrReuse(
+        IReadOnlyList<TranscriptMessage> messages,
+        IReadOnlyDictionary<string, string> personas,
+        KeyValuePair<string, string>[] incomingPersonaSnapshot,
+        int appendCount)
+    {
+        if (appendCount == 0)
+        {
+            LastReceipt = new DiagnosticProjectionReceipt(
+                "reuse",
+                messages.Count,
+                stride,
+                0,
+                0,
+                0,
+                samples.Count);
+            return Snapshot();
+        }
+
+        var oldCount = orderedTurns.Count;
+        for (var index = oldCount; index < messages.Count; index++)
+        {
+            orderedTurns.Add(DiagnosticsWorkflowCoordinator.ToDiscourseTurn(messages[index]));
+            sourceStamps.Add(DiagnosticMessageStamp.From(messages[index]));
+        }
+
+        personaSnapshot = incomingPersonaSnapshot;
+        diagnostics = discourseDiagnostics.AnalyzeOrdered(orderedTurns, personas);
+
+        var nextStride = StrideFor(messages.Count);
+        int analyzedWindows;
+        string mode;
+        if (nextStride != stride)
+        {
+            stride = nextStride;
+            analyzedWindows = RebuildSeries(messages, personas);
+            mode = "stride-rebuild";
+        }
+        else
+        {
+            analyzedWindows = ExtendSeries(messages, personas, oldCount);
+            mode = "append";
+        }
+
+        LastReceipt = new DiagnosticProjectionReceipt(
+            mode,
+            messages.Count,
+            stride,
+            0,
+            appendCount,
+            analyzedWindows + 1,
+            samples.Count);
+        return Snapshot();
+    }
+
+    private DiagnosticsProjection Rebuild(
+        IReadOnlyList<TranscriptMessage> messages,
+        IReadOnlyDictionary<string, string> personas,
+        KeyValuePair<string, string>[] incomingPersonaSnapshot,
+        bool incomingOrdered)
+    {
+        var orderedMessages = incomingOrdered
+            ? messages.ToArray()
+            : messages
+                .OrderBy(message => message.Turn)
+                .ThenBy(message => message.CreatedAt)
+                .ToArray();
+
+        orderedTurns = orderedMessages
+            .Select(DiagnosticsWorkflowCoordinator.ToDiscourseTurn)
+            .ToList();
+        sourceStamps = messages.Select(DiagnosticMessageStamp.From).ToList();
+        sourceWasOrdered = incomingOrdered;
+        personaSnapshot = incomingPersonaSnapshot;
+        stride = StrideFor(orderedMessages.Length);
+        diagnostics = discourseDiagnostics.AnalyzeOrdered(orderedTurns, personas);
+        var analyzedWindows = RebuildSeries(orderedMessages, personas);
+        LastReceipt = new DiagnosticProjectionReceipt(
+            incomingOrdered ? "rebuild" : "out-of-order-rebuild",
+            messages.Count,
+            stride,
+            incomingOrdered ? 0 : messages.Count,
+            messages.Count,
+            analyzedWindows + 1,
+            samples.Count);
+        return Snapshot();
+    }
+
+    private int RebuildSeries(
+        IReadOnlyList<TranscriptMessage> orderedMessages,
+        IReadOnlyDictionary<string, string> personas)
+    {
+        samples = [];
+        if (orderedMessages.Count == 0)
+        {
+            return 0;
+        }
+
+        var analyzed = 0;
+        for (var end = 1; end <= orderedMessages.Count; end += stride)
+        {
+            samples.Add(new DiagnosticSeriesSample(
+                end,
+                Scheduled: true,
+                PointForWindow(discourseDiagnostics, orderedMessages, end, personas)));
+            analyzed++;
+        }
+
+        var final = PointForWindow(discourseDiagnostics, orderedMessages, orderedMessages.Count, personas);
+        analyzed++;
+        if (samples.Count == 0 || samples[^1].Point != final)
+        {
+            samples.Add(new DiagnosticSeriesSample(orderedMessages.Count, Scheduled: false, final));
+        }
+
+        TrimSamples();
+        return analyzed;
+    }
+
+    private int ExtendSeries(
+        IReadOnlyList<TranscriptMessage> orderedMessages,
+        IReadOnlyDictionary<string, string> personas,
+        int previousCount)
+    {
+        if (samples.Count > 0 && !samples[^1].Scheduled)
+        {
+            samples.RemoveAt(samples.Count - 1);
+        }
+
+        var analyzed = 0;
+        var firstScheduled = 1 + (((Math.Max(1, previousCount + 1) - 1 + stride - 1) / stride) * stride);
+        for (var end = firstScheduled; end <= orderedMessages.Count; end += stride)
+        {
+            samples.Add(new DiagnosticSeriesSample(
+                end,
+                Scheduled: true,
+                PointForWindow(discourseDiagnostics, orderedMessages, end, personas)));
+            analyzed++;
+        }
+
+        var final = PointForWindow(discourseDiagnostics, orderedMessages, orderedMessages.Count, personas);
+        analyzed++;
+        if (samples.Count == 0 || samples[^1].Point != final)
+        {
+            samples.Add(new DiagnosticSeriesSample(orderedMessages.Count, Scheduled: false, final));
+        }
+
+        TrimSamples();
+        return analyzed;
+    }
+
+    private void TrimSamples()
+    {
+        if (samples.Count > HistoryLimit)
+        {
+            samples.RemoveRange(0, samples.Count - HistoryLimit);
+        }
+    }
+
+    private DiagnosticsProjection Snapshot()
+    {
+        var points = samples.Select(sample => sample.Point).ToArray();
+        return new DiagnosticsProjection(
+            diagnostics ?? throw new InvalidOperationException("Diagnostics projection is empty."),
+            new DiagnosticSeriesSet(
+                points,
+                points.Select(point => point.UnsupportedClaims).DefaultIfEmpty(0).Max()),
+            LastReceipt);
+    }
+
+    internal static DiagnosticHistoryPoint PointForWindow(
+        DiscourseDiagnosticsService discourseDiagnostics,
+        IReadOnlyList<TranscriptMessage> orderedMessages,
+        int endExclusive,
+        IReadOnlyDictionary<string, string> personas)
+    {
+        var end = Math.Clamp(endExclusive, 1, orderedMessages.Count);
+        var start = Math.Max(0, end - WindowSize);
+        var window = new CoreDiscourseTurn[end - start];
+        for (var index = start; index < end; index++)
+        {
+            window[index - start] = DiagnosticsWorkflowCoordinator.ToDiscourseTurn(orderedMessages[index]);
+        }
+
+        var diagnostics = discourseDiagnostics.AnalyzeOrdered(window, personas);
+        return PointFrom(diagnostics);
+    }
+
+    internal static DiagnosticHistoryPoint PointFrom(CoreFrictionDiagnostics diagnostics)
+    {
+        return new DiagnosticHistoryPoint(
+            FrictionScore(diagnostics.StateLabel),
+            diagnostics.ConsensusPercent,
+            diagnostics.RoleDriftPercent,
+            diagnostics.UnsupportedClaimCount,
+            diagnostics.EvidencePressureScore,
+            diagnostics.NarrativeHeatScore);
+    }
+
+    private static int FrictionScore(string label)
+    {
+        return label.Equals("Healthy", StringComparison.OrdinalIgnoreCase)
+            ? 64
+            : label.Equals("Static", StringComparison.OrdinalIgnoreCase)
+                ? 28
+                : label.Equals("Chaotic", StringComparison.OrdinalIgnoreCase)
+                    ? 88
+                    : 45;
+    }
+
+    private static int StrideFor(int count)
+    {
+        return count == 0
+            ? 0
+            : Math.Max(1, (int)Math.Ceiling(count / (double)HistoryLimit));
+    }
+
+    private static bool IsOrderedAscending(IReadOnlyList<TranscriptMessage> messages)
+    {
+        for (var index = 1; index < messages.Count; index++)
+        {
+            var previous = messages[index - 1];
+            var current = messages[index];
+            if (previous.Turn > current.Turn
+                || (previous.Turn == current.Turn && previous.CreatedAt > current.CreatedAt))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static KeyValuePair<string, string>[] SnapshotPersonas(
+        IReadOnlyDictionary<string, string> personas)
+    {
+        return personas
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static bool PersonasEqual(
+        IReadOnlyList<KeyValuePair<string, string>> left,
+        IReadOnlyList<KeyValuePair<string, string>> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < left.Count; index++)
+        {
+            if (!left[index].Key.Equals(right[index].Key, StringComparison.Ordinal)
+                || !left[index].Value.Equals(right[index].Value, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private sealed record DiagnosticSeriesSample(
+        int EndExclusive,
+        bool Scheduled,
+        DiagnosticHistoryPoint Point);
+
+    private sealed record DiagnosticMessageStamp(
+        int Turn,
+        double CreatedAt,
+        string SpeakerId,
+        string Speaker,
+        string Kind,
+        string Text,
+        string[] Sources)
+    {
+        public static DiagnosticMessageStamp From(TranscriptMessage message)
+        {
+            return new DiagnosticMessageStamp(
+                message.Turn,
+                message.CreatedAt,
+                message.SpeakerId,
+                message.Speaker,
+                message.Kind,
+                message.Text,
+                message.InternetSources.ToArray());
+        }
+
+        public bool MatchesDiagnosticInput(TranscriptMessage message)
+        {
+            return Turn == message.Turn
+                && CreatedAt.Equals(message.CreatedAt)
+                && SpeakerId.Equals(message.SpeakerId, StringComparison.Ordinal)
+                && Speaker.Equals(message.Speaker, StringComparison.Ordinal)
+                && Kind.Equals(message.Kind, StringComparison.Ordinal)
+                && Text.Equals(message.Text, StringComparison.Ordinal)
+                && Sources.SequenceEqual(message.InternetSources, StringComparer.Ordinal);
+        }
+    }
 }

@@ -338,7 +338,7 @@ internal static partial class Program
             {
                 host.Close();
             }
-            var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/InAppQaInspectorControl.xaml"));
+            var xaml = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/InAppQaInspectorControl.xaml");
             Require(xaml.Contains("DynamicResource", StringComparison.Ordinal)
                 && xaml.Contains("QaPickerLabelTemplate", StringComparison.Ordinal)
                 && xaml.Contains("QaEvidenceTabControl", StringComparison.Ordinal)
@@ -971,7 +971,7 @@ internal static partial class Program
                     && control.SelectedEvidencePath is null,
                     "QA Inspector loaded or visually substituted an evidence path absent from its bounded index");
 
-                var controlSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/UI/Controls/InAppQaInspectorControl.xaml.cs"));
+                var controlSource = ReadWorkspaceFile("src/AIArena.Wpf/UI/Controls/InAppQaInspectorControl.xaml.cs");
                 Require(controlSource.Contains("coordinator.RefreshAsync();", StringComparison.Ordinal)
                     && controlSource.Contains("EvidenceRunPicker_SelectionChanged", StringComparison.Ordinal),
                     "QA Inspector refresh no longer targets latest evidence or explicit picker selection is not wired");
@@ -1159,7 +1159,7 @@ internal static partial class Program
             File.WriteAllText(evidence, "{}", new UTF8Encoding(false));
 
             var validator = new ReleaseQaEvidenceCurrentnessValidator();
-            var productionSource = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Services/InAppQaInspectorCoordinator.cs"));
+            var productionSource = ReadWorkspaceFile("src/AIArena.Wpf/Services/InAppQaInspectorCoordinator.cs");
             Require(productionSource.Contains("\"restore\"", StringComparison.Ordinal)
                 && productionSource.Contains("\"--configfile\", configPath", StringComparison.Ordinal)
                 && productionSource.Contains("\"--packages\", packageRoot", StringComparison.Ordinal)

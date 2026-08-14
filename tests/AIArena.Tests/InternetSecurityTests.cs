@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.IO.Compression;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using AIArena.Core.Models;
@@ -541,6 +542,193 @@ internal static class InternetSecurityTests
         Require(result.Sources.Count == 1 && new Uri(result.Sources[0].Url).Host == "source11.example", "DNS filtering must happen before the visible Take(maxResults)");
     }
 
+    internal static void SearchDnsValidationDeduplicatesHostsWithBoundedReceipt()
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            results = Enumerable.Range(0, 40).Select(index => new
+            {
+                url = $"https://host{index % 5}.example/article/{index}",
+                title = $"Result {index}",
+                content = $"Useful public evidence from candidate {index}."
+            })
+        });
+        using var fetcher = new PublicWebFetcher(
+            new DelegateHandler(_ => throw new InvalidOperationException("page enrichment was not expected")),
+            (_, _) => Task.CompletedTask);
+
+        static (InternetToolResult Result, long AllocatedBytes, long ElapsedTicks) ExecuteMeasured(
+            LocalInternetToolProvider provider)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            var before = GC.GetTotalAllocatedBytes(precise: true);
+            var started = Stopwatch.GetTimestamp();
+            var result = provider.ExecuteAsync(
+                    new InternetToolRequest { Tool = InternetToolNames.WebSearch, Query = "deduplicated DNS", MaxResults = 10 },
+                    new InternetSettings { UseInternet = true, MaxResults = 10 })
+                .GetAwaiter()
+                .GetResult();
+            return (result, GC.GetTotalAllocatedBytes(precise: true) - before, Stopwatch.GetTimestamp() - started);
+        }
+
+        var legacyCalls = 0;
+        using var legacy = new LocalInternetToolProvider(
+            fetcher,
+            searchClient: new FixedSearchClient(json),
+            browserRenderer: new NoopBrowserRenderer(),
+            searchResultDestinationValidator: (_, _) =>
+            {
+                Interlocked.Increment(ref legacyCalls);
+                return Task.FromResult(true);
+            },
+            enrichSearchResults: false);
+        // Exclude the warm-up invocation from the stable operation-count receipt.
+        _ = ExecuteMeasured(legacy);
+        legacyCalls = 0;
+        var legacyReceipt = ExecuteMeasured(legacy);
+
+        var hostCalls = 0;
+        using var optimized = new LocalInternetToolProvider(
+            fetcher,
+            searchClient: new FixedSearchClient(json),
+            browserRenderer: new NoopBrowserRenderer(),
+            enrichSearchResults: false,
+            searchResultHostValidator: (_, _) =>
+            {
+                Interlocked.Increment(ref hostCalls);
+                return Task.FromResult(true);
+            });
+        _ = ExecuteMeasured(optimized);
+        hostCalls = 0;
+        var optimizedReceipt = ExecuteMeasured(optimized);
+
+        Require(legacyCalls == 40, $"legacy per-URI validation should perform 40 calls, observed {legacyCalls}");
+        Require(hostCalls == 5, $"five normalized hosts should perform five validations, observed {hostCalls}");
+        Require(
+            legacyReceipt.Result.Sources.Select(source => source.Url).SequenceEqual(optimizedReceipt.Result.Sources.Select(source => source.Url), StringComparer.Ordinal),
+            "host-level DNS coalescing changed visible source order or selection");
+        Console.WriteLine(
+            $"DNS VALIDATION receipt 40 candidates/5 hosts: legacy {legacyCalls} calls, {legacyReceipt.AllocatedBytes:N0} B, {Stopwatch.GetElapsedTime(0, legacyReceipt.ElapsedTicks).TotalMilliseconds:F3} ms; " +
+            $"optimized {hostCalls} calls, {optimizedReceipt.AllocatedBytes:N0} B, {Stopwatch.GetElapsedTime(0, optimizedReceipt.ElapsedTicks).TotalMilliseconds:F3} ms.");
+    }
+
+    internal static void SearchDnsValidationIsBoundedCancelableAndFetchesRevalidate()
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            results = Enumerable.Range(0, 40).Select(index => new
+            {
+                url = $"https://unique{index}.example/article",
+                title = $"Result {index}",
+                content = "Useful public evidence for bounded validation."
+            })
+        });
+        var active = 0;
+        var maximum = 0;
+        var calls = 0;
+        using var fetcher = new PublicWebFetcher(
+            new DelegateHandler(_ => throw new InvalidOperationException("page enrichment was not expected")),
+            (_, _) => Task.CompletedTask);
+        using (var provider = new LocalInternetToolProvider(
+            fetcher,
+            searchClient: new FixedSearchClient(json),
+            browserRenderer: new NoopBrowserRenderer(),
+            enrichSearchResults: false,
+            searchResultHostValidator: async (_, token) =>
+            {
+                Interlocked.Increment(ref calls);
+                var current = Interlocked.Increment(ref active);
+                UpdateMaximum(ref maximum, current);
+                try
+                {
+                    await Task.Delay(8, token);
+                    return true;
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref active);
+                }
+            }))
+        {
+            var result = provider.ExecuteAsync(
+                    new InternetToolRequest { Tool = InternetToolNames.WebSearch, Query = "bounded DNS", MaxResults = 10 },
+                    new InternetSettings { UseInternet = true, MaxResults = 10 })
+                .GetAwaiter()
+                .GetResult();
+            Require(result.Ok && result.Sources.Count == 10, "bounded validation changed successful search results");
+            Require(calls == 40, "every unique host must still be validated");
+            Require(maximum > 1 && maximum <= 8, $"DNS validation concurrency must stay within 2..8, observed {maximum}");
+        }
+
+        using (var cancelStarted = new ManualResetEventSlim(false))
+        using (var provider = new LocalInternetToolProvider(
+            fetcher,
+            searchClient: new FixedSearchClient(json),
+            browserRenderer: new NoopBrowserRenderer(),
+            enrichSearchResults: false,
+            searchResultHostValidator: async (_, token) =>
+            {
+                cancelStarted.Set();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return true;
+            }))
+        using (var cancellation = new CancellationTokenSource())
+        {
+            var operation = provider.ExecuteAsync(
+                new InternetToolRequest { Tool = InternetToolNames.WebSearch, Query = "cancel DNS", MaxResults = 10 },
+                new InternetSettings { UseInternet = true, MaxResults = 10 },
+                cancellation.Token);
+            Require(cancelStarted.Wait(TimeSpan.FromSeconds(2)), "bounded DNS validation did not start");
+            cancellation.Cancel();
+            try
+            {
+                _ = operation.GetAwaiter().GetResult();
+                throw new InvalidOperationException("caller cancellation should stop DNS validation");
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        const string singleJson = """
+        {"results":[{"url":"https://revalidate.example/article","title":"Result","content":"Useful evidence."}]}
+        """;
+        var fetchValidations = 0;
+        var searchValidations = 0;
+        using var revalidatingFetcher = new PublicWebFetcher(
+            new DelegateHandler(request => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new StringContent("<html><body>public evidence</body></html>", Encoding.UTF8, "text/html")
+            }),
+            (_, _) =>
+            {
+                Interlocked.Increment(ref fetchValidations);
+                return Task.CompletedTask;
+            });
+        using var revalidatingProvider = new LocalInternetToolProvider(
+            revalidatingFetcher,
+            searchClient: new FixedSearchClient(singleJson),
+            pageExtractor: new FixedReadablePageExtractor(),
+            browserRenderer: new NoopBrowserRenderer(),
+            enrichSearchResults: true,
+            searchResultHostValidator: (_, _) =>
+            {
+                Interlocked.Increment(ref searchValidations);
+                return Task.FromResult(true);
+            });
+        var enriched = revalidatingProvider.ExecuteAsync(
+                new InternetToolRequest { Tool = InternetToolNames.WebSearch, Query = "fetch revalidation", MaxResults = 1 },
+                new InternetSettings { UseInternet = true, MaxResults = 1 })
+            .GetAwaiter()
+            .GetResult();
+        Require(enriched.Ok, $"fetch-revalidation fixture failed: {enriched.Error}");
+        Require(searchValidations == 1, "search filtering should validate the response host once");
+        Require(fetchValidations == 1, "page enrichment must independently revalidate immediately before fetching");
+    }
+
     internal static void ExplicitUrlsPreserveBalancedClosingParentheses()
     {
         Require(
@@ -590,6 +778,21 @@ internal static class InternetSecurityTests
         if (!condition)
         {
             throw new InvalidOperationException(message);
+        }
+    }
+
+    private static void UpdateMaximum(ref int maximum, int candidate)
+    {
+        var observed = Volatile.Read(ref maximum);
+        while (candidate > observed)
+        {
+            var previous = Interlocked.CompareExchange(ref maximum, candidate, observed);
+            if (previous == observed)
+            {
+                return;
+            }
+
+            observed = previous;
         }
     }
 

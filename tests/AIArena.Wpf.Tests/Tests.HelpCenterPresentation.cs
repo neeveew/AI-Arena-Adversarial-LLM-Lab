@@ -26,7 +26,7 @@ internal static partial class Program
 
     private static void HelpCenterPresentationHostsAccessibleTaskAndSearchContracts()
     {
-        var xaml = File.ReadAllText(FindWorkspaceFile("src/AIArena.Wpf/Help/Presentation/HelpCenterWindow.xaml"));
+        var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Help/Presentation/HelpCenterWindow.xaml");
         Require(xaml.Contains("AutomationProperties.AutomationId=\"HelpCenterSearchBox\"", StringComparison.Ordinal), "search should expose a stable UIA ID");
         Require(xaml.Contains("AutomationProperties.LiveSetting=\"Polite\"", StringComparison.Ordinal), "article and result changes should be politely announced");
         Require(xaml.Contains("HelpCenterHomeTasks", StringComparison.Ordinal), "the home page should expose task cards as one named landmark");
@@ -108,12 +108,17 @@ internal static partial class Program
                     var search = (TextBox)window.FindName("SearchBox");
                     Require(search.IsKeyboardFocusWithin, "Control+F should focus the hosted Help Center search box");
                     Require(search.MinHeight >= 44 && search.ActualHeight >= 44, "Help search should retain a 44-DIP target");
+                    var searchResultsPanel = (FrameworkElement)window.FindName("SearchResultsPanel");
                     search.Text = "context limit";
-                    window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                    Require(string.IsNullOrEmpty(window.ViewModel.SearchText), "typing should preserve the 140 ms view-model debounce");
+                    Require(searchResultsPanel.Visibility == Visibility.Collapsed, "typed search should not expose stale results before the debounced query commits");
+                    PumpHelpDispatcherUntil(
+                        () => window.ViewModel.SearchResults.Count > 0
+                            && searchResultsPanel.Visibility == Visibility.Visible);
                     Require(window.ViewModel.SearchResults.Count > 0, "keyboard search should produce ranked results");
-                    Require(((FrameworkElement)window.FindName("SearchResultsPanel")).Visibility == Visibility.Visible, "active search should display its results surface");
+                    Require(searchResultsPanel.Visibility == Visibility.Visible, "the debounced view-model update should display its results surface");
                     Require(window.NavigateTo(window.CurrentArticleId), "rerendering for a theme refresh should preserve the selected article");
-                    Require(((FrameworkElement)window.FindName("SearchResultsPanel")).Visibility == Visibility.Visible, "rerendering should preserve active search presentation");
+                    Require(searchResultsPanel.Visibility == Visibility.Visible, "rerendering should preserve active search presentation");
                     search.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(search), Environment.TickCount, Key.Down)
                     {
                         RoutedEvent = Keyboard.PreviewKeyDownEvent
@@ -203,6 +208,29 @@ internal static partial class Program
             {
                 Source = new Uri($"/{assemblyName};component/{relativePath}", UriKind.Relative)
             });
+        }
+    }
+
+    private static void PumpHelpDispatcherUntil(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            var frame = new DispatcherFrame();
+            var timer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(10)
+            };
+            EventHandler? tick = null;
+            tick = (_, _) =>
+            {
+                timer.Stop();
+                timer.Tick -= tick;
+                frame.Continue = false;
+            };
+            timer.Tick += tick;
+            timer.Start();
+            Dispatcher.PushFrame(frame);
         }
     }
 }

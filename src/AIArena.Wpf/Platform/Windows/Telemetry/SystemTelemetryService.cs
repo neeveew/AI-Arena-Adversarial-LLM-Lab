@@ -5,37 +5,71 @@ namespace AIArena.Wpf.Services;
 
 public sealed class SystemTelemetryService
 {
+    internal static readonly TimeSpan GpuWmiQueryTimeout = TimeSpan.FromSeconds(2);
     private readonly NvidiaGpuProbeCache nvidiaGpuProbeCache;
+    private readonly GpuAdapterProbeCache gpuAdapterProbeCache;
     private ulong? previousIdle;
     private ulong? previousKernel;
     private ulong? previousUser;
-    private GpuAdapterSnapshot? cachedGpuAdapters;
-    private DateTime cachedGpuAdaptersAt = DateTime.MinValue;
 
     public SystemTelemetryService()
         : this(new NvidiaGpuProbeCache(
             WindowsHardwareProbeService.DetectNvidiaGpus,
-            static () => DateTimeOffset.UtcNow))
+            static () => DateTimeOffset.UtcNow),
+            new GpuAdapterProbeCache(
+                WindowsHardwareProbeService.DetectWindowsGpus,
+                static () => DateTimeOffset.UtcNow))
     {
     }
 
     internal SystemTelemetryService(NvidiaGpuProbeCache nvidiaGpuProbeCache)
+        : this(
+            nvidiaGpuProbeCache,
+            new GpuAdapterProbeCache(
+                WindowsHardwareProbeService.DetectWindowsGpus,
+                static () => DateTimeOffset.UtcNow))
+    {
+    }
+
+    internal SystemTelemetryService(
+        NvidiaGpuProbeCache nvidiaGpuProbeCache,
+        GpuAdapterProbeCache gpuAdapterProbeCache)
     {
         this.nvidiaGpuProbeCache = nvidiaGpuProbeCache;
+        this.gpuAdapterProbeCache = gpuAdapterProbeCache;
     }
 
     public SystemTelemetrySample Sample()
     {
-        var cpu = SampleCpuPercent();
-        var memory = WindowsHardwareProbeService.SampleMemory();
+        var fast = SampleFast();
         var gpu = SampleGpu();
         return new SystemTelemetrySample(
-            cpu,
-            gpu.Percent,
+            fast.CpuPercent,
+            gpu.GpuPercent,
             gpu.VramUsedGb,
+            fast.RamUsedGb,
+            fast.RamPercent,
+            fast.RamTotalGb,
+            gpu.GpuName,
+            gpu.VramTotalGb);
+    }
+
+    public SystemTelemetryFastSample SampleFast()
+    {
+        var memory = WindowsHardwareProbeService.SampleMemory();
+        return new SystemTelemetryFastSample(
+            SampleCpuPercent(),
             memory.UsedGb,
             memory.PercentUsed,
-            memory.TotalGb,
+            memory.TotalGb);
+    }
+
+    public SystemTelemetryGpuSample SampleGpu()
+    {
+        var gpu = SampleNvidiaSmiGpu() ?? SampleWindowsGpuCounters();
+        return new SystemTelemetryGpuSample(
+            gpu.Percent,
+            gpu.VramUsedGb,
             gpu.Name,
             gpu.VramTotalGb);
     }
@@ -74,11 +108,6 @@ public sealed class SystemTelemetryService
         return Math.Clamp((1d - (idleDelta / (double)total)) * 100d, 0, 100);
     }
 
-    private GpuSnapshot SampleGpu()
-    {
-        return SampleNvidiaSmiGpu() ?? SampleWindowsGpuCounters();
-    }
-
     private GpuSnapshot? SampleNvidiaSmiGpu()
     {
         var gpus = nvidiaGpuProbeCache.Sample();
@@ -96,12 +125,11 @@ public sealed class SystemTelemetryService
 
     private GpuSnapshot SampleWindowsGpuCounters()
     {
-        var adapters = GetGpuAdapters();
+        var adapters = gpuAdapterProbeCache.Sample();
         try
         {
             double utilization = 0;
-            using (var engineSearcher = new ManagementObjectSearcher(
-                "root\\CIMV2",
+            using (var engineSearcher = CreateGpuCounterSearcher(
                 "SELECT Name, UtilizationPercentage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine"))
             {
                 foreach (ManagementBaseObject engine in engineSearcher.Get())
@@ -117,8 +145,7 @@ public sealed class SystemTelemetryService
             }
 
             double dedicatedUsageBytes = 0;
-            using (var memorySearcher = new ManagementObjectSearcher(
-                "root\\CIMV2",
+            using (var memorySearcher = CreateGpuCounterSearcher(
                 "SELECT DedicatedUsage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory"))
             {
                 foreach (ManagementBaseObject adapterMemory in memorySearcher.Get())
@@ -139,34 +166,19 @@ public sealed class SystemTelemetryService
         }
     }
 
-    private GpuAdapterSnapshot GetGpuAdapters()
+    private static ManagementObjectSearcher CreateGpuCounterSearcher(string query)
     {
-        if (cachedGpuAdapters is not null && DateTime.UtcNow - cachedGpuAdaptersAt < TimeSpan.FromMinutes(5))
-        {
-            return cachedGpuAdapters;
-        }
-
-        try
-        {
-            var gpus = WindowsHardwareProbeService.DetectWindowsGpus();
-            var names = gpus.Select(gpu => gpu.Name).Where(name => !string.IsNullOrWhiteSpace(name)).ToArray();
-            var totalGb = gpus.Sum(gpu => gpu.VramTotalGb ?? 0);
-
-            cachedGpuAdapters = new GpuAdapterSnapshot(
-                FormatGpuName(names),
-                totalGb > 0 ? totalGb : null);
-            cachedGpuAdaptersAt = DateTime.UtcNow;
-            return cachedGpuAdapters;
-        }
-        catch
-        {
-            cachedGpuAdapters = new GpuAdapterSnapshot(null, null);
-            cachedGpuAdaptersAt = DateTime.UtcNow;
-            return cachedGpuAdapters;
-        }
+        return new ManagementObjectSearcher(
+            "root\\CIMV2",
+            query,
+            new EnumerationOptions
+            {
+                ReturnImmediately = false,
+                Timeout = GpuWmiQueryTimeout
+            });
     }
 
-    private static string? FormatGpuName(IReadOnlyCollection<string> names)
+    internal static string? FormatGpuName(IReadOnlyCollection<string> names)
     {
         var uniqueNames = names
             .Where(name => !string.IsNullOrWhiteSpace(name))
@@ -197,7 +209,24 @@ public sealed class SystemTelemetryService
     }
 
     private sealed record GpuSnapshot(double? Percent, double? VramUsedGb, double? VramTotalGb, string? Name);
-    private sealed record GpuAdapterSnapshot(string? Name, double? TotalVramGb);
+}
+
+public sealed record SystemTelemetryFastSample(
+    double? CpuPercent,
+    double? RamUsedGb,
+    double? RamPercent,
+    double? RamTotalGb)
+{
+    public static SystemTelemetryFastSample Unavailable { get; } = new(null, null, null, null);
+}
+
+public sealed record SystemTelemetryGpuSample(
+    double? GpuPercent,
+    double? VramUsedGb,
+    string? GpuName,
+    double? VramTotalGb)
+{
+    public static SystemTelemetryGpuSample Unavailable { get; } = new(null, null, null, null);
 }
 
 public sealed record SystemTelemetrySample(
@@ -271,3 +300,59 @@ internal sealed class NvidiaGpuProbeCache
         }
     }
 }
+
+internal sealed class GpuAdapterProbeCache
+{
+    internal static readonly TimeSpan EvidenceLifetime = TimeSpan.FromMinutes(5);
+
+    private readonly Func<IReadOnlyList<WindowsGpuProbe>> probe;
+    private readonly Func<DateTimeOffset> utcNow;
+    private readonly object gate = new();
+    private GpuAdapterSnapshot? cachedEvidence;
+    private DateTimeOffset cachedAt = DateTimeOffset.MinValue;
+
+    public GpuAdapterProbeCache(
+        Func<IReadOnlyList<WindowsGpuProbe>> probe,
+        Func<DateTimeOffset> utcNow)
+    {
+        ArgumentNullException.ThrowIfNull(probe);
+        ArgumentNullException.ThrowIfNull(utcNow);
+        this.probe = probe;
+        this.utcNow = utcNow;
+    }
+
+    public GpuAdapterSnapshot Sample()
+    {
+        lock (gate)
+        {
+            var now = utcNow();
+            if (cachedEvidence is not null && now - cachedAt < EvidenceLifetime)
+            {
+                return cachedEvidence;
+            }
+
+            IReadOnlyList<WindowsGpuProbe> adapters;
+            try
+            {
+                adapters = probe();
+            }
+            catch
+            {
+                adapters = Array.Empty<WindowsGpuProbe>();
+            }
+
+            var names = adapters
+                .Select(adapter => adapter.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .ToArray();
+            var totalGb = adapters.Sum(adapter => adapter.VramTotalGb ?? 0);
+            cachedEvidence = new GpuAdapterSnapshot(
+                SystemTelemetryService.FormatGpuName(names),
+                totalGb > 0 ? totalGb : null);
+            cachedAt = now;
+            return cachedEvidence;
+        }
+    }
+}
+
+internal sealed record GpuAdapterSnapshot(string? Name, double? TotalVramGb);
