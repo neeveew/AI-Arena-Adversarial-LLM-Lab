@@ -15,3 +15,5 @@ versioned `.txt` change file.
   window, while retaining metadata-only cache hits for aged snapshots.
 - Keep the release-security fixture exit-clean in both PowerShell editions after
   it verifies an intentionally failing harness and rejects its reusable receipt.
+- Keep the noisy command-runner output fixture reliable on cold hosted runners
+  while retaining separate timeout validation and cancellation coverage.

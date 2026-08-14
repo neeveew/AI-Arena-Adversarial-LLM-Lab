@@ -579,14 +579,20 @@ static void AgentWorkspaceCommandRunnerCapturesTerminalOutput()
         Require(result.StandardOutput.Contains("AI_ARENA_AGENT_OK", StringComparison.Ordinal), "command runner should capture stdout");
         Require(!result.TimedOut, "quick command should not time out");
 
+        File.WriteAllText(Path.Combine(root, "noisy-stdout.txt"), new string('O', 140000));
+        File.WriteAllText(Path.Combine(root, "noisy-stderr.txt"), new string('E', 140000));
         var noisyPreview = AgentWorkspaceCommand.BuildPreview(
             root,
-            "PowerShell",
-            "$out = 'O' * 140000; $err = 'E' * 140000; [Console]::Out.Write($out); [Console]::Error.Write($err)");
+            "Terminal",
+            "type .\\noisy-stdout.txt & type .\\noisy-stderr.txt 1>&2");
         Require(noisyPreview.Ok, $"noisy command preview should be valid: {noisyPreview.Error}");
-        var noisyResult = AgentWorkspaceCommand.RunAsync(noisyPreview, TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+        // This assertion exercises concurrent bounded stdout/stderr draining, not timeout policy.
+        // Prebuilt fixture files avoid coupling it to a child runtime's cold-start performance.
+        var noisyResult = AgentWorkspaceCommand.RunAsync(noisyPreview, TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
         var boundedLength = AgentWorkspaceCommand.MaxCapturedStreamChars + 96;
-        Require(noisyResult.Ok, $"noisy command should still exit successfully: {noisyResult.Error}");
+        Require(
+            noisyResult.Ok,
+            $"noisy command should still exit successfully: error={noisyResult.Error}; timed_out={noisyResult.TimedOut}; canceled={noisyResult.Canceled}; exit={noisyResult.ExitCode}; elapsed_ms={noisyResult.Elapsed.TotalMilliseconds:0}; stdout_chars={noisyResult.StandardOutput.Length}; stderr_chars={noisyResult.StandardError.Length}");
         Require(noisyResult.StandardOutput.Length <= boundedLength, "stdout capture should be bounded before UI display truncation");
         Require(noisyResult.StandardError.Length <= boundedLength, "stderr capture should be bounded before UI display truncation");
         Require(noisyResult.StandardOutput.Contains(AgentWorkspaceCommand.StreamTruncatedMarker, StringComparison.Ordinal), "stdout should disclose command output truncation");
