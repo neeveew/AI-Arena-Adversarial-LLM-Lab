@@ -709,6 +709,21 @@ internal static partial class Program
                         $"ExpectedSha256 = '{originalSha256}'",
                         StringComparison.Ordinal),
                     "the generated apply command should carry the exact managed baseline digest shown in the preview");
+                Require(
+                    !guardedWrite.Contains("Get-FileHash", StringComparison.OrdinalIgnoreCase)
+                    && guardedWrite.Contains("function Get-AIArenaSha256Hex", StringComparison.Ordinal)
+                    && guardedWrite.Contains("[System.IO.File]::OpenRead($LiteralPath)", StringComparison.Ordinal)
+                    && guardedWrite.Contains("[System.Security.Cryptography.SHA256]::Create()", StringComparison.Ordinal)
+                    && guardedWrite.Contains("$sha256.ComputeHash($stream)", StringComparison.Ordinal)
+                    && guardedWrite.Contains(
+                        "[System.BitConverter]::ToString($digest).Replace('-', [string]::Empty)",
+                        StringComparison.Ordinal)
+                    && guardedWrite.Contains("$sha256.Dispose()", StringComparison.Ordinal)
+                    && guardedWrite.Contains("$stream.Dispose()", StringComparison.Ordinal)
+                    && guardedWrite.Contains(
+                        "Get-AIArenaSha256Hex -LiteralPath $fullPath",
+                        StringComparison.Ordinal),
+                    "the generated stale guard should use the portable streamed framework SHA-256 path and dispose both hashing resources");
 
                 var linkedWorkspaceRoot = Path.Combine(testRoot, "linked-workspace");
                 try
@@ -806,6 +821,12 @@ internal static partial class Program
                     coordinator.DebugCommandText.Contains(
                         $"ExpectedSha256 = '{originalSha256}'",
                         StringComparison.Ordinal)
+                    && coordinator.DebugCommandText.Contains(
+                        "Get-AIArenaSha256Hex -LiteralPath $fullPath",
+                        StringComparison.Ordinal)
+                    && !coordinator.DebugCommandText.Contains(
+                        "Get-FileHash",
+                        StringComparison.OrdinalIgnoreCase)
                     && coordinator.DebugCommandText.Contains(
                         "Repair preview is stale",
                         StringComparison.Ordinal),

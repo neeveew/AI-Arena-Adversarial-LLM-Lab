@@ -7,4 +7,6 @@ versioned `.txt` change file.
 
 ## Verified
 
-- No changes recorded yet.
+- Make Solution Doctor repair approvals verify reviewed file bytes through a
+  portable streamed SHA-256 guard, including Windows PowerShell hosts where
+  `Get-FileHash` is unavailable.
