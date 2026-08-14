@@ -1,0 +1,8 @@
+AI Arena 0.4.133-beta
+
+- Make busy workspaces scale smoothly by virtualizing Agent and Collaborate conversations and incrementally updating Match Setup, Agent Performance, Models, diagnostics, AI World, Status Center, and session projections.
+- Reduce turn-processing work with prepared per-turn context, bounded Rolling 80% history selection, shared prompt inspection and tracing data, and structural source caching while preserving provider bytes and persisted semantics.
+- Strengthen local data handling with canonical UTF-8 experiment serialization, bounded concurrent artifact loading, durable batched event logging with partial-tail recovery, and privacy-safe snapshot persistence.
+- Cut background work through split telemetry cadences, cached GPU and RAM presentation, deadline-driven status scheduling, indexed and debounced Help search, and per-host DNS validation reuse with fetch-time revalidation.
+- Harden QA and release production with isolated parallel harnesses, causal verification receipts, installer-resume binding, deterministic checksum output, and performance, concurrency, cancellation, accessibility, durability, and equivalence gates.
+- Verified receipts include Rolling-80 prompt calls from 2,614 to 14, AI World full rebuilds from 1,000 to 0, GPU probes from 61 to 13, Status Center idle wakes from 600 to 0, and one event-log lease and stream for a 100-record batch.
