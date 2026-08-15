@@ -7,7 +7,7 @@ AI Arena - Lite reports generation failures as typed outcomes whenever evidence 
 | **Input context limit** | The provider rejected the causal prompt as too large | Increase configured context and reload; choose a larger model; fork; skip the turn; end the match |
 | **Output limit reached** | A partial response exists and generation stopped at the output cap | Continue from the preserved partial response; increase output for future turns |
 | **Native state exhausted/lost** | Provider-native conversation state cannot continue reliably | Reload/reconnect as offered; fork or reset if the causal continuation cannot be proven |
-| **Capacity/busy** | Provider rejected before acceptance because no slot/capacity was available | Wait, inspect provider residency, then retry the same evidenced action |
+| **Capacity/busy** | Provider reported a capacity condition; absence of response tokens does not by itself prove non-acceptance | Wait and inspect provider residency; retry only when the app marks replay safe |
 | **Timeout/disconnect/malformed stream** | Transport failed; acceptance/replay safety depends on phase | Follow the typed retry state; never assume an accepted stream is safe to replay |
 | **Unknown/unconfirmed** | The post-request state cannot be proved | Refresh provider evidence; avoid duplicate mutation; preserve the run and fork if needed |
 

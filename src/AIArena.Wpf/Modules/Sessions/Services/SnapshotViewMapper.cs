@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using AIArena.Core.Models;
+using AIArena.Core.Persistence;
 using AIArena.Core.Providers;
 using AIArena.Core.Services;
 using AgentInternetSourceItem = AIArena.Wpf.Models.AgentInternetSourceItem;
@@ -77,6 +78,9 @@ public static class SnapshotViewMapper
             transcriptProjection.Messages,
             ParseAgents(snapshot.Engine.Agents, snapshot, transcriptProjection.LatestInternetByAgent))
         {
+            SessionInstanceId = SessionStore.IsValidSessionInstanceId(snapshot.SessionInstanceId)
+                ? snapshot.SessionInstanceId
+                : "",
             FactoryMode = snapshot.Engine.FactoryMode,
             DefaultForUnassignedAgentsEnabled = snapshot.Engine.DefaultForUnassignedAgentsEnabled,
             ExplicitRoleModels = ExplicitRoleModelsFrom(snapshot, sharedConfig),

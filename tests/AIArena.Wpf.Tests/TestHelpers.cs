@@ -22,6 +22,8 @@ using System.Windows.Media.Imaging;
 
 internal static partial class Program
 {
+    private const string ComposerTestSessionInstanceId = "11111111111111111111111111111111";
+
 static readonly Lazy<string> WorkspaceRootCache = new(LocateWorkspaceRoot, LazyThreadSafetyMode.ExecutionAndPublication);
 static readonly ConcurrentDictionary<string, string> WorkspaceSourceCache = new(StringComparer.OrdinalIgnoreCase);
 static readonly Lazy<string> MainWindowSourceCache = new(BuildMainWindowSource, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -225,7 +227,14 @@ static CollaborateCoordinator CreateCollaborateCoordinatorForTest(
     CollaborateHistoryStore historyStore,
     TextBlock? promptBudgetText = null,
     Button? contextReceiptButton = null,
-    StackPanel? recentItems = null)
+    StackPanel? recentItems = null,
+    StackPanel? toolDocumentItems = null,
+    Button? addDocumentButton = null,
+    Button? clearDocumentsButton = null,
+    TextBox? calculatorText = null,
+    Button? runCalculatorButton = null,
+    Func<string, CancellationToken, Task<Stream>>? toolDocumentStreamFactory = null,
+    ComposerDraftStore? composerDraftStore = null)
 {
     var modePicker = new ComboBox();
     var fastMode = new ComboBoxItem { Content = "Fast", Tag = "fast" };
@@ -263,11 +272,11 @@ static CollaborateCoordinator CreateCollaborateCoordinatorForTest(
         recentItems ?? new StackPanel(),
         new Button(),
         new Button(),
-        new StackPanel(),
-        new Button(),
-        new Button(),
-        new TextBox(),
-        new Button(),
+        toolDocumentItems ?? new StackPanel(),
+        addDocumentButton ?? new Button(),
+        clearDocumentsButton ?? new Button(),
+        calculatorText ?? new TextBox(),
+        runCalculatorButton ?? new Button(),
         new Button(),
         new StackPanel(),
         new TextBox(),
@@ -277,7 +286,9 @@ static CollaborateCoordinator CreateCollaborateCoordinatorForTest(
         snapshot,
         AccentResourceBrush,
         setShellStatus,
-        historyStore);
+        historyStore,
+        toolDocumentStreamFactory,
+        composerDraftStore);
 }
 
 static Brush AccentResourceBrush(string key)
@@ -364,7 +375,10 @@ static ArenaViewSnapshot SnapshotForOverviewTest(
         false,
         providerOnline,
         messages,
-        agents);
+        agents)
+    {
+        SessionInstanceId = ComposerTestSessionInstanceId
+    };
 }
 
 static DialogueMessage CoreMessageForTest(int turn, string speaker, string speakerId, string kind, string status, string model, int latencyMs)

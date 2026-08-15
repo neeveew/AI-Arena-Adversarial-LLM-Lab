@@ -231,8 +231,10 @@ internal static class VerificationLabHarness
         Require(!result.Ok, "Interrupted stream was reported as a completed response.");
         Require(progress.Text == ScriptedProviderHost.InterruptedPartialText,
             "Interrupted stream did not expose exactly the partial content observed before transport termination.");
-        Require(result.Text.Length == 0 && result.Reasoning.Length == 0,
-            "Interrupted transport promoted unverified partial progress into accepted completion content.");
+        Require(!result.Ok
+                && result.Text == ScriptedProviderHost.InterruptedPartialText
+                && result.Reasoning.Length == 0,
+            "Interrupted transport did not retain exactly the observed partial evidence on its failed result.");
         RequireFaultCapture(provider, captureStart, ScriptedProviderFault.Interruption, streaming: true);
     }
 

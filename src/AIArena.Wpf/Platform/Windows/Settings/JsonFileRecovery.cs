@@ -33,19 +33,21 @@ internal static class JsonFileRecovery
     {
         try
         {
+            var presentation = AppErrorPresenter.Present(error, AppErrorContext.Settings);
             if (!File.Exists(path))
             {
-                return $"{label} file could not be loaded: {error.Message}";
+                return $"{label} file is corrupt or invalid. {presentation.DisplayText} Defaults are being used.";
             }
 
             var backupPath = CorruptBackupPath(path);
             File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
             File.Move(path, backupPath);
-            return $"{label} file was corrupt and was moved to {backupPath}. Defaults are being used.";
+            return $"{label} file was corrupt and was moved to a timestamped backup beside the original. {presentation.DisplayText} Defaults are being used.";
         }
         catch (Exception backupError)
         {
-            return $"{label} file is corrupt and could not be backed up: {backupError.Message}. Defaults are being used.";
+            var presentation = AppErrorPresenter.Present(backupError, AppErrorContext.Settings);
+            return $"{label} file is corrupt and could not be backed up. {presentation.DisplayText} Defaults are being used.";
         }
     }
 

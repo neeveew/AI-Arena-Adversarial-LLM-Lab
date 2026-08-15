@@ -641,6 +641,19 @@ static void AgentWorkspaceCommandRunnerCapturesTerminalOutput()
         Require(!shutdownResult.Ok, "shutdown-terminated command should not report success");
         Require(AgentWorkspaceCommand.ActiveProcessCount == 0, "completed shutdown cleanup should unregister the child process");
         Require(!File.Exists(Path.Combine(root, "after-shutdown.txt")), "app shutdown cleanup should prevent descendant work after close");
+
+        var mainWindowSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml.cs");
+        var coordinatorSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/AgentWorkspaceCoordinator.cs");
+        var closingBoundary = mainWindowSource.IndexOf("private async void MainWindow_Closing", StringComparison.Ordinal);
+        var shutdownFlag = mainWindowSource.IndexOf("_shutdownInProgress = true;", closingBoundary, StringComparison.Ordinal);
+        var commandShutdown = mainWindowSource.IndexOf(
+            "AgentWorkspaceCommand.BeginApplicationShutdown();",
+            closingBoundary,
+            StringComparison.Ordinal);
+        Require(closingBoundary >= 0 && shutdownFlag > closingBoundary && commandShutdown > shutdownFlag,
+            "the real window-closing boundary should invoke process-wide Agent command shutdown after its durable close preflight and before draining services");
+        Require(!coordinatorSource.Contains("AgentWorkspaceCommand.BeginApplicationShutdown();", StringComparison.Ordinal),
+            "ordinary Agent workspace disposal must not invoke the process-wide application shutdown boundary");
     }
     finally
     {
@@ -4514,7 +4527,11 @@ private static AgentWorkspaceCoordinator CreateWorkspaceProfileTestCoordinator(
     WpfSettings settings,
     WpfSettingsStore settingsStore,
     Func<string, CancellationToken, Task<string>> buildWorkspaceProfileAsync,
-    Func<string, CancellationToken, Task<DotNetWorkspaceSnapshot>>? discoverDotNetWorkspaceAsync = null)
+    Func<string, CancellationToken, Task<DotNetWorkspaceSnapshot>>? discoverDotNetWorkspaceAsync = null,
+    IModelProviderClient? modelClient = null,
+    Func<ArenaViewSnapshot?>? snapshot = null,
+    TextBox? promptText = null,
+    ComposerDraftStore? composerDraftStore = null)
 {
     var shellPicker = new ComboBox();
     shellPicker.Items.Add(new ComboBoxItem { Content = "PowerShell", Tag = "PowerShell" });
@@ -4524,7 +4541,7 @@ private static AgentWorkspaceCoordinator CreateWorkspaceProfileTestCoordinator(
         System.Windows.Threading.Dispatcher.CurrentDispatcher,
         settingsStore,
         () => settings,
-        null,
+        modelClient,
         new TextBox(),
         new Button(),
         new Button(),
@@ -4538,7 +4555,7 @@ private static AgentWorkspaceCoordinator CreateWorkspaceProfileTestCoordinator(
         new TextBlock(),
         new ScrollViewer(),
         new StackPanel(),
-        new TextBox(),
+        promptText ?? new TextBox(),
         new Button(),
         new Button(),
         new Button(),
@@ -4584,11 +4601,12 @@ private static AgentWorkspaceCoordinator CreateWorkspaceProfileTestCoordinator(
         new StackPanel(),
         new Button(),
         new Button(),
-        () => null,
+        snapshot ?? (() => null),
         AccentResourceBrush,
         _ => { },
         buildWorkspaceProfileAsync: buildWorkspaceProfileAsync,
-        discoverDotNetWorkspaceAsync: discoverDotNetWorkspaceAsync);
+        discoverDotNetWorkspaceAsync: discoverDotNetWorkspaceAsync,
+        composerDraftStore: composerDraftStore);
 }
 
 }

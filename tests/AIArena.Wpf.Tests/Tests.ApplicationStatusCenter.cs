@@ -262,6 +262,7 @@ internal static partial class Program
         var scenarioSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ScenarioWorkflowCoordinator.cs");
         var transcriptMutationSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/TranscriptMutationCoordinator.cs");
         var internetSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/InternetWorkflowCoordinator.cs");
+        var collaborateSource = ReadWorkspaceFile("src/AIArena.Wpf/Shell/CollaborateCoordinator.cs");
 
         var settingsStatusHelper = CSharpMethodBlock(mainWindowSource, "private void SetSettingsTransferStatus");
         Require(settingsStatusHelper.Contains("SetApplicationStatus", StringComparison.Ordinal)
@@ -290,6 +291,25 @@ internal static partial class Program
         Require(loadSession.Contains("StatusCenter.SetContext(new ApplicationStatusIdentity(session.Id))", StringComparison.Ordinal)
                 && loadSession.Contains("new ApplicationStatusIdentity(session.Id),", StringComparison.Ordinal),
             "a failed session switch must still replace the old status scope and bind its failure to the requested session");
+        var collaborateRecoveryPublisher = CSharpMethodBlock(
+            mainWindowSource,
+            "private void PublishCollaborateRecoveryWarning");
+        var collaborateHistoryLoad = CSharpMethodBlock(
+            collaborateSource,
+            "private void LoadPersistedConversations()");
+        var collaboratePendingPublication = CSharpMethodBlock(
+            collaborateSource,
+            "internal bool PublishPendingRecoveryWarning");
+        Require(loadSession.Contains("PublishPendingRecoveryWarning(PublishCollaborateRecoveryWarning)", StringComparison.Ordinal)
+                && loadSession.IndexOf("StatusCenter.SetContext", StringComparison.Ordinal)
+                    < loadSession.IndexOf("PublishPendingRecoveryWarning", StringComparison.Ordinal)
+                && collaborateRecoveryPublisher.Contains("\"collaborate.history-recovery\"", StringComparison.Ordinal)
+                && collaborateRecoveryPublisher.Contains("ApplicationStatusState.Warning", StringComparison.Ordinal)
+                && collaborateRecoveryPublisher.Contains("new ApplicationStatusIdentity(_activeSession?.Id ?? \"\")", StringComparison.Ordinal)
+                && collaborateHistoryLoad.Contains("pendingRecoveryWarning = historyStore.LastLoadWarning", StringComparison.Ordinal)
+                && !collaborateHistoryLoad.Contains("setShellStatus", StringComparison.Ordinal)
+                && collaboratePendingPublication.Contains("pendingRecoveryWarning = \"\"", StringComparison.Ordinal),
+            "Collaborate history recovery should defer one typed warning until the active status identity is established");
         var publishReadiness = CSharpMethodBlock(mainWindowSource, "private void PublishArenaReadiness");
         Require(publishReadiness.Contains("SetArenaRunStatusCompatibilityText", StringComparison.Ordinal)
                 && !publishReadiness.Contains("ArenaRunStatus.Text =", StringComparison.Ordinal)

@@ -8,6 +8,17 @@ namespace AIArena.Wpf;
 
 internal static class AIArenaControlPlaneProtocol
 {
+    private const string InvalidOwnerMessage =
+        $"{OwnerEnvironmentVariable} must be a 32-character hexadecimal QA ownership identifier.";
+
+    private sealed class InvalidControlOwnerException : InvalidOperationException
+    {
+        internal InvalidControlOwnerException()
+            : base(InvalidOwnerMessage)
+        {
+        }
+    }
+
     public const string PipeName = "ai-arena-wpf-control";
     public const string OwnerEnvironmentVariable = "AI_ARENA_CONTROL_OWNER";
     public const int MaxRequestBytes = 256 * 1024;
@@ -50,7 +61,8 @@ internal static class AIArenaControlPlaneProtocol
         }
         catch (JsonException ex)
         {
-            error = $"Invalid JSON: {ex.Message}";
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.ControlPlane);
+            error = $"Invalid JSON request. {presentation.DisplayText}";
             return false;
         }
 
@@ -104,8 +116,7 @@ internal static class AIArenaControlPlaneProtocol
             error = "";
             return true;
         }
-        catch (InvalidOperationException ex) when (
-            ex.Message.StartsWith(OwnerEnvironmentVariable, StringComparison.Ordinal))
+        catch (InvalidControlOwnerException)
         {
             // Keep the protocol itself fail-closed: an invalid QA owner must
             // never fall back to the unsuffixed production pipe. The desktop
@@ -113,7 +124,7 @@ internal static class AIArenaControlPlaneProtocol
             // the rest of the application available.
             pipeName = "";
             tokenPath = "";
-            error = ex.Message;
+            error = InvalidOwnerMessage;
             return false;
         }
     }
@@ -129,8 +140,7 @@ internal static class AIArenaControlPlaneProtocol
         var owner = configured.Trim();
         if (owner.Length != 32 || owner.Any(character => !IsAsciiHex(character)))
         {
-            throw new InvalidOperationException(
-                $"{OwnerEnvironmentVariable} must be a 32-character hexadecimal QA ownership identifier.");
+            throw new InvalidControlOwnerException();
         }
 
         return $"-{owner.ToLowerInvariant()}";

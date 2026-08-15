@@ -54,7 +54,8 @@ internal class CollaborateHistoryStore
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            LastLoadWarning = $"Collaborate history could not be read and was left unchanged: {ex.Message}";
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Collaborate);
+            LastLoadWarning = $"{presentation.DisplayText} Existing history was left unchanged.";
             return [];
         }
     }

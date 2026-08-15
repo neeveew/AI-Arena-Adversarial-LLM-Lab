@@ -299,12 +299,16 @@ internal sealed record ProviderHealthPopupState(
         var online = snapshot?.ProviderOnline == true;
         var baseUrl = snapshot?.ProviderBaseUrl ?? providerBaseUrl;
         var model = snapshot?.ProviderModel ?? providerModel;
-        var error = snapshot?.ProviderLastError ?? "";
+        var rawError = snapshot?.ProviderLastError ?? "";
+        var error = AppErrorPresenter.RedactAndBound(
+            rawError,
+            600,
+            "Provider status detail is unavailable.");
         var modelCount = advertisedModels.Count > 0
             ? advertisedModels.Count
             : lastProviderModelCount;
         var checkedAt = lastProviderHealthCheckedAt ?? lastModelListCheckedAt;
-        var hasError = !string.IsNullOrWhiteSpace(error);
+        var hasError = !string.IsNullOrWhiteSpace(rawError);
         var missingModel = advertisedModels.Count > 0
             && !string.IsNullOrWhiteSpace(model)
             && model != "-"

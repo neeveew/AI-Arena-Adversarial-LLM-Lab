@@ -73,7 +73,9 @@ public sealed partial class LlamaCppRuntimeService
         catch (UriFormatException ex)
         {
             return LlamaCppRuntimeSnapshot.Unavailable(
-                SafeError($"Invalid llama.cpp server address: {ex.Message}", config.ApiToken),
+                SafeError(
+                    AppErrorPresenter.Present(ex, AppErrorContext.LlamaRuntime).DisplayText,
+                    config.ApiToken),
                 checkedAt);
         }
 
@@ -822,12 +824,19 @@ public sealed partial class LlamaCppRuntimeService
 
     private static string FriendlyException(Exception ex)
     {
+        var category = ex is OperationCanceledException
+            ? AppErrorCategory.Timeout
+            : (AppErrorCategory?)null;
+        var presentation = AppErrorPresenter.Present(
+            ex,
+            AppErrorContext.LlamaRuntime,
+            category);
         return ex switch
         {
-            OperationCanceledException => "Timed out while inspecting llama-server.",
-            UriFormatException => "The configured llama.cpp server address is invalid.",
-            InvalidDataException => ex.Message,
-            _ => $"llama.cpp runtime request failed: {ex.Message}"
+            OperationCanceledException => $"Timed out while inspecting llama-server. {presentation.DisplayText}",
+            UriFormatException => $"The configured llama.cpp server address is invalid. {presentation.DisplayText}",
+            InvalidDataException => $"The llama.cpp response exceeded the safety limit. {presentation.DisplayText}",
+            _ => presentation.DisplayText
         };
     }
 

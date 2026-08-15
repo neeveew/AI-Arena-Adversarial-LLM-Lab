@@ -971,15 +971,131 @@ public sealed class ApplicationStatusCenter
 
     private static string Safe(string? value, int maximumLength, string fallback)
     {
-        var safe = ProviderModelCatalogProjectionService.SafeStatusForDisplay(value ?? "");
+        var raw = value ?? "";
+        var hasStableCode = TryFindStableErrorCodeAtBoundedEdges(raw, out var stableCode);
+        var safe = ProviderModelCatalogProjectionService.SafeStatusForDisplay(raw);
         if (string.IsNullOrWhiteSpace(safe))
         {
             return fallback;
         }
 
-        return safe.Length <= maximumLength
-            ? safe
-            : safe[..Math.Max(1, maximumLength - 1)].TrimEnd() + "…";
+        if (!hasStableCode
+            && TryFindStableErrorCode(safe, out _, out _, out var sanitizedCode))
+        {
+            stableCode = sanitizedCode;
+            hasStableCode = true;
+        }
+
+        if (hasStableCode)
+        {
+            // Control-plane status projection has a 512-character defensive
+            // bound. Keep coded entries within that shared envelope so a code
+            // reconstructed here cannot be truncated away downstream.
+            return BoundWithStableErrorCode(
+                safe,
+                stableCode,
+                Math.Min(maximumLength, 512));
+        }
+
+        if (safe.Length <= maximumLength)
+        {
+            return safe;
+        }
+
+        return safe[..Math.Max(1, maximumLength - 1)].TrimEnd() + "…";
+    }
+
+    private static string BoundWithStableErrorCode(string safe, string code, int maximumLength)
+    {
+        var codeClause = $"Code: {code}.";
+        if (codeClause.Length > maximumLength)
+        {
+            return safe[..Math.Max(1, maximumLength - 1)].TrimEnd() + "…";
+        }
+
+        if (TryFindStableErrorCode(safe, out var markerStart, out var codeEnd, out var safeCode))
+        {
+            if (safe.Length <= maximumLength
+                && safeCode.Equals(code, StringComparison.Ordinal))
+            {
+                return safe;
+            }
+
+            var afterCode = codeEnd < safe.Length && safe[codeEnd] == '.'
+                ? codeEnd + 1
+                : codeEnd;
+            safe = string.Concat(safe.AsSpan(0, markerStart), safe.AsSpan(afterCode)).Trim();
+        }
+
+        var suffix = $"… {codeClause}";
+        if (suffix.Length > maximumLength)
+        {
+            return codeClause;
+        }
+
+        var prefixCapacity = maximumLength - suffix.Length;
+        var prefix = safe[..Math.Min(prefixCapacity, safe.Length)].TrimEnd();
+        return prefix.Length == 0 ? codeClause : prefix + suffix;
+    }
+
+    private static bool TryFindStableErrorCodeAtBoundedEdges(string value, out string code)
+    {
+        const int searchWindow = 512;
+        if (value.Length <= searchWindow)
+        {
+            return TryFindStableErrorCode(value, out _, out _, out code);
+        }
+
+        // Product-generated display text places the code at the end, while
+        // copy-detail text places it at the beginning. Inspect only those
+        // bounded authoritative edges rather than scanning arbitrary untrusted
+        // megabyte-scale status text.
+        var tail = value[^searchWindow..];
+        if (TryFindStableErrorCode(tail, out _, out _, out code))
+        {
+            return true;
+        }
+
+        var prefix = value[..searchWindow];
+        return TryFindStableErrorCode(prefix, out _, out _, out code);
+    }
+
+    private static bool TryFindStableErrorCode(
+        string value,
+        out int markerStart,
+        out int codeEnd,
+        out string code)
+    {
+        const string marker = "Code: AA-";
+        markerStart = value.LastIndexOf(marker, StringComparison.Ordinal);
+        if (markerStart < 0)
+        {
+            codeEnd = 0;
+            code = "";
+            return false;
+        }
+
+        var codeStart = markerStart + "Code: ".Length;
+        codeEnd = codeStart;
+        while (codeEnd < value.Length
+            && (value[codeEnd] is >= 'A' and <= 'Z'
+                || value[codeEnd] is >= '0' and <= '9'
+                || value[codeEnd] == '-'))
+        {
+            codeEnd++;
+        }
+
+        code = value[codeStart..codeEnd];
+        var segments = code.Split('-', StringSplitOptions.None);
+        var terminatorIsValid = codeEnd == value.Length
+            || value[codeEnd] == '.'
+            || char.IsWhiteSpace(value[codeEnd]);
+        return terminatorIsValid
+            && code.Length <= 80
+            && segments.Length is >= 3 and <= 6
+            && segments[0].Equals("AA", StringComparison.Ordinal)
+            && segments.Skip(1).All(segment => segment.Length is > 0 and <= 24)
+            && AppErrorPresenter.IsStableCode(code);
     }
 
     private void RaiseChanged(ApplicationStatusChangedEventArgs? args)

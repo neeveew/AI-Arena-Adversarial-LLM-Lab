@@ -202,7 +202,8 @@ public sealed class VoiceNarrationService : IDisposable
                 RaiseSpeakingChanged();
             }
 
-            return VoiceNarrationResult.Failed($"Voice narration failed: {ex.Message}");
+            return VoiceNarrationResult.Failed(
+                AppErrorPresenter.Present(ex, AppErrorContext.VoiceNarration).DisplayText);
         }
     }
 

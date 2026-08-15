@@ -2143,6 +2143,8 @@ static void MainWindowVoiceTtsSettingsExposeAutomation()
     }
 
     Require(xaml.Contains("<UniformGrid x:Name=\"ArenaControlGrid\" Columns=\"3\" Margin=\"0,0,-6,-6\">", StringComparison.Ordinal), "arena controls should expose an adaptive grid whose row count follows its responsive column count");
+    var readiness = XamlStartTag(xaml, "ArenaControlReadinessText", "TextBlock");
+    Require(readiness.Contains("Style=\"{StaticResource HintText}\"", StringComparison.Ordinal), "arena readiness guidance should use the dynamic muted-text hint style instead of WPF's black default foreground");
     var autoChatStart = xaml.IndexOf("x:Name=\"AutoChatButton\"", StringComparison.Ordinal);
     var stopStart = xaml.IndexOf("x:Name=\"StopButton\"", autoChatStart, StringComparison.Ordinal);
     var stableRunCellEnd = xaml.IndexOf("</Grid>", stopStart, StringComparison.Ordinal);
@@ -2161,6 +2163,18 @@ static void MainWindowVoiceTtsSettingsExposeAutomation()
     var status = XamlStartTag(xaml, "VoiceTtsStatusText", "TextBlock");
     Require(status.Contains("AutomationProperties.Name=\"", StringComparison.Ordinal), "voice TTS status should expose an automation name");
     Require(status.Contains("ToolTip=\"", StringComparison.Ordinal), "voice TTS status should retain a tooltip");
+
+    Require(!MainWindow.IsGenuineSessionChange("session-a", "SESSION-A"), "same-session refreshes should not stop voice playback");
+    Require(MainWindow.IsGenuineSessionChange("session-a", "session-b"), "switching sessions should stop voice playback");
+    Require(MainWindow.IsGenuineSessionChange(null, "session-a"), "loading the first active session should reset any in-flight global voice operation");
+
+    var mainWindowSource = ReadMainWindowSource();
+    var loadSessionStart = mainWindowSource.IndexOf("private async Task LoadSessionAsync(", StringComparison.Ordinal);
+    var stopForSwitch = mainWindowSource.IndexOf("StopVoicePlaybackForSessionChange(session.Id);", loadSessionStart, StringComparison.Ordinal);
+    var snapshotRead = mainWindowSource.IndexOf("LoadSnapshotAsync(session.Id, cancellationToken)", loadSessionStart, StringComparison.Ordinal);
+    Require(
+        loadSessionStart >= 0 && stopForSwitch > loadSessionStart && snapshotRead > stopForSwitch,
+        "a genuine session change should invalidate old narration before reading or rendering the next session");
 }
 
 static void MainWindowOperatorTurnTextUsesMultilineScrollAffordance()

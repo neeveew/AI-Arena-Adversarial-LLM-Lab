@@ -105,17 +105,16 @@ public sealed class OllamaModelPullService
 
     private static string FriendlyException(Exception ex)
     {
-        if (ex is TaskCanceledException)
+        var presentation = AppErrorPresenter.Present(
+            ex,
+            AppErrorContext.Provider,
+            ex is TaskCanceledException ? AppErrorCategory.Timeout : null);
+        return ex switch
         {
-            return "Ollama pull request timed out.";
-        }
-
-        if (ex is UriFormatException)
-        {
-            return "Invalid Ollama native API URL.";
-        }
-
-        return ex.Message;
+            TaskCanceledException => $"Ollama pull request timed out. {presentation.DisplayText}",
+            UriFormatException => $"Invalid Ollama native API URL. {presentation.DisplayText}",
+            _ => presentation.DisplayText
+        };
     }
 
     private static long FirstLong(JsonElement element, params string[] names)

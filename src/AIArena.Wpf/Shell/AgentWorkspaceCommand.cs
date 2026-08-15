@@ -222,6 +222,7 @@ internal static partial class AgentWorkspaceCommand
         catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
         {
             watch.Stop();
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Agent);
             return new AgentCommandResult(
                 false,
                 preview.Shell,
@@ -233,7 +234,7 @@ internal static partial class AgentWorkspaceCommand
                 watch.Elapsed,
                 false,
                 false,
-                ex.Message);
+                presentation.DisplayText);
         }
         finally
         {
@@ -341,7 +342,7 @@ internal static partial class AgentWorkspaceCommand
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
         {
-            error = $"Workspace path is invalid: {ex.Message}";
+            error = AppErrorPresenter.Present(ex, AppErrorContext.Agent).DisplayText;
             return value;
         }
     }
@@ -505,7 +506,7 @@ internal static partial class AgentWorkspaceCommand
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
         {
-            reason = $"Full Access could not validate the command path: {ex.Message}";
+            reason = AppErrorPresenter.Present(ex, AppErrorContext.Agent).DisplayText;
             return false;
         }
     }

@@ -43,7 +43,7 @@ public sealed class TurnRunnerService
     {
         _modelClient = modelClient ?? new ModelProviderClient();
         _sessionStore = sessionStore ?? new SessionStore();
-        _eventLogStore = eventLogStore ?? new EventLogStore(_sessionStore.DataRoot);
+        _eventLogStore = eventLogStore ?? EventLogStore.ForSessionStore(_sessionStore);
         _transcriptService = transcriptService ?? new TranscriptService();
         _internetToolService = internetToolService ?? new InternetToolService(eventLogStore: _eventLogStore);
         _factoryConversationService = factoryConversationService ?? new FactoryConversationService();

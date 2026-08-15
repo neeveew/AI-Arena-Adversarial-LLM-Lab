@@ -898,7 +898,9 @@ static void LlamaCppRuntimeContinuesAfterOptionalTransportFailure()
     Require(snapshot.Slots.Count == 1 && snapshot.BusySlots == 1, "slot evidence after the thrown props request should still be retained");
     Require(snapshot.Error == "", "an optional transport failure must not become a global runtime failure");
     Require(snapshot.Warnings.Any(value => value.Contains("Runtime properties unavailable", StringComparison.OrdinalIgnoreCase)
-        && value.Contains("connection reset", StringComparison.OrdinalIgnoreCase)), "the thrown transport failure should remain visible as a capability warning");
+        && value.Contains("AA-LLAMA-NETWORK", StringComparison.Ordinal)
+        && !value.Contains("connection reset", StringComparison.OrdinalIgnoreCase)),
+        "the thrown transport failure should remain a coded capability warning without raw transport text");
     Require(handler.Requests.Last().AbsolutePath == "/slots", "inspection must continue to later probes after an optional transport exception");
 
     static HttpResponseMessage JsonResponse(string body) => new(System.Net.HttpStatusCode.OK)

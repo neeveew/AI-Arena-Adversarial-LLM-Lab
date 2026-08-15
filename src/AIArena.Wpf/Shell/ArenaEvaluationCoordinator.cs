@@ -640,14 +640,7 @@ internal sealed class ArenaEvaluationCoordinator
 
     private static string FriendlyError(Exception exception)
     {
-        return exception switch
-        {
-            UnauthorizedAccessException => "Local evaluation history could not be accessed.",
-            IOException => "Local evaluation data could not be read or written.",
-            JsonException => "Local evaluation data is invalid and was not used.",
-            InvalidOperationException => exception.Message,
-            _ => "Evaluation capture failed."
-        };
+        return AppErrorPresenter.Present(exception, AppErrorContext.SavedState).DisplayText;
     }
 }
 

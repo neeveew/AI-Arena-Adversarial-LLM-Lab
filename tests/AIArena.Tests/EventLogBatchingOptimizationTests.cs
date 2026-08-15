@@ -121,9 +121,11 @@ internal static class EventLogBatchingOptimizationTests
         var crashRoot = TemporaryRoot();
         try
         {
+            var completions = new bool?[8];
             var observer = new EventLogWriteObserver
             {
                 Clock = () => FixedTime,
+                Completion = (index, succeeded) => completions[index] = succeeded,
                 BeforeWrite = index =>
                 {
                     if (index == 3)
@@ -138,6 +140,9 @@ internal static class EventLogBatchingOptimizationTests
                 "injected record-boundary interruption did not fail the caller");
             var path = store.EventPath("crash-prefix");
             Require(ReadIndexes(path).SequenceEqual([0, 1, 2]), "interrupted batch did not leave the exact valid JSONL prefix");
+            Require(completions.Take(3).All(completion => completion == true)
+                    && completions.Skip(3).All(completion => completion == false),
+                "callers for the durable prefix should succeed while only the uncommitted suffix reports failure");
             AssertEveryLineIsJson(path);
 
             new EventLogStore(crashRoot).AppendAsync("crash-prefix", "batch_event", new { index = 3, value = "fixed" })

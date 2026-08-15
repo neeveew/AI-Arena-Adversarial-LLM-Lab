@@ -1325,7 +1325,7 @@ internal static partial class Program
                 var persisted = coordinator.ListClaimLedgersAsync().GetAwaiter().GetResult().Artifacts
                     .Single(item => item.Id == ledger.Id);
                 Require(ArenaContractCodec.Serialize(persisted) == beforeSwitchJson
-                        && control.ClaimStatusText.Text.Contains("unavailable", StringComparison.OrdinalIgnoreCase)
+                        && control.ClaimStatusText.Text.Contains("AA-EXPERIMENT-INVALID-DATA", StringComparison.Ordinal)
                         && !ArenaContractCodec.Serialize(persisted).Contains("Must remain unavailable", StringComparison.Ordinal),
                     "session B accepted stale session A add/review provenance into its claim ledger");
             }

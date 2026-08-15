@@ -1480,7 +1480,10 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         }
         catch (ExperimentLabInputException exception)
         {
-            control.SetMatrixStatus(exception.Message);
+            control.SetMatrixStatus(AppErrorPresenter.Present(
+                exception,
+                AppErrorContext.Experiment,
+                AppErrorCategory.InvalidData).DisplayText);
         }
         catch (OperationCanceledException)
         {
@@ -1801,7 +1804,10 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         }
         catch (ExperimentLabInputException exception)
         {
-            control.SetRubricStatus(exception.Message);
+            control.SetRubricStatus(AppErrorPresenter.Present(
+                exception,
+                AppErrorContext.Experiment,
+                AppErrorCategory.InvalidData).DisplayText);
         }
         catch (OperationCanceledException) when (lifetime.Cancellation.IsCancellationRequested)
         {
@@ -2166,15 +2172,20 @@ internal sealed partial class ExperimentLabCoordinator : IDisposable
         }
         catch (ExperimentLabInputException exception)
         {
-            setStatus(exception.Message);
+            setStatus(AppErrorPresenter.Present(
+                exception,
+                AppErrorContext.Experiment,
+                AppErrorCategory.InvalidData).DisplayText);
         }
         catch (OperationCanceledException)
         {
-            setStatus("Action cancelled; persisted Experiment Lab artifacts were not rewritten.");
+            setStatus(AppErrorPresenter.Present(
+                new OperationCanceledException(),
+                AppErrorContext.Experiment).DisplayText);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException or ArgumentException)
         {
-            setStatus($"Action failed safely ({exception.GetType().Name}); no provider result or evidence was invented.");
+            setStatus(AppErrorPresenter.Present(exception, AppErrorContext.Experiment).DisplayText);
         }
         finally
         {

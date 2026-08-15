@@ -1320,7 +1320,9 @@ static void CollaborateSendPreservesHistorySaveFailures()
 
         Require(client.CompleteCalls == 1, "collaborate send should call the provider once in fast mode");
         Require(store.SaveCalls == 1, "collaborate send should attempt to save history");
-        Require(statusText.Text.Contains("Could not save Collaborate history:", StringComparison.Ordinal), "save failure should remain visible in collaborate status");
+        Require(statusText.Text.Contains("AA-COLLAB-IO", StringComparison.Ordinal)
+                && !statusText.Text.Contains("disk offline", StringComparison.Ordinal),
+            "save failure should remain visibly coded without exposing raw storage details");
         Require(shellStatus == statusText.Text, "shell status should match the collaborate save warning");
         Require(store.LastConversations.Single().Exchanges.Single().Answer == "Checklist ready.", "failed save attempt should still receive the completed exchange");
     });
@@ -1345,9 +1347,12 @@ static void CollaborateFailedSendsAreSavedInHistory()
         coordinator.SendAsync().GetAwaiter().GetResult();
 
         var exchange = store.LastConversations.Single().Exchanges.Single();
-        Require(statusText.Text == "Collaboration failed.", "provider exception should leave a failure status");
+        Require(statusText.Text.Contains("AA-COLLAB-UNEXPECTED", StringComparison.Ordinal),
+            "provider exception should leave a stable coded failure status");
         Require(exchange.Prompt == "Explain the provider failure", "failed send should persist the user prompt");
-        Require(exchange.Answer == "Collaboration failed: provider down", "failed send should persist the visible assistant failure");
+        Require(exchange.Answer.Contains("AA-COLLAB-UNEXPECTED", StringComparison.Ordinal)
+                && !exchange.Answer.Contains("provider down", StringComparison.Ordinal),
+            "failed send should persist the same privacy-safe visible assistant failure");
     });
 }
 

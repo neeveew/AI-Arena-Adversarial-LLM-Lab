@@ -174,18 +174,14 @@ internal sealed class LlamaCppRuntimeCoordinator
         }
         catch (Exception exception)
         {
-            var safeError = ProviderModelCatalogProjectionService.SafeStatusForDisplay(
-                exception.Message,
-                config.ApiToken);
+            var presentation = AppErrorPresenter.Present(exception, AppErrorContext.LlamaRuntime);
             if (IsCurrent(identity, version))
             {
-                snapshot = LlamaCppRuntimeSnapshot.Unavailable(safeError, DateTimeOffset.Now);
+                snapshot = LlamaCppRuntimeSnapshot.Unavailable(presentation.DisplayText, DateTimeOffset.Now);
                 FailStatus(
                     receipt,
-                    reconnect
-                        ? "Could not reconnect to llama.cpp runtime."
-                        : "Could not inspect llama.cpp runtime.",
-                    safeError);
+                    presentation.Summary,
+                    presentation.CopyDetails);
             }
             else
             {
@@ -305,21 +301,17 @@ internal sealed class LlamaCppRuntimeCoordinator
         }
         catch (Exception exception)
         {
-            var safeError = ProviderModelCatalogProjectionService.SafeStatusForDisplay(
-                exception.Message,
-                config.ApiToken);
+            var presentation = AppErrorPresenter.Present(exception, AppErrorContext.LlamaRuntime);
             if (IsCurrent(identity, version))
             {
                 actionNotice = load
-                    ? $"Preload failed for {displayModel}: {safeError}"
-                    : $"Unload failed for {displayModel}: {safeError}";
+                    ? $"Preload for {displayModel}: {presentation.DisplayText}"
+                    : $"Unload for {displayModel}: {presentation.DisplayText}";
                 actionNoticeIsFailure = true;
                 FailStatus(
                     receipt,
-                    load
-                        ? $"Could not preload {displayModel}."
-                        : $"Could not unload {displayModel}.",
-                    safeError);
+                    presentation.Summary,
+                    presentation.CopyDetails);
             }
             else
             {

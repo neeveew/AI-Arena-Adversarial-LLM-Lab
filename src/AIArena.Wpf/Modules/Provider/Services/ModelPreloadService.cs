@@ -639,17 +639,16 @@ public sealed class ModelPreloadService
 
     private static string FriendlyException(Exception ex)
     {
-        if (ex is TaskCanceledException)
+        var presentation = AppErrorPresenter.Present(
+            ex,
+            AppErrorContext.Provider,
+            ex is TaskCanceledException ? AppErrorCategory.Timeout : null);
+        return ex switch
         {
-            return "Timed out while asking the native provider to load or unload the model.";
-        }
-
-        if (ex is UriFormatException)
-        {
-            return "Invalid native provider base URL.";
-        }
-
-        return ex.Message;
+            TaskCanceledException => $"Timed out while asking the native provider to load or unload the model. {presentation.DisplayText}",
+            UriFormatException => $"Invalid native provider base URL. {presentation.DisplayText}",
+            _ => presentation.DisplayText
+        };
     }
 }
 

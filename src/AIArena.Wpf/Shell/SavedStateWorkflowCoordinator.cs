@@ -11,6 +11,33 @@ namespace AIArena.Wpf;
 
 internal sealed class SavedStateWorkflowCoordinator
 {
+    internal sealed record CheckpointRestoreCompletion(
+        CheckpointRestoreWithSafetyResult Restore,
+        string Outcome,
+        bool EventRecorded);
+
+    internal sealed record CheckpointTrashCompletion(
+        SavedStateDeletionReceipt? Receipt,
+        string Outcome,
+        bool EventRecorded);
+
+    internal sealed record SessionTrashCompletion(
+        SavedStateDeletionReceipt? Receipt,
+        string Outcome);
+
+    internal sealed record DeletedStateUndoCompletion(
+        SavedStateRestoreResult Restore,
+        string Outcome,
+        bool EventRecorded);
+
+    internal sealed record TemplateApplyCompletion(
+        SnapshotSafetyCheckpointReceipt SafetyCheckpoint,
+        string Outcome,
+        bool EventRecorded);
+
+    internal const string TrashRetentionDisclosure =
+        "Trash keeps up to 64 items for at most seven days.";
+
     private readonly Window owner;
     private readonly SessionStore sessionStore;
     private readonly EventLogStore eventLogStore;
@@ -39,7 +66,6 @@ internal sealed class SavedStateWorkflowCoordinator
     private readonly Func<string, Func<Task>, Task> runArenaBusyAsync;
     private readonly Func<CoreSessionSummary, bool, Task> loadSessionAsync;
     private readonly Func<string?, Task> loadSessionsAsync;
-    private readonly Func<ArenaSnapshot, string, Task> saveSnapshotWithFeedbackAsync;
     private readonly Func<string, Task> refreshActiveSessionAsync;
     private readonly Func<string, Brush> resourceBrush;
     private readonly Action<string> setArenaRunStatus;
@@ -49,6 +75,8 @@ internal sealed class SavedStateWorkflowCoordinator
     private IReadOnlyList<CheckpointSummary> checkpointSummaries = [];
     private IReadOnlyList<ScenarioTemplate> scenarioTemplates = [];
     private SessionForkLineage? currentForkLineage;
+    private PendingSavedStateDeletion? pendingDeletion;
+    private bool pendingDeletionUndoArmed;
     private bool isUpdating;
 
     /// <summary>
@@ -119,7 +147,7 @@ internal sealed class SavedStateWorkflowCoordinator
         this.runArenaBusyAsync = runArenaBusyAsync;
         this.loadSessionAsync = loadSessionAsync;
         this.loadSessionsAsync = loadSessionsAsync;
-        this.saveSnapshotWithFeedbackAsync = saveSnapshotWithFeedbackAsync;
+        _ = saveSnapshotWithFeedbackAsync;
         this.refreshActiveSessionAsync = refreshActiveSessionAsync;
         this.resourceBrush = resourceBrush;
         this.setArenaRunStatus = setArenaRunStatus;
@@ -239,7 +267,9 @@ internal sealed class SavedStateWorkflowCoordinator
             return;
         }
 
+        pendingDeletionUndoArmed = false;
         UpdatePicker();
+        UpdateActionButtons();
     }
 
     public void OnItemSelectionChanged()
@@ -249,7 +279,9 @@ internal sealed class SavedStateWorkflowCoordinator
             return;
         }
 
+        pendingDeletionUndoArmed = false;
         UpdateSelectionDetails();
+        UpdateActionButtons();
     }
 
     public async Task SaveAsync()
@@ -292,6 +324,12 @@ internal sealed class SavedStateWorkflowCoordinator
 
     public async Task DeleteAsync()
     {
+        if (ShouldUndoDeletionOnDelete(pendingDeletion?.Receipt, pendingDeletionUndoArmed))
+        {
+            await UndoPendingDeletionAsync();
+            return;
+        }
+
         switch (CurrentMode())
         {
             case "session":
@@ -363,7 +401,7 @@ internal sealed class SavedStateWorkflowCoordinator
 
     internal static string CheckpointRefreshFailureStatus(Exception ex)
     {
-        return $"Checkpoint refresh failed: {ex.Message}";
+        return AppErrorPresenter.Present(ex, AppErrorContext.SavedState).DisplayText;
     }
 
     public void ClearCheckpoints(string status)
@@ -530,12 +568,18 @@ internal sealed class SavedStateWorkflowCoordinator
         var parentSessionId = CurrentParentSessionId();
         var parentAvailable = ParentSessionIsAvailable(parentSessionId);
         loadButton.IsEnabled = idle && hasSelection;
-        deleteButton.IsEnabled = idle && hasSelection && !selectedDefaultSession;
+        var deletePresentation = DeleteActionPresentation(
+            idle,
+            hasSelection,
+            selectedDefaultSession,
+            pendingDeletionUndoArmed ? pendingDeletion?.Receipt : null);
+        deleteButton.Content = deletePresentation.Content;
+        deleteButton.IsEnabled = deletePresentation.Enabled;
         forkButton.IsEnabled = idle && activeSession() is not null;
         openParentButton.IsEnabled = idle && parentAvailable;
-        deleteButton.ToolTip = selectedDefaultSession
-            ? "Default session cannot be deleted."
-            : "Delete the selected saved item.";
+        deleteButton.ToolTip = deletePresentation.HelpText;
+        AutomationProperties.SetName(deleteButton, deletePresentation.AutomationName);
+        AutomationProperties.SetHelpText(deleteButton, deletePresentation.HelpText);
         var parentHelpText = parentAvailable
             ? $"Open parent session {parentSessionId}"
             : string.IsNullOrWhiteSpace(parentSessionId)
@@ -543,6 +587,27 @@ internal sealed class SavedStateWorkflowCoordinator
                 : $"Parent session {parentSessionId} is no longer available.";
         openParentButton.ToolTip = parentHelpText;
         AutomationProperties.SetHelpText(openParentButton, parentHelpText);
+    }
+
+    public async Task RehydratePendingDeletionAsync(CancellationToken cancellationToken = default)
+    {
+        var receipts = await sessionStore.ListRestorableDeletedStatesAsync(cancellationToken);
+        var newest = receipts.FirstOrDefault();
+        if (newest is null)
+        {
+            pendingDeletion = null;
+            pendingDeletionUndoArmed = false;
+        }
+        else
+        {
+            var wasActiveSession = pendingDeletion is not null
+                && pendingDeletion.Receipt.Id.Equals(newest.Id, StringComparison.OrdinalIgnoreCase)
+                && pendingDeletion.WasActiveSession;
+            pendingDeletion = new PendingSavedStateDeletion(newest, wasActiveSession);
+            pendingDeletionUndoArmed = true;
+        }
+
+        UpdateActionButtons();
     }
 
     private void UpdateLineagePresentation()
@@ -675,7 +740,7 @@ internal sealed class SavedStateWorkflowCoordinator
             owner,
             theme(),
             "Delete Session",
-            $"Delete session \"{session.Id}\"?\n\nThis removes the session folder and cannot be undone.",
+            $"Move session \"{session.Id}\" to Trash?\n\nYou can undo this from Saved State. {TrashRetentionDisclosure}",
             "Delete",
             tone: ConfirmDialogTone.Danger);
         if (!confirm)
@@ -684,13 +749,49 @@ internal sealed class SavedStateWorkflowCoordinator
             return;
         }
 
-        await runArenaBusyAsync($"Deleting session {session.Id}...", async () =>
+        var wasActive = activeSession()?.Id.Equals(session.Id, StringComparison.OrdinalIgnoreCase) == true;
+        var preferredSessionId = PreferredSessionAfterDelete(session.Id, activeSession()?.Id);
+        await runArenaBusyAsync($"Moving session {session.Id} to Trash...", async () =>
         {
-            var deleted = await sessionStore.DeleteSessionAsync(session.Id);
-            await loadSessionsAsync("default");
-            SetStatus(deleted ? $"Deleted session: {session.Id}." : $"Could not delete session: {session.Id}.", isDanger: !deleted);
+            var completion = await TrashSessionAndReportAsync(
+                sessionStore,
+                session.Id,
+                preferredSessionId,
+                (selectedId, _) => loadSessionsAsync(selectedId));
+            if (completion.Receipt is not null)
+            {
+                pendingDeletion = new PendingSavedStateDeletion(completion.Receipt, wasActive);
+                pendingDeletionUndoArmed = true;
+            }
+
+            SetStatus(completion.Outcome, isDanger: completion.Receipt is null);
             setArenaRunStatus(statusText.Text);
+            UpdateActionButtons();
         });
+    }
+
+    internal static async Task<SessionTrashCompletion> TrashSessionAndReportAsync(
+        SessionStore sessionStore,
+        string sessionId,
+        string? preferredSessionId,
+        Func<string?, CancellationToken, Task> loadSessionsAsync,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sessionStore);
+        ArgumentNullException.ThrowIfNull(loadSessionsAsync);
+        var receipt = await sessionStore.TrashSessionAsync(sessionId, cancellationToken);
+        if (receipt is null)
+        {
+            return new SessionTrashCompletion(
+                null,
+                $"Could not move session {sessionId} to Trash.");
+        }
+
+        var outcome = $"Moved session {sessionId} to Trash. Choose Undo to restore it.";
+        var refreshWarning = await TryCompletePostCommitAsync(
+            () => loadSessionsAsync(preferredSessionId, CancellationToken.None),
+            "the session list could not be refreshed");
+        return new SessionTrashCompletion(receipt, AppendCompletionWarning(outcome, refreshWarning));
     }
 
     private async Task SaveScenarioTemplateAsync()
@@ -764,19 +865,85 @@ internal sealed class SavedStateWorkflowCoordinator
 
         await runArenaBusyAsync($"Applying match template {template.Name}...", async () =>
         {
-            var snapshot = await sessionStore.LoadSnapshotAsync(session.Id);
-            if (snapshot is null)
+            var completion = await ApplyTemplateWithSafetyCheckpointAndReportAsync(
+                sessionStore,
+                eventLogStore,
+                session.Id,
+                template,
+                (outcome, _) => refreshActiveSessionAsync(outcome));
+            if (completion is null)
             {
                 SetStatus($"No snapshot found for session {session.Id}.", isDanger: true);
                 return;
             }
 
-            ScenarioTemplateStore.Apply(template, snapshot);
-            await saveSnapshotWithFeedbackAsync(snapshot, session.Id);
-            await eventLogStore.AppendAsync(session.Id, "native_scenario_template_applied", new { template.Id, template.Name });
-            await refreshActiveSessionAsync($"Applied template: {template.Name}.");
-            SetStatus($"Loaded template: {template.Name}. Transcript was preserved.");
+            SetStatus(completion.Outcome);
         });
+    }
+
+    internal static async Task<TemplateApplyCompletion?> ApplyTemplateWithSafetyCheckpointAndReportAsync(
+        SessionStore sessionStore,
+        EventLogStore eventLogStore,
+        string sessionId,
+        ScenarioTemplate template,
+        Func<string, CancellationToken, Task> refreshActiveSessionAsync,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(eventLogStore);
+        ArgumentNullException.ThrowIfNull(refreshActiveSessionAsync);
+        var safety = await ApplyTemplateWithSafetyCheckpointAsync(
+            sessionStore,
+            sessionId,
+            template,
+            cancellationToken);
+        if (safety is null)
+        {
+            return null;
+        }
+
+        var evidence = await AppPostCommitEvidence.TryAppendAsync(
+            eventLogStore,
+            sessionId,
+            "native_scenario_template_applied",
+            new
+            {
+                template.Id,
+                template.Name,
+                safety_checkpoint_id = safety.Checkpoint.Id,
+                safety_checkpoint_name = safety.Checkpoint.Name,
+                protected_revision = safety.ProtectedRevision,
+                replacement_revision = safety.ReplacementRevision
+            },
+            AppErrorContext.SavedState);
+        var refreshOutcome = evidence.AppendTo(
+            $"Applied template: {template.Name}. Safety checkpoint: {safety.Checkpoint.Name}.");
+        var outcome = evidence.AppendTo(
+            $"Loaded template: {template.Name}. Transcript was preserved. Safety checkpoint: {safety.Checkpoint.Name}.");
+        var refreshWarning = await TryCompletePostCommitAsync(
+            () => refreshActiveSessionAsync(refreshOutcome, CancellationToken.None),
+            "the template-applied session could not be refreshed");
+        outcome = AppendCompletionWarning(outcome, refreshWarning);
+        return new TemplateApplyCompletion(safety, outcome, evidence.Recorded);
+    }
+
+    internal static Task<SnapshotSafetyCheckpointReceipt?> ApplyTemplateWithSafetyCheckpointAsync(
+        SessionStore sessionStore,
+        string sessionId,
+        ScenarioTemplate template,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sessionStore);
+        ArgumentNullException.ThrowIfNull(template);
+        return sessionStore.MutateSnapshotWithSafetyCheckpointAsync(
+            sessionId,
+            SnapshotSafetyCheckpointOperation.TemplateApply,
+            template.Name,
+            snapshot =>
+            {
+                ScenarioTemplateStore.Apply(template, snapshot);
+                return snapshot;
+            },
+            cancellationToken);
     }
 
     private async Task DeleteSelectedTemplateAsync()
@@ -856,18 +1023,133 @@ internal sealed class SavedStateWorkflowCoordinator
 
         await runArenaBusyAsync($"Loading checkpoint {checkpoint.Name}...", async () =>
         {
-            var restored = await sessionStore.RestoreCheckpointAsync(session.Id, checkpoint.Id);
-            if (restored is null)
+            var completion = await RestoreCheckpointWithSafetyCheckpointAndReportAsync(
+                sessionStore,
+                eventLogStore,
+                session.Id,
+                checkpoint.Id,
+                refreshActiveSessionAsync,
+                RefreshCheckpointsAsync);
+            if (completion is null)
             {
                 SetStatus("Checkpoint load failed.", isDanger: true);
                 return;
             }
 
-            await eventLogStore.AppendAsync(session.Id, "native_checkpoint_restored", new { restored.Id, restored.Name });
-            await refreshActiveSessionAsync($"Loaded checkpoint: {restored.Name}");
-            await RefreshCheckpointsAsync(restored.Id);
-            SetStatus($"Loaded checkpoint: {restored.Name}.");
+            SetStatus(completion.Outcome);
         });
+    }
+
+    internal static async Task<CheckpointRestoreCompletion?> RestoreCheckpointWithSafetyCheckpointAndReportAsync(
+        SessionStore sessionStore,
+        EventLogStore eventLogStore,
+        string sessionId,
+        string checkpointId,
+        Func<string, Task> refreshActiveSessionAsync,
+        Func<string?, Task> refreshCheckpointsAsync,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(eventLogStore);
+        ArgumentNullException.ThrowIfNull(refreshActiveSessionAsync);
+        ArgumentNullException.ThrowIfNull(refreshCheckpointsAsync);
+        var result = await RestoreCheckpointWithSafetyCheckpointAsync(
+            sessionStore,
+            sessionId,
+            checkpointId,
+            cancellationToken);
+        if (result is null)
+        {
+            return null;
+        }
+
+        var restored = result.RestoredCheckpoint;
+        var safety = result.SafetyCheckpoint;
+        // The restore is authoritative at this point. Failure to append its
+        // audit event is reported as a secondary warning, never as a failed
+        // restore, and cannot prevent either required refresh.
+        var evidence = await AppPostCommitEvidence.TryAppendAsync(
+            eventLogStore,
+            sessionId,
+            "native_checkpoint_restored",
+            new
+            {
+                restored.Id,
+                restored.Name,
+                safety_checkpoint_id = safety?.Checkpoint.Id ?? "",
+                safety_checkpoint_name = safety?.Checkpoint.Name ?? "",
+                protected_revision = safety?.ProtectedRevision,
+                replacement_revision = safety?.ReplacementRevision
+            },
+            AppErrorContext.SavedState);
+        var safetyStatus = safety is null
+            ? "No prior live snapshot required a safety checkpoint."
+            : $"Safety checkpoint: {safety.Checkpoint.Name}.";
+        var outcome = evidence.AppendTo($"Loaded checkpoint: {restored.Name}. {safetyStatus}");
+        var activeRefreshWarning = await TryCompletePostCommitAsync(
+            () => refreshActiveSessionAsync(outcome),
+            "the restored session could not be refreshed");
+        outcome = AppendCompletionWarning(outcome, activeRefreshWarning);
+        var checkpointRefreshWarning = await TryCompletePostCommitAsync(
+            () => refreshCheckpointsAsync(restored.Id),
+            "the checkpoint list could not be refreshed");
+        outcome = AppendCompletionWarning(outcome, checkpointRefreshWarning);
+        return new CheckpointRestoreCompletion(result, outcome, evidence.Recorded);
+    }
+
+    internal static Task<CheckpointRestoreWithSafetyResult?> RestoreCheckpointWithSafetyCheckpointAsync(
+        SessionStore sessionStore,
+        string sessionId,
+        string checkpointId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sessionStore);
+        return sessionStore.RestoreCheckpointWithSafetyCheckpointAsync(
+            sessionId,
+            checkpointId,
+            cancellationToken);
+    }
+
+    internal static async Task<CheckpointTrashCompletion> TrashCheckpointAndReportAsync(
+        SessionStore sessionStore,
+        EventLogStore eventLogStore,
+        string sessionId,
+        string checkpointId,
+        string checkpointName,
+        Func<string?, CancellationToken, Task> refreshCheckpointsAsync,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sessionStore);
+        ArgumentNullException.ThrowIfNull(eventLogStore);
+        ArgumentNullException.ThrowIfNull(refreshCheckpointsAsync);
+        var receipt = await sessionStore.TrashCheckpointAsync(
+            sessionId,
+            checkpointId,
+            checkpointName,
+            cancellationToken);
+        if (receipt is null)
+        {
+            await refreshCheckpointsAsync(null, CancellationToken.None);
+            return new CheckpointTrashCompletion(
+                null,
+                "Checkpoint could not be moved to Trash.",
+                EventRecorded: false);
+        }
+
+        // The payload move has committed. Evidence and projection refresh are
+        // secondary completion work and must ignore late caller cancellation.
+        var evidence = await AppPostCommitEvidence.TryAppendAsync(
+            eventLogStore,
+            sessionId,
+            "native_checkpoint_deleted",
+            new { Id = checkpointId, Name = checkpointName },
+            AppErrorContext.SavedState);
+        var outcome = evidence.AppendTo(
+            $"Moved checkpoint {checkpointName} to Trash. Choose Undo to restore it.");
+        var refreshWarning = await TryCompletePostCommitAsync(
+            () => refreshCheckpointsAsync(null, CancellationToken.None),
+            "the checkpoint list could not be refreshed");
+        outcome = AppendCompletionWarning(outcome, refreshWarning);
+        return new CheckpointTrashCompletion(receipt, outcome, evidence.Recorded);
     }
 
     private async Task DeleteSelectedCheckpointAsync()
@@ -883,7 +1165,7 @@ internal sealed class SavedStateWorkflowCoordinator
             owner,
             theme(),
             "Delete Checkpoint",
-            $"Delete \"{checkpoint.Name}\"?\n\nThis removes only the saved checkpoint. The current arena state is not changed.",
+            $"Move \"{checkpoint.Name}\" to Trash?\n\nThe current arena is unchanged, and you can undo this from Saved State. {TrashRetentionDisclosure}",
             "Delete",
             tone: ConfirmDialogTone.Danger);
         if (!confirm)
@@ -892,22 +1174,232 @@ internal sealed class SavedStateWorkflowCoordinator
             return;
         }
 
-        await runArenaBusyAsync($"Deleting checkpoint {checkpoint.Name}...", async () =>
+        await runArenaBusyAsync($"Moving checkpoint {checkpoint.Name} to Trash...", async () =>
         {
-            var deleted = await sessionStore.DeleteCheckpointAsync(session.Id, checkpoint.Id);
-            if (deleted)
+            var completion = await TrashCheckpointAndReportAsync(
+                sessionStore,
+                eventLogStore,
+                session.Id,
+                checkpoint.Id,
+                checkpoint.Name,
+                (selectedId, _) => RefreshCheckpointsAsync(selectedId));
+            if (completion.Receipt is not null)
             {
-                await eventLogStore.AppendAsync(session.Id, "native_checkpoint_deleted", new { checkpoint.Id, checkpoint.Name });
+                pendingDeletion = new PendingSavedStateDeletion(completion.Receipt, WasActiveSession: false);
+                pendingDeletionUndoArmed = true;
             }
 
-            await RefreshCheckpointsAsync();
-            SetStatus(deleted ? $"Deleted checkpoint: {checkpoint.Name}." : "Checkpoint delete failed.", isDanger: !deleted);
+            SetStatus(completion.Outcome, isDanger: completion.Receipt is null);
             setArenaRunStatus(statusText.Text);
+            UpdateActionButtons();
         });
+    }
+
+    private async Task UndoPendingDeletionAsync()
+    {
+        var pending = pendingDeletion;
+        if (pending is null)
+        {
+            return;
+        }
+
+        var receipt = pending.Receipt;
+        await runArenaBusyAsync($"Restoring {DeletedItemLabel(receipt)} from Trash...", async () =>
+        {
+            var preferredSessionId = PreferredSessionAfterUndo(
+                receipt.SessionId,
+                pending.WasActiveSession,
+                activeSession()?.Id);
+            var completion = await UndoDeletedStateAndReportAsync(
+                sessionStore,
+                eventLogStore,
+                receipt,
+                result =>
+                {
+                    if (result.Restored
+                        || result.Status is SavedStateRestoreStatus.Expired
+                            or SavedStateRestoreStatus.NotFound
+                            or SavedStateRestoreStatus.Invalid)
+                    {
+                        pendingDeletion = null;
+                        pendingDeletionUndoArmed = false;
+                    }
+                },
+                async (restoredReceipt, _) =>
+                {
+                    if (restoredReceipt.Kind == SavedStateDeletionKind.Session)
+                    {
+                        await loadSessionsAsync(preferredSessionId);
+                    }
+                    else if (activeSession()?.Id.Equals(
+                                 restoredReceipt.SessionId,
+                                 StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        await RefreshCheckpointsAsync(restoredReceipt.CheckpointId);
+                    }
+                },
+                RehydratePendingDeletionAsync);
+
+            SetStatus(completion.Outcome, isDanger: !completion.Restore.Restored);
+            setArenaRunStatus(statusText.Text);
+            UpdateActionButtons();
+        });
+    }
+
+    internal static async Task<DeletedStateUndoCompletion> UndoDeletedStateAndReportAsync(
+        SessionStore sessionStore,
+        EventLogStore eventLogStore,
+        SavedStateDeletionReceipt receipt,
+        Action<SavedStateRestoreResult> applyRestoreResult,
+        Func<SavedStateDeletionReceipt, CancellationToken, Task> refreshRestoredStateAsync,
+        Func<CancellationToken, Task> rehydratePendingDeletionAsync,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sessionStore);
+        ArgumentNullException.ThrowIfNull(eventLogStore);
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(applyRestoreResult);
+        ArgumentNullException.ThrowIfNull(refreshRestoredStateAsync);
+        ArgumentNullException.ThrowIfNull(rehydratePendingDeletionAsync);
+
+        var result = await sessionStore.RestoreDeletedStateAsync(receipt, cancellationToken);
+        applyRestoreResult(result);
+        var eventRecorded = true;
+        var outcome = UndoStatus(result);
+        if (result.Restored)
+        {
+            AppPostCommitEvidenceResult evidence;
+            if (receipt.Kind == SavedStateDeletionKind.Session)
+            {
+                evidence = await AppPostCommitEvidence.TryAppendAsync(
+                    eventLogStore,
+                    receipt.SessionId,
+                    "native_session_delete_undone",
+                    new { deletion_id = receipt.Id },
+                    AppErrorContext.SavedState);
+            }
+            else
+            {
+                evidence = await AppPostCommitEvidence.TryAppendAsync(
+                    eventLogStore,
+                    receipt.SessionId,
+                    "native_checkpoint_delete_undone",
+                    new { deletion_id = receipt.Id, checkpoint_id = receipt.CheckpointId },
+                    AppErrorContext.SavedState);
+            }
+
+            eventRecorded = evidence.Recorded;
+            outcome = evidence.AppendTo(outcome);
+            var refreshWarning = await TryCompletePostCommitAsync(
+                () => refreshRestoredStateAsync(receipt, CancellationToken.None),
+                "the restored Saved State view could not be refreshed");
+            outcome = AppendCompletionWarning(outcome, refreshWarning);
+        }
+
+        var rehydrateWarning = await TryCompletePostCommitAsync(
+            () => rehydratePendingDeletionAsync(CancellationToken.None),
+            "the remaining Trash Undo state could not be refreshed");
+        outcome = AppendCompletionWarning(outcome, rehydrateWarning);
+        return new DeletedStateUndoCompletion(result, outcome, eventRecorded);
+    }
+
+    private static async Task<string> TryCompletePostCommitAsync(
+        Func<Task> completion,
+        string failureSummary)
+    {
+        return await AppPostCommitEvidence.TryCompleteAsync(
+            completion,
+            failureSummary,
+            AppErrorContext.SavedState);
+    }
+
+    private static string AppendCompletionWarning(string outcome, string warning) =>
+        AppPostCommitEvidence.AppendWarning(outcome, warning);
+
+    internal static string PreferredSessionAfterDelete(string deletedSessionId, string? activeSessionId)
+    {
+        return string.IsNullOrWhiteSpace(activeSessionId)
+               || deletedSessionId.Equals(activeSessionId, StringComparison.OrdinalIgnoreCase)
+            ? "default"
+            : activeSessionId;
+    }
+
+    internal static string PreferredSessionAfterUndo(
+        string restoredSessionId,
+        bool deletedSessionWasActive,
+        string? currentActiveSessionId)
+    {
+        return deletedSessionWasActive
+            ? restoredSessionId
+            : string.IsNullOrWhiteSpace(currentActiveSessionId)
+                ? "default"
+                : currentActiveSessionId;
+    }
+
+    internal static bool ShouldUndoDeletionOnDelete(
+        SavedStateDeletionReceipt? pendingReceipt,
+        bool pendingUndoArmed = true)
+    {
+        return pendingUndoArmed && pendingReceipt is not null;
+    }
+
+    internal static SavedStateDeleteActionPresentation DeleteActionPresentation(
+        bool idle,
+        bool hasSelection,
+        bool selectedDefaultSession,
+        SavedStateDeletionReceipt? pendingReceipt)
+    {
+        if (pendingReceipt is not null)
+        {
+            return new SavedStateDeleteActionPresentation(
+                "Undo",
+                idle,
+                $"Restore the {DeletedItemLabel(pendingReceipt)} most recently moved to Trash.",
+                "Undo saved item deletion");
+        }
+
+        return new SavedStateDeleteActionPresentation(
+            "Delete",
+            idle && hasSelection && !selectedDefaultSession,
+            selectedDefaultSession
+                ? "Default session cannot be deleted."
+                : "Move the selected saved item to Trash.",
+            "Delete saved item");
+    }
+
+    internal static string UndoStatus(SavedStateRestoreResult result)
+    {
+        var label = DeletedItemLabel(result.Receipt);
+        return result.Status switch
+        {
+            SavedStateRestoreStatus.Restored => $"Restored {label} from Trash.",
+            SavedStateRestoreStatus.NameCollision => $"Could not restore {label}: an item with that name already exists.",
+            SavedStateRestoreStatus.Expired => $"Could not restore {label}: its Trash retention period expired.",
+            SavedStateRestoreStatus.NotFound => $"Could not restore {label}: it is no longer in Trash.",
+            SavedStateRestoreStatus.Invalid => $"Could not restore {label}: its Trash receipt is invalid.",
+            _ => $"Could not restore {label} from Trash."
+        };
+    }
+
+    private static string DeletedItemLabel(SavedStateDeletionReceipt receipt)
+    {
+        return receipt.Kind == SavedStateDeletionKind.Session
+            ? $"session {receipt.DisplayName}"
+            : $"checkpoint {receipt.DisplayName}";
     }
 
     private static string CountLabel(int count, string singular)
     {
         return count == 1 ? $"1 {singular}" : $"{count} {singular}s";
     }
+
+    private sealed record PendingSavedStateDeletion(
+        SavedStateDeletionReceipt Receipt,
+        bool WasActiveSession);
 }
+
+internal sealed record SavedStateDeleteActionPresentation(
+    string Content,
+    bool Enabled,
+    string HelpText,
+    string AutomationName);

@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -14,10 +13,6 @@ namespace AIArena.Wpf;
 
 internal sealed class ArenaOperationCoordinator
 {
-    private static readonly Regex SensitiveErrorRegex = new(
-        @"(?ix)(?:\b(?:api[_\s-]?key|access[_\s-]?token|authorization|bearer|client[_\s-]?secret|password|refresh[_\s-]?token)\b\s*(?::|=|\s)\s*[""']?[A-Za-z0-9_+./~=-]{8,}|\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     private readonly SemaphoreSlim operationLock;
     private readonly TextBlock loadStatus;
     private readonly TextBlock arenaRunStatus;
@@ -144,6 +139,12 @@ internal sealed class ArenaOperationCoordinator
             return false;
         }
 
+        // RunsDuringAutoChat borrows the arena/load compatibility targets while
+        // the parent run continues to own them. Keep the exact prior projection
+        // so coordinator-only progress can be removed without inventing a new
+        // terminal state for the still-running parent operation.
+        var priorArenaStatus = arenaRunStatus.Text;
+        var priorLoadStatus = loadStatus.Text;
         var operationLockTaken = false;
         try
         {
@@ -165,6 +166,28 @@ internal sealed class ArenaOperationCoordinator
             await operationLock.WaitAsync(cancellationToken);
             operationLockTaken = true;
             await action(cancellationToken);
+
+            // Resolve only an unchanged, coordinator-owned progress value. An
+            // operation that owns busy state settles to Ready; work borrowing the
+            // parent Auto Chat surface restores the projection it displaced. A
+            // workflow-authored completion, warning, or failure stays authoritative.
+            if (mode == ArenaOperationMode.OwnsBusyState
+                && string.Equals(arenaRunStatus.Text, status, StringComparison.Ordinal))
+            {
+                arenaRunStatus.Text = "Ready.";
+            }
+            else if (mode == ArenaOperationMode.RunsDuringAutoChat)
+            {
+                if (string.Equals(arenaRunStatus.Text, status, StringComparison.Ordinal))
+                {
+                    arenaRunStatus.Text = priorArenaStatus;
+                }
+
+                if (string.Equals(loadStatus.Text, status, StringComparison.Ordinal))
+                {
+                    loadStatus.Text = priorLoadStatus;
+                }
+            }
         }
         catch (SnapshotConcurrencyException)
         {
@@ -348,7 +371,10 @@ internal sealed class ArenaOperationCoordinator
         if (readinessStatus is not null)
         {
             readinessStatus.Text = readinessMessage;
-            readinessStatus.Visibility = arenaReady ? Visibility.Collapsed : Visibility.Visible;
+            // This element remains populated as a compatibility target for
+            // automation and older coordinator seams. The Universal Status
+            // Center is the single visible owner of readiness guidance.
+            readinessStatus.Visibility = Visibility.Collapsed;
         }
 
         ApplyReadinessHelp(autoChatButton, autoChatReadyHelp);
@@ -520,28 +546,7 @@ internal sealed class ArenaOperationCoordinator
 
     internal static string OperationFailureStatus(Exception exception)
     {
-        var rawDetail = exception.Message ?? "";
-        if (rawDetail.Length > 1024)
-        {
-            rawDetail = rawDetail[..1024];
-        }
-
-        if (SensitiveErrorRegex.IsMatch(rawDetail))
-        {
-            return "Operation failed; sensitive error details were redacted.";
-        }
-
-        var detail = string.Join(
-            " ",
-            rawDetail.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        if (detail.Length > 280)
-        {
-            detail = detail[..277].TrimEnd() + "...";
-        }
-
-        return string.IsNullOrWhiteSpace(detail)
-            ? "Operation failed. Check the current settings and try again."
-            : $"Operation failed: {detail}";
+        return AppErrorPresenter.Present(exception, AppErrorContext.Arena).DisplayText;
     }
 
     private bool TryBeginOperation(out CancellationToken cancellationToken)

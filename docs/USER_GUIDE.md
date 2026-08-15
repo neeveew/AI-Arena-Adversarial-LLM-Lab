@@ -855,7 +855,7 @@ AI Arena - Lite reports generation failures as typed outcomes whenever evidence 
 | **Input context limit** | The provider rejected the causal prompt as too large | Increase configured context and reload; choose a larger model; fork; skip the turn; end the match |
 | **Output limit reached** | A partial response exists and generation stopped at the output cap | Continue from the preserved partial response; increase output for future turns |
 | **Native state exhausted/lost** | Provider-native conversation state cannot continue reliably | Reload/reconnect as offered; fork or reset if the causal continuation cannot be proven |
-| **Capacity/busy** | Provider rejected before acceptance because no slot/capacity was available | Wait, inspect provider residency, then retry the same evidenced action |
+| **Capacity/busy** | Provider reported a capacity condition; absence of response tokens does not by itself prove non-acceptance | Wait and inspect provider residency; retry only when the app marks replay safe |
 | **Timeout/disconnect/malformed stream** | Transport failed; acceptance/replay safety depends on phase | Follow the typed retry state; never assume an accepted stream is safe to replay |
 | **Unknown/unconfirmed** | The post-request state cannot be proved | Refresh provider evidence; avoid duplicate mutation; preserve the run and fork if needed |
 
@@ -937,7 +937,7 @@ If changed context differs from the live process, use Reload to apply and verify
 
 AI Arena - Lite does not download, launch, stop, or replace a user-owned `llama-server`. Inspect/Reconnect capability-detects optional health, props, slots, router models, and lifecycle endpoints. **Not reported** means the server did not expose that field; it does not prove chat is broken.
 
-For explicit pre-acceptance loading/busy/no-slot 429/503 signals, the llama.cpp adapter may perform at most two short retries. Once streaming is accepted, AI Arena - Lite never replays it automatically.
+`Retry-After` is delay guidance, not proof that a provider did no work. Compatible, LM Studio, Ollama, and llama.cpp routes are replayed only when an explicitly configured end-to-end idempotency contract can reuse one key and the exact payload; a requested delay beyond the five-second local policy is surfaced instead of shortened. Loopback location and busy/loading text are not replay proof on their own. After any 2xx acceptance, partial or incomplete stream, ambiguous send/read failure, timeout, or cancellation, AI Arena - Lite preserves available evidence and never replays the completion automatically.
 
 ## Credentials
 

@@ -134,11 +134,12 @@ public partial class App : Application
     {
         try
         {
+            var presentation = AppErrorPresenter.Present(exception, AppErrorContext.AppFatal);
             var where = reportPath is null
-                ? "A crash report could not be written."
-                : $"A report was saved to:{Environment.NewLine}{reportPath}";
+                ? "A privacy-safe crash report could not be written."
+                : "A privacy-safe crash report was saved in the AI Arena logs folder.";
             MessageBox.Show(
-                $"AI Arena - Lite has to close.{Environment.NewLine}{Environment.NewLine}{exception.Message}{Environment.NewLine}{Environment.NewLine}{where}",
+                $"{presentation.DisplayText}{Environment.NewLine}{Environment.NewLine}{where}{Environment.NewLine}{Environment.NewLine}{presentation.CopyDetails}",
                 "AI Arena - Lite",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);

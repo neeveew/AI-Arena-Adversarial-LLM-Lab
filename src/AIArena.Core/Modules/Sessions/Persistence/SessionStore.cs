@@ -20,27 +20,38 @@ public sealed class SessionStore
     private const int SnapshotSaveRetries = 24;
     private const int MaxForkNameAttempts = 10_000;
     private const int MaxSafeCheckpointIdLength = 128;
+    private const int MaxCheckpointNameLength = 80;
+    private const int SavedStateTrashSchemaVersion = 1;
     internal const int SnapshotMutationGenerationCapacity = 4_096;
+    internal const int SessionSummaryCountCacheCapacity = 1_024;
+    internal const int DefaultSavedStateTrashEntryLimit = 64;
     private static readonly TimeSpan SnapshotSaveRetryDelay = TimeSpan.FromMilliseconds(125);
     private static readonly TimeSpan SnapshotWriteLeaseTimeout = TimeSpan.FromSeconds(45);
+    internal static readonly TimeSpan DefaultSavedStateTrashRetention = TimeSpan.FromDays(7);
     private static readonly KeyedAsyncLockRegistry SnapshotWriteLocks = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly KeyedAsyncLockRegistry SavedStateTrashLocks = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Snapshot path to its last observed write stamp and message count. Shared
     /// across stores because the key is a full path, and a data root can be
     /// shared with other AI Arena implementations.
     /// </summary>
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime WriteUtc, long Length, int Count)> MessageCountCache =
-        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly BoundedPathCountCache MessageCountCache =
+        new(SessionSummaryCountCacheCapacity);
 
     /// <summary>Event log path to its last observed write stamp and line count.</summary>
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime WriteUtc, long Length, int Count)> EventLineCountCache =
-        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly BoundedPathCountCache EventLineCountCache =
+        new(SessionSummaryCountCacheCapacity);
     private static readonly object SnapshotMutationGenerationGate = new();
     private static readonly Dictionary<string, (long Stamp, LinkedListNode<string> RecencyNode)> SnapshotMutationGenerations =
         new(StringComparer.OrdinalIgnoreCase);
     private static readonly LinkedList<string> SnapshotMutationGenerationRecency = new();
     private static long snapshotMutationSequence;
+    private readonly TimeProvider timeProvider;
+    private readonly TimeSpan savedStateTrashRetention;
+    private readonly int savedStateTrashEntryLimit;
+    private readonly Func<string, CancellationToken, Task> checkpointDurableCommitObserver;
+    private readonly Func<SavedStateDeletionReceipt, CancellationToken, Task> savedStateTrashPreparedObserver;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -63,11 +74,38 @@ public sealed class SessionStore
     public static Func<string, string> UnprotectSecret { get; set; } = static value => value;
 
     public SessionStore(string? dataRoot = null)
+        : this(dataRoot, TimeProvider.System, DefaultSavedStateTrashRetention, DefaultSavedStateTrashEntryLimit)
     {
+    }
+
+    internal SessionStore(
+        string? dataRoot,
+        TimeProvider timeProvider,
+        TimeSpan savedStateTrashRetention,
+        int savedStateTrashEntryLimit,
+        Func<string, CancellationToken, Task>? checkpointDurableCommitObserver = null,
+        Func<SavedStateDeletionReceipt, CancellationToken, Task>? savedStateTrashPreparedObserver = null)
+    {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        if (savedStateTrashRetention <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(savedStateTrashRetention));
+        }
+
+        ArgumentOutOfRangeException.ThrowIfLessThan(savedStateTrashEntryLimit, 1);
         DataRoot = string.IsNullOrWhiteSpace(dataRoot) ? NativeDataPaths.DefaultDataRoot() : dataRoot;
+        this.timeProvider = timeProvider;
+        this.savedStateTrashRetention = savedStateTrashRetention;
+        this.savedStateTrashEntryLimit = savedStateTrashEntryLimit;
+        this.checkpointDurableCommitObserver = checkpointDurableCommitObserver
+            ?? (static (_, _) => Task.CompletedTask);
+        this.savedStateTrashPreparedObserver = savedStateTrashPreparedObserver
+            ?? (static (_, _) => Task.CompletedTask);
     }
 
     public string DataRoot { get; }
+
+    internal string SavedStateTrashRoot => Path.Combine(DataRoot, ".trash", "saved-state");
 
     public string SettingsPath => NativeDataPaths.ConfigPath(DataRoot, "settings.json");
 
@@ -162,31 +200,174 @@ public sealed class SessionStore
 
     public async Task SaveSnapshotAsync(ArenaSnapshot snapshot, string sessionId = "default", CancellationToken cancellationToken = default)
     {
-        var path = SnapshotPath(sessionId);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var safeSession = SafeSessionId(sessionId);
+        var path = SnapshotPath(safeSession);
         var fullPath = Path.GetFullPath(path);
         var snapshotDirectory = Path.GetDirectoryName(fullPath)!;
-        using var processLock = await SnapshotWriteLocks.AcquireAsync(fullPath, cancellationToken);
-        var snapshotDirectoryExisted = Directory.Exists(snapshotDirectory);
+        var snapshotExistedAtRequest = File.Exists(fullPath);
+        SavedStateTrashMaintenanceScope? identityReservation = null;
         try
         {
+            if (!snapshotExistedAtRequest)
+            {
+                identityReservation = await AcquireSavedStateTrashMaintenanceScopeAsync(cancellationToken);
+                if (await SessionIdentityIsReservedInTrashUnderMaintenanceAsync(
+                        identityReservation.TrashRoot,
+                        safeSession,
+                        cancellationToken))
+                {
+                    throw new SessionIdentityConflictException(
+                        $"Session identity '{safeSession}' is reserved in Trash.");
+                }
+            }
+
+            using var processLock = await SnapshotWriteLocks.AcquireAsync(fullPath, cancellationToken);
+            using var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+                SessionTreeLeaseTarget(fullPath),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            if (File.Exists(fullPath) != snapshotExistedAtRequest)
+            {
+                throw new SessionIdentityConflictException(
+                    $"Session identity '{safeSession}' changed while the snapshot save was waiting.");
+            }
+
+            if (!snapshotExistedAtRequest
+                && (SessionSideArtifactsExist(safeSession)
+                    || TargetDirectoryContainsUnexpectedEntries(snapshotDirectory, fullPath)))
+            {
+                throw new SessionIdentityConflictException(
+                    $"Session identity '{safeSession}' is already reserved.");
+            }
+
             using var experimentCallLease = await CrossProcessWriteLease.AcquireAsync(
                 ExperimentProviderLeaseTarget(fullPath),
                 SnapshotWriteLeaseTimeout,
                 cancellationToken);
             using var writeLease = await CrossProcessWriteLease.AcquireAsync(fullPath, SnapshotWriteLeaseTimeout, cancellationToken);
+            if (snapshotExistedAtRequest)
+            {
+                var authoritative = await LoadSnapshotAsync(safeSession, cancellationToken);
+                var authoritativeInstanceId = authoritative?.SessionInstanceId;
+                if (IsValidSessionInstanceId(authoritativeInstanceId))
+                {
+                    if (IsValidSessionInstanceId(snapshot.SessionInstanceId)
+                        && !snapshot.SessionInstanceId.Equals(authoritativeInstanceId, StringComparison.Ordinal))
+                    {
+                        throw new SessionIdentityConflictException(
+                            $"Session identity '{safeSession}' now belongs to a different session instance.");
+                    }
+
+                    snapshot.SessionInstanceId = authoritativeInstanceId!;
+                }
+                else if (!IsValidSessionInstanceId(snapshot.SessionInstanceId))
+                {
+                    snapshot.SessionInstanceId = NewSessionInstanceId();
+                }
+            }
+            else
+            {
+                snapshot.SessionInstanceId = NewSessionInstanceId();
+            }
+
             await SaveSnapshotCoreAsync(snapshot, fullPath, rejectStaleRevision: true, cancellationToken);
         }
         finally
         {
-            if (!snapshotDirectoryExisted && !File.Exists(fullPath))
+            identityReservation?.Dispose();
+            if (!snapshotExistedAtRequest && !File.Exists(fullPath))
             {
                 TryDeleteEmptyDirectory(snapshotDirectory);
             }
         }
     }
 
+    /// <summary>
+    /// Returns the durable identity for one live session incarnation. Legacy
+    /// snapshots are migrated atomically under the normal session write order so
+    /// callers never need to fall back to the reusable display name.
+    /// </summary>
+    public async Task<string> EnsureSessionInstanceIdAsync(
+        string sessionId = "default",
+        CancellationToken cancellationToken = default)
+    {
+        var safeSession = SafeSessionId(sessionId);
+        var snapshotPath = Path.GetFullPath(SnapshotPath(safeSession));
+        var sessionPath = Path.GetDirectoryName(snapshotPath)!;
+        using var processLock = await SnapshotWriteLocks.AcquireAsync(snapshotPath, cancellationToken);
+        using var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+            SessionTreeLeaseTarget(snapshotPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        if (!Directory.Exists(sessionPath)
+            || PathIsReparsePoint(sessionPath)
+            || !File.Exists(snapshotPath)
+            || PathIsReparsePoint(snapshotPath))
+        {
+            throw new FileNotFoundException("The live session snapshot is unavailable.", snapshotPath);
+        }
+
+        using var experimentCallLease = await CrossProcessWriteLease.AcquireAsync(
+            ExperimentProviderLeaseTarget(snapshotPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        using var writeLease = await CrossProcessWriteLease.AcquireAsync(
+            snapshotPath,
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        if (!Directory.Exists(sessionPath)
+            || PathIsReparsePoint(sessionPath)
+            || !File.Exists(snapshotPath)
+            || PathIsReparsePoint(snapshotPath))
+        {
+            throw new FileNotFoundException("The live session snapshot is unavailable.", snapshotPath);
+        }
+
+        var snapshot = await LoadSnapshotAsync(safeSession, cancellationToken)
+            ?? throw new InvalidDataException("The live session snapshot could not be read safely.");
+        if (IsValidSessionInstanceId(snapshot.SessionInstanceId))
+        {
+            return snapshot.SessionInstanceId;
+        }
+
+        snapshot.SessionInstanceId = NewSessionInstanceId();
+        await SaveSnapshotCoreAsync(snapshot, snapshotPath, rejectStaleRevision: false, cancellationToken);
+        return snapshot.SessionInstanceId;
+    }
+
+    public static bool IsValidSessionInstanceId(string? value)
+    {
+        return !string.IsNullOrWhiteSpace(value)
+            && Guid.TryParseExact(value, "N", out var parsed)
+            && value.Equals(parsed.ToString("N"), StringComparison.Ordinal);
+    }
+
+    private static string NewSessionInstanceId() => Guid.NewGuid().ToString("N");
+
     private static string ExperimentProviderLeaseTarget(string fullSnapshotPath) =>
         $"{fullSnapshotPath}.experiment-provider-call";
+
+    private string SessionTreeLeaseTarget(string fullSnapshotPath) =>
+        SessionTreeLeaseTargetForSnapshot(DataRoot, fullSnapshotPath);
+
+    internal static string SessionTreeLeaseTargetForSnapshot(string dataRootPath, string fullSnapshotPath)
+    {
+        var dataRoot = Path.GetFullPath(dataRootPath);
+        var lockContainer = Path.GetFullPath(Path.Combine(dataRoot, ".locks"));
+        var sessionTreeRoot = Path.GetFullPath(Path.Combine(lockContainer, "session-tree"));
+        if (!PathIsInsideDirectory(dataRoot, sessionTreeRoot))
+        {
+            throw new IOException("The session-tree lock path escaped the AI Arena data root.");
+        }
+
+        EnsureDirectoryWithoutReparsePoint(dataRoot, "AI Arena data root");
+        EnsureDirectoryWithoutReparsePoint(lockContainer, "lock");
+        EnsureDirectoryWithoutReparsePoint(sessionTreeRoot, "session-tree lock");
+        var normalizedPath = Path.GetFullPath(fullSnapshotPath).ToUpperInvariant();
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedPath))).ToLowerInvariant();
+        return Path.Combine(sessionTreeRoot, key);
+    }
 
     private static async Task SaveSnapshotCoreAsync(
         ArenaSnapshot snapshot,
@@ -194,6 +375,11 @@ public sealed class SessionStore
         bool rejectStaleRevision,
         CancellationToken cancellationToken)
     {
+        if (!IsValidSessionInstanceId(snapshot.SessionInstanceId))
+        {
+            throw new InvalidDataException("The session instance identity is unavailable.");
+        }
+
         ScrubRemovedLegacyInternetData(snapshot);
         StructuredMemoryService.NormalizeSnapshot(snapshot);
         ModelRuntimeSettingsRegistry.Normalize(snapshot);
@@ -315,9 +501,18 @@ public sealed class SessionStore
         }
     }
 
+    internal static int MessageCountCacheCount => MessageCountCache.Count;
+
+    internal static int EventLineCountCacheCount => EventLineCountCache.Count;
+
+    internal static bool MessageCountCacheContains(string path) => MessageCountCache.Contains(path);
+
+    internal static bool EventLineCountCacheContains(string path) => EventLineCountCache.Contains(path);
+
     internal static void RecordSnapshotMutation(string path)
     {
         var fullPath = Path.GetFullPath(path);
+        MessageCountCache.Remove(fullPath);
         lock (SnapshotMutationGenerationGate)
         {
             var stamp = checked(++snapshotMutationSequence);
@@ -447,7 +642,10 @@ public sealed class SessionStore
 
     public async Task CreateSessionAsync(string newSessionId, ArenaSnapshot template, CancellationToken cancellationToken = default)
     {
-        _ = await TryCreateSessionAsync(newSessionId, template, cancellationToken);
+        if (!await TryCreateSessionAsync(newSessionId, template, cancellationToken))
+        {
+            throw new IOException($"Session identity '{SafeSessionId(newSessionId)}' is already reserved.");
+        }
     }
 
     public async Task<bool> TryCreateSessionAsync(string newSessionId, ArenaSnapshot template, CancellationToken cancellationToken = default)
@@ -458,8 +656,18 @@ public sealed class SessionStore
             throw new ArgumentException("Session name is required.", nameof(newSessionId));
         }
 
+        using var identityReservation = await AcquireSavedStateTrashMaintenanceScopeAsync(cancellationToken);
+        if (await SessionIdentityIsReservedInTrashUnderMaintenanceAsync(
+                identityReservation.TrashRoot,
+                safeSession,
+                cancellationToken))
+        {
+            return false;
+        }
+
         var cloneJson = JsonSerializer.Serialize(template, JsonOptions);
         var clone = JsonSerializer.Deserialize<ArenaSnapshot>(cloneJson, JsonOptions) ?? new ArenaSnapshot();
+        clone.SessionInstanceId = NewSessionInstanceId();
         clone.Engine.Messages.Clear();
         clone.Engine.Narration.Clear();
         clone.Engine.TurnCount = 0;
@@ -479,8 +687,22 @@ public sealed class SessionStore
 
         var fullPath = Path.GetFullPath(SnapshotPath(safeSession));
         using var processLock = await SnapshotWriteLocks.AcquireAsync(fullPath, cancellationToken);
+        using var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+            SessionTreeLeaseTarget(fullPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        var targetDirectory = Path.GetDirectoryName(fullPath)!;
+        if (File.Exists(fullPath)
+            || SessionSideArtifactsExist(safeSession)
+            || TargetDirectoryContainsUnexpectedEntries(targetDirectory, fullPath))
+        {
+            return false;
+        }
+
         using var writeLease = await CrossProcessWriteLease.AcquireAsync(fullPath, SnapshotWriteLeaseTimeout, cancellationToken);
-        if (File.Exists(fullPath))
+        if (File.Exists(fullPath)
+            || SessionSideArtifactsExist(safeSession)
+            || TargetDirectoryContainsUnexpectedEntries(targetDirectory, fullPath))
         {
             return false;
         }
@@ -509,6 +731,10 @@ public sealed class SessionStore
 
         ArenaSnapshot sourceSnapshot;
         using (await SnapshotWriteLocks.AcquireAsync(sourcePath, cancellationToken))
+        using (await CrossProcessWriteLease.AcquireAsync(
+                   SessionTreeLeaseTarget(sourcePath),
+                   SnapshotWriteLeaseTimeout,
+                   cancellationToken))
         using (await CrossProcessWriteLease.AcquireAsync(sourcePath, SnapshotWriteLeaseTimeout, cancellationToken))
         {
             sourceSnapshot = await LoadSnapshotAsync(safeSourceSessionId, cancellationToken)
@@ -533,7 +759,12 @@ public sealed class SessionStore
             var targetPath = Path.GetFullPath(SnapshotPath(candidateSessionId));
             var targetDirectory = Path.GetDirectoryName(targetPath)!;
             var targetDirectoryExisted = Directory.Exists(targetDirectory);
-            if (SessionIdentityExists(candidateSessionId, targetPath))
+            using var identityReservation = await AcquireSavedStateTrashMaintenanceScopeAsync(cancellationToken);
+            if (SessionIdentityExists(candidateSessionId, targetPath)
+                || await SessionIdentityIsReservedInTrashUnderMaintenanceAsync(
+                    identityReservation.TrashRoot,
+                    candidateSessionId,
+                    cancellationToken))
             {
                 continue;
             }
@@ -541,6 +772,10 @@ public sealed class SessionStore
             try
             {
                 using var processLock = await SnapshotWriteLocks.AcquireAsync(targetPath, cancellationToken);
+                using var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+                    SessionTreeLeaseTarget(targetPath),
+                    SnapshotWriteLeaseTimeout,
+                    cancellationToken);
                 using var writeLease = await CrossProcessWriteLease.AcquireAsync(targetPath, SnapshotWriteLeaseTimeout, cancellationToken);
                 if (File.Exists(targetPath)
                     || SessionSideArtifactsExist(candidateSessionId)
@@ -629,6 +864,15 @@ public sealed class SessionStore
 
         var safeSourceSessionId = SafeSessionId(sourceSessionId);
         var safeTargetSessionId = ValidateExplicitForkTargetSessionId(targetSessionId);
+        using var identityReservation = await AcquireSavedStateTrashMaintenanceScopeAsync(cancellationToken);
+        if (await SessionIdentityIsReservedInTrashUnderMaintenanceAsync(
+                identityReservation.TrashRoot,
+                safeTargetSessionId,
+                cancellationToken))
+        {
+            throw new IOException("The exact experiment child session identity is already reserved.");
+        }
+
         var sourcePath = Path.GetFullPath(SnapshotPath(safeSourceSessionId));
         if (!File.Exists(sourcePath))
         {
@@ -636,6 +880,10 @@ public sealed class SessionStore
         }
 
         using var sourceProcessLock = await SnapshotWriteLocks.AcquireAsync(sourcePath, cancellationToken);
+        using var sourceSessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+            SessionTreeLeaseTarget(sourcePath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
         using var sourceExperimentCallLease = await CrossProcessWriteLease.AcquireAsync(
             ExperimentProviderLeaseTarget(sourcePath),
             SnapshotWriteLeaseTimeout,
@@ -665,6 +913,10 @@ public sealed class SessionStore
         try
         {
             using var targetProcessLock = await SnapshotWriteLocks.AcquireAsync(targetPath, cancellationToken);
+            using var targetSessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+                SessionTreeLeaseTarget(targetPath),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
             using var targetExperimentCallLease = await CrossProcessWriteLease.AcquireAsync(
                 ExperimentProviderLeaseTarget(targetPath),
                 SnapshotWriteLeaseTimeout,
@@ -741,19 +993,39 @@ public sealed class SessionStore
         ArgumentNullException.ThrowIfNull(guard);
         ArgumentOutOfRangeException.ThrowIfLessThan(expectedPersistenceRevision, 1);
         var fullPath = Path.GetFullPath(SnapshotPath(guard.SessionId));
-        var callLease = await CrossProcessWriteLease.AcquireAsync(
-            ExperimentProviderLeaseTarget(fullPath),
+        var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+            SessionTreeLeaseTarget(fullPath),
             SnapshotWriteLeaseTimeout,
             cancellationToken).ConfigureAwait(false);
         try
         {
-            var snapshot = await LoadSnapshotAsync(guard.SessionId, cancellationToken).ConfigureAwait(false);
-            ValidateExperimentChild(snapshot, guard, expectedPersistenceRevision);
-            return new ArenaExperimentProviderCallLease(callLease, expectedPersistenceRevision);
+            if (!File.Exists(fullPath))
+            {
+                throw new ArenaExperimentChildDriftException();
+            }
+
+            var callLease = await CrossProcessWriteLease.AcquireAsync(
+                ExperimentProviderLeaseTarget(fullPath),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var snapshot = await LoadSnapshotAsync(guard.SessionId, cancellationToken).ConfigureAwait(false);
+                ValidateExperimentChild(snapshot, guard, expectedPersistenceRevision);
+                return new ArenaExperimentProviderCallLease(
+                    sessionTreeLease,
+                    callLease,
+                    expectedPersistenceRevision);
+            }
+            catch
+            {
+                callLease.Dispose();
+                throw;
+            }
         }
         catch
         {
-            callLease.Dispose();
+            sessionTreeLease.Dispose();
             throw;
         }
     }
@@ -821,6 +1093,10 @@ public sealed class SessionStore
 
         ArenaSnapshot sourceSnapshot;
         using (await SnapshotWriteLocks.AcquireAsync(sourcePath, cancellationToken))
+        using (await CrossProcessWriteLease.AcquireAsync(
+                   SessionTreeLeaseTarget(sourcePath),
+                   SnapshotWriteLeaseTimeout,
+                   cancellationToken))
         using (await CrossProcessWriteLease.AcquireAsync(sourcePath, SnapshotWriteLeaseTimeout, cancellationToken))
         {
             sourceSnapshot = await LoadSnapshotAsync(safeSourceSessionId, cancellationToken)
@@ -852,7 +1128,12 @@ public sealed class SessionStore
             var targetPath = Path.GetFullPath(SnapshotPath(candidateSessionId));
             var targetDirectory = Path.GetDirectoryName(targetPath)!;
             var targetDirectoryExisted = Directory.Exists(targetDirectory);
-            if (SessionIdentityExists(candidateSessionId, targetPath))
+            using var identityReservation = await AcquireSavedStateTrashMaintenanceScopeAsync(cancellationToken);
+            if (SessionIdentityExists(candidateSessionId, targetPath)
+                || await SessionIdentityIsReservedInTrashUnderMaintenanceAsync(
+                    identityReservation.TrashRoot,
+                    candidateSessionId,
+                    cancellationToken))
             {
                 continue;
             }
@@ -860,6 +1141,10 @@ public sealed class SessionStore
             try
             {
                 using var processLock = await SnapshotWriteLocks.AcquireAsync(targetPath, cancellationToken);
+                using var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+                    SessionTreeLeaseTarget(targetPath),
+                    SnapshotWriteLeaseTimeout,
+                    cancellationToken);
                 using var writeLease = await CrossProcessWriteLease.AcquireAsync(targetPath, SnapshotWriteLeaseTimeout, cancellationToken);
                 if (File.Exists(targetPath)
                     || SessionSideArtifactsExist(candidateSessionId)
@@ -1273,6 +1558,7 @@ public sealed class SessionStore
         int? parentTurnCount = null,
         int? parentMessageCount = null)
     {
+        snapshot.SessionInstanceId = NewSessionInstanceId();
         snapshot.PersistenceRevision = 0;
         snapshot.ForkLineage = new SessionForkLineage
         {
@@ -1299,6 +1585,11 @@ public sealed class SessionStore
         string fullPath,
         CancellationToken cancellationToken)
     {
+        if (!IsValidSessionInstanceId(snapshot.SessionInstanceId))
+        {
+            throw new InvalidDataException("The session instance identity is unavailable.");
+        }
+
         if (File.Exists(fullPath))
         {
             return false;
@@ -1414,24 +1705,67 @@ public sealed class SessionStore
 
     public async Task<bool> DeleteSessionAsync(string sessionId, CancellationToken cancellationToken = default)
     {
+        return await TrashSessionAsync(sessionId, cancellationToken) is not null;
+    }
+
+    public async Task<SavedStateDeletionReceipt?> TrashSessionAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         var safeSession = SafeSessionId(sessionId);
         if (string.IsNullOrWhiteSpace(safeSession) || safeSession.Equals("default", StringComparison.OrdinalIgnoreCase))
         {
-            return false;
+            return null;
         }
 
         var sessionsRoot = Path.GetFullPath(NativeDataPaths.SessionsRoot(DataRoot));
         var sessionPath = Path.GetFullPath(Path.Combine(sessionsRoot, safeSession));
-        if (!PathIsInsideDirectory(sessionsRoot, sessionPath) || !Directory.Exists(sessionPath))
+        if (!PathIsInsideDirectory(sessionsRoot, sessionPath)
+            || !Directory.Exists(sessionPath)
+            || PathIsReparsePoint(sessionPath))
         {
-            return false;
+            return null;
         }
 
+        string? entryPath = null;
+        var moved = false;
         try
         {
+            var trashRoot = EnsureSavedStateTrashRoot();
+            var trashLeaseRoot = EnsureSavedStateTrashLeaseRoot();
+            using var maintenanceLock = await SavedStateTrashLocks.AcquireAsync(
+                $"{trashRoot}|maintenance",
+                cancellationToken);
+            using var maintenanceLease = await CrossProcessWriteLease.AcquireAsync(
+                Path.Combine(trashLeaseRoot, "maintenance"),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            // Preflight only reconciles invalid or expired entries. A valid
+            // recovery candidate is never evicted to reserve space for work that
+            // has not committed yet.
+            await PurgeSavedStateTrashUnderMaintenanceAsync(
+                int.MaxValue,
+                cancellationToken);
+            if (SavedStateTrashEntryCount(trashRoot) > savedStateTrashEntryLimit)
+            {
+                // A prior committed delete can temporarily exceed the cap when
+                // its oldest entry is externally locked. Do not grow that
+                // bounded overflow until maintenance can reconcile it.
+                return null;
+            }
+
             var snapshotPath = Path.GetFullPath(SnapshotPath(safeSession));
             using var processLock = await SnapshotWriteLocks.AcquireAsync(snapshotPath, cancellationToken);
+            using var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+                SessionTreeLeaseTarget(snapshotPath),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            if (!Directory.Exists(sessionPath) || PathIsReparsePoint(sessionPath))
+            {
+                return null;
+            }
+
             using var experimentCallLease = await CrossProcessWriteLease.AcquireAsync(
                 ExperimentProviderLeaseTarget(snapshotPath),
                 SnapshotWriteLeaseTimeout,
@@ -1440,12 +1774,67 @@ public sealed class SessionStore
                 snapshotPath,
                 SnapshotWriteLeaseTimeout,
                 cancellationToken);
-            DeleteDirectoryTree(sessionPath, cancellationToken);
-            return true;
+            // Provider-call, snapshot-write, and session-tree exclusion must all
+            // remain live through the durable tombstone and the atomic move. If
+            // either file lease is released here, a validated provider call or
+            // snapshot writer can enter while the soon-to-be-trashed tree still
+            // resolves at its original path.
+            if (!Directory.Exists(sessionPath) || PathIsReparsePoint(sessionPath))
+            {
+                return null;
+            }
+
+            var deletedAt = await NextSavedStateDeletionTimeAsync(trashRoot, cancellationToken);
+            var receipt = new SavedStateDeletionReceipt(
+                Guid.NewGuid().ToString("N"),
+                SavedStateDeletionKind.Session,
+                safeSession,
+                "",
+                safeSession,
+                deletedAt,
+                deletedAt.Add(savedStateTrashRetention));
+            entryPath = SavedStateTrashEntryPath(trashRoot, receipt.Id);
+            var payloadPath = Path.Combine(entryPath, "payload");
+            EnsureDirectoryWithoutReparsePoint(entryPath, "saved-state Trash entry");
+            using var entryLock = await SavedStateTrashLocks.AcquireAsync(entryPath, cancellationToken);
+            using var entryLease = await CrossProcessWriteLease.AcquireAsync(
+                SavedStateTrashEntryLeaseTarget(trashLeaseRoot, receipt.Id),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            var tombstone = CreateSavedStateTombstone(
+                receipt,
+                Path.GetRelativePath(Path.GetFullPath(DataRoot), sessionPath));
+            await WriteSavedStateTombstoneAsync(entryPath, tombstone, cancellationToken);
+            await savedStateTrashPreparedObserver(receipt, cancellationToken);
+
+            // Cancellation is observed before the single same-volume rename.
+            // Once the rename succeeds the operation is committed and returns a
+            // receipt rather than reporting cancellation after data moved.
+            cancellationToken.ThrowIfCancellationRequested();
+            ClearReadOnly(sessionPath);
+            experimentCallLease.PrepareForContainingDirectoryMove();
+            writeLease.PrepareForContainingDirectoryMove();
+            Directory.Move(sessionPath, payloadPath);
+            moved = true;
+            InvalidateSessionSummaryCaches(safeSession);
+            RecordSnapshotMutation(snapshotPath);
+            await ReconcileSavedStateTrashCapacityAfterCommitAsync();
+            return receipt;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
         {
-            return false;
+            return null;
+        }
+        finally
+        {
+            if (!moved && !string.IsNullOrWhiteSpace(entryPath))
+            {
+                TryDeleteTrashEntry(entryPath);
+            }
         }
     }
 
@@ -1460,8 +1849,15 @@ public sealed class SessionStore
 
     public async Task<IReadOnlyList<CheckpointSummary>> ListCheckpointsAsync(string sessionId = "default", CancellationToken cancellationToken = default)
     {
-        var checkpointDir = CheckpointDirectory(sessionId);
-        if (!Directory.Exists(checkpointDir))
+        var safeSession = SafeSessionId(sessionId);
+        var snapshotPath = Path.GetFullPath(SnapshotPath(safeSession));
+        using var processLock = await SnapshotWriteLocks.AcquireAsync(snapshotPath, cancellationToken);
+        using var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+            SessionTreeLeaseTarget(snapshotPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        var checkpointDir = Path.GetFullPath(CheckpointDirectory(safeSession));
+        if (!Directory.Exists(checkpointDir) || PathIsReparsePoint(checkpointDir))
         {
             return Array.Empty<CheckpointSummary>();
         }
@@ -1472,11 +1868,32 @@ public sealed class SessionStore
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                var metadata = await ReadCheckpointMetadataAsync(stream, cancellationToken);
-                if (metadata is not null && !string.IsNullOrWhiteSpace(metadata.Id))
+                var fullPath = Path.GetFullPath(path);
+                if (!PathIsInsideDirectory(checkpointDir, fullPath) || PathIsReparsePoint(fullPath))
                 {
-                    checkpoints.Add(new CheckpointSummary(metadata.Id, metadata.Name, metadata.SessionId, metadata.CreatedAt, path));
+                    continue;
+                }
+
+                using var checkpointLock = await SavedStateTrashLocks.AcquireAsync(fullPath, cancellationToken);
+                using var checkpointLease = await CrossProcessWriteLease.AcquireAsync(
+                    fullPath,
+                    SnapshotWriteLeaseTimeout,
+                    cancellationToken);
+                if (!File.Exists(fullPath)
+                    || PathIsReparsePoint(fullPath)
+                    || PathIsReparsePoint(checkpointDir))
+                {
+                    continue;
+                }
+
+                await using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                var metadata = await ReadCheckpointMetadataAsync(stream, cancellationToken);
+                var expectedId = Path.GetFileNameWithoutExtension(fullPath);
+                if (metadata is not null
+                    && metadata.Id.Equals(expectedId, StringComparison.OrdinalIgnoreCase)
+                    && metadata.SessionId.Equals(safeSession, StringComparison.OrdinalIgnoreCase))
+                {
+                    checkpoints.Add(new CheckpointSummary(metadata.Id, metadata.Name, safeSession, metadata.CreatedAt, fullPath));
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1628,13 +2045,193 @@ public sealed class SessionStore
 
     public async Task<CheckpointSummary> SaveCheckpointAsync(string sessionId, string name, CancellationToken cancellationToken = default)
     {
-        var snapshot = await LoadSnapshotAsync(sessionId, cancellationToken)
+        var safeSession = SafeSessionId(sessionId);
+        var snapshotPath = Path.GetFullPath(SnapshotPath(safeSession));
+        var sessionPath = Path.GetDirectoryName(snapshotPath)!;
+        using var processLock = await SnapshotWriteLocks.AcquireAsync(snapshotPath, cancellationToken);
+        using var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+            SessionTreeLeaseTarget(snapshotPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        if (!Directory.Exists(sessionPath)
+            || PathIsReparsePoint(sessionPath)
+            || !File.Exists(snapshotPath)
+            || PathIsReparsePoint(snapshotPath))
+        {
+            throw new InvalidOperationException($"No snapshot found for session {safeSession}.");
+        }
+
+        using var experimentCallLease = await CrossProcessWriteLease.AcquireAsync(
+            ExperimentProviderLeaseTarget(snapshotPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        using var writeLease = await CrossProcessWriteLease.AcquireAsync(
+            snapshotPath,
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        if (!Directory.Exists(sessionPath)
+            || PathIsReparsePoint(sessionPath)
+            || !File.Exists(snapshotPath)
+            || PathIsReparsePoint(snapshotPath))
+        {
+            throw new InvalidOperationException($"No snapshot found for session {safeSession}.");
+        }
+
+        var snapshot = await LoadSnapshotAsync(safeSession, cancellationToken)
             ?? throw new InvalidOperationException($"No snapshot found for session {sessionId}.");
+        await EnsureSnapshotInstanceIdUnderWriteLeaseAsync(snapshot, snapshotPath, cancellationToken);
+        return await SaveCheckpointCoreAsync(safeSession, name, snapshot, cancellationToken);
+    }
+
+    /// <summary>
+    /// Replaces one persisted snapshot only after a full checkpoint of the
+    /// authoritative pre-mutation revision has committed. The mutation delegate
+    /// receives a deep clone, never the object serialized into the checkpoint.
+    /// All session mutation leases remain held across both commits.
+    /// </summary>
+    public async Task<SnapshotSafetyCheckpointReceipt?> MutateSnapshotWithSafetyCheckpointAsync(
+        string sessionId,
+        SnapshotSafetyCheckpointOperation operation,
+        string? subject,
+        Func<ArenaSnapshot, ArenaSnapshot> mutation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(mutation);
+        var safeSession = SafeSessionId(sessionId);
+        var snapshotPath = Path.GetFullPath(SnapshotPath(safeSession));
+        using var processLock = await SnapshotWriteLocks.AcquireAsync(snapshotPath, cancellationToken);
+        using var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+            SessionTreeLeaseTarget(snapshotPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        var sessionPath = Path.GetDirectoryName(snapshotPath)!;
+        if (!Directory.Exists(sessionPath)
+            || PathIsReparsePoint(sessionPath)
+            || !File.Exists(snapshotPath)
+            || PathIsReparsePoint(snapshotPath))
+        {
+            return null;
+        }
+
+        using var experimentCallLease = await CrossProcessWriteLease.AcquireAsync(
+            ExperimentProviderLeaseTarget(snapshotPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        using var writeLease = await CrossProcessWriteLease.AcquireAsync(
+            snapshotPath,
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        if (!File.Exists(snapshotPath) || PathIsReparsePoint(snapshotPath))
+        {
+            return null;
+        }
+
+        var authoritative = await LoadSnapshotAsync(safeSession, cancellationToken);
+        if (authoritative is null)
+        {
+            return null;
+        }
+
+        await EnsureSnapshotInstanceIdUnderWriteLeaseAsync(authoritative, snapshotPath, cancellationToken);
+
+        return await MutateSnapshotWithSafetyCheckpointCoreAsync(
+            safeSession,
+            snapshotPath,
+            authoritative,
+            operation,
+            subject,
+            mutation,
+            cancellationToken);
+    }
+
+    private async Task<SnapshotSafetyCheckpointReceipt> MutateSnapshotWithSafetyCheckpointCoreAsync(
+        string safeSession,
+        string snapshotPath,
+        ArenaSnapshot authoritative,
+        SnapshotSafetyCheckpointOperation operation,
+        string? subject,
+        Func<ArenaSnapshot, ArenaSnapshot> mutation,
+        CancellationToken cancellationToken)
+    {
+        var protectedRevision = Math.Max(0, authoritative.PersistenceRevision);
+        var mutationInput = CloneSnapshot(authoritative);
+        var normalizedSubject = NormalizeSavedStateDisplayName(subject, "");
+        var safetyCheckpoint = await SaveCheckpointCoreAsync(
+            safeSession,
+            AutomaticSafetyCheckpointName(operation, normalizedSubject),
+            authoritative,
+            cancellationToken);
+
+        // Cancellation before replacement is fail-closed. A checkpoint that
+        // already committed is intentionally retained as harmless extra safety.
+        cancellationToken.ThrowIfCancellationRequested();
+        var replacement = mutation(mutationInput)
+            ?? throw new InvalidOperationException("The safety-checkpoint mutation did not produce a replacement snapshot.");
+        replacement.SessionInstanceId = authoritative.SessionInstanceId;
+        cancellationToken.ThrowIfCancellationRequested();
+        await SaveSnapshotCoreAsync(
+            replacement,
+            snapshotPath,
+            rejectStaleRevision: false,
+            cancellationToken);
+
+        // SaveSnapshotCoreAsync has committed at this point. Do not observe the
+        // caller token again or report a successful replacement as cancelled.
+        return new SnapshotSafetyCheckpointReceipt(
+            safetyCheckpoint,
+            operation,
+            normalizedSubject,
+            protectedRevision,
+            replacement.PersistenceRevision);
+    }
+
+    private static async Task EnsureSnapshotInstanceIdUnderWriteLeaseAsync(
+        ArenaSnapshot snapshot,
+        string snapshotPath,
+        CancellationToken cancellationToken)
+    {
+        if (IsValidSessionInstanceId(snapshot.SessionInstanceId))
+        {
+            return;
+        }
+
+        snapshot.SessionInstanceId = NewSessionInstanceId();
+        await SaveSnapshotCoreAsync(
+            snapshot,
+            snapshotPath,
+            rejectStaleRevision: false,
+            cancellationToken);
+    }
+
+    internal static string AutomaticSafetyCheckpointName(
+        SnapshotSafetyCheckpointOperation operation,
+        string? subject)
+    {
+        var prefix = operation switch
+        {
+            SnapshotSafetyCheckpointOperation.ArenaReset => "Safety before arena reset",
+            SnapshotSafetyCheckpointOperation.CheckpointRestore => "Safety before checkpoint restore",
+            SnapshotSafetyCheckpointOperation.TemplateApply => "Safety before template apply",
+            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown safety-checkpoint operation.")
+        };
+        var normalizedSubject = NormalizeSavedStateDisplayName(subject, "");
+        var name = string.IsNullOrWhiteSpace(normalizedSubject)
+            ? prefix
+            : $"{prefix}: {normalizedSubject}";
+        return name[..Math.Min(name.Length, MaxCheckpointNameLength)];
+    }
+
+    private async Task<CheckpointSummary> SaveCheckpointCoreAsync(
+        string sessionId,
+        string name,
+        ArenaSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
         var id = Guid.NewGuid().ToString("N");
         var now = DateTimeOffset.Now;
         var checkpointName = string.IsNullOrWhiteSpace(name)
             ? $"Arena checkpoint {now:yyyy-MM-dd HH:mm:ss}"
-            : name.Trim()[..Math.Min(name.Trim().Length, 80)];
+            : name.Trim()[..Math.Min(name.Trim().Length, MaxCheckpointNameLength)];
         var record = new CheckpointRecord
         {
             Id = id,
@@ -1652,13 +2249,22 @@ public sealed class SessionStore
         var tempPath = $"{fullPath}.{Guid.NewGuid():N}.tmp";
         try
         {
-            await using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+            await using (var stream = new FileStream(
+                             tempPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.Read,
+                             bufferSize: 4 * 1024,
+                             FileOptions.Asynchronous | FileOptions.WriteThrough))
             {
                 var persistenceJsonOptions = SnapshotPersistenceJson.CreateOptions(JsonOptions, ProtectSecret);
                 await JsonSerializer.SerializeAsync(stream, record, persistenceJsonOptions, cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+                stream.Flush(flushToDisk: true);
             }
 
             await ReplaceSnapshotFileAsync(tempPath, fullPath, cancellationToken);
+            await checkpointDurableCommitObserver(fullPath, cancellationToken);
         }
         finally
         {
@@ -1668,10 +2274,92 @@ public sealed class SessionStore
         return new CheckpointSummary(id, checkpointName, sessionId, record.CreatedAt, fullPath);
     }
 
-    public async Task<CheckpointSummary?> RestoreCheckpointAsync(string sessionId, string checkpointId, CancellationToken cancellationToken = default)
+    public async Task<CheckpointSummary?> RestoreCheckpointAsync(
+        string sessionId,
+        string checkpointId,
+        CancellationToken cancellationToken = default)
     {
-        var path = SafeCheckpointPath(sessionId, checkpointId);
-        if (path is null || !File.Exists(path))
+        var result = await RestoreCheckpointWithSafetyCheckpointAsync(
+            sessionId,
+            checkpointId,
+            cancellationToken);
+        return result?.RestoredCheckpoint;
+    }
+
+    public async Task<CheckpointRestoreWithSafetyResult?> RestoreCheckpointWithSafetyCheckpointAsync(
+        string sessionId,
+        string checkpointId,
+        CancellationToken cancellationToken = default)
+    {
+        var safeSession = SafeSessionId(sessionId);
+        var safeCheckpoint = SafeCheckpointId(checkpointId);
+        if (string.IsNullOrWhiteSpace(safeCheckpoint))
+        {
+            return null;
+        }
+
+        var path = SafeCheckpointPath(safeSession, safeCheckpoint);
+        if (path is null)
+        {
+            return null;
+        }
+
+        var snapshotPath = Path.GetFullPath(SnapshotPath(safeSession));
+        var sessionPath = Path.GetDirectoryName(snapshotPath)!;
+        using var identityReservation = await AcquireSavedStateTrashMaintenanceScopeAsync(cancellationToken);
+        var allowMissingSessionDirectory = !Directory.Exists(sessionPath);
+        if ((allowMissingSessionDirectory && File.Exists(sessionPath))
+            || (!allowMissingSessionDirectory && PathIsReparsePoint(sessionPath))
+            || (allowMissingSessionDirectory
+                && await SessionIdentityIsReservedInTrashUnderMaintenanceAsync(
+                    identityReservation.TrashRoot,
+                    safeSession,
+                    cancellationToken)))
+        {
+            return null;
+        }
+
+        using var processLock = await SnapshotWriteLocks.AcquireAsync(snapshotPath, cancellationToken);
+        using var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+            SessionTreeLeaseTarget(snapshotPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        // Legacy checkpoints may predate a live session directory. The Trash
+        // maintenance reservation distinguishes that compatibility case from a
+        // session tree that was atomically moved away and remains recoverable.
+        if (!SessionDirectoryIsSafeForCheckpointRestore(sessionPath, allowMissingSessionDirectory))
+        {
+            return null;
+        }
+
+        using var experimentCallLease = await CrossProcessWriteLease.AcquireAsync(
+            ExperimentProviderLeaseTarget(snapshotPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        using var writeLease = await CrossProcessWriteLease.AcquireAsync(
+            snapshotPath,
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        if (!SessionDirectoryIsSafeForCheckpointRestore(sessionPath, allowMissingSessionDirectory))
+        {
+            return null;
+        }
+
+        using var checkpointLock = await SavedStateTrashLocks.AcquireAsync(path, cancellationToken);
+        if (!File.Exists(path)
+            || PathIsReparsePoint(path)
+            || PathIsReparsePoint(Path.GetDirectoryName(path)!))
+        {
+            return null;
+        }
+
+        using var checkpointLease = await CrossProcessWriteLease.AcquireAsync(
+            path,
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        if (!File.Exists(path)
+            || PathIsReparsePoint(path)
+            || PathIsReparsePoint(Path.GetDirectoryName(path)!))
         {
             return null;
         }
@@ -1687,37 +2375,421 @@ public sealed class SessionStore
             return null;
         }
 
-        if (record?.Snapshot is null)
+        if (record?.Snapshot is null
+            || !string.Equals(record.Id, safeCheckpoint, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(record.SessionId, safeSession, StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
 
-        var snapshotPath = Path.GetFullPath(SnapshotPath(sessionId));
-        using var processLock = await SnapshotWriteLocks.AcquireAsync(snapshotPath, cancellationToken);
-        using var experimentCallLease = await CrossProcessWriteLease.AcquireAsync(
-            ExperimentProviderLeaseTarget(snapshotPath),
-            SnapshotWriteLeaseTimeout,
-            cancellationToken);
-        using var writeLease = await CrossProcessWriteLease.AcquireAsync(snapshotPath, SnapshotWriteLeaseTimeout, cancellationToken);
-        // Restoring a checkpoint is an explicit whole-snapshot replacement, so
-        // it intentionally supersedes the live revision while still advancing it.
-        await SaveSnapshotCoreAsync(record.Snapshot, snapshotPath, rejectStaleRevision: false, cancellationToken);
-
-        return new CheckpointSummary(record.Id, record.Name, sessionId, record.CreatedAt, path);
-    }
-
-    public Task<bool> DeleteCheckpointAsync(string sessionId, string checkpointId, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var path = SafeCheckpointPath(sessionId, checkpointId);
-        if (path is null || !File.Exists(path))
+        try
         {
-            return Task.FromResult(false);
+            _ = DateTimeOffset.FromUnixTimeSeconds(record.CreatedAt);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null;
         }
 
-        ClearReadOnly(path);
-        File.Delete(path);
-        return Task.FromResult(true);
+        // Checkpoint payloads use the same at-rest protection as snapshots. The
+        // complete projection stays inside the session-tree coherence boundary;
+        // a corrupt payload or failed secret transform still exits before any
+        // checkpoint or live-snapshot replacement. The later persistence write
+        // protects plaintext once; carrying ciphertext forward would
+        // double-protect it.
+        ScrubRemovedLegacyInternetData(record.Snapshot);
+        StructuredMemoryService.NormalizeSnapshot(record.Snapshot);
+        ModelRuntimeSettingsRegistry.Normalize(record.Snapshot);
+        TransformConfigTokens(record.Snapshot, UnprotectSecret);
+
+        var restoredName = NormalizeSavedStateDisplayName(record.Name, safeCheckpoint);
+        var restoredCheckpoint = new CheckpointSummary(
+            safeCheckpoint,
+            restoredName,
+            safeSession,
+            record.CreatedAt,
+            path);
+        var authoritative = await LoadSnapshotAsync(safeSession, cancellationToken);
+        if (authoritative is null)
+        {
+            if (File.Exists(snapshotPath))
+            {
+                // A present but unreadable live snapshot is still state. Never
+                // overwrite it under the snapshot-less compatibility path,
+                // because no exact safety checkpoint can be created from it.
+                return null;
+            }
+
+            var replacement = CloneSnapshot(record.Snapshot);
+            replacement.SessionInstanceId = NewSessionInstanceId();
+            await SaveSnapshotCoreAsync(
+                replacement,
+                snapshotPath,
+                rejectStaleRevision: false,
+                cancellationToken);
+            // Nothing existed to supersede, so there is no destructive state to
+            // checkpoint. Preserve legacy recovery of snapshot-less sessions.
+            return new CheckpointRestoreWithSafetyResult(restoredCheckpoint, SafetyCheckpoint: null);
+        }
+
+        await EnsureSnapshotInstanceIdUnderWriteLeaseAsync(authoritative, snapshotPath, cancellationToken);
+
+        var safetyCheckpoint = await MutateSnapshotWithSafetyCheckpointCoreAsync(
+            safeSession,
+            snapshotPath,
+            authoritative,
+            SnapshotSafetyCheckpointOperation.CheckpointRestore,
+            restoredName,
+            _ =>
+            {
+                var replacement = CloneSnapshot(record.Snapshot);
+                replacement.SessionInstanceId = authoritative.SessionInstanceId;
+                return replacement;
+            },
+            cancellationToken);
+        return new CheckpointRestoreWithSafetyResult(restoredCheckpoint, safetyCheckpoint);
+    }
+
+    public async Task<bool> DeleteCheckpointAsync(
+        string sessionId,
+        string checkpointId,
+        CancellationToken cancellationToken = default)
+    {
+        return await TrashCheckpointAsync(sessionId, checkpointId, null, cancellationToken) is not null;
+    }
+
+    public async Task<SavedStateDeletionReceipt?> TrashCheckpointAsync(
+        string sessionId,
+        string checkpointId,
+        string? displayName = null,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var safeSession = SafeSessionId(sessionId);
+        var safeCheckpoint = SafeCheckpointId(checkpointId);
+        var path = SafeCheckpointPath(safeSession, safeCheckpoint);
+        if (path is null || !File.Exists(path))
+        {
+            return null;
+        }
+
+        var snapshotPath = Path.GetFullPath(SnapshotPath(safeSession));
+        var sessionPath = Path.GetDirectoryName(snapshotPath)!;
+        string? entryPath = null;
+        var moved = false;
+        try
+        {
+            var trashRoot = EnsureSavedStateTrashRoot();
+            var trashLeaseRoot = EnsureSavedStateTrashLeaseRoot();
+            using var maintenanceLock = await SavedStateTrashLocks.AcquireAsync(
+                $"{trashRoot}|maintenance",
+                cancellationToken);
+            using var maintenanceLease = await CrossProcessWriteLease.AcquireAsync(
+                Path.Combine(trashLeaseRoot, "maintenance"),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            // Capacity eviction is post-commit; preflight may only remove entries
+            // that are already invalid or expired independently of this delete.
+            await PurgeSavedStateTrashUnderMaintenanceAsync(
+                int.MaxValue,
+                cancellationToken);
+            if (SavedStateTrashEntryCount(trashRoot) > savedStateTrashEntryLimit)
+            {
+                return null;
+            }
+
+            using var processLock = await SnapshotWriteLocks.AcquireAsync(snapshotPath, cancellationToken);
+            using var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+                SessionTreeLeaseTarget(snapshotPath),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            if (!Directory.Exists(sessionPath) || PathIsReparsePoint(sessionPath))
+            {
+                return null;
+            }
+
+            var fullPath = Path.GetFullPath(path);
+            using var mutationLock = await SavedStateTrashLocks.AcquireAsync(fullPath, cancellationToken);
+            if (!File.Exists(fullPath)
+                || PathIsReparsePoint(fullPath)
+                || PathIsReparsePoint(Path.GetDirectoryName(fullPath)!))
+            {
+                return null;
+            }
+
+            using var writeLease = await CrossProcessWriteLease.AcquireAsync(
+                fullPath,
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            if (!File.Exists(fullPath)
+                || PathIsReparsePoint(fullPath)
+                || PathIsReparsePoint(Path.GetDirectoryName(fullPath)!))
+            {
+                return null;
+            }
+
+            CheckpointMetadata? metadata;
+            try
+            {
+                await using var metadataStream = new FileStream(
+                    fullPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                metadata = await ReadCheckpointMetadataAsync(metadataStream, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+            {
+                return null;
+            }
+
+            if (metadata is null
+                || !metadata.Id.Equals(safeCheckpoint, StringComparison.OrdinalIgnoreCase)
+                || !metadata.SessionId.Equals(safeSession, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var resolvedDisplayName = string.IsNullOrWhiteSpace(displayName)
+                ? metadata.Name
+                : displayName;
+            resolvedDisplayName = NormalizeSavedStateDisplayName(resolvedDisplayName, safeCheckpoint);
+            var deletedAt = await NextSavedStateDeletionTimeAsync(trashRoot, cancellationToken);
+            var receipt = new SavedStateDeletionReceipt(
+                Guid.NewGuid().ToString("N"),
+                SavedStateDeletionKind.Checkpoint,
+                safeSession,
+                safeCheckpoint,
+                resolvedDisplayName,
+                deletedAt,
+                deletedAt.Add(savedStateTrashRetention));
+            entryPath = SavedStateTrashEntryPath(trashRoot, receipt.Id);
+            var payloadPath = Path.Combine(entryPath, "payload.json");
+            EnsureDirectoryWithoutReparsePoint(entryPath, "saved-state Trash entry");
+            using var entryLock = await SavedStateTrashLocks.AcquireAsync(entryPath, cancellationToken);
+            using var entryLease = await CrossProcessWriteLease.AcquireAsync(
+                SavedStateTrashEntryLeaseTarget(trashLeaseRoot, receipt.Id),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            var tombstone = CreateSavedStateTombstone(
+                receipt,
+                Path.GetRelativePath(Path.GetFullPath(DataRoot), fullPath));
+            await WriteSavedStateTombstoneAsync(entryPath, tombstone, cancellationToken);
+            await savedStateTrashPreparedObserver(receipt, cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            ClearReadOnly(fullPath);
+            File.Move(fullPath, payloadPath);
+            moved = true;
+            await ReconcileSavedStateTrashCapacityAfterCommitAsync();
+            return receipt;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+        finally
+        {
+            if (!moved && !string.IsNullOrWhiteSpace(entryPath))
+            {
+                TryDeleteTrashEntry(entryPath);
+            }
+        }
+    }
+
+    public async Task<SavedStateRestoreResult> RestoreDeletedStateAsync(
+        SavedStateDeletionReceipt receipt,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Guid.TryParseExact(receipt.Id, "N", out _))
+        {
+            return new SavedStateRestoreResult(SavedStateRestoreStatus.Invalid, receipt);
+        }
+
+        try
+        {
+            var trashRoot = EnsureSavedStateTrashRoot();
+            var trashLeaseRoot = EnsureSavedStateTrashLeaseRoot();
+            var entryPath = SavedStateTrashEntryPath(trashRoot, receipt.Id);
+            if (!Directory.Exists(entryPath) || DirectoryIsReparsePoint(entryPath))
+            {
+                return new SavedStateRestoreResult(SavedStateRestoreStatus.NotFound, receipt);
+            }
+
+            using var entryLock = await SavedStateTrashLocks.AcquireAsync(entryPath, cancellationToken);
+            using var entryLease = await CrossProcessWriteLease.AcquireAsync(
+                SavedStateTrashEntryLeaseTarget(trashLeaseRoot, receipt.Id),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            if (!Directory.Exists(entryPath))
+            {
+                return new SavedStateRestoreResult(SavedStateRestoreStatus.NotFound, receipt);
+            }
+
+            var resolved = await ReadSavedStateTrashEntryAsync(entryPath, cancellationToken);
+            if (resolved is null || !ReceiptsIdentifySameDeletion(receipt, resolved.Receipt))
+            {
+                return new SavedStateRestoreResult(SavedStateRestoreStatus.Invalid, receipt);
+            }
+
+            if (resolved.Receipt.ExpiresAt <= timeProvider.GetUtcNow())
+            {
+                TryDeleteTrashEntry(entryPath);
+                return new SavedStateRestoreResult(SavedStateRestoreStatus.Expired, resolved.Receipt);
+            }
+
+            if (!SavedStatePayloadExists(resolved))
+            {
+                TryDeleteTrashEntry(entryPath);
+                return new SavedStateRestoreResult(SavedStateRestoreStatus.NotFound, resolved.Receipt);
+            }
+
+            var status = resolved.Receipt.Kind == SavedStateDeletionKind.Session
+                ? await RestoreSessionTrashEntryAsync(resolved, cancellationToken)
+                : await RestoreCheckpointTrashEntryAsync(resolved, cancellationToken);
+            if (status == SavedStateRestoreStatus.Restored)
+            {
+                // The data move is already committed. Tombstone cleanup is
+                // deliberately best effort so a cleanup error can never turn a
+                // successful restore into an apparent failure.
+                TryDeleteTrashEntry(entryPath);
+            }
+
+            return new SavedStateRestoreResult(status, resolved.Receipt);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException or JsonException)
+        {
+            return new SavedStateRestoreResult(SavedStateRestoreStatus.Failed, receipt);
+        }
+    }
+
+    /// <summary>
+    /// Reconstructs the durable Undo candidates from validated Trash entries.
+    /// The returned receipts are authoritative for this read, newest first; no
+    /// caller-held receipt or process-local UI state is trusted as the source of
+    /// truth.
+    /// </summary>
+    public async Task<IReadOnlyList<SavedStateDeletionReceipt>> ListRestorableDeletedStatesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            var trashRoot = EnsureSavedStateTrashRoot();
+            var trashLeaseRoot = EnsureSavedStateTrashLeaseRoot();
+            using var maintenanceLock = await SavedStateTrashLocks.AcquireAsync(
+                $"{trashRoot}|maintenance",
+                cancellationToken);
+            using var maintenanceLease = await CrossProcessWriteLease.AcquireAsync(
+                Path.Combine(trashLeaseRoot, "maintenance"),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+
+            var now = timeProvider.GetUtcNow();
+            var receipts = new List<SavedStateDeletionReceipt>();
+            foreach (var entryPath in EnumerateSavedStateTrashEntries(trashRoot))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var id = Path.GetFileName(
+                    entryPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                if (!Guid.TryParseExact(id, "N", out _) || DirectoryIsReparsePoint(entryPath))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    using var entryLock = await SavedStateTrashLocks.AcquireAsync(entryPath, cancellationToken);
+                    using var entryLease = await CrossProcessWriteLease.AcquireAsync(
+                        SavedStateTrashEntryLeaseTarget(trashLeaseRoot, id),
+                        SnapshotWriteLeaseTimeout,
+                        cancellationToken);
+                    if (!Directory.Exists(entryPath) || DirectoryIsReparsePoint(entryPath))
+                    {
+                        continue;
+                    }
+
+                    var resolved = await ReadSavedStateTrashEntryAsync(entryPath, cancellationToken);
+                    if (resolved is not null
+                        && resolved.Receipt.ExpiresAt > now
+                        && SavedStatePayloadExists(resolved))
+                    {
+                        receipts.Add(resolved.Receipt);
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (ex is IOException
+                                               or UnauthorizedAccessException
+                                               or DirectoryNotFoundException
+                                               or JsonException)
+                {
+                    // A single locked or invalid entry is not an Undo candidate.
+                    // Continue under the bounded maintenance snapshot rather than
+                    // allowing it to hide other independently valid entries.
+                }
+            }
+
+            return receipts
+                .OrderByDescending(receipt => receipt.DeletedAt)
+                .ThenByDescending(receipt => receipt.Id, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException
+                                       or UnauthorizedAccessException
+                                       or DirectoryNotFoundException
+                                       or JsonException)
+        {
+            return [];
+        }
+    }
+
+    public async Task<int> PurgeExpiredSavedStateTrashAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            var trashRoot = EnsureSavedStateTrashRoot();
+            var trashLeaseRoot = EnsureSavedStateTrashLeaseRoot();
+            using var maintenanceLock = await SavedStateTrashLocks.AcquireAsync(
+                $"{trashRoot}|maintenance",
+                cancellationToken);
+            using var maintenanceLease = await CrossProcessWriteLease.AcquireAsync(
+                Path.Combine(trashLeaseRoot, "maintenance"),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            return await PurgeSavedStateTrashUnderMaintenanceAsync(
+                savedStateTrashEntryLimit,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+        {
+            return 0;
+        }
     }
 
     public string SnapshotPath(string sessionId = "default") => NativeDataPaths.SessionSnapshotPath(DataRoot, sessionId);
@@ -1742,6 +2814,18 @@ public sealed class SessionStore
         return PathIsInsideDirectory(checkpointDir, path) ? path : null;
     }
 
+    private static bool SessionDirectoryIsSafeForCheckpointRestore(
+        string sessionPath,
+        bool allowMissingSessionDirectory)
+    {
+        if (Directory.Exists(sessionPath))
+        {
+            return !PathIsReparsePoint(sessionPath);
+        }
+
+        return allowMissingSessionDirectory && !File.Exists(sessionPath);
+    }
+
     private static string SafeCheckpointId(string? checkpointId)
     {
         if (string.IsNullOrWhiteSpace(checkpointId))
@@ -1762,6 +2846,697 @@ public sealed class SessionStore
         return string.IsNullOrWhiteSpace(cleaned) || cleaned.All(ch => ch == '.') || cleaned.Length > MaxSafeCheckpointIdLength
             ? ""
             : cleaned;
+    }
+
+    private string EnsureSavedStateTrashRoot()
+    {
+        var dataRoot = Path.GetFullPath(DataRoot);
+        var trashContainer = Path.GetFullPath(Path.Combine(dataRoot, ".trash"));
+        var trashRoot = Path.GetFullPath(Path.Combine(trashContainer, "saved-state"));
+        if (!PathIsInsideDirectory(dataRoot, trashRoot))
+        {
+            throw new IOException("The saved-state Trash path escaped the AI Arena data root.");
+        }
+
+        EnsureDirectoryWithoutReparsePoint(dataRoot, "AI Arena data root");
+        EnsureDirectoryWithoutReparsePoint(trashContainer, "Trash");
+        EnsureDirectoryWithoutReparsePoint(trashRoot, "saved-state Trash");
+        return trashRoot;
+    }
+
+    private string EnsureSavedStateTrashLeaseRoot()
+    {
+        var dataRoot = Path.GetFullPath(DataRoot);
+        var lockContainer = Path.GetFullPath(Path.Combine(dataRoot, ".locks"));
+        var leaseRoot = Path.GetFullPath(Path.Combine(lockContainer, "saved-state-trash"));
+        if (!PathIsInsideDirectory(dataRoot, leaseRoot))
+        {
+            throw new IOException("The saved-state Trash lock path escaped the AI Arena data root.");
+        }
+
+        EnsureDirectoryWithoutReparsePoint(dataRoot, "AI Arena data root");
+        EnsureDirectoryWithoutReparsePoint(lockContainer, "lock");
+        EnsureDirectoryWithoutReparsePoint(leaseRoot, "saved-state Trash lock");
+        return leaseRoot;
+    }
+
+    private async Task<SavedStateTrashMaintenanceScope> AcquireSavedStateTrashMaintenanceScopeAsync(
+        CancellationToken cancellationToken)
+    {
+        var trashRoot = EnsureSavedStateTrashRoot();
+        var trashLeaseRoot = EnsureSavedStateTrashLeaseRoot();
+        var processLease = await SavedStateTrashLocks.AcquireAsync(
+            $"{trashRoot}|maintenance",
+            cancellationToken);
+        try
+        {
+            var crossProcessLease = await CrossProcessWriteLease.AcquireAsync(
+                Path.Combine(trashLeaseRoot, "maintenance"),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            return new SavedStateTrashMaintenanceScope(
+                trashRoot,
+                processLease,
+                crossProcessLease);
+        }
+        catch
+        {
+            processLease.Dispose();
+            throw;
+        }
+    }
+
+    private async Task<bool> SessionIdentityIsReservedInTrashUnderMaintenanceAsync(
+        string trashRoot,
+        string safeSessionId,
+        CancellationToken cancellationToken)
+    {
+        var trashLeaseRoot = EnsureSavedStateTrashLeaseRoot();
+        var now = timeProvider.GetUtcNow();
+        foreach (var entryPath in EnumerateSavedStateTrashEntries(trashRoot))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entryId = Path.GetFileName(
+                entryPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (!Guid.TryParseExact(entryId, "N", out _))
+            {
+                continue;
+            }
+
+            using var entryLock = await SavedStateTrashLocks.AcquireAsync(entryPath, cancellationToken);
+            using var entryLease = await CrossProcessWriteLease.AcquireAsync(
+                SavedStateTrashEntryLeaseTarget(trashLeaseRoot, entryId),
+                SnapshotWriteLeaseTimeout,
+                cancellationToken);
+            var resolved = await ReadSavedStateTrashEntryAsync(entryPath, cancellationToken);
+            if (resolved is not null
+                && resolved.Receipt.Kind == SavedStateDeletionKind.Session
+                && resolved.Receipt.SessionId.Equals(safeSessionId, StringComparison.OrdinalIgnoreCase)
+                && resolved.Receipt.ExpiresAt > now
+                && SavedStatePayloadExists(resolved))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void EnsureDirectoryWithoutReparsePoint(string path, string description)
+    {
+        if (Directory.Exists(path) && DirectoryIsReparsePoint(path))
+        {
+            throw new IOException($"The {description} directory cannot be a reparse point.");
+        }
+
+        Directory.CreateDirectory(path);
+        if (DirectoryIsReparsePoint(path))
+        {
+            throw new IOException($"The {description} directory cannot be a reparse point.");
+        }
+    }
+
+    private static string SavedStateTrashEntryPath(string trashRoot, string deletionId)
+    {
+        if (!Guid.TryParseExact(deletionId, "N", out _))
+        {
+            throw new IOException("The saved-state deletion receipt is invalid.");
+        }
+
+        var entryPath = Path.GetFullPath(Path.Combine(trashRoot, deletionId));
+        if (!PathIsInsideDirectory(trashRoot, entryPath))
+        {
+            throw new IOException("The saved-state Trash entry escaped its root.");
+        }
+
+        return entryPath;
+    }
+
+    private static string SavedStateTrashEntryLeaseTarget(string trashLeaseRoot, string entryId)
+    {
+        var normalizedEntryId = entryId.ToLowerInvariant();
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedEntryId))).ToLowerInvariant();
+        return Path.Combine(trashLeaseRoot, $"entry-{key}");
+    }
+
+    private async Task<DateTimeOffset> NextSavedStateDeletionTimeAsync(
+        string trashRoot,
+        CancellationToken cancellationToken)
+    {
+        // Tombstones persist timestamps to millisecond precision. The global
+        // maintenance lease serializes deletions, so advancing past the newest
+        // retained tombstone gives restart-stable ordering even when the clock is
+        // frozen or moves backward.
+        var now = timeProvider.GetUtcNow();
+        var next = DateTimeOffset.FromUnixTimeMilliseconds(now.ToUnixTimeMilliseconds());
+        foreach (var entryPath in EnumerateSavedStateTrashEntries(trashRoot))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var resolved = await ReadSavedStateTrashEntryAsync(entryPath, cancellationToken);
+            if (resolved is null || resolved.Receipt.DeletedAt < next)
+            {
+                continue;
+            }
+
+            try
+            {
+                next = resolved.Receipt.DeletedAt.AddMilliseconds(1);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                // An implausible externally-authored timestamp must not make a
+                // live item deletable without a trustworthy ordering receipt.
+                throw new IOException("The saved-state Trash ordering metadata is invalid.");
+            }
+        }
+
+        return next;
+    }
+
+    private static SavedStateTrashTombstone CreateSavedStateTombstone(
+        SavedStateDeletionReceipt receipt,
+        string originalRelativePath)
+    {
+        return new SavedStateTrashTombstone
+        {
+            SchemaVersion = SavedStateTrashSchemaVersion,
+            Id = receipt.Id,
+            Kind = receipt.Kind == SavedStateDeletionKind.Session ? "session" : "checkpoint",
+            SessionId = receipt.SessionId,
+            CheckpointId = receipt.CheckpointId,
+            DisplayName = receipt.DisplayName,
+            OriginalRelativePath = originalRelativePath,
+            DeletedAtUnixMilliseconds = receipt.DeletedAt.ToUnixTimeMilliseconds(),
+            ExpiresAtUnixMilliseconds = receipt.ExpiresAt.ToUnixTimeMilliseconds()
+        };
+    }
+
+    private static async Task WriteSavedStateTombstoneAsync(
+        string entryPath,
+        SavedStateTrashTombstone tombstone,
+        CancellationToken cancellationToken)
+    {
+        var tombstonePath = Path.Combine(entryPath, "tombstone.json");
+        var tempPath = Path.Combine(entryPath, $"tombstone.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using (var stream = new FileStream(
+                             tempPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.Read,
+                             bufferSize: 4 * 1024,
+                             FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await JsonSerializer.SerializeAsync(stream, tombstone, JsonOptions, cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+                stream.Flush(flushToDisk: true);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(tempPath, tombstonePath);
+        }
+        finally
+        {
+            TryDeleteTempFile(tempPath);
+        }
+    }
+
+    private static void TryDeleteTrashEntry(string entryPath)
+    {
+        try
+        {
+            DeleteDirectoryTree(entryPath, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+        {
+            // An interrupted prepared tombstone is reconciled by the next Trash
+            // maintenance pass. Never mask the source operation's outcome.
+        }
+    }
+
+    private async Task<int> PurgeSavedStateTrashUnderMaintenanceAsync(
+        int maximumEntries,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumEntries);
+        cancellationToken.ThrowIfCancellationRequested();
+        var trashRoot = EnsureSavedStateTrashRoot();
+        var trashLeaseRoot = EnsureSavedStateTrashLeaseRoot();
+        var now = timeProvider.GetUtcNow();
+        var inspections = new List<SavedStateTrashInspection>();
+        foreach (var entryPath in EnumerateSavedStateTrashEntries(trashRoot))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            inspections.Add(await InspectSavedStateTrashEntryAsync(entryPath, now, cancellationToken));
+        }
+
+        var purgeIds = inspections
+            .Where(inspection => inspection.ShouldPurge)
+            .Select(inspection => inspection.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var retained = inspections
+            .Where(inspection => !purgeIds.Contains(inspection.Id))
+            .OrderBy(inspection => inspection.SortTime)
+            .ThenBy(inspection => inspection.Id, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var excess = Math.Max(0, retained.Length - maximumEntries);
+        foreach (var inspection in retained.Take(excess))
+        {
+            purgeIds.Add(inspection.Id);
+        }
+
+        var purged = 0;
+        foreach (var inspection in inspections
+                     .Where(candidate => purgeIds.Contains(candidate.Id))
+                     .OrderBy(candidate => candidate.SortTime))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                using var entryLock = await SavedStateTrashLocks.AcquireAsync(
+                    inspection.EntryPath,
+                    cancellationToken);
+                using var entryLease = await CrossProcessWriteLease.AcquireAsync(
+                    SavedStateTrashEntryLeaseTarget(trashLeaseRoot, inspection.Id),
+                    SnapshotWriteLeaseTimeout,
+                    cancellationToken);
+                if (!Directory.Exists(inspection.EntryPath))
+                {
+                    continue;
+                }
+
+                // Re-inspect after the per-entry lease. A restore may have won
+                // the race after the maintenance scan; in that case its entry is
+                // already gone and must not count as a purge.
+                var current = await InspectSavedStateTrashEntryAsync(
+                    inspection.EntryPath,
+                    now,
+                    cancellationToken);
+                var forcedByCapacity = retained.Take(excess)
+                    .Any(candidate => candidate.Id.Equals(current.Id, StringComparison.OrdinalIgnoreCase));
+                if (!current.ShouldPurge && !forcedByCapacity)
+                {
+                    continue;
+                }
+
+                DeleteDirectoryTree(current.EntryPath, cancellationToken);
+                if (!Directory.Exists(current.EntryPath))
+                {
+                    purged++;
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException or JsonException)
+            {
+                // One locked/corrupt Trash entry must not make deletion of a
+                // different item irreversible or unavailable. It remains for a
+                // future bounded maintenance pass.
+            }
+        }
+
+        return purged;
+    }
+
+    private async Task ReconcileSavedStateTrashCapacityAfterCommitAsync()
+    {
+        try
+        {
+            // The caller still owns the global maintenance scope. The source
+            // move is already committed, so reconciliation is non-cancelable and
+            // best effort: an externally locked oldest entry may temporarily
+            // leave one bounded overflow, but can never turn a successful delete
+            // into an apparent failure or destroy the new recovery receipt.
+            await PurgeSavedStateTrashUnderMaintenanceAsync(
+                savedStateTrashEntryLimit,
+                CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException
+                                   or UnauthorizedAccessException
+                                   or DirectoryNotFoundException
+                                   or JsonException)
+        {
+        }
+    }
+
+    private async Task<SavedStateTrashInspection> InspectSavedStateTrashEntryAsync(
+        string entryPath,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var id = Path.GetFileName(entryPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (DirectoryIsReparsePoint(entryPath) || !Guid.TryParseExact(id, "N", out _))
+        {
+            return new SavedStateTrashInspection(id, entryPath, DateTimeOffset.MinValue, true);
+        }
+
+        var resolved = await ReadSavedStateTrashEntryAsync(entryPath, cancellationToken);
+        if (resolved is not null)
+        {
+            return new SavedStateTrashInspection(
+                id,
+                entryPath,
+                resolved.Receipt.DeletedAt,
+                resolved.Receipt.ExpiresAt <= now || !SavedStatePayloadExists(resolved));
+        }
+
+        var lastWrite = SavedStateTrashEntryLastWrite(entryPath);
+        return new SavedStateTrashInspection(
+            id,
+            entryPath,
+            lastWrite,
+            lastWrite <= now.Subtract(savedStateTrashRetention));
+    }
+
+    private async Task<ResolvedSavedStateTrashEntry?> ReadSavedStateTrashEntryAsync(
+        string entryPath,
+        CancellationToken cancellationToken)
+    {
+        if (!Directory.Exists(entryPath) || PathIsReparsePoint(entryPath))
+        {
+            return null;
+        }
+
+        var tombstonePath = Path.Combine(entryPath, "tombstone.json");
+        if (!File.Exists(tombstonePath) || PathIsReparsePoint(tombstonePath))
+        {
+            return null;
+        }
+
+        SavedStateTrashTombstone? tombstone;
+        try
+        {
+            await using var stream = new FileStream(
+                tombstonePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            tombstone = await JsonSerializer.DeserializeAsync<SavedStateTrashTombstone>(
+                stream,
+                JsonOptions,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+
+        if (tombstone is null
+            || tombstone.SchemaVersion != SavedStateTrashSchemaVersion
+            || !Guid.TryParseExact(tombstone.Id, "N", out _)
+            || !tombstone.Id.Equals(
+                Path.GetFileName(entryPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        SavedStateDeletionKind kind;
+        if (tombstone.Kind.Equals("session", StringComparison.Ordinal))
+        {
+            kind = SavedStateDeletionKind.Session;
+        }
+        else if (tombstone.Kind.Equals("checkpoint", StringComparison.Ordinal))
+        {
+            kind = SavedStateDeletionKind.Checkpoint;
+        }
+        else
+        {
+            return null;
+        }
+
+        var safeSession = SafeSessionId(tombstone.SessionId);
+        if (string.IsNullOrWhiteSpace(tombstone.SessionId)
+            || !safeSession.Equals(tombstone.SessionId, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        string expectedOriginalPath;
+        string payloadPath;
+        var safeCheckpoint = "";
+        if (kind == SavedStateDeletionKind.Session)
+        {
+            if (safeSession.Equals("default", StringComparison.OrdinalIgnoreCase)
+                || !string.IsNullOrWhiteSpace(tombstone.CheckpointId))
+            {
+                return null;
+            }
+
+            expectedOriginalPath = Path.GetFullPath(Path.Combine(NativeDataPaths.SessionsRoot(DataRoot), safeSession));
+            payloadPath = Path.GetFullPath(Path.Combine(entryPath, "payload"));
+        }
+        else
+        {
+            safeCheckpoint = SafeCheckpointId(tombstone.CheckpointId);
+            if (string.IsNullOrWhiteSpace(safeCheckpoint)
+                || !safeCheckpoint.Equals(tombstone.CheckpointId, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            expectedOriginalPath = Path.GetFullPath(
+                Path.Combine(NativeDataPaths.CheckpointDirectory(DataRoot, safeSession), $"{safeCheckpoint}.json"));
+            payloadPath = Path.GetFullPath(Path.Combine(entryPath, "payload.json"));
+        }
+
+        var dataRoot = Path.GetFullPath(DataRoot);
+        string recordedOriginalPath;
+        try
+        {
+            recordedOriginalPath = Path.GetFullPath(Path.Combine(dataRoot, tombstone.OriginalRelativePath));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+
+        if (!PathIsInsideDirectory(dataRoot, expectedOriginalPath)
+            || !PathIsInsideDirectory(dataRoot, recordedOriginalPath)
+            || !PathsEqual(expectedOriginalPath, recordedOriginalPath)
+            || !PathIsInsideDirectory(entryPath, payloadPath))
+        {
+            return null;
+        }
+
+        DateTimeOffset deletedAt;
+        DateTimeOffset expiresAt;
+        try
+        {
+            deletedAt = DateTimeOffset.FromUnixTimeMilliseconds(tombstone.DeletedAtUnixMilliseconds);
+            expiresAt = DateTimeOffset.FromUnixTimeMilliseconds(tombstone.ExpiresAtUnixMilliseconds);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null;
+        }
+
+        if (expiresAt <= deletedAt)
+        {
+            return null;
+        }
+
+        var fallbackName = kind == SavedStateDeletionKind.Session ? safeSession : safeCheckpoint;
+        var receipt = new SavedStateDeletionReceipt(
+            tombstone.Id,
+            kind,
+            safeSession,
+            safeCheckpoint,
+            NormalizeSavedStateDisplayName(tombstone.DisplayName, fallbackName),
+            deletedAt,
+            expiresAt);
+        return new ResolvedSavedStateTrashEntry(receipt, entryPath, payloadPath, expectedOriginalPath);
+    }
+
+    private async Task<SavedStateRestoreStatus> RestoreSessionTrashEntryAsync(
+        ResolvedSavedStateTrashEntry entry,
+        CancellationToken cancellationToken)
+    {
+        var snapshotPath = Path.GetFullPath(
+            Path.Combine(entry.OriginalPath, "snapshot.json"));
+        using var processLock = await SnapshotWriteLocks.AcquireAsync(snapshotPath, cancellationToken);
+        using var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+            SessionTreeLeaseTarget(snapshotPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Directory.Exists(entry.OriginalPath) || File.Exists(entry.OriginalPath))
+        {
+            return SavedStateRestoreStatus.NameCollision;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(entry.OriginalPath)!);
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            // The session-tree lease lives outside the directory being restored,
+            // so it coordinates writers without recreating the destination. The
+            // atomic move remains the final collision arbiter.
+            Directory.Move(entry.PayloadPath, entry.OriginalPath);
+            InvalidateSessionSummaryCaches(entry.Receipt.SessionId);
+            RecordSnapshotMutation(snapshotPath);
+            return SavedStateRestoreStatus.Restored;
+        }
+        catch (IOException) when (Directory.Exists(entry.OriginalPath) || File.Exists(entry.OriginalPath))
+        {
+            return SavedStateRestoreStatus.NameCollision;
+        }
+    }
+
+    private async Task<SavedStateRestoreStatus> RestoreCheckpointTrashEntryAsync(
+        ResolvedSavedStateTrashEntry entry,
+        CancellationToken cancellationToken)
+    {
+        var safeSession = SafeSessionId(entry.Receipt.SessionId);
+        var snapshotPath = Path.GetFullPath(SnapshotPath(safeSession));
+        var sessionPath = Path.GetDirectoryName(snapshotPath)!;
+        var checkpointDirectory = Path.GetDirectoryName(entry.OriginalPath)!;
+        using var processLock = await SnapshotWriteLocks.AcquireAsync(snapshotPath, cancellationToken);
+        using var sessionTreeLease = await CrossProcessWriteLease.AcquireAsync(
+            SessionTreeLeaseTarget(snapshotPath),
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        // A deleted checkpoint remains recoverable while its parent session is in
+        // Trash, but restoring it must not recreate an orphan checkpoint tree.
+        // The operator can first Undo the session and then retry this receipt.
+        if (!Directory.Exists(sessionPath) || PathIsReparsePoint(sessionPath))
+        {
+            return SavedStateRestoreStatus.NotFound;
+        }
+
+        if (Directory.Exists(checkpointDirectory) && PathIsReparsePoint(checkpointDirectory))
+        {
+            return SavedStateRestoreStatus.Invalid;
+        }
+
+        using var mutationLock = await SavedStateTrashLocks.AcquireAsync(
+            entry.OriginalPath,
+            cancellationToken);
+        if (!File.Exists(entry.PayloadPath)
+            || PathIsReparsePoint(entry.PayloadPath)
+            || (Directory.Exists(checkpointDirectory) && PathIsReparsePoint(checkpointDirectory)))
+        {
+            return SavedStateRestoreStatus.NotFound;
+        }
+
+        using var writeLease = await CrossProcessWriteLease.AcquireAsync(
+            entry.OriginalPath,
+            SnapshotWriteLeaseTimeout,
+            cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Directory.Exists(sessionPath)
+            || PathIsReparsePoint(sessionPath)
+            || PathIsReparsePoint(checkpointDirectory)
+            || !File.Exists(entry.PayloadPath)
+            || PathIsReparsePoint(entry.PayloadPath))
+        {
+            return SavedStateRestoreStatus.NotFound;
+        }
+
+        if (File.Exists(entry.OriginalPath) || Directory.Exists(entry.OriginalPath))
+        {
+            return SavedStateRestoreStatus.NameCollision;
+        }
+
+        Directory.CreateDirectory(checkpointDirectory);
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            File.Move(entry.PayloadPath, entry.OriginalPath);
+            return SavedStateRestoreStatus.Restored;
+        }
+        catch (IOException) when (File.Exists(entry.OriginalPath) || Directory.Exists(entry.OriginalPath))
+        {
+            return SavedStateRestoreStatus.NameCollision;
+        }
+    }
+
+    private static bool SavedStatePayloadExists(ResolvedSavedStateTrashEntry entry)
+    {
+        return entry.Receipt.Kind == SavedStateDeletionKind.Session
+            ? Directory.Exists(entry.PayloadPath) && !PathIsReparsePoint(entry.PayloadPath)
+            : File.Exists(entry.PayloadPath) && !PathIsReparsePoint(entry.PayloadPath);
+    }
+
+    private static bool ReceiptsIdentifySameDeletion(
+        SavedStateDeletionReceipt requested,
+        SavedStateDeletionReceipt persisted)
+    {
+        return requested.Id.Equals(persisted.Id, StringComparison.OrdinalIgnoreCase)
+            && requested.Kind == persisted.Kind
+            && requested.SessionId.Equals(persisted.SessionId, StringComparison.OrdinalIgnoreCase)
+            && requested.CheckpointId.Equals(persisted.CheckpointId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeSavedStateDisplayName(string? value, string fallback)
+    {
+        var cleaned = new string((value ?? "")
+            .Select(character => char.IsControl(character) ? ' ' : character)
+            .ToArray())
+            .Trim();
+        if (string.IsNullOrWhiteSpace(cleaned))
+        {
+            cleaned = fallback;
+        }
+
+        return cleaned[..Math.Min(cleaned.Length, 160)];
+    }
+
+    private static IReadOnlyList<string> EnumerateSavedStateTrashEntries(string trashRoot)
+    {
+        try
+        {
+            return Directory.Exists(trashRoot)
+                ? Directory.EnumerateDirectories(trashRoot).ToArray()
+                : [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+        {
+            return [];
+        }
+    }
+
+    private static int SavedStateTrashEntryCount(string trashRoot)
+    {
+        try
+        {
+            return Directory.Exists(trashRoot)
+                ? Directory.EnumerateDirectories(trashRoot).Count()
+                : 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+        {
+            // An unreadable root cannot prove capacity, so callers fail closed.
+            return int.MaxValue;
+        }
+    }
+
+    private static DateTimeOffset SavedStateTrashEntryLastWrite(string entryPath)
+    {
+        try
+        {
+            return new DateTimeOffset(Directory.GetLastWriteTimeUtc(entryPath), TimeSpan.Zero);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+        {
+            return DateTimeOffset.MinValue;
+        }
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        return Path.GetFullPath(left)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Equals(
+                Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool PathIsInsideDirectory(string directory, string path)
@@ -1835,6 +3610,7 @@ public sealed class SessionStore
     /// </summary>
     private async Task<int> CountSnapshotMessagesAsync(string snapshotPath, CancellationToken cancellationToken)
     {
+        snapshotPath = Path.GetFullPath(snapshotPath);
         DateTime writeUtc;
         long length;
         try
@@ -1845,14 +3621,13 @@ public sealed class SessionStore
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            MessageCountCache.Remove(snapshotPath);
             return 0;
         }
 
-        if (MessageCountCache.TryGetValue(snapshotPath, out var cached)
-            && cached.WriteUtc == writeUtc
-            && cached.Length == length)
+        if (MessageCountCache.TryGet(snapshotPath, writeUtc, length, out var cachedCount))
         {
-            return cached.Count;
+            return cachedCount;
         }
 
         int count;
@@ -1882,7 +3657,7 @@ public sealed class SessionStore
             return 0;
         }
 
-        MessageCountCache[snapshotPath] = (writeUtc, length, count);
+        MessageCountCache.Set(snapshotPath, writeUtc, length, count);
         return count;
     }
 
@@ -1963,8 +3738,10 @@ public sealed class SessionStore
     /// </summary>
     private static int CountLines(string path)
     {
+        path = Path.GetFullPath(path);
         if (!File.Exists(path))
         {
+            EventLineCountCache.Remove(path);
             return 0;
         }
 
@@ -1978,38 +3755,64 @@ public sealed class SessionStore
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            EventLineCountCache.Remove(path);
             return 0;
         }
 
-        if (EventLineCountCache.TryGetValue(path, out var cached)
-            && cached.WriteUtc == writeUtc
-            && cached.Length == length)
+        if (EventLineCountCache.TryGet(path, writeUtc, length, out var cachedCount))
         {
-            return cached.Count;
+            return cachedCount;
         }
 
-        var counted = CountLinesUncached(path);
-        EventLineCountCache[path] = (writeUtc, length, counted);
+        if (!TryCountLinesUncached(path, out var counted))
+        {
+            return 0;
+        }
+
+        EventLineCountCache.Set(path, writeUtc, length, counted);
         return counted;
     }
 
-    private static int CountLinesUncached(string path)
+    private static bool TryCountLinesUncached(string path, out int count)
     {
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var reader = new StreamReader(stream);
-            var count = 0;
+            count = 0;
             while (reader.ReadLine() is not null)
             {
                 count++;
             }
 
-            return count;
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
         {
-            return 0;
+            count = 0;
+            return false;
+        }
+    }
+
+    private void InvalidateSessionSummaryCaches(string sessionId)
+    {
+        TryRemoveSessionSummaryCacheEntry(MessageCountCache, SnapshotPath(sessionId));
+        TryRemoveSessionSummaryCacheEntry(
+            EventLineCountCache,
+            NativeDataPaths.EventPath(DataRoot, sessionId));
+    }
+
+    private static void TryRemoveSessionSummaryCacheEntry(BoundedPathCountCache cache, string path)
+    {
+        try
+        {
+            cache.Remove(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException)
+        {
+            // Cache invalidation is only a memory-retention optimization. The
+            // underlying move has already committed, and the fixed cache bound
+            // still prevents an invalid path from growing process memory.
         }
     }
 
@@ -2025,15 +3828,179 @@ public sealed class SessionStore
         }
     }
 
-    private static bool DirectoryIsReparsePoint(string directory)
+    private static bool DirectoryIsReparsePoint(string directory) => PathIsReparsePoint(directory);
+
+    private static bool PathIsReparsePoint(string path)
     {
         try
         {
-            return (File.GetAttributes(directory) & FileAttributes.ReparsePoint) == FileAttributes.ReparsePoint;
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) == FileAttributes.ReparsePoint;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
         {
             return true;
+        }
+    }
+
+    private sealed class SavedStateTrashTombstone
+    {
+        [JsonPropertyName("schema_version")]
+        public int SchemaVersion { get; init; }
+
+        [JsonPropertyName("id")]
+        public string Id { get; init; } = "";
+
+        [JsonPropertyName("kind")]
+        public string Kind { get; init; } = "";
+
+        [JsonPropertyName("session_id")]
+        public string SessionId { get; init; } = "";
+
+        [JsonPropertyName("checkpoint_id")]
+        public string CheckpointId { get; init; } = "";
+
+        [JsonPropertyName("display_name")]
+        public string DisplayName { get; init; } = "";
+
+        [JsonPropertyName("original_relative_path")]
+        public string OriginalRelativePath { get; init; } = "";
+
+        [JsonPropertyName("deleted_at_unix_ms")]
+        public long DeletedAtUnixMilliseconds { get; init; }
+
+        [JsonPropertyName("expires_at_unix_ms")]
+        public long ExpiresAtUnixMilliseconds { get; init; }
+    }
+
+    private sealed record ResolvedSavedStateTrashEntry(
+        SavedStateDeletionReceipt Receipt,
+        string EntryPath,
+        string PayloadPath,
+        string OriginalPath);
+
+    private sealed record SavedStateTrashInspection(
+        string Id,
+        string EntryPath,
+        DateTimeOffset SortTime,
+        bool ShouldPurge);
+
+    private sealed class BoundedPathCountCache
+    {
+        private readonly int capacity;
+        private readonly object gate = new();
+        private readonly Dictionary<string, CacheEntry> entries = new(StringComparer.OrdinalIgnoreCase);
+        private readonly LinkedList<string> recency = new();
+
+        internal BoundedPathCountCache(int capacity)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
+            this.capacity = capacity;
+        }
+
+        internal int Count
+        {
+            get
+            {
+                lock (gate)
+                {
+                    return entries.Count;
+                }
+            }
+        }
+
+        internal bool Contains(string path)
+        {
+            var fullPath = Path.GetFullPath(path);
+            lock (gate)
+            {
+                return entries.ContainsKey(fullPath);
+            }
+        }
+
+        internal bool TryGet(string path, DateTime writeUtc, long length, out int count)
+        {
+            var fullPath = Path.GetFullPath(path);
+            lock (gate)
+            {
+                if (!entries.TryGetValue(fullPath, out var entry))
+                {
+                    count = 0;
+                    return false;
+                }
+
+                if (entry.WriteUtc != writeUtc || entry.Length != length)
+                {
+                    RemoveUnderLock(fullPath, entry);
+                    count = 0;
+                    return false;
+                }
+
+                recency.Remove(entry.RecencyNode);
+                recency.AddFirst(entry.RecencyNode);
+                count = entry.Count;
+                return true;
+            }
+        }
+
+        internal void Set(string path, DateTime writeUtc, long length, int count)
+        {
+            var fullPath = Path.GetFullPath(path);
+            lock (gate)
+            {
+                if (entries.Remove(fullPath, out var previous))
+                {
+                    recency.Remove(previous.RecencyNode);
+                }
+
+                var node = recency.AddFirst(fullPath);
+                entries[fullPath] = new CacheEntry(writeUtc, length, count, node);
+                while (entries.Count > capacity && recency.Last is { } oldest)
+                {
+                    recency.RemoveLast();
+                    entries.Remove(oldest.Value);
+                }
+            }
+        }
+
+        internal void Remove(string path)
+        {
+            var fullPath = Path.GetFullPath(path);
+            lock (gate)
+            {
+                if (entries.Remove(fullPath, out var entry))
+                {
+                    recency.Remove(entry.RecencyNode);
+                }
+            }
+        }
+
+        private void RemoveUnderLock(string fullPath, CacheEntry entry)
+        {
+            entries.Remove(fullPath);
+            recency.Remove(entry.RecencyNode);
+        }
+
+        private sealed record CacheEntry(
+            DateTime WriteUtc,
+            long Length,
+            int Count,
+            LinkedListNode<string> RecencyNode);
+    }
+
+    private sealed class SavedStateTrashMaintenanceScope(
+        string trashRoot,
+        KeyedAsyncLockRegistry.Lease processLease,
+        CrossProcessWriteLease crossProcessLease) : IDisposable
+    {
+        private KeyedAsyncLockRegistry.Lease? process = processLease;
+        private CrossProcessWriteLease? crossProcess = crossProcessLease;
+
+        internal string TrashRoot { get; } = trashRoot;
+
+        public void Dispose()
+        {
+            Interlocked.Exchange(ref crossProcess, null)?.Dispose();
+            Interlocked.Exchange(ref process, null)?.Dispose();
         }
     }
 
@@ -2075,14 +4042,20 @@ internal sealed record ArenaExperimentChildGuard(
     string ChildSetupFingerprint);
 
 internal sealed class ArenaExperimentProviderCallLease(
-    CrossProcessWriteLease lease,
+    CrossProcessWriteLease sessionTreeLease,
+    CrossProcessWriteLease providerCallLease,
     long persistenceRevision) : IDisposable
 {
-    private CrossProcessWriteLease? _lease = lease;
+    private CrossProcessWriteLease? _sessionTreeLease = sessionTreeLease;
+    private CrossProcessWriteLease? _providerCallLease = providerCallLease;
 
     internal long PersistenceRevision { get; } = persistenceRevision;
 
-    public void Dispose() => Interlocked.Exchange(ref _lease, null)?.Dispose();
+    public void Dispose()
+    {
+        Interlocked.Exchange(ref _providerCallLease, null)?.Dispose();
+        Interlocked.Exchange(ref _sessionTreeLease, null)?.Dispose();
+    }
 }
 
 public sealed class ArenaExperimentSourceChangedException : InvalidOperationException
@@ -2097,6 +4070,14 @@ internal sealed class ArenaExperimentChildDriftException : IOException
 {
     internal ArenaExperimentChildDriftException()
         : base("The experiment child changed outside its guarded execution boundary.")
+    {
+    }
+}
+
+internal sealed class SessionIdentityConflictException : InvalidOperationException
+{
+    internal SessionIdentityConflictException(string message)
+        : base(message)
     {
     }
 }
@@ -2125,6 +4106,38 @@ public sealed record CheckpointSummary(string Id, string Name, string SessionId,
         var localTime = DateTimeOffset.FromUnixTimeSeconds(CreatedAt).LocalDateTime;
         return $"{Name} - {localTime:g}";
     }
+}
+
+public enum SavedStateDeletionKind
+{
+    Session,
+    Checkpoint
+}
+
+public sealed record SavedStateDeletionReceipt(
+    string Id,
+    SavedStateDeletionKind Kind,
+    string SessionId,
+    string CheckpointId,
+    string DisplayName,
+    DateTimeOffset DeletedAt,
+    DateTimeOffset ExpiresAt);
+
+public enum SavedStateRestoreStatus
+{
+    Restored,
+    NotFound,
+    NameCollision,
+    Expired,
+    Invalid,
+    Failed
+}
+
+public sealed record SavedStateRestoreResult(
+    SavedStateRestoreStatus Status,
+    SavedStateDeletionReceipt Receipt)
+{
+    public bool Restored => Status == SavedStateRestoreStatus.Restored;
 }
 
 public sealed class CheckpointRecord

@@ -37,7 +37,7 @@ public sealed class ContextRecoveryService
         _sessionStore = sessionStore ?? new SessionStore();
         _modelClient = modelClient ?? new ModelProviderClient();
         _transcriptService = transcriptService ?? new TranscriptService();
-        _eventLogStore = eventLogStore ?? new EventLogStore(_sessionStore.DataRoot);
+        _eventLogStore = eventLogStore ?? EventLogStore.ForSessionStore(_sessionStore);
     }
 
     public async Task<ContextRecoveryResult> SkipBlockedTurnAsync(

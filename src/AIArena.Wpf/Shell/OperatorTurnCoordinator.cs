@@ -66,11 +66,13 @@ internal sealed class OperatorTurnCoordinator
     private readonly Action<string> setLoadStatus;
     private readonly Action<string> setArenaRunStatus;
     private readonly Action<DialogueMessage> speakNarratorMessage;
+    private readonly ComposerDraftStore? composerDraftStore;
     private readonly Dictionary<string, Dictionary<string, string>> draftsBySession = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> routeBySession = new(StringComparer.OrdinalIgnoreCase);
 
     private string routeMode = "public";
     private string draftSessionId = "";
+    private string draftSessionInstanceId = "";
     private bool restoringDraft;
     private bool sendInProgress;
     private bool lastBusy;
@@ -110,7 +112,8 @@ internal sealed class OperatorTurnCoordinator
         Func<string, Task> refreshActiveSessionAsync,
         Action<string> setLoadStatus,
         Action<string> setArenaRunStatus,
-        Action<DialogueMessage>? speakNarratorMessage = null)
+        Action<DialogueMessage>? speakNarratorMessage = null,
+        ComposerDraftStore? composerDraftStore = null)
     {
         this.sessionStore = sessionStore;
         this.eventLogStore = eventLogStore;
@@ -133,6 +136,7 @@ internal sealed class OperatorTurnCoordinator
         this.saveTemplateButton = saveTemplateButton;
         this.deleteTemplateButton = deleteTemplateButton;
         this.turnText = turnText;
+        this.turnText.MaxLength = ComposerDraftStore.MaxDraftCharacters;
         this.sendButton = sendButton;
         this.settings = settings;
         this.activeSession = activeSession;
@@ -145,6 +149,7 @@ internal sealed class OperatorTurnCoordinator
         this.setLoadStatus = setLoadStatus;
         this.setArenaRunStatus = setArenaRunStatus;
         this.speakNarratorMessage = speakNarratorMessage ?? (_ => { });
+        this.composerDraftStore = composerDraftStore;
     }
 
     public void InitializeControls()
@@ -153,12 +158,20 @@ internal sealed class OperatorTurnCoordinator
         privateRouteButton.Content = CreateCommandContent("\uE72E", "Private", 11);
         narratorRouteButton.Content = CreateCommandContent("\uE8D4", "Narrator", 11);
         draftSessionId = activeSession()?.Id?.Trim() ?? "";
-        if (!string.IsNullOrWhiteSpace(draftSessionId) && routeBySession.TryGetValue(draftSessionId, out var savedRoute))
+        var rendered = lastRenderedSnapshot();
+        draftSessionInstanceId = rendered is not null
+            && rendered.SessionId.Equals(draftSessionId, StringComparison.OrdinalIgnoreCase)
+            && SessionStore.IsValidSessionInstanceId(rendered.SessionInstanceId)
+                ? rendered.SessionInstanceId
+                : "";
+        var ownerKey = DraftOwnerKey(draftSessionId, draftSessionInstanceId);
+        if (ownerKey.Length > 0 && routeBySession.TryGetValue(ownerKey, out var savedRoute))
         {
             routeMode = savedRoute;
         }
         InitializeOperatorTemplates();
         WireQuickInterventionButtons();
+        RestoreVisibleDraft();
         UpdateRouteUi();
         UpdateQuickInterventions();
         UpdateTurnMeter();
@@ -183,11 +196,17 @@ internal sealed class OperatorTurnCoordinator
     {
         factoryMode = snapshot.FactoryMode;
         var nextSessionId = snapshot.SessionId?.Trim() ?? "";
-        if (!draftSessionId.Equals(nextSessionId, StringComparison.OrdinalIgnoreCase))
+        var nextSessionInstanceId = SessionStore.IsValidSessionInstanceId(snapshot.SessionInstanceId)
+            ? snapshot.SessionInstanceId
+            : "";
+        var currentOwnerKey = DraftOwnerKey(draftSessionId, draftSessionInstanceId);
+        var nextOwnerKey = DraftOwnerKey(nextSessionId, nextSessionInstanceId);
+        if (!currentOwnerKey.Equals(nextOwnerKey, StringComparison.Ordinal))
         {
             CaptureVisibleDraft();
             draftSessionId = nextSessionId;
-            routeMode = routeBySession.TryGetValue(draftSessionId, out var savedRoute)
+            draftSessionInstanceId = nextSessionInstanceId;
+            routeMode = nextOwnerKey.Length > 0 && routeBySession.TryGetValue(nextOwnerKey, out var savedRoute)
                 ? savedRoute
                 : "public";
             RestoreVisibleDraft();
@@ -286,6 +305,9 @@ internal sealed class OperatorTurnCoordinator
         }
 
         var mode = routeMode;
+        var sessionInstanceId = draftSessionId.Equals(session.Id, StringComparison.OrdinalIgnoreCase)
+            ? draftSessionInstanceId
+            : "";
         var rawText = turnText.Text ?? "";
         var text = NormalizeOperatorRoute(mode) == "public" ? rawText : rawText.Trim();
         if (string.IsNullOrWhiteSpace(text))
@@ -303,7 +325,7 @@ internal sealed class OperatorTurnCoordinator
         var sent = await RunOperatorSendAsync(() => SendOperatorPromptAsync(session, text, mode));
         if (sent)
         {
-            ClearVisibleDraftAfterSuccessfulSend(session.Id, mode, text);
+            ClearVisibleDraftAfterSuccessfulSend(session.Id, sessionInstanceId, mode, rawText);
         }
     }
 
@@ -738,19 +760,20 @@ internal sealed class OperatorTurnCoordinator
 
     private void CaptureVisibleDraft()
     {
-        if (restoringDraft || string.IsNullOrWhiteSpace(draftSessionId))
+        var ownerKey = DraftOwnerKey(draftSessionId, draftSessionInstanceId);
+        if (restoringDraft || ownerKey.Length == 0)
         {
             return;
         }
 
-        var drafts = GetOrCreateSessionDrafts(draftSessionId);
+        var drafts = GetOrCreateSessionDrafts(ownerKey);
         var text = turnText.Text ?? "";
         if (string.IsNullOrWhiteSpace(text))
         {
             drafts.Remove(routeMode);
             if (drafts.Count == 0)
             {
-                draftsBySession.Remove(draftSessionId);
+                draftsBySession.Remove(ownerKey);
             }
         }
         else
@@ -758,17 +781,28 @@ internal sealed class OperatorTurnCoordinator
             drafts[routeMode] = text;
         }
 
+        composerDraftStore?.Set(OperatorDraftScope(draftSessionId, draftSessionInstanceId, routeMode), text);
+
         RememberCurrentRoute();
     }
 
     private void RestoreVisibleDraft()
     {
         var text = "";
-        if (!string.IsNullOrWhiteSpace(draftSessionId)
-            && draftsBySession.TryGetValue(draftSessionId, out var drafts)
+        var ownerKey = DraftOwnerKey(draftSessionId, draftSessionInstanceId);
+        if (ownerKey.Length > 0
+            && draftsBySession.TryGetValue(ownerKey, out var drafts)
             && drafts.TryGetValue(routeMode, out var savedDraft))
         {
             text = savedDraft;
+        }
+
+        var persisted = composerDraftStore?.Get(
+            OperatorDraftScope(draftSessionId, draftSessionInstanceId, routeMode)) ?? "";
+        if (!string.IsNullOrWhiteSpace(persisted))
+        {
+            text = persisted;
+            GetOrCreateSessionDrafts(ownerKey)[routeMode] = persisted;
         }
 
         SetVisibleDraftText(text);
@@ -776,9 +810,10 @@ internal sealed class OperatorTurnCoordinator
 
     private void RememberCurrentRoute()
     {
-        if (!string.IsNullOrWhiteSpace(draftSessionId))
+        var ownerKey = DraftOwnerKey(draftSessionId, draftSessionInstanceId);
+        if (ownerKey.Length > 0)
         {
-            routeBySession[draftSessionId] = routeMode;
+            routeBySession[ownerKey] = routeMode;
         }
     }
 
@@ -833,27 +868,66 @@ internal sealed class OperatorTurnCoordinator
         return appended;
     }
 
-    private void ClearVisibleDraftAfterSuccessfulSend(string sessionId, string route, string sentText)
+    public void CaptureDraftForShutdown()
+    {
+        CaptureVisibleDraft();
+    }
+
+    private void ClearVisibleDraftAfterSuccessfulSend(
+        string sessionId,
+        string sessionInstanceId,
+        string route,
+        string sentText)
     {
         var normalizedRoute = NormalizeOperatorRoute(route);
-        if (draftsBySession.TryGetValue(sessionId, out var drafts))
+        var ownerKey = DraftOwnerKey(sessionId, sessionInstanceId);
+        var isVisibleScope = draftSessionId.Equals(sessionId, StringComparison.OrdinalIgnoreCase)
+            && draftSessionInstanceId.Equals(sessionInstanceId, StringComparison.Ordinal)
+            && routeMode.Equals(normalizedRoute, StringComparison.OrdinalIgnoreCase);
+        var scopeStillEqualsSent = isVisibleScope
+            ? string.Equals(turnText.Text ?? "", sentText, StringComparison.Ordinal)
+            : ownerKey.Length > 0 && draftsBySession.TryGetValue(ownerKey, out var scopedDrafts)
+                && scopedDrafts.TryGetValue(normalizedRoute, out var scopedText)
+                && string.Equals(scopedText, sentText, StringComparison.Ordinal);
+        if (!scopeStillEqualsSent)
+        {
+            return;
+        }
+
+        if (ownerKey.Length > 0 && draftsBySession.TryGetValue(ownerKey, out var drafts))
         {
             drafts.Remove(normalizedRoute);
             if (drafts.Count == 0)
             {
-                draftsBySession.Remove(sessionId);
+                draftsBySession.Remove(ownerKey);
             }
         }
 
-        if (!draftSessionId.Equals(sessionId, StringComparison.OrdinalIgnoreCase)
-            || !routeMode.Equals(normalizedRoute, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(turnText.Text?.Trim(), sentText.Trim(), StringComparison.Ordinal))
+        composerDraftStore?.Remove(OperatorDraftScope(sessionId, sessionInstanceId, normalizedRoute));
+
+        if (!isVisibleScope)
         {
             return;
         }
 
         SetVisibleDraftText("");
         UpdateTurnMeter();
+    }
+
+    private static string OperatorDraftScope(string sessionId, string sessionInstanceId, string route)
+    {
+        return ComposerDraftScopes.Operator(
+            sessionId,
+            sessionInstanceId,
+            NormalizeOperatorRoute(route));
+    }
+
+    private static string DraftOwnerKey(string sessionId, string sessionInstanceId)
+    {
+        return SessionStore.IsValidSessionInstanceId(sessionInstanceId)
+            && !string.IsNullOrWhiteSpace(sessionId)
+                ? $"{sessionId.Trim().ToUpperInvariant()}\u001f{sessionInstanceId}"
+                : "";
     }
 
     private string DraftSessionLabel()

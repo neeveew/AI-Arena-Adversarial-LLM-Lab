@@ -926,7 +926,192 @@ static void SavedStateWorkflowIgnoresStaleCheckpointRefresh()
     Require(!SavedStateWorkflowCoordinator.ShouldApplyCheckpointRefresh("session-a", "session-b"), "stale session should reject checkpoint refresh");
     Require(!SavedStateWorkflowCoordinator.ShouldApplyCheckpointRefresh("session-a", null), "missing active session should reject checkpoint refresh");
     Require(!SavedStateWorkflowCoordinator.ShouldApplyCheckpointRefresh("", "session-a"), "blank captured session should reject checkpoint refresh");
-    Require(SavedStateWorkflowCoordinator.CheckpointRefreshFailureStatus(new IOException("disk busy")) == "Checkpoint refresh failed: disk busy", "checkpoint refresh failure should produce a visible status");
+    var refreshFailure = SavedStateWorkflowCoordinator.CheckpointRefreshFailureStatus(new IOException("disk busy"));
+    Require(refreshFailure.Contains("AA-SAVED-IO", StringComparison.Ordinal)
+            && !refreshFailure.Contains("disk busy", StringComparison.Ordinal),
+        "checkpoint refresh failure should use the stable privacy-safe presentation");
+
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-template-safety-checkpoint-tests", Guid.NewGuid().ToString("N"));
+    const string sessionId = "template-safety";
+    try
+    {
+        var store = new SessionStore(root);
+        var before = SessionStore.CreateDefaultSnapshot();
+        before.MatchType = "before-template";
+        before.Engine.Steering.Topic = "Original topic";
+        before.Engine.Messages.Clear();
+        before.Engine.Messages.Add(new DialogueMessage
+        {
+            Turn = 1,
+            Speaker = "Operator",
+            SpeakerId = "operator",
+            Kind = "message",
+            Status = "ok",
+            Text = "TEMPLATE_SAFETY_SENTINEL",
+            CreatedAt = 1
+        });
+        before.Engine.TurnCount = 1;
+        store.SaveSnapshotAsync(before, sessionId).GetAwaiter().GetResult();
+        var template = new ScenarioTemplate(
+            "safety-template",
+            "Safety Template",
+            DateTimeOffset.UnixEpoch,
+            "after-template",
+            "Replacement topic",
+            "Replacement global",
+            TopicLocked: true,
+            GlobalLocked: false,
+            Agents:
+            [
+                new ScenarioTemplateAgent("alpha", "Alpha", "Template alpha", true, false),
+                new ScenarioTemplateAgent("narrator", "Narrator", "Template narrator", true, false)
+            ],
+            ModelConfigs: new Dictionary<string, ScenarioTemplateModelConfig>(StringComparer.OrdinalIgnoreCase));
+
+        var receipt = SavedStateWorkflowCoordinator.ApplyTemplateWithSafetyCheckpointAsync(
+                store,
+                sessionId,
+                template)
+            .GetAwaiter()
+            .GetResult()
+            ?? throw new InvalidOperationException("template apply safety checkpoint returned no receipt");
+        Require(receipt.Operation == SnapshotSafetyCheckpointOperation.TemplateApply
+                && receipt.Checkpoint.Name == "Safety before template apply: Safety Template",
+            "template apply should publish its deterministic safety-checkpoint receipt");
+        var checkpoint = JsonSerializer.Deserialize<CheckpointRecord>(File.ReadAllText(receipt.Checkpoint.Path), new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        }) ?? throw new InvalidOperationException("template safety checkpoint was unreadable");
+        Require(checkpoint.Snapshot.MatchType == "before-template"
+                && checkpoint.Snapshot.Engine.Steering.Topic == "Original topic"
+                && checkpoint.Snapshot.Engine.Messages.Single().Text == "TEMPLATE_SAFETY_SENTINEL",
+            "template safety checkpoint should preserve the exact pre-apply framing and transcript");
+        var after = store.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("template replacement snapshot was unreadable");
+        Require(after.MatchType == "after-template"
+                && after.Engine.Steering.Topic == "Replacement topic"
+                && after.Engine.Messages.Single().Text == "TEMPLATE_SAFETY_SENTINEL",
+            "protected template apply should replace setup while preserving transcript semantics");
+
+        var restoreTarget = store.SaveCheckpointAsync(sessionId, "UI Restore Target").GetAwaiter().GetResult();
+        after.MatchType = "newer-ui-state";
+        store.SaveSnapshotAsync(after, sessionId).GetAwaiter().GetResult();
+        var events = new EventLogStore(root);
+        var activeRefreshCalls = 0;
+        var checkpointRefreshCalls = 0;
+        var activeRefreshOutcome = "";
+        string? selectedCheckpointId = null;
+        Directory.CreateDirectory(Path.GetDirectoryName(events.EventPath(sessionId))!);
+        SavedStateWorkflowCoordinator.CheckpointRestoreCompletion restoreCompletion;
+        using (var evidenceLock = new FileStream(
+                   events.EventPath(sessionId),
+                   FileMode.OpenOrCreate,
+                   FileAccess.ReadWrite,
+                   FileShare.None))
+        {
+            restoreCompletion = SavedStateWorkflowCoordinator
+                .RestoreCheckpointWithSafetyCheckpointAndReportAsync(
+                    store,
+                    events,
+                    sessionId,
+                    restoreTarget.Id,
+                    outcome =>
+                    {
+                        activeRefreshCalls++;
+                        activeRefreshOutcome = outcome;
+                        return Task.CompletedTask;
+                    },
+                    selectedId =>
+                    {
+                        checkpointRefreshCalls++;
+                        selectedCheckpointId = selectedId;
+                        return Task.CompletedTask;
+                    })
+                .GetAwaiter()
+                .GetResult()
+                ?? throw new InvalidOperationException("Saved State UI restore helper returned no completion");
+        }
+
+        var restoreResult = restoreCompletion.Restore;
+        Require(restoreResult.RestoredCheckpoint.Id == restoreTarget.Id
+                && restoreResult.SafetyCheckpoint?.Checkpoint.Name == "Safety before checkpoint restore: UI Restore Target",
+            "Saved State UI restore path should return the selected checkpoint and automatic safety receipt");
+        var restoredSnapshot = store.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("Saved State UI restored snapshot was unreadable");
+        Require(restoredSnapshot.MatchType == "after-template"
+                && !restoreCompletion.EventRecorded
+                && activeRefreshCalls == 1
+                && checkpointRefreshCalls == 1
+                && selectedCheckpointId == restoreTarget.Id
+                && activeRefreshOutcome == restoreCompletion.Outcome
+                && restoreCompletion.Outcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                && restoreCompletion.Outcome.Contains("AA-SAVED-IO", StringComparison.Ordinal)
+                && !restoreCompletion.Outcome.Contains(events.EventPath(sessionId), StringComparison.OrdinalIgnoreCase),
+            "a locked event file should leave the restored UI state committed, publish a safe warning, and run both refreshes");
+
+        restoredSnapshot.MatchType = "newer-before-projection-failure";
+        store.SaveSnapshotAsync(restoredSnapshot, sessionId).GetAwaiter().GetResult();
+        var failedActiveRefreshCalls = 0;
+        var failedCheckpointRefreshCalls = 0;
+        var projectionFailureRestore = SavedStateWorkflowCoordinator
+            .RestoreCheckpointWithSafetyCheckpointAndReportAsync(
+                store,
+                events,
+                sessionId,
+                restoreTarget.Id,
+                _ =>
+                {
+                    failedActiveRefreshCalls++;
+                    throw new IOException(@"C:\Users\private\active-refresh.txt");
+                },
+                _ =>
+                {
+                    failedCheckpointRefreshCalls++;
+                    throw new IOException(@"C:\Users\private\checkpoint-refresh.txt");
+                })
+            .GetAwaiter()
+            .GetResult()
+            ?? throw new InvalidOperationException("projection-failure restore returned no completion");
+        var projectionFailureSnapshot = store.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult();
+        Require(projectionFailureSnapshot?.MatchType == "after-template"
+                && projectionFailureRestore.EventRecorded
+                && failedActiveRefreshCalls == 1
+                && failedCheckpointRefreshCalls == 1
+                && projectionFailureRestore.Outcome.Contains(
+                    "restored session could not be refreshed",
+                    StringComparison.OrdinalIgnoreCase)
+                && projectionFailureRestore.Outcome.Contains(
+                    "checkpoint list could not be refreshed",
+                    StringComparison.OrdinalIgnoreCase)
+                && projectionFailureRestore.Outcome.Contains("AA-SAVED-IO", StringComparison.Ordinal)
+                && !projectionFailureRestore.Outcome.Contains("private", StringComparison.OrdinalIgnoreCase),
+            "post-commit projection faults misreported, hid, or disclosed the durable checkpoint restore");
+
+        var checkpointCountBeforeSnapshotlessRestore = store.ListCheckpointsAsync(sessionId)
+            .GetAwaiter()
+            .GetResult()
+            .Count;
+        File.Delete(store.SnapshotPath(sessionId));
+        var snapshotlessRestore = SavedStateWorkflowCoordinator.RestoreCheckpointWithSafetyCheckpointAsync(
+                store,
+                sessionId,
+                restoreTarget.Id)
+            .GetAwaiter()
+            .GetResult()
+            ?? throw new InvalidOperationException("Saved State UI snapshot-less restore returned no result");
+        Require(snapshotlessRestore.RestoredCheckpoint.Id == restoreTarget.Id
+                && snapshotlessRestore.SafetyCheckpoint is null
+                && store.ListCheckpointsAsync(sessionId).GetAwaiter().GetResult().Count
+                    == checkpointCountBeforeSnapshotlessRestore,
+            "Saved State UI restore should explicitly report no safety receipt when no live snapshot was superseded");
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }
 
 static void AppShutdownSurvivesCleanupFailures()

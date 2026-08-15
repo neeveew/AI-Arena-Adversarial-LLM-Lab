@@ -91,4 +91,23 @@ internal sealed class CrossProcessWriteLease : IDisposable
             ownedStream.Dispose();
         }
     }
+
+    internal void PrepareForContainingDirectoryMove()
+    {
+        if (Volatile.Read(ref stream) is null)
+        {
+            throw new ObjectDisposedException(nameof(CrossProcessWriteLease));
+        }
+
+        // Windows cannot rename a directory that contains a visible open lease
+        // sidecar, even though the handle grants delete sharing. Marking the
+        // sidecar delete-pending keeps this handle alive through the rename. The
+        // caller must also retain an external parent/tree lease so no new owner
+        // can recreate the sidecar name until the move commits.
+        File.Delete(path);
+        if (File.Exists(path))
+        {
+            throw new IOException("The write lease could not be prepared for an atomic directory move.");
+        }
+    }
 }

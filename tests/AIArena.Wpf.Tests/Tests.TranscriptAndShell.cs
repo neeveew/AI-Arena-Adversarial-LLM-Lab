@@ -77,6 +77,7 @@ static void ArenaOperationCoordinatorSelectsOperationMode()
         var busyFlag = false;
         var loadStatus = new TextBlock();
         var arenaStatus = new TextBlock();
+        var readinessStatus = new TextBlock { Visibility = Visibility.Visible };
         var coordinator = new ArenaOperationCoordinator(
             new SemaphoreSlim(1, 1),
             loadStatus,
@@ -99,10 +100,27 @@ static void ArenaOperationCoordinatorSelectsOperationMode()
             _ => { },
             _ => { },
             _ => { },
-            () => callbackCount++);
+            () => callbackCount++,
+            readinessStatus: readinessStatus);
+
+        Require(
+            readinessStatus.Text == "Load a session to enable arena actions."
+            && readinessStatus.Visibility == Visibility.Collapsed,
+            "the compatibility readiness target should retain current text without duplicating the Universal Status Center warning");
 
         coordinator.UpdateReadiness(new ArenaActionReadiness(true, "Arena actions ready."));
         Require(autoChatButton.IsEnabled && oneTurnButton.IsEnabled && narrateButton.IsEnabled, "ready arena actions should become available while idle");
+        Require(
+            readinessStatus.Text == "Arena actions ready."
+            && readinessStatus.Visibility == Visibility.Collapsed,
+            "ready-state compatibility guidance should remain populated but never become a second visible status surface");
+
+        coordinator.UpdateReadiness(new ArenaActionReadiness(false, "Connect the configured provider."));
+        Require(
+            readinessStatus.Text == "Connect the configured provider."
+            && readinessStatus.Visibility == Visibility.Collapsed,
+            "blocked readiness should stay single-sourced through the Universal Status Center");
+        coordinator.UpdateReadiness(new ArenaActionReadiness(true, "Arena actions ready."));
 
         coordinator.SetBusy(true, "busy", stopEnabled: false);
         Require(!disabledDuringBusy.IsEnabled, "busy controls should disable while an arena operation owns busy state");
@@ -122,7 +140,9 @@ static void ArenaOperationCoordinatorSelectsOperationMode()
         coordinator.RunAsync(
             "writing event log",
             () => throw new IOException("  disk   became unavailable\r\nwhile saving  ")).GetAwaiter().GetResult();
-        Require(arenaStatus.Text == "Operation failed: disk became unavailable while saving", "ordinary operation failures should become compact UI status instead of escaping an async event handler");
+        Require(arenaStatus.Text.Contains("AA-ARENA-IO", StringComparison.Ordinal)
+                && !arenaStatus.Text.Contains("disk became unavailable", StringComparison.Ordinal),
+            "ordinary operation failures should become coded privacy-safe UI status instead of escaping an async event handler");
         Require(loadStatus.Text == arenaStatus.Text, "operation failure should stay consistent across status surfaces");
         Require(!busyFlag && disabledDuringBusy.IsEnabled, "ordinary failure handling should restore idle controls");
         Require(
@@ -130,8 +150,12 @@ static void ArenaOperationCoordinatorSelectsOperationMode()
             "operation failure status should remain bounded for pathological exception messages");
         Require(
             ArenaOperationCoordinator.OperationFailureStatus(new InvalidOperationException("Bearer sk-proj-abcdefghijklmnopqrs"))
-                == "Operation failed; sensitive error details were redacted.",
+                .Contains("AA-ARENA-UNEXPECTED", StringComparison.Ordinal),
             "operation failure status should not publish credential-like exception details");
+        Require(
+            !ArenaOperationCoordinator.OperationFailureStatus(new InvalidOperationException("Bearer sk-proj-abcdefghijklmnopqrs"))
+                .Contains("sk-proj", StringComparison.Ordinal),
+            "operation failure status should omit raw exception secrets");
 
         coordinator.RunAsync(
             "cancelled operation",
@@ -173,6 +197,148 @@ static void ArenaOperationCoordinatorSelectsOperationMode()
             return Task.CompletedTask;
         }).GetAwaiter().GetResult();
         Require(!lateActionRan, "new arena operations must be rejected after shutdown begins");
+    });
+}
+
+static void ArenaOperationCoordinatorRestoresBorrowedAutoChatStatus()
+{
+    RunStaTest(() =>
+    {
+        const string priorArenaStatus = "Auto Chat running.";
+        const string priorLoadStatus = "Turn 7 streaming.";
+        const string progress = "Creating replay session...";
+
+        void VerifyCase(
+            string label,
+            Action<TextBlock, TextBlock> action,
+            Action<TextBlock, TextBlock, ApplicationStatusCenter> verify)
+        {
+            var statusCenter = new ApplicationStatusCenter();
+            var presentation = new AIArena.Wpf.ViewModels.ShellTopBarPresentationViewModel(statusCenter)
+            {
+                ArenaStatus = priorArenaStatus
+            };
+            var arenaStatus = new TextBlock { Text = priorArenaStatus };
+            var loadStatus = new TextBlock { Text = priorLoadStatus };
+            var descriptor = System.ComponentModel.DependencyPropertyDescriptor.FromProperty(
+                TextBlock.TextProperty,
+                typeof(TextBlock));
+            EventHandler arenaStatusChanged = (_, _) => presentation.ArenaStatus = arenaStatus.Text;
+            descriptor.AddValueChanged(arenaStatus, arenaStatusChanged);
+
+            try
+            {
+                var coordinator = new ArenaOperationCoordinator(
+                    new SemaphoreSlim(1, 1),
+                    loadStatus,
+                    arenaStatus,
+                    new Button(),
+                    new Button(),
+                    new Button(),
+                    new Button(),
+                    new Button(),
+                    [],
+                    () => true,
+                    _ => throw new InvalidOperationException($"{label} must not take ownership of the parent Auto Chat busy state"),
+                    () => true,
+                    (_, _) => { },
+                    (_, _) => { },
+                    (_, _) => { },
+                    _ => { },
+                    () => { },
+                    _ => { },
+                    _ => { },
+                    _ => { },
+                    _ => { });
+
+                var ran = coordinator.RunAsync(
+                        progress,
+                        operationButton: null,
+                        _ =>
+                        {
+                            Require(statusCenter.History.Any(entry =>
+                                    entry.Key == "legacy.arena"
+                                    && entry.Summary == progress
+                                    && entry.IsActive),
+                                $"{label} did not publish borrowed progress while it ran");
+                            action(arenaStatus, loadStatus);
+                            return Task.CompletedTask;
+                        },
+                        allowDuringAutoChat: true)
+                    .GetAwaiter()
+                    .GetResult();
+
+                Require(ran, $"{label} was unexpectedly rejected during Auto Chat");
+                Require(!statusCenter.History.Any(entry =>
+                        entry.Key == "legacy.arena"
+                        && entry.Summary == progress
+                        && entry.IsActive),
+                    $"{label} leaked its borrowed progress as an active legacy.arena row");
+                verify(arenaStatus, loadStatus, statusCenter);
+            }
+            finally
+            {
+                descriptor.RemoveValueChanged(arenaStatus, arenaStatusChanged);
+            }
+        }
+
+        VerifyCase(
+            "successful unchanged operation",
+            (_, _) => { },
+            (arenaStatus, loadStatus, statusCenter) =>
+            {
+                Require(arenaStatus.Text == priorArenaStatus && loadStatus.Text == priorLoadStatus,
+                    "successful Auto Chat work should restore the exact arena and load statuses it borrowed");
+                Require(statusCenter.History.Any(entry =>
+                        entry.Key == "legacy.arena"
+                        && entry.Summary == priorArenaStatus
+                        && entry.IsActive),
+                    "restoring borrowed progress should re-project the parent Auto Chat status");
+            });
+
+        const string workflowArenaStatus = "Replay run ready: generated-match.";
+        const string workflowLoadStatus = "Created replay run: generated-match.";
+        VerifyCase(
+            "workflow-authored completion",
+            (arenaStatus, loadStatus) =>
+            {
+                arenaStatus.Text = workflowArenaStatus;
+                loadStatus.Text = workflowLoadStatus;
+            },
+            (arenaStatus, loadStatus, _) =>
+            {
+                Require(arenaStatus.Text == workflowArenaStatus && loadStatus.Text == workflowLoadStatus,
+                    "a workflow-authored terminal status must survive successful Auto Chat cleanup");
+            });
+
+        VerifyCase(
+            "failed operation",
+            (_, _) => throw new IOException("private failure detail"),
+            (arenaStatus, loadStatus, _) =>
+            {
+                Require(arenaStatus.Text == loadStatus.Text
+                        && arenaStatus.Text.Contains("AA-ARENA-IO", StringComparison.Ordinal),
+                    "a failed Auto Chat operation must retain its coded failure instead of restoring stale parent text");
+            });
+
+        VerifyCase(
+            "cancelled operation",
+            (_, _) => throw new OperationCanceledException(),
+            (arenaStatus, loadStatus, _) =>
+            {
+                Require(arenaStatus.Text == "Operation cancelled." && loadStatus.Text == "Operation cancelled.",
+                    "a cancelled Auto Chat operation must retain its cancellation status");
+            });
+
+        VerifyCase(
+            "snapshot conflict",
+            (_, _) => throw new SnapshotConcurrencyException("snapshot.json", 1, 2),
+            (arenaStatus, loadStatus, _) =>
+            {
+                Require(arenaStatus.Text == loadStatus.Text
+                        && arenaStatus.Text.Contains("Reload", StringComparison.Ordinal),
+                    "a concurrent snapshot change must retain its reload guidance during Auto Chat");
+            });
     });
 }
 
@@ -2018,8 +2184,10 @@ static void ArenaRunCoordinatorSurvivesProviderAndCancellationFailuresCore()
 
             Require(!coordinator.IsAutoChatRunning, "provider failure left auto chat marked as running");
             Require(
-                providerFailureStatuses.Any(status => status.Contains("simulated provider crash", StringComparison.Ordinal)),
-                "provider failure should become a visible auto-chat status instead of escaping the UI handler");
+                providerFailureStatuses.Any(status =>
+                    status.Contains("AA-ARENA-UNEXPECTED", StringComparison.Ordinal)
+                    && !status.Contains("simulated provider crash", StringComparison.Ordinal)),
+                "provider failure should become a coded privacy-safe auto-chat status instead of escaping the UI handler");
         }
 
         var cancellationClient = new ThrowingCancellationModelClient();
@@ -2177,6 +2345,373 @@ static void ArenaSessionMutationCoordinatorNormalizesSettings()
     ArenaSessionMutationCoordinator.RefreshRoleInheritedGenerationDefaults(configs, "beta", previousShared, updatedShared);
     Require(Math.Abs(configs["alpha"].Temperature - 0.9) < 0.0001 && configs["alpha"].MaxOutputTokens == 2048, "Apply should preserve an explicit role temperature while refreshing its inherited output limit");
     Require(Math.Abs(configs["beta"].Temperature - 0.5) < 0.0001 && configs["beta"].MaxOutputTokens == 2048, "Apply should propagate shared generation defaults without touching persisted role routing");
+
+    var boundaryValues = ArenaSessionMutationCoordinator.ValidateAdvancedSettings(
+        "1",
+        "0",
+        "32768",
+        "60",
+        "0",
+        "60");
+    Require(boundaryValues.IsValid && boundaryValues.Values is not null,
+        "every documented advanced-setting boundary should be accepted");
+    var acceptedBoundaries = boundaryValues.Values
+        ?? throw new InvalidOperationException("validated advanced-setting boundaries should be available");
+    Require(acceptedBoundaries.TimeoutSeconds == 1
+            && acceptedBoundaries.Temperature == 0
+            && acceptedBoundaries.MaxOutputTokens == 32768
+            && acceptedBoundaries.TranscriptWindow == 60
+            && acceptedBoundaries.PrivateWindow == 0
+            && acceptedBoundaries.NotesWindow == 60,
+        "advanced-setting validation should preserve exact boundary values");
+
+    var invalidValues = ArenaSessionMutationCoordinator.ValidateAdvancedSettings(
+        "0",
+        "NaN",
+        "32769",
+        "0",
+        "-1",
+        "61");
+    Require(!invalidValues.IsValid && invalidValues.Values is null,
+        "an invalid advanced-setting draft must not produce partially usable values");
+    Require(invalidValues.Errors.Select(error => error.FieldKey).SequenceEqual([
+            "timeout",
+            "temperature",
+            "max-output",
+            "transcript-window",
+            "private-window",
+            "notes-window"
+        ]),
+        "all invalid advanced-setting fields should be reported in visual focus order");
+    Require(invalidValues.Errors.All(error => error.Message.Contains("0", StringComparison.Ordinal)
+            || error.Message.Contains("1", StringComparison.Ordinal)),
+        "every advanced-setting error should state its accepted numeric range");
+
+    var invariantDecimal = ArenaSessionMutationCoordinator.ValidateAdvancedSettings(
+        "300", "0.50", "1024", "20", "8", "6");
+    var localizedDecimal = ArenaSessionMutationCoordinator.ValidateAdvancedSettings(
+        "300", "0,50", "1024", "20", "8", "6");
+    var infiniteDecimal = ArenaSessionMutationCoordinator.ValidateAdvancedSettings(
+        "300", "Infinity", "1024", "20", "8", "6");
+    Require(invariantDecimal.IsValid && Math.Abs(invariantDecimal.Values!.Temperature - 0.5) < 0.0001,
+        "advanced settings should retain culture-invariant period-decimal semantics");
+    Require(!localizedDecimal.IsValid
+            && localizedDecimal.Errors.Single().FieldKey == "temperature"
+            && localizedDecimal.Errors.Single().Message.Contains("period", StringComparison.OrdinalIgnoreCase),
+        "a localized comma decimal should be rejected with explicit invariant-format help");
+    Require(!infiniteDecimal.IsValid && infiniteDecimal.Errors.Single().FieldKey == "temperature",
+        "non-finite temperatures should be rejected even when the numeric parser accepts them");
+
+    ArenaSessionMutationCoordinatorPresentsAccessibleAdvancedSettingErrors();
+    ArenaSessionMutationCoordinatorCreatesSafetyCheckpointBeforeReset();
+}
+
+static void ArenaSessionMutationCoordinatorPresentsAccessibleAdvancedSettingErrors()
+{
+    static T Pump<T>(Func<Task<T>> start)
+    {
+        var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        var previousContext = SynchronizationContext.Current;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(
+                new System.Windows.Threading.DispatcherSynchronizationContext(dispatcher));
+            var task = start();
+            if (!task.IsCompleted)
+            {
+                var frame = new System.Windows.Threading.DispatcherFrame();
+                _ = task.ContinueWith(
+                    _ => dispatcher.BeginInvoke(
+                        new Action(() => frame.Continue = false),
+                        System.Windows.Threading.DispatcherPriority.Send),
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+            }
+
+            return task.GetAwaiter().GetResult();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+        }
+    }
+
+    RunStaTest(() =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ai-arena-advanced-settings-validation-tests", Guid.NewGuid().ToString("N"));
+        const string sessionId = "advanced-settings-validation";
+        Window? host = null;
+        try
+        {
+            var sessionStore = new SessionStore(root);
+            sessionStore.SaveSnapshotAsync(SessionStore.CreateDefaultSnapshot(), sessionId).GetAwaiter().GetResult();
+            var active = new SessionSummary(sessionId, "", true, 0, 0, 0, DateTimeOffset.UtcNow);
+            var timeoutText = new TextBox { Text = "300" };
+            var temperatureText = new TextBox { Text = "0.50" };
+            var maxOutputText = new TextBox { Text = "1024" };
+            var transcriptWindowText = new TextBox { Text = "20" };
+            var privateWindowText = new TextBox { Text = "8" };
+            var notesWindowText = new TextBox { Text = "6" };
+            var statusText = new TextBlock();
+            var resetButton = new Button { Content = "Reset" };
+            var content = new StackPanel();
+            content.Children.Add(timeoutText);
+            content.Children.Add(temperatureText);
+            content.Children.Add(maxOutputText);
+            content.Children.Add(transcriptWindowText);
+            content.Children.Add(privateWindowText);
+            content.Children.Add(notesWindowText);
+            content.Children.Add(statusText);
+            content.Children.Add(resetButton);
+            host = new Window
+            {
+                Width = 420,
+                Height = 360,
+                WindowStyle = WindowStyle.None,
+                ResizeMode = ResizeMode.NoResize,
+                ShowInTaskbar = false,
+                Left = -10000,
+                Top = -10000,
+                Content = content
+            };
+
+            var busyCalls = 0;
+            var saveCalls = 0;
+            ArenaSnapshot? savedSnapshot = null;
+            var coordinator = new ArenaSessionMutationCoordinator(
+                host,
+                sessionStore,
+                new EventLogStore(root),
+                timeoutText,
+                temperatureText,
+                maxOutputText,
+                transcriptWindowText,
+                privateWindowText,
+                notesWindowText,
+                statusText,
+                resetButton,
+                () => active,
+                () => false,
+                () => ThemePalette.Resolve("dark-arena"),
+                _ => Task.CompletedTask,
+                async (_, _, action, _) =>
+                {
+                    busyCalls++;
+                    await action();
+                },
+                (snapshot, _) =>
+                {
+                    saveCalls++;
+                    savedSnapshot = snapshot;
+                    return Task.CompletedTask;
+                },
+                _ => Task.CompletedTask,
+                _ => { },
+                _ => { });
+
+            host.Show();
+            host.Activate();
+            host.UpdateLayout();
+
+            Require(AutomationProperties.GetName(temperatureText) == "Model temperature"
+                    && AutomationProperties.GetIsRequiredForForm(temperatureText)
+                    && AutomationProperties.GetHelpText(temperatureText).Contains("0 to 2", StringComparison.Ordinal),
+                "advanced-setting inputs should expose a field name, required state, and explicit range to UI Automation");
+
+            temperatureText.Text = "0,50";
+            Require(Validation.GetHasError(temperatureText),
+                "invalid advanced-setting text should enter WPF's accessible validation-error state as soon as it changes");
+            Require(AutomationProperties.GetItemStatus(temperatureText).StartsWith("Invalid:", StringComparison.Ordinal)
+                    && AutomationProperties.GetHelpText(temperatureText).Contains("period", StringComparison.OrdinalIgnoreCase)
+                    && temperatureText.ToolTip?.ToString()?.Contains("period", StringComparison.OrdinalIgnoreCase) == true,
+                "an invalid field should publish its specific correction through UI Automation help/status and its tooltip");
+
+            temperatureText.Text = "0.50";
+            Require(!Validation.GetHasError(temperatureText)
+                    && string.IsNullOrEmpty(AutomationProperties.GetItemStatus(temperatureText)),
+                "correcting an advanced-setting field should clear its validation state immediately");
+
+            timeoutText.Text = "0";
+            maxOutputText.Text = "50000";
+            var rejected = Pump(() => coordinator.ApplySettingsAsync());
+            Require(!rejected && busyCalls == 0 && saveCalls == 0 && savedSnapshot is null,
+                "Apply should reject an invalid draft before entering the busy or persistence path");
+            Require(timeoutText.Text == "0" && maxOutputText.Text == "50000",
+                "rejected advanced settings must remain visible for correction instead of being silently clamped or overwritten");
+            Require(Validation.GetHasError(timeoutText) && Validation.GetHasError(maxOutputText),
+                "Apply should retain field-level errors for every invalid value, not only the first one");
+            Require(timeoutText.IsKeyboardFocusWithin
+                    && timeoutText.SelectionStart == 0
+                    && timeoutText.SelectionLength == timeoutText.Text.Length,
+                "rejected Apply should focus and select the first invalid field in visual order");
+            Require(statusText.Text.Contains("not applied", StringComparison.OrdinalIgnoreCase)
+                    && statusText.Text.Contains("Model-call timeout", StringComparison.Ordinal)
+                    && statusText.Text.Contains("1 to 3600", StringComparison.Ordinal),
+                "rejected Apply should announce the first field and its valid range without claiming success");
+
+            timeoutText.Text = "15";
+            maxOutputText.Text = "2048";
+            var applied = Pump(() => coordinator.ApplySettingsAsync());
+            Require(applied && busyCalls == 1 && saveCalls == 1 && savedSnapshot is not null,
+                "a corrected advanced-setting draft should use the established busy and persistence path exactly once");
+            var appliedSnapshot = savedSnapshot
+                ?? throw new InvalidOperationException("successful advanced-setting Apply should expose its saved snapshot");
+            Require(appliedSnapshot.Configs["shared"].Timeout == 15
+                    && Math.Abs(appliedSnapshot.Configs["shared"].Temperature - 0.5) < 0.0001
+                    && appliedSnapshot.Configs["shared"].MaxOutputTokens == 2048
+                    && appliedSnapshot.Engine.TranscriptWindow == 20
+                    && appliedSnapshot.Engine.PrivateWindow == 8
+                    && appliedSnapshot.Engine.NotesWindow == 6,
+                "successful Apply should persist all six exact validated numeric values");
+            Require(temperatureText.Text == "0.50"
+                    && new[] { timeoutText, temperatureText, maxOutputText, transcriptWindowText, privateWindowText, notesWindowText }
+                        .All(field => !Validation.GetHasError(field)),
+                "successful Apply should preserve the user's valid text representation and clear every validation error");
+        }
+        finally
+        {
+            host?.Close();
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    });
+}
+
+static void ArenaSessionMutationCoordinatorCreatesSafetyCheckpointBeforeReset()
+{
+    var root = Path.Combine(Path.GetTempPath(), "ai-arena-reset-safety-checkpoint-tests", Guid.NewGuid().ToString("N"));
+    const string sessionId = "reset-safety";
+    try
+    {
+        var store = new SessionStore(root);
+        var before = SessionStore.CreateDefaultSnapshot();
+        before.Engine.Messages.Clear();
+        before.Engine.Messages.Add(new DialogueMessage
+        {
+            Turn = 1,
+            Speaker = "Operator",
+            SpeakerId = "operator",
+            Kind = "message",
+            Status = "ok",
+            Text = "RESET_SAFETY_SENTINEL",
+            CreatedAt = 1
+        });
+        before.Engine.Narration.Add(new NarrationEntry
+        {
+            Id = 1,
+            Text = "Narration that reset will clear.",
+            FromTurn = 1,
+            ToTurn = 1
+        });
+        before.Engine.TurnCount = 1;
+        before.Engine.MatchEnded = true;
+        before.Engine.MatchEndReason = "fixture";
+        before.Engine.Agents[0].PrivateNotes.Add("Private reset sentinel");
+        store.SaveSnapshotAsync(before, sessionId).GetAwaiter().GetResult();
+
+        var events = new EventLogStore(root);
+        var refreshCalls = 0;
+        var refreshOutcome = "";
+        Directory.CreateDirectory(Path.GetDirectoryName(events.EventPath(sessionId))!);
+        ArenaSessionMutationCoordinator.ArenaResetCompletion completion;
+        using (var evidenceLock = new FileStream(
+                   events.EventPath(sessionId),
+                   FileMode.OpenOrCreate,
+                   FileAccess.ReadWrite,
+                   FileShare.None))
+        {
+            completion = ArenaSessionMutationCoordinator
+                .ResetArenaWithSafetyCheckpointAndReportAsync(
+                    store,
+                    events,
+                    sessionId,
+                    outcome =>
+                    {
+                        refreshCalls++;
+                        refreshOutcome = outcome;
+                        return Task.CompletedTask;
+                    })
+                .GetAwaiter()
+                .GetResult()
+                ?? throw new InvalidOperationException("reset safety checkpoint did not return a completion");
+        }
+
+        var receipt = completion.SafetyCheckpoint;
+        Require(receipt.Operation == SnapshotSafetyCheckpointOperation.ArenaReset
+                && receipt.Checkpoint.Name == "Safety before arena reset",
+            "reset should publish its deterministic automatic checkpoint receipt");
+        Require(!completion.EventRecorded
+                && refreshCalls == 1
+                && refreshOutcome == completion.Outcome
+                && completion.Outcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                && completion.Outcome.Contains("AA-ARENA-IO", StringComparison.Ordinal)
+                && !completion.Outcome.Contains(events.EventPath(sessionId), StringComparison.OrdinalIgnoreCase),
+            "a locked event file should report a safe secondary evidence warning without suppressing the committed reset refresh");
+        var checkpoint = JsonSerializer.Deserialize<CheckpointRecord>(File.ReadAllText(receipt.Checkpoint.Path), new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        }) ?? throw new InvalidOperationException("reset safety checkpoint was unreadable");
+        Require(checkpoint.Snapshot.Engine.Messages.Single().Text == "RESET_SAFETY_SENTINEL"
+                && checkpoint.Snapshot.Engine.Narration.Single().Text == "Narration that reset will clear."
+                && checkpoint.Snapshot.Engine.Agents[0].PrivateNotes.Single() == "Private reset sentinel"
+                && checkpoint.Snapshot.Engine.MatchEnded,
+            "reset safety checkpoint should preserve every state family that reset clears");
+        var after = store.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("reset replacement snapshot was unreadable");
+        Require(after.Engine.Messages.Count == 0
+                && after.Engine.Narration.Count == 0
+                && after.Engine.TurnCount == 0
+                && !after.Engine.MatchEnded
+                && after.Engine.Agents.All(agent => agent.PrivateNotes.Count == 0),
+            "protected reset should retain established reset semantics");
+
+        after.Engine.Messages.Add(new DialogueMessage
+        {
+            Turn = 2,
+            Speaker = "Operator",
+            SpeakerId = "operator",
+            Kind = "message",
+            Status = "ok",
+            Text = "RESET_REFRESH_FAILURE_SENTINEL",
+            CreatedAt = 2
+        });
+        after.Engine.TurnCount = 1;
+        store.SaveSnapshotAsync(after, sessionId).GetAwaiter().GetResult();
+        var projectionFailureCalls = 0;
+        var projectionFailure = ArenaSessionMutationCoordinator
+            .ResetArenaWithSafetyCheckpointAndReportAsync(
+                store,
+                events,
+                sessionId,
+                _ =>
+                {
+                    projectionFailureCalls++;
+                    throw new IOException(@"C:\Users\private\arena-refresh.txt");
+                })
+            .GetAwaiter()
+            .GetResult()
+            ?? throw new InvalidOperationException("projection-failure reset returned no completion");
+        var afterProjectionFailure = store.LoadSnapshotAsync(sessionId).GetAwaiter().GetResult();
+        Require(afterProjectionFailure?.Engine.Messages.Count == 0
+                && projectionFailureCalls == 1
+                && projectionFailure.EventRecorded
+                && projectionFailure.Outcome.Contains("Arena reset", StringComparison.Ordinal)
+                && projectionFailure.Outcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                && projectionFailure.Outcome.Contains("AA-ARENA-IO", StringComparison.Ordinal)
+                && !projectionFailure.Outcome.Contains("private", StringComparison.OrdinalIgnoreCase),
+            "an arena projection fault misreported or disclosed a committed reset");
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }
 
 static void SessionOverviewCoordinatorFormatsSummaries()
@@ -3277,7 +3812,10 @@ static void InternetWorkflowStartsAndStopsBackendWithToggle()
         });
         failingToggle.IsChecked = true;
         Require(failingToggle.IsChecked == false, "a failed direct-toggle save should revert to the last persisted state");
-        Require(failingHint.Text.Contains("could not be saved", StringComparison.OrdinalIgnoreCase), "failed direct-toggle persistence should stay visible to the operator");
+        Require(failingHint.Text.Contains("could not be saved", StringComparison.OrdinalIgnoreCase)
+                && failingHint.Text.Contains("AA-SETTINGS-IO", StringComparison.Ordinal)
+                && !failingHint.Text.Contains("simulated save failure", StringComparison.Ordinal),
+            "failed direct-toggle persistence should stay visible with a privacy-safe support code");
     });
 }
 
@@ -6046,7 +6584,9 @@ static void CrashesLeaveSomethingBehind()
         Require(File.Exists(written!), "the reported path should exist");
 
         var report = File.ReadAllText(written!);
-        Require(report.Contains("crash reporter self test", StringComparison.Ordinal), "the report should carry the exception message");
+        Require(!report.Contains("crash reporter self test", StringComparison.Ordinal)
+                && report.Contains("AA-APP-UNEXPECTED", StringComparison.Ordinal),
+            "the report should omit raw exception text and carry a stable support code");
         Require(report.Contains("SelfTest", StringComparison.Ordinal), "the report should say where the failure came from");
         Require(report.Contains("InvalidOperationException", StringComparison.Ordinal), "the report should carry the exception type");
         Require(report.Contains("AI Arena - Lite", StringComparison.Ordinal), "the report should identify the Lite build");

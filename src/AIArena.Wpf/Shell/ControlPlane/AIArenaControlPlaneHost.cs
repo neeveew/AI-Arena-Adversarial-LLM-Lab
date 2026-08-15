@@ -98,8 +98,15 @@ internal sealed class AIArenaControlPlaneHost : IDisposable
                 else
                 {
                     var run = new RunState(GenerateToken());
+                    if (!TryAcquireHostLease(run) || !WriteTokenFile(run))
+                    {
+                        run.HostLease?.Dispose();
+                        run.Cancellation.Dispose();
+                        run.ClientSlots.Dispose();
+                        return;
+                    }
+
                     currentRun = run;
-                    WriteTokenFile(run);
                     run.AcceptLoop = Task.Run(() => AcceptLoopAsync(run));
                     return;
                 }
@@ -194,8 +201,15 @@ internal sealed class AIArenaControlPlaneHost : IDisposable
         }
         finally
         {
-            run.Cancellation.Dispose();
-            run.ClientSlots.Dispose();
+            try
+            {
+                run.HostLease?.Dispose();
+            }
+            finally
+            {
+                run.Cancellation.Dispose();
+                run.ClientSlots.Dispose();
+            }
         }
     }
 
@@ -268,11 +282,15 @@ internal sealed class AIArenaControlPlaneHost : IDisposable
             }
             catch (InvalidDataException ex)
             {
+                var presentation = AppErrorPresenter.Present(ex, AppErrorContext.ControlPlane);
                 var errorRequest = new AIArenaControlRequest("", "invalid", null);
                 await WriteLineAsync(
                     pipe,
                     AIArenaControlPlaneProtocol.Serialize(
-                        AIArenaControlResponse.Error(errorRequest, "invalid_request", ex.Message)),
+                        AIArenaControlResponse.Error(
+                            errorRequest,
+                            "invalid_request",
+                            $"Request body is too large. {presentation.DisplayText}")),
                     cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -477,26 +495,174 @@ internal sealed class AIArenaControlPlaneHost : IDisposable
         return Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
     }
 
-    private void WriteTokenFile(RunState run)
+    private bool WriteTokenFile(RunState run)
     {
         try
         {
-            var directory = Path.GetDirectoryName(tokenPath);
-            if (!string.IsNullOrWhiteSpace(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            File.WriteAllText(tokenPath, run.SessionToken, new UTF8Encoding(false));
+            PublishTokenFileAtomically(tokenPath, run.SessionToken);
             run.TokenFileWritten = true;
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.ControlPlane);
             eventSource.Publish(new AIArenaControlEvent(
                 "control.token.write_failed",
                 DateTimeOffset.Now,
                 "Control-plane token file could not be written.",
-                new { tokenPath, error = ex.Message }));
+                new { tokenPath = "[REDACTED:PATH]", error = presentation.CopyDetails }));
+            return false;
+        }
+    }
+
+    private bool TryAcquireHostLease(RunState run)
+    {
+        try
+        {
+            var fullTokenPath = Path.GetFullPath(tokenPath);
+            var directory = Path.GetDirectoryName(fullTokenPath)
+                ?? throw new NotSupportedException("The control-plane token path has no parent directory.");
+            Directory.CreateDirectory(directory);
+            var leasePath = fullTokenPath + ".host.lock";
+            run.HostLease = new FileStream(
+                leasePath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                bufferSize: 1,
+                FileOptions.DeleteOnClose);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.ControlPlane);
+            eventSource.Publish(new AIArenaControlEvent(
+                "control.host.lock_failed",
+                DateTimeOffset.Now,
+                "Another control-plane host may already own this app identity.",
+                new { tokenPath = "[REDACTED:PATH]", error = presentation.CopyDetails }));
+            return false;
+        }
+    }
+
+    internal static void PublishTokenFileAtomically(string destinationPath, string token)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(token);
+
+        var fullDestinationPath = Path.GetFullPath(destinationPath);
+        var directory = Path.GetDirectoryName(fullDestinationPath)
+            ?? throw new NotSupportedException("The control-plane token path has no parent directory.");
+        Directory.CreateDirectory(directory);
+        WithTokenFileLease(fullDestinationPath, () =>
+        {
+            var stagingPath = Path.Combine(
+                directory,
+                $".{Path.GetFileName(fullDestinationPath)}.{Guid.NewGuid():N}.tmp");
+            var tokenBytes = Encoding.UTF8.GetBytes(token);
+            try
+            {
+                try
+                {
+                    using (var stream = new FileStream(
+                               stagingPath,
+                               FileMode.CreateNew,
+                               FileAccess.Write,
+                               FileShare.None,
+                               bufferSize: 4096,
+                               FileOptions.WriteThrough))
+                    {
+                        stream.Write(tokenBytes);
+                        stream.Flush(flushToDisk: true);
+                    }
+
+                    File.Move(stagingPath, fullDestinationPath, overwrite: true);
+                    stagingPath = "";
+                }
+                catch (Exception publicationFailure) when (
+                    publicationFailure is IOException or UnauthorizedAccessException or NotSupportedException)
+                {
+                    try
+                    {
+                        if (stagingPath.Length > 0)
+                        {
+                            File.Delete(stagingPath);
+                        }
+                    }
+                    catch (Exception cleanupFailure) when (cleanupFailure is IOException or UnauthorizedAccessException)
+                    {
+                        throw new IOException(
+                            "Control-plane token staging cleanup failed.",
+                            new AggregateException(publicationFailure, cleanupFailure));
+                    }
+
+                    throw;
+                }
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(tokenBytes);
+            }
+        });
+    }
+
+    internal static bool DeletePublishedTokenIfOwnedAtomically(string destinationPath, string expectedToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedToken);
+        var fullDestinationPath = Path.GetFullPath(destinationPath);
+        var deleted = false;
+        WithTokenFileLease(fullDestinationPath, () =>
+        {
+            if (File.Exists(fullDestinationPath)
+                && TokenMatches(File.ReadAllText(fullDestinationPath), expectedToken))
+            {
+                File.Delete(fullDestinationPath);
+                deleted = true;
+            }
+        });
+        return deleted;
+    }
+
+    private static void WithTokenFileLease(string fullDestinationPath, Action action)
+    {
+        var normalizedPathBytes = Encoding.UTF8.GetBytes(fullDestinationPath.ToUpperInvariant());
+        string mutexName;
+        try
+        {
+            mutexName = $"Local\\AIArena.ControlToken.{Convert.ToHexString(SHA256.HashData(normalizedPathBytes))}";
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(normalizedPathBytes);
+        }
+
+        using var mutex = new Mutex(initiallyOwned: false, mutexName);
+        var acquired = false;
+        try
+        {
+            try
+            {
+                acquired = mutex.WaitOne(TimeSpan.FromSeconds(5));
+            }
+            catch (AbandonedMutexException)
+            {
+                acquired = true;
+            }
+
+            if (!acquired)
+            {
+                throw new IOException("Timed out waiting for exclusive control-plane token-file access.");
+            }
+
+            action();
+        }
+        finally
+        {
+            if (acquired)
+            {
+                mutex.ReleaseMutex();
+            }
         }
     }
 
@@ -504,22 +670,21 @@ internal sealed class AIArenaControlPlaneHost : IDisposable
     {
         try
         {
-            if (run.TokenFileWritten
-                && File.Exists(tokenPath)
-                && File.ReadAllText(tokenPath).Trim().Equals(run.SessionToken, StringComparison.Ordinal))
+            if (run.TokenFileWritten)
             {
-                File.Delete(tokenPath);
+                DeletePublishedTokenIfOwnedAtomically(tokenPath, run.SessionToken);
             }
 
             run.TokenFileWritten = false;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.ControlPlane);
             eventSource.Publish(new AIArenaControlEvent(
                 "control.token.delete_failed",
                 DateTimeOffset.Now,
                 "Control-plane token file could not be deleted.",
-                new { tokenPath, error = ex.Message }));
+                new { tokenPath = "[REDACTED:PATH]", error = presentation.CopyDetails }));
         }
     }
 
@@ -584,11 +749,12 @@ internal sealed class AIArenaControlPlaneHost : IDisposable
     {
         try
         {
+            var presentation = AppErrorPresenter.Present(exception, AppErrorContext.ControlPlane);
             eventSource.Publish(new AIArenaControlEvent(
                 "control.background.failed",
                 DateTimeOffset.Now,
                 message,
-                new { error = exception.Message }));
+                new { error = presentation.CopyDetails }));
         }
         catch
         {
@@ -625,6 +791,8 @@ internal sealed class AIArenaControlPlaneHost : IDisposable
         public Task AcceptLoop { get; set; } = Task.CompletedTask;
 
         public bool TokenFileWritten { get; set; }
+
+        public FileStream? HostLease { get; set; }
     }
 
     internal sealed class EventQueue : IDisposable

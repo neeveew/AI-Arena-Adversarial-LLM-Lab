@@ -74,8 +74,11 @@ public class LmStudioModelCatalogService
         }
         catch (OperationCanceledException)
         {
+            var presentation = AppErrorPresenter.Present(
+                new TimeoutException(),
+                AppErrorContext.Provider);
             return LmStudioModelCatalog.Failed(
-                "Timed out while asking LM Studio for its native model catalog.");
+                $"Timed out while asking LM Studio for its native model catalog. {presentation.DisplayText}");
         }
         catch (Exception ex) when (ex is UriFormatException
                                    or HttpRequestException
@@ -383,12 +386,13 @@ public class LmStudioModelCatalogService
 
     private static string FriendlyException(Exception ex)
     {
-        if (ex is UriFormatException)
+        var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Provider);
+        return ex switch
         {
-            return $"Invalid LM Studio native API URL: {ex.Message}";
-        }
-
-        return ex.Message;
+            UriFormatException => $"Invalid LM Studio native API URL. {presentation.DisplayText}",
+            InvalidDataException => $"LM Studio native model catalog exceeded the response limit. {presentation.DisplayText}",
+            _ => presentation.DisplayText
+        };
     }
 
     private readonly record struct BoundedContent(byte[] Buffer, int Length)

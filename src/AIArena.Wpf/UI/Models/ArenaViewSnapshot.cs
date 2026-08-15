@@ -55,6 +55,13 @@ public sealed record ArenaViewSnapshot(
     IReadOnlyList<AgentState> Agents)
 {
     /// <summary>
+    /// Opaque identity for the current persisted session incarnation. Draft
+    /// scopes must fail closed when this value is unavailable and must never use
+    /// the reusable display name as an identity substitute.
+    /// </summary>
+    public string SessionInstanceId { get; init; } = "";
+
+    /// <summary>
     /// When enabled, participant turns bypass Match Setup behavior and use the
     /// session's attributed public group conversation. Narration is unavailable.
     /// </summary>

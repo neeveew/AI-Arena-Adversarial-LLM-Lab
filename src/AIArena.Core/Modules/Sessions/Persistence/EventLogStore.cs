@@ -18,30 +18,41 @@ public sealed class EventLogStore
         WriteIndented = false
     };
     private readonly EventLogWriteObserver? observer;
+    private readonly bool requireExistingSession;
 
-    public EventLogStore(string? dataRoot = null)
-        : this(dataRoot, observer: null)
+    public EventLogStore(string? dataRoot = null, bool requireExistingSession = false)
+        : this(dataRoot, observer: null, requireExistingSession)
     {
     }
 
-    internal EventLogStore(string? dataRoot, EventLogWriteObserver? observer)
+    internal EventLogStore(
+        string? dataRoot,
+        EventLogWriteObserver? observer,
+        bool requireExistingSession = false)
     {
         DataRoot = string.IsNullOrWhiteSpace(dataRoot) ? NativeDataPaths.DefaultDataRoot() : dataRoot;
         this.observer = observer;
+        this.requireExistingSession = requireExistingSession;
     }
 
     public string DataRoot { get; }
 
+    public static EventLogStore ForSessionStore(SessionStore sessionStore)
+    {
+        ArgumentNullException.ThrowIfNull(sessionStore);
+        return new EventLogStore(sessionStore.DataRoot, requireExistingSession: true);
+    }
+
     public async Task AppendAsync(string sessionId, string type, object payload, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var fullPath = Path.GetFullPath(EventPath(sessionId));
-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        var target = ResolveWriteTarget(sessionId);
         var pending = new PendingWrite(
             SerializeLine(type, payload, observer?.GetNow() ?? DateTimeOffset.Now),
             cancellationToken,
-            observer);
-        Enqueue(fullPath, [pending]);
+            observer,
+            recordIndex: 0);
+        Enqueue(target, [pending]);
         await pending.Completion.Task.ConfigureAwait(false);
     }
 
@@ -62,8 +73,7 @@ public sealed class EventLogStore
             return;
         }
 
-        var fullPath = Path.GetFullPath(EventPath(sessionId));
-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        var target = ResolveWriteTarget(sessionId);
         var serializedLines = new byte[records.Count][];
         for (var index = 0; index < records.Count; index++)
         {
@@ -81,10 +91,11 @@ public sealed class EventLogStore
             lines[index] = new PendingWrite(
                 serializedLines[index],
                 cancellationToken,
-                observer);
+                observer,
+                recordIndex: index);
         }
 
-        Enqueue(fullPath, lines);
+        Enqueue(target, lines);
         await Task.WhenAll(lines.Select(line => line.Completion.Task)).ConfigureAwait(false);
     }
 
@@ -92,6 +103,44 @@ public sealed class EventLogStore
     {
         var safeSession = string.IsNullOrWhiteSpace(sessionId) ? "default" : sessionId;
         return NativeDataPaths.EventPath(DataRoot, safeSession);
+    }
+
+    private EventWriteTarget ResolveWriteTarget(string sessionId)
+    {
+        var fullEventPath = Path.GetFullPath(EventPath(sessionId));
+        if (!requireExistingSession)
+        {
+            return EventWriteTarget.Standalone(fullEventPath);
+        }
+
+        var requestedSessionId = string.IsNullOrWhiteSpace(sessionId) ? "default" : sessionId.Trim();
+        var safeSessionId = SessionStore.SafeSessionId(requestedSessionId);
+        if (!safeSessionId.Equals(requestedSessionId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Guarded event logging requires a canonical session identity.",
+                nameof(sessionId));
+        }
+
+        var snapshotPath = Path.GetFullPath(
+            NativeDataPaths.SessionSnapshotPath(DataRoot, safeSessionId));
+        // Fail before creating the per-session event directory (or even the
+        // shared lease hierarchy) when the authoritative session is already
+        // absent. The same condition is checked again while the shared
+        // session-tree lease is held by the queue drain.
+        if (!File.Exists(snapshotPath))
+        {
+            throw new DirectoryNotFoundException(
+                "The event-log target session no longer has a live snapshot.");
+        }
+
+        var sessionTreeLeaseTarget = SessionStore.SessionTreeLeaseTargetForSnapshot(
+            DataRoot,
+            snapshotPath);
+        return EventWriteTarget.Guarded(
+            fullEventPath,
+            snapshotPath,
+            sessionTreeLeaseTarget);
     }
 
     private static byte[] SerializeLine(string type, object payload, DateTimeOffset now)
@@ -110,16 +159,16 @@ public sealed class EventLogStore
         return line;
     }
 
-    private static void Enqueue(string path, IReadOnlyList<PendingWrite> lines)
+    private static void Enqueue(EventWriteTarget target, IReadOnlyList<PendingWrite> lines)
     {
         SessionWriteQueue queue;
         var startDrain = false;
         lock (EventQueueGate)
         {
-            if (!EventWriteQueues.TryGetValue(path, out queue!))
+            if (!EventWriteQueues.TryGetValue(target.QueueKey, out queue!))
             {
                 queue = new SessionWriteQueue();
-                EventWriteQueues.Add(path, queue);
+                EventWriteQueues.Add(target.QueueKey, queue);
             }
 
             foreach (var line in lines)
@@ -136,11 +185,11 @@ public sealed class EventLogStore
 
         if (startDrain)
         {
-            _ = DrainQueueAsync(path, queue);
+            _ = DrainQueueAsync(target, queue);
         }
     }
 
-    private static async Task DrainQueueAsync(string path, SessionWriteQueue queue)
+    private static async Task DrainQueueAsync(EventWriteTarget target, SessionWriteQueue queue)
     {
         // Let same-turn callers enqueue before the first lease is acquired. This
         // keeps transparent AppendAsync bursts coalesced even when local file I/O
@@ -156,7 +205,7 @@ public sealed class EventLogStore
                     if (queue.Writes.Count == 0)
                     {
                         queue.Draining = false;
-                        EventWriteQueues.Remove(path);
+                        EventWriteQueues.Remove(target.QueueKey);
                         return;
                     }
 
@@ -168,7 +217,7 @@ public sealed class EventLogStore
                     }
                 }
 
-                await PersistBatchAsync(path, batch).ConfigureAwait(false);
+                await PersistBatchAsync(target, batch).ConfigureAwait(false);
             }
         }
         catch (Exception ex)
@@ -179,7 +228,7 @@ public sealed class EventLogStore
                 abandoned = queue.Writes.ToArray();
                 queue.Writes.Clear();
                 queue.Draining = false;
-                EventWriteQueues.Remove(path);
+                EventWriteQueues.Remove(target.QueueKey);
             }
 
             foreach (var write in abandoned)
@@ -189,7 +238,7 @@ public sealed class EventLogStore
         }
     }
 
-    private static async Task PersistBatchAsync(string path, IReadOnlyList<PendingWrite> batch)
+    private static async Task PersistBatchAsync(EventWriteTarget target, IReadOnlyList<PendingWrite> batch)
     {
         try
         {
@@ -205,29 +254,63 @@ public sealed class EventLogStore
                 {
                     PendingWrite[] started;
                     Exception? mutationError = null;
-                    using (await EventWriteLocks.AcquireAsync(path, leaseOwner.CancellationToken).ConfigureAwait(false))
-                    using (await CrossProcessWriteLease.AcquireAsync(
-                        path,
-                        EventWriteLeaseTimeout,
-                        leaseOwner.CancellationToken).ConfigureAwait(false))
+                    if (target.IsGuarded)
                     {
+                        foreach (var batchObserver in batch
+                            .Where(write => write.IsWaiting)
+                            .Select(write => write.Observer)
+                            .Where(item => item is not null)
+                            .Distinct())
+                        {
+                            batchObserver!.BeforeSessionGuardCheck();
+                        }
+                    }
+
+                    using (await EventWriteLocks.AcquireAsync(
+                               target.EventPath,
+                               leaseOwner.CancellationToken).ConfigureAwait(false))
+                    using (var sessionTreeLease = target.IsGuarded
+                               ? await CrossProcessWriteLease.AcquireAsync(
+                                   target.SessionTreeLeaseTarget!,
+                                   EventWriteLeaseTimeout,
+                                   leaseOwner.CancellationToken).ConfigureAwait(false)
+                               : null)
+                    {
+                        if (target.IsGuarded && !File.Exists(target.LiveSnapshotPath!))
+                        {
+                            throw new DirectoryNotFoundException(
+                                "The event-log target session no longer has a live snapshot.");
+                        }
+
+                        // Acquiring the event-file lease creates its containing
+                        // directory. In guarded mode it must therefore happen
+                        // only after the authoritative snapshot check succeeds
+                        // under the shared session-tree exclusion.
+                        using var eventLease = await CrossProcessWriteLease.AcquireAsync(
+                            target.EventPath,
+                            EventWriteLeaseTimeout,
+                            leaseOwner.CancellationToken).ConfigureAwait(false);
                         started = batch.Where(write => write.TryStart()).ToArray();
                         if (started.Length == 0)
                         {
                             return;
                         }
 
-                        foreach (var batchObserver in started
-                            .Select(write => write.Observer)
-                            .Where(item => item is not null)
-                            .Distinct())
-                        {
-                            batchObserver!.RecordLeaseAcquisition(started.Length);
-                        }
-
                         try
                         {
-                            await AppendLinesAsync(path, started).ConfigureAwait(false);
+                            // Directory creation, append repair, rotation, and the
+                            // durable write all share the same session-tree
+                            // exclusion as SessionStore Trash/restore.
+                            Directory.CreateDirectory(Path.GetDirectoryName(target.EventPath)!);
+                            foreach (var batchObserver in started
+                                .Select(write => write.Observer)
+                                .Where(item => item is not null)
+                                .Distinct())
+                            {
+                                batchObserver!.RecordLeaseAcquisition(started.Length);
+                            }
+
+                            await AppendLinesAsync(target.EventPath, started).ConfigureAwait(false);
                         }
                         catch (Exception ex)
                         {
@@ -235,9 +318,13 @@ public sealed class EventLogStore
                         }
                     }
 
-                    foreach (var write in started)
+                    var durablePrefixCount = mutationError is EventBatchMutationException batchFailure
+                        ? batchFailure.DurablePrefixCount
+                        : 0;
+                    for (var index = 0; index < started.Length; index++)
                     {
-                        if (mutationError is null)
+                        var write = started[index];
+                        if (mutationError is null || index < durablePrefixCount)
                         {
                             write.Succeed();
                         }
@@ -277,6 +364,11 @@ public sealed class EventLogStore
     private static async Task AppendLinesAsync(string path, IReadOnlyList<PendingWrite> lines)
     {
         FileStream? stream = null;
+        var writtenCount = 0;
+        var durablePrefixCount = 0;
+        var recordWriteInProgress = false;
+        long ambiguousRecordStart = -1;
+        Exception? failure = null;
         try
         {
             for (var index = 0; index < lines.Count; index++)
@@ -287,6 +379,7 @@ public sealed class EventLogStore
                     if (stream is not null)
                     {
                         stream.Flush(flushToDisk: true);
+                        durablePrefixCount = writtenCount;
                         await stream.DisposeAsync().ConfigureAwait(false);
                         stream = null;
                         RotateIfNeeded(path);
@@ -316,21 +409,75 @@ public sealed class EventLogStore
                 }
 
                 pending.Observer?.BeforeRecordWrite(index);
+                ambiguousRecordStart = stream.Position;
+                recordWriteInProgress = true;
                 await stream.WriteAsync(pending.Line, CancellationToken.None).ConfigureAwait(false);
+                recordWriteInProgress = false;
+                writtenCount++;
                 pending.Observer?.RecordBytesWritten(pending.Line.Length);
             }
 
             if (stream is not null)
             {
                 stream.Flush(flushToDisk: true);
+                durablePrefixCount = writtenCount;
+            }
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+            if (stream is not null && recordWriteInProgress && ambiguousRecordStart >= 0)
+            {
+                try
+                {
+                    stream.SetLength(ambiguousRecordStart);
+                    stream.Position = ambiguousRecordStart;
+                    recordWriteInProgress = false;
+                }
+                catch (Exception truncateFailure)
+                {
+                    failure = new AggregateException(exception, truncateFailure);
+                }
+            }
+
+            if (stream is not null && durablePrefixCount < writtenCount)
+            {
+                try
+                {
+                    stream.Flush(flushToDisk: true);
+                    durablePrefixCount = writtenCount;
+                }
+                catch (Exception flushFailure)
+                {
+                    failure = new AggregateException(exception, flushFailure);
+                }
             }
         }
         finally
         {
             if (stream is not null)
             {
-                await stream.DisposeAsync().ConfigureAwait(false);
+                try
+                {
+                    await stream.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception disposeFailure)
+                {
+                    if (failure is null && durablePrefixCount < writtenCount)
+                    {
+                        failure = disposeFailure;
+                    }
+                    else if (failure is not null && durablePrefixCount < writtenCount)
+                    {
+                        failure = new AggregateException(failure, disposeFailure);
+                    }
+                }
             }
+        }
+
+        if (failure is not null)
+        {
+            throw new EventBatchMutationException(durablePrefixCount, failure);
         }
     }
 
@@ -454,6 +601,36 @@ public sealed class EventLogStore
         }
     }
 
+    private sealed record EventWriteTarget(
+        string EventPath,
+        string? LiveSnapshotPath,
+        string? SessionTreeLeaseTarget,
+        string QueueKey)
+    {
+        public bool IsGuarded => LiveSnapshotPath is not null;
+
+        public static EventWriteTarget Standalone(string eventPath)
+        {
+            return new EventWriteTarget(
+                eventPath,
+                LiveSnapshotPath: null,
+                SessionTreeLeaseTarget: null,
+                QueueKey: $"standalone\0{eventPath}");
+        }
+
+        public static EventWriteTarget Guarded(
+            string eventPath,
+            string liveSnapshotPath,
+            string sessionTreeLeaseTarget)
+        {
+            return new EventWriteTarget(
+                eventPath,
+                liveSnapshotPath,
+                sessionTreeLeaseTarget,
+                QueueKey: $"guarded\0{eventPath}\0{liveSnapshotPath}\0{sessionTreeLeaseTarget}");
+        }
+    }
+
     private sealed class SessionWriteQueue
     {
         public Queue<PendingWrite> Writes { get; } = new();
@@ -461,16 +638,33 @@ public sealed class EventLogStore
         public bool Draining { get; set; }
     }
 
+    private sealed class EventBatchMutationException : IOException
+    {
+        public EventBatchMutationException(int durablePrefixCount, Exception innerException)
+            : base("An event-log batch stopped after committing a durable record prefix.", innerException)
+        {
+            DurablePrefixCount = durablePrefixCount;
+        }
+
+        public int DurablePrefixCount { get; }
+    }
+
     private sealed class PendingWrite
     {
         private readonly CancellationTokenRegistration cancellationRegistration;
+        private readonly int recordIndex;
         private int state;
 
-        public PendingWrite(byte[] line, CancellationToken cancellationToken, EventLogWriteObserver? observer)
+        public PendingWrite(
+            byte[] line,
+            CancellationToken cancellationToken,
+            EventLogWriteObserver? observer,
+            int recordIndex)
         {
             Line = line;
             CancellationToken = cancellationToken;
             Observer = observer;
+            this.recordIndex = recordIndex;
             Completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             if (cancellationToken.CanBeCanceled)
             {
@@ -500,6 +694,7 @@ public sealed class EventLogStore
             if (Interlocked.Exchange(ref state, 2) == 1)
             {
                 cancellationRegistration.Dispose();
+                Observer?.RecordCompletion(recordIndex, succeeded: true);
                 Completion.TrySetResult(true);
             }
         }
@@ -510,6 +705,7 @@ public sealed class EventLogStore
             if (previous is 0 or 1)
             {
                 cancellationRegistration.Dispose();
+                Observer?.RecordCompletion(recordIndex, succeeded: false);
                 Completion.TrySetException(exception);
             }
         }
@@ -526,6 +722,7 @@ public sealed class EventLogStore
         {
             if (Interlocked.CompareExchange(ref state, 2, 0) == 0)
             {
+                Observer?.RecordCompletion(recordIndex, succeeded: false);
                 Completion.TrySetCanceled(CancellationToken);
             }
         }
@@ -542,6 +739,10 @@ internal sealed class EventLogWriteObserver
     private long recordsInLease;
 
     public Action<int>? BeforeWrite { get; init; }
+
+    public Action? BeforeSessionGuard { get; init; }
+
+    public Action<int, bool>? Completion { get; init; }
 
     public Func<DateTimeOffset>? Clock { get; init; }
 
@@ -570,6 +771,23 @@ internal sealed class EventLogWriteObserver
     internal void BeforeRecordWrite(int index)
     {
         BeforeWrite?.Invoke(index);
+    }
+
+    internal void BeforeSessionGuardCheck()
+    {
+        BeforeSessionGuard?.Invoke();
+    }
+
+    internal void RecordCompletion(int index, bool succeeded)
+    {
+        try
+        {
+            Completion?.Invoke(index, succeeded);
+        }
+        catch
+        {
+            // Receipt observers must never alter event durability or caller completion.
+        }
     }
 
     internal DateTimeOffset GetNow()

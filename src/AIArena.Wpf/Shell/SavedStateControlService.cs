@@ -31,6 +31,10 @@ internal sealed record AIArenaSavedStateControlResult(
     string Message,
     AIArenaSavedStateControlState State);
 
+internal sealed record AIArenaSavedStatePostCommitProjection(
+    string Outcome,
+    AIArenaSavedStateControlState State);
+
 /// <summary>
 /// UI-independent saved-state command facade. MainWindow supplies only the active-session
 /// boundary and refresh delegates; persistence and validation remain testable here.
@@ -184,15 +188,74 @@ internal sealed class SavedStateControlService
             return Failure("not_found", $"Checkpoint '{checkpointId}' was not found in session '{session.Id}'.", await CaptureAsync(cancellationToken));
         }
 
-        var restored = await sessionStore.RestoreCheckpointAsync(session.Id, selected.Id, cancellationToken);
-        if (restored is null)
+        // Keep a truthful, schema-valid fallback projection. If projection work
+        // fails after the restore commits, the control request still succeeds
+        // with an explicit warning instead of throwing or inventing state.
+        var fallbackState = await CaptureAsync(cancellationToken);
+
+        var result = await sessionStore.RestoreCheckpointWithSafetyCheckpointAsync(
+            session.Id,
+            selected.Id,
+            cancellationToken);
+        if (result is null)
         {
             return Failure("restore_failed", $"Checkpoint '{selected.Name}' could not be restored.", await CaptureAsync(cancellationToken));
         }
 
-        await eventLogStore.AppendAsync(session.Id, "control_checkpoint_restored", new { restored.Id, restored.Name });
-        await refreshActiveSessionAsync($"Restored checkpoint: {restored.Name}.", cancellationToken);
-        return Success($"Restored checkpoint: {restored.Name}.", await CaptureAsync(cancellationToken));
+        var restored = result.RestoredCheckpoint;
+        var safety = result.SafetyCheckpoint;
+        // The live restore has committed. Treat event-log evidence as secondary
+        // and complete refresh/capture with non-cancellable semantics so a late
+        // logging or caller-cancellation failure cannot misreport the mutation.
+        var evidence = await AppPostCommitEvidence.TryAppendAsync(
+            eventLogStore,
+            session.Id,
+            "control_checkpoint_restored",
+            new
+            {
+                restored.Id,
+                restored.Name,
+                safety_checkpoint_id = safety?.Checkpoint.Id ?? "",
+                safety_checkpoint_name = safety?.Checkpoint.Name ?? "",
+                protected_revision = safety?.ProtectedRevision,
+                replacement_revision = safety?.ReplacementRevision
+            },
+            AppErrorContext.SavedState);
+        var safetyStatus = safety is null
+            ? "No prior live snapshot required a safety checkpoint."
+            : $"Safety checkpoint: {safety.Checkpoint.Name}.";
+        var outcome = evidence.AppendTo($"Restored checkpoint: {restored.Name}. {safetyStatus}");
+        var projection = await CompleteCommittedRestoreProjectionAsync(
+            outcome,
+            fallbackState,
+            refreshActiveSessionAsync,
+            CaptureAsync);
+        return Success(projection.Outcome, projection.State);
+    }
+
+    internal static async Task<AIArenaSavedStatePostCommitProjection> CompleteCommittedRestoreProjectionAsync(
+        string outcome,
+        AIArenaSavedStateControlState fallbackState,
+        Func<string, CancellationToken, Task> refreshActiveSessionAsync,
+        Func<CancellationToken, Task<AIArenaSavedStateControlState>> captureAsync)
+    {
+        ArgumentNullException.ThrowIfNull(fallbackState);
+        ArgumentNullException.ThrowIfNull(refreshActiveSessionAsync);
+        ArgumentNullException.ThrowIfNull(captureAsync);
+
+        var refreshWarning = await AppPostCommitEvidence.TryCompleteAsync(
+            () => refreshActiveSessionAsync(outcome, CancellationToken.None),
+            "the restored session could not be refreshed",
+            AppErrorContext.SavedState);
+        outcome = AppPostCommitEvidence.AppendWarning(outcome, refreshWarning);
+
+        var state = fallbackState;
+        var captureWarning = await AppPostCommitEvidence.TryCompleteAsync(
+            async () => state = await captureAsync(CancellationToken.None),
+            "the restored Saved State projection could not be captured",
+            AppErrorContext.SavedState);
+        outcome = AppPostCommitEvidence.AppendWarning(outcome, captureWarning);
+        return new AIArenaSavedStatePostCommitProjection(outcome, state);
     }
 
     private static AIArenaCheckpointControlItem ToControlItem(CheckpointSummary checkpoint)

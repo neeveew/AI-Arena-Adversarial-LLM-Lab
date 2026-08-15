@@ -45,7 +45,7 @@ If changed context differs from the live process, use Reload to apply and verify
 
 AI Arena - Lite does not download, launch, stop, or replace a user-owned `llama-server`. Inspect/Reconnect capability-detects optional health, props, slots, router models, and lifecycle endpoints. **Not reported** means the server did not expose that field; it does not prove chat is broken.
 
-For explicit pre-acceptance loading/busy/no-slot 429/503 signals, the llama.cpp adapter may perform at most two short retries. Once streaming is accepted, AI Arena - Lite never replays it automatically.
+`Retry-After` is delay guidance, not proof that a provider did no work. Compatible, LM Studio, Ollama, and llama.cpp routes are replayed only when an explicitly configured end-to-end idempotency contract can reuse one key and the exact payload; a requested delay beyond the five-second local policy is surfaced instead of shortened. Loopback location and busy/loading text are not replay proof on their own. After any 2xx acceptance, partial or incomplete stream, ambiguous send/read failure, timeout, or cancellation, AI Arena - Lite preserves available evidence and never replays the completion automatically.
 
 ## Credentials
 

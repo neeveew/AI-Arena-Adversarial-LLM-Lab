@@ -80,10 +80,13 @@ public class OllamaModelCatalogService
             }
             catch (OperationCanceledException)
             {
+                var presentation = AppErrorPresenter.Present(
+                    new TimeoutException(),
+                    AppErrorContext.Provider);
                 return OllamaModelCatalog.Success(
                     localModels.Models,
                     runningModelsOk: false,
-                    "Timed out while asking Ollama for its running-model inventory.",
+                    $"Timed out while asking Ollama for its running-model inventory. {presentation.DisplayText}",
                     omittedTagEntryCount: localModels.OmittedEntryCount);
             }
             catch (Exception ex) when (IsCatalogException(ex))
@@ -101,8 +104,11 @@ public class OllamaModelCatalogService
         }
         catch (OperationCanceledException)
         {
+            var presentation = AppErrorPresenter.Present(
+                new TimeoutException(),
+                AppErrorContext.Provider);
             return OllamaModelCatalog.Failed(
-                "Timed out while asking Ollama for its native model catalog.");
+                $"Timed out while asking Ollama for its native model catalog. {presentation.DisplayText}");
         }
         catch (Exception ex) when (IsCatalogException(ex))
         {
@@ -399,12 +405,13 @@ public class OllamaModelCatalogService
 
     private static string FriendlyException(Exception ex)
     {
-        if (ex is UriFormatException)
+        var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Provider);
+        return ex switch
         {
-            return $"Invalid Ollama native API URL: {ex.Message}";
-        }
-
-        return ex.Message;
+            UriFormatException => $"Invalid Ollama native API URL. {presentation.DisplayText}",
+            InvalidDataException => $"Ollama native response exceeded the response limit. {presentation.DisplayText}",
+            _ => presentation.DisplayText
+        };
     }
 
     private readonly record struct TransportResult(

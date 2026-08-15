@@ -299,7 +299,7 @@ internal sealed class AIArenaScreenshotControlService
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            error = $"Invalid screenshot path: {ex.Message}";
+            error = AppErrorPresenter.Present(ex, AppErrorContext.ControlPlane).DisplayText;
             return false;
         }
     }
@@ -494,7 +494,8 @@ internal sealed class AIArenaScreenshotControlService
             or OverflowException
             or NotSupportedException)
         {
-            return Failure("screenshot_failed", $"AI Arena - Lite screenshot failed: {ex.Message}", targetPath);
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.ControlPlane);
+            return Failure("screenshot_failed", presentation.DisplayText, targetPath);
         }
         finally
         {

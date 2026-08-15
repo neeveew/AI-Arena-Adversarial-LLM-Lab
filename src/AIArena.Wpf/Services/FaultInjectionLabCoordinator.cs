@@ -73,7 +73,10 @@ public sealed class FaultInjectionLabCoordinator : IDisposable
             }
             catch (FaultLabInputException exception)
             {
-                control.SetStatus(exception.Message);
+                control.SetStatus(AppErrorPresenter.Present(
+                    exception,
+                    AppErrorContext.FaultLab,
+                    AppErrorCategory.InvalidData).DisplayText);
                 return;
             }
 

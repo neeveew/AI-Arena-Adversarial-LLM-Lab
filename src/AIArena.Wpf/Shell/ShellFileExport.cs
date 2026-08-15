@@ -36,7 +36,7 @@ internal static class ShellFileExport
                 TryRestoreAttributes(targetPath, originalTargetAttributes.Value);
             }
 
-            error = ex.Message;
+            error = AppErrorPresenter.Present(ex, AppErrorContext.FileTransfer).DisplayText;
             return false;
         }
         finally

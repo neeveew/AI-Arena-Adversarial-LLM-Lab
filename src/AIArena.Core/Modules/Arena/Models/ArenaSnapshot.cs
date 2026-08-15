@@ -5,6 +5,16 @@ namespace AIArena.Core.Models;
 
 public sealed class ArenaSnapshot
 {
+    /// <summary>
+    /// Opaque identity for one persisted session incarnation. Unlike the
+    /// user-visible session name, this value is never reused when a deleted name
+    /// becomes available again, so private per-session state cannot cross that
+    /// lifecycle boundary.
+    /// </summary>
+    [JsonPropertyName("session_instance_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public string SessionInstanceId { get; set; } = "";
+
     [JsonPropertyName("persistence_revision")]
     public long PersistenceRevision { get; set; }
 

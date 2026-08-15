@@ -19,7 +19,7 @@ internal static class ShellProcessLauncher
         }
         catch (Exception ex) when (ex is Win32Exception or FileNotFoundException or InvalidOperationException or ObjectDisposedException)
         {
-            error = ex.Message;
+            error = AppErrorPresenter.Present(ex, AppErrorContext.FileTransfer).DisplayText;
             return false;
         }
     }

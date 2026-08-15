@@ -1626,12 +1626,29 @@ internal static class ExperimentExecutionTests
                 .ListSessionsAsync(SessionListingDetail.Identity).GetAwaiter().GetResult()
                 .Select(item => item.Id)
                 .Single(id => !beforeRestoreSessions.Contains(id));
-            var checkpoint = fixture.SessionStore
-                .SaveCheckpointAsync(childSessionId, "provider-call restore boundary")
-                .GetAwaiter().GetResult();
             var snapshotPath = fixture.SessionStore.SnapshotPath(childSessionId);
+            var checkpointSnapshot = fixture.SessionStore.LoadSnapshotAsync(childSessionId)
+                .GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException("restore lease fixture child snapshot was unavailable");
+            var checkpointId = Guid.NewGuid().ToString("N");
+            var checkpointDirectory = fixture.SessionStore.CheckpointDirectory(childSessionId);
+            Directory.CreateDirectory(checkpointDirectory);
+            File.WriteAllText(
+                Path.Combine(checkpointDirectory, $"{checkpointId}.json"),
+                System.Text.Json.JsonSerializer.Serialize(new CheckpointRecord
+                {
+                    Id = checkpointId,
+                    Name = "provider-call restore boundary",
+                    SessionId = childSessionId,
+                    CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    Snapshot = checkpointSnapshot
+                }));
             var beforeRestoreBytes = File.ReadAllBytes(snapshotPath);
-            restoreTask = fixture.SessionStore.RestoreCheckpointAsync(childSessionId, checkpoint.Id);
+            // The fixture record is staged directly because the production
+            // checkpoint writer correctly shares the same session-tree lease as
+            // the provider call. The operation under test is the cooperative
+            // restore, which must remain blocked until that call releases it.
+            restoreTask = fixture.SessionStore.RestoreCheckpointAsync(childSessionId, checkpointId);
             restoreWasBlocked = !restoreTask.Wait(TimeSpan.FromMilliseconds(350));
             restoreSnapshotStayedStable = File.Exists(snapshotPath)
                 && File.ReadAllBytes(snapshotPath).SequenceEqual(beforeRestoreBytes);

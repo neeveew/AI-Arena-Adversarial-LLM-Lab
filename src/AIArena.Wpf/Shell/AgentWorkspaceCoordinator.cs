@@ -134,10 +134,12 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private readonly Action<string, string, object?> publishControlEvent;
     private readonly Func<string, CancellationToken, Task<string>> buildWorkspaceProfileAsync;
     private readonly Func<string, CancellationToken, Task<DotNetWorkspaceSnapshot>> discoverDotNetWorkspaceAsync;
+    private readonly ComposerDraftStore? composerDraftStore;
     private readonly object workspaceProfileSync = new();
     private readonly List<AgentWorkspaceMessage> messages = [];
     private readonly List<AgentStep> latestSteps = [];
     private readonly List<AgentCommandHistoryItem> commandHistory = [];
+    private readonly HashSet<string> announcedLiveResponseRoles = new(StringComparer.OrdinalIgnoreCase);
     private readonly AgentRunbookService runbook = new();
 
     private CancellationTokenSource? chatCancellation;
@@ -183,6 +185,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private string buildEvidenceSummary = "No app-building task yet.";
     private string outputSummary = "No artifacts yet.";
     private bool disposed;
+    private bool restoringComposerDraft;
 
     internal string DebugWorkspacePath => workspacePath;
 
@@ -281,6 +284,10 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     internal string DebugLastMessageKind => messages.Count == 0 ? "" : messages[^1].Kind;
 
     internal string DebugLastMessageBody => messages.Count == 0 ? "" : messages[^1].Body;
+
+    internal int DebugPendingNewMessageCount => virtualMessageItems?.PendingNewMessageCount ?? 0;
+
+    internal Button? DebugJumpToLatestButton => virtualMessageItems?.JumpToLatestButton;
 
     internal string DebugPhaseSummary => phaseSummaryText.Text;
 
@@ -399,9 +406,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     internal async Task ControlSendAsync(string prompt)
     {
-        promptText.Text = prompt ?? "";
-        promptText.CaretIndex = promptText.Text.Length;
-        await SendAsync();
+        await SendAsync(prompt ?? "", controlPrompt: true);
     }
 
     internal Task ControlApproveAsync()
@@ -653,7 +658,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         Action<string, string, object?>? publishControlEvent = null,
         Func<string, CancellationToken, Task<string>>? buildWorkspaceProfileAsync = null,
         TextBlock? runbookMetaText = null,
-        Func<string, CancellationToken, Task<DotNetWorkspaceSnapshot>>? discoverDotNetWorkspaceAsync = null)
+        Func<string, CancellationToken, Task<DotNetWorkspaceSnapshot>>? discoverDotNetWorkspaceAsync = null,
+        ComposerDraftStore? composerDraftStore = null)
     {
         this.owner = owner;
         this.dispatcher = dispatcher;
@@ -677,6 +683,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         AutomationProperties.SetName(messageItems, "Agent conversation");
         AutomationProperties.SetHelpText(messageItems, "Agent workspace conversation messages in chronological order.");
         this.promptText = promptText;
+        this.promptText.MaxLength = ComposerDraftStore.MaxDraftCharacters;
         this.planPromptButton = planPromptButton;
         this.breakdownPromptButton = breakdownPromptButton;
         this.progressPromptButton = progressPromptButton;
@@ -736,10 +743,11 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             ?? ((root, cancellationToken) => Task.Run(
                 () => new DotNetWorkspaceIntelligenceService().DiscoverAsync(root, cancellationToken: cancellationToken),
                 cancellationToken));
+        this.composerDraftStore = composerDraftStore;
 
         this.workspaceBrowseButton.Click += (_, _) => BrowseWorkspace();
         this.workspaceApplyButton.Click += (_, _) => ApplyWorkspaceFromText(persist: true);
-        this.promptText.TextChanged += (_, _) => RefreshPromptBudget();
+        this.promptText.TextChanged += (_, _) => OnComposerTextChanged();
         this.planPromptButton.Click += (_, _) => ApplyPromptTemplate("plan");
         this.breakdownPromptButton.Click += (_, _) => ApplyPromptTemplate("breakdown");
         this.progressPromptButton.Click += (_, _) => ApplyPromptTemplate("progress");
@@ -859,6 +867,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         if (string.IsNullOrWhiteSpace(workspacePath))
         {
             UpdateWorkspaceDisplays("No workspace selected.", "Choose a project folder.");
+            RestoreComposerDraft();
         }
 
         builderOnlyForSession = settings().AgentBuilderOnlyDefault;
@@ -1058,6 +1067,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         var normalized = AgentWorkspaceCommand.NormalizeWorkspacePath(workspacePathText.Text, out var error);
         if (!string.IsNullOrWhiteSpace(error))
         {
+            CaptureComposerDraft();
             if (!string.IsNullOrWhiteSpace(workspacePath))
             {
                 Interlocked.Increment(ref workspaceGeneration);
@@ -1093,6 +1103,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             RefreshCommandHistory();
             RefreshWorkSummary();
             RefreshProviderState();
+            RestoreComposerDraft();
             return;
         }
 
@@ -1101,10 +1112,15 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             && workspaceChanged;
         if (workspaceChanged)
         {
+            CaptureComposerDraft();
             Interlocked.Increment(ref workspaceGeneration);
         }
 
         workspacePath = normalized;
+        if (workspaceChanged)
+        {
+            RestoreComposerDraft();
+        }
         RefreshWorkspaceProfile();
         workspacePathText.Text = normalized;
         if (changedWorkspace && autoApproveCommandsForSession)
@@ -1318,41 +1334,44 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
     }
 
-    private async Task SendAsync(string? internalPrompt = null)
+    private async Task<bool> SendAsync(string? injectedPrompt = null, bool controlPrompt = false)
     {
         if (isRunningChat)
         {
-            return;
+            return false;
         }
 
-        var isInternalPrompt = !string.IsNullOrWhiteSpace(internalPrompt);
-        var prompt = isInternalPrompt ? internalPrompt!.Trim() : promptText.Text.Trim();
+        var usesVisibleComposer = injectedPrompt is null;
+        var isInternalPrompt = !usesVisibleComposer && !controlPrompt;
+        var visibleComposerAtSend = promptText.Text ?? "";
+        var draftScopeAtSend = CurrentComposerDraftScope();
+        var prompt = usesVisibleComposer ? visibleComposerAtSend.Trim() : injectedPrompt!.Trim();
         if (string.IsNullOrWhiteSpace(prompt))
         {
-            if (!isInternalPrompt)
+            if (usesVisibleComposer)
             {
                 promptText.Focus();
             }
 
-            return;
+            return false;
         }
 
-        if (!isInternalPrompt && TryHandleComposerSlashCommand(prompt))
+        if (usesVisibleComposer && TryHandleComposerSlashCommand(prompt, visibleComposerAtSend))
         {
-            return;
+            return false;
         }
 
         if (!WorkspaceReady())
         {
             workspacePathText.Focus();
-            return;
+            return false;
         }
 
         var current = snapshot();
         if (current is null)
         {
             UpdateStatus("Configure a provider before Agent collaboration.");
-            return;
+            return false;
         }
 
         var missing = MissingConfiguredModelRoles(current);
@@ -1361,7 +1380,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             UpdateStatus(missing.Count == 1
                 ? $"No model configured for {missing[0]}."
                 : $"No model configured for {string.Join(", ", missing)}.");
-            return;
+            return false;
         }
 
         if (!isInternalPrompt && (!runbook.HasActiveRun || !AgentRunbookService.IsGeneratedContinuationPrompt(prompt)))
@@ -1393,17 +1412,14 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         var autoRunAfterChat = false;
         var autoRescueAfterChat = false;
         var internalRescuePromptAfterChat = "";
+        var logicalSendSucceeded = false;
+        announcedLiveResponseRoles.Clear();
         var previousRescueCommandReplacement = allowRescueCommandReplacement;
         chatCancellation?.Dispose();
         chatCancellation = new CancellationTokenSource();
         var cancellationToken = chatCancellation.Token;
         SetChatControlsEnabled(false);
         RefreshCommandActionState();
-        if (!isInternalPrompt)
-        {
-            promptText.Clear();
-        }
-
         RefreshProviderState();
 
         if (messages.Count == 0)
@@ -1415,7 +1431,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             ? new AgentWorkspaceMessage("system", "Agent Rescue", prompt, "Action", "", DateTimeOffset.Now)
             : new AgentWorkspaceMessage("operator", "Operator", prompt, "User", "", DateTimeOffset.Now);
         messages.Add(userMessage);
-        AddMessagePresentation(userMessage);
+        AddMessagePresentation(userMessage, announceAsNew: false);
         PersistConversation();
         AddActivity(isInternalPrompt ? "Auto Rescue" : "Prompt", isInternalPrompt ? "Builder is being retried for a runnable command." : "Software task sent to Agent team.");
         SetBuildEvidenceSummary(currentPromptRequiresCommand
@@ -1505,7 +1521,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                     "No command staged",
                     shouldAutoRescue
                         ? "This request sounds like it needs workspace changes, but Builder did not stage a runnable command. The app has not been written yet. Agent is retrying Builder internally for one previewable command."
-                        : "This request sounds like it needs workspace changes, but Builder did not stage a runnable command. The app has not been written yet. A Rescue prompt is staged so Builder must return one previewable command.",
+                        : "This request sounds like it needs workspace changes, but Builder did not stage a runnable command. The app has not been written yet. Use Rescue to ask Builder for one previewable command.",
                     "Warning");
                 AddActivity("Needs command", "Builder completed without a runnable command proposal.");
                 if (shouldAutoRescue)
@@ -1522,12 +1538,12 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 }
                 else
                 {
-                    runbook.UpdateStep("approval", "Blocked", "Builder returned no runnable command; Rescue is staged.", DateTimeOffset.Now);
+                    runbook.UpdateStep("approval", "Blocked", "Builder returned no runnable command; Rescue is available.", DateTimeOffset.Now);
                     runbook.AddCheckpoint("needs-command", "Runbook paused because Builder returned no runnable command.", DateTimeOffset.Now);
-                    StageRescuePrompt("Builder returned prose without a runnable command.");
+                    AddActivity("Rescue available", "Use Rescue to retry Builder without replacing the operator draft.");
                     phaseSummaryText.Text = "Needs command: no runnable Builder proposal.";
-                    SetBuildEvidenceSummary("Needs command: Rescue prompt staged.");
-                    UpdateStatus("No command staged. Rescue prompt staged.");
+                    SetBuildEvidenceSummary("Needs command: Rescue is available.");
+                    UpdateStatus("No command staged. Use Rescue to retry.");
                 }
 
                 PersistRunbook();
@@ -1553,12 +1569,23 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                     RenderPhases();
                 }
             }
+
+            logicalSendSucceeded = latestSteps.Count > 0
+                && latestSteps.All(step => step.Ok)
+                && (!currentPromptRequiresCommand || pendingPreview is not null);
+            if (usesVisibleComposer
+                && logicalSendSucceeded
+                && !autoRescueAfterChat)
+            {
+                ClearComposerAfterSuccessfulSend(draftScopeAtSend, visibleComposerAtSend);
+            }
         }
         catch (OperationCanceledException)
         {
             var stopped = new AgentWorkspaceMessage("system", "Agent", "Collaboration stopped.", "Status", "", DateTimeOffset.Now);
             messages.Add(stopped);
-            AddMessagePresentation(stopped);
+            AddMessagePresentation(stopped, announceAsNew: announcedLiveResponseRoles.Count == 0);
+            announcedLiveResponseRoles.Clear();
             PersistConversation();
             AddActivity("Stopped", "Agent collaboration cancelled.");
             phaseSummaryText.Text = "Agent collaboration stopped.";
@@ -1572,11 +1599,37 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
             UpdateStatus("Collaboration stopped.");
         }
+        catch (Exception ex)
+        {
+            var failed = new AgentWorkspaceMessage(
+                "system",
+                "Agent",
+                "Agent collaboration failed before completion. Your draft is still available to retry.",
+                "Error",
+                "",
+                DateTimeOffset.Now);
+            messages.Add(failed);
+            AddMessagePresentation(failed, announceAsNew: announcedLiveResponseRoles.Count == 0);
+            announcedLiveResponseRoles.Clear();
+            PersistConversation();
+            AddActivity("Agent failed", ex.GetType().Name);
+            phaseSummaryText.Text = "Agent collaboration failed.";
+            SetBuildEvidenceSummary("Agent collaboration failed before completion.");
+            if (runbook.HasActiveRun)
+            {
+                runbook.MarkInterrupted("A model step failed before completion.", DateTimeOffset.Now);
+                PersistRunbook();
+                RenderPhases();
+            }
+
+            UpdateStatus("Agent collaboration failed. Draft retained for retry.");
+        }
         finally
         {
             allowRescueCommandReplacement = previousRescueCommandReplacement;
             RunOnUiThread(() =>
             {
+                announcedLiveResponseRoles.Clear();
                 isRunningChat = false;
                 SetChatControlsEnabled(true);
                 RefreshCommandActionState();
@@ -1585,7 +1638,12 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             chatCancellation = null;
             if (autoRescueAfterChat && !string.IsNullOrWhiteSpace(internalRescuePromptAfterChat))
             {
-                await SendAsync(internalRescuePromptAfterChat);
+                var rescueSucceeded = await SendAsync(internalRescuePromptAfterChat);
+                logicalSendSucceeded = rescueSucceeded;
+                if (usesVisibleComposer && rescueSucceeded)
+                {
+                    ClearComposerAfterSuccessfulSend(draftScopeAtSend, visibleComposerAtSend);
+                }
             }
             else if (autoRunAfterChat || (autoApproveCommandsForSession && pendingPreview is not null))
             {
@@ -1598,9 +1656,11 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 ScrollToEnd();
             });
         }
+
+        return logicalSendSucceeded;
     }
 
-    private bool TryHandleComposerSlashCommand(string prompt)
+    private bool TryHandleComposerSlashCommand(string prompt, string visibleComposerAtSend)
     {
         if (!prompt.StartsWith("/", StringComparison.Ordinal))
         {
@@ -1613,21 +1673,21 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         {
             case "/help":
             case "/commands":
-                promptText.Clear();
+                ClearComposerAfterSuccessfulLocalCommand(visibleComposerAtSend);
                 AddCenterMessage("Agent commands", SlashCommandHelp(), "Status");
                 AddActivity("Slash /help", "Composer command list shown.");
                 UpdateStatus("Agent command help shown.");
                 ScrollToEnd();
                 return true;
             case "/status":
-                promptText.Clear();
+                ClearComposerAfterSuccessfulLocalCommand(visibleComposerAtSend);
                 AddCenterMessage("Agent status", BuildSlashStatusReport(), "Status");
                 AddActivity("Slash /status", "Session status summarized.");
                 UpdateStatus("Agent status summarized.");
                 ScrollToEnd();
                 return true;
             case "/brief":
-                promptText.Clear();
+                ClearComposerAfterSuccessfulLocalCommand(visibleComposerAtSend);
                 AddCenterMessage(
                     string.IsNullOrWhiteSpace(lastWorkBrief) ? "No work brief yet" : "Latest work brief",
                     string.IsNullOrWhiteSpace(lastWorkBrief)
@@ -1639,23 +1699,40 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 ScrollToEnd();
                 return true;
             case "/next":
-                promptText.Clear();
+                if (lastCommandResult is null)
+                {
+                    StageNextPromptFromResult();
+                    return true;
+                }
+
+                ClearComposerAfterSuccessfulLocalCommand(visibleComposerAtSend);
                 StageNextPromptFromResult();
                 ScrollToEnd();
                 return true;
             case "/verify":
-                promptText.Clear();
+                if (lastCommandResult is null)
+                {
+                    StageVerifyPromptFromBrief();
+                    return true;
+                }
+
+                ClearComposerAfterSuccessfulLocalCommand(visibleComposerAtSend);
                 StageVerifyPromptFromBrief();
                 ScrollToEnd();
                 return true;
             case "/artifact":
             case "/preview":
-                promptText.Clear();
+                var originalDraft = promptText.Text;
+                ClearComposerAfterSuccessfulLocalCommand(visibleComposerAtSend);
                 StageArtifactSuggestionCommand();
+                if (pendingPreview is null && string.IsNullOrEmpty(promptText.Text))
+                {
+                    SetComposerText(originalDraft);
+                    CaptureComposerDraft();
+                }
                 ScrollToEnd();
                 return true;
             default:
-                promptText.Clear();
                 AddCenterMessage(
                     "Unknown Agent command",
                     $"`{command}` is not an Agent composer command.\n\n{SlashCommandHelp()}",
@@ -2532,7 +2609,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return await modelClient.CompleteChatAsync(config, effectivePrompt, cancellationToken);
         }
 
-        var liveCard = BeginLiveStreamCard(roleName);
+        var liveCard = BeginLiveStreamCard(roleId, roleName);
         try
         {
             var progress = new Progress<string>(delta => AppendLiveStreamText(liveCard, delta, roleId, roleName));
@@ -2553,7 +2630,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         public DateTime LastRender { get; set; } = DateTime.MinValue;
     }
 
-    private LiveStreamCard BeginLiveStreamCard(string roleName)
+    private LiveStreamCard BeginLiveStreamCard(string roleId, string roleName)
     {
         var text = new TextBlock
         {
@@ -2593,10 +2670,13 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 keepAlive: true,
                 automationName: $"Agent message {roleName}",
                 automationHelpText: $"{roleName} response is streaming.");
+            virtualMessageItems.NotifyContentChanged(
+                announcedLiveResponseRoles.Add(roleId) ? 1 : 0);
         }
         else
         {
             messageItems.Children.Add(container);
+            announcedLiveResponseRoles.Add(roleId);
         }
         ScrollToEnd();
         return card;
@@ -2677,7 +2757,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             : $"Model step failed: {step.Error}";
         var message = new AgentWorkspaceMessage(step.RoleId, step.RoleName, body, step.Ok ? "Agent" : "Error", step.Model, DateTimeOffset.Now);
         messages.Add(message);
-        AddMessagePresentation(message);
+        AddMessagePresentation(message, announceAsNew: !announcedLiveResponseRoles.Remove(step.RoleId));
         PersistConversation();
         SetPhase(step.RoleId, step.Ok ? "Done" : "Error", step.Ok ? $"{step.RoleName} completed." : step.Error);
         AddActivity(step.RoleName, step.Ok
@@ -2920,10 +3000,12 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 $"agent-transient-{Guid.NewGuid():N}",
                 EstimateMessageHeight(message),
                 keepAlive: false);
+            virtualMessageItems.NotifyContentChanged(newMessageCount: 1);
         }
         else
         {
             messageItems.Children.Add(CreateMessageCard(message));
+            ScrollToEnd();
         }
     }
 
@@ -3237,7 +3319,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
         AddActivity("Restored", AgentWorkspaceConversationStore.RestoreActivityDetail(messages.Count));
         UpdateStatus("Agent chat restored.");
-        ScrollToEnd();
+        JumpToLatest();
         return true;
     }
 
@@ -3334,7 +3416,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             .ToArray();
     }
 
-    private void AddMessagePresentation(AgentWorkspaceMessage message)
+    private void AddMessagePresentation(AgentWorkspaceMessage message, bool announceAsNew = true)
     {
         if (virtualMessageItems is not null)
         {
@@ -3345,10 +3427,12 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 EstimateMessageHeight(message),
                 automationName: $"Agent message {message.Title}",
                 automationHelpText: message.Body);
+            virtualMessageItems.NotifyContentChanged(announceAsNew ? 1 : 0);
             return;
         }
 
         messageItems.Children.Add(CreateMessageCard(message));
+        ScrollToEnd();
     }
 
     private void ClearMessagePresentation()
@@ -4236,17 +4320,103 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             """;
     }
 
-    private void StageRescuePrompt(string reason)
+    public void CaptureDraftForShutdown()
     {
-        if (!promptText.IsEnabled)
+        CaptureComposerDraft();
+    }
+
+    private void OnComposerTextChanged()
+    {
+        RefreshPromptBudget();
+        CaptureComposerDraft();
+    }
+
+    private void CaptureComposerDraft()
+    {
+        if (restoringComposerDraft)
         {
-            promptText.IsEnabled = true;
+            return;
         }
 
-        promptText.Text = BuildRescueCommandPrompt();
-        promptText.CaretIndex = promptText.Text.Length;
+        var scope = CurrentComposerDraftScope();
+        if (scope.Length > 0)
+        {
+            composerDraftStore?.Set(scope, promptText.Text ?? "");
+        }
+    }
+
+    private void RestoreComposerDraft()
+    {
+        if (composerDraftStore is null)
+        {
+            return;
+        }
+
+        var scope = CurrentComposerDraftScope();
+        SetComposerText(scope.Length == 0 ? "" : composerDraftStore.Get(scope));
+    }
+
+    private void ClearComposerAfterSuccessfulSend(string scopeAtSend, string visibleComposerAtSend)
+    {
+        if (scopeAtSend.Length == 0
+            || !CurrentComposerDraftScope().Equals(scopeAtSend, StringComparison.Ordinal)
+            || !string.Equals(promptText.Text ?? "", visibleComposerAtSend, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        composerDraftStore?.Remove(scopeAtSend);
+        SetComposerText("");
         RefreshPromptBudget();
-        AddActivity("Rescue prompt", reason);
+    }
+
+    private void ClearComposerAfterSuccessfulLocalCommand(string visibleComposerAtSend)
+    {
+        if (!string.Equals(promptText.Text ?? "", visibleComposerAtSend, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var scope = CurrentComposerDraftScope();
+        composerDraftStore?.Remove(scope);
+        SetComposerText("");
+        RefreshPromptBudget();
+    }
+
+    private void SetComposerText(string text)
+    {
+        text ??= "";
+        if (string.Equals(promptText.Text, text, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var hadKeyboardFocus = promptText.IsKeyboardFocusWithin;
+        var selectionStart = promptText.SelectionStart;
+        var selectionLength = promptText.SelectionLength;
+        restoringComposerDraft = true;
+        try
+        {
+            promptText.Text = text;
+            if (hadKeyboardFocus)
+            {
+                var start = Math.Min(selectionStart, text.Length);
+                promptText.Select(start, Math.Min(selectionLength, text.Length - start));
+            }
+            else
+            {
+                promptText.CaretIndex = text.Length;
+            }
+        }
+        finally
+        {
+            restoringComposerDraft = false;
+        }
+    }
+
+    private string CurrentComposerDraftScope()
+    {
+        return ComposerDraftScopes.AgentWorkspace(workspacePath);
     }
 
     private void RefreshPromptBudget()
@@ -4698,11 +4868,12 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Agent);
             RunOnUiThread(() =>
             {
-                commandStatusText.Text = $"Full Access failed: {ex.Message}";
+                commandStatusText.Text = presentation.DisplayText;
                 SetBuildEvidenceSummary("Full Access failed before command completion.");
-                AddActivity("Full Access failed", ex.Message);
+                AddActivity(presentation.Summary, presentation.CopyDetails);
                 UpdateStatus("Full Access command failed before completion.");
             });
         }
@@ -4770,7 +4941,6 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         TryCancel(profileCancellation);
         TryCancel(chatCancellation);
         TryCancel(commandCancellation);
-        AgentWorkspaceCommand.BeginApplicationShutdown();
     }
 
     private static bool IsManualApprovalRisk(string risk)
@@ -4825,19 +4995,17 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         }
 
         autoContinueRemainingSteps--;
+        var autoContinuePrompt = BuildAutoContinuePrompt(result, receipt);
         RunOnUiThread(() =>
         {
             ClearCommandRailForAutoContinue();
-            promptText.Text = BuildAutoContinuePrompt(result, receipt);
-            promptText.CaretIndex = promptText.Text.Length;
-            RefreshPromptBudget();
             AddActivity("Auto Continue", AgentAutonomyPolicyService.FollowUpActivityDetail(autoContinueRemainingSteps));
             SetBuildEvidenceSummary("Auto Continue is asking for the next command based on terminal output.");
             UpdateStatus("Auto Continue asking Agent for the next step...");
             RefreshAutoContinueAction();
         });
 
-        await SendOnUiThreadAsync();
+        await SendOnUiThreadAsync(autoContinuePrompt);
         if (autoContinueForSession && autoContinueRemainingSteps <= 0 && !isRunningChat && !isRunningCommand)
         {
             PauseAutoContinue("Follow-up budget reached.");
@@ -4904,14 +5072,14 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         return AgentCommandResultService.NormalizeCommandForLoopComparison(command);
     }
 
-    private Task SendOnUiThreadAsync()
+    private Task SendOnUiThreadAsync(string injectedPrompt)
     {
         if (dispatcher.CheckAccess())
         {
-            return SendAsync();
+            return SendAsync(injectedPrompt, controlPrompt: true);
         }
 
-        return dispatcher.InvokeAsync(() => SendAsync()).Task.Unwrap();
+        return dispatcher.InvokeAsync(() => SendAsync(injectedPrompt, controlPrompt: true)).Task.Unwrap();
     }
 
     private void ClearCommandRailForAutoContinue()
@@ -5912,18 +6080,43 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
     private void ScrollToEnd()
     {
-        dispatcher.BeginInvoke(
-            () =>
-            {
-                if (virtualMessageItems is not null)
-                {
-                    virtualMessageItems.ScrollToEnd();
-                    return;
-                }
+        if (!dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(ScrollToEnd, DispatcherPriority.Background);
+            return;
+        }
 
-                chatScrollViewer.ScrollToEnd();
-            },
-            DispatcherPriority.Background);
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.NotifyContentChanged();
+            return;
+        }
+
+        var follow = VirtualizingConversationPanel.IsNearBottom(
+            chatScrollViewer.VerticalOffset,
+            chatScrollViewer.ViewportHeight,
+            chatScrollViewer.ExtentHeight);
+        if (follow)
+        {
+            dispatcher.BeginInvoke(chatScrollViewer.ScrollToEnd, DispatcherPriority.Loaded);
+        }
+    }
+
+    private void JumpToLatest()
+    {
+        if (!dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(JumpToLatest, DispatcherPriority.Background);
+            return;
+        }
+
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.JumpToLatest();
+            return;
+        }
+
+        dispatcher.BeginInvoke(chatScrollViewer.ScrollToEnd, DispatcherPriority.Loaded);
     }
 
     private ProviderPlan ProviderPlanForRole(ArenaViewSnapshot current, string roleId)

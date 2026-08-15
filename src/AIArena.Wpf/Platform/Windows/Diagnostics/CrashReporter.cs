@@ -28,6 +28,9 @@ internal static class CrashReporter
             var directory = ReportDirectory();
             Directory.CreateDirectory(directory);
             var path = UniquePath(directory, DateTime.Now);
+            var presentation = exception is null
+                ? null
+                : AppErrorPresenter.Present(exception, AppErrorContext.AppFatal);
 
             var report = new StringBuilder()
                 .AppendLine($"AI Arena - Lite {Version()}")
@@ -36,7 +39,8 @@ internal static class CrashReporter
                 .AppendLine($"OS:     {Environment.OSVersion} ({(Environment.Is64BitProcess ? "x64" : "x86")})")
                 .AppendLine($".NET:   {Environment.Version}")
                 .AppendLine()
-                .AppendLine(exception?.ToString() ?? "No exception object was supplied.")
+                .AppendLine($"Exception type: {exception?.GetType().FullName ?? "unavailable"}")
+                .AppendLine(presentation?.CopyDetails ?? "No exception object was supplied.")
                 .ToString();
 
             File.WriteAllText(path, report);

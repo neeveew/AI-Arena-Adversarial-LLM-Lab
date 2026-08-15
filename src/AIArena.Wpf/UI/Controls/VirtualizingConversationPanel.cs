@@ -4,6 +4,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -18,17 +19,26 @@ namespace AIArena.Wpf.Controls;
 /// </summary>
 public sealed class VirtualizingConversationPanel : StackPanel
 {
-    internal const int MaximumViewportRows = 24;
+    internal const int MaximumOverscanRows = 24;
     internal const double DefaultEstimatedRowHeight = 112d;
     private const double MinimumEstimatedRowHeight = 24d;
     private const double MaximumEstimatedRowHeight = 8_192d;
     private const double MinimumOverscan = 180d;
+    internal const double FollowLatestThreshold = 48d;
 
     private readonly List<ConversationRow> rows = [];
     private ScrollViewer? scrollOwner;
+    private AdornerLayer? newMessagesAdornerLayer;
+    private ConversationNewMessagesAdorner? newMessagesAdorner;
     private bool scrollHooked;
     private bool pendingScrollToEnd;
+    private bool pendingScrollOperationScheduled;
     private bool pendingAnchorCorrection;
+    private bool awaitingUserNavigation;
+    private bool userNavigationCompletionScheduled;
+    private int pendingNewMessageCount;
+    private int pendingAutoFollowMessageCount;
+    private int presentedNewMessageCount = -1;
     private double lastMeasureWidth = double.NaN;
     private long nextKey;
     private int elementCreationCount;
@@ -37,6 +47,7 @@ public sealed class VirtualizingConversationPanel : StackPanel
     public VirtualizingConversationPanel()
     {
         Orientation = Orientation.Vertical;
+        AutomationProperties.SetLiveSetting(this, AutomationLiveSetting.Polite);
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
     }
@@ -48,6 +59,16 @@ public sealed class VirtualizingConversationPanel : StackPanel
     internal int PeakRealizedRowCount => peakRealizedRowCount;
 
     internal int ElementCreationCount => elementCreationCount;
+
+    internal int PendingNewMessageCount => pendingNewMessageCount;
+
+    internal int PendingAutoFollowMessageCount => pendingAutoFollowMessageCount;
+
+    internal bool HasPendingFollowScroll => pendingScrollToEnd;
+
+    internal bool IsFollowingLatest => pendingScrollToEnd || ScrollOwnerIsNearBottom();
+
+    internal Button? JumpToLatestButton => newMessagesAdorner?.JumpButton;
 
     internal IReadOnlyList<object> RealizedKeys => rows
         .Where(row => row.Element is not null)
@@ -73,6 +94,27 @@ public sealed class VirtualizingConversationPanel : StackPanel
             peakRealizedRowCount,
             elementCreationCount,
             rows.Sum(row => row.Height));
+    }
+
+    internal int RealizedOverscanRowCountForTest(double verticalOffset, double viewportHeight)
+    {
+        VerifyAccess();
+        var viewportStart = NormalizeOffset(verticalOffset);
+        var viewportEnd = viewportStart + NormalizeViewportHeight(viewportHeight);
+        var top = 0d;
+        var count = 0;
+        foreach (var row in rows)
+        {
+            var bottom = top + row.Height;
+            if (row.Element is not null && !Intersects(top, bottom, viewportStart, viewportEnd))
+            {
+                count++;
+            }
+
+            top = bottom;
+        }
+
+        return count;
     }
 
     internal void PinRowForTest(object key, bool keepAlive)
@@ -103,10 +145,7 @@ public sealed class VirtualizingConversationPanel : StackPanel
         foreach (var row in rows.Where(row => row.Element is not null))
         {
             row.Element!.Measure(new Size(Math.Max(0d, viewportWidth), double.PositiveInfinity));
-            row.Height = Math.Clamp(
-                row.Element.DesiredSize.Height,
-                MinimumEstimatedRowHeight,
-                MaximumEstimatedRowHeight);
+            row.Height = NormalizeMeasuredHeight(row.Element.DesiredSize.Height, row.EstimatedHeight);
             row.HasMeasuredHeight = true;
         }
 
@@ -242,6 +281,12 @@ public sealed class VirtualizingConversationPanel : StackPanel
 
         rows.Clear();
         pendingScrollToEnd = false;
+        pendingScrollOperationScheduled = false;
+        awaitingUserNavigation = false;
+        userNavigationCompletionScheduled = false;
+        pendingNewMessageCount = 0;
+        pendingAutoFollowMessageCount = 0;
+        UpdateNewMessagesPresentation();
         scrollOwner?.ScrollToTop();
         InvalidateMeasure();
     }
@@ -257,20 +302,66 @@ public sealed class VirtualizingConversationPanel : StackPanel
 
     internal void ScrollToEnd()
     {
+        JumpToLatest();
+    }
+
+    internal void NotifyContentChanged(int newMessageCount = 0)
+    {
         VerifyAccess();
-        pendingScrollToEnd = true;
+        if (newMessageCount < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(newMessageCount));
+        }
+
+        HookScrollOwner();
+        if (scrollOwner is null
+            || (ScrollOwnerIsNearBottom() && !awaitingUserNavigation)
+            || pendingScrollToEnd)
+        {
+            AddPendingAutoFollowMessages(newMessageCount);
+            pendingNewMessageCount = 0;
+            UpdateNewMessagesPresentation();
+            ScheduleScrollToEnd();
+            return;
+        }
+
+        if (newMessageCount > 0)
+        {
+            pendingNewMessageCount = (int)Math.Min(
+                int.MaxValue,
+                (long)pendingNewMessageCount + newMessageCount);
+            UpdateNewMessagesPresentation();
+        }
+
         InvalidateMeasure();
-        Dispatcher.BeginInvoke(ApplyPendingScrollToEnd, DispatcherPriority.Loaded);
+    }
+
+    internal void JumpToLatest()
+    {
+        VerifyAccess();
+        pendingNewMessageCount = 0;
+        pendingAutoFollowMessageCount = 0;
+        awaitingUserNavigation = false;
+        UpdateNewMessagesPresentation();
+        ScheduleScrollToEnd();
     }
 
     private void OnLoaded(object sender, RoutedEventArgs args)
     {
         HookScrollOwner();
+        EnsureNewMessagesAdorner();
+        UpdateNewMessagesPresentation();
+        if (pendingScrollToEnd)
+        {
+            ScheduleScrollToEnd();
+        }
+
         InvalidateMeasure();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs args)
     {
+        RemoveNewMessagesAdorner();
         UnhookScrollOwner();
     }
 
@@ -282,6 +373,7 @@ public sealed class VirtualizingConversationPanel : StackPanel
             return;
         }
 
+        RemoveNewMessagesAdorner();
         UnhookScrollOwner();
         scrollOwner = candidate;
         if (scrollOwner is null)
@@ -290,7 +382,20 @@ public sealed class VirtualizingConversationPanel : StackPanel
         }
 
         scrollOwner.ScrollChanged += OnScrollChanged;
+        scrollOwner.AddHandler(
+            UIElement.PreviewMouseWheelEvent,
+            new MouseWheelEventHandler(OnScrollOwnerPreviewMouseWheel),
+            handledEventsToo: true);
+        scrollOwner.AddHandler(
+            UIElement.PreviewMouseLeftButtonDownEvent,
+            new MouseButtonEventHandler(OnScrollOwnerPreviewMouseLeftButtonDown),
+            handledEventsToo: true);
+        scrollOwner.AddHandler(
+            UIElement.PreviewKeyDownEvent,
+            new KeyEventHandler(OnScrollOwnerPreviewKeyDown),
+            handledEventsToo: true);
         scrollHooked = true;
+        EnsureNewMessagesAdorner();
     }
 
     private void UnhookScrollOwner()
@@ -298,6 +403,15 @@ public sealed class VirtualizingConversationPanel : StackPanel
         if (scrollOwner is not null && scrollHooked)
         {
             scrollOwner.ScrollChanged -= OnScrollChanged;
+            scrollOwner.RemoveHandler(
+                UIElement.PreviewMouseWheelEvent,
+                new MouseWheelEventHandler(OnScrollOwnerPreviewMouseWheel));
+            scrollOwner.RemoveHandler(
+                UIElement.PreviewMouseLeftButtonDownEvent,
+                new MouseButtonEventHandler(OnScrollOwnerPreviewMouseLeftButtonDown));
+            scrollOwner.RemoveHandler(
+                UIElement.PreviewKeyDownEvent,
+                new KeyEventHandler(OnScrollOwnerPreviewKeyDown));
         }
 
         scrollHooked = false;
@@ -306,9 +420,52 @@ public sealed class VirtualizingConversationPanel : StackPanel
 
     private void OnScrollChanged(object sender, ScrollChangedEventArgs args)
     {
+        if (ScrollOwnerIsNearBottom())
+        {
+            if (!awaitingUserNavigation)
+            {
+                pendingNewMessageCount = 0;
+                UpdateNewMessagesPresentation();
+            }
+        }
+        else
+        {
+            awaitingUserNavigation = false;
+            if (args.VerticalChange != 0d)
+            {
+                CancelPendingFollowLatest();
+            }
+        }
+
         if (args.VerticalChange != 0 || args.ViewportHeightChange != 0 || args.ExtentHeightChange != 0)
         {
             InvalidateMeasure();
+        }
+    }
+
+    private void OnScrollOwnerPreviewMouseWheel(object sender, MouseWheelEventArgs args)
+    {
+        CancelPendingFollowLatest(expectViewportChange: true);
+    }
+
+    private void OnScrollOwnerPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs args)
+    {
+        if (FindAncestor<ScrollBar>(args.OriginalSource as DependencyObject) is not null)
+        {
+            CancelPendingFollowLatest(expectViewportChange: true);
+        }
+    }
+
+    private void OnScrollOwnerPreviewKeyDown(object sender, KeyEventArgs args)
+    {
+        if (args.OriginalSource is TextBoxBase)
+        {
+            return;
+        }
+
+        if (args.Key is Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End)
+        {
+            CancelPendingFollowLatest(expectViewportChange: true);
         }
     }
 
@@ -334,11 +491,7 @@ public sealed class VirtualizingConversationPanel : StackPanel
             }
 
             row.Element.Measure(new Size(width, double.PositiveInfinity));
-            var measuredHeight = Math.Clamp(
-                row.Element.DesiredSize.Height,
-                MinimumEstimatedRowHeight,
-                MaximumEstimatedRowHeight);
-            row.Height = measuredHeight;
+            row.Height = NormalizeMeasuredHeight(row.Element.DesiredSize.Height, row.EstimatedHeight);
             row.HasMeasuredHeight = true;
         }
 
@@ -348,7 +501,7 @@ public sealed class VirtualizingConversationPanel : StackPanel
         var extentHeight = rows.Sum(row => row.Height);
         if (pendingScrollToEnd)
         {
-            Dispatcher.BeginInvoke(ApplyPendingScrollToEnd, DispatcherPriority.Loaded);
+            ScheduleScrollToEnd();
         }
 
         return new Size(width, extentHeight);
@@ -406,18 +559,30 @@ public sealed class VirtualizingConversationPanel : StackPanel
             return desired;
         }
 
-        var overscan = Math.Max(MinimumOverscan, viewportHeight * 0.5d);
-        var start = Math.Max(0d, offset - overscan);
-        var end = offset + viewportHeight + overscan;
+        var normalizedOffset = NormalizeOffset(offset);
+        var normalizedViewportHeight = NormalizeViewportHeight(viewportHeight);
+        var viewportStart = normalizedOffset;
+        var viewportEnd = viewportStart + normalizedViewportHeight;
+        var overscan = Math.Max(MinimumOverscan, normalizedViewportHeight * 0.5d);
+        var overscanStart = Math.Max(0d, viewportStart - overscan);
+        var overscanEnd = viewportEnd + overscan;
         var top = 0d;
         var candidates = new List<(ConversationRow Row, double Distance)>();
-        var viewportCenter = offset + (viewportHeight / 2d);
         foreach (var row in rows)
         {
             var bottom = top + row.Height;
-            if (bottom >= start && top <= end)
+            if (Intersects(top, bottom, viewportStart, viewportEnd))
             {
-                candidates.Add((row, Math.Abs(((top + bottom) / 2d) - viewportCenter)));
+                // The viewport itself must never contain unrealized holes. A
+                // separate cap applies only to optional rows around it.
+                desired.Add(row);
+            }
+            else if (Intersects(top, bottom, overscanStart, overscanEnd))
+            {
+                var distance = bottom <= viewportStart
+                    ? viewportStart - bottom
+                    : top - viewportEnd;
+                candidates.Add((row, distance));
             }
 
             top = bottom;
@@ -425,7 +590,7 @@ public sealed class VirtualizingConversationPanel : StackPanel
 
         foreach (var candidate in candidates
                      .OrderBy(candidate => candidate.Distance)
-                     .Take(MaximumViewportRows)
+                     .Take(MaximumOverscanRows)
                      .Select(candidate => candidate.Row))
         {
             desired.Add(candidate);
@@ -609,14 +774,191 @@ public sealed class VirtualizingConversationPanel : StackPanel
 
     private void ApplyPendingScrollToEnd()
     {
+        pendingScrollOperationScheduled = false;
         if (!pendingScrollToEnd)
         {
             return;
         }
 
+        if (scrollOwner is null)
+        {
+            return;
+        }
+
         pendingScrollToEnd = false;
-        scrollOwner?.ScrollToEnd();
+        pendingNewMessageCount = 0;
+        pendingAutoFollowMessageCount = 0;
+        awaitingUserNavigation = false;
+        UpdateNewMessagesPresentation();
+        scrollOwner.ScrollToEnd();
         InvalidateMeasure();
+    }
+
+    private void ScheduleScrollToEnd()
+    {
+        pendingScrollToEnd = true;
+        InvalidateMeasure();
+        if (pendingScrollOperationScheduled)
+        {
+            return;
+        }
+
+        pendingScrollOperationScheduled = true;
+        Dispatcher.BeginInvoke(ApplyPendingScrollToEnd, DispatcherPriority.Loaded);
+    }
+
+    private void CancelPendingFollowLatest(bool expectViewportChange = false)
+    {
+        if (expectViewportChange && ScrollOwnerIsNearBottom())
+        {
+            awaitingUserNavigation = true;
+            ScheduleUserNavigationCompletion();
+        }
+
+        if (pendingScrollToEnd && pendingAutoFollowMessageCount > 0)
+        {
+            pendingNewMessageCount = (int)Math.Min(
+                int.MaxValue,
+                (long)pendingNewMessageCount + pendingAutoFollowMessageCount);
+            pendingAutoFollowMessageCount = 0;
+            UpdateNewMessagesPresentation();
+        }
+
+        pendingScrollToEnd = false;
+    }
+
+    private void ScheduleUserNavigationCompletion()
+    {
+        if (userNavigationCompletionScheduled)
+        {
+            return;
+        }
+
+        userNavigationCompletionScheduled = true;
+        Dispatcher.BeginInvoke(() =>
+        {
+            userNavigationCompletionScheduled = false;
+            if (!awaitingUserNavigation)
+            {
+                return;
+            }
+
+            awaitingUserNavigation = false;
+            if (ScrollOwnerIsNearBottom() && pendingNewMessageCount > 0)
+            {
+                pendingNewMessageCount = 0;
+                UpdateNewMessagesPresentation();
+            }
+        }, DispatcherPriority.ContextIdle);
+    }
+
+    private void AddPendingAutoFollowMessages(int count)
+    {
+        if (count <= 0)
+        {
+            return;
+        }
+
+        pendingAutoFollowMessageCount = (int)Math.Min(
+            int.MaxValue,
+            (long)pendingAutoFollowMessageCount + count);
+    }
+
+    private bool ScrollOwnerIsNearBottom()
+    {
+        return scrollOwner is null
+            || IsNearBottom(
+                scrollOwner.VerticalOffset,
+                scrollOwner.ViewportHeight,
+                scrollOwner.ExtentHeight);
+    }
+
+    internal static bool IsNearBottom(double verticalOffset, double viewportHeight, double extentHeight)
+    {
+        if (!double.IsFinite(verticalOffset)
+            || !double.IsFinite(viewportHeight)
+            || !double.IsFinite(extentHeight)
+            || viewportHeight <= 0d
+            || extentHeight <= viewportHeight)
+        {
+            return true;
+        }
+
+        var distance = extentHeight - Math.Max(0d, verticalOffset) - viewportHeight;
+        return distance <= FollowLatestThreshold;
+    }
+
+    private void EnsureNewMessagesAdorner()
+    {
+        if (newMessagesAdorner is not null || scrollOwner is null || !IsLoaded)
+        {
+            return;
+        }
+
+        var layer = AdornerLayer.GetAdornerLayer(scrollOwner);
+        if (layer is null)
+        {
+            return;
+        }
+
+        newMessagesAdornerLayer = layer;
+        newMessagesAdorner = new ConversationNewMessagesAdorner(scrollOwner, JumpToLatest);
+        newMessagesAdornerLayer.Add(newMessagesAdorner);
+    }
+
+    private void RemoveNewMessagesAdorner()
+    {
+        if (newMessagesAdorner is null)
+        {
+            return;
+        }
+
+        newMessagesAdornerLayer?.Remove(newMessagesAdorner);
+        newMessagesAdorner = null;
+        newMessagesAdornerLayer = null;
+    }
+
+    private void UpdateNewMessagesPresentation()
+    {
+        EnsureNewMessagesAdorner();
+        newMessagesAdorner?.UpdateCount(pendingNewMessageCount);
+        if (presentedNewMessageCount == pendingNewMessageCount)
+        {
+            return;
+        }
+
+        presentedNewMessageCount = pendingNewMessageCount;
+        AutomationProperties.SetItemStatus(
+            this,
+            pendingNewMessageCount == 0
+                ? "Following latest messages."
+                : NewMessagesLabel(pendingNewMessageCount));
+        if (UIElementAutomationPeer.FromElement(this) is VirtualizingConversationPanelAutomationPeer peer)
+        {
+            peer.RaiseLiveRegionChanged();
+        }
+    }
+
+    private static string NewMessagesLabel(int count)
+    {
+        return $"{count.ToString(System.Globalization.CultureInfo.InvariantCulture)} new message{(count == 1 ? "" : "s")}. Jump to latest.";
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? start)
+        where T : DependencyObject
+    {
+        var current = start;
+        while (current is not null)
+        {
+            if (current is T match)
+            {
+                return match;
+            }
+
+            current = VisualTreeHelper.GetParent(current) ?? LogicalTreeHelper.GetParent(current);
+        }
+
+        return null;
     }
 
     private static ScrollViewer? FindScrollOwner(DependencyObject start)
@@ -641,6 +983,25 @@ public sealed class VirtualizingConversationPanel : StackPanel
             ? Math.Clamp(value, MinimumEstimatedRowHeight, MaximumEstimatedRowHeight)
             : DefaultEstimatedRowHeight;
     }
+
+    private static double NormalizeMeasuredHeight(double value, double estimatedHeight)
+    {
+        // Estimates stay bounded because they drive realization before an
+        // element exists. Once WPF produces a finite desired height, preserve
+        // it so arrange, extent, hit testing, and UIA share the same geometry.
+        return double.IsFinite(value) && value >= 0d
+            ? value
+            : NormalizeEstimate(estimatedHeight);
+    }
+
+    private static double NormalizeOffset(double value) =>
+        double.IsFinite(value) ? Math.Max(0d, value) : 0d;
+
+    private static double NormalizeViewportHeight(double value) =>
+        double.IsFinite(value) && value > 0d ? value : 640d;
+
+    private static bool Intersects(double top, double bottom, double viewportStart, double viewportEnd) =>
+        bottom > viewportStart && top < viewportEnd;
 
     private static ConversationRowViewState CaptureViewState(UIElement root, bool captureFocus = false)
     {
@@ -820,6 +1181,11 @@ public sealed class VirtualizingConversationPanel : StackPanel
     private sealed class VirtualizingConversationPanelAutomationPeer(VirtualizingConversationPanel owner)
         : FrameworkElementAutomationPeer(owner)
     {
+        internal void RaiseLiveRegionChanged()
+        {
+            RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+        }
+
         protected override string GetClassNameCore() => nameof(VirtualizingConversationPanel);
 
         protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.List;
@@ -1038,6 +1404,7 @@ public sealed class VirtualizingConversationPanel : StackPanel
         {
             void BringIntoView()
             {
+                owner.CancelPendingFollowLatest();
                 var top = owner.RowTop(row.Key);
                 if (top is null)
                 {
@@ -1084,5 +1451,85 @@ public sealed class VirtualizingConversationPanel : StackPanel
     {
         internal static readonly ConversationAnchor Empty = new(null, 0d);
         internal bool IsEmpty => Key is null;
+    }
+
+    private sealed class ConversationNewMessagesAdorner : Adorner
+    {
+        private readonly VisualCollection visuals;
+
+        internal ConversationNewMessagesAdorner(UIElement adornedElement, Action jumpToLatest)
+            : base(adornedElement)
+        {
+            JumpButton = new Button
+            {
+                MinHeight = 36d,
+                MinWidth = 168d,
+                Padding = new Thickness(12d, 6d, 12d, 6d),
+                FontWeight = FontWeights.SemiBold,
+                Visibility = Visibility.Collapsed,
+                ToolTip = "Jump to the newest conversation message and resume following live updates."
+            };
+            JumpButton.SetResourceReference(FrameworkElement.StyleProperty, "Arena.Button.Assist");
+            AutomationProperties.SetLiveSetting(JumpButton, AutomationLiveSetting.Polite);
+            AutomationProperties.SetHelpText(
+                JumpButton,
+                "Moves to the newest conversation message and resumes following live updates.");
+            JumpButton.Click += (_, _) => jumpToLatest();
+            visuals = new VisualCollection(this) { JumpButton };
+        }
+
+        internal Button JumpButton { get; }
+
+        internal void UpdateCount(int count)
+        {
+            if (count <= 0)
+            {
+                JumpButton.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            var label = NewMessagesLabel(count);
+            JumpButton.Content = $"{count.ToString(System.Globalization.CultureInfo.InvariantCulture)} new message{(count == 1 ? "" : "s")} · Jump to latest";
+            AutomationProperties.SetName(JumpButton, label);
+            AutomationProperties.SetItemStatus(JumpButton, label);
+            JumpButton.Visibility = Visibility.Visible;
+            InvalidateMeasure();
+            InvalidateArrange();
+        }
+
+        protected override int VisualChildrenCount => visuals.Count;
+
+        protected override Visual GetVisualChild(int index) => visuals[index];
+
+        protected override Size MeasureOverride(Size constraint)
+        {
+            // AdornerLayer measures every adorner with the size of the entire
+            // layer. Size this adorner to the adorned ScrollViewer instead so
+            // its bottom-right placement remains relative to the conversation
+            // viewport when the viewport is offset or layout-scaled.
+            var viewportSize = AdornedElement.RenderSize;
+            JumpButton.Measure(new Size(
+                Math.Max(0d, viewportSize.Width - 32d),
+                Math.Max(0d, viewportSize.Height - 24d)));
+            return viewportSize;
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            var desired = JumpButton.DesiredSize;
+            var width = Math.Min(desired.Width, Math.Max(0d, finalSize.Width - 32d));
+            var height = Math.Min(desired.Height, Math.Max(0d, finalSize.Height - 24d));
+            JumpButton.Arrange(new Rect(
+                Math.Max(16d, finalSize.Width - width - 18d),
+                Math.Max(12d, finalSize.Height - height - 14d),
+                width,
+                height));
+            return finalSize;
+        }
+
+        protected override HitTestResult? HitTestCore(PointHitTestParameters hitTestParameters)
+        {
+            return null;
+        }
     }
 }

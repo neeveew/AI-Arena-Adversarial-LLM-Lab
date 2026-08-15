@@ -42,7 +42,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     internal const double RightRailFullWidthMinWindowWidth = 1500;
     private static readonly TimeSpan VoiceTtsSaveDebounceDelay = TimeSpan.FromMilliseconds(250);
     private readonly SessionStore _coreSessionStore = new();
-    private readonly EventLogStore _eventLogStore = new();
+    private readonly EventLogStore _eventLogStore;
     private readonly ModelProviderHealthService _providerHealth = new();
     private readonly ProviderReachabilityService _providerReachabilityService;
     private readonly ProviderConfigurationControlService _providerConfigurationControlService;
@@ -58,6 +58,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     private readonly VoiceStyleAdherenceService _voiceStyleAdherenceService = new();
     private readonly InternetToolService _internetToolService;
     private readonly WpfSettingsStore _wpfSettingsStore = new();
+    private readonly ComposerDraftStore _composerDraftStore = new();
     private readonly ScenarioTemplateStore _scenarioTemplateStore = new();
     private readonly VoiceNarrationService _voiceNarrationService = new();
     private readonly UserGuideWindowHost _userGuideWindowHost = new();
@@ -149,6 +150,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     private bool _rightRailWidthCollapseLatched;
     private bool _topBarStacked = true;
     private bool _shutdownInProgress;
+    private bool _shutdownAttemptInProgress;
     private bool _shutdownReady;
     private IInputElement? _settingsFocusReturnTarget;
     private IInputElement? _viewMenuFocusReturnTarget;
@@ -290,6 +292,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     public MainWindow()
     {
+        _eventLogStore = EventLogStore.ForSessionStore(_coreSessionStore);
         InitializeComponent();
         ShellNavigationRail.Presentation = ShellTopBar.Presentation;
         _userGuideWindowHost.AppRouteRequested += UserGuideWindowHost_AppRouteRequested;
@@ -774,7 +777,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             AgentOutputSummaryText,
             AgentOutputItems,
             (type, message, data) => _controlPlaneEvents.Publish(type, message, data),
-            runbookMetaText: AgentRunbookMetaText);
+            runbookMetaText: AgentRunbookMetaText,
+            composerDraftStore: _composerDraftStore);
         _agentImpactExplorerCoordinator = new AgentImpactExplorerCoordinator(
             AgentImpactExplorerExpander,
             AgentImpactStatusText,
@@ -872,7 +876,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             RefreshActiveSessionForCoordinatorAsync,
             SetLoadStatus,
             SetArenaRunStatus,
-            SpeakNarratorMessage);
+            SpeakNarratorMessage,
+            _composerDraftStore);
         _internetWorkflowCoordinator = new InternetWorkflowCoordinator(
             UseInternetCheckBox,
             InternetHintText,
@@ -1034,7 +1039,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             CollaborateMemoryItems,
             () => _lastRenderedSnapshot,
             ResourceBrush,
-            status => SetApplicationStatus("collaborate.run", "Collaborate", status, "collaborate"));
+            status => SetApplicationStatus("collaborate.run", "Collaborate", status, "collaborate"),
+            composerDraftStore: _composerDraftStore);
         _collaborateCoordinator.Initialize();
         _refreshTimer = new DispatcherTimer
         {
@@ -1668,7 +1674,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
 
         e.Cancel = true;
-        if (_shutdownInProgress)
+        if (_shutdownInProgress || !TryBeginShutdownAttempt(ref _shutdownAttemptInProgress))
         {
             return;
         }
@@ -1684,10 +1690,46 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 "Keep app open",
                 ConfirmDialogTone.Danger))
         {
+            EndShutdownAttempt(ref _shutdownAttemptInProgress);
             return;
         }
 
+        var draftsSaved = await FlushComposerDraftsForShutdownAsync(dispose: false);
+        if (!draftsSaved)
+        {
+            var presentation = AppErrorPresenter.Present(new IOException(), AppErrorContext.Settings);
+            var status = "Unsent drafts could not be protected and saved. "
+                + $"Free disk space or copy the visible text before trying again. Code: {presentation.Code}.";
+            ShellTopBar.Presentation.StatusCenter.PublishNotice(
+                "app.composer-drafts",
+                "App",
+                ApplicationStatusState.Failed,
+                status,
+                presentation.CopyDetails,
+                identity: new ApplicationStatusIdentity(_activeSession?.Id ?? ""),
+                lifetime: ApplicationStatusLifetime.UntilResolved);
+            var discardConfirmed = ConfirmDialog.Show(
+                this,
+                _theme,
+                "Unsent drafts were not saved",
+                status + " Exit only if you accept losing those unsent drafts.",
+                "Exit without saving drafts",
+                "Keep app open",
+                ConfirmDialogTone.Danger);
+            if (!ShouldContinueShutdownAfterDraftFlush(draftsSaved, () => discardConfirmed))
+            {
+                EndShutdownAttempt(ref _shutdownAttemptInProgress);
+                return;
+            }
+        }
+        else
+        {
+            ShellTopBar.Presentation.StatusCenter.Resolve("app.composer-drafts");
+        }
+
         _shutdownInProgress = true;
+        IsEnabled = false;
+        AgentWorkspaceCommand.BeginApplicationShutdown();
         _refreshTimer.Stop();
         _modelRefreshTimer.Stop();
         _providerHealthTimer.Stop();
@@ -1702,7 +1744,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Auto-chat shutdown failed: {ex}");
+                    Debug.WriteLine($"Auto-chat shutdown failed with {ex.GetType().Name}.");
                 }
             }
 
@@ -1714,7 +1756,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Arena-operation shutdown failed: {ex}");
+                    Debug.WriteLine($"Arena-operation shutdown failed with {ex.GetType().Name}.");
                 }
             }
 
@@ -1726,7 +1768,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Control-plane disposal failed: {ex}");
+                    Debug.WriteLine($"Control-plane disposal failed with {ex.GetType().Name}.");
                 }
 
                 try
@@ -1735,17 +1777,75 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Control-plane shutdown failed: {ex}");
+                    Debug.WriteLine($"Control-plane shutdown failed with {ex.GetType().Name}.");
                 }
             }
         }
         finally
         {
+            await FlushComposerDraftsForShutdownAsync(dispose: true);
             _shutdownReady = true;
             _shutdownInProgress = false;
+            EndShutdownAttempt(ref _shutdownAttemptInProgress);
             ScheduleCloseAfterCleanup(Dispatcher, Close);
         }
     }
+
+    private async Task<bool> FlushComposerDraftsForShutdownAsync(bool dispose)
+    {
+        var flushed = false;
+        try
+        {
+            _operatorTurnCoordinator?.CaptureDraftForShutdown();
+            _agentWorkspaceCoordinator?.CaptureDraftForShutdown();
+            _collaborateCoordinator?.CaptureDraftForShutdown();
+            flushed = await _composerDraftStore.FlushAsync();
+            if (!flushed)
+            {
+                Debug.WriteLine($"Composer draft shutdown flush failed safely: {_composerDraftStore.LastDiagnosticCode}.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Composer draft shutdown flush failed safely: {ex.GetType().Name}.");
+        }
+
+        if (dispose)
+        {
+            try
+            {
+                await _composerDraftStore.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Composer draft shutdown disposal failed safely: {ex.GetType().Name}.");
+            }
+        }
+
+        return flushed;
+    }
+
+    internal static bool ShouldContinueShutdownAfterDraftFlush(
+        bool flushSucceeded,
+        Func<bool> confirmDiscard)
+    {
+        ArgumentNullException.ThrowIfNull(confirmDiscard);
+        return flushSucceeded || confirmDiscard();
+    }
+
+    internal static bool TryBeginShutdownAttempt(ref bool shutdownAttemptInProgress)
+    {
+        if (shutdownAttemptInProgress)
+        {
+            return false;
+        }
+
+        shutdownAttemptInProgress = true;
+        return true;
+    }
+
+    internal static void EndShutdownAttempt(ref bool shutdownAttemptInProgress) =>
+        shutdownAttemptInProgress = false;
 
     internal static void ScheduleCloseAfterCleanup(Dispatcher dispatcher, Action close)
     {
@@ -2268,7 +2368,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            VoiceTtsStatusText.Text = $"Voice settings could not be saved: {ex.Message}";
+            VoiceTtsStatusText.Text = AppErrorPresenter
+                .Present(ex, AppErrorContext.VoiceNarration)
+                .DisplayText;
         }
     }
 
@@ -2378,6 +2480,32 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         SetArenaRunStatus("Voice playback stopped.");
     }
 
+    private void StopVoicePlaybackForSessionChange(string nextSessionId)
+    {
+        if (!IsGenuineSessionChange(_activeSession?.Id, nextSessionId))
+        {
+            return;
+        }
+
+        // Stop unconditionally so a synthesizer that is still starting cannot
+        // begin speaking content from the session that is being left.
+        var wasSpeaking = _voiceNarrationService.IsSpeaking;
+        _voiceNarrationService.Stop();
+        UpdateVoiceToggleButton();
+        if (wasSpeaking)
+        {
+            UpdateVoiceTtsUi("Voice playback stopped because the active session changed.");
+        }
+    }
+
+    internal static bool IsGenuineSessionChange(string? currentSessionId, string? nextSessionId)
+    {
+        return !string.Equals(
+            currentSessionId?.Trim(),
+            nextSessionId?.Trim(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
 
     private async void LoadSessions(string? preferredSessionId = null)
     {
@@ -2396,6 +2524,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
 
         SavedStateCoordinator.SetSessions(sessions);
+        await SavedStateCoordinator.RehydratePendingDeletionAsync(cancellationToken);
 
         var defaultSession = sessions.FirstOrDefault(session => session.Id.Equals(preferredSessionId, StringComparison.OrdinalIgnoreCase))
             ?? sessions.FirstOrDefault(session => session.Id.Equals(_activeSession?.Id, StringComparison.OrdinalIgnoreCase))
@@ -2483,14 +2612,14 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            var status = $"Snapshot auto-refresh paused: {ex.Message}";
-            LoadStatus.Text = status;
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.SavedState);
+            LoadStatus.Text = presentation.DisplayText;
             ShellTopBar.Presentation.StatusCenter.PublishNotice(
                 "app.snapshot-refresh",
                 "App",
                 ApplicationStatusState.Warning,
-                "Snapshot auto-refresh paused.",
-                ex.Message,
+                presentation.Summary,
+                presentation.CopyDetails,
                 "arena",
                 new ApplicationStatusIdentity(_activeSession?.Id ?? ""),
                 background: true,
@@ -3548,7 +3677,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {
-            SetSettingsTransferStatus($"Export failed: {ex.Message}");
+            SetSettingsTransferStatus(
+                AppErrorPresenter.Present(ex, AppErrorContext.FileTransfer).DisplayText);
         }
     }
 
@@ -3583,7 +3713,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {
-            SetSettingsTransferStatus($"Import failed: {ex.Message}");
+            SetSettingsTransferStatus(
+                AppErrorPresenter.Present(ex, AppErrorContext.FileTransfer).DisplayText);
         }
     }
 
@@ -3641,6 +3772,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             return;
         }
 
+        StopVoicePlaybackForSessionChange(session.Id);
+
         // A session switch owns status causality immediately, even if reading its
         // snapshot later fails. Preserve the provider scope for same-session
         // refreshes; RenderSnapshot will refine a successful switch with the new
@@ -3653,13 +3786,36 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
         try
         {
-            var coreSnapshot = await _coreSessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
-            var currentSession = coreSnapshot is null
-                ? session
-                : session with { MessageCount = coreSnapshot.Engine.Messages.Count };
-            var snapshot = coreSnapshot is null
-                ? SnapshotViewMapper.Empty(currentSession, "No snapshot file.")
-                : SnapshotViewMapper.FromCore(currentSession, coreSnapshot);
+            ArenaSnapshot? coreSnapshot = null;
+            var currentSession = session;
+            ArenaViewSnapshot snapshot;
+            if (session.HasSnapshot)
+            {
+                var sessionInstanceId = await _coreSessionStore.EnsureSessionInstanceIdAsync(
+                    session.Id,
+                    cancellationToken);
+                coreSnapshot = await _coreSessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
+                if (coreSnapshot is null
+                    || !coreSnapshot.SessionInstanceId.Equals(sessionInstanceId, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException("The live session identity could not be established safely.");
+                }
+
+                var persistedWriteTime = new DateTimeOffset(
+                    File.GetLastWriteTimeUtc(session.SnapshotPath),
+                    TimeSpan.Zero);
+                currentSession = session with
+                {
+                    MessageCount = coreSnapshot.Engine.Messages.Count,
+                    LastModified = persistedWriteTime
+                };
+                snapshot = SnapshotViewMapper.FromCore(currentSession, coreSnapshot);
+            }
+            else
+            {
+                snapshot = SnapshotViewMapper.Empty(currentSession, "No snapshot file.");
+            }
+
             _activeSession = currentSession;
             _experimentLabCoordinator?.NotifyActiveSessionChanged(currentSession.Id);
             _activeSnapshotWriteUtc = currentSession.LastModified;
@@ -3675,25 +3831,27 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
         catch (Exception ex)
         {
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.SavedState);
             _activeSession = session;
             _experimentLabCoordinator?.NotifyActiveSessionChanged(session.Id);
             _activeSnapshotWriteUtc = session.LastModified;
             SavedStateCoordinator.ApplyForkLineage(null);
-            PopulateFallbackState($"Could not load snapshot: {ex.Message}");
+            PopulateFallbackState(presentation.DisplayText);
             SavedStateCoordinator.ClearCheckpoints("No checkpoint data.");
-            LoadStatus.Text = $"Could not load session '{session.Id}': {ex.Message}";
+            LoadStatus.Text = presentation.DisplayText;
             ShellTopBar.Presentation.StatusCenter.PublishNotice(
                 "app.session-load",
                 "App",
                 ApplicationStatusState.Failed,
-                $"Could not load session '{session.Id}'.",
-                ex.Message,
+                presentation.Summary,
+                presentation.CopyDetails,
                 "arena",
                 new ApplicationStatusIdentity(session.Id),
                 background: false,
                 lifetime: ApplicationStatusLifetime.UntilResolved);
         }
 
+        _collaborateCoordinator?.PublishPendingRecoveryWarning(PublishCollaborateRecoveryWarning);
         await RefreshAgentInspectionForSessionSafelyAsync(cancellationToken);
     }
 
@@ -5485,7 +5643,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
         catch (Exception ex)
         {
-            SetSaveStatus($"Save failed: {ex.Message}", ResourceBrush("DangerTextBrush"));
+            SetSaveStatus(
+                AppErrorPresenter.Present(ex, AppErrorContext.SavedState).DisplayText,
+                ResourceBrush("DangerTextBrush"));
             throw;
         }
     }
@@ -5625,6 +5785,18 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             status,
             navigationTarget: navigationTarget,
             identity: new ApplicationStatusIdentity(_activeSession?.Id ?? ""));
+    }
+
+    private void PublishCollaborateRecoveryWarning(string warning)
+    {
+        ShellTopBar.Presentation.StatusCenter.PublishNotice(
+            "collaborate.history-recovery",
+            "Collaborate",
+            ApplicationStatusState.Warning,
+            warning,
+            navigationTarget: "collaborate",
+            identity: new ApplicationStatusIdentity(_activeSession?.Id ?? ""),
+            lifetime: ApplicationStatusLifetime.UntilResolved);
     }
 
     private void SetTranscriptMutationStatus(string status)
@@ -6443,9 +6615,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         _collaborateCoordinator?.RefreshProviderState();
     }
 
-    private void CollaborateAddDocumentButton_Click(object sender, RoutedEventArgs e)
+    private async void CollaborateAddDocumentButton_Click(object sender, RoutedEventArgs e)
     {
-        Collaborate.AddDocuments();
+        await Collaborate.AddDocumentsAsync(this);
     }
 
     private void CollaborateClearDocumentsButton_Click(object sender, RoutedEventArgs e)
@@ -6542,7 +6714,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            TranscriptSearch.ShowCrossSessionMessage($"Could not read every session: {exception.Message}");
+            TranscriptSearch.ShowCrossSessionMessage(
+                AppErrorPresenter.Present(exception, AppErrorContext.SavedState).DisplayText);
         }
     }
 
@@ -7507,7 +7680,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                     ? "Provider settings save cancelled."
                     : ArenaOperationCoordinator.OperationFailureStatus(exception);
                 SetLoadStatus(status);
-                Debug.WriteLine($"Provider settings commit failed: {exception}");
+                Debug.WriteLine($"Provider settings commit failed with {exception.GetType().Name}.");
             });
     }
 
@@ -7563,10 +7736,14 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                     return;
                 }
 
-                var status = $"{operationName} failed: {exception.Message}";
-                SetLoadStatus(status);
-                SetApplicationStatus($"app.background.{operationName}", "App", status, "arena");
-                Debug.WriteLine($"Tracked {operationName} failed: {exception}");
+                var presentation = AppErrorPresenter.Present(exception, AppErrorContext.Arena);
+                SetLoadStatus(presentation.DisplayText);
+                SetApplicationStatus(
+                    $"app.background.{operationName}",
+                    "App",
+                    presentation.DisplayText,
+                    "arena");
+                Debug.WriteLine($"Tracked {operationName} failed with {exception.GetType().Name}.");
             });
     }
 
@@ -7586,7 +7763,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             }
             catch (Exception reportingFailure)
             {
-                Debug.WriteLine($"UI commit failure reporting failed: {reportingFailure}");
+                Debug.WriteLine($"UI commit failure reporting failed with {reportingFailure.GetType().Name}.");
             }
         }
     }

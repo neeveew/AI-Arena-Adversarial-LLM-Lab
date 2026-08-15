@@ -56,7 +56,8 @@ public sealed class WpfSettingsStore
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            LastLoadWarning = $"Settings could not be read and were left unchanged: {ex.Message}";
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Settings);
+            LastLoadWarning = $"{presentation.DisplayText} The existing settings file was left unchanged.";
             return Normalize(new WpfSettings());
         }
     }

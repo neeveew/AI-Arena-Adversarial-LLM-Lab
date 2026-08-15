@@ -219,7 +219,12 @@ public sealed class SearxngSupervisorService : IDisposable
         {
             EnsureLifecycleCurrent(requestedGeneration, cancellationToken);
             ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
-            return Status(false, false, true, baseUri, $"Bundled SearXNG process could not start: {ex.Message}");
+            return Status(
+                false,
+                false,
+                true,
+                baseUri,
+                AppErrorPresenter.Present(ex, AppErrorContext.SearchBackend).DisplayText);
         }
         if (startedProcess is null)
         {
@@ -469,7 +474,13 @@ public sealed class SearxngSupervisorService : IDisposable
         }
         catch (Exception ex)
         {
-            return new InternetSearchDiagnostic(false, stopwatch.Elapsed, 0, null, null, $"Local search diagnostic failed: {ex.Message}");
+            return new InternetSearchDiagnostic(
+                false,
+                stopwatch.Elapsed,
+                0,
+                null,
+                null,
+                AppErrorPresenter.Present(ex, AppErrorContext.SearchBackend).DisplayText);
         }
     }
 
@@ -777,7 +788,11 @@ public sealed class SearxngSupervisorService : IDisposable
         }
         catch (Exception ex)
         {
-            return new InternetFetchDiagnostic(false, TimeSpan.Zero, null, $"Direct page fetch diagnostic failed: {ex.Message}");
+            return new InternetFetchDiagnostic(
+                false,
+                TimeSpan.Zero,
+                null,
+                AppErrorPresenter.Present(ex, AppErrorContext.Internet).DisplayText);
         }
     }
 

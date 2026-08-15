@@ -60,7 +60,7 @@ static int RunRealWorkspaceSmoke()
         .GetAwaiter()
         .GetResult();
     Require(snapshot.Availability != ImpactAvailability.Unavailable, Diagnostics(snapshot));
-    Require(snapshot.Projects.Count == 6, "the real solution should expose all product and intelligence projects");
+    Require(snapshot.Projects.Count == 7, "the real solution should expose all product and intelligence projects");
     Require(snapshot.Nodes.Any(node => node.IsProduction), "the real solution should expose production symbols");
     Require(snapshot.Diagnostics.All(item =>
         !item.Message.Contains(root, StringComparison.OrdinalIgnoreCase)),

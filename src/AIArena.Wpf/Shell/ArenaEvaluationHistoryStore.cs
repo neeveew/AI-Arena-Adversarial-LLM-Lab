@@ -165,12 +165,13 @@ internal sealed class ArenaEvaluationHistoryStore
         {
             LastLoadWarning = recoverCorrupt
                 ? JsonFileRecovery.BackupCorruptFile(HistoryPath, "Evaluation history", ex)
-                : $"Evaluation history is invalid: {ex.Message}";
+                : AppErrorPresenter.Present(ex, AppErrorContext.SavedState).DisplayText;
             return Snapshot([]);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            LastLoadWarning = $"Evaluation history could not be read and was left unchanged: {ex.Message}";
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.SavedState);
+            LastLoadWarning = $"{presentation.DisplayText} Evaluation history was left unchanged.";
             return Snapshot([]);
         }
     }

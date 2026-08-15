@@ -277,10 +277,19 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
         {
             if (version == diagnosticUiVersion)
             {
-                diagnosticResultText.Text = $"Internet test failed before completion: {ex.Message}{Environment.NewLine}Action: retry; if it persists, restart AI Arena - Lite and check firewall/DNS access.";
-                diagnosticResultText.Foreground = resourceBrush("DangerTextBrush");
+                var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Internet);
+                diagnosticResultText.Text = presentation.DisplayText;
+                diagnosticResultText.Foreground = resourceBrush(
+                    presentation.IsCancellation ? "MutedTextBrush" : "DangerTextBrush");
                 diagnosticResultText.ToolTip = diagnosticResultText.Text;
-                statusCenter?.Fail(statusReceipt, "Internet test failed.", ex.Message);
+                if (presentation.IsCancellation)
+                {
+                    statusCenter?.Cancel(statusReceipt, presentation.Summary, presentation.CopyDetails);
+                }
+                else
+                {
+                    statusCenter?.Fail(statusReceipt, presentation.Summary, presentation.CopyDetails);
+                }
             }
         }
         finally
@@ -441,7 +450,8 @@ internal sealed class InternetWorkflowCoordinator : IDisposable
                 applyingSnapshot = false;
             }
 
-            internetHintText.Text = $"Internet setting could not be saved: {ex.Message}";
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Settings);
+            internetHintText.Text = $"Internet setting could not be saved. {presentation.DisplayText}";
             internetHintText.Foreground = resourceBrush("DangerTextBrush");
         }
         finally

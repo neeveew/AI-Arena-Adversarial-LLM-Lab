@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.IO;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -1080,53 +1079,6 @@ internal sealed record PromptTraceListItem(
             $"{phase}, {model}, attempt {attempt.ToString(CultureInfo.InvariantCulture)}, {outcome}",
             $"Exact outbound body evidence: {bytes.ToString("N0", CultureInfo.InvariantCulture)} bytes. Select for hash, token evidence, redacted payload, role transformations, and context omissions.",
             trace);
-    }
-}
-
-internal static partial class InspectionTextSafety
-{
-    [GeneratedRegex("""(?im)^.*\bvisibility\s*=\s*private\b.*$""", RegexOptions.CultureInvariant)]
-    private static partial Regex PrivateMemoryLineRegex();
-
-    [GeneratedRegex("""(?i)("?(?:api[_-]?key|api[_-]?token|authorization|password|private[_-]?key|refresh[_-]?token|secret|session[_-]?token|token)"?\s*[:=]\s*"?)[^",\s}\]]+""", RegexOptions.CultureInvariant)]
-    private static partial Regex NamedSecretRegex();
-
-    [GeneratedRegex("""(?i)\b(?:sk|pk|api)[-_][A-Za-z0-9_-]{8,}\b""", RegexOptions.CultureInvariant)]
-    private static partial Regex CredentialRegex();
-
-    [GeneratedRegex("""(?i)\bhttps?://[^\s"'<>]+""", RegexOptions.CultureInvariant)]
-    private static partial Regex UrlRegex();
-
-    [GeneratedRegex("""(?i)(?<![A-Za-z0-9_])[A-Za-z]:\\(?:[^\s"'<>|]+\\)*[^\s"'<>|]*""", RegexOptions.CultureInvariant)]
-    private static partial Regex WindowsPathRegex();
-
-    [GeneratedRegex("""(?i)\\\\[^\s\\/]+\\[^\s"'<>|]+(?:\\[^\s"'<>|]+)*""", RegexOptions.CultureInvariant)]
-    private static partial Regex UncPathRegex();
-
-    [GeneratedRegex("""(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b""", RegexOptions.CultureInvariant)]
-    private static partial Regex EmailRegex();
-
-    internal static string RedactAndBound(string? value, int maximum, string fallback)
-    {
-        var text = (value ?? "").Trim();
-        if (text.Length == 0)
-        {
-            return fallback;
-        }
-
-        // ProviderRequestTraceStore is the authoritative boundary-aware
-        // redactor for scoped-memory sections. Reapplying a greedy UI regex
-        // here would erase later public transcript content from an already-safe
-        // preview, so this layer only applies idempotent field/line redactions.
-        text = PrivateMemoryLineRegex().Replace(text, "[REDACTED:PRIVATE_MEMORY]");
-        text = NamedSecretRegex().Replace(text, "$1[REDACTED:SECRET]");
-        text = CredentialRegex().Replace(text, "[REDACTED:SECRET]");
-        text = UrlRegex().Replace(text, "[REDACTED:URL]");
-        text = WindowsPathRegex().Replace(text, "[REDACTED:PATH]");
-        text = UncPathRegex().Replace(text, "[REDACTED:PATH]");
-        text = EmailRegex().Replace(text, "[REDACTED:EMAIL]");
-        maximum = Math.Clamp(maximum, 1, 64 * 1024);
-        return text.Length <= maximum ? text : $"{text[..maximum]}… [display truncated]";
     }
 }
 

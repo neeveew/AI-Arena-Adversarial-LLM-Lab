@@ -609,7 +609,9 @@ static void ShellProcessLauncherReportsFailures()
         out var failure,
         _ => throw new InvalidOperationException("launcher blocked"));
     Require(!failed, "process launcher should report injected failures");
-    Require(failure.Contains("launcher blocked", StringComparison.Ordinal), "process launcher should return the launch error");
+    Require(failure.Contains("AA-FILE-UNEXPECTED", StringComparison.Ordinal)
+            && !failure.Contains("launcher blocked", StringComparison.Ordinal),
+        "process launcher should return a stable privacy-safe launch error");
 
     var trackedProcess = new DisposalTrackingProcess();
     var launched = ShellProcessLauncher.TryStart(startInfo, out var success, _ => trackedProcess);

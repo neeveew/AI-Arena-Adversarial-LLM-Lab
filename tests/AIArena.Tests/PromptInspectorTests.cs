@@ -420,7 +420,11 @@ internal static class PromptInspectorTests
             {
                 BaseUrl = "http://127.0.0.1:45678/v1",
                 ApiMode = ModelProviderApiModes.LlamaCppNative,
-                Model = "llama.gguf"
+                Model = "llama.gguf",
+                Extra = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+                {
+                    [ModelProviderClient.CompletionIdempotencyCapabilityKey] = JsonSerializer.SerializeToElement(true)
+                }
             },
             [new ModelChatMessage("user", "hello")],
             progress: null).GetAwaiter().GetResult();

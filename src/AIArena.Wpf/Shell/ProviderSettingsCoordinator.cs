@@ -1630,11 +1630,12 @@ internal sealed class ProviderSettingsCoordinator
         }
         catch (Exception ex)
         {
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Provider);
             routingStatus.Fail(
                 routingPersisted
                     ? "Provider routing was saved, but follow-up work failed."
                     : "Provider routing save failed.",
-                ProviderModelCatalogProjectionService.SafeStatusForDisplay(ex.Message, CurrentProviderApiTokenText()));
+                presentation.CopyDetails);
             throw;
         }
     }
@@ -2987,9 +2988,10 @@ internal sealed class ProviderSettingsCoordinator
         }
         catch (Exception ex)
         {
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Provider);
             status.Fail(
                 $"{runningSummary.TrimEnd('.', '\u2026')} failed.",
-                ProviderModelCatalogProjectionService.SafeStatusForDisplay(ex.Message, CurrentProviderApiTokenText()));
+                presentation.CopyDetails);
             throw;
         }
     }

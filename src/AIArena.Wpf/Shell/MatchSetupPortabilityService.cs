@@ -262,7 +262,9 @@ internal sealed class MatchSetupPortabilityService
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            return Failure("invalid_path", $"Match Setup path is invalid: {ex.Message}");
+            return Failure(
+                "invalid_path",
+                AppErrorPresenter.Present(ex, AppErrorContext.FileTransfer).DisplayText);
         }
 
         if (!Path.GetExtension(fullPath).Equals(".json", StringComparison.OrdinalIgnoreCase))
@@ -275,7 +277,7 @@ internal sealed class MatchSetupPortabilityService
             var file = new FileInfo(fullPath);
             if (!file.Exists)
             {
-                return Failure("not_found", $"Match Setup package was not found: {fullPath}");
+                return Failure("not_found", "The Match Setup package was not found at the selected location.");
             }
 
             if (file.Length > MatchSetupPackageCodec.MaxPackageBytes)
@@ -288,7 +290,9 @@ internal sealed class MatchSetupPortabilityService
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return Failure("read_failed", $"Match Setup package could not be read: {ex.Message}");
+            return Failure(
+                "read_failed",
+                AppErrorPresenter.Present(ex, AppErrorContext.FileTransfer).DisplayText);
         }
     }
 
@@ -631,7 +635,9 @@ internal static class MatchSetupPackageCodec
         }
         catch (JsonException ex)
         {
-            return Invalid("invalid_json", $"Match Setup JSON is invalid: {ex.Message}");
+            return Invalid(
+                "invalid_json",
+                AppErrorPresenter.Present(ex, AppErrorContext.FileTransfer).DisplayText);
         }
 
         if (package is null)

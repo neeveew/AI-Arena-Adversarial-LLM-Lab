@@ -103,8 +103,12 @@ var tests = new List<(string Name, Action Test)>
     ("normalizes llama.cpp native routing", NormalizesLlamaCppNativeRouting),
     ("runs llama.cpp compatible chat with native timings", RunsLlamaCppCompatibleChatWithNativeTimings),
     ("lists llama.cpp router models before compatible fallback", ListsLlamaCppRouterModelsBeforeCompatibleFallback),
-    ("retries only unaccepted transient llama.cpp requests", RetriesOnlyUnacceptedTransientLlamaCppRequests),
+    ("retries explicitly idempotent availability signals without replaying accepted streams", RetriesLocalAvailabilitySignalsWithoutReplayingAcceptedStreams),
     ("llama.cpp retry delay honors caller cancellation", LlamaCppRetryDelayHonorsCallerCancellation),
+    ("provider retries parse and bound Retry-After delays", ProviderRetryTests.ParsesAndBoundsRetryAfterDelays),
+    ("provider retries only capability-authorized availability signals", ProviderRetryTests.RetriesOnlyCapabilityAuthorizedAvailabilitySignals),
+    ("provider retries buffered and streaming rejections without duplicate progress", ProviderRetryTests.RetriesBufferedAndStreamingRejectionsWithoutDuplicateProgress),
+    ("provider retries never replay accepted ambiguous or cancelled attempts", ProviderRetryTests.NeverReplaysAcceptedAmbiguousOrCancelledAttempts),
     ("extracts LM Studio native chat response", ExtractLmStudioNativeChatResponse),
     ("runs LM Studio native chat endpoint", RunsLmStudioNativeChatEndpoint),
     ("omits disabled reasoning from LM Studio native chat", OmitsDisabledReasoningFromLmStudioNativeChat),
@@ -243,6 +247,8 @@ var tests = new List<(string Name, Action Test)>
     ("lists session summaries", ListSessionSummaries),
     ("session summaries tolerate corrupt snapshots", SessionSummariesTolerateCorruptSnapshots),
     ("saves restores and deletes native checkpoints", SaveRestoreDeleteNativeCheckpoints),
+    ("recovers deleted sessions and checkpoints with bounded Trash", SavedStateTrashTests.RecoversSessionsAndCheckpointsWithBoundedTrash),
+    ("creates atomic safety checkpoints before destructive snapshot replacements", SafetyCheckpointTests.CreatesAtomicSafetyCheckpointsBeforeDestructiveSnapshotReplacements),
     ("lists checkpoint metadata without deserializing snapshot payload", ListCheckpointMetadataWithoutDeserializingSnapshotPayload),
     ("lists legacy checkpoints with metadata after snapshot", ListLegacyCheckpointWithMetadataAfterSnapshot),
     ("restore ignores corrupt native checkpoint", RestoreIgnoresCorruptNativeCheckpoint),
@@ -906,7 +912,7 @@ static void ListsLlamaCppRouterModelsBeforeCompatibleFallback()
         "an oversized compatible inventory was accepted, leaked, or escaped the bounded error contract");
 }
 
-static void RetriesOnlyUnacceptedTransientLlamaCppRequests()
+static void RetriesLocalAvailabilitySignalsWithoutReplayingAcceptedStreams()
 {
     const string success = """{"id":"retry-ok","choices":[{"message":{"content":"accepted once"}}]}""";
     var transient = (HttpStatusCode.ServiceUnavailable, """{"error":{"message":"all slots are busy","type":"unavailable_error"}}""");
@@ -914,18 +920,20 @@ static void RetriesOnlyUnacceptedTransientLlamaCppRequests()
     var llamaHandler = new ProviderSequenceHandler(transient, (HttpStatusCode.OK, success));
     var llamaClient = new ModelProviderClient(new HttpClient(llamaHandler));
     var llamaResult = llamaClient.CompleteChatAsync(
-        LlamaConfig(),
-        [new ModelChatMessage("user", "retry before acceptance")]).GetAwaiter().GetResult();
-    Require(llamaResult.Ok && llamaResult.Text == "accepted once", $"transient llama.cpp request did not recover: {llamaResult.Error}");
-    Require(llamaHandler.Requests.Count == 2, "llama.cpp should retry a transient request rejected before acceptance");
+        LlamaConfig(supportsIdempotencyKey: true),
+        [new ModelChatMessage("user", "retry a local availability signal")]).GetAwaiter().GetResult();
+    Require(llamaResult.Ok && llamaResult.Text == "accepted once", $"idempotent llama.cpp request did not recover: {llamaResult.Error}");
+    Require(llamaHandler.Requests.Count == 2, "llama.cpp should retry only under the explicit idempotency contract");
 
     var compatibleHandler = new ProviderSequenceHandler(transient, (HttpStatusCode.OK, success));
     var compatibleClient = new ModelProviderClient(new HttpClient(compatibleHandler));
     var compatibleResult = compatibleClient.CompleteChatAsync(
         LlamaConfig(ModelProviderApiModes.OpenAiCompatible),
-        [new ModelChatMessage("user", "do not broaden retry policy")]).GetAwaiter().GetResult();
-    Require(!compatibleResult.Ok, "generic OpenAI-compatible requests should retain their existing no-retry behavior");
-    Require(compatibleHandler.Requests.Count == 1, "llama.cpp retry policy must not affect generic compatible providers");
+        [new ModelChatMessage("user", "do not trust a generic loopback proxy")]).GetAwaiter().GetResult();
+    Require(!compatibleResult.Ok,
+        "generic OpenAI-compatible localhost requests must require an explicit idempotency contract before replay");
+    Require(compatibleHandler.Requests.Count == 1,
+        "native local-provider retry evidence leaked into a generic compatible route");
 
     var streamingHandler = new ProviderSequenceHandler(
         (HttpStatusCode.OK, "data: {\"id\":\"stream-once\",\"choices\":[{\"delta\":{\"content\":\"partial accepted response\"}}]}\n\n"),
@@ -935,15 +943,26 @@ static void RetriesOnlyUnacceptedTransientLlamaCppRequests()
         LlamaConfig(),
         [new ModelChatMessage("user", "never replay accepted streams")],
         null).GetAwaiter().GetResult();
-    Require(streamingResult.Ok && streamingResult.Text == "partial accepted response", $"accepted llama.cpp stream failed: {streamingResult.Error}");
+    Require(!streamingResult.Ok
+            && streamingResult.Text == "partial accepted response"
+            && streamingResult.Error.Contains("terminal", StringComparison.OrdinalIgnoreCase),
+        "an incomplete accepted llama.cpp stream was not preserved and classified as partial");
     Require(streamingHandler.Requests.Count == 1, "an accepted llama.cpp stream must never be replayed");
 
-    static ModelProviderConfig LlamaConfig(string apiMode = ModelProviderApiModes.LlamaCppNative) => new()
+    static ModelProviderConfig LlamaConfig(
+        string apiMode = ModelProviderApiModes.LlamaCppNative,
+        bool supportsIdempotencyKey = false) => new()
     {
         BaseUrl = "http://127.0.0.1:8080/v1",
         ApiMode = apiMode,
         Model = "local-model",
-        Timeout = 5
+        Timeout = 5,
+        Extra = supportsIdempotencyKey
+            ? new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+            {
+                [ModelProviderClient.CompletionIdempotencyCapabilityKey] = JsonSerializer.SerializeToElement(true)
+            }
+            : null
     };
 }
 
@@ -963,7 +982,11 @@ static void LlamaCppRetryDelayHonorsCallerCancellation()
                 BaseUrl = "http://127.0.0.1:8080/v1",
                 ApiMode = ModelProviderApiModes.LlamaCppNative,
                 Model = "local-model",
-                Timeout = 30
+                Timeout = 30,
+                Extra = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+                {
+                    [ModelProviderClient.CompletionIdempotencyCapabilityKey] = JsonSerializer.SerializeToElement(true)
+                }
             },
             [new ModelChatMessage("user", "cancel queued retry")],
             cancellation.Token).GetAwaiter().GetResult();

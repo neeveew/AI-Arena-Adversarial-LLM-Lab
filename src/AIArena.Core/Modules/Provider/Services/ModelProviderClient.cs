@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -36,15 +37,35 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
     // below the independent four-MiB response bound.
     internal const int MaximumModelCatalogEntries = 1024;
     private const string EmptyCompletionError = "Provider returned a successful response without assistant content.";
-    private const int LlamaCppMaximumRetries = 2;
+    internal const int MaximumCompletionAttempts = 3;
+    internal static readonly TimeSpan MaximumRetryDelay = TimeSpan.FromSeconds(5);
+    private const int InitialRetryDelayMilliseconds = 150;
+    private const int MaximumRetryJitterMilliseconds = 100;
+    internal const string CompletionIdempotencyCapabilityKey = "completion_idempotency_key_supported";
     private static readonly JsonSerializerOptions ProviderPayloadJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _httpClient;
     private readonly IProviderRequestObserver? _requestObserver;
+    private readonly TimeProvider _timeProvider;
+    private readonly Func<int, double> _retryJitterUnit;
+    private readonly Func<TimeSpan, CancellationToken, Task> _retryDelayAsync;
 
     public ModelProviderClient(HttpClient? httpClient = null, IProviderRequestObserver? requestObserver = null)
+        : this(httpClient, requestObserver, TimeProvider.System)
+    {
+    }
+
+    internal ModelProviderClient(
+        HttpClient? httpClient,
+        IProviderRequestObserver? requestObserver,
+        TimeProvider timeProvider,
+        Func<int, double>? retryJitterUnit = null,
+        Func<TimeSpan, CancellationToken, Task>? retryDelayAsync = null)
     {
         _httpClient = httpClient ?? new HttpClient();
         _requestObserver = requestObserver;
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _retryJitterUnit = retryJitterUnit ?? (_ => Random.Shared.NextDouble());
+        _retryDelayAsync = retryDelayAsync ?? ((delay, token) => Task.Delay(delay, _timeProvider, token));
         // Per-request provider timeouts are enforced by TimeoutToken. HttpClient's
         // 100-second default would otherwise win for configured timeouts above 100s.
         _httpClient.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
@@ -300,6 +321,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         try
         {
             var endpoint = new Uri(new Uri(baseUrl + "/"), "chat/completions");
+            var idempotencyKey = CompletionIdempotencyKey(config);
             using var timeout = TimeoutToken(config, cancellationToken);
             for (var attempt = 0; ; attempt++)
             {
@@ -314,20 +336,34 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     Content = CreateJsonContent(payloadBytes)
                 };
                 ApplyAuthorization(request, config);
+                ApplyCompletionIdempotencyKey(request, idempotencyKey);
                 using var response = await _httpClient.SendAsync(request, timeout.Token);
                 var body = await response.Content.ReadAsStringAsync(timeout.Token);
                 if (!response.IsSuccessStatusCode)
                 {
-                    if (retryLlamaCppTransientFailures
-                        && attempt < LlamaCppMaximumRetries
-                        && IsTransientLlamaCppFailure(response.StatusCode, body))
+                    if (attempt < MaximumCompletionAttempts - 1
+                        && TryAuthorizeCompletionRetry(
+                            config,
+                            endpoint,
+                            response.RequestMessage?.RequestUri,
+                            response.StatusCode,
+                            body,
+                            retryLlamaCppTransientFailures,
+                            idempotencyKey,
+                            out var retryEvidence)
+                        && TryResolveRetryDelay(
+                            response.Headers,
+                            attempt,
+                            _timeProvider,
+                            _retryJitterUnit,
+                            out var retryDelay))
                     {
                         ObserveUnavailableCompletion(
                             activeObservationId,
                             "retryable_provider_failure",
-                            "The provider rejected this physical attempt before accepting it; no token evidence was returned.");
+                            retryEvidence);
                         activeObservationId = "";
-                        await DelayLlamaCppRetryAsync(attempt, timeout.Token);
+                        await _retryDelayAsync(retryDelay, timeout.Token);
                         continue;
                     }
 
@@ -391,11 +427,11 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 "The caller cancelled before provider token evidence was available.");
             throw;
         }
-        catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or JsonException)
+        catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or IOException or JsonException)
         {
             watch.Stop();
             var failed = new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
-            return CompleteObservation(activeObservationId, failed, ex is OperationCanceledException ? "provider_timeout" : "transport_error");
+            return CompleteObservation(activeObservationId, failed, FailureObservationOutcome(ex));
         }
     }
 
@@ -419,43 +455,74 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         try
         {
             var endpoint = new Uri(new Uri(NormalizeNativeApiBase(config.BaseUrl) + "/"), "chat");
-            activeObservationId = ObserveRequest(
-                config,
-                payloadBytes,
-                "lmstudio_native_chat",
-                requestedStreaming: false,
-                attempt: 1);
-            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
-            {
-                Content = CreateJsonContent(payloadBytes)
-            };
-            ApplyAuthorization(request, config);
+            var idempotencyKey = CompletionIdempotencyKey(config);
             using var timeout = TimeoutToken(config, cancellationToken);
-            using var response = await _httpClient.SendAsync(request, timeout.Token);
-            var body = await response.Content.ReadAsStringAsync(timeout.Token);
-            if (!response.IsSuccessStatusCode)
+            for (var attempt = 0; ; attempt++)
             {
-                watch.Stop();
-                var failed = new ModelCompletionResult(
-                    false,
-                    baseUrl,
-                    model,
-                    "",
-                    "",
-                    (int)watch.ElapsedMilliseconds,
-                    0,
-                    0,
-                    0,
-                    FriendlyProviderHttpError(body, response.ReasonPhrase, baseUrl, config.ApiToken),
-                    DateTimeOffset.Now,
-                    ProviderStatusCode: (int)response.StatusCode,
-                    ProviderErrorCode: ExtractProviderErrorCode(body, config.ApiToken));
-                return CompleteObservation(activeObservationId, failed, "provider_error");
-            }
+                activeObservationId = ObserveRequest(
+                    config,
+                    payloadBytes,
+                    "lmstudio_native_chat",
+                    requestedStreaming: false,
+                    attempt + 1);
+                using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+                {
+                    Content = CreateJsonContent(payloadBytes)
+                };
+                ApplyAuthorization(request, config);
+                ApplyCompletionIdempotencyKey(request, idempotencyKey);
+                using var response = await _httpClient.SendAsync(request, timeout.Token);
+                var body = await response.Content.ReadAsStringAsync(timeout.Token);
+                if (!response.IsSuccessStatusCode)
+                {
+                    if (attempt < MaximumCompletionAttempts - 1
+                        && TryAuthorizeCompletionRetry(
+                            config,
+                            endpoint,
+                            response.RequestMessage?.RequestUri,
+                            response.StatusCode,
+                            body,
+                            useLlamaCppBusyBodyPredicates: false,
+                            idempotencyKey,
+                            out var retryEvidence)
+                        && TryResolveRetryDelay(
+                            response.Headers,
+                            attempt,
+                            _timeProvider,
+                            _retryJitterUnit,
+                            out var retryDelay))
+                    {
+                        ObserveUnavailableCompletion(
+                            activeObservationId,
+                            "retryable_provider_failure",
+                            retryEvidence);
+                        activeObservationId = "";
+                        await _retryDelayAsync(retryDelay, timeout.Token);
+                        continue;
+                    }
 
-            watch.Stop();
-            var completed = NativeCompletionFromBody(body, baseUrl, model, (int)watch.ElapsedMilliseconds);
-            return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
+                    watch.Stop();
+                    var failed = new ModelCompletionResult(
+                        false,
+                        baseUrl,
+                        model,
+                        "",
+                        "",
+                        (int)watch.ElapsedMilliseconds,
+                        0,
+                        0,
+                        0,
+                        FriendlyProviderHttpError(body, response.ReasonPhrase, baseUrl, config.ApiToken),
+                        DateTimeOffset.Now,
+                        ProviderStatusCode: (int)response.StatusCode,
+                        ProviderErrorCode: ExtractProviderErrorCode(body, config.ApiToken));
+                    return CompleteObservation(activeObservationId, failed, "provider_error");
+                }
+
+                watch.Stop();
+                var completed = NativeCompletionFromBody(body, baseUrl, model, (int)watch.ElapsedMilliseconds);
+                return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -466,11 +533,11 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 "The caller cancelled before provider token evidence was available.");
             throw;
         }
-        catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or JsonException)
+        catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or IOException or JsonException)
         {
             watch.Stop();
             var failed = new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
-            return CompleteObservation(activeObservationId, failed, ex is OperationCanceledException ? "provider_timeout" : "transport_error");
+            return CompleteObservation(activeObservationId, failed, FailureObservationOutcome(ex));
         }
     }
 
@@ -548,148 +615,305 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
 
         var watch = Stopwatch.StartNew();
         var activeObservationId = "";
+        StringBuilder? acceptedContent = null;
+        StringBuilder? acceptedReasoning = null;
+        var acceptedStreamError = "";
+        var acceptedMalformedEvent = false;
         try
         {
             var endpoint = new Uri(new Uri(NormalizeNativeApiBase(config.BaseUrl) + "/"), "chat");
-            activeObservationId = ObserveRequest(
-                config,
-                payloadBytes,
-                "lmstudio_native_chat",
-                requestedStreaming: true,
-                attempt: 1);
-            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
-            {
-                Content = CreateJsonContent(payloadBytes)
-            };
-            ApplyAuthorization(request, config);
+            var idempotencyKey = CompletionIdempotencyKey(config);
             using var timeout = TimeoutToken(config, cancellationToken);
-            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-            if (!response.IsSuccessStatusCode)
+            for (var attempt = 0; ; attempt++)
             {
-                var errorBody = await response.Content.ReadAsStringAsync(timeout.Token);
-                watch.Stop();
-                var failed = new ModelCompletionResult(
-                    false,
-                    baseUrl,
-                    model,
-                    "",
-                    "",
-                    (int)watch.ElapsedMilliseconds,
-                    0,
-                    0,
-                    0,
-                    FriendlyProviderHttpError(errorBody, response.ReasonPhrase, baseUrl, config.ApiToken),
-                    DateTimeOffset.Now,
-                    ProviderStatusCode: (int)response.StatusCode,
-                    ProviderErrorCode: ExtractProviderErrorCode(errorBody, config.ApiToken));
-                return CompleteObservation(activeObservationId, failed, "provider_error");
-            }
-
-            var content = new StringBuilder();
-            var reasoning = new StringBuilder();
-            var resultJson = "";
-            var streamError = "";
-            await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
-            using var reader = new StreamReader(stream);
-            while (await reader.ReadLineAsync(timeout.Token) is { } line)
-            {
-                if (!line.StartsWith("data:", StringComparison.Ordinal))
+                activeObservationId = ObserveRequest(
+                    config,
+                    payloadBytes,
+                    "lmstudio_native_chat",
+                    requestedStreaming: true,
+                    attempt + 1);
+                using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
                 {
-                    continue;
-                }
-
-                var data = line[5..].Trim();
-                if (string.IsNullOrWhiteSpace(data))
+                    Content = CreateJsonContent(payloadBytes)
+                };
+                ApplyAuthorization(request, config);
+                ApplyCompletionIdempotencyKey(request, idempotencyKey);
+                using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+                if (!response.IsSuccessStatusCode)
                 {
-                    continue;
-                }
-
-                try
-                {
-                    using var doc = JsonDocument.Parse(data);
-                    var type = FirstString(doc.RootElement, "type");
-                    if (type.Equals("message.delta", StringComparison.OrdinalIgnoreCase))
+                    var errorBody = await response.Content.ReadAsStringAsync(timeout.Token);
+                    if (attempt < MaximumCompletionAttempts - 1
+                        && TryAuthorizeCompletionRetry(
+                            config,
+                            endpoint,
+                            response.RequestMessage?.RequestUri,
+                            response.StatusCode,
+                            errorBody,
+                            useLlamaCppBusyBodyPredicates: false,
+                            idempotencyKey,
+                            out var retryEvidence)
+                        && TryResolveRetryDelay(
+                            response.Headers,
+                            attempt,
+                            _timeProvider,
+                            _retryJitterUnit,
+                            out var retryDelay))
                     {
-                        var delta = FirstString(doc.RootElement, "content");
-                        if (delta.Length > 0)
+                        ObserveUnavailableCompletion(
+                            activeObservationId,
+                            "retryable_provider_failure",
+                            retryEvidence);
+                        activeObservationId = "";
+                        await _retryDelayAsync(retryDelay, timeout.Token);
+                        continue;
+                    }
+
+                    watch.Stop();
+                    var failed = new ModelCompletionResult(
+                        false,
+                        baseUrl,
+                        model,
+                        "",
+                        "",
+                        (int)watch.ElapsedMilliseconds,
+                        0,
+                        0,
+                        0,
+                        FriendlyProviderHttpError(errorBody, response.ReasonPhrase, baseUrl, config.ApiToken),
+                        DateTimeOffset.Now,
+                        ProviderStatusCode: (int)response.StatusCode,
+                        ProviderErrorCode: ExtractProviderErrorCode(errorBody, config.ApiToken));
+                    return CompleteObservation(activeObservationId, failed, "provider_error");
+                }
+
+                // A successful status is the acceptance boundary. Never replay
+                // after this point: the stream may have produced billable work
+                // even when no usable event reaches the caller.
+
+                acceptedContent = new StringBuilder();
+                acceptedReasoning = new StringBuilder();
+                acceptedStreamError = "";
+                acceptedMalformedEvent = false;
+                var content = acceptedContent;
+                var reasoning = acceptedReasoning;
+                var resultJson = "";
+                var sawTerminalEvent = false;
+                await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
+                using var reader = new StreamReader(stream);
+                while (await reader.ReadLineAsync(timeout.Token) is { } line)
+                {
+                    if (!line.StartsWith("data:", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var data = line[5..].Trim();
+                    if (string.IsNullOrWhiteSpace(data))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(data);
+                        var type = FirstString(doc.RootElement, "type");
+                        if (type.Equals("message.delta", StringComparison.OrdinalIgnoreCase))
                         {
-                            content.Append(delta);
-                            progress?.Report(delta);
+                            var delta = FirstString(doc.RootElement, "content");
+                            if (delta.Length > 0)
+                            {
+                                content.Append(delta);
+                                progress?.Report(delta);
+                            }
+                        }
+                        else if (type.Equals("reasoning.delta", StringComparison.OrdinalIgnoreCase))
+                        {
+                            reasoning.Append(FirstString(doc.RootElement, "content"));
+                        }
+                        else if (type.Equals("chat.end", StringComparison.OrdinalIgnoreCase))
+                        {
+                            sawTerminalEvent = true;
+                            if (doc.RootElement.TryGetProperty("result", out var result)
+                                && result.ValueKind == JsonValueKind.Object)
+                            {
+                                resultJson = result.GetRawText();
+                            }
+
+                            break;
+                        }
+                        else if (type.Equals("error", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var observedError = doc.RootElement.TryGetProperty("error", out var errorElement)
+                                ? ExtractProviderErrorMessage(errorElement)
+                                : FirstString(doc.RootElement, "message", "detail", "reason");
+                            if (!string.IsNullOrWhiteSpace(observedError))
+                            {
+                                acceptedStreamError = observedError;
+                            }
+                            else if (string.IsNullOrWhiteSpace(acceptedStreamError))
+                            {
+                                acceptedStreamError = "Provider stream returned an LM Studio error event.";
+                            }
                         }
                     }
-                    else if (type.Equals("reasoning.delta", StringComparison.OrdinalIgnoreCase))
+                    catch (JsonException)
                     {
-                        reasoning.Append(FirstString(doc.RootElement, "content"));
-                    }
-                    else if (type.Equals("chat.end", StringComparison.OrdinalIgnoreCase)
-                        && doc.RootElement.TryGetProperty("result", out var result)
-                        && result.ValueKind == JsonValueKind.Object)
-                    {
-                        resultJson = result.GetRawText();
-                    }
-                    else if (type.Equals("error", StringComparison.OrdinalIgnoreCase))
-                    {
-                        streamError = ExtractProviderErrorMessage(doc.RootElement);
+                        acceptedMalformedEvent = true;
                     }
                 }
-                catch (JsonException)
+
+                watch.Stop();
+                ModelCompletionResult? terminalResult = null;
+                if (!string.IsNullOrWhiteSpace(resultJson))
                 {
+                    terminalResult = NativeCompletionFromBody(resultJson, baseUrl, model, (int)watch.ElapsedMilliseconds);
                 }
-            }
 
-            watch.Stop();
-            if (!string.IsNullOrWhiteSpace(resultJson))
-            {
-                var completed = NativeCompletionFromBody(resultJson, baseUrl, model, (int)watch.ElapsedMilliseconds);
-                return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
-            }
+                // LM Studio documents error -> chat.end as a normal failure
+                // sequence. Error evidence must win over the terminal result;
+                // the latter is retained only for safe partial/token evidence.
+                if (!string.IsNullOrWhiteSpace(acceptedStreamError))
+                {
+                    var partialText = !string.IsNullOrWhiteSpace(terminalResult?.Text)
+                        ? terminalResult.Text
+                        : content.ToString().Trim();
+                    var partialReasoning = !string.IsNullOrWhiteSpace(terminalResult?.Reasoning)
+                        ? terminalResult.Reasoning
+                        : reasoning.ToString().Trim();
+                    var failed = new ModelCompletionResult(
+                        false,
+                        baseUrl,
+                        terminalResult?.Model ?? model,
+                        partialText,
+                        partialReasoning,
+                        (int)watch.ElapsedMilliseconds,
+                        terminalResult?.PromptTokens ?? 0,
+                        terminalResult?.CompletionTokens ?? 0,
+                        terminalResult?.TotalTokens ?? 0,
+                        SanitizeProviderError(acceptedStreamError, config.ApiToken),
+                        DateTimeOffset.Now,
+                        terminalResult?.TokensPerSecond ?? 0,
+                        terminalResult?.TimeToFirstTokenMs ?? 0,
+                        terminalResult?.ResponseId ?? "",
+                        terminalResult?.ModelLoadTimeMs ?? 0,
+                        StopReason: ModelCompletionStopReason.ProviderError);
+                    return CompleteObservation(activeObservationId, failed, "provider_stream_error");
+                }
 
-            if (!string.IsNullOrWhiteSpace(streamError))
-            {
-                var failed = new ModelCompletionResult(
+                if (acceptedMalformedEvent)
+                {
+                    var partialText = !string.IsNullOrWhiteSpace(terminalResult?.Text)
+                        ? terminalResult.Text
+                        : content.ToString().Trim();
+                    var partialReasoning = !string.IsNullOrWhiteSpace(terminalResult?.Reasoning)
+                        ? terminalResult.Reasoning
+                        : reasoning.ToString().Trim();
+                    var failed = new ModelCompletionResult(
+                        false,
+                        baseUrl,
+                        terminalResult?.Model ?? model,
+                        partialText,
+                        partialReasoning,
+                        (int)watch.ElapsedMilliseconds,
+                        terminalResult?.PromptTokens ?? 0,
+                        terminalResult?.CompletionTokens ?? 0,
+                        terminalResult?.TotalTokens ?? 0,
+                        "Provider stream contained malformed LM Studio event data; any partial response was preserved.",
+                        DateTimeOffset.Now,
+                        terminalResult?.TokensPerSecond ?? 0,
+                        terminalResult?.TimeToFirstTokenMs ?? 0,
+                        terminalResult?.ResponseId ?? "",
+                        terminalResult?.ModelLoadTimeMs ?? 0,
+                        StopReason: ModelCompletionStopReason.ProviderError);
+                    return CompleteObservation(activeObservationId, failed, "provider_stream_error");
+                }
+
+                if (terminalResult is not null)
+                {
+                    return CompleteObservation(
+                        activeObservationId,
+                        terminalResult,
+                        terminalResult.Ok ? "succeeded" : "empty_response");
+                }
+
+                var partialContent = content.ToString().Trim();
+                var incomplete = new ModelCompletionResult(
                     false,
                     baseUrl,
                     model,
-                    content.ToString().Trim(),
+                    partialContent,
                     reasoning.ToString().Trim(),
                     (int)watch.ElapsedMilliseconds,
                     0,
                     0,
                     0,
-                    SanitizeProviderError(streamError, config.ApiToken),
+                    sawTerminalEvent
+                        ? "Provider stream ended without a terminal LM Studio result; any partial response was preserved."
+                        : "Provider stream ended before the required LM Studio chat.end event; any partial response was preserved.",
                     DateTimeOffset.Now);
-                return CompleteObservation(activeObservationId, failed, "provider_stream_error");
+                return CompleteObservation(activeObservationId, incomplete, "provider_stream_incomplete");
             }
-
-            var streamedContent = content.ToString().Trim();
-            var streamed = new ModelCompletionResult(
-                !string.IsNullOrWhiteSpace(streamedContent),
-                baseUrl,
-                model,
-                streamedContent,
-                reasoning.ToString().Trim(),
-                (int)watch.ElapsedMilliseconds,
-                0,
-                0,
-                0,
-                string.IsNullOrWhiteSpace(streamedContent) ? EmptyCompletionError : "",
-                DateTimeOffset.Now);
-            return CompleteObservation(activeObservationId, streamed, streamed.Ok ? "succeeded" : "empty_response");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             watch.Stop();
-            ObserveUnavailableCompletion(
-                activeObservationId,
-                "caller_cancelled",
-                "The caller cancelled before provider token evidence was available.");
+            if (acceptedContent is not null
+                && (!string.IsNullOrWhiteSpace(acceptedStreamError) || acceptedMalformedEvent))
+            {
+                _ = CompleteObservation(
+                    activeObservationId,
+                    LmStudioAcceptedStreamFailureResult(
+                        baseUrl,
+                        model,
+                        acceptedContent,
+                        acceptedReasoning,
+                        (int)watch.ElapsedMilliseconds,
+                        acceptedStreamError,
+                        acceptedMalformedEvent,
+                        config.ApiToken),
+                    "provider_stream_error");
+            }
+            else
+            {
+                ObserveUnavailableCompletion(
+                    activeObservationId,
+                    "caller_cancelled",
+                    acceptedContent is { Length: > 0 }
+                        ? "The caller cancelled after provider acceptance and partial progress; the accepted stream was not replayed."
+                        : "The caller cancelled after the provider request began; the physical attempt was not replayed.");
+            }
             throw;
         }
         catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or IOException or JsonException)
         {
             watch.Stop();
-            var failed = new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
-            return CompleteObservation(activeObservationId, failed, ex is OperationCanceledException ? "provider_timeout" : "transport_error");
+            var failed = acceptedContent is not null
+                && (!string.IsNullOrWhiteSpace(acceptedStreamError) || acceptedMalformedEvent)
+                ? LmStudioAcceptedStreamFailureResult(
+                    baseUrl,
+                    model,
+                    acceptedContent,
+                    acceptedReasoning,
+                    (int)watch.ElapsedMilliseconds,
+                    acceptedStreamError,
+                    acceptedMalformedEvent,
+                    config.ApiToken)
+                : new ModelCompletionResult(
+                    false,
+                    baseUrl,
+                    model,
+                    acceptedContent?.ToString().Trim() ?? "",
+                    acceptedReasoning?.ToString().Trim() ?? "",
+                    (int)watch.ElapsedMilliseconds,
+                    0,
+                    0,
+                    0,
+                    FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken),
+                    DateTimeOffset.Now);
+            var outcome = !string.IsNullOrWhiteSpace(acceptedStreamError) || acceptedMalformedEvent
+                ? "provider_stream_error"
+                : FailureObservationOutcome(ex);
+            return CompleteObservation(activeObservationId, failed, outcome);
         }
     }
 
@@ -720,9 +944,17 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
 
         var watch = Stopwatch.StartNew();
         var activeObservationId = "";
+        StringBuilder? acceptedContent = null;
+        StringBuilder? acceptedReasoning = null;
+        var acceptedResponseModel = "";
+        var acceptedUsage = new ModelTokenUsage(0, 0, 0);
+        var acceptedTelemetry = new ModelProviderTelemetry(0, 0, "");
+        var acceptedStopReason = ModelCompletionStopReason.Unknown;
+        var acceptedFirstTokenMs = 0;
         try
         {
             var endpoint = new Uri(new Uri(baseUrl + "/"), "chat/completions");
+            var idempotencyKey = CompletionIdempotencyKey(config);
             using var timeout = TimeoutToken(config, cancellationToken);
             for (var attempt = 0; ; attempt++)
             {
@@ -737,20 +969,34 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     Content = CreateJsonContent(payloadBytes)
                 };
                 ApplyAuthorization(request, config);
+                ApplyCompletionIdempotencyKey(request, idempotencyKey);
                 using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
                 if (!response.IsSuccessStatusCode)
                 {
                     var errorBody = await response.Content.ReadAsStringAsync(timeout.Token);
-                    if (retryLlamaCppTransientFailures
-                        && attempt < LlamaCppMaximumRetries
-                        && IsTransientLlamaCppFailure(response.StatusCode, errorBody))
+                    if (attempt < MaximumCompletionAttempts - 1
+                        && TryAuthorizeCompletionRetry(
+                            config,
+                            endpoint,
+                            response.RequestMessage?.RequestUri,
+                            response.StatusCode,
+                            errorBody,
+                            retryLlamaCppTransientFailures,
+                            idempotencyKey,
+                            out var retryEvidence)
+                        && TryResolveRetryDelay(
+                            response.Headers,
+                            attempt,
+                            _timeProvider,
+                            _retryJitterUnit,
+                            out var retryDelay))
                     {
                         ObserveUnavailableCompletion(
                             activeObservationId,
                             "retryable_provider_failure",
-                            "The provider rejected this physical attempt before accepting it; no token evidence was returned.");
+                            retryEvidence);
                         activeObservationId = "";
-                        await DelayLlamaCppRetryAsync(attempt, timeout.Token);
+                        await _retryDelayAsync(retryDelay, timeout.Token);
                         continue;
                     }
 
@@ -775,13 +1021,18 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 // From this point on the provider has accepted the request. Never
                 // replay it: a dropped or malformed stream may already have emitted
                 // tokens or committed provider-side state.
-                var content = new StringBuilder();
-                var reasoning = new StringBuilder();
-                var responseModel = "";
-                var usage = new ModelTokenUsage(0, 0, 0);
-                var telemetry = new ModelProviderTelemetry(0, 0, "");
-                var completionStopReason = ModelCompletionStopReason.Unknown;
-                var firstTokenMs = 0;
+                acceptedContent = new StringBuilder();
+                acceptedReasoning = new StringBuilder();
+                var content = acceptedContent;
+                var reasoning = acceptedReasoning;
+                acceptedResponseModel = "";
+                acceptedUsage = new ModelTokenUsage(0, 0, 0);
+                acceptedTelemetry = new ModelProviderTelemetry(0, 0, "");
+                acceptedStopReason = ModelCompletionStopReason.Unknown;
+                acceptedFirstTokenMs = 0;
+                var sawDone = false;
+                var sawMalformedEvent = false;
+                var streamError = "";
                 await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
                 using var reader = new StreamReader(stream);
                 while (await reader.ReadLineAsync(timeout.Token) is { } line)
@@ -799,31 +1050,43 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
 
                     if (data.Equals("[DONE]", StringComparison.OrdinalIgnoreCase))
                     {
+                        sawDone = true;
                         break;
                     }
 
                     try
                     {
                         using var doc = JsonDocument.Parse(data);
-                        if (string.IsNullOrWhiteSpace(responseModel))
+                        if (doc.RootElement.TryGetProperty("error", out _))
                         {
-                            responseModel = FirstString(doc.RootElement, "model");
+                            streamError = ExtractProviderErrorMessage(doc.RootElement);
+                            if (string.IsNullOrWhiteSpace(streamError))
+                            {
+                                streamError = "Provider stream returned an error event.";
+                            }
+
+                            break;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(acceptedResponseModel))
+                        {
+                            acceptedResponseModel = FirstString(doc.RootElement, "model");
                         }
 
                         var chunkStopReason = ModelCompletionOutcomeClassifier.ExtractStopReason(doc.RootElement);
                         if (chunkStopReason != ModelCompletionStopReason.Unknown)
                         {
-                            completionStopReason = chunkStopReason;
+                            acceptedStopReason = chunkStopReason;
                         }
 
                         if (retryLlamaCppTransientFailures)
                         {
                             var chunkTelemetry = ExtractLlamaCppTelemetry(doc.RootElement);
-                            telemetry = new ModelProviderTelemetry(
-                                chunkTelemetry.TokensPerSecond > 0 ? chunkTelemetry.TokensPerSecond : telemetry.TokensPerSecond,
-                                telemetry.TimeToFirstTokenMs,
-                                string.IsNullOrWhiteSpace(chunkTelemetry.ResponseId) ? telemetry.ResponseId : chunkTelemetry.ResponseId,
-                                chunkTelemetry.ModelLoadTimeMs > 0 ? chunkTelemetry.ModelLoadTimeMs : telemetry.ModelLoadTimeMs);
+                            acceptedTelemetry = new ModelProviderTelemetry(
+                                chunkTelemetry.TokensPerSecond > 0 ? chunkTelemetry.TokensPerSecond : acceptedTelemetry.TokensPerSecond,
+                                acceptedTelemetry.TimeToFirstTokenMs,
+                                string.IsNullOrWhiteSpace(chunkTelemetry.ResponseId) ? acceptedTelemetry.ResponseId : chunkTelemetry.ResponseId,
+                                chunkTelemetry.ModelLoadTimeMs > 0 ? chunkTelemetry.ModelLoadTimeMs : acceptedTelemetry.ModelLoadTimeMs);
                         }
 
                         if (doc.RootElement.TryGetProperty("usage", out var usageElement)
@@ -832,7 +1095,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                             var promptTokens = GetTokenCount(usageElement, "prompt_tokens");
                             var completionTokens = GetTokenCount(usageElement, "completion_tokens");
                             var totalTokens = GetTokenCount(usageElement, "total_tokens");
-                            usage = new ModelTokenUsage(promptTokens, completionTokens, totalTokens <= 0 ? promptTokens + completionTokens : totalTokens);
+                            acceptedUsage = new ModelTokenUsage(promptTokens, completionTokens, totalTokens <= 0 ? promptTokens + completionTokens : totalTokens);
                         }
 
                         if (!doc.RootElement.TryGetProperty("choices", out var choices)
@@ -851,9 +1114,9 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
 
                         var contentDelta = FirstString(delta, "content");
                         var reasoningDelta = FirstString(delta, "reasoning_content", "reasoning");
-                        if (firstTokenMs <= 0 && (contentDelta.Length > 0 || reasoningDelta.Length > 0))
+                        if (acceptedFirstTokenMs <= 0 && (contentDelta.Length > 0 || reasoningDelta.Length > 0))
                         {
-                            firstTokenMs = Math.Max(1, (int)watch.ElapsedMilliseconds);
+                            acceptedFirstTokenMs = Math.Max(1, (int)watch.ElapsedMilliseconds);
                         }
 
                         if (contentDelta.Length > 0)
@@ -866,45 +1129,145 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     }
                     catch (JsonException)
                     {
+                        sawMalformedEvent = true;
                     }
                 }
 
                 watch.Stop();
                 var streamedContent = content.ToString().Trim();
+                var streamedReasoning = reasoning.ToString().Trim();
+                if (!string.IsNullOrWhiteSpace(streamError))
+                {
+                    var failed = new ModelCompletionResult(
+                        false,
+                        baseUrl,
+                        string.IsNullOrWhiteSpace(acceptedResponseModel) ? model : acceptedResponseModel,
+                        streamedContent,
+                        streamedReasoning,
+                        (int)watch.ElapsedMilliseconds,
+                        acceptedUsage.PromptTokens,
+                        acceptedUsage.CompletionTokens,
+                        acceptedUsage.TotalTokens,
+                        SanitizeProviderError(streamError, config.ApiToken),
+                        DateTimeOffset.Now,
+                        acceptedTelemetry.TokensPerSecond,
+                        acceptedFirstTokenMs,
+                        acceptedTelemetry.ResponseId,
+                        acceptedTelemetry.ModelLoadTimeMs,
+                        StopReason: ModelCompletionStopReason.ProviderError);
+                    return CompleteObservation(activeObservationId, failed, "provider_stream_error");
+                }
+
+                if (sawMalformedEvent)
+                {
+                    var failed = new ModelCompletionResult(
+                        false,
+                        baseUrl,
+                        string.IsNullOrWhiteSpace(acceptedResponseModel) ? model : acceptedResponseModel,
+                        streamedContent,
+                        streamedReasoning,
+                        (int)watch.ElapsedMilliseconds,
+                        acceptedUsage.PromptTokens,
+                        acceptedUsage.CompletionTokens,
+                        acceptedUsage.TotalTokens,
+                        "Provider stream contained malformed event data; any partial response was preserved.",
+                        DateTimeOffset.Now,
+                        acceptedTelemetry.TokensPerSecond,
+                        acceptedFirstTokenMs,
+                        acceptedTelemetry.ResponseId,
+                        acceptedTelemetry.ModelLoadTimeMs,
+                        StopReason: ModelCompletionStopReason.ProviderError);
+                    return CompleteObservation(activeObservationId, failed, "provider_stream_error");
+                }
+
+                if (!sawDone && acceptedStopReason == ModelCompletionStopReason.Unknown)
+                {
+                    var incomplete = new ModelCompletionResult(
+                        false,
+                        baseUrl,
+                        string.IsNullOrWhiteSpace(acceptedResponseModel) ? model : acceptedResponseModel,
+                        streamedContent,
+                        streamedReasoning,
+                        (int)watch.ElapsedMilliseconds,
+                        acceptedUsage.PromptTokens,
+                        acceptedUsage.CompletionTokens,
+                        acceptedUsage.TotalTokens,
+                        "Provider stream ended before terminal completion evidence; any partial response was preserved.",
+                        DateTimeOffset.Now,
+                        acceptedTelemetry.TokensPerSecond,
+                        acceptedFirstTokenMs,
+                        acceptedTelemetry.ResponseId,
+                        acceptedTelemetry.ModelLoadTimeMs,
+                        StopReason: ModelCompletionStopReason.ProviderError);
+                    return CompleteObservation(activeObservationId, incomplete, "provider_stream_incomplete");
+                }
+
                 var completed = new ModelCompletionResult(
                     !string.IsNullOrWhiteSpace(streamedContent),
                     baseUrl,
-                    string.IsNullOrWhiteSpace(responseModel) ? model : responseModel,
+                    string.IsNullOrWhiteSpace(acceptedResponseModel) ? model : acceptedResponseModel,
                     streamedContent,
-                    reasoning.ToString().Trim(),
+                    streamedReasoning,
                     (int)watch.ElapsedMilliseconds,
-                    usage.PromptTokens,
-                    usage.CompletionTokens,
-                    usage.TotalTokens,
+                    acceptedUsage.PromptTokens,
+                    acceptedUsage.CompletionTokens,
+                    acceptedUsage.TotalTokens,
                     string.IsNullOrWhiteSpace(streamedContent) ? EmptyCompletionError : "",
                     DateTimeOffset.Now,
-                    telemetry.TokensPerSecond,
-                    firstTokenMs,
-                    telemetry.ResponseId,
-                    telemetry.ModelLoadTimeMs,
-                    StopReason: completionStopReason);
+                    acceptedTelemetry.TokensPerSecond,
+                    acceptedFirstTokenMs,
+                    acceptedTelemetry.ResponseId,
+                    acceptedTelemetry.ModelLoadTimeMs,
+                    StopReason: acceptedStopReason);
                 return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             watch.Stop();
-            ObserveUnavailableCompletion(
-                activeObservationId,
-                "caller_cancelled",
-                "The caller cancelled before provider token evidence was available.");
+            if (acceptedContent is not null)
+            {
+                _ = CompleteObservation(
+                    activeObservationId,
+                    AcceptedStreamInterruptionResult(
+                        baseUrl,
+                        model,
+                        acceptedResponseModel,
+                        acceptedContent,
+                        acceptedReasoning,
+                        acceptedUsage,
+                        acceptedTelemetry,
+                        acceptedFirstTokenMs,
+                        (int)watch.ElapsedMilliseconds,
+                        "Provider stream was cancelled after acceptance; any partial response was preserved and was not replayed."),
+                    "caller_cancelled");
+            }
+            else
+            {
+                ObserveUnavailableCompletion(
+                    activeObservationId,
+                    "caller_cancelled",
+                    "The caller cancelled after the provider request began; the physical attempt was not replayed.");
+            }
             throw;
         }
         catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or IOException or JsonException)
         {
             watch.Stop();
-            var failed = new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
-            return CompleteObservation(activeObservationId, failed, ex is OperationCanceledException ? "provider_timeout" : "transport_error");
+            var failed = acceptedContent is null
+                ? new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now)
+                : AcceptedStreamInterruptionResult(
+                    baseUrl,
+                    model,
+                    acceptedResponseModel,
+                    acceptedContent,
+                    acceptedReasoning,
+                    acceptedUsage,
+                    acceptedTelemetry,
+                    acceptedFirstTokenMs,
+                    (int)watch.ElapsedMilliseconds,
+                    FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken));
+            return CompleteObservation(activeObservationId, failed, FailureObservationOutcome(ex));
         }
     }
 
@@ -929,64 +1292,95 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         try
         {
             var endpoint = new Uri(new Uri(NormalizeOllamaApiBase(config.BaseUrl) + "/"), "chat");
-            activeObservationId = ObserveRequest(
-                config,
-                payloadBytes,
-                "ollama_native_chat",
-                requestedStreaming,
-                attempt: 1);
-            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
-            {
-                Content = CreateJsonContent(payloadBytes)
-            };
-            ApplyAuthorization(request, config);
+            var idempotencyKey = CompletionIdempotencyKey(config);
             using var timeout = TimeoutToken(config, cancellationToken);
-            using var response = await _httpClient.SendAsync(request, timeout.Token);
-            var body = await response.Content.ReadAsStringAsync(timeout.Token);
-            if (!response.IsSuccessStatusCode)
+            for (var attempt = 0; ; attempt++)
             {
-                watch.Stop();
-                var failed = new ModelCompletionResult(
-                    false,
-                    baseUrl,
-                    model,
-                    "",
-                    "",
-                    (int)watch.ElapsedMilliseconds,
-                    0,
-                    0,
-                    0,
-                    FriendlyProviderHttpError(body, response.ReasonPhrase, baseUrl, config.ApiToken),
-                    DateTimeOffset.Now,
-                    ProviderStatusCode: (int)response.StatusCode,
-                    ProviderErrorCode: ExtractProviderErrorCode(body, config.ApiToken));
-                return CompleteObservation(activeObservationId, failed, "provider_error");
-            }
+                activeObservationId = ObserveRequest(
+                    config,
+                    payloadBytes,
+                    "ollama_native_chat",
+                    requestedStreaming,
+                    attempt + 1);
+                using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+                {
+                    Content = CreateJsonContent(payloadBytes)
+                };
+                ApplyAuthorization(request, config);
+                ApplyCompletionIdempotencyKey(request, idempotencyKey);
+                using var response = await _httpClient.SendAsync(request, timeout.Token);
+                var body = await response.Content.ReadAsStringAsync(timeout.Token);
+                if (!response.IsSuccessStatusCode)
+                {
+                    if (attempt < MaximumCompletionAttempts - 1
+                        && TryAuthorizeCompletionRetry(
+                            config,
+                            endpoint,
+                            response.RequestMessage?.RequestUri,
+                            response.StatusCode,
+                            body,
+                            useLlamaCppBusyBodyPredicates: false,
+                            idempotencyKey,
+                            out var retryEvidence)
+                        && TryResolveRetryDelay(
+                            response.Headers,
+                            attempt,
+                            _timeProvider,
+                            _retryJitterUnit,
+                            out var retryDelay))
+                    {
+                        ObserveUnavailableCompletion(
+                            activeObservationId,
+                            "retryable_provider_failure",
+                            retryEvidence);
+                        activeObservationId = "";
+                        await _retryDelayAsync(retryDelay, timeout.Token);
+                        continue;
+                    }
 
-            watch.Stop();
-            using var completionDocument = JsonDocument.Parse(body);
-            var completionRoot = completionDocument.RootElement;
-            var usage = ExtractOllamaUsage(completionRoot);
-            var telemetry = ExtractOllamaTelemetry(completionRoot);
-            var text = ExtractOllamaChatContent(completionRoot).Trim();
-            var completed = new ModelCompletionResult(
-                !string.IsNullOrWhiteSpace(text),
-                baseUrl,
-                ExtractOllamaModel(completionRoot, model),
-                text,
-                ExtractOllamaReasoning(completionRoot).Trim(),
-                (int)watch.ElapsedMilliseconds,
-                usage.PromptTokens,
-                usage.CompletionTokens,
-                usage.TotalTokens,
-                string.IsNullOrWhiteSpace(text) ? EmptyCompletionError : "",
-                DateTimeOffset.Now,
-                telemetry.TokensPerSecond,
-                telemetry.TimeToFirstTokenMs,
-                telemetry.ResponseId,
-                telemetry.ModelLoadTimeMs,
-                StopReason: ModelCompletionOutcomeClassifier.ExtractStopReason(completionRoot));
-            return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
+                    watch.Stop();
+                    var failed = new ModelCompletionResult(
+                        false,
+                        baseUrl,
+                        model,
+                        "",
+                        "",
+                        (int)watch.ElapsedMilliseconds,
+                        0,
+                        0,
+                        0,
+                        FriendlyProviderHttpError(body, response.ReasonPhrase, baseUrl, config.ApiToken),
+                        DateTimeOffset.Now,
+                        ProviderStatusCode: (int)response.StatusCode,
+                        ProviderErrorCode: ExtractProviderErrorCode(body, config.ApiToken));
+                    return CompleteObservation(activeObservationId, failed, "provider_error");
+                }
+
+                watch.Stop();
+                using var completionDocument = JsonDocument.Parse(body);
+                var completionRoot = completionDocument.RootElement;
+                var usage = ExtractOllamaUsage(completionRoot);
+                var telemetry = ExtractOllamaTelemetry(completionRoot);
+                var text = ExtractOllamaChatContent(completionRoot).Trim();
+                var completed = new ModelCompletionResult(
+                    !string.IsNullOrWhiteSpace(text),
+                    baseUrl,
+                    ExtractOllamaModel(completionRoot, model),
+                    text,
+                    ExtractOllamaReasoning(completionRoot).Trim(),
+                    (int)watch.ElapsedMilliseconds,
+                    usage.PromptTokens,
+                    usage.CompletionTokens,
+                    usage.TotalTokens,
+                    string.IsNullOrWhiteSpace(text) ? EmptyCompletionError : "",
+                    DateTimeOffset.Now,
+                    telemetry.TokensPerSecond,
+                    telemetry.TimeToFirstTokenMs,
+                    telemetry.ResponseId,
+                    telemetry.ModelLoadTimeMs,
+                    StopReason: ModelCompletionOutcomeClassifier.ExtractStopReason(completionRoot));
+                return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -997,11 +1391,11 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 "The caller cancelled before provider token evidence was available.");
             throw;
         }
-        catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or JsonException)
+        catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or IOException or JsonException)
         {
             watch.Stop();
             var failed = new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
-            return CompleteObservation(activeObservationId, failed, ex is OperationCanceledException ? "provider_timeout" : "transport_error");
+            return CompleteObservation(activeObservationId, failed, FailureObservationOutcome(ex));
         }
     }
 
@@ -1829,13 +2223,61 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         return timeout;
     }
 
-    private static bool IsTransientLlamaCppFailure(HttpStatusCode statusCode, string body)
+    private static bool TryAuthorizeCompletionRetry(
+        ModelProviderConfig config,
+        Uri requestedEndpoint,
+        Uri? responseEndpoint,
+        HttpStatusCode statusCode,
+        string body,
+        bool useLlamaCppBusyBodyPredicates,
+        string idempotencyKey,
+        out string evidence)
+    {
+        evidence = "";
+        if (!IsRetryableAvailabilitySignal(statusCode, body, useLlamaCppBusyBodyPredicates))
+        {
+            return false;
+        }
+
+        // A fully received 429/503 is delay guidance, not proof that an
+        // upstream remote provider did no work. Automatic replay is therefore
+        // limited to an explicitly configured end-to-end idempotency-key
+        // contract. The effective response authority must still be the one the
+        // user configured; an HTTP redirect cannot silently broaden that claim.
+        var effectiveEndpoint = responseEndpoint ?? requestedEndpoint;
+        if (idempotencyKey.Length > 0
+            && SupportsCompletionIdempotencyKey(config)
+            && HasSameAuthority(requestedEndpoint, effectiveEndpoint))
+        {
+            evidence = "Retry evidence: idempotency_key. "
+                + "The explicitly configured endpoint contract reuses one idempotency key for this logical completion.";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasSameAuthority(Uri left, Uri right) =>
+        left.Scheme.Equals(right.Scheme, StringComparison.OrdinalIgnoreCase)
+        && left.Host.Equals(right.Host, StringComparison.OrdinalIgnoreCase)
+        && left.Port == right.Port;
+
+    private static bool IsRetryableAvailabilitySignal(
+        HttpStatusCode statusCode,
+        string body,
+        bool useLlamaCppBusyBodyPredicates)
     {
         if (statusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable)
         {
             return true;
         }
 
+        return useLlamaCppBusyBodyPredicates
+            && IsLlamaCppAvailabilitySignal(statusCode, body);
+    }
+
+    private static bool IsLlamaCppAvailabilitySignal(HttpStatusCode statusCode, string body)
+    {
         if ((int)statusCode is < 409 or >= 600 || string.IsNullOrWhiteSpace(body))
         {
             return false;
@@ -1850,11 +2292,183 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             || safePrefix.Contains("queue full", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static Task DelayLlamaCppRetryAsync(int attempt, CancellationToken cancellationToken)
+    private static string CompletionIdempotencyKey(ModelProviderConfig config) =>
+        SupportsCompletionIdempotencyKey(config)
+            ? $"ai-arena-{Guid.NewGuid():N}"
+            : "";
+
+    internal static bool SupportsCompletionIdempotencyKey(ModelProviderConfig config)
     {
-        var delay = attempt <= 0 ? TimeSpan.FromMilliseconds(150) : TimeSpan.FromMilliseconds(400);
-        return Task.Delay(delay, cancellationToken);
+        ArgumentNullException.ThrowIfNull(config);
+        return config.Extra is not null
+            && config.Extra.TryGetValue(CompletionIdempotencyCapabilityKey, out var capability)
+            && capability.ValueKind == JsonValueKind.True;
     }
+
+    private static void ApplyCompletionIdempotencyKey(HttpRequestMessage request, string idempotencyKey)
+    {
+        if (idempotencyKey.Length > 0)
+        {
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
+        }
+    }
+
+    internal static bool TryResolveRetryDelay(
+        HttpResponseHeaders headers,
+        int failedAttempt,
+        TimeProvider timeProvider,
+        Func<int, double> retryJitterUnit,
+        out TimeSpan delay)
+    {
+        ArgumentNullException.ThrowIfNull(headers);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(retryJitterUnit);
+
+        if (headers.TryGetValues("Retry-After", out var values))
+        {
+            var rawValue = values.FirstOrDefault()?.Trim();
+            if (!string.IsNullOrWhiteSpace(rawValue)
+                && TryParseRetryAfter(rawValue, timeProvider.GetUtcNow(), out var serverDelay))
+            {
+                if (serverDelay > MaximumRetryDelay)
+                {
+                    // Retrying sooner than the provider requested can amplify
+                    // overload or repeat work. A delay outside local policy is
+                    // therefore surfaced to the caller without an auto-replay.
+                    delay = default;
+                    return false;
+                }
+
+                delay = serverDelay <= TimeSpan.Zero ? TimeSpan.Zero : serverDelay;
+                return true;
+            }
+        }
+
+        var exponent = Math.Clamp(failedAttempt, 0, 4);
+        var baseMilliseconds = Math.Min(
+            InitialRetryDelayMilliseconds * (1 << exponent),
+            (int)MaximumRetryDelay.TotalMilliseconds);
+        var jitterUnit = retryJitterUnit(failedAttempt);
+        if (double.IsNaN(jitterUnit) || double.IsInfinity(jitterUnit))
+        {
+            jitterUnit = 0;
+        }
+
+        var jitterMilliseconds = Math.Round(
+            Math.Clamp(jitterUnit, 0, 1) * MaximumRetryJitterMilliseconds,
+            MidpointRounding.AwayFromZero);
+        delay = CapRetryDelay(TimeSpan.FromMilliseconds(baseMilliseconds + jitterMilliseconds));
+        return true;
+    }
+
+    private static bool TryParseRetryAfter(
+        string rawValue,
+        DateTimeOffset utcNow,
+        out TimeSpan delay)
+    {
+        if (rawValue.All(character => character is >= '0' and <= '9'))
+        {
+            // Treat an arbitrarily long digit sequence as a valid but hostile
+            // delta rather than overflowing and falling back to a short delay.
+            if (!decimal.TryParse(rawValue, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds)
+                || seconds > (decimal)MaximumRetryDelay.TotalSeconds)
+            {
+                delay = MaximumRetryDelay + TimeSpan.FromTicks(1);
+                return true;
+            }
+
+            delay = TimeSpan.FromSeconds((double)seconds);
+            return true;
+        }
+
+        if (DateTimeOffset.TryParse(
+            rawValue,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out var retryAt))
+        {
+            delay = retryAt <= utcNow ? TimeSpan.Zero : retryAt - utcNow;
+            return true;
+        }
+
+        delay = default;
+        return false;
+    }
+
+    private static TimeSpan CapRetryDelay(TimeSpan delay)
+    {
+        if (delay <= TimeSpan.Zero)
+        {
+            return TimeSpan.Zero;
+        }
+
+        return delay >= MaximumRetryDelay ? MaximumRetryDelay : delay;
+    }
+
+    private static string FailureObservationOutcome(Exception exception) => exception switch
+    {
+        OperationCanceledException => "provider_timeout",
+        JsonException => "provider_response_error",
+        _ => "transport_error"
+    };
+
+    private static ModelCompletionResult LmStudioAcceptedStreamFailureResult(
+        string baseUrl,
+        string model,
+        StringBuilder content,
+        StringBuilder? reasoning,
+        int latencyMs,
+        string streamError,
+        bool sawMalformedEvent,
+        string apiToken)
+    {
+        var error = !string.IsNullOrWhiteSpace(streamError)
+            ? SanitizeProviderError(streamError, apiToken)
+            : sawMalformedEvent
+                ? "Provider stream contained malformed LM Studio event data; any partial response was preserved."
+                : "Provider stream ended after acceptance; any partial response was preserved.";
+        return new ModelCompletionResult(
+            false,
+            baseUrl,
+            model,
+            content.ToString().Trim(),
+            reasoning?.ToString().Trim() ?? "",
+            latencyMs,
+            0,
+            0,
+            0,
+            error,
+            DateTimeOffset.Now,
+            StopReason: ModelCompletionStopReason.ProviderError);
+    }
+
+    private static ModelCompletionResult AcceptedStreamInterruptionResult(
+        string baseUrl,
+        string fallbackModel,
+        string responseModel,
+        StringBuilder content,
+        StringBuilder? reasoning,
+        ModelTokenUsage usage,
+        ModelProviderTelemetry telemetry,
+        int firstTokenMs,
+        int latencyMs,
+        string error) => new(
+            false,
+            baseUrl,
+            string.IsNullOrWhiteSpace(responseModel) ? fallbackModel : responseModel,
+            content.ToString().Trim(),
+            reasoning?.ToString().Trim() ?? "",
+            latencyMs,
+            usage.PromptTokens,
+            usage.CompletionTokens,
+            usage.TotalTokens,
+            error,
+            DateTimeOffset.Now,
+            telemetry.TokensPerSecond,
+            firstTokenMs,
+            telemetry.ResponseId,
+            telemetry.ModelLoadTimeMs,
+            StopReason: ModelCompletionStopReason.ProviderError);
 
     private static void ApplyAuthorization(HttpRequestMessage request, ModelProviderConfig config)
     {

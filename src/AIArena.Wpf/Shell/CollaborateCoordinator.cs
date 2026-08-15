@@ -26,6 +26,7 @@ internal sealed class CollaborateCoordinator
     private const int MaxRounds = 12;
     private const int MaxToolDocuments = 5;
     private const int MaxToolDocumentChars = 6000;
+    private const int MaxToolDocumentCandidates = 32;
     private const int MaxToolPromptChars = 12000;
     private const int MaxToolCalculations = 8;
     private const int MaxMemoryNotes = 12;
@@ -40,6 +41,10 @@ internal sealed class CollaborateCoordinator
         ".json",
         ".log"
     };
+
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(
+        encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true);
 
     private static readonly CollaborateRole[] DefaultRoles =
     [
@@ -97,6 +102,10 @@ internal sealed class CollaborateCoordinator
     private readonly Func<string, Brush> resourceBrush;
     private readonly Action<string> setShellStatus;
     private readonly CollaborateHistoryStore historyStore;
+    private readonly Func<string, CancellationToken, Task<Stream>> toolDocumentStreamFactory;
+    private readonly ComposerDraftStore? composerDraftStore;
+    private readonly object? addDocumentIdleContent;
+    private readonly string addDocumentIdleAutomationName;
     private readonly List<CollaborateExchange> history = [];
     private readonly List<CollaborateConversation> conversations = [];
     private readonly List<ToolDocument> toolDocuments = [];
@@ -107,6 +116,11 @@ internal sealed class CollaborateCoordinator
     private Popup? recentConversationPopup;
     private Popup? contextReceiptPopup;
     private CancellationTokenSource? runCancellation;
+    private CancellationTokenSource? documentImportCancellation;
+    private bool suppressDocumentImportCompletionStatus;
+    private bool restoringComposerDraft;
+    private string composerDraftScopeKey = "";
+    private string pendingRecoveryWarning = "";
 
     private bool isRunning;
 
@@ -118,7 +132,17 @@ internal sealed class CollaborateCoordinator
 
     internal int DebugHistoryCount => history.Count;
 
+    internal int DebugPendingNewMessageCount => virtualMessageItems?.PendingNewMessageCount ?? 0;
+
+    internal Button? DebugJumpToLatestButton => virtualMessageItems?.JumpToLatestButton;
+
     internal IReadOnlyList<string> DebugMemoryNotes => memoryNotes.ToArray();
+
+    internal bool DebugIsDocumentImporting => documentImportCancellation is not null;
+
+    internal IReadOnlyList<ToolDocumentDebug> DebugToolDocuments => toolDocuments
+        .Select(document => new ToolDocumentDebug(document.Title, document.Text, document.Truncated))
+        .ToArray();
 
     internal string DebugRecentSearchText => recentSearchText;
 
@@ -177,7 +201,9 @@ internal sealed class CollaborateCoordinator
         Func<ArenaViewSnapshot?> snapshot,
         Func<string, Brush> resourceBrush,
         Action<string> setShellStatus,
-        CollaborateHistoryStore? historyStore = null)
+        CollaborateHistoryStore? historyStore = null,
+        Func<string, CancellationToken, Task<Stream>>? toolDocumentStreamFactory = null,
+        ComposerDraftStore? composerDraftStore = null)
     {
         this.modelClient = modelClient ?? new ModelProviderClient();
         this.dispatcher = dispatcher;
@@ -187,6 +213,7 @@ internal sealed class CollaborateCoordinator
         AutomationProperties.SetName(messageItems, "AI Collaborate conversation");
         AutomationProperties.SetHelpText(messageItems, "AI Collaborate prompts and answers in chronological order.");
         this.promptText = promptText;
+        this.promptText.MaxLength = ComposerDraftStore.MaxDraftCharacters;
         this.planPromptButton = planPromptButton;
         this.critiquePromptButton = critiquePromptButton;
         this.shipPromptButton = shipPromptButton;
@@ -222,7 +249,11 @@ internal sealed class CollaborateCoordinator
         this.resourceBrush = resourceBrush;
         this.setShellStatus = setShellStatus;
         this.historyStore = historyStore ?? new CollaborateHistoryStore();
-        this.promptText.TextChanged += (_, _) => RefreshPromptBudget();
+        this.toolDocumentStreamFactory = toolDocumentStreamFactory ?? OpenToolDocumentStreamAsync;
+        this.composerDraftStore = composerDraftStore;
+        addDocumentIdleContent = addDocumentButton.Content;
+        addDocumentIdleAutomationName = AutomationProperties.GetName(addDocumentButton);
+        this.promptText.TextChanged += (_, _) => OnComposerTextChanged();
         AutomationProperties.SetName(this.contextReceiptButton, "Context receipt");
         AutomationProperties.SetHelpText(this.contextReceiptButton, "Preview the run plan and context AI Collaborate will send.");
         this.contextReceiptButton.Click += (_, _) => ToggleContextReceipt();
@@ -232,14 +263,31 @@ internal sealed class CollaborateCoordinator
     {
         LoadPersistedConversations();
         RenderEmptyState();
+        RefreshComposerDraftScope();
         RefreshProviderState();
         RefreshRecentItems();
         RefreshToolItems();
         RefreshPromptBudget();
     }
 
+    internal bool PublishPendingRecoveryWarning(Action<string> publish)
+    {
+        ArgumentNullException.ThrowIfNull(publish);
+        dispatcher.VerifyAccess();
+        if (string.IsNullOrWhiteSpace(pendingRecoveryWarning))
+        {
+            return false;
+        }
+
+        var warning = pendingRecoveryWarning;
+        pendingRecoveryWarning = "";
+        publish(warning);
+        return true;
+    }
+
     public void RefreshProviderState()
     {
+        RefreshComposerDraftScope();
         var current = snapshot();
         var providerModel = current is null ? "-" : DisplayModel(current.ProviderModel);
         providerText.Text = current is null
@@ -294,9 +342,11 @@ internal sealed class CollaborateCoordinator
             return;
         }
 
+        promptText.Clear();
         currentConversationId = null;
         history.Clear();
-        promptText.Clear();
+        composerDraftStore?.Remove(CurrentComposerDraftScope());
+        RefreshComposerDraftScope();
         ResetToolContext();
         UpdateStatus("Ready.");
         RefreshRecentItems();
@@ -376,8 +426,15 @@ internal sealed class CollaborateCoordinator
         UpdateStatus($"{PromptTemplateLabel(templateId)} prompt staged.");
     }
 
-    public void AddDocuments()
+    public async Task AddDocumentsAsync(Window? owner = null)
     {
+        dispatcher.VerifyAccess();
+        if (documentImportCancellation is not null)
+        {
+            CancelDocumentImport();
+            return;
+        }
+
         if (isRunning)
         {
             return;
@@ -391,42 +448,212 @@ internal sealed class CollaborateCoordinator
             Filter = "Text documents|*.txt;*.md;*.markdown;*.csv;*.json;*.log|All files|*.*"
         };
 
-        if (dialog.ShowDialog() != true)
+        bool selected;
+        try
+        {
+            selected = owner is null
+                ? dialog.ShowDialog() == true
+                : dialog.ShowDialog(owner) == true;
+        }
+        catch
+        {
+            UpdateStatus("Could not open the document picker. Try again or restart AI Arena - Lite.");
+            return;
+        }
+
+        if (!selected)
         {
             return;
         }
 
-        var added = 0;
-        var failures = new List<string>();
-        foreach (var path in dialog.FileNames)
+        try
         {
-            if (toolDocuments.Count >= MaxToolDocuments)
-            {
-                failures.Add($"Limit reached ({MaxToolDocuments} documents).");
-                break;
-            }
+            await ImportDocumentsAsync(dialog.FileNames);
+        }
+        catch
+        {
+            UpdateStatus("Document import stopped unexpectedly. Documents already imported are still available.");
+        }
+    }
 
-            if (TryLoadToolDocument(path, out var document, out var error))
-            {
-                toolDocuments.RemoveAll(item => item.Path.Equals(document.Path, StringComparison.OrdinalIgnoreCase));
-                toolDocuments.Add(document);
-                added++;
-            }
-            else
-            {
-                failures.Add(error);
-            }
+    public void CancelDocumentImport()
+    {
+        dispatcher.VerifyAccess();
+        if (documentImportCancellation is null)
+        {
+            return;
         }
 
-        RefreshToolItems();
-        UpdateStatus(added > 0
-            ? $"Added {added.ToString(CultureInfo.InvariantCulture)} document{(added == 1 ? "" : "s")}."
-            : failures.FirstOrDefault() ?? "No documents added.");
+        RequestDocumentImportCancellation(documentImportCancellation);
+        addDocumentButton.IsEnabled = false;
+        AutomationProperties.SetName(addDocumentButton, "Cancelling document import");
+        UpdateStatus("Cancelling document import. The current file will not be added.");
+    }
+
+    internal async Task<DocumentImportReceipt> ImportDocumentsAsync(
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        dispatcher.VerifyAccess();
+        if (documentImportCancellation is not null)
+        {
+            throw new InvalidOperationException("A document import is already running.");
+        }
+
+        if (isRunning || paths.Count == 0)
+        {
+            return DocumentImportReceipt.Empty;
+        }
+
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        documentImportCancellation = linkedCancellation;
+        suppressDocumentImportCompletionStatus = false;
+        SetDocumentImportControls();
+
+        var imported = 0;
+        var added = 0;
+        var updated = 0;
+        var duplicates = 0;
+        var cancelled = false;
+        var issues = new List<DocumentImportIssue>();
+        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var currentFileName = "document";
+        var candidateCount = Math.Min(paths.Count, MaxToolDocumentCandidates);
+        var omittedSelectionCount = Math.Max(0, paths.Count - candidateCount);
+
+        try
+        {
+            for (var index = 0; index < candidateCount; index++)
+            {
+                linkedCancellation.Token.ThrowIfCancellationRequested();
+                var selectedPath = paths[index] ?? "";
+                currentFileName = SafeDocumentFileName(selectedPath);
+                UpdateStatus(DocumentImportProgress("Importing", index, candidateCount, currentFileName));
+
+                if (!TryNormalizeDocumentPath(selectedPath, out var fullPath))
+                {
+                    AddDocumentImportIssue(
+                        issues,
+                        index,
+                        candidateCount,
+                        currentFileName,
+                        "The selected file name is invalid. Choose the file again.");
+                    continue;
+                }
+
+                if (!seenPaths.Add(fullPath))
+                {
+                    duplicates++;
+                    AddDocumentImportIssue(
+                        issues,
+                        index,
+                        candidateCount,
+                        currentFileName,
+                        "Duplicate selection skipped; each file is imported once.");
+                    continue;
+                }
+
+                if (!SupportedToolDocumentExtensions.Contains(Path.GetExtension(fullPath)))
+                {
+                    AddDocumentImportIssue(
+                        issues,
+                        index,
+                        candidateCount,
+                        currentFileName,
+                        "Unsupported file type. Choose TXT, Markdown, CSV, JSON, or LOG.");
+                    continue;
+                }
+
+                var existingIndex = toolDocuments.FindIndex(document =>
+                    document.Path.Equals(fullPath, StringComparison.OrdinalIgnoreCase));
+                if (existingIndex < 0 && toolDocuments.Count >= MaxToolDocuments)
+                {
+                    AddDocumentImportIssue(
+                        issues,
+                        index,
+                        candidateCount,
+                        currentFileName,
+                        $"The {MaxToolDocuments.ToString(CultureInfo.InvariantCulture)}-document limit is full. Remove a document and try again.");
+                    continue;
+                }
+
+                var loadResult = await LoadToolDocumentAsync(fullPath, currentFileName, linkedCancellation.Token);
+                linkedCancellation.Token.ThrowIfCancellationRequested();
+                if (loadResult.Document is not ToolDocument document)
+                {
+                    AddDocumentImportIssue(
+                        issues,
+                        index,
+                        candidateCount,
+                        currentFileName,
+                        loadResult.Error);
+                    continue;
+                }
+
+                existingIndex = toolDocuments.FindIndex(document =>
+                    document.Path.Equals(fullPath, StringComparison.OrdinalIgnoreCase));
+                if (existingIndex >= 0)
+                {
+                    toolDocuments[existingIndex] = document;
+                    updated++;
+                }
+                else if (toolDocuments.Count >= MaxToolDocuments)
+                {
+                    AddDocumentImportIssue(
+                        issues,
+                        index,
+                        candidateCount,
+                        currentFileName,
+                        $"The {MaxToolDocuments.ToString(CultureInfo.InvariantCulture)}-document limit is full. Remove a document and try again.");
+                    continue;
+                }
+                else
+                {
+                    toolDocuments.Add(document);
+                    added++;
+                }
+
+                imported++;
+                RefreshToolItems();
+                UpdateStatus(DocumentImportProgress("Imported", index, candidateCount, currentFileName));
+            }
+        }
+        catch (OperationCanceledException) when (linkedCancellation.IsCancellationRequested)
+        {
+            cancelled = true;
+        }
+        finally
+        {
+            if (ReferenceEquals(documentImportCancellation, linkedCancellation))
+            {
+                documentImportCancellation = null;
+            }
+
+            SetDocumentImportControls(!isRunning);
+        }
+
+        var receipt = new DocumentImportReceipt(
+            imported,
+            added,
+            updated,
+            duplicates,
+            cancelled,
+            omittedSelectionCount,
+            issues.ToArray());
+        var publishCompletionStatus = !suppressDocumentImportCompletionStatus;
+        suppressDocumentImportCompletionStatus = false;
+        if (publishCompletionStatus)
+        {
+            UpdateStatus(DocumentImportSummary(receipt, currentFileName));
+        }
+
+        return receipt;
     }
 
     public void ClearDocuments()
     {
-        if (isRunning)
+        if (isRunning || documentImportCancellation is not null)
         {
             return;
         }
@@ -569,17 +796,19 @@ internal sealed class CollaborateCoordinator
             return false;
         }
 
+        CaptureComposerDraft();
         currentConversationId = null;
         history.Clear();
         history.AddRange(conversation.Exchanges);
-        promptText.Clear();
+        composerDraftStore?.Remove(CurrentComposerDraftScope());
+        RefreshComposerDraftScope();
         ResetToolContext();
         memoryNotes.AddRange(NormalizeMemoryNotes(conversation.MemoryNotes));
         RefreshToolItems();
         RenderConversation(conversation);
         UpdateStatus($"Forked: {conversation.Title}. Next reply saves as a new chat.");
         RefreshRecentItems();
-        ScrollToEnd();
+        JumpToLatest();
         return true;
     }
 
@@ -605,8 +834,11 @@ internal sealed class CollaborateCoordinator
             return false;
         }
 
+        CaptureComposerDraft();
         currentConversationId = null;
         history.Clear();
+        composerDraftStore?.Remove(CurrentComposerDraftScope());
+        RefreshComposerDraftScope();
         ResetToolContext();
         memoryNotes.AddRange(NormalizeMemoryNotes(conversation.MemoryNotes));
         RefreshToolItems();
@@ -635,10 +867,7 @@ internal sealed class CollaborateCoordinator
 
     internal async Task ControlSendAsync(string prompt)
     {
-        promptText.Text = prompt ?? "";
-        promptText.CaretIndex = promptText.Text.Length;
-        promptText.ScrollToEnd();
-        await SendAsync();
+        await SendCoreAsync(prompt ?? "", controlPrompt: true);
     }
 
     internal bool ControlForkRecent(string id)
@@ -710,15 +939,28 @@ internal sealed class CollaborateCoordinator
 
     public async Task SendAsync()
     {
+        await SendCoreAsync(null, controlPrompt: false);
+    }
+
+    private async Task SendCoreAsync(string? injectedPrompt, bool controlPrompt)
+    {
         if (isRunning)
         {
             return;
         }
 
-        var prompt = promptText.Text.Trim();
+        var usesVisibleComposer = !controlPrompt;
+        var visibleComposerAtSend = promptText.Text ?? "";
+        var draftScopeAtSend = CurrentComposerDraftScope();
+        var prompt = usesVisibleComposer
+            ? visibleComposerAtSend.Trim()
+            : (injectedPrompt ?? "").Trim();
         if (string.IsNullOrWhiteSpace(prompt))
         {
-            promptText.Focus();
+            if (usesVisibleComposer)
+            {
+                promptText.Focus();
+            }
             return;
         }
 
@@ -737,6 +979,7 @@ internal sealed class CollaborateCoordinator
             return;
         }
 
+        CancelDocumentImportForContextTransition();
         isRunning = true;
         runCancellation?.Dispose();
         runCancellation = new CancellationTokenSource();
@@ -752,7 +995,6 @@ internal sealed class CollaborateCoordinator
         SetPromptAssistControlsEnabled(false);
         SetToolControlsEnabled(false);
         RefreshRecentItems();
-        promptText.Clear();
 
         if (history.Count == 0)
         {
@@ -765,8 +1007,10 @@ internal sealed class CollaborateCoordinator
             out var traceItems,
             out var runReviewItems,
             $"{pendingExchangeKey}-assistant");
+        NotifyAssistantResponseStarted();
         ScrollToEnd();
 
+        var logicallySuccessful = false;
         try
         {
             var rounds = EffectiveRounds(mode, SelectedRounds());
@@ -788,8 +1032,10 @@ internal sealed class CollaborateCoordinator
             RenderRunReview(runReviewItems, prompt, finalAnswer, result.TraceSteps, result.Ok ? "Ready." : "Answer completed with model errors.");
             history.Add(new CollaborateExchange(prompt, finalAnswer, result.TraceSteps.ToArray()));
             TrimHistory();
+            var persistenceResult = SaveCurrentConversation();
+            logicallySuccessful = result.Ok && persistenceResult.Ok;
             ApplyRunStatusAfterSave(
-                SaveCurrentConversation(),
+                persistenceResult,
                 result.Ok ? "Ready." : "Answer completed with model errors.");
         }
         catch (OperationCanceledException)
@@ -803,15 +1049,20 @@ internal sealed class CollaborateCoordinator
         }
         catch (Exception ex)
         {
-            var failureAnswer = $"Collaboration failed: {ex.Message}";
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Collaborate);
+            var failureAnswer = presentation.DisplayText;
             RenderMarkdown(answerHost, failureAnswer, 14);
-            RenderRunReview(runReviewItems, prompt, failureAnswer, [], "Collaboration failed.");
+            RenderRunReview(runReviewItems, prompt, failureAnswer, [], presentation.DisplayText);
             history.Add(InterruptedExchange(prompt, failureAnswer));
             TrimHistory();
-            ApplyRunStatusAfterSave(SaveCurrentConversation(), "Collaboration failed.");
+            ApplyRunStatusAfterSave(SaveCurrentConversation(), presentation.DisplayText);
         }
         finally
         {
+            TransitionComposerAfterRun(
+                draftScopeAtSend,
+                visibleComposerAtSend,
+                usesVisibleComposer && logicallySuccessful);
             isRunning = false;
             stopButton.IsEnabled = false;
             sendButton.IsEnabled = true;
@@ -1243,7 +1494,7 @@ internal sealed class CollaborateCoordinator
             builder.AppendLine("Documents:");
             foreach (var document in toolDocuments)
             {
-                builder.AppendLine($"- {document.Title} ({document.Path}){(document.Truncated ? " [truncated]" : "")}");
+                builder.AppendLine($"- {document.Title}{(document.Truncated ? " [truncated]" : "")}");
                 builder.AppendLine(document.Text);
             }
         }
@@ -1274,6 +1525,7 @@ internal sealed class CollaborateCoordinator
 
     private void ResetToolContext()
     {
+        CancelDocumentImportForContextTransition();
         toolDocuments.Clear();
         toolCalculations.Clear();
         memoryNotes.Clear();
@@ -1299,6 +1551,129 @@ internal sealed class CollaborateCoordinator
             toolCalculations.Count,
             memoryNotes.Count,
             ToolContextCharacterCount());
+    }
+
+    public void CaptureDraftForShutdown()
+    {
+        CaptureComposerDraft();
+    }
+
+    private void OnComposerTextChanged()
+    {
+        RefreshPromptBudget();
+        CaptureComposerDraft();
+    }
+
+    private void CaptureComposerDraft()
+    {
+        if (restoringComposerDraft || composerDraftStore is null)
+        {
+            return;
+        }
+
+        var scope = composerDraftScopeKey;
+        if (scope.Length > 0)
+        {
+            composerDraftStore.Set(scope, promptText.Text ?? "");
+        }
+    }
+
+    private void RefreshComposerDraftScope()
+    {
+        var nextScope = CurrentComposerDraftScope();
+        if (composerDraftScopeKey.Equals(nextScope, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        CaptureComposerDraft();
+        composerDraftScopeKey = nextScope;
+        if (composerDraftStore is not null)
+        {
+            SetComposerText(nextScope.Length == 0 ? "" : composerDraftStore.Get(nextScope));
+        }
+    }
+
+    private void TransitionComposerAfterRun(
+        string scopeAtSend,
+        string visibleComposerAtSend,
+        bool logicallySuccessful)
+    {
+        var nextScope = CurrentComposerDraftScope();
+        var liveText = promptText.Text ?? "";
+        var unchanged = string.Equals(liveText, visibleComposerAtSend, StringComparison.Ordinal);
+        composerDraftScopeKey = nextScope;
+
+        if (composerDraftStore is null)
+        {
+            if (logicallySuccessful && unchanged)
+            {
+                SetComposerText("");
+            }
+
+            return;
+        }
+
+        if (logicallySuccessful && unchanged)
+        {
+            composerDraftStore.Remove(scopeAtSend);
+            if (!nextScope.Equals(scopeAtSend, StringComparison.Ordinal))
+            {
+                composerDraftStore.Remove(nextScope);
+            }
+
+            SetComposerText("");
+            RefreshPromptBudget();
+            return;
+        }
+
+        if (!nextScope.Equals(scopeAtSend, StringComparison.Ordinal))
+        {
+            composerDraftStore.Remove(scopeAtSend);
+        }
+
+        composerDraftStore.Set(nextScope, liveText);
+    }
+
+    private void SetComposerText(string text)
+    {
+        text ??= "";
+        if (string.Equals(promptText.Text, text, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var hadKeyboardFocus = promptText.IsKeyboardFocusWithin;
+        var selectionStart = promptText.SelectionStart;
+        var selectionLength = promptText.SelectionLength;
+        restoringComposerDraft = true;
+        try
+        {
+            promptText.Text = text;
+            if (hadKeyboardFocus)
+            {
+                var start = Math.Min(selectionStart, text.Length);
+                promptText.Select(start, Math.Min(selectionLength, text.Length - start));
+            }
+            else
+            {
+                promptText.CaretIndex = text.Length;
+            }
+        }
+        finally
+        {
+            restoringComposerDraft = false;
+        }
+    }
+
+    private string CurrentComposerDraftScope()
+    {
+        var current = snapshot();
+        return ComposerDraftScopes.Collaborate(
+            current?.SessionId,
+            current?.SessionInstanceId,
+            currentConversationId,
+            SelectedMode());
     }
 
     private void ToggleContextReceipt()
@@ -1586,14 +1961,63 @@ internal sealed class CollaborateCoordinator
 
     private void SetToolControlsEnabled(bool enabled)
     {
-        addDocumentButton.IsEnabled = enabled;
-        clearDocumentsButton.IsEnabled = enabled && toolDocuments.Count > 0;
+        SetDocumentImportControls(enabled);
         calculatorText.IsEnabled = enabled;
         runCalculatorButton.IsEnabled = enabled;
         clearCalculationsButton.IsEnabled = enabled && toolCalculations.Count > 0;
         memoryText.IsEnabled = enabled;
         saveMemoryButton.IsEnabled = enabled;
         clearMemoryButton.IsEnabled = enabled && memoryNotes.Count > 0;
+    }
+
+    private void SetDocumentImportControls(bool enabled = true)
+    {
+        if (documentImportCancellation is not null)
+        {
+            addDocumentButton.Content = "Cancel import";
+            addDocumentButton.IsEnabled = !documentImportCancellation.IsCancellationRequested;
+            clearDocumentsButton.IsEnabled = false;
+            AutomationProperties.SetName(
+                addDocumentButton,
+                documentImportCancellation.IsCancellationRequested
+                    ? "Cancelling document import"
+                    : "Cancel document import");
+            AutomationProperties.SetHelpText(
+                addDocumentButton,
+                "Stops reading the current document. Documents already imported remain available.");
+            return;
+        }
+
+        addDocumentButton.Content = addDocumentIdleContent;
+        addDocumentButton.IsEnabled = enabled;
+        clearDocumentsButton.IsEnabled = enabled && toolDocuments.Count > 0;
+        AutomationProperties.SetName(addDocumentButton, addDocumentIdleAutomationName);
+        AutomationProperties.SetHelpText(addDocumentButton, "Select text documents to add to AI Collaborate context.");
+    }
+
+    private void CancelDocumentImportForContextTransition()
+    {
+        if (documentImportCancellation is null)
+        {
+            return;
+        }
+
+        suppressDocumentImportCompletionStatus = true;
+        RequestDocumentImportCancellation(documentImportCancellation);
+        addDocumentButton.IsEnabled = false;
+        AutomationProperties.SetName(addDocumentButton, "Cancelling document import");
+    }
+
+    private static void RequestDocumentImportCancellation(CancellationTokenSource cancellation)
+    {
+        try
+        {
+            cancellation.Cancel();
+        }
+        catch
+        {
+            // Misbehaving stream callbacks must not escape through the WPF click handler.
+        }
     }
 
     private void SetPromptAssistControlsEnabled(bool enabled)
@@ -1610,38 +2034,261 @@ internal sealed class CollaborateCoordinator
         setShellStatus(message);
     }
 
-    private static bool TryLoadToolDocument(string path, out ToolDocument document, out string error)
+    private async Task<ToolDocumentLoadResult> LoadToolDocumentAsync(
+        string fullPath,
+        string safeFileName,
+        CancellationToken cancellationToken)
     {
-        document = new ToolDocument("", "", "", false);
-        error = "";
         try
         {
-            var fullPath = Path.GetFullPath(path);
-            var extension = Path.GetExtension(fullPath);
-            if (!SupportedToolDocumentExtensions.Contains(extension))
+            var openTask = toolDocumentStreamFactory(fullPath, cancellationToken)
+                ?? throw new IOException("The document stream source returned no operation.");
+            await using var stream = await AwaitToolDocumentStreamAsync(openTask, cancellationToken);
+            if (stream is null || !stream.CanRead)
             {
-                error = $"Unsupported file type: {Path.GetFileName(fullPath)}";
-                return false;
+                return ToolDocumentLoadResult.Failed("The file could not be read. Check access and try again.");
             }
 
-            using var reader = new StreamReader(fullPath);
-            var buffer = new char[MaxToolDocumentChars + 1];
-            var read = reader.ReadBlock(buffer, 0, buffer.Length);
-            var text = new string(buffer, 0, Math.Min(read, MaxToolDocumentChars)).Trim();
-            if (string.IsNullOrWhiteSpace(text))
+            var encodingPrefix = await ReadToolDocumentEncodingPrefixAsync(stream, cancellationToken);
+            using var decodedStream = new PrefixReplayStream(stream, encodingPrefix.ReplayBytes);
+            using var reader = new StreamReader(
+                decodedStream,
+                encodingPrefix.Encoding,
+                detectEncodingFromByteOrderMarks: false,
+                bufferSize: 1024,
+                leaveOpen: true);
+            var buffer = new char[Math.Min(1024, MaxToolDocumentChars + 1)];
+            var text = new StringBuilder(MaxToolDocumentChars + 1);
+            while (text.Length < MaxToolDocumentChars + 1)
             {
-                error = $"No readable text found: {Path.GetFileName(fullPath)}";
-                return false;
+                var requested = Math.Min(buffer.Length, MaxToolDocumentChars + 1 - text.Length);
+                var read = await reader.ReadAsync(buffer.AsMemory(0, requested), cancellationToken);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                text.Append(buffer, 0, read);
             }
 
-            document = new ToolDocument(Path.GetFileName(fullPath), fullPath, text, read > MaxToolDocumentChars);
-            return true;
+            cancellationToken.ThrowIfCancellationRequested();
+            var truncated = text.Length > MaxToolDocumentChars;
+            var readableText = text
+                .ToString(0, Math.Min(text.Length, MaxToolDocumentChars))
+                .Trim();
+            if (string.IsNullOrWhiteSpace(readableText))
+            {
+                return ToolDocumentLoadResult.Failed("No readable text was found. Choose a non-empty text document.");
+            }
+
+            return ToolDocumentLoadResult.Succeeded(
+                new ToolDocument(safeFileName, fullPath, readableText, truncated));
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            error = $"Could not load document: {ex.Message}";
+            throw;
+        }
+        catch (DecoderFallbackException)
+        {
+            return ToolDocumentLoadResult.Failed(
+                "The text encoding is invalid or unsupported. Save the file as UTF-8, UTF-16, or UTF-32 and try again.");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return ToolDocumentLoadResult.Failed("Access was denied. Check the file permissions and try again.");
+        }
+        catch (FileNotFoundException)
+        {
+            return ToolDocumentLoadResult.Failed("The file is no longer available. Choose it again.");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return ToolDocumentLoadResult.Failed("The file location is no longer available. Choose the file again.");
+        }
+        catch (IOException)
+        {
+            return ToolDocumentLoadResult.Failed("The file could not be read. Close it in other apps and try again.");
+        }
+        catch (Exception)
+        {
+            return ToolDocumentLoadResult.Failed("The file could not be loaded safely. Choose another text document.");
+        }
+    }
+
+    private static Task<Stream> OpenToolDocumentStreamAsync(string path, CancellationToken cancellationToken)
+    {
+        return Task.Run<Stream>(
+            () => new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 4096,
+                FileOptions.Asynchronous | FileOptions.SequentialScan),
+            cancellationToken);
+    }
+
+    private static async Task<ToolDocumentEncodingPrefix> ReadToolDocumentEncodingPrefixAsync(
+        Stream stream,
+        CancellationToken cancellationToken)
+    {
+        var prefix = new byte[4];
+        var count = 0;
+        while (count < prefix.Length)
+        {
+            var read = await stream.ReadAsync(prefix.AsMemory(count, prefix.Length - count), cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+
+            count += read;
+        }
+
+        Encoding encoding = StrictUtf8;
+        var bomLength = 0;
+        if (count >= 4 && prefix[0] == 0x00 && prefix[1] == 0x00 && prefix[2] == 0xFE && prefix[3] == 0xFF)
+        {
+            encoding = new UTF32Encoding(bigEndian: true, byteOrderMark: false, throwOnInvalidCharacters: true);
+            bomLength = 4;
+        }
+        else if (count >= 4 && prefix[0] == 0xFF && prefix[1] == 0xFE && prefix[2] == 0x00 && prefix[3] == 0x00)
+        {
+            encoding = new UTF32Encoding(bigEndian: false, byteOrderMark: false, throwOnInvalidCharacters: true);
+            bomLength = 4;
+        }
+        else if (count >= 3 && prefix[0] == 0xEF && prefix[1] == 0xBB && prefix[2] == 0xBF)
+        {
+            bomLength = 3;
+        }
+        else if (count >= 2 && prefix[0] == 0xFE && prefix[1] == 0xFF)
+        {
+            encoding = new UnicodeEncoding(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: true);
+            bomLength = 2;
+        }
+        else if (count >= 2 && prefix[0] == 0xFF && prefix[1] == 0xFE)
+        {
+            encoding = new UnicodeEncoding(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true);
+            bomLength = 2;
+        }
+
+        return new ToolDocumentEncodingPrefix(
+            encoding,
+            prefix.AsSpan(bomLength, count - bomLength).ToArray());
+    }
+
+    private static async Task<Stream> AwaitToolDocumentStreamAsync(
+        Task<Stream> openTask,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await openTask.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _ = DisposeLateToolDocumentStreamAsync(openTask);
+            throw;
+        }
+    }
+
+    private static async Task DisposeLateToolDocumentStreamAsync(Task<Stream> openTask)
+    {
+        try
+        {
+            var stream = await openTask.ConfigureAwait(false);
+            if (stream is not null)
+            {
+                await stream.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            // The abandoned open is deliberately observed; user-facing status already reports cancellation.
+        }
+    }
+
+    private void AddDocumentImportIssue(
+        ICollection<DocumentImportIssue> issues,
+        int index,
+        int total,
+        string safeFileName,
+        string message)
+    {
+        issues.Add(new DocumentImportIssue(safeFileName, message));
+        UpdateStatus($"{DocumentImportProgress("Skipped", index, total, safeFileName)} {message}");
+    }
+
+    private static string DocumentImportProgress(string action, int index, int total, string safeFileName)
+    {
+        return $"{action} document {(index + 1).ToString(CultureInfo.InvariantCulture)} of {total.ToString(CultureInfo.InvariantCulture)}: {safeFileName}.";
+    }
+
+    private static string DocumentImportSummary(DocumentImportReceipt receipt, string currentFileName)
+    {
+        var imported = receipt.ImportedCount.ToString(CultureInfo.InvariantCulture);
+        var importLabel = receipt.ImportedCount == 1 ? "document" : "documents";
+        if (receipt.Cancelled)
+        {
+            return $"Document import cancelled. Imported {imported} {importLabel}; {currentFileName} was not added.";
+        }
+
+        if (receipt.Issues.Count > 0 || receipt.OmittedSelectionCount > 0)
+        {
+            var skippedCount = receipt.Issues.Count + receipt.OmittedSelectionCount;
+            var skipped = skippedCount.ToString(CultureInfo.InvariantCulture);
+            var skippedLabel = skippedCount == 1 ? "file was" : "files were";
+            var detail = receipt.Issues.Count > 0
+                ? $"{receipt.Issues[0].FileName}: {receipt.Issues[0].Message}"
+                : $"Select no more than {MaxToolDocumentCandidates.ToString(CultureInfo.InvariantCulture)} files at a time.";
+            return $"Imported {imported} {importLabel}. {skipped} {skippedLabel} skipped. {detail}";
+        }
+
+        if (receipt.ImportedCount == 0)
+        {
+            return "No documents were selected for import.";
+        }
+
+        return $"Imported {imported} {importLabel}.";
+    }
+
+    private static bool TryNormalizeDocumentPath(string path, out string fullPath)
+    {
+        fullPath = "";
+        try
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            fullPath = Path.GetFullPath(path);
+            return !string.IsNullOrWhiteSpace(Path.GetFileName(fullPath));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
             return false;
         }
+    }
+
+    private static string SafeDocumentFileName(string path)
+    {
+        string name;
+        try
+        {
+            name = Path.GetFileName(path);
+        }
+        catch
+        {
+            name = "";
+        }
+
+        var safe = new string(name
+            .Where(character => !char.IsControl(character))
+            .Take(96)
+            .ToArray())
+            .Trim();
+        return string.IsNullOrWhiteSpace(safe) ? "document" : safe;
     }
 
     private static string EvaluateExpression(string input)
@@ -1659,7 +2306,10 @@ internal sealed class CollaborateCoordinator
         }
         catch (Exception ex)
         {
-            return $"Calculator error: {ex.Message}";
+            return AppErrorPresenter.Present(
+                ex,
+                AppErrorContext.Collaborate,
+                AppErrorCategory.InvalidData).DisplayText;
         }
     }
 
@@ -2606,18 +3256,54 @@ internal sealed class CollaborateCoordinator
 
     private void ScrollToEnd()
     {
-        dispatcher.BeginInvoke(
-            () =>
-            {
-                if (virtualMessageItems is not null)
-                {
-                    virtualMessageItems.ScrollToEnd();
-                    return;
-                }
+        if (!dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(ScrollToEnd, DispatcherPriority.Background);
+            return;
+        }
 
-                chatScrollViewer.ScrollToEnd();
-            },
-            DispatcherPriority.Background);
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.NotifyContentChanged();
+            return;
+        }
+
+        var follow = VirtualizingConversationPanel.IsNearBottom(
+            chatScrollViewer.VerticalOffset,
+            chatScrollViewer.ViewportHeight,
+            chatScrollViewer.ExtentHeight);
+        if (follow)
+        {
+            dispatcher.BeginInvoke(chatScrollViewer.ScrollToEnd, DispatcherPriority.Loaded);
+        }
+    }
+
+    private void NotifyAssistantResponseStarted()
+    {
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.NotifyContentChanged(newMessageCount: 1);
+            return;
+        }
+
+        ScrollToEnd();
+    }
+
+    private void JumpToLatest()
+    {
+        if (!dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(JumpToLatest, DispatcherPriority.Background);
+            return;
+        }
+
+        if (virtualMessageItems is not null)
+        {
+            virtualMessageItems.JumpToLatest();
+            return;
+        }
+
+        dispatcher.BeginInvoke(chatScrollViewer.ScrollToEnd, DispatcherPriority.Loaded);
     }
 
     private CollaborateRunResult ResultFromFinal(CollaborateStep final, IReadOnlyList<CollaborateStep> fallbacks)
@@ -3251,10 +3937,11 @@ internal sealed class CollaborateCoordinator
             return;
         }
 
+        CaptureComposerDraft();
         currentConversationId = id;
         history.Clear();
         history.AddRange(conversation.Exchanges);
-        promptText.Clear();
+        RefreshComposerDraftScope();
         ResetToolContext();
         memoryNotes.AddRange(NormalizeMemoryNotes(conversation.MemoryNotes));
         RefreshToolItems();
@@ -3262,7 +3949,7 @@ internal sealed class CollaborateCoordinator
         statusText.Text = $"Loaded: {conversation.Title}";
         setShellStatus(statusText.Text);
         RefreshRecentItems();
-        ScrollToEnd();
+        JumpToLatest();
     }
 
     private void DeleteConversation(Guid id)
@@ -3292,11 +3979,15 @@ internal sealed class CollaborateCoordinator
             return;
         }
 
+        RemoveConversationDrafts(id);
+
         if (currentConversationId == id)
         {
+            promptText.Clear();
             currentConversationId = null;
             history.Clear();
-            promptText.Clear();
+            composerDraftStore?.Remove(CurrentComposerDraftScope());
+            RefreshComposerDraftScope();
             ResetToolContext();
             RenderEmptyState();
             statusText.Text = conversation is null ? "Chat deleted." : $"Deleted: {conversation.Title}";
@@ -3311,14 +4002,35 @@ internal sealed class CollaborateCoordinator
         RefreshRecentItems();
     }
 
+    private void RemoveConversationDrafts(Guid conversationId)
+    {
+        if (composerDraftStore is null)
+        {
+            return;
+        }
+
+        var current = snapshot();
+        var sessionId = current?.SessionId;
+        var sessionInstanceId = current?.SessionInstanceId;
+        foreach (var mode in new[] { "fast", "team", "critique", "redteam" })
+        {
+            composerDraftStore.Remove(ComposerDraftScopes.Collaborate(
+                sessionId,
+                sessionInstanceId,
+                conversationId,
+                mode));
+        }
+    }
+
     private void LoadPersistedConversations()
     {
         conversations.Clear();
+        pendingRecoveryWarning = "";
         conversations.AddRange(historyStore.Load().Select(FromHistoryConversation));
         if (!string.IsNullOrWhiteSpace(historyStore.LastLoadWarning))
         {
-            statusText.Text = historyStore.LastLoadWarning;
-            setShellStatus(statusText.Text);
+            pendingRecoveryWarning = historyStore.LastLoadWarning;
+            statusText.Text = pendingRecoveryWarning;
         }
     }
 
@@ -3331,7 +4043,8 @@ internal sealed class CollaborateCoordinator
         }
         catch (Exception ex)
         {
-            return CollaboratePersistenceResult.Failure($"Could not save Collaborate history: {ex.Message}");
+            return CollaboratePersistenceResult.Failure(
+                AppErrorPresenter.Present(ex, AppErrorContext.Collaborate).DisplayText);
         }
     }
 
@@ -3815,7 +4528,6 @@ internal sealed class CollaborateCoordinator
 
     private void RenderConversation(CollaborateConversation conversation)
     {
-        ClearMessagePresentation();
         if (virtualMessageItems is not null)
         {
             virtualMessageItems.ReplaceRows(
@@ -3824,6 +4536,7 @@ internal sealed class CollaborateCoordinator
             return;
         }
 
+        ClearMessagePresentation();
         for (var index = 0; index < conversation.Exchanges.Count; index++)
         {
             var exchange = conversation.Exchanges[index];
@@ -4999,6 +5712,22 @@ internal sealed class CollaborateCoordinator
 
     internal sealed record ContextReceiptItem(string Kind, string Title, string Detail, bool Truncated);
 
+    internal sealed record ToolDocumentDebug(string Title, string Text, bool Truncated);
+
+    internal sealed record DocumentImportIssue(string FileName, string Message);
+
+    internal sealed record DocumentImportReceipt(
+        int ImportedCount,
+        int AddedCount,
+        int UpdatedCount,
+        int DuplicateCount,
+        bool Cancelled,
+        int OmittedSelectionCount,
+        IReadOnlyList<DocumentImportIssue> Issues)
+    {
+        internal static DocumentImportReceipt Empty { get; } = new(0, 0, 0, 0, false, 0, []);
+    }
+
     internal sealed record CollaborateRunReview(
         string Verdict,
         string Outcome,
@@ -5015,6 +5744,77 @@ internal sealed class CollaborateCoordinator
         bool NeedsReview);
 
     private sealed record ToolDocument(string Title, string Path, string Text, bool Truncated);
+
+    private sealed record ToolDocumentLoadResult(ToolDocument? Document, string Error)
+    {
+        internal static ToolDocumentLoadResult Succeeded(ToolDocument document) => new(document, "");
+
+        internal static ToolDocumentLoadResult Failed(string error) => new(null, error);
+    }
+
+    private sealed record ToolDocumentEncodingPrefix(Encoding Encoding, byte[] ReplayBytes);
+
+    private sealed class PrefixReplayStream(Stream inner, byte[] prefix) : Stream
+    {
+        private int prefixOffset;
+
+        public override bool CanRead => inner.CanRead;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (prefixOffset < prefix.Length)
+            {
+                var copied = Math.Min(count, prefix.Length - prefixOffset);
+                prefix.AsSpan(prefixOffset, copied).CopyTo(buffer.AsSpan(offset, copied));
+                prefixOffset += copied;
+                return copied;
+            }
+
+            return inner.Read(buffer, offset, count);
+        }
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (prefixOffset < prefix.Length)
+            {
+                var copied = Math.Min(buffer.Length, prefix.Length - prefixOffset);
+                prefix.AsMemory(prefixOffset, copied).CopyTo(buffer);
+                prefixOffset += copied;
+                return ValueTask.FromResult(copied);
+            }
+
+            return inner.ReadAsync(buffer, cancellationToken);
+        }
+
+        public override void Flush() { }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            // The outer import scope owns the source stream.
+            base.Dispose(disposing);
+        }
+    }
 
     private sealed record ToolCalculation(string Input, string Result);
 

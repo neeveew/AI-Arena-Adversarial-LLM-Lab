@@ -47,7 +47,7 @@ public sealed class MatchGenerationService : IDisposable
     {
         _modelClient = modelClient ?? new ModelProviderClient();
         _sessionStore = sessionStore ?? new SessionStore();
-        _eventLogStore = eventLogStore ?? new EventLogStore(_sessionStore.DataRoot);
+        _eventLogStore = eventLogStore ?? EventLogStore.ForSessionStore(_sessionStore);
         _ownsInternetToolService = internetToolService is null;
         _internetToolService = internetToolService ?? new InternetToolService(eventLogStore: _eventLogStore);
     }
@@ -61,7 +61,7 @@ public sealed class MatchGenerationService : IDisposable
         ArgumentNullException.ThrowIfNull(internetToolServiceFactory);
         _modelClient = modelClient ?? new ModelProviderClient();
         _sessionStore = sessionStore ?? new SessionStore();
-        _eventLogStore = eventLogStore ?? new EventLogStore(_sessionStore.DataRoot);
+        _eventLogStore = eventLogStore ?? EventLogStore.ForSessionStore(_sessionStore);
         _internetToolService = internetToolServiceFactory(_eventLogStore)
             ?? throw new InvalidOperationException("Internet tool service factory returned null.");
         _ownsInternetToolService = true;

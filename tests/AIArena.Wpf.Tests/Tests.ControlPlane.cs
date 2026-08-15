@@ -111,7 +111,9 @@ internal static partial class Program
         Require(stateSerialized.Contains("\"view\":\"arena\"", StringComparison.OrdinalIgnoreCase), "control-plane state summary should serialize current view");
 
         Require(!AIArenaControlPlaneProtocol.TryParseRequest("{", out _, out var invalidError), "invalid JSON should be rejected");
-        Require(invalidError.Contains("Invalid JSON", StringComparison.Ordinal), "invalid JSON should report a parse error");
+        Require(invalidError.Contains("Invalid JSON", StringComparison.Ordinal)
+                && invalidError.Contains("AA-CONTROL-JSON", StringComparison.Ordinal),
+            "invalid JSON should report a privacy-safe parse error with a stable support code");
         Require(!AIArenaControlPlaneProtocol.TryParseRequest("""{"id":"x"}""", out _, out var missingCommandError), "missing commands should be rejected");
         Require(missingCommandError.Contains("Command is required", StringComparison.Ordinal), "missing command errors should be stable");
     }
@@ -267,6 +269,127 @@ internal static partial class Program
             Directory.CreateDirectory(secondDataRoot);
             File.WriteAllText(Path.Combine(firstDataRoot, ".ai-arena-qa-owner"), firstOwner + "\n", new UTF8Encoding(false));
             File.WriteAllText(Path.Combine(secondDataRoot, ".ai-arena-qa-owner"), secondOwner + "\n", new UTF8Encoding(false));
+
+            var atomicTokenPath = Path.Combine(fixtureRoot, "atomic-publication.token");
+            var priorToken = new string('a', 64);
+            var replacementToken = new string('b', 64);
+            File.WriteAllText(atomicTokenPath, priorToken, new UTF8Encoding(false));
+            var publicationRejected = false;
+            var blockedPublicationEvents = new List<AIArenaControlEvent>();
+            var blockedPublicationHub = new AIArenaControlPlaneEventHub();
+            using var blockedPublicationSubscription = blockedPublicationHub.Subscribe(blockedPublicationEvents.Add);
+            using var blockedHost = new AIArenaControlPlaneHost(
+                new FakeControlTarget(),
+                blockedPublicationHub,
+                $"ai-arena-blocked-token-{Guid.NewGuid():N}",
+                atomicTokenPath);
+            using (new FileStream(
+                       atomicTokenPath,
+                       FileMode.Open,
+                       FileAccess.Read,
+                       FileShare.Read))
+            {
+                try
+                {
+                    AIArenaControlPlaneHost.PublishTokenFileAtomically(atomicTokenPath, replacementToken);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    publicationRejected = true;
+                }
+
+                blockedHost.StartIfEnabledAsync().GetAwaiter().GetResult();
+                Require(!blockedHost.IsRunning
+                        && blockedHost.SessionToken.Length == 0
+                        && blockedPublicationEvents.Any(controlEvent =>
+                            controlEvent.Type.Equals("control.token.write_failed", StringComparison.Ordinal)),
+                    "a host that cannot publish its new token must remain stopped and report the publication failure");
+            }
+            Require(publicationRejected
+                    && File.ReadAllText(atomicTokenPath).Equals(priorToken, StringComparison.Ordinal),
+                "a blocked atomic token commit should fail closed without truncating the previously published token");
+            Require(!Directory.EnumerateFiles(
+                    fixtureRoot,
+                    $".{Path.GetFileName(atomicTokenPath)}.*.tmp",
+                    SearchOption.TopDirectoryOnly).Any(),
+                "a failed atomic token commit should not leave a secret-bearing staging file");
+
+            blockedHost.StartIfEnabledAsync().GetAwaiter().GetResult();
+            Require(blockedHost.IsRunning
+                    && File.ReadAllText(atomicTokenPath).Equals(blockedHost.SessionToken, StringComparison.Ordinal),
+                "a host should publish a fresh token and start normally when a prior sharing failure is released");
+            blockedHost.StopAsync().WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            Require(!blockedHost.IsRunning && !File.Exists(atomicTokenPath),
+                "the retried host should remove only its own published token during shutdown");
+
+            var sharedOwnerPipe = $"ai-arena-shared-owner-{Guid.NewGuid():N}";
+            var secondOwnerEvents = new List<AIArenaControlEvent>();
+            var secondOwnerHub = new AIArenaControlPlaneEventHub();
+            using var secondOwnerSubscription = secondOwnerHub.Subscribe(secondOwnerEvents.Add);
+            using var firstSameOwnerHost = new AIArenaControlPlaneHost(
+                new FakeControlTarget(),
+                new AIArenaControlPlaneEventHub(),
+                sharedOwnerPipe,
+                atomicTokenPath);
+            using var secondSameOwnerHost = new AIArenaControlPlaneHost(
+                new FakeControlTarget(),
+                secondOwnerHub,
+                sharedOwnerPipe,
+                atomicTokenPath);
+            firstSameOwnerHost.StartIfEnabledAsync().GetAwaiter().GetResult();
+            secondSameOwnerHost.StartIfEnabledAsync().GetAwaiter().GetResult();
+            Require(firstSameOwnerHost.IsRunning
+                    && !secondSameOwnerHost.IsRunning
+                    && secondSameOwnerHost.SessionToken.Length == 0
+                    && File.ReadAllText(atomicTokenPath).Equals(
+                        firstSameOwnerHost.SessionToken,
+                        StringComparison.Ordinal)
+                    && secondOwnerEvents.Any(controlEvent =>
+                        controlEvent.Type.Equals("control.host.lock_failed", StringComparison.Ordinal)),
+                "only one live host may own a control identity and publish its client token");
+
+            firstSameOwnerHost.StopAsync().WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            secondSameOwnerHost.StartIfEnabledAsync().GetAwaiter().GetResult();
+            Require(secondSameOwnerHost.IsRunning
+                    && File.ReadAllText(atomicTokenPath).Equals(
+                        secondSameOwnerHost.SessionToken,
+                        StringComparison.Ordinal),
+                "a blocked same-owner host should start only after its predecessor fully releases lifetime ownership");
+            secondSameOwnerHost.StopAsync().WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            Require(!File.Exists(atomicTokenPath)
+                    && !File.Exists(atomicTokenPath + ".host.lock"),
+                "stopping the sole owner should remove its token and release the crash-safe lifetime lease");
+
+            AIArenaControlPlaneHost.PublishTokenFileAtomically(atomicTokenPath, replacementToken);
+            Require(File.ReadAllText(atomicTokenPath).Equals(replacementToken, StringComparison.Ordinal),
+                "an unlocked atomic token commit should replace the complete published value");
+
+            for (var index = 0; index < 8; index++)
+            {
+                var predecessorToken = new string((char)('c' + index), 64);
+                var successorToken = new string((char)('k' + index), 64);
+                AIArenaControlPlaneHost.PublishTokenFileAtomically(atomicTokenPath, predecessorToken);
+                using var startRace = new ManualResetEventSlim(false);
+                var predecessorDelete = Task.Run(() =>
+                {
+                    startRace.Wait();
+                    return AIArenaControlPlaneHost.DeletePublishedTokenIfOwnedAtomically(
+                        atomicTokenPath,
+                        predecessorToken);
+                });
+                var successorPublish = Task.Run(() =>
+                {
+                    startRace.Wait();
+                    AIArenaControlPlaneHost.PublishTokenFileAtomically(atomicTokenPath, successorToken);
+                });
+                startRace.Set();
+                Task.WhenAll(predecessorDelete, successorPublish).GetAwaiter().GetResult();
+                Require(File.Exists(atomicTokenPath)
+                        && File.ReadAllText(atomicTokenPath).Equals(successorToken, StringComparison.Ordinal),
+                    "a stopping predecessor must never delete a concurrently published same-owner successor token");
+            }
+
+            File.Delete(atomicTokenPath);
 
             var firstEndpoint = ResolveControlEndpointForOwner(firstOwner);
             var secondEndpoint = ResolveControlEndpointForOwner(secondOwner);
@@ -545,7 +668,9 @@ internal static partial class Program
             var response = SendControlRequest(pipeName, oversized);
             Require(response.Contains("\"ok\":false", StringComparison.OrdinalIgnoreCase), "oversized requests should fail");
             Require(response.Contains("\"errorCode\":\"invalid_request\"", StringComparison.OrdinalIgnoreCase), "oversized requests should return invalid_request");
-            Require(response.Contains("too large", StringComparison.OrdinalIgnoreCase), "oversized requests should report size failure");
+            Require(response.Contains("too large", StringComparison.OrdinalIgnoreCase)
+                    && response.Contains("AA-CONTROL-INVALID-DATA", StringComparison.Ordinal),
+                "oversized requests should report a privacy-safe size failure with a stable support code");
 
             var firstRequest = $"{{\"id\":\"first\",\"command\":\"status\",\"token\":\"{host.SessionToken}\",\"args\":{{}}}}";
             var secondRequest = $"{{\"id\":\"second\",\"command\":\"status\",\"token\":\"{host.SessionToken}\",\"args\":{{}}}}";
@@ -1170,6 +1295,9 @@ internal static partial class Program
             var events = new EventLogStore(root);
             store.EnsureDefaultSessionAsync().GetAwaiter().GetResult();
             SessionSummary? active = store.ListSessionsAsync().GetAwaiter().GetResult().Single();
+            var postCommitRefreshTokenCanBeCanceled = true;
+            var postCommitRefreshCalls = 0;
+            var postCommitRefreshOutcome = "";
             var service = new SavedStateControlService(
                 store,
                 events,
@@ -1186,6 +1314,9 @@ internal static partial class Program
                 },
                 async (_, cancellationToken) =>
                 {
+                    postCommitRefreshTokenCanBeCanceled = cancellationToken.CanBeCanceled;
+                    postCommitRefreshCalls++;
+                    postCommitRefreshOutcome = _;
                     active = (await store.ListSessionsAsync(cancellationToken))
                         .Single(session => session.Id.Equals(active!.Id, StringComparison.OrdinalIgnoreCase));
                 });
@@ -1197,10 +1328,113 @@ internal static partial class Program
             var checkpoint = service.SaveCheckpointAsync("before change").GetAwaiter().GetResult();
             Require(checkpoint.Ok && checkpoint.State.Checkpoints.Count == 1, "checkpoint creation should return refreshed inventory");
             var checkpointId = checkpoint.State.Checkpoints.Single().Id;
+            var newerControlState = store.LoadSnapshotAsync("powershell-audit").GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException("control restore mutation fixture had no snapshot");
+            newerControlState.MatchType = "newer-control-state";
+            store.SaveSnapshotAsync(newerControlState, "powershell-audit").GetAwaiter().GetResult();
 
-            var restored = service.RestoreCheckpointAsync(checkpointId).GetAwaiter().GetResult();
+            AIArenaSavedStateControlResult restored;
+            using (var evidenceLock = new FileStream(
+                       events.EventPath("powershell-audit"),
+                       FileMode.Open,
+                       FileAccess.ReadWrite,
+                       FileShare.None))
+            {
+                restored = service.RestoreCheckpointAsync(checkpointId).GetAwaiter().GetResult();
+            }
+
             Require(restored.Ok, "a listed checkpoint should restore successfully");
-            Require(restored.State.Checkpoints.Single().Id == checkpointId, "restore receipt should retain checkpoint identity");
+            Require(restored.State.Checkpoints.Any(item => item.Id == checkpointId), "restore receipt should retain checkpoint identity");
+            Require(restored.State.Checkpoints.Count == 2
+                    && restored.State.Checkpoints.Single(item => item.Id != checkpointId).Name == "Safety before checkpoint restore: before change"
+                    && restored.Message.Contains("Safety checkpoint:", StringComparison.Ordinal),
+                "control restore should expose the automatic pre-restore checkpoint and its receipt");
+            var restoredSnapshot = store.LoadSnapshotAsync("powershell-audit").GetAwaiter().GetResult();
+            Require(restoredSnapshot is not null
+                    && restoredSnapshot.MatchType != "newer-control-state"
+                    && !postCommitRefreshTokenCanBeCanceled
+                    && postCommitRefreshCalls == 1
+                    && postCommitRefreshOutcome == restored.Message
+                    && restored.Message.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                    && restored.Message.Contains("AA-SAVED-IO", StringComparison.Ordinal)
+                    && !restored.Message.Contains(events.EventPath("powershell-audit"), StringComparison.OrdinalIgnoreCase),
+                "a locked event file should keep control restore successful, refresh once without caller cancellation, and return a safe evidence warning");
+
+            var projectionSource = store.LoadSnapshotAsync("powershell-audit").GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException("control projection-failure fixture had no snapshot");
+            projectionSource.MatchType = "newer-before-control-projection-failure";
+            store.SaveSnapshotAsync(projectionSource, "powershell-audit").GetAwaiter().GetResult();
+            var projectionRefreshCalls = 0;
+            var faultingProjectionService = new SavedStateControlService(
+                store,
+                events,
+                () => active,
+                (session, _, _) =>
+                {
+                    active = session;
+                    return Task.CompletedTask;
+                },
+                async (preferredId, cancellationToken) =>
+                {
+                    active = (await store.ListSessionsAsync(cancellationToken))
+                        .Single(session => session.Id.Equals(preferredId, StringComparison.OrdinalIgnoreCase));
+                },
+                (_, cancellationToken) =>
+                {
+                    Require(!cancellationToken.CanBeCanceled,
+                        "committed control restore refresh inherited caller cancellation");
+                    projectionRefreshCalls++;
+                    throw new IOException(@"C:\Users\private\control-refresh.txt");
+                });
+            var projectionFailureRestore = faultingProjectionService.RestoreCheckpointAsync(checkpointId)
+                .GetAwaiter()
+                .GetResult();
+            Require(projectionFailureRestore.Ok
+                    && projectionRefreshCalls == 1
+                    && store.LoadSnapshotAsync("powershell-audit").GetAwaiter().GetResult()?.MatchType
+                        != "newer-before-control-projection-failure"
+                    && projectionFailureRestore.Message.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                    && projectionFailureRestore.Message.Contains("AA-SAVED-IO", StringComparison.Ordinal)
+                    && !projectionFailureRestore.Message.Contains("private", StringComparison.OrdinalIgnoreCase),
+                "control restore projection failure escaped or misreported the committed restore");
+
+            var captureFallback = projectionFailureRestore.State;
+            var captureCalls = 0;
+            var captureFailure = SavedStateControlService.CompleteCommittedRestoreProjectionAsync(
+                    "Restored checkpoint after durable commit.",
+                    captureFallback,
+                    (_, token) =>
+                    {
+                        Require(!token.CanBeCanceled,
+                            "committed control completion refresh inherited caller cancellation");
+                        return Task.CompletedTask;
+                    },
+                    token =>
+                    {
+                        Require(!token.CanBeCanceled,
+                            "committed control capture inherited caller cancellation");
+                        captureCalls++;
+                        throw new IOException(@"C:\Users\private\control-capture.txt");
+                    })
+                .GetAwaiter()
+                .GetResult();
+            Require(captureCalls == 1
+                    && ReferenceEquals(captureFailure.State, captureFallback)
+                    && captureFailure.Outcome.Contains("change was committed", StringComparison.OrdinalIgnoreCase)
+                    && captureFailure.Outcome.Contains("AA-SAVED-IO", StringComparison.Ordinal)
+                    && !captureFailure.Outcome.Contains("private", StringComparison.OrdinalIgnoreCase),
+                "control capture failure did not preserve a safe successful fallback after commit");
+
+            var checkpointCountBeforeSnapshotlessRestore = projectionFailureRestore.State.Checkpoints.Count;
+            File.Delete(store.SnapshotPath("powershell-audit"));
+            var snapshotlessRestore = service.RestoreCheckpointAsync(checkpointId).GetAwaiter().GetResult();
+            Require(snapshotlessRestore.Ok
+                    && snapshotlessRestore.State.Checkpoints.Count == checkpointCountBeforeSnapshotlessRestore
+                    && snapshotlessRestore.Message.Contains(
+                        "No prior live snapshot required a safety checkpoint.",
+                        StringComparison.Ordinal)
+                    && !snapshotlessRestore.Message.StartsWith("Safety checkpoint:", StringComparison.Ordinal),
+                "control restore should succeed without inventing a safety receipt when no live snapshot was superseded");
 
             var selected = service.SelectSessionAsync("default").GetAwaiter().GetResult();
             Require(selected.Ok && selected.State.ActiveSessionId == "default", "session selection should update active state");

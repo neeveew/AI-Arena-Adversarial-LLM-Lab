@@ -3030,6 +3030,7 @@
                         <!-- Compatibility target for readiness coordinators. The universal
                              status center now presents the actionable message once. -->
                         <TextBlock x:Name="ArenaControlReadinessText"
+                                   Style="{StaticResource HintText}"
                                    Visibility="Collapsed"
                                    IsHitTestVisible="False"
                                    Focusable="False"

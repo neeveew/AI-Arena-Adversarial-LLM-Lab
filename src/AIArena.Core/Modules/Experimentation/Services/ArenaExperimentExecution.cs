@@ -968,7 +968,7 @@ public sealed class ArenaExperimentCellExecutor : IArenaExperimentCellExecutor, 
             }
             var guardedClient = new ExperimentGuardedProviderClient(runtimeClient, _sessionStore, childGuard);
             runtimeClient = guardedClient;
-            var eventLog = new EventLogStore(_sessionStore.DataRoot);
+            var eventLog = EventLogStore.ForSessionStore(_sessionStore);
             using var internetTool = new InternetToolService(eventLogStore: eventLog);
             var turnRunner = new TurnRunnerService(
                 runtimeClient,
@@ -1062,7 +1062,9 @@ public sealed class ArenaExperimentCellExecutor : IArenaExperimentCellExecutor, 
             evidence.Add(FailureEvidence(context.TrialId, "source_changed"));
             return ArenaExperimentCellExecutionResult.Interrupted("source_changed", evidence.ToImmutable());
         }
-        catch (Exception exception) when (exception is ArenaExperimentChildDriftException or SnapshotConcurrencyException)
+        catch (Exception exception) when (exception is ArenaExperimentChildDriftException
+            or SnapshotConcurrencyException
+            or SessionIdentityConflictException)
         {
             evidence.Add(FailureEvidence(context.TrialId, "child_state_changed"));
             return ArenaExperimentCellExecutionResult.Interrupted("child_state_changed", evidence.ToImmutable());

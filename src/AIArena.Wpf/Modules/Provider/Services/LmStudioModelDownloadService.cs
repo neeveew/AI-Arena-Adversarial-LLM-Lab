@@ -282,9 +282,13 @@ public sealed class LmStudioModelDownloadService
 
     private static string FriendlyException(Exception ex)
     {
+        var presentation = AppErrorPresenter.Present(
+            ex,
+            AppErrorContext.Provider,
+            ex is TaskCanceledException ? AppErrorCategory.Timeout : null);
         return ex is TaskCanceledException
-            ? "LM Studio download request timed out."
-            : ex.Message;
+            ? $"LM Studio download request timed out. {presentation.DisplayText}"
+            : presentation.DisplayText;
     }
 
 }
