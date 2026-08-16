@@ -70,7 +70,15 @@ Use `dotnet build-server shutdown` or force a rebuild if incremental builds appe
 
 - Prompt golden tests live in `tests/AIArena.Tests/Goldens`. Prompt text changes should intentionally review and update goldens.
 - Session snapshot API tokens are protected at rest through `SessionStore.ProtectSecret` in the WPF host.
-- Transcript rendering is virtualized through `TranscriptListBox`; Agent and Collaborate chat surfaces remain non-virtualized by design.
+- Arena readiness has one visible owner in `ApplicationStatusCenter`; compatibility text must bypass the legacy live mirror, while disabled controls retain accessible prerequisite help.
+- Transcript rendering is virtualized through `TranscriptListBox`; Agent and Collaborate conversations use `VirtualizingConversationPanel` with reader-preserving follow-live and an accessible Jump action.
+- AI Collaborate document import is asynchronous, cancellable, extension/encoding checked, path-private, and bounded by candidate, retained-document, per-document, and combined tool-context limits.
+- The six Advanced settings numeric fields must pass `ArenaSessionMutationCoordinator` validation before Apply; invalid drafts remain visible and use WPF plus UI Automation error state rather than silent clamping.
+- A genuine active-session change stops current and still-starting voice playback before loading the new snapshot; same-session refreshes do not.
+- `ComposerDraftStore` keeps bounded Operator, Agent, and Collaborate drafts under current-user Windows protection, scopes them to durable identities, merges cross-process updates, and clears only an unchanged successfully consumed draft.
+- Session and checkpoint deletion uses bounded seven-day Trash receipts and Undo. Whole-snapshot Reset, template apply, and checkpoint restore require an automatic durable safety checkpoint when live state would be replaced.
+- User-facing workflow failures should pass through `AppErrorPresenter` so visible and copied details stay bounded, redacted, and identified by a finite stable support code.
+- Provider completion replay requires an explicitly configured end-to-end idempotency-key capability, same-authority response evidence, the identical payload/key, and a retry delay within policy. Never infer replay safety from loopback location, busy text, missing tokens, timeout, cancellation, or a partially accepted stream.
 
 ## Refactor Direction
 

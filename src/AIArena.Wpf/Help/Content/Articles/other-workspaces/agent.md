@@ -34,6 +34,10 @@ Commands run from the selected workspace. Preview shows shell, exact command, wo
 
 A process success without expected file changes is treated as suspicious for a build task. Read-only, build, test, and preview commands may legitimately change no files.
 
+## Read live output without losing your place
+
+Agent conversation rows are virtualized so long threads do not require every card to remain rendered. While the view is near the newest message it follows live additions. If you scroll back, Agent preserves the historical position and text selection, counts unseen messages, and shows an accessible **Jump to latest** action instead of snapping away from what you are reading.
+
 ## Solution Doctor and Impact Explorer
 
 Solution Doctor reports only bounded evidence it can prove from project files and command output. Repairs produce a proposed diff, require explicit approval, and become stale if the source hash changes. Verification remains a separate approved action.
@@ -43,5 +47,7 @@ Impact Explorer is opt-in for trusted .NET solutions because loading a solution 
 ## Restart and recovery
 
 Runbooks are workspace-bound and persisted without source bodies or secrets. A step that was Running when the app stopped restores as Blocked with an interruption checkpoint; it is never silently rerun. Resume stages an editable prompt for the first incomplete step.
+
+An unsent Agent composer draft is stored separately under a normalized, hashed workspace identity and protected for the current Windows user. Returning to that workspace or restarting the app restores the draft. A failed or cancelled request, or text edited while a request is running, remains available; only the exact unchanged draft associated with a successful action is cleared. A control-plane request does not replace or clear the visible draft.
 
 Use Status Center for the cross-app outcome, then return to Agent for authoritative command output, receipts, and verification.

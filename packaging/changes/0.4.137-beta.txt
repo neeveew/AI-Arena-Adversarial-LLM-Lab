@@ -1,0 +1,14 @@
+AI Arena - Lite 0.4.137-beta
+
+- Carry forward the AI Arena - Lite identity, green emblem, refreshed Help and documentation, and compatibility-preserving public branding introduced after the last published build.
+- Install the self-contained x64 app in `%ProgramFiles%\AI Arena Lite`, safely migrate only the verified legacy per-user installation, retain data in `%LOCALAPPDATA%\AI Arena`, use the distinct Lite shortcut icon, and never remove the sibling public AI Arena desktop shortcut.
+- Make the Universal Status Center the single visible owner of Arena readiness warnings and blockers, while keeping exact prerequisites available through disabled-control help and avoiding duplicate legacy announcements.
+- Add reader-respecting follow-live behavior to virtualized Agent and AI Collaborate conversations: preserve a scrolled-back reader's position and selection, count unseen messages, and expose an accessible Jump to latest action.
+- Make AI Collaborate document import asynchronous and cancellable, with BOM-aware UTF-8/16/32 decoding, supported-extension and duplicate handling, partial-success receipts, sanitized path-free failures, and bounded file and prompt context.
+- Validate all six numeric Advanced settings before saving, keep invalid input visible for correction, expose field-level errors to assistive technology, and focus the first invalid field instead of silently clamping it.
+- Stop in-flight or still-starting voice narration before a genuine active-session change without interrupting same-session refreshes.
+- Protect and restore unsent Operator, Agent, and AI Collaborate drafts per session, route, workspace, conversation, and mode using current-user Windows protection; retain drafts after failure, cancellation, or an in-flight edit.
+- Move saved-session and restore-point deletion to a bounded Trash with confirmation and one-step Undo, retaining up to 64 items for at most seven days.
+- Create a durable safety checkpoint before Arena reset, template application, or restore-point replacement whenever existing live state would be superseded.
+- Standardize user-facing workflow failures through bounded, privacy-safe guidance and stable `AA-<context>-<category>` support codes without exposing raw exception text, paths, prompts, or credentials.
+- Permit up to two provider completion retries only when an explicit end-to-end idempotency-key capability can reuse the exact request and key; honor `Retry-After` within the five-second policy and never automatically replay accepted, partial, ambiguous, timed-out, or cancelled completions.

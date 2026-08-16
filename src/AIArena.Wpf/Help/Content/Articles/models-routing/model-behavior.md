@@ -34,6 +34,12 @@ Tone is model-level response guidance. It is deliberately separate from:
 
 Factory mode keeps sampling and model-level tone but omits Arena persona, voice, pressure, relationship, and private-memory guidance.
 
+## Validate Advanced settings before Apply
+
+The Advanced settings form validates all six numeric drafts before it changes the active session: model-call timeout (1–3,600 seconds), temperature (0–2, using a period as the decimal separator), maximum output (1–32,768 tokens), transcript window (1–60 turns), private-memory window (0–60 turns), and notes window (0–60 turns).
+
+An invalid value remains visible for correction and is never silently clamped or saved. Every invalid field exposes its range through the normal WPF validation state, tooltip, and UI Automation help/status. **Apply** announces, focuses, and selects the first invalid field in visual order; after all values are valid, it preserves their entered representation and saves them together.
+
 ## Apply a changed context to a loaded model
 
 Saving behavior is not a residency operation. When LM Studio reports a loaded process with a different effective context—or when an explicit override returns to Provider default—the action becomes **Reload to apply**.

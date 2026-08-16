@@ -21,6 +21,18 @@ Experiment Lab's cursor-scoped Conversation Fork truncates later public history 
 
 Reset is not a substitute for a fork. Reset clears the active arena transcript/live turn state and requires a new Factory root.
 
+## Trash and Undo
+
+Deleting a saved session or restore point requires confirmation and moves it to local **Trash** instead of erasing it immediately. Saved State exposes **Undo** for the most recent successful move. Trash keeps up to 64 items for at most seven days; an expired, missing, invalid, or name-colliding item is not restored under a different identity.
+
+After a committed move or Undo, Saved State refreshes its authoritative list. A failure to refresh the projection or append secondary activity evidence is reported as a warning and does not misdescribe an already committed move or restore as failed.
+
+## Automatic safety restore points
+
+Arena Reset, applying a scenario template, and restoring an existing restore point can replace the whole live snapshot. When a live snapshot would be superseded, AI Arena - Lite first commits an automatic safety restore point for its exact authoritative revision. The replacement proceeds only after that safety point is durable; if it cannot be created, the destructive mutation does not run.
+
+The completion status identifies the automatic safety point and the operation it protects. A compatibility recovery with no prior live snapshot has no state to checkpoint and reports that limitation instead of inventing one.
+
 ## Match Setup v4 portability
 
 `ai_arena.match_setup.v4` includes:
