@@ -10,7 +10,7 @@ Bring AI models together to debate ideas, collaborate on answers, and help build
 
 Current beta: [Download 0.4.140-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.140-beta) · [Release notes](packaging/changes/0.4.140-beta.txt)
 
-![AI Arena Lite's AI Lab workspace, with model participants, conversation controls, and match diagnostics](docs/assets/ai-arena-lite-workspace.png)
+![AI Arena Lite in action: a multi-agent conversation with model responses, turn timings, and token performance](docs/assets/ai-arena-lite-workspace.png)
 
 ## Three ways to use Lite
 
