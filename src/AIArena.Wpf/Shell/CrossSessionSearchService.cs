@@ -1,12 +1,8 @@
 using System.IO;
-using System.Buffers;
-using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text.Json;
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
 using AIArena.Wpf.Models;
-using Microsoft.Win32.SafeHandles;
 using CoreSessionSummary = AIArena.Core.Models.SessionSummary;
 
 namespace AIArena.Wpf;
@@ -51,22 +47,7 @@ internal sealed class CrossSessionSearchService
         long CacheHits,
         long CompactProjections);
 
-    private readonly record struct FileGeneration(
-        long Length,
-        long LastWriteUtcTicks,
-        long ChangeTimeFileTicks,
-        long CreationTimeFileTicks,
-        string ContentHash,
-        long ProcessMutationGeneration);
-
-    private readonly record struct FileSystemGeneration(
-        long Length,
-        DateTime LastWriteUtc,
-        long ChangeTimeFileTicks,
-        long CreationTimeFileTicks,
-        string ContentHash);
-
-    private sealed record SearchableSession(CoreSessionSummary Summary, FileGeneration Generation);
+    private sealed record SearchableSession(CoreSessionSummary Summary, SnapshotStamp Generation);
 
     private sealed record LoadedSession(
         CoreSessionSummary Summary,
@@ -74,7 +55,7 @@ internal sealed class CrossSessionSearchService
 
     private sealed class CacheEntry
     {
-        public required FileGeneration Generation { get; init; }
+        public required SnapshotStamp Generation { get; init; }
         public required IReadOnlyList<SearchMessage> Messages { get; init; }
         public required int MessageCount { get; init; }
         public required long CharacterCount { get; init; }
@@ -85,15 +66,12 @@ internal sealed class CrossSessionSearchService
     internal const int DefaultMaxCachedSessions = 32;
     internal const int DefaultMaxCachedMessages = 20_000;
     internal const long DefaultMaxCachedCharacters = 4L * 1024 * 1024;
-    internal static readonly TimeSpan RecentNativeChangeHashWindow = TimeSpan.FromSeconds(2);
 
     private readonly SessionStore sessionStore;
     private readonly int maxCachedSessions;
     private readonly int maxCachedMessages;
     private readonly long maxCachedCharacters;
-    private readonly bool forceContentHashGeneration;
-    private readonly Action<int>? hashChunkObserved;
-    private readonly TimeProvider timeProvider;
+    private readonly SnapshotStampReader stampReader;
     private readonly object cacheGate = new();
     private readonly Dictionary<string, CacheEntry> cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly LinkedList<string> cacheRecency = new();
@@ -125,9 +103,7 @@ internal sealed class CrossSessionSearchService
         this.maxCachedSessions = Math.Max(0, maxCachedSessions);
         this.maxCachedMessages = Math.Max(0, maxCachedMessages);
         this.maxCachedCharacters = Math.Max(0, maxCachedCharacters);
-        this.forceContentHashGeneration = forceContentHashGeneration;
-        this.hashChunkObserved = hashChunkObserved;
-        this.timeProvider = timeProvider ?? TimeProvider.System;
+        stampReader = new SnapshotStampReader(forceContentHashGeneration, timeProvider, hashChunkObserved);
     }
 
     internal CacheSnapshot Diagnostics
@@ -151,7 +127,13 @@ internal sealed class CrossSessionSearchService
     /// Scans newest-modified sessions first and stops once the hit cap is
     /// reached, so a broad query on a large history stays responsive.
     /// </summary>
-    public async Task<IReadOnlyList<Hit>> SearchAsync(
+    public Task<IReadOnlyList<Hit>> SearchAsync(
+        string query,
+        int maxHits = DefaultMaxHits,
+        CancellationToken cancellationToken = default) =>
+        Task.Run(() => SearchCoreAsync(query, maxHits, cancellationToken), cancellationToken);
+
+    private async Task<IReadOnlyList<Hit>> SearchCoreAsync(
         string query,
         int maxHits = DefaultMaxHits,
         CancellationToken cancellationToken = default)
@@ -245,245 +227,13 @@ internal sealed class CrossSessionSearchService
         string snapshotPath,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            if (!TryReadFileSystemGeneration(snapshotPath, cancellationToken, out var fileGeneration))
-            {
-                return null;
-            }
-
-            var lastModified = new DateTimeOffset(fileGeneration.LastWriteUtc, TimeSpan.Zero);
-            return new SearchableSession(
-                new CoreSessionSummary(sessionId, snapshotPath, true, 0, 0, 0, lastModified),
-                new FileGeneration(
-                    fileGeneration.Length,
-                    fileGeneration.LastWriteUtc.Ticks,
-                    fileGeneration.ChangeTimeFileTicks,
-                    fileGeneration.CreationTimeFileTicks,
-                    fileGeneration.ContentHash,
-                    sessionStore.SnapshotMutationGeneration(sessionId)));
-        }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or CryptographicException)
-        {
-            return null;
-        }
+        var stamp = stampReader.Capture(snapshotPath,
+            () => sessionStore.SnapshotMutationGeneration(sessionId), cancellationToken);
+        return stamp is { } generation
+            ? new SearchableSession(new CoreSessionSummary(sessionId, snapshotPath, true, 0, 0, 0,
+                generation.LastWriteTimeUtc), generation)
+            : null;
     }
-
-    private bool TryReadFileSystemGeneration(
-        string snapshotPath,
-        CancellationToken cancellationToken,
-        out FileSystemGeneration generation)
-    {
-        generation = default;
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!File.Exists(snapshotPath))
-        {
-            return false;
-        }
-
-        try
-        {
-            if (!forceContentHashGeneration
-                && TryReadNativeFileSystemGeneration(snapshotPath, cancellationToken, out generation))
-            {
-                return true;
-            }
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
-        catch (Exception exception) when (
-            exception is PlatformNotSupportedException or DllNotFoundException or EntryPointNotFoundException)
-        {
-            // Fall through to the portable hash evidence below.
-        }
-
-        // AI Arena is a Windows app and the native change stamp is normally
-        // available. If a filesystem cannot expose it, hash the file instead
-        // of silently weakening cache coherence to size + write time.
-        var info = new FileInfo(snapshotPath);
-        if (!info.Exists)
-        {
-            return false;
-        }
-
-        using (var stream = new FileStream(
-                   snapshotPath,
-                   FileMode.Open,
-                   FileAccess.Read,
-                   FileShare.ReadWrite | FileShare.Delete))
-        {
-            generation = new FileSystemGeneration(
-                info.Length,
-                info.LastWriteTimeUtc,
-                0,
-                info.CreationTimeUtc.ToFileTimeUtc(),
-                HashFile(stream, cancellationToken));
-        }
-
-        return true;
-    }
-
-    private bool TryReadNativeFileSystemGeneration(
-        string snapshotPath,
-        CancellationToken cancellationToken,
-        out FileSystemGeneration generation)
-    {
-        generation = default;
-        for (var attempt = 0; attempt < 2; attempt++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            using var handle = File.OpenHandle(
-                snapshotPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete);
-            if (!GetFileInformationByHandleEx(
-                    handle,
-                    FileInfoByHandleClass.FileBasicInfo,
-                    out var before,
-                    (uint)Marshal.SizeOf<FileBasicInfo>())
-                || !ShouldTrustNativeChangeTime(before.ChangeTime))
-            {
-                return false;
-            }
-
-            var length = RandomAccess.GetLength(handle);
-            var contentHash = ShouldHashRecentNativeChangeTime(before.ChangeTime, timeProvider.GetUtcNow())
-                ? HashFile(handle, cancellationToken)
-                : "";
-            if (!GetFileInformationByHandleEx(
-                    handle,
-                    FileInfoByHandleClass.FileBasicInfo,
-                    out var after,
-                    (uint)Marshal.SizeOf<FileBasicInfo>())
-                || length != RandomAccess.GetLength(handle)
-                || !SameNativeGeneration(before, after))
-            {
-                continue;
-            }
-
-            generation = new FileSystemGeneration(
-                length,
-                DateTime.FromFileTimeUtc(after.LastWriteTime),
-                after.ChangeTime,
-                after.CreationTime,
-                contentHash);
-            return true;
-        }
-
-        return false;
-    }
-
-    internal static bool ShouldTrustNativeChangeTime(long changeTimeFileTicks) =>
-        changeTimeFileTicks > 0;
-
-    internal static bool ShouldHashRecentNativeChangeTime(
-        long changeTimeFileTicks,
-        DateTimeOffset utcNow)
-    {
-        if (!ShouldTrustNativeChangeTime(changeTimeFileTicks))
-        {
-            return true;
-        }
-
-        try
-        {
-            var changedAt = new DateTimeOffset(
-                DateTime.FromFileTimeUtc(changeTimeFileTicks),
-                TimeSpan.Zero);
-            return utcNow.ToUniversalTime() - changedAt < RecentNativeChangeHashWindow;
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            return true;
-        }
-    }
-
-    private static bool SameNativeGeneration(FileBasicInfo left, FileBasicInfo right) =>
-        left.CreationTime == right.CreationTime
-        && left.LastWriteTime == right.LastWriteTime
-        && left.ChangeTime == right.ChangeTime
-        && left.FileAttributes == right.FileAttributes;
-
-    private string HashFile(SafeFileHandle handle, CancellationToken cancellationToken)
-    {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
-        try
-        {
-            var chunks = 0;
-            long offset = 0;
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var read = RandomAccess.Read(handle, buffer.AsSpan(), offset);
-                if (read == 0)
-                {
-                    return Convert.ToHexString(hash.GetHashAndReset());
-                }
-
-                hash.AppendData(buffer, 0, read);
-                offset += read;
-                hashChunkObserved?.Invoke(++chunks);
-            }
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
-        }
-    }
-
-    private string HashFile(Stream stream, CancellationToken cancellationToken)
-    {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
-        try
-        {
-            var chunks = 0;
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var read = stream.Read(buffer, 0, buffer.Length);
-                if (read == 0)
-                {
-                    return Convert.ToHexString(hash.GetHashAndReset());
-                }
-
-                hash.AppendData(buffer, 0, read);
-                hashChunkObserved?.Invoke(++chunks);
-            }
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
-        }
-    }
-
-    private enum FileInfoByHandleClass
-    {
-        FileBasicInfo = 0
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct FileBasicInfo
-    {
-        public long CreationTime;
-        public long LastAccessTime;
-        public long LastWriteTime;
-        public long ChangeTime;
-        public uint FileAttributes;
-    }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetFileInformationByHandleEx(
-        SafeFileHandle fileHandle,
-        FileInfoByHandleClass fileInformationClass,
-        out FileBasicInfo fileInformation,
-        uint bufferSize);
 
     private async Task<LoadedSession> LoadMessagesAsync(
         SearchableSession initial,
@@ -655,25 +405,7 @@ internal sealed class CrossSessionSearchService
     /// causes one bounded reload, which closes the case where an unseen rewrite
     /// collided with the recent stamp before the next search.
     /// </summary>
-    private static bool GenerationMatches(FileGeneration expected, FileGeneration observed)
-    {
-        if (expected.Length != observed.Length
-            || expected.LastWriteUtcTicks != observed.LastWriteUtcTicks
-            || expected.ChangeTimeFileTicks != observed.ChangeTimeFileTicks
-            || expected.CreationTimeFileTicks != observed.CreationTimeFileTicks
-            || expected.ProcessMutationGeneration != observed.ProcessMutationGeneration)
-        {
-            return false;
-        }
-
-        return ContentHashEvidenceMatches(expected.ContentHash, observed.ContentHash);
-    }
-
-    internal static bool ContentHashEvidenceMatches(string expected, string observed) =>
-        string.IsNullOrEmpty(expected)
-            ? string.IsNullOrEmpty(observed)
-            : !string.IsNullOrEmpty(observed)
-                && string.Equals(expected, observed, StringComparison.Ordinal);
+    private static bool GenerationMatches(SnapshotStamp expected, SnapshotStamp observed) => expected == observed;
 
     private static long CharacterCount(IReadOnlyList<SearchMessage> messages)
     {

@@ -70,9 +70,11 @@ public partial class MainWindow
         {
             _ = RunTrackedBackgroundOperationSafelyAsync(
                 "Models refresh",
-                cancellationToken => ProviderModelsSurface.RefreshAsync(
-                    refreshCatalog: true,
-                    cancellationToken));
+                async cancellationToken =>
+                {
+                    await DiscoverProviderServersAsync(cancellationToken);
+                    await ProviderModelsSurface.RefreshAsync(refreshCatalog: true, cancellationToken);
+                });
             Dispatcher.BeginInvoke(() =>
             {
                 if (ProviderModelsPanel.Visibility == Visibility.Visible)
@@ -112,7 +114,7 @@ public partial class MainWindow
         ProviderModelLifecycleRequestedEventArgs e)
     {
         await RunTrackedBackgroundOperationSafelyAsync(
-            e.Load ? "LM Studio model load" : "LM Studio model unload",
+            e.Load ? "Model load" : "Model unload",
             cancellationToken => ProviderModelsSurface.RunLifecycleAsync(e, cancellationToken));
     }
 

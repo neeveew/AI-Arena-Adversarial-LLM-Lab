@@ -4087,74 +4087,25 @@
                           IsExpanded="False"
                           Expanded="ModelProviderSettingsExpander_Expanded">
                     <StackPanel>
-                        <TextBlock Text="Connect AI Arena - Lite to LM Studio, Ollama, llama.cpp, or another compatible provider. Model discovery and agent assignments now live in the Models workspace."
+                        <TextBlock Text="Choose models in Models; their server connections are handled automatically. Your configuration is remembered."
                                    Style="{StaticResource HintText}"
-                                   Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
-                                   TextWrapping="Wrap" />
-                        <TextBlock Text="Provider" Style="{StaticResource FieldLabel}" />
-                        <Grid Margin="{DynamicResource Arena.Gap.Stack}">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="8" />
-                                <ColumnDefinition Width="140" />
-                            </Grid.ColumnDefinitions>
-                            <ComboBox x:Name="ProviderPresetPicker"
-                                      Style="{StaticResource FormComboBox}"
-                                      ToolTip="Choose a common provider base URL and API mode preset.">
-                                <ComboBoxItem Content="LM Studio" Tag="lm_studio" IsSelected="True" />
-                                <ComboBoxItem Content="Ollama" Tag="ollama" />
-                                <ComboBoxItem Content="llama.cpp" Tag="llama_cpp" />
-                                <ComboBoxItem Content="Local server :8000" Tag="local_8000" />
-                                <ComboBoxItem Content="Remote / manual" Tag="manual" />
-                            </ComboBox>
-                            <Button x:Name="ApplyProviderPresetButton"
-                                    Grid.Column="2"
-                                    Click="ApplyProviderPresetButton_Click"
-                                    Style="{StaticResource SecondaryButton}"
-                                    Padding="8"
-                                    ToolTip="Fill the provider base URL and API mode from the selected preset.">
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                    <TextBlock Text="&#xE74E;" Style="{StaticResource CommandButtonIcon}" />
-                                    <TextBlock Text="Use preset" Style="{StaticResource CommandButtonLabel}" />
-                                </StackPanel>
-                            </Button>
-                        </Grid>
+                                   Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
                         <TextBlock x:Name="ProviderPresetStatusText"
                                    Style="{StaticResource HintText}"
                                    AutomationProperties.LiveSetting="Off"
                                    Margin="{DynamicResource Arena.Gap.Stack}"
-                                   Text="A preset fills the server address and connection type. Your model choice stays unchanged." />
-                        <Expander x:Name="ProviderCustomConnectionExpander"
-                                  Header="Custom connection"
-                                  Style="{StaticResource SettingsSubsectionExpander}"
-                                  IsExpanded="False">
-                            <StackPanel>
-                        <TextBlock Text="Connection type" Style="{StaticResource FieldLabel}" />
+                                   Text="Finding model servers..." />
+
+                        <!-- Runtime mode is detected from the server. Keep the shared configuration editor out of the visible connection flow. -->
                         <ComboBox x:Name="ProviderApiModePicker"
                                   SelectionChanged="ProviderApiModePicker_SelectionChanged"
-                                  Style="{StaticResource FormComboBox}"
-                                  Margin="{DynamicResource Arena.Gap.Stack}"
-                                  ToolTip="OpenAI-compatible works with most local providers. LM Studio and Ollama native modes enable provider-specific features. llama.cpp native adds bounded runtime inspection and capability-detected router lifecycle actions.">
+                                  Visibility="Collapsed"
+                                  Style="{StaticResource FormComboBox}">
                             <ComboBoxItem Content="OpenAI-compatible /v1" Tag="openai_compatible" IsSelected="True" />
                             <ComboBoxItem Content="LM Studio native /api/v1" Tag="lmstudio_native" />
                             <ComboBoxItem Content="Ollama native /api" Tag="ollama_native" />
                             <ComboBoxItem Content="llama.cpp native /v1" Tag="llamacpp_native" />
                         </ComboBox>
-                        <TextBlock Text="Server address" Style="{StaticResource FieldLabel}" />
-                        <TextBox x:Name="ProviderBaseUrlText"
-                                  Style="{StaticResource FormTextBox}"
-                                  Margin="{DynamicResource Arena.Gap.Stack}"
-                                  LostKeyboardFocus="ProviderBaseUrlText_Commit"
-                                  KeyDown="ProviderBaseUrlText_KeyDown" />
-                        <TextBlock Text="Access token (optional)" Style="{StaticResource FieldLabel}" />
-                        <PasswordBox x:Name="ProviderApiTokenBox"
-                                     Style="{StaticResource FormPasswordBox}"
-                                     Margin="{DynamicResource Arena.Gap.Stack}"
-                                     LostKeyboardFocus="ProviderApiTokenBox_Commit"
-                                     KeyDown="ProviderApiTokenBox_KeyDown"
-                                     ToolTip="Optional bearer token for local providers, Ollama Cloud, proxies, or OpenAI-compatible endpoints that require Authorization." />
-                            </StackPanel>
-                        </Expander>
                         <!-- Compatibility editors remain in the visual tree while the Models
                              workspace becomes the single visible routing surface. Existing
                              coordinators and saved profiles keep their behavior during migration. -->
@@ -4179,14 +4130,31 @@
                                        Text="not selected"
                                        Style="{StaticResource SettingsInlineStatusText}" />
                         </Grid>
-                        <Grid Margin="0,2,0,0">
+                        <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
                             <Button x:Name="TestProviderButton"
                                     Click="TestProviderButton_Click"
-                                    Style="{StaticResource PrimaryButton}"
-                                    ToolTip="Verify that the server and selected default model can complete a small request.">
+                                    Style="{StaticResource SecondaryButton}"
+                                    ToolTip="Refresh running local servers. Models from all available servers appear together in Models.">
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                                     <TextBlock Text="&#xE9D9;" Style="{StaticResource CommandButtonIcon}" />
-                                    <TextBlock Text="Test connection" Style="{StaticResource CommandButtonLabel}" />
+                                    <TextBlock Text="Find servers" Style="{StaticResource CommandButtonLabel}" />
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="OpenModelsSurfaceButton"
+                                    Grid.Column="2"
+                                    Click="OpenModelsSurfaceButton_Click"
+                                    Style="{StaticResource PrimaryButton}"
+                                    AutomationProperties.Name="Open Models and assignments"
+                                    AutomationProperties.HelpText="Open the Models workspace to browse loaded and available models and assign them to agents."
+                                    ToolTip="Open Models and assignments">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <TextBlock Text="&#xE8B7;" Style="{StaticResource CommandButtonIcon}" />
+                                    <TextBlock Text="Manage models" Style="{StaticResource CommandButtonLabel}" />
                                 </StackPanel>
                             </Button>
                         </Grid>
@@ -4200,23 +4168,13 @@
                                    Margin="0,4,0,10"
                                    Visibility="Collapsed"
                                    Text="Available models refresh while this section is open." />
-                        <Button x:Name="OpenModelsSurfaceButton"
-                                Click="OpenModelsSurfaceButton_Click"
-                                Style="{StaticResource SecondaryButton}"
-                                Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}"
-                                AutomationProperties.Name="Open Models and assignments"
-                                AutomationProperties.HelpText="Open the Models workspace to browse loaded and available models and assign them to agents."
-                                ToolTip="Open Models and assignments">
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                <TextBlock Text="&#xE8B7;" Style="{StaticResource CommandButtonIcon}" />
-                                <TextBlock Text="Open Models &amp; assignments" Style="{StaticResource CommandButtonLabel}" />
-                            </StackPanel>
-                        </Button>
+
 
                         <Expander x:Name="ProviderSavedSetupsExpander"
                                   Header="Saved setups"
                                   Style="{StaticResource SettingsSubsectionExpander}"
-                                  IsExpanded="False">
+                                  IsExpanded="False"
+                                  Visibility="Collapsed">
                             <StackPanel>
                                 <TextBlock Text="Setup name" Style="{StaticResource FieldLabel}" />
                                 <ComboBox x:Name="ProviderProfilePicker"
@@ -4399,7 +4357,8 @@
                         <Expander x:Name="ProviderRecommendationsExpander"
                                   Header="Model recommendations"
                                   Style="{StaticResource SettingsSubsectionExpander}"
-                                  IsExpanded="False">
+                                  IsExpanded="False"
+                                  Visibility="Collapsed">
                             <StackPanel>
                         <Border Style="{StaticResource SettingsStatusCard}"
                                 Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
@@ -4479,7 +4438,8 @@
                                   Header="Local model tools"
                                   Style="{StaticResource SettingsSubsectionExpander}"
                                   IsExpanded="False"
-                                  ToolTip="Inspect llama.cpp runtime evidence, or preload, unload, and download models when the selected local provider supports those actions.">
+                                  ToolTip="Inspect llama.cpp runtime evidence, or preload, unload, and download models when the selected local provider supports those actions."
+                                  Visibility="Collapsed">
                             <StackPanel>
                         <Border x:Name="LlamaCppRuntimeStatusCard"
                                 Style="{StaticResource SettingsStatusCard}"
@@ -4736,14 +4696,42 @@
                         </Expander>
 
                         <Expander x:Name="ProviderAdvancedCallsExpander"
-                                  Header="Advanced model calls"
+                                  Header="Advanced"
                                   Style="{StaticResource SettingsSubsectionExpander}"
                                   IsExpanded="False">
                             <StackPanel>
-                        <TextBlock Text="Shared request defaults for this session. Use Apply at the bottom after editing timeout, temperature, or response limit."
+                        <ComboBox x:Name="ProviderServerPicker"
+                                  SelectionChanged="ProviderServerPicker_SelectionChanged"
+                                  Style="{StaticResource FormComboBox}"
+                                  Margin="{DynamicResource Arena.Gap.Stack}"
+                                  Visibility="Collapsed"
+                                  AutomationProperties.Name="Default connection"
+                                  ToolTip="Choose the default connection. Models from every detected server remain available; each assignment keeps its own server." />
+                        <TextBlock Text="Connect to a custom server, or adjust model request settings."
                                    Style="{StaticResource HintText}"
-                                   Margin="{DynamicResource Arena.Gap.Stack}"
-                                   TextWrapping="Wrap" />
+                                   Margin="{DynamicResource Arena.Gap.Stack}" />
+                        <TextBlock Text="Server address" Style="{StaticResource FieldLabel}" />
+                        <TextBox x:Name="ProviderBaseUrlText"
+                                 Style="{StaticResource FormTextBox}"
+                                 Margin="{DynamicResource Arena.Gap.Stack}"
+                                 AutomationProperties.Name="Provider server address"
+                                 KeyDown="ProviderBaseUrlText_KeyDown"
+                                 ToolTip="Enter a custom server address and choose Connect. The server type is detected automatically." />
+                        <TextBlock Text="Access token (optional)" Style="{StaticResource FieldLabel}" />
+                        <PasswordBox x:Name="ProviderApiTokenBox"
+                                     Style="{StaticResource FormPasswordBox}"
+                                     Margin="{DynamicResource Arena.Gap.Stack}"
+                                     AutomationProperties.Name="Provider access token"
+                                     KeyDown="ProviderApiTokenBox_KeyDown"
+                                     ToolTip="Only needed when this server requires authentication." />
+                        <Button x:Name="ConnectCustomProviderButton"
+                                Content="Connect to address"
+                                Click="ConnectCustomProviderButton_Click"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}" />
+                        <TextBlock Text="Use Apply after editing timeout, temperature, or response limit."
+                                   Style="{StaticResource HintText}"
+                                   Margin="{DynamicResource Arena.Gap.Stack}" />
                         <Grid Margin="{DynamicResource Arena.Gap.Stack}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -5235,6 +5223,19 @@
                     </StackPanel>
                 </Expander>
 
+                <Expander Header="Native Services" Tag="&#xE713;" Style="{StaticResource SettingsExpander}" IsExpanded="False">
+                    <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
+                        <TextBlock Text="Connect to the native app to manage its models, run inference, and create diagnostic bundles."
+                                   Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap" />
+                        <Button x:Name="OpenNativeServicesButton"
+                                Content="Open Native Services"
+                                Click="OpenNativeServicesButton_Click"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                                AutomationProperties.HelpText="Open native models, inference, health, and diagnostic operations."
+                                ToolTip="Inspect and control the running native app" />
+                    </StackPanel>
+                </Expander>
                 <Expander Header="Help / About" Tag="&#xE897;" Style="{StaticResource SettingsExpander}" IsExpanded="False">
                     <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
                         <TextBlock Text="AI Arena - Lite: Adversarial LLM Lab"
@@ -5310,7 +5311,7 @@
                         Padding="0,14,0,0"
                         Margin="0,14,0,0">
                     <StackPanel>
-                        <TextBlock Text="Apply saves advanced model-call and context-window edits to this session. Connection, model routing, internet, appearance, Agent, and voice preferences save as you change them."
+                        <TextBlock Text="Connection and app preferences save automatically. Use Apply for advanced model and context settings."
                                    Style="{StaticResource HintText}"
                                    Margin="{DynamicResource Arena.Gap.Stack.After.Tight}"
                                    TextWrapping="Wrap" />

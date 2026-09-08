@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Text.Json;
+using AIArena.Core.Providers;
 
 namespace AIArena.Wpf.Services;
 
@@ -51,14 +52,27 @@ internal static class ProviderHttpHelpers
     /// message the provider supplied, else the HTTP reason phrase, else a
     /// caller-supplied fallback describing what was being attempted.
     /// </summary>
-    public static string FriendlyBody(string body, string? reason, string fallback, params string[] propertyNames)
+    public static string FriendlyError(string body, string? reason, string fallback, string? apiToken, params string[] propertyNames)
     {
-        var message = LmStudioJsonMessageExtractor.ExtractMessage(body, propertyNames);
+        var message = ResponseMessage(body, apiToken, propertyNames);
         if (!string.IsNullOrWhiteSpace(message))
         {
             return message;
         }
 
-        return string.IsNullOrWhiteSpace(reason) ? fallback : reason.Trim();
+        return ProviderErrorSanitizer.Sanitize(string.IsNullOrWhiteSpace(reason) ? fallback : reason, apiToken);
+    }
+    internal static string ResponseMessage(string body, string? apiToken, params string[] propertyNames)
+    {
+        if (body.Length > ProviderErrorSanitizer.MaximumInputLength)
+            return ProviderErrorSanitizer.Sanitize(body, apiToken);
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            // The element overload does not truncate. Sanitize the full decoded error,
+            // not unrelated success metadata such as model digests or download IDs.
+            return ProviderErrorSanitizer.Sanitize(LmStudioJsonMessageExtractor.ExtractMessage(document.RootElement, propertyNames), apiToken);
+        }
+        catch (JsonException) { return ProviderErrorSanitizer.Sanitize(body, apiToken); }
     }
 }

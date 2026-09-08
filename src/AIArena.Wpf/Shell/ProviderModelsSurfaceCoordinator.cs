@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.IO;
 using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
 using AIArena.Core.Providers;
@@ -30,8 +32,11 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
     private readonly ApplicationStatusCenter? statusCenter;
     private readonly ProviderModelCatalogProjectionService catalogProjection = new();
     private readonly LmStudioModelCatalogService lmStudioCatalog;
-    private readonly OllamaModelCatalogService ollamaCatalog = new();
-    private readonly LlamaCppRuntimeService llamaCppRuntime = new();
+    private readonly OllamaModelCatalogService ollamaCatalog;
+    private readonly LlamaCppRuntimeService llamaCppRuntime;
+    private readonly ProviderServerInventory? serverInventory;
+    private Dictionary<string, ModelSource> modelSourcesByRow = new(StringComparer.Ordinal);
+    private sealed record ModelSource(ModelProviderConfig Config, string ModelId, string Label);
     private readonly Dictionary<string, ProviderModelAssignmentProjection> assignmentsByModel =
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, ProviderModelCatalogItem> catalogItemsByModel =
@@ -58,7 +63,10 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         Func<SessionSummary?> activeSession,
         Func<bool> isArenaBusy,
         LmStudioModelCatalogService? lmStudioCatalog = null,
-        ApplicationStatusCenter? statusCenter = null)
+        ApplicationStatusCenter? statusCenter = null,
+        OllamaModelCatalogService? ollamaCatalog = null,
+        LlamaCppRuntimeService? llamaCppRuntime = null,
+        ProviderServerInventory? serverInventory = null)
     {
         this.control = control;
         this.sessionStore = sessionStore;
@@ -70,6 +78,9 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         this.isArenaBusy = isArenaBusy;
         this.lmStudioCatalog = lmStudioCatalog ?? new LmStudioModelCatalogService();
         this.statusCenter = statusCenter;
+        this.ollamaCatalog = ollamaCatalog ?? new OllamaModelCatalogService();
+        this.llamaCppRuntime = llamaCppRuntime ?? new LlamaCppRuntimeService();
+        this.serverInventory = serverInventory;
     }
 
     public Task RefreshAsync(bool refreshCatalog, CancellationToken cancellationToken = default) =>
@@ -164,14 +175,15 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         }
 
         if (heartbeat
-            && !ModelProviderApiModes.IsLmStudioNative(SharedConfig(snapshot).ApiMode))
+            && serverInventory is null
+            && !SupportsModelLifecycle(SharedConfig(snapshot).ApiMode))
         {
             return;
         }
 
         var shared = SharedConfig(snapshot);
         var providerFingerprint = ProviderModelCatalogProjectionService.ProviderFingerprint(session.Id, snapshot);
-        var connectionIdentity = ProviderModelCatalogProjectionService.ConnectionFingerprint(session.Id, shared);
+        var connectionIdentity = ConnectionIdentity(session.Id, snapshot);
         if (Volatile.Read(ref lifecycleRunning) != 0
             && lifecycleConnectionIdentity.Length > 0
             && !lifecycleConnectionIdentity.Equals(connectionIdentity, StringComparison.Ordinal))
@@ -183,7 +195,8 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         if (!refreshCatalog
             && current is not null
             && current.SessionId.Equals(session.Id, StringComparison.Ordinal)
-            && current.ProviderFingerprint.Equals(providerFingerprint, StringComparison.Ordinal))
+            && current.ProviderFingerprint.Equals(providerFingerprint, StringComparison.Ordinal)
+            && currentConnectionIdentity.Equals(connectionIdentity, StringComparison.Ordinal))
         {
             ApplyPresentation(snapshot, current, isRefreshing: false);
             return;
@@ -213,9 +226,17 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         }
 
         ProviderModelCatalogSnapshot candidate;
+        Dictionary<string, ModelSource>? candidateSources = null;
         try
         {
-            candidate = await LoadCatalogAsync(lease, shared, refreshToken);
+            if (serverInventory is null)
+            {
+                candidate = await LoadCatalogAsync(lease, shared, refreshToken);
+            }
+            else
+            {
+                (candidate, candidateSources) = await LoadCombinedCatalogAsync(lease, snapshot, refreshToken);
+            }
         }
         catch (OperationCanceledException) when (refreshOwner.IsCancellationRequested)
         {
@@ -251,11 +272,19 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             || !active.Id.Equals(lease.SessionId, StringComparison.Ordinal)
             || !ProviderModelCatalogProjectionService.ProviderFingerprint(active.Id, latest)
                 .Equals(lease.ProviderFingerprint, StringComparison.Ordinal)
+            || !ConnectionIdentity(active.Id, latest).Equals(connectionIdentity, StringComparison.Ordinal)
             || !catalogProjection.TryPublish(lease, candidate, out var published))
         {
             return;
         }
 
+        if (candidateSources is not null)
+        {
+            foreach (var retainedItem in published.Models)
+                if (!candidateSources.ContainsKey(retainedItem.Id) && modelSourcesByRow.TryGetValue(retainedItem.Id, out var retainedSource))
+                    candidateSources[retainedItem.Id] = retainedSource;
+            modelSourcesByRow = candidateSources;
+        }
         if (!heartbeat
             || control.HasUnconfirmedLifecycleReceipt
             || !CatalogEvidenceEquivalent(current, published))
@@ -310,15 +339,29 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             var equivalentModelIds = catalogItemsByModel.TryGetValue(change.ModelId, out var catalogItem)
                 ? catalogItem.Aliases
                 : [change.ModelId];
+            var source = SourceForRow(change.ModelId);
+            if (serverInventory is not null)
+            {
+                source = await ResolveCurrentSourceAsync(change.ModelId, cancellationToken);
+                if (source is null)
+                {
+                    const string message = "This model's server connection changed or could not be verified. The assignment was not saved; select it again after refresh.";
+                    control.SetAssignmentState(change.ChangeId, ProviderAssignmentSaveState.Failed, message);
+                    FailStatus(statusReceipt, "Assignment was not saved.", message);
+                    await RefreshAsync(refreshCatalog: true, cancellationToken);
+                    return;
+                }
+            }
             result = await providerConfiguration.SetModelAssignmentAsync(
                 new ProviderModelAssignmentRequest(
                     target.Id,
-                    change.ModelId,
+                    source?.ModelId ?? change.ModelId,
                     change.IsAssigned,
                     assignment.ProviderFingerprint,
                     target.AssignmentFingerprint,
                     equivalentModelIds),
-                cancellationToken);
+                cancellationToken,
+                source?.Config);
         }
         catch (OperationCanceledException)
         {
@@ -379,9 +422,22 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         ProviderModelConfigurationControlResult result;
         try
         {
+            var source = SourceForRow(change.ModelId);
+            if (serverInventory is not null)
+            {
+                source = await ResolveCurrentSourceAsync(change.ModelId, cancellationToken);
+                if (source is null)
+                {
+                    const string message = "This model's server connection changed or could not be verified. Model settings were not saved; select it again after refresh.";
+                    control.SetConfigurationState(change.ChangeId, ProviderModelConfigurationSaveState.Failed, message);
+                    FailStatus(statusReceipt, "Model configuration was not saved.", message);
+                    await RefreshAsync(refreshCatalog: true, cancellationToken);
+                    return;
+                }
+            }
             result = await providerConfiguration.SetModelConfigurationAsync(
                 new ProviderModelConfigurationRequest(
-                    change.ModelId,
+                    source?.ModelId ?? change.ModelId,
                     change.ContextWindow,
                     HistoryPolicyWire(change.HistoryPolicy),
                     ResponseToneWire(change.ResponseTone),
@@ -390,7 +446,8 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                     item.Aliases,
                     ContextApplyRequired: item.LoadState == ProviderModelLoadState.Loaded
                         && !item.IsResidencyStale),
-                cancellationToken);
+                cancellationToken,
+                source?.Config);
         }
         catch (OperationCanceledException)
         {
@@ -489,14 +546,21 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                 return;
             }
 
-            var shared = SharedConfig(snapshot);
-            var connectionIdentity = ProviderModelCatalogProjectionService.ConnectionFingerprint(session.Id, shared);
+            var source = ResolveSource(change.ModelId, snapshot);
+            if (source is null)
+            {
+                throw new ProviderLifecycleContextChangedException();
+            }
+            var shared = source.Config;
+            var rawModelId = source.ModelId;
+            var connectionIdentity = ConnectionIdentity(session.Id, snapshot);
             var providerFingerprint = ProviderModelCatalogProjectionService.ProviderFingerprint(session.Id, snapshot);
             var configuration = ProviderConfigurationControlService.CaptureModelConfiguration(
                 session.Id,
                 snapshot,
-                change.ModelId,
-                startingItem.Aliases);
+                rawModelId,
+                startingItem.Aliases,
+                shared);
             if (!ModelProviderApiModes.IsLmStudioNative(shared.ApiMode)
                 || !providerFingerprint.Equals(startingCatalog.ProviderFingerprint, StringComparison.Ordinal)
                 || !configuration.ConfigurationIdentity.Equals(change.ConfigurationIdentity, StringComparison.Ordinal))
@@ -510,6 +574,8 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             void OnMutationStarting()
             {
                 lifecycleToken.ThrowIfCancellationRequested();
+                if (serverInventory is not null && ResolveSource(change.ModelId, snapshot) is null)
+                    throw new ProviderLifecycleContextChangedException();
                 var currentSession = activeSession();
                 if (currentSession is null || !currentSession.Id.Equals(session.Id, StringComparison.Ordinal))
                 {
@@ -524,7 +590,7 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
 
             var unload = await modelLifecycle.UnloadAsync(
                 shared.BaseUrl,
-                [change.ModelId],
+                [rawModelId],
                 shared.ApiMode,
                 shared.ApiToken,
                 lifecycleToken,
@@ -545,7 +611,7 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                 loadAttempted = true;
                 var load = await modelLifecycle.PreloadAsync(
                     shared.BaseUrl,
-                    [change.ModelId],
+                    [rawModelId],
                     shared.ApiMode,
                     shared.ApiToken,
                     configuration.ConfiguredContextWindow,
@@ -590,10 +656,11 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             {
                 var clearedApplyIntent = await providerConfiguration
                     .ConfirmModelConfigurationAppliedUnderLockAsync(
-                        change.ModelId,
+                        rawModelId,
                         startingItem.Aliases,
                         change.ConfigurationIdentity,
-                        lifecycleToken);
+                        lifecycleToken,
+                        shared);
                 if (clearedApplyIntent)
                 {
                     state = ProviderModelConfigurationReloadState.Succeeded;
@@ -693,9 +760,7 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         }
 
         var action = change.Load ? "load" : "unload";
-        var confirmedAction = change.Load
-            ? "Model loaded in LM Studio."
-            : "Model unloaded from LM Studio.";
+        var providerName = "The provider";
         var lifecycleState = ProviderModelLifecycleActionState.Failed;
         var lifecycleMessage = $"Could not {action} the selected model.";
         var lockTaken = false;
@@ -707,7 +772,7 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         control.SetLifecycleState(
             change.OperationId,
             ProviderModelLifecycleActionState.Running,
-            change.Load ? "Asking LM Studio to load the model…" : "Asking LM Studio to unload the model…");
+            change.Load ? "Asking the server to load the model…" : "Asking the server to unload the model…");
 
         lifecycleCancellation?.Cancel();
         lifecycleCancellation?.Dispose();
@@ -753,13 +818,20 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                 return;
             }
 
-            var shared = SharedConfig(snapshot);
+            var source = ResolveSource(change.ModelId, snapshot);
+            if (source is null)
+            {
+                throw new ProviderLifecycleContextChangedException();
+            }
+            var shared = source.Config;
+            var rawModelId = source.ModelId;
+            providerName = ProviderName(shared.ApiMode);
             var providerFingerprint = ProviderModelCatalogProjectionService.ProviderFingerprint(session.Id, snapshot);
-            var connectionIdentity = ProviderModelCatalogProjectionService.ConnectionFingerprint(session.Id, shared);
-            if (!ModelProviderApiModes.IsLmStudioNative(shared.ApiMode)
+            var connectionIdentity = ConnectionIdentity(session.Id, snapshot);
+            if (!SupportsModelLifecycle(shared.ApiMode)
                 || !providerFingerprint.Equals(startingCatalog.ProviderFingerprint, StringComparison.Ordinal))
             {
-                lifecycleMessage = "The LM Studio connection or session changed. Refresh and try again.";
+                lifecycleMessage = "The provider connection or session changed. Refresh and try again.";
                 return;
             }
 
@@ -773,6 +845,8 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             void OnMutationStarting()
             {
                 lifecycleToken.ThrowIfCancellationRequested();
+                if (serverInventory is not null && ResolveSource(change.ModelId, snapshot) is null)
+                    throw new ProviderLifecycleContextChangedException();
                 var currentSession = activeSession();
                 if (currentSession is null
                     || !currentSession.Id.Equals(session.Id, StringComparison.Ordinal))
@@ -788,30 +862,17 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                 requestStarted = true;
             }
 
-            var results = change.Load
-                ? await modelLifecycle.PreloadAsync(
-                    shared.BaseUrl,
-                    [change.ModelId],
-                    shared.ApiMode,
-                    shared.ApiToken,
-                    shared.ContextLength,
-                    shared.NativeIdleTtlSeconds,
-                    lifecycleToken,
-                    requireCatalogMatch: true,
-                    mutationStarting: OnMutationStarting)
-                : await modelLifecycle.UnloadAsync(
-                    shared.BaseUrl,
-                    [change.ModelId],
-                    shared.ApiMode,
-                    shared.ApiToken,
-                    lifecycleToken,
-                    mutationStarting: OnMutationStarting);
+            var modelConfiguration = ProviderConfigurationControlService.CaptureModelConfiguration(
+                session.Id, snapshot, rawModelId, startingItem.Aliases, shared);
+            var results = await RunProviderLifecycleAsync(
+                shared, rawModelId, change.Load, modelConfiguration.ConfiguredContextWindow,
+                OnMutationStarting, lifecycleToken);
             var failures = results.Where(result => result.IsFailure).ToArray();
             var outcomeUnknown = results.Any(result => result.MutationOutcomeUnknown);
             requestAccepted = failures.Length == 0;
             if (!requestAccepted)
             {
-                lifecycleMessage = $"LM Studio did not accept the {action} request. Refresh the catalog or inspect provider diagnostics.";
+                lifecycleMessage = $"{providerName} did not accept the {action} request. Refresh the catalog or inspect provider diagnostics.";
             }
 
             await RefreshAsync(refreshCatalog: true, lifecycleToken);
@@ -828,17 +889,19 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             if (confirmed)
             {
                 lifecycleState = ProviderModelLifecycleActionState.Succeeded;
-                lifecycleMessage = $"{confirmedAction} Routing assignments were unchanged.";
+                lifecycleMessage = change.Load
+                    ? $"Model loaded in {providerName}. Routing assignments were unchanged."
+                    : $"Model unloaded from {providerName}. Routing assignments were unchanged.";
             }
             else if (requestAccepted)
             {
                 lifecycleState = ProviderModelLifecycleActionState.Unconfirmed;
-                lifecycleMessage = $"LM Studio accepted the {action} request, but its catalog has not confirmed the new state.";
+                lifecycleMessage = $"{providerName} accepted the {action} request, but its catalog has not confirmed the new state.";
             }
             else if (outcomeUnknown)
             {
                 lifecycleState = ProviderModelLifecycleActionState.Unconfirmed;
-                lifecycleMessage = "The LM Studio request started but ended without a definite outcome. Refresh to verify the load state.";
+                lifecycleMessage = "The provider request started but ended without a definite outcome. Refresh to verify the load state.";
             }
         }
         catch (ProviderLifecycleContextChangedException)
@@ -847,7 +910,7 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                 ? ProviderModelLifecycleActionState.Unconfirmed
                 : ProviderModelLifecycleActionState.Failed;
             lifecycleMessage = requestStarted
-                ? "The provider or session changed after a lifecycle request started. The LM Studio load state is unknown; refresh to verify it."
+                ? "The provider or session changed after a lifecycle request started. The provider load state is unknown; refresh to verify it."
                 : "The provider or session changed before the request; no lifecycle request was sent.";
         }
         catch (OperationCanceledException) when (lifecycleOwner.IsCancellationRequested)
@@ -856,7 +919,7 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                 ? ProviderModelLifecycleActionState.Unconfirmed
                 : ProviderModelLifecycleActionState.Failed;
             lifecycleMessage = requestStarted
-                ? "The request was interrupted; the LM Studio load state is unknown. Refresh to verify it."
+                ? "The request was interrupted; the provider load state is unknown. Refresh to verify it."
                 : "The model residency request was cancelled.";
         }
         catch (Exception exception) when (exception is HttpRequestException
@@ -868,8 +931,8 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                 ? ProviderModelLifecycleActionState.Unconfirmed
                 : ProviderModelLifecycleActionState.Failed;
             lifecycleMessage = requestStarted
-                ? "The LM Studio request ended without confirmed load-state evidence. Refresh to verify it."
-                : $"The LM Studio request could not start safely ({exception.GetType().Name}).";
+                ? "The provider request ended without confirmed load-state evidence. Refresh to verify it."
+                : $"The provider request could not start safely ({exception.GetType().Name}).";
         }
         finally
         {
@@ -906,6 +969,169 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         lifecycleCancellation?.Cancel();
         lifecycleCancellation?.Dispose();
         lifecycleCancellation = null;
+    }
+
+    private ModelSource? SourceForRow(string rowId) =>
+        modelSourcesByRow.TryGetValue(rowId, out var source) ? source : null;
+
+    private async Task<ModelSource?> ResolveCurrentSourceAsync(string rowId, CancellationToken cancellationToken)
+    {
+        var session = activeSession();
+        if (session is null || session.Id != currentSessionId)
+            return null;
+        try
+        {
+            var snapshot = await sessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
+            if (snapshot is null || activeSession()?.Id != session.Id || session.Id != currentSessionId)
+                return null;
+            return ResolveSource(rowId, snapshot);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private ModelSource? ResolveSource(string rowId, ArenaSnapshot snapshot)
+    {
+        if (serverInventory is null)
+            return new ModelSource(SharedConfig(snapshot), rowId, ProviderName(SharedConfig(snapshot).ApiMode));
+        if (!modelSourcesByRow.TryGetValue(rowId, out var source))
+            return null;
+        var current = serverInventory.CaptureServers(snapshot).FirstOrDefault(config =>
+            ProviderServerInventory.ServerIdentity(config) == ProviderServerInventory.ServerIdentity(source.Config));
+        if (current is null || ProviderModelCatalogProjectionService.ConnectionFingerprint("", current)
+            != ProviderModelCatalogProjectionService.ConnectionFingerprint("", source.Config))
+            return null;
+        return source;
+    }
+
+    private string ConnectionIdentity(string sessionId, ArenaSnapshot snapshot)
+    {
+        if (serverInventory is null)
+            return ProviderModelCatalogProjectionService.ConnectionFingerprint(sessionId, SharedConfig(snapshot));
+        var identities = serverInventory.CaptureServers(snapshot)
+            .Select(config => ProviderModelCatalogProjectionService.ConnectionFingerprint(sessionId, config))
+            .Order(StringComparer.Ordinal);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", identities))));
+    }
+
+    private async Task<(ProviderModelCatalogSnapshot Catalog, Dictionary<string, ModelSource> Sources)> LoadCombinedCatalogAsync(
+        ProviderModelCatalogRefreshLease lease, ArenaSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        var servers = serverInventory!.CaptureServers(snapshot);
+        var catalogs = await Task.WhenAll(servers.Select(async config =>
+            (Config: config, Catalog: await LoadCatalogAsync(lease, config, cancellationToken))));
+        var sources = new Dictionary<string, ModelSource>(StringComparer.Ordinal);
+        var items = new List<ProviderModelCatalogItem>();
+        var omitted = 0;
+        foreach (var (config, catalog) in catalogs)
+        {
+            var providerLabel = ProviderName(config.ApiMode);
+            if (Uri.TryCreate(config.BaseUrl, UriKind.Absolute, out var endpoint))
+                providerLabel += $" · {endpoint.Host}:{endpoint.Port}";
+            omitted += catalog.OmittedModelCount;
+            foreach (var model in catalog.Models)
+            {
+                var rowId = ProviderServerInventory.ModelIdentity(config, model.Id);
+                if (sources.ContainsKey(rowId)) continue;
+                sources[rowId] = new ModelSource(config, model.Id, providerLabel);
+                items.Add(model with { Id = rowId });
+            }
+            // One offline server must not lose its last confirmed grouping just
+            // because another server still provides fresh residency evidence.
+            if (catalog.ResidencyEvidence == ProviderCatalogEvidenceState.Unavailable
+                && catalogProjection.Current is { } previous
+                && previous.ProviderFingerprint == lease.ProviderFingerprint)
+            {
+                foreach (var old in previous.Models)
+                {
+                    if (sources.ContainsKey(old.Id) || !modelSourcesByRow.TryGetValue(old.Id, out var oldSource)
+                        || ProviderServerInventory.ServerIdentity(oldSource.Config) != ProviderServerInventory.ServerIdentity(config)
+                        || ProviderModelCatalogProjectionService.ConnectionFingerprint("", oldSource.Config)
+                            != ProviderModelCatalogProjectionService.ConnectionFingerprint("", config)) continue;
+                    sources[old.Id] = oldSource;
+                    items.Add(old with { CanLoad = false, CanUnload = false, IsResidencyStale = true });
+                }
+            }
+        }
+        var configuredModel = SharedConfig(snapshot);
+        var configuredRow = ProviderServerInventory.ModelIdentity(configuredModel, configuredModel.Model);
+        var ordered = items.OrderByDescending(item => item.Id == configuredRow)
+            .ThenByDescending(item => item.LoadState == ProviderModelLoadState.Loaded)
+            .ThenBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray();
+        omitted += Math.Max(0, ordered.Length - ProviderModelCatalogProjectionService.MaximumModelCount);
+        var displayed = ordered.Take(ProviderModelCatalogProjectionService.MaximumModelCount).ToArray();
+        var online = catalogs.Count(item => item.Catalog.CatalogEvidence != ProviderCatalogEvidenceState.Unavailable);
+        var hasResidency = catalogs.Any(item => item.Catalog.ResidencyEvidence != ProviderCatalogEvidenceState.Unavailable);
+        var partial = catalogs.Any(item => item.Catalog.CatalogEvidence != ProviderCatalogEvidenceState.Ready
+            || item.Catalog.ResidencyEvidence != ProviderCatalogEvidenceState.Ready) || omitted > 0;
+        var result = new ProviderModelCatalogSnapshot(
+            lease.Generation, lease.SessionId, lease.ProviderFingerprint,
+            online == 0 ? ProviderCatalogEvidenceState.Unavailable : partial ? ProviderCatalogEvidenceState.Partial : ProviderCatalogEvidenceState.Ready,
+            !hasResidency ? ProviderCatalogEvidenceState.Unavailable : partial ? ProviderCatalogEvidenceState.Partial : ProviderCatalogEvidenceState.Ready,
+            displayed.Where(item => item.LoadState == ProviderModelLoadState.Loaded).ToArray(),
+            displayed.Where(item => item.LoadState != ProviderModelLoadState.Loaded).ToArray(),
+            configuredRow, !displayed.Any(item => item.Id == configuredRow), omitted,
+            $"{online} of {catalogs.Length} servers online · {displayed.Count(item => item.LoadState == ProviderModelLoadState.Loaded)} loaded · {displayed.Length} models",
+            DateTimeOffset.Now);
+        return (result, sources);
+    }
+
+    private static bool SupportsModelLifecycle(string apiMode) =>
+        ModelProviderApiModes.IsLmStudioNative(apiMode)
+        || ModelProviderApiModes.IsOllamaNative(apiMode)
+        || ModelProviderApiModes.IsLlamaCppNative(apiMode);
+
+    private async Task<IReadOnlyList<ModelPreloadResult>> RunProviderLifecycleAsync(
+        ModelProviderConfig shared,
+        string modelId,
+        bool load,
+        int configuredContextWindow,
+        Action mutationStarting,
+        CancellationToken cancellationToken)
+    {
+        // Revalidate provider capability and the selected row before a mutation.
+        // A compatible model name alone is never residency evidence.
+        if (ModelProviderApiModes.IsOllamaNative(shared.ApiMode))
+        {
+            var catalog = await ollamaCatalog.TryLoadAsync(shared.BaseUrl, shared.ApiToken, cancellationToken);
+            var model = catalog.Find(modelId);
+            if (!catalog.Ok || !catalog.RunningModelsOk || model is null)
+            {
+                return [new ModelPreloadResult(modelId, "unavailable", "Refresh Ollama's model list and load status before changing this model.", true)];
+            }
+            if (model.Loaded == load)
+            {
+                return [new ModelPreloadResult(modelId, "ready", "Ollama already reports the requested load state.", false)];
+            }
+        }
+        else if (ModelProviderApiModes.IsLlamaCppNative(shared.ApiMode))
+        {
+            var runtime = await llamaCppRuntime.InspectAsync(shared, cancellationToken);
+            var model = runtime.Models.FirstOrDefault(item => item.Id.Equals(modelId, StringComparison.Ordinal));
+            if (!runtime.Available || !runtime.Capabilities.ModelLifecycle || model?.Loaded is null)
+            {
+                return [new ModelPreloadResult(modelId, "unsupported", "This llama.cpp server has not reported model loading controls for the selected model.", true)];
+            }
+            if (model.Loaded == load)
+            {
+                return [new ModelPreloadResult(modelId, "ready", "llama.cpp already reports the requested load state.", false)];
+            }
+            var result = load
+                ? await llamaCppRuntime.LoadAsync(shared, modelId, cancellationToken, mutationStarting)
+                : await llamaCppRuntime.UnloadAsync(shared, modelId, cancellationToken, mutationStarting);
+            return [new ModelPreloadResult(modelId, result.Status, result.Error, !result.Ok, result.MutationOutcomeUnknown)];
+        }
+
+        return load
+            ? await modelLifecycle.PreloadAsync(
+                shared.BaseUrl, [modelId], shared.ApiMode, shared.ApiToken,
+                configuredContextWindow, shared.NativeIdleTtlSeconds, cancellationToken,
+                requireCatalogMatch: true, mutationStarting: mutationStarting)
+            : await modelLifecycle.UnloadAsync(
+                shared.BaseUrl, [modelId], shared.ApiMode, shared.ApiToken,
+                cancellationToken, mutationStarting: mutationStarting);
     }
 
     private async Task<ProviderModelCatalogSnapshot> LoadCatalogAsync(
@@ -1006,8 +1232,8 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         profileSettingsByModel.Clear();
         var shared = SharedConfig(snapshot);
         currentSessionId = catalog.SessionId;
-        currentConnectionIdentity = ProviderModelCatalogProjectionService.ConnectionFingerprint(catalog.SessionId, shared);
-        var lmStudioLifecycle = ModelProviderApiModes.IsLmStudioNative(shared.ApiMode)
+        currentConnectionIdentity = ConnectionIdentity(catalog.SessionId, snapshot);
+        var providerLifecycle = (serverInventory is not null || SupportsModelLifecycle(shared.ApiMode))
             && catalog.ResidencyEvidence != ProviderCatalogEvidenceState.Unavailable;
         var assignmentBatch = ProviderModelAssignmentProjectionService.CreateBatch(
             catalog.SessionId,
@@ -1016,23 +1242,28 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
         foreach (var item in catalog.LoadedModels.Concat(catalog.AvailableModels))
         {
             catalogItemsByModel[item.Id] = item;
-            var assignment = assignmentBatch.Project(item.Id, item.Aliases);
+            var source = SourceForRow(item.Id);
+            var sourceConfig = source?.Config ?? shared;
+            var rawModelId = source?.ModelId ?? item.Id;
+            var lmStudioLifecycle = providerLifecycle && ModelProviderApiModes.IsLmStudioNative(sourceConfig.ApiMode);
+            var assignment = assignmentBatch.Project(rawModelId, item.Aliases, sourceConfig);
             var configuration = ProviderConfigurationControlService.CaptureModelConfiguration(
                 catalog.SessionId,
                 snapshot,
-                item.Id,
-                item.Aliases);
-            if (HasRegisteredModelSetting(snapshot, shared, item))
+                rawModelId,
+                item.Aliases,
+                sourceConfig);
+            if (HasRegisteredModelSetting(snapshot, sourceConfig, item))
             {
                 profileSettingsByModel[item.Id] = new WpfProviderModelSettings
                 {
-                    Model = item.Id,
-                    ModelIdentity = ModelRuntimeSettingsRegistry.Identity(ConfigForModel(shared, item.Id)),
+                    Model = rawModelId,
+                    ModelIdentity = ModelRuntimeSettingsRegistry.Identity(ConfigForModel(sourceConfig, rawModelId)),
                     ConfiguredContextWindow = configuration.ConfiguredContextWindow,
                     HistoryPolicy = configuration.HistoryPolicy,
                     ResponseTone = configuration.ResponseTone,
                     CustomTone = configuration.CustomTone,
-                    PendingApply = HasPendingConfigurationApply(snapshot, shared, item)
+                    PendingApply = HasPendingConfigurationApply(snapshot, sourceConfig, item)
                 };
             }
             var effectiveContext = item.LoadState == ProviderModelLoadState.Loaded
@@ -1047,7 +1278,7 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             var requiresReload = lmStudioLifecycle
                 && item.LoadState == ProviderModelLoadState.Loaded
                 && !item.IsResidencyStale
-                && (HasPendingConfigurationApply(snapshot, shared, item)
+                && (HasPendingConfigurationApply(snapshot, sourceConfig, item)
                     || (expectedContext > 0 && effectiveContext != expectedContext));
             var contextEvidence = ConfigurationContextEvidence(
                 ContextEvidence(item, catalog.ResidencyEvidence, effectiveContext),
@@ -1064,12 +1295,12 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                     _ => ProviderModelAvailability.Unavailable
                 },
                 ModelStatus(item, catalog.ResidencyEvidence),
-                ModelMetadata(item),
+                source is null ? ModelMetadata(item) : $"{source.Label} · {ModelMetadata(item)}",
                 assignment.Targets.Where(target => target.Assigned).Select(target => target.Id).ToArray(),
                 ModelAutomationHelp(item, catalog.ResidencyEvidence),
-                CanLoad: lmStudioLifecycle && item.CanLoad,
-                CanUnload: lmStudioLifecycle && item.CanUnload,
-                LifecycleHelp: LifecycleHelpFor(item, lmStudioLifecycle),
+                CanLoad: providerLifecycle && item.CanLoad,
+                CanUnload: providerLifecycle && item.CanUnload,
+                LifecycleHelp: LifecycleHelpFor(item, providerLifecycle, sourceConfig.ApiMode),
                 IsResidencyStale: item.IsResidencyStale,
                 Configuration: new ProviderModelConfigurationPresentation(
                     configuration.ConfiguredContextWindow,
@@ -1085,7 +1316,9 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                     Status: ConfigurationStatus(
                         requiresReload,
                         configuration.ConfiguredContextWindow,
-                        configuration.HistoryPolicy))));
+                        configuration.HistoryPolicy)),
+                ProviderName: source?.Label ?? ProviderName(sourceConfig.ApiMode),
+                ModelIdentifier: rawModelId));
         }
 
         var selected = control.SelectedModelId;
@@ -1103,7 +1336,7 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
                 : ProviderModelAssignmentProjection.Empty(selected);
         var selectedIsDefault = selectedAssignment.Targets.Any(target => target.IsDefault && target.Assigned);
         var busy = isArenaBusy();
-        var providerName = ProviderName(shared.ApiMode);
+        var providerName = serverInventory is null ? ProviderName(shared.ApiMode) : "Local servers";
         var catalogReady = catalog.CatalogEvidence != ProviderCatalogEvidenceState.Unavailable;
         var catalogPartial = catalog.CatalogEvidence == ProviderCatalogEvidenceState.Partial
             || catalog.ResidencyEvidence == ProviderCatalogEvidenceState.Partial
@@ -1127,7 +1360,7 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             connectionState,
             isRefreshing
                 ? $"Refreshing… {catalog.Status}"
-                : lmStudioLifecycle
+                : providerLifecycle
                     ? $"{catalog.Status} Auto-checking every 5 seconds while Models is open."
                     : catalog.Status,
             rows,
@@ -1158,7 +1391,7 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
             CanAssign: !busy && rows.Count > 0,
             PresentationIdentity: catalog.ProviderFingerprint,
             ConnectionIdentity: currentConnectionIdentity,
-            CanRunLifecycle: !busy && !isRefreshing && lmStudioLifecycle));
+            CanRunLifecycle: !busy && !isRefreshing && providerLifecycle));
     }
 
     private ApplicationStatusReceipt BeginStatus(string key, string summary, string modelId) =>
@@ -1261,25 +1494,32 @@ internal sealed class ProviderModelsSurfaceCoordinator : IDisposable
 
     internal static string LifecycleHelpFor(
         ProviderModelCatalogItem item,
-        bool lmStudioLifecycle)
+        bool lmStudioLifecycle,
+        string apiMode = "")
     {
+        var providerLifecycle = lmStudioLifecycle;
+        var providerName = ProviderName(apiMode);
         if (item.IsResidencyStale)
         {
-            return lmStudioLifecycle
-                ? "Showing the last confirmed grouping. Refresh before changing LM Studio residency."
-                : "Showing the last confirmed provider grouping. Refresh before relying on model residency.";
+            return "Showing the last confirmed provider grouping. Refresh before changing model loading.";
         }
-
         if (item.LoadState == ProviderModelLoadState.Loaded && !item.CanUnload)
         {
-            return lmStudioLifecycle
+            return providerLifecycle && ModelProviderApiModes.IsLmStudioNative(apiMode)
                 ? "LM Studio reports this model as loaded but did not provide an unloadable instance identifier. Refresh or manage it in LM Studio."
-                : "The provider reports this model as loaded, but this connection does not expose an unload action.";
+                : "The provider reports this model as loaded, but this server does not expose an unload action.";
         }
-
-        return lmStudioLifecycle
-            ? "LM Studio controls model residency. Assignments remain unchanged, and LM Studio chooses hardware placement."
-            : "Load and unload controls are unavailable for this provider evidence.";
+        if (providerLifecycle && (item.CanLoad || item.CanUnload))
+        {
+            return ModelProviderApiModes.IsOllamaNative(apiMode)
+                ? "Load keeps this model ready in Ollama; unload releases its memory. Ollama may also load models when a chat starts."
+                : ModelProviderApiModes.IsLlamaCppNative(apiMode)
+                    ? "This llama.cpp router supports loading and unloading models. Assignments remain unchanged."
+                    : "LM Studio controls model residency. Assignments remain unchanged, and LM Studio chooses hardware placement.";
+        }
+        return SupportsModelLifecycle(apiMode)
+            ? $"{providerName} has not reported model loading controls for this model. Refresh, or manage it in the server app."
+            : "Open Connection to find the server automatically. Model loading controls appear when the server supports them.";
     }
 
     private static ProviderModelAssignmentsPresentation EmptyPresentation(string status) => new(

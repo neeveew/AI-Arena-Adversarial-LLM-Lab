@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using System.Text.RegularExpressions;
+
 using AIArena.Core.Models;
 using AIArena.Core.Persistence;
 using AIArena.Core.Providers;
@@ -18,18 +18,6 @@ public sealed class ProviderRuntimeService
     private const int MaximumStatusLength = 240;
     private const int MaximumModelLength = 192;
     private const int MaximumModelCount = 256;
-    private const int MaximumSanitizationInputLength = 4096;
-
-    private static readonly string[] ArenaRoleIds = ["alpha", "beta", "gamma", "delta", "narrator"];
-
-    private static readonly Regex AbsoluteHttpUrlRegex = new(
-        @"(?i)\bhttps?://[^\s<>""']+",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-    private static readonly Regex SensitiveAssignmentRegex = new(
-        @"(?ix)\b(api[_\s-]?key|access[_\s-]?token|authorization|bearer|client[_\s-]?secret|password|refresh[_\s-]?token)\b\s*(?::|=|\s)\s*[""']?[A-Za-z0-9_+./~=-]{8,}",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     private readonly SessionStore sessionStore;
     private readonly ModelProviderHealthService providerHealth;
     private readonly ProviderReachabilityService providerReachability;
@@ -77,25 +65,8 @@ public sealed class ProviderRuntimeService
                 return ProviderRuntimeTestResult.Unavailable("No shared provider configuration is available.");
             }
 
-            var plans = BuildProbePlans(snapshot, sharedConfig, allRoles);
-            var roleResults = new List<ProviderRuntimeRoleTestResult>(plans.Count);
             var elapsed = Stopwatch.StartNew();
-            foreach (var plan in plans)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var result = await providerHealth.TestCompletionAsync(plan.Config, cancellationToken);
-                roleResults.Add(new ProviderRuntimeRoleTestResult(
-                    Roles: ReadOnly(plan.Roles.Select(role => SanitizeText(role, "", 48))),
-                    Ok: result.Ok,
-                    BaseUrl: SafeProviderEndpoint(result.BaseUrl, plan.Config.ApiToken),
-                    ApiMode: ModelProviderApiModes.Normalize(plan.Config.ApiMode),
-                    Model: SanitizeText(result.Model, plan.Config.ApiToken, MaximumModelLength),
-                    LatencyMs: Math.Max(0, result.LatencyMs),
-                    CheckedAt: result.CheckedAt,
-                    Reply: SanitizeText(result.Text, plan.Config.ApiToken, MaximumReplyLength),
-                    Error: SanitizeText(result.Error, plan.Config.ApiToken, MaximumErrorLength)));
-            }
-
+            var roleResults = await ProbeSnapshotAsync(snapshot, allRoles, cancellationToken);
             var probeOk = roleResults.Count > 0 && roleResults.All(result => result.Ok);
             var reachable = roleResults.Any(result => result.Ok);
             ModelProviderHealth? health = null;
@@ -248,87 +219,40 @@ public sealed class ProviderRuntimeService
         }
     }
 
-    private static IReadOnlyList<ProbePlan> BuildProbePlans(
-        ArenaSnapshot snapshot,
-        ModelProviderConfig sharedConfig,
-        bool allRoles)
+    internal async Task<IReadOnlyList<ProviderRuntimeRoleTestResult>> ProbeSnapshotAsync(
+        ArenaSnapshot snapshot, bool allRoles, CancellationToken cancellationToken = default)
     {
-        var plans = new List<MutableProbePlan>
+        var roleResults = new List<ProviderRuntimeRoleTestResult>();
+        foreach (var plan in ModelProviderProbePlan.Build(snapshot, allRoles))
         {
-            new(sharedConfig, [ModelProviderRouting.SharedConfigKey])
-        };
-        if (!allRoles)
-        {
-            return ReadOnly(plans.Select(plan => plan.Freeze()));
-        }
-
-        foreach (var roleId in ArenaRoleIds)
-        {
-            var config = ModelProviderRouting.Resolve(snapshot, roleId, out _) ?? sharedConfig;
-            var existing = plans.FirstOrDefault(plan => SameProbe(plan.Config, config));
-            if (existing is null)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (plan.Config is not { } config || string.IsNullOrWhiteSpace(config.Model))
             {
-                plans.Add(new MutableProbePlan(config, [roleId]));
+                roleResults.Add(new ProviderRuntimeRoleTestResult(
+                    plan.Roles, false, "", "", "", 0, DateTimeOffset.Now, "",
+                    "No model is assigned to this role; default inheritance is disabled or unavailable."));
+                continue;
             }
-            else
-            {
-                existing.Roles.Add(roleId);
-            }
+            var result = await providerHealth.TestCompletionAsync(config, cancellationToken);
+            roleResults.Add(new ProviderRuntimeRoleTestResult(
+                ReadOnly(plan.Roles), result.Ok, SafeProviderEndpoint(result.BaseUrl, config.ApiToken),
+                ModelProviderApiModes.Normalize(config.ApiMode),
+                SanitizeText(result.Model, config.ApiToken, MaximumModelLength),
+                Math.Max(0, result.LatencyMs), result.CheckedAt,
+                SanitizeText(result.Text, config.ApiToken, MaximumReplyLength),
+                ProviderErrorSanitizer.Sanitize(result.Error, config.ApiToken)));
         }
-
-        return ReadOnly(plans.Select(plan => plan.Freeze()));
+        return ReadOnly(roleResults);
     }
 
-    private static bool SameProbe(ModelProviderConfig left, ModelProviderConfig right)
+    private static bool ProbeConfigurationMatches(ArenaSnapshot captured, ArenaSnapshot latest, bool allRoles)
     {
-        return left.BaseUrl.Trim().TrimEnd('/').Equals(right.BaseUrl.Trim().TrimEnd('/'), StringComparison.Ordinal)
-            && ModelProviderApiModes.Normalize(left.ApiMode).Equals(ModelProviderApiModes.Normalize(right.ApiMode), StringComparison.OrdinalIgnoreCase)
-            && left.ApiToken.Trim().Equals(right.ApiToken.Trim(), StringComparison.Ordinal)
-            && left.Model.Trim().Equals(right.Model.Trim(), StringComparison.Ordinal);
+        var before = ModelProviderProbePlan.Build(captured, allRoles);
+        var after = ModelProviderProbePlan.Build(latest, allRoles);
+        return before.Count == after.Count && before.Zip(after).All(pair =>
+            pair.First.Roles.SequenceEqual(pair.Second.Roles, StringComparer.Ordinal)
+            && ModelProviderProbePlan.SameRequest(pair.First.Config, pair.Second.Config));
     }
-
-    private static bool ProbeConfigurationMatches(
-        ArenaSnapshot captured,
-        ArenaSnapshot latest,
-        bool allRoles)
-    {
-        if (!captured.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var capturedShared)
-            || !latest.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var latestShared)
-            || !SameCompletionProbe(capturedShared, latestShared))
-        {
-            return false;
-        }
-
-        if (!allRoles)
-        {
-            return true;
-        }
-
-        foreach (var role in ArenaRoleIds)
-        {
-            var capturedRole = ModelProviderRouting.Resolve(captured, role, out _) ?? capturedShared;
-            var latestRole = ModelProviderRouting.Resolve(latest, role, out _) ?? latestShared;
-            if (!SameCompletionProbe(capturedRole, latestRole))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool SameCompletionProbe(ModelProviderConfig left, ModelProviderConfig right)
-    {
-        return SameProbe(left, right)
-            && left.Timeout == right.Timeout
-            && left.ContextLength == right.ContextLength
-            && ModelProviderReasoningModes.Normalize(left.Reasoning).Equals(
-                ModelProviderReasoningModes.Normalize(right.Reasoning),
-                StringComparison.OrdinalIgnoreCase)
-            && left.NativeStatefulChat == right.NativeStatefulChat
-            && left.NativeIdleTtlSeconds == right.NativeIdleTtlSeconds;
-    }
-
     private static string FailureSummary(
         IReadOnlyList<ProviderRuntimeRoleTestResult> roleResults,
         string apiToken)
@@ -363,84 +287,11 @@ public sealed class ProviderRuntimeService
         return "Provider offline.";
     }
 
-    private static string SafeProviderEndpoint(string value, string apiToken)
-    {
-        var endpoint = LimitRaw(value, MaximumSanitizationInputLength).Trim();
-        if (Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)
-            && (uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
-                || uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
-        {
-            var builder = new UriBuilder(uri)
-            {
-                UserName = "",
-                Password = "",
-                Query = "",
-                Fragment = ""
-            };
-            endpoint = builder.Uri.AbsoluteUri.TrimEnd('/');
-        }
-        else
-        {
-            endpoint = StripInvalidEndpointSecrets(endpoint);
-        }
+    private static string SafeProviderEndpoint(string value, string apiToken) =>
+        Limit(ProviderErrorSanitizer.Endpoint(value, apiToken), MaximumModelLength);
 
-        return Limit(RedactExactToken(endpoint, apiToken), MaximumModelLength);
-    }
-
-    private static string StripInvalidEndpointSecrets(string value)
-    {
-        var endpoint = value;
-        var suffixIndex = endpoint.IndexOfAny(['?', '#']);
-        if (suffixIndex >= 0)
-        {
-            endpoint = endpoint[..suffixIndex];
-        }
-
-        var schemeIndex = endpoint.IndexOf("://", StringComparison.Ordinal);
-        if (schemeIndex < 0)
-        {
-            return endpoint;
-        }
-
-        var authorityStart = schemeIndex + 3;
-        var authorityEnd = endpoint.IndexOf('/', authorityStart);
-        if (authorityEnd < 0)
-        {
-            authorityEnd = endpoint.Length;
-        }
-
-        var atIndex = endpoint.LastIndexOf('@', authorityEnd - 1, authorityEnd - authorityStart);
-        return atIndex >= authorityStart
-            ? endpoint[..authorityStart] + endpoint[(atIndex + 1)..]
-            : endpoint;
-    }
-
-    private static string SanitizeText(string? value, string apiToken, int maximumLength)
-    {
-        var text = LimitRaw(value, MaximumSanitizationInputLength);
-        text = AbsoluteHttpUrlRegex.Replace(
-            text,
-            match => SafeProviderEndpoint(match.Value, apiToken));
-        text = RedactExactToken(text, apiToken);
-        text = SensitiveAssignmentRegex.Replace(text, match => $"{match.Groups[1].Value}=[redacted]");
-        text = string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return Limit(text, maximumLength);
-    }
-
-    private static string RedactExactToken(string value, string apiToken)
-    {
-        var token = apiToken?.Trim() ?? "";
-        return string.IsNullOrEmpty(token)
-            ? value
-            : value.Replace(token, "[redacted]", StringComparison.Ordinal);
-    }
-
-    private static string LimitRaw(string? value, int maximumLength)
-    {
-        var text = value ?? "";
-        return text.Length <= maximumLength ? text : text[..maximumLength];
-    }
-
+    private static string SanitizeText(string? value, string apiToken, int maximumLength) =>
+        Limit(ProviderErrorSanitizer.Sanitize(value, apiToken), maximumLength);
     private static string Limit(string value, int maximumLength)
     {
         return value.Length <= maximumLength
@@ -453,19 +304,7 @@ public sealed class ProviderRuntimeService
         return Array.AsReadOnly(values.ToArray());
     }
 
-    private sealed record ProbePlan(ModelProviderConfig Config, IReadOnlyList<string> Roles);
 
-    private sealed class MutableProbePlan(ModelProviderConfig config, IEnumerable<string> roles)
-    {
-        public ModelProviderConfig Config { get; } = config;
-
-        public List<string> Roles { get; } = roles.ToList();
-
-        public ProbePlan Freeze()
-        {
-            return new ProbePlan(Config, ReadOnly(Roles));
-        }
-    }
 }
 
 public sealed record ProviderRuntimeRoleTestResult(

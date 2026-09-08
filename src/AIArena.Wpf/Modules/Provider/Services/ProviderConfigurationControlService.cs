@@ -64,7 +64,6 @@ internal sealed class ProviderConfigurationControlService
     private const int MaxBaseUrlLength = 2048;
     private const int MaxModelLength = 1024;
     private const int MaxApiTokenLength = 16 * 1024;
-    private const int MaxSafeErrorLength = 512;
     private readonly SessionStore sessionStore;
     private readonly EventLogStore eventLogStore;
     private readonly SemaphoreSlim arenaOperationLock;
@@ -103,7 +102,9 @@ internal sealed class ProviderConfigurationControlService
 
     public async Task<AIArenaProviderConfigurationControlResult> ApplyAsync(
         AIArenaProviderConfigurationPatch patch,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ProviderOperationContext? expectedContext = null,
+        ModelProviderConfig? expectedSourceConfig = null)
     {
         ArgumentNullException.ThrowIfNull(patch);
         var validation = Validate(patch);
@@ -128,6 +129,11 @@ internal sealed class ProviderConfigurationControlService
         await arenaOperationLock.WaitAsync(cancellationToken);
         try
         {
+            if (isArenaBusy())
+            {
+                return Failure("busy", "Provider configuration cannot change while the arena is running.", await CaptureAsync(cancellationToken));
+            }
+
             for (var attempt = 0; attempt < 2; attempt++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -139,6 +145,28 @@ internal sealed class ProviderConfigurationControlService
                 }
 
                 var beforeShared = SharedConfig(snapshot);
+                if (!HasCurrentSourceCredentials(snapshot, expectedSourceConfig))
+                {
+                    return Failure("connection_changed",
+                        "The selected server connection changed while detection was running. Connect again to use the current settings.",
+                        CaptureState(session.Id, snapshot));
+                }
+
+                if (expectedContext is not null
+                    && (!string.Equals(activeSession()?.Id, session.Id, StringComparison.Ordinal)
+                        || !expectedContext.Matches(new ProviderOperationContext(session.Id, beforeShared))))
+                {
+                    return Failure(
+                        "connection_changed",
+                        "The active session or provider connection changed while detection was running. Connect again to use the current settings.",
+                        await CaptureAsync(cancellationToken));
+                }
+
+                if (isArenaBusy())
+                {
+                    return Failure("busy", "Provider configuration cannot change while the arena is running.", CaptureState(session.Id, snapshot));
+                }
+
                 var beforeConnectionIdentity = ProviderModelCatalogProjectionService.ConnectionFingerprint(
                     session.Id,
                     beforeShared);
@@ -203,7 +231,8 @@ internal sealed class ProviderConfigurationControlService
 
     public async Task<ProviderModelAssignmentControlResult> SetModelAssignmentAsync(
         ProviderModelAssignmentRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ModelProviderConfig? sourceConfig = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         var validation = ValidateAssignmentRequest(request);
@@ -265,7 +294,12 @@ internal sealed class ProviderConfigurationControlService
                     equivalentModels.Contains(value.Trim())
                     || equivalentModels.Contains(ProviderModelCatalogProjectionService.SafeModelIdentifier(value));
                 var assignmentBatch = ProviderModelAssignmentProjectionService.CreateBatch(session.Id, snapshot);
-                var before = assignmentBatch.Project(request.Model, equivalentModels);
+                var before = assignmentBatch.Project(request.Model, equivalentModels, sourceConfig);
+                if (!HasCurrentSourceCredentials(snapshot, sourceConfig))
+                {
+                    return AssignmentFailure("stale_provider",
+                        "The model server connection changed; refresh the model list and retry.", before);
+                }
                 if (!before.ProviderFingerprint.Equals(request.ExpectedProviderFingerprint, StringComparison.Ordinal))
                 {
                     return AssignmentFailure(
@@ -315,7 +349,12 @@ internal sealed class ProviderConfigurationControlService
                     }
                     else
                     {
-                        changedFields = ApplyPatch(snapshot, DefaultModelPatch(requestedModel, true));
+                        changedFields = ApplyPatch(snapshot, DefaultModelPatch(requestedModel, true) with
+                        {
+                            BaseUrl = sourceConfig?.BaseUrl,
+                            ApiMode = sourceConfig?.ApiMode,
+                            ApiToken = sourceConfig?.ApiToken
+                        });
                     }
                 }
                 else
@@ -331,7 +370,9 @@ internal sealed class ProviderConfigurationControlService
                     var desiredModel = request.Assigned ? requestedModel : "";
                     if (!request.Assigned
                         && configuredModel.Length > 0
-                        && !MatchesEquivalentModel(configuredModel))
+                        && (!MatchesEquivalentModel(configuredModel)
+                            || sourceConfig is not null && snapshot.Configs.TryGetValue(target.Id, out var assignedConfig)
+                                && !SameServer(assignedConfig, sourceConfig)))
                     {
                         return AssignmentFailure(
                             "conflict",
@@ -339,7 +380,10 @@ internal sealed class ProviderConfigurationControlService
                             before);
                     }
 
-                    if (configuredModel.Equals(desiredModel, StringComparison.Ordinal))
+                    if (configuredModel.Equals(desiredModel, StringComparison.Ordinal)
+                        && (!request.Assigned || sourceConfig is null
+                            || snapshot.Configs.TryGetValue(target.Id, out var alreadyRouted)
+                                && SameServer(alreadyRouted, sourceConfig)))
                     {
                         savedProjection = before;
                         break;
@@ -353,7 +397,7 @@ internal sealed class ProviderConfigurationControlService
                         snapshot.Configs,
                         target.Id,
                         desiredModel,
-                        shared,
+                        request.Assigned && sourceConfig is not null ? WithServer(shared, sourceConfig) : shared,
                         temperatureOverride,
                         maxOutputTokensOverride,
                         explicitAssignment: request.Assigned && desiredModel.Length > 0);
@@ -362,7 +406,7 @@ internal sealed class ProviderConfigurationControlService
 
                 if (changedFields.Count == 0)
                 {
-                    savedProjection = assignmentBatch.Project(request.Model, equivalentModels);
+                    savedProjection = assignmentBatch.Project(request.Model, equivalentModels, sourceConfig);
                     break;
                 }
 
@@ -371,7 +415,7 @@ internal sealed class ProviderConfigurationControlService
                     await sessionStore.SaveSnapshotAsync(snapshot, session.Id, cancellationToken);
                     savedProjection = ProviderModelAssignmentProjectionService
                         .CreateBatch(session.Id, snapshot)
-                        .Project(request.Model, equivalentModels);
+                        .Project(request.Model, equivalentModels, sourceConfig);
                     await eventLogStore.AppendAsync(session.Id, "provider_model_assignment_changed", new
                     {
                         TargetId = target.Id,
@@ -420,7 +464,7 @@ internal sealed class ProviderConfigurationControlService
             ? savedProjection
             : ProviderModelAssignmentProjectionService
                 .CreateBatch(session.Id, refreshedSnapshot)
-                .Project(request.Model, request.EquivalentModelIds);
+                .Project(request.Model, request.EquivalentModelIds, sourceConfig);
         return new ProviderModelAssignmentControlResult(
             true,
             "",
@@ -431,7 +475,8 @@ internal sealed class ProviderConfigurationControlService
 
     public async Task<ProviderModelConfigurationControlResult> SetModelConfigurationAsync(
         ProviderModelConfigurationRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ModelProviderConfig? sourceConfig = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         var validation = ValidateModelConfigurationRequest(request);
@@ -440,7 +485,7 @@ internal sealed class ProviderConfigurationControlService
             return ModelConfigurationFailure(
                 validation.ErrorCode,
                 validation.Message,
-                await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, cancellationToken));
+                await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, cancellationToken, sourceConfig));
         }
 
         if (isArenaBusy())
@@ -448,7 +493,7 @@ internal sealed class ProviderConfigurationControlService
             return ModelConfigurationFailure(
                 "busy",
                 "Model configuration cannot change while the arena is running.",
-                await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, cancellationToken));
+                await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, cancellationToken, sourceConfig));
         }
 
         var session = activeSession();
@@ -479,7 +524,12 @@ internal sealed class ProviderConfigurationControlService
                 }
 
                 var aliases = EquivalentModels(request.Model, request.EquivalentModelIds);
-                var before = CaptureModelConfiguration(session.Id, snapshot, request.Model, aliases);
+                var before = CaptureModelConfiguration(session.Id, snapshot, request.Model, aliases, sourceConfig);
+                if (!HasCurrentSourceCredentials(snapshot, sourceConfig))
+                {
+                    return ModelConfigurationFailure("conflict",
+                        "The model server connection changed; refresh the model list and retry.", before);
+                }
                 if (!before.ConfigurationIdentity.Equals(request.ExpectedConfigurationIdentity, StringComparison.Ordinal))
                 {
                     return ModelConfigurationFailure(
@@ -500,9 +550,9 @@ internal sealed class ProviderConfigurationControlService
                     normalizedTone,
                     normalizedCustomTone).ToList();
 
-                var shared = SharedConfig(snapshot);
+                var shared = sourceConfig ?? SharedConfig(snapshot);
                 var rawRoutedAliases = snapshot.Configs.Values
-                    .Where(config => !string.IsNullOrWhiteSpace(config.Model)
+                    .Where(config => SameServer(config, shared) && !string.IsNullOrWhiteSpace(config.Model)
                         && aliases.Any(alias => ModelAliasesMatch(alias, config.Model)))
                     .Select(config => config.Model.Trim());
                 var allAliases = aliases
@@ -555,7 +605,7 @@ internal sealed class ProviderConfigurationControlService
                 try
                 {
                     await sessionStore.SaveSnapshotAsync(snapshot, session.Id, cancellationToken);
-                    saved = CaptureModelConfiguration(session.Id, snapshot, request.Model, aliases);
+                    saved = CaptureModelConfiguration(session.Id, snapshot, request.Model, aliases, sourceConfig);
                     await eventLogStore.AppendAsync(session.Id, "provider_model_configuration_changed", new
                     {
                         Model = ProviderModelCatalogProjectionService.SafeModelIdentifier(request.Model),
@@ -576,7 +626,7 @@ internal sealed class ProviderConfigurationControlService
                     return ModelConfigurationFailure(
                         "conflict",
                         "Model configuration changed concurrently; refresh and retry.",
-                        await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, cancellationToken));
+                        await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, cancellationToken, sourceConfig));
                 }
             }
         }
@@ -589,7 +639,7 @@ internal sealed class ProviderConfigurationControlService
             ? "Model configuration already matched the requested values."
             : "Model configuration saved. Routing and model residency were unchanged.";
         await refreshHostAsync(message, false, cancellationToken);
-        var refreshed = await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, cancellationToken);
+        var refreshed = await CaptureModelConfigurationAsync(request.Model, request.EquivalentModelIds, cancellationToken, sourceConfig);
         return new ProviderModelConfigurationControlResult(
             true,
             "",
@@ -606,7 +656,8 @@ internal sealed class ProviderConfigurationControlService
         string model,
         IReadOnlyList<string>? equivalentModelIds,
         string expectedConfigurationIdentity,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ModelProviderConfig? sourceConfig = null)
     {
         var session = activeSession();
         if (session is null)
@@ -629,16 +680,21 @@ internal sealed class ProviderConfigurationControlService
                 return false;
             }
 
+            if (!HasCurrentSourceCredentials(snapshot, sourceConfig))
+            {
+                return false;
+            }
+
             var aliases = EquivalentModels(model, equivalentModelIds);
-            var projection = CaptureModelConfiguration(session.Id, snapshot, model, aliases);
+            var projection = CaptureModelConfiguration(session.Id, snapshot, model, aliases, sourceConfig);
             if (!projection.ConfigurationIdentity.Equals(expectedConfigurationIdentity, StringComparison.Ordinal))
             {
                 return false;
             }
 
-            var shared = SharedConfig(snapshot);
+            var shared = sourceConfig ?? SharedConfig(snapshot);
             var rawRoutedAliases = snapshot.Configs.Values
-                .Where(config => !string.IsNullOrWhiteSpace(config.Model)
+                .Where(config => SameServer(config, shared) && !string.IsNullOrWhiteSpace(config.Model)
                     && aliases.Any(alias => ModelAliasesMatch(alias, config.Model)))
                 .Select(config => config.Model.Trim());
             var aliasConfigs = aliases
@@ -855,6 +911,15 @@ internal sealed class ProviderConfigurationControlService
                 && !configuredModel.Equals(existingRoleModels[role], StringComparison.Ordinal))
             {
                 changed.Add($"{role}Model");
+            }
+
+            // An explicit assignment includes its server. Changing the default
+            // connection must not reroute a role already using another provider.
+            if (!patch.RoleModels.ContainsKey(role) && existingRoleModels[role].Length > 0
+                && snapshot.Configs.TryGetValue(role, out var explicitRole)
+                && (!SameServer(explicitRole, existingShared) || !SameServer(existingShared, updatedShared)))
+            {
+                continue;
             }
 
             var (temperatureOverride, maxOutputTokensOverride) = roleOverrides[role];
@@ -1102,47 +1167,9 @@ internal sealed class ProviderConfigurationControlService
         hash.AppendData(bytes);
     }
 
-    internal static string SanitizeBaseUrl(string value)
-    {
-        var text = (value ?? "").Trim();
-        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri)
-            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-        {
-            return Regex.Replace(text, @"(?i)(https?://)[^/@\s]+@", "$1[redacted]@").Split(['?', '#'])[0];
-        }
+    internal static string SanitizeBaseUrl(string value) => ProviderErrorSanitizer.Endpoint(value);
 
-        var builder = new UriBuilder(uri)
-        {
-            UserName = "",
-            Password = "",
-            Query = "",
-            Fragment = ""
-        };
-        return builder.Uri.AbsoluteUri.TrimEnd('/');
-    }
-
-    internal static string SanitizeError(string value, string apiToken)
-    {
-        var message = value ?? "";
-        if (!string.IsNullOrEmpty(apiToken))
-        {
-            message = message.Replace(apiToken, "[redacted]", StringComparison.Ordinal);
-        }
-
-        message = Regex.Replace(
-            message,
-            @"(?i)\bhttps?://[^\s<>""']+",
-            match => SanitizeBaseUrl(match.Value));
-        message = Regex.Replace(message, @"(?i)(bearer\s+)[^\s,;]+", "$1[redacted]");
-        message = Regex.Replace(message, @"(?i)((?:api[_-]?key|token|authorization)\s*[:=]\s*)[^\s,;]+", "$1[redacted]");
-        message = Regex.Replace(message, @"(?i)(https?://)[^/@\s]+@", "$1");
-        if (message.Length > MaxSafeErrorLength)
-        {
-            message = message[..MaxSafeErrorLength] + "...";
-        }
-
-        return message;
-    }
+    internal static string SanitizeError(string value, string apiToken) => ProviderErrorSanitizer.Sanitize(value, apiToken);
 
     private static AIArenaProviderConfigurationControlResult Failure(
         string errorCode,
@@ -1224,7 +1251,8 @@ internal sealed class ProviderConfigurationControlService
     internal async Task<ProviderModelConfigurationProjection> CaptureModelConfigurationAsync(
         string model,
         IReadOnlyList<string>? equivalentModelIds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ModelProviderConfig? sourceConfig = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var session = activeSession();
@@ -1241,17 +1269,18 @@ internal sealed class ProviderConfigurationControlService
                 session.Id,
                 snapshot,
                 model,
-                EquivalentModels(model, equivalentModelIds));
+                EquivalentModels(model, equivalentModelIds), sourceConfig);
     }
 
     internal static ProviderModelConfigurationProjection CaptureModelConfiguration(
         string sessionId,
         ArenaSnapshot snapshot,
         string model,
-        IReadOnlyList<string>? equivalentModelIds = null)
+        IReadOnlyList<string>? equivalentModelIds = null,
+        ModelProviderConfig? sourceConfig = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        var shared = SharedConfig(snapshot);
+        var shared = sourceConfig ?? SharedConfig(snapshot);
         var aliases = EquivalentModels(model, equivalentModelIds);
         ModelRuntimeSettings? settings = null;
         foreach (var alias in aliases)
@@ -1344,6 +1373,30 @@ internal sealed class ProviderConfigurationControlService
         snapshot.Configs.TryGetValue(ModelProviderRouting.SharedConfigKey, out var shared)
             ? shared
             : new ModelProviderConfig();
+
+    private static bool HasCurrentSourceCredentials(ArenaSnapshot snapshot, ModelProviderConfig? source)
+    {
+        if (source is null) return true;
+        // Resolve against the snapshot held under the mutation lock. Reuse the
+        // inventory's origin boundary and current-credential precedence, including
+        // deliberate clearing, without discarding a newly detected native adapter.
+        var inventory = new ProviderServerInventory();
+        inventory.ReplaceDetectedServers([source]);
+        var current = inventory.CaptureServers(snapshot).First(server => SameServer(server, source));
+        return string.Equals(current.ApiToken, source.ApiToken, StringComparison.Ordinal);
+    }
+
+    private static bool SameServer(ModelProviderConfig left, ModelProviderConfig right) =>
+        ProviderServerInventory.ServerIdentity(left).Equals(ProviderServerInventory.ServerIdentity(right), StringComparison.Ordinal);
+
+    private static ModelProviderConfig WithServer(ModelProviderConfig defaults, ModelProviderConfig server) => new()
+    {
+        BaseUrl = server.BaseUrl, ApiMode = server.ApiMode, ApiToken = server.ApiToken,
+        Model = defaults.Model, Timeout = defaults.Timeout, Temperature = defaults.Temperature,
+        MaxOutputTokens = defaults.MaxOutputTokens, ContextLength = defaults.ContextLength,
+        HistoryPolicy = defaults.HistoryPolicy, Reasoning = defaults.Reasoning,
+        NativeStatefulChat = defaults.NativeStatefulChat, NativeIdleTtlSeconds = defaults.NativeIdleTtlSeconds
+    };
 
     private static ModelProviderConfig ConfigForModel(ModelProviderConfig shared, string model) => new()
     {

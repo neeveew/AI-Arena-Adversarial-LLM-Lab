@@ -47,10 +47,10 @@ public sealed class OllamaModelPullService
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return OllamaModelPullResult.Failed(normalizedModel, ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Ollama pull request failed.", "error", "message", "detail"));
+                return OllamaModelPullResult.Failed(normalizedModel, ProviderHttpHelpers.FriendlyError(body, response.ReasonPhrase, "Ollama pull request failed.", apiToken, "error", "message", "detail"));
             }
 
-            return ParseResponse(body, normalizedModel);
+            return ParseResponse(body, normalizedModel, apiToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -62,12 +62,12 @@ public sealed class OllamaModelPullService
         }
     }
 
-    public static OllamaModelPullResult ParseResponse(string json, string model)
+    public static OllamaModelPullResult ParseResponse(string json, string model, string apiToken = "")
     {
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
         var root = doc.RootElement;
         var status = ProviderHttpHelpers.FirstString(root, "status", "state");
-        var error = LmStudioJsonMessageExtractor.ExtractMessage(root, "error", "message", "detail", "reason");
+        var error = ProviderHttpHelpers.ResponseMessage(json, apiToken, "error", "message", "detail", "reason");
         var digest = ProviderHttpHelpers.FirstString(root, "digest");
         var completed = FirstLong(root, "completed", "completed_bytes", "downloaded", "downloaded_bytes");
         var total = FirstLong(root, "total", "total_bytes", "total_size_bytes");
@@ -75,22 +75,18 @@ public sealed class OllamaModelPullService
         var ok = !normalizedStatus.Equals("failed", StringComparison.OrdinalIgnoreCase)
             && string.IsNullOrWhiteSpace(error);
         var detail = ok
-            ? FormatDetail(normalizedStatus, digest, completed, total)
+            ? FormatDetail(normalizedStatus, completed, total)
             : (string.IsNullOrWhiteSpace(error) ? "Ollama reported pull failure." : error);
+        detail = ProviderErrorSanitizer.Sanitize(detail, apiToken);
         return new OllamaModelPullResult(ok, model, normalizedStatus, detail, digest, completed, total, ok ? "" : detail);
     }
 
-    private static string FormatDetail(string status, string digest, long completed, long total)
+    private static string FormatDetail(string status, long completed, long total)
     {
         var parts = new List<string>
         {
             $"Status: {status}"
         };
-        if (!string.IsNullOrWhiteSpace(digest))
-        {
-            parts.Add($"digest {digest}");
-        }
-
         if (completed > 0 && total > 0)
         {
             parts.Add($"{FormatBytes(completed)} / {FormatBytes(total)}");

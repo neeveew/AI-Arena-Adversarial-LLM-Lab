@@ -20,7 +20,8 @@ public static class ModelProviderRouting
             // assignment from an inherited generation-override carrier.
             var explicitlyAssigned = specific.ExplicitModelAssignment
                 || fallbackConfig is null
-                || !specific.Model.Trim().Equals(fallbackConfig.Model.Trim(), StringComparison.Ordinal);
+                || !ModelRuntimeSettingsRegistry.Identity(specific).Equals(
+                    ModelRuntimeSettingsRegistry.Identity(fallbackConfig), StringComparison.Ordinal);
             if (!snapshot.Engine.DefaultForUnassignedAgentsEnabled && !explicitlyAssigned)
             {
                 fallbackConfig = null;
@@ -33,7 +34,8 @@ public static class ModelProviderRouting
                 return ModelRuntimeSettingsRegistry.Resolve(snapshot, specific);
             }
 
-            if (fallbackConfig is not null && string.Equals(specific.Model, fallbackConfig.Model, StringComparison.Ordinal))
+            if (fallbackConfig is not null && ModelRuntimeSettingsRegistry.Identity(specific).Equals(
+                ModelRuntimeSettingsRegistry.Identity(fallbackConfig), StringComparison.Ordinal))
             {
                 fallbackConfig = null;
             }

@@ -6,7 +6,9 @@
 
 A native Windows lab for running adversarial multi-agent conversations and collaborative AI team chats between local or OpenAI-compatible LLMs.
 
-[Download 0.4.137-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.137-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
+[Download 0.4.140-beta](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases/tag/v0.4.140-beta) | [All releases](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases) | [User guide](docs/USER_GUIDE.md) | [PowerShell control plane](CONTROLPLANE.md) | [Licence](LICENSE)
+
+The self-contained Windows x64 installer includes the .NET Desktop Runtime, offline Help, and an optional bundled SearXNG component for local web search. [Version 0.4.140-beta](packaging/changes/0.4.140-beta.txt) adds automatic model-server discovery, combined model catalogs, simpler Settings, and reliability fixes.
 
 AI Arena - Lite is not a chatbot and not just a model comparison board. It is a local multi-agent LLM lab where agents can debate, collaborate, converge, drift, overclaim, challenge assumptions, and be steered by an operator.
 
@@ -39,7 +41,7 @@ AI Arena - Lite makes those dynamics visible. The friction strip, narrator layer
 - Context-aware top-rail export for AI Lab transcripts and AI Collaborate chats.
 - Surface-aware top commands that hide transcript-only Search, Export, and View actions outside the workspaces they control.
 - Match Setup returns to the workspace and keyboard focus that opened it; Escape closes it without clearing transcript filters.
-- Top-rail **Models** opens a wide, searchable model catalog with observed loaded models first and provider-available models below. Provider inventories are bounded to 4 MiB and 1,024 source entries before the 256-row display projection; omitted entries are reported as Partial evidence. While the surface is open, LM Studio residency is rechecked every five seconds. Selecting a model exposes a narrow pane for its durable context window, Arena history policy, response tone, one evidence-driven **Load model** or **Unload model** action, and immediate routing assignments. Saving behavior never changes routing or residency; a loaded LM Studio model offers a separate confirmed reload when its context must change.
+- Top-rail **Models** combines searchable catalogs from running servers, with observed loaded models first and each model identified by its server. LM Studio and Ollama can contribute models at the same time; assignments and per-model settings retain the serving connection even when model names match. Provider inventories are bounded to 4 MiB and 1,024 source entries before the 256-row display projection; omitted entries are reported as Partial evidence. Supported native residency is rechecked every five seconds while Models is open. Selecting a model exposes its context window, Arena history policy, response tone, available **Load model** or **Unload model** action, and immediate routing assignments. Saving model behavior never changes routing or residency; a loaded LM Studio model offers a separate confirmed reload when its context must change.
 - Narrow-window right rail opens as an overlay drawer so the main workspace keeps its usable width.
 - Default-on, token-authenticated local PowerShell control plane with a normal Settings toggle, typed commands for navigation, secret-free portable Match Setup export/import, cast sizing/relationship patterns/generation/history/replay, searchable and safely mutable Settings, full-state current-match forks with parent lineage, saved-session and checkpoint recovery, provider/Agent/Collaborate state, Collaborate run-review/trace inspection, arena turn/narration/reset, Internet state/toggle/diagnostics, self-screenshots, exports, live events, and an authoritative post-command state snapshot on every response.
 - Configurable AI Collaborate rounds for deeper team drafting, critique, and hardening passes.
@@ -51,8 +53,9 @@ AI Arena - Lite makes those dynamics visible. The friction strip, narrator layer
 - Operator quick intervention chips for evidence checks, consensus breaking, private role resets, narrator judgments, repairs, scope gates, handoff notes, and next-step framing.
 - Per-agent personas, model assignments, voice styles, pressure profiles, and absurd persona-mixer constraints.
 - Optional debug voice/style cue chips and voice drift enforcement for constrained agents.
-- OpenAI-compatible provider support, including LM Studio, plus a first-class `llamacpp_native` mode for a user-installed, user-owned `llama-server`. AI Arena - Lite sends chat through `/v1/chat/completions`; it does not bundle, download, start, stop, replace, or silently reconfigure llama.cpp.
-- Capability-detected llama.cpp runtime inspection for optional `/health`, `/props`, `/slots`, router `/models`, and router model load/unload endpoints. Missing measurements stay unavailable, and model file size or parameter count is never presented as measured RAM or VRAM use.
+- Automatic discovery of running LM Studio, Ollama, llama.cpp, and other OpenAI-compatible servers. AI Arena selects supported chat and model-management APIs from server evidence, remembers the last session and configuration, and keeps custom addresses and tokens under **Advanced**.
+- Provider-specific model load and unload controls appear when the server supports them. Residency changes require server confirmation; missing measurements remain unavailable. Model execution and device placement stay with the server you run.
+- Optional [Native Services](docs/NATIVE_SERVICES.md) for model management, inference, and diagnostic bundles through a separately running compatible AI Arena C++ app. Each app keeps its own writable data profile.
 - Conservative completion retries: up to two retries require an eligible transient rejection, an explicitly configured end-to-end idempotency-key contract, the identical request and key, and same-authority response evidence. Accepted, partial, ambiguous, timed-out, or cancelled completions are never automatically replayed.
 - AI Lab right-rail **Model Comparison & QA** for capturing a baseline, comparing another model against the same model-neutral Match Setup and, for Factory runs, the same privacy-safe public-group context fingerprint, copying exact secret-free replay JSON and aggregate-only evidence, and reporting runtime QA as ready, partial, or blocked with unavailable evidence called out explicitly.
 - Wide Match Setup flyout for scenario framing, readiness badges, preset-gallery metadata, run-shape preview, pressure graph preview, copyable setup receipts, personas, locks, checkpoints, sessions, and operator controls. Its per-match **Apply Match Setup to models** toggle can enter Factory mode, where the latest eligible public Operator turn present when Factory first runs anchors a continuous public group conversation: each participant sees that root, its own earlier public replies, attributed peer replies, and later public Operator turns without receiving Match Setup behavior guidance. For strict chat templates, adjacent logical entries that map to the same role are losslessly batched into one transport block; chronology, attribution, retained text, and logical entry counts remain unchanged.
@@ -77,23 +80,15 @@ AI Arena - Lite makes those dynamics visible. The friction strip, narrator layer
 
 1. Download and run the latest beta installer from the
    [GitHub releases page](https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases).
-2. Start LM Studio, another OpenAI-compatible provider, or your own `llama-server` process.
-3. Open Settings, then **Provider connection**.
-4. Choose a provider preset and press **Use preset**.
-5. If your provider needs a different endpoint or token, open **Custom connection**. For a standard LM Studio OpenAI-compatible endpoint, use:
+2. Start LM Studio, Ollama, your own `llama-server`, or another OpenAI-compatible server. You can run more than one at the same time.
+3. Open **Models** in the AI Lab top rail. AI Arena discovers running local servers and combines their model catalogs automatically.
+4. Select a model. If the server supports loading and reports it unloaded, choose **Load model** and wait for the server to confirm its state.
+5. Under **Assign to**, turn on **Default** for Arena roles without an explicit model, or select individual agents and Narrator. Assignments save immediately and keep the model's serving connection; different agents can use different servers.
+6. Open **Match Setup** to tune the scenario and cast, or create a setup with Random Seed, AI Choice, or Wild Seed.
+7. Run **1 Turn** to check the configured match, then use **Auto Chat** to continue. Watch the transcript and adjust the scenario or send Operator turns as needed.
+8. Open **Agent** for team software work inside a selected project folder with approved command execution, or **AI Collaborate** for a synthesized team answer.
 
-   ```text
-   http://127.0.0.1:1234/v1
-   ```
-
-   For a typical user-started llama.cpp server, choose **llama.cpp** / **llama.cpp native /v1** and use `http://127.0.0.1:8080/v1`.
-
-6. Press **Models** in the AI Lab top rail. Pick a model from **Loaded Models** or **Available Models**. For LM Studio, use the single residency button to request Load or Unload; the row moves sections only after LM Studio confirms the new state. Check **Default** to let unassigned Arena agents use the shared model, or uncheck it to require explicit agent assignments. Check any active agent/Narrator target to save an explicit route immediately—even when that route uses the same model as Default.
-7. Use **Connection** from the Models header to return to Provider connection and press **Test connection** for the selected default model. Optionally open **Model recommendations** to scan local hardware and recommend a role spread. The provider still owns device placement.
-8. Open Match Setup to create or replay a setup with Random Seed, AI Choice, or Wild Seed.
-9. Run 1 TURN or AUTO CHAT to start an adversarial match.
-10. Open Agent when you want the team to plan or review software work inside a selected project folder with approved command execution.
-11. Open AI Collaborate when you want the team to produce a synthesized answer instead of running a turn-by-turn match.
+Use **Settings → Provider connection → Find servers** to refresh discovery. For a remote server or an uncommon port, expand **Advanced**, enter its **Server address** and optional token, then choose **Connect to address**. The app detects the supported server APIs. It remembers your last session and configuration automatically.
 
 ## What Makes It Different
 
@@ -106,37 +101,35 @@ AI Arena - Lite makes those dynamics visible. The friction strip, narrator layer
 
 ## Requirements
 
-- Windows.
-- The release installer includes the required .NET Desktop Runtime; no separate .NET installation is needed.
-- LM Studio, a user-run `llama-server`, or any OpenAI-compatible `/v1` provider.
+- Windows x64.
+- The self-contained installer includes the required .NET Desktop Runtime; no separate .NET installation is needed.
+- LM Studio, Ollama, a user-run `llama-server`, or another OpenAI-compatible provider.
 - Local models are optional depending on your provider setup.
+- SearXNG is an optional bundled installer component for local web search.
+- The optional [Native Services](docs/NATIVE_SERVICES.md) feature requires a separately running compatible AI Arena C++ app and separate writable data profiles.
 
 Model execution depends on the provider you connect to.
 
 ## Provider Setup
 
-AI Arena - Lite talks to OpenAI-compatible providers.
+Start the model servers you want to use. AI Arena discovers local servers at startup and when you open **Models**, then selects the supported chat and model-management APIs automatically. LM Studio, Ollama, and other servers can serve models to the same arena at the same time.
 
-For LM Studio:
+Discovery checks the saved address and these standard local ports:
 
-1. Open LM Studio.
-2. Load a model.
-3. Start the local server.
-4. Use this base URL in AI Arena - Lite:
+| Server | Typical address |
+| --- | --- |
+| LM Studio | `http://127.0.0.1:1234/v1` |
+| Ollama | `http://127.0.0.1:11434/v1` |
+| llama.cpp | `http://127.0.0.1:8080/v1` |
+| Other compatible servers | `http://127.0.0.1:8000/v1` |
 
-   ```text
-   http://127.0.0.1:1234/v1
-   ```
+Server type is detected from API responses; the port alone does not determine it. Use **Find servers** under **Settings → Provider connection** to refresh discovery. For another address, open **Advanced**, enter the address and optional access token, then select **Connect to address**.
 
-If the provider is offline, AI Arena - Lite can still open sessions and display local data, but model turns will not run until the provider is reachable.
+Choose models and assign them to agents in **Models**. Each assignment retains its server, and identical model names from different servers remain distinct. **Default** supplies the shared model for roles without explicit assignments. Your last session, connections, assignments, and per-model settings are remembered automatically.
 
-For llama.cpp, install and start `llama-server` yourself, then choose the **llama.cpp** preset or `llamacpp_native` connection mode and use its OpenAI-compatible base URL, commonly:
+Load and unload controls appear only when supported by the serving provider. For llama.cpp, chat uses `/v1/chat/completions`; model lifecycle controls require detected router support. Start and configure `llama-server` yourself. The provider owns model execution, device placement, and GPU offload.
 
-```text
-http://127.0.0.1:8080/v1
-```
-
-AI Arena - Lite uses `/v1/chat/completions` for model turns. Under **Settings -> Provider connection -> Local model tools**, **Inspect** and **Reconnect** probe the configured process without taking ownership of it. `/health`, `/props`, `/slots`, and router `/models` vary by llama.cpp build and mode, so unsupported evidence remains visibly unavailable. Preload and Unload are enabled only when router lifecycle support is detected. Context and GPU-layer values are treated as server startup evidence, and model file size is labelled as file size rather than inferred RAM or VRAM consumption.
+If a provider is offline, AI Arena can still open sessions and display local data. Turns assigned to that provider need it to become reachable again.
 
 ## PowerShell Control
 
@@ -173,8 +166,9 @@ With no path, screenshots use `%LOCALAPPDATA%\AI Arena\exports\screenshots\AI-Ar
 
 - Native Windows WPF app.
 - Shared .NET core library for arena logic, sessions, providers, diagnostics, internet tools, narration, transcript handling, match generation, and avatars.
-- OpenAI-compatible provider client.
-- GPU-aware provider auto configuration for recommending model routing. LM Studio or the provider still controls final device placement and GPU offload.
+- Shared provider client with automatically selected OpenAI-compatible and native adapters for LM Studio, Ollama, and llama.cpp.
+- Automatic local server discovery and combined model catalogs, with serving endpoints preserved in model assignments and configuration. Providers control model execution, device placement, and GPU offload.
+- A separate authenticated Protobuf client for the optional [Native Services](docs/NATIVE_SERVICES.md) integration; the compatible AI Arena C++ app owns its processes and data.
 - User data storage under `%LOCALAPPDATA%\AI Arena`, split into `configs`, `sessions`, `checkpoints`, `templates`, `exports`, `logs`, and `cache`.
 - No dependency on a specific model host.
 - No WebView/browser dashboard dependency in the active app.

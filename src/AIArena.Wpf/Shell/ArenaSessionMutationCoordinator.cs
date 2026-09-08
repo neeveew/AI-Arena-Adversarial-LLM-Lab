@@ -379,6 +379,14 @@ internal sealed class ArenaSessionMutationCoordinator
                 || !existingRole.Model.Trim().Equals(previousShared.Model.Trim(), StringComparison.Ordinal))
             ? existingRole.Model
             : "";
+        if (existingRole is not null && explicitModel.Length > 0
+            && (!ProviderServerInventory.SameEndpoint(existingRole.BaseUrl, previousShared.BaseUrl)
+                || !ProviderServerInventory.SameEndpoint(previousShared.BaseUrl, updatedShared.BaseUrl)))
+        {
+            // An explicit model stays attached to its server when unrelated
+            // session settings or the shared default connection change.
+            return;
+        }
         ProviderConfigurationControlService.SaveRoleModelConfig(
             configs,
             role,

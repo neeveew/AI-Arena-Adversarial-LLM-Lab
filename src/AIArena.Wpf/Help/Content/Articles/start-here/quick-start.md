@@ -4,14 +4,15 @@ This path proves the complete chain from provider connection to one successful A
 
 Start LM Studio, Ollama, your own `llama-server`, or another OpenAI-compatible service. AI Arena - Lite connects to the service; it does not silently start or replace a user-owned provider process.
 
-## 2. Configure and test the connection
+## 2. Discover model servers
 
-1. Open **Settings → Provider connection**.
-2. Choose the matching preset and select **Use preset**.
-3. Open **Custom connection** only when the API mode, base address, or token differs.
-4. Select **Test connection**.
+AI Arena finds running local model servers when it opens and when you open Models. It detects the supported chat API and model tools automatically. LM Studio and Ollama can both contribute models at the same time.
 
-Common local addresses are `http://127.0.0.1:1234/v1` for an LM Studio OpenAI-compatible server and `http://127.0.0.1:8080/v1` for a typical user-started llama.cpp server. The connection type must match the provider API.
+1. Open **Models** to browse the combined model list. Each model keeps its server connection when assigned to an agent.
+2. Use **Settings → Provider connection → Find servers** to refresh discovery. Models from every detected server remain available together. Choosing a model selects its server automatically.
+3. For a remote server or an uncommon port, expand **Advanced**, enter its **Server address** and optional token, then select **Connect to address**.
+
+The app remembers the last session and its complete configuration automatically. Saved setup profiles are not needed. Local discovery checks the saved address plus the standard local ports 1234, 11434, 8080, and 8000; other addresses can be added through Advanced.
 
 ## 3. Load a model when the provider supports residency
 

@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.IO;
+using AIArena.Wpf.Services;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -47,6 +49,8 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
     private ShellSearchSurface activeSurface = ShellSearchSurface.Transcript;
     private string transcriptSearchText = "";
     private string collaborateSearchText = "";
+    private CancellationTokenSource? crossSessionSearchCancellation;
+    private bool disposed;
 
     public TranscriptSearchCoordinator(
         Window owner,
@@ -96,6 +100,7 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
         this.collaborateSearchChanged = collaborateSearchChanged ?? (_ => { });
         this.collaborateSearch = collaborateSearch ?? (_ => []);
         this.openCollaborateConversation = openCollaborateConversation ?? (_ => false);
+        searchPopup.Closed += SearchPopupClosed;
         searchDebouncer = new DispatcherDebouncer(
             dispatcher,
             SearchDebounceDelay,
@@ -225,6 +230,7 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
 
     public void OnFilterChanged(bool debounceTextInput = false)
     {
+        CancelCrossSessionSearch();
         if (isSwitchingSearchSurface)
         {
             return;
@@ -277,6 +283,7 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
 
     public void ClearSearch()
     {
+        CancelCrossSessionSearch();
         StoreCurrentSearch();
         searchText.Clear();
         FlushPendingFilterChange();
@@ -288,6 +295,7 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
 
     public void CloseSearch()
     {
+        CancelCrossSessionSearch();
         StoreCurrentSearch();
         PopulateRecentSearches();
         searchPopup.IsOpen = false;
@@ -399,6 +407,9 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
 
     public void Dispose()
     {
+        disposed = true;
+        CancelCrossSessionSearch();
+        searchPopup.Closed -= SearchPopupClosed;
         searchDebouncer.Dispose();
     }
 
@@ -754,7 +765,53 @@ internal sealed class TranscriptSearchCoordinator : IDisposable
 
     public void ClosePopup()
     {
+        CancelCrossSessionSearch();
         searchPopup.IsOpen = false;
+    }
+
+    private void SearchPopupClosed(object? sender, EventArgs e) => CancelCrossSessionSearch();
+
+    private void CancelCrossSessionSearch()
+    {
+        var previous = crossSessionSearchCancellation;
+        crossSessionSearchCancellation = null;
+        previous?.Cancel();
+    }
+
+    public async Task SearchAllSessionsAsync(
+        Func<string, CancellationToken, Task<IReadOnlyList<CrossSessionSearchService.Hit>>> search,
+        Action<string> openSession)
+    {
+        CancelCrossSessionSearch();
+        if (disposed) return;
+        var query = CurrentSearch;
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            ShowCrossSessionMessage("Type a query first, then search all sessions.");
+            return;
+        }
+
+        var surface = activeSurface;
+        using var cancellation = new CancellationTokenSource();
+        crossSessionSearchCancellation = cancellation;
+        bool IsCurrent() => !disposed && !cancellation.IsCancellationRequested
+            && ReferenceEquals(crossSessionSearchCancellation, cancellation)
+            && CurrentSearch == query && activeSurface == surface;
+        ShowCrossSessionMessage($"Searching every session for \"{query}\"...");
+        try
+        {
+            var hits = await search(query, cancellation.Token);
+            if (IsCurrent()) ShowCrossSessionResults(query, hits, openSession);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            if (IsCurrent()) ShowCrossSessionMessage(AppErrorPresenter.Present(exception, AppErrorContext.SavedState).DisplayText);
+        }
+        finally
+        {
+            if (ReferenceEquals(crossSessionSearchCancellation, cancellation)) crossSessionSearchCancellation = null;
+        }
     }
 
     /// <summary>Replaces the result list with a single status line.</summary>

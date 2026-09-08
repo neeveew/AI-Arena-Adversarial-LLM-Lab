@@ -22,13 +22,12 @@ internal sealed class ProviderSettingsCoordinator
     private readonly ModelProviderHealthService providerHealth;
     private readonly ProviderRuntimeService providerRuntime;
     private readonly ModelPreloadService modelPreloadService;
-    private readonly LmStudioModelDownloadService modelDownloadService;
-    private readonly OllamaModelPullService ollamaModelPullService = new();
+    private readonly ProviderDownloadWorkflow downloadWorkflow;
+    private readonly OllamaModelPullService ollamaModelPullService;
     private readonly ProviderAutoConfigureService providerAutoConfigureService;
-    private readonly LmStudioModelCatalogService lmStudioModelCatalogService = new();
-    private readonly OllamaModelCatalogService ollamaModelCatalogService = new();
+    private readonly LmStudioModelCatalogService lmStudioModelCatalogService;
+    private readonly OllamaModelCatalogService ollamaModelCatalogService;
     private readonly SemaphoreSlim arenaOperationLock;
-    private readonly ComboBox providerPresetPicker;
     private readonly TextBlock providerPresetStatusText;
     private readonly ComboBox providerApiModePicker;
     private readonly TextBox providerBaseUrlText;
@@ -85,8 +84,13 @@ internal sealed class ProviderSettingsCoordinator
     private IReadOnlyList<string> advertisedModels = [];
     private LmStudioModelCatalog lastLmStudioCatalog = LmStudioModelCatalog.Empty;
     private OllamaModelCatalog lastOllamaCatalog = OllamaModelCatalog.Empty;
-    private bool isRefreshingModels;
+    private Task? settingsRefreshTask;
+    private ProviderModelCatalogRefreshLease? activeSettingsRefreshLease;
+    private bool settingsRefreshQueued;
+    private CancellationToken queuedSettingsRefreshToken;
+    private bool isDownloadOperationRunning;
     private bool isUpdatingRoleModelEditor;
+    private bool isApplyingProviderSelection;
     private int lastProviderModelCount = -1;
     private DateTimeOffset? lastProviderHealthCheckedAt;
     private DateTimeOffset? lastModelListCheckedAt;
@@ -97,6 +101,8 @@ internal sealed class ProviderSettingsCoordinator
     private string lastDownloadProviderBaseUrl = "";
     private string lastDownloadApiMode = "";
     private string lastDownloadApiToken = "";
+    private ProviderOperationContext? lastDownloadContext;
+    private readonly ProviderModelCatalogProjectionService settingsCatalog = new();
 
     public ProviderSettingsCoordinator(
         Window owner,
@@ -108,7 +114,6 @@ internal sealed class ProviderSettingsCoordinator
         LmStudioModelDownloadService modelDownloadService,
         ProviderAutoConfigureService providerAutoConfigureService,
         SemaphoreSlim arenaOperationLock,
-        ComboBox providerPresetPicker,
         TextBlock providerPresetStatusText,
         ComboBox providerApiModePicker,
         TextBox providerBaseUrlText,
@@ -166,7 +171,10 @@ internal sealed class ProviderSettingsCoordinator
         Func<bool, CancellationToken, Task> refreshProviderReachabilityAsync,
         Action updateProviderHealthPopup,
         Func<string, (double? Temperature, int? MaxOutputTokens)>? roleGenerationOverride = null,
-        ApplicationStatusCenter? statusCenter = null)
+        ApplicationStatusCenter? statusCenter = null,
+        LmStudioModelCatalogService? lmStudioModelCatalogService = null,
+        OllamaModelCatalogService? ollamaModelCatalogService = null,
+        OllamaModelPullService? ollamaModelPullService = null)
     {
         this.roleGenerationOverride = roleGenerationOverride ?? (_ => (null, null));
         this.owner = owner;
@@ -175,10 +183,12 @@ internal sealed class ProviderSettingsCoordinator
         this.providerHealth = providerHealth;
         this.providerRuntime = providerRuntime;
         this.modelPreloadService = modelPreloadService;
-        this.modelDownloadService = modelDownloadService;
+        downloadWorkflow = new ProviderDownloadWorkflow(modelDownloadService);
+        this.lmStudioModelCatalogService = lmStudioModelCatalogService ?? new();
+        this.ollamaModelCatalogService = ollamaModelCatalogService ?? new();
+        this.ollamaModelPullService = ollamaModelPullService ?? new();
         this.providerAutoConfigureService = providerAutoConfigureService;
         this.arenaOperationLock = arenaOperationLock;
-        this.providerPresetPicker = providerPresetPicker;
         this.providerPresetStatusText = providerPresetStatusText;
         this.providerApiModePicker = providerApiModePicker;
         this.providerBaseUrlText = providerBaseUrlText;
@@ -252,47 +262,58 @@ internal sealed class ProviderSettingsCoordinator
 
     public DateTimeOffset? LastModelListCheckedAt => lastModelListCheckedAt;
 
+    public bool IsApplyingProviderSelection => isApplyingProviderSelection;
+
     public void ApplySnapshot(ArenaViewSnapshot snapshot)
     {
-        if (ShouldClearDownloadJob(
-            lastDownloadJobId,
-            lastDownloadProviderBaseUrl,
-            lastDownloadApiMode,
-            lastDownloadApiToken,
-            snapshot.ProviderBaseUrl,
-            snapshot.ProviderApiMode,
-            snapshot.ProviderApiToken))
+        var wasApplyingProviderSelection = isApplyingProviderSelection;
+        isApplyingProviderSelection = true;
+        try
         {
-            ClearDownloadJob();
-        }
+            if ((lastDownloadContext is not null && lastDownloadContext.SessionId != activeSession()?.Id) || ShouldClearDownloadJob(
+                lastDownloadJobId,
+                lastDownloadProviderBaseUrl,
+                lastDownloadApiMode,
+                lastDownloadApiToken,
+                snapshot.ProviderBaseUrl,
+                snapshot.ProviderApiMode,
+                snapshot.ProviderApiToken))
+            {
+                ClearDownloadJob();
+            }
 
-        providerBaseUrlText.Text = snapshot.ProviderBaseUrl;
-        ShellUiHelpers.SelectComboTag(providerApiModePicker, ModelProviderApiModes.Normalize(snapshot.ProviderApiMode));
-        providerApiTokenBox.Password = snapshot.ProviderApiToken;
-        ShellUiHelpers.SelectComboTag(providerPresetPicker, ProviderPresetTagForUrl(snapshot.ProviderBaseUrl));
-        providerModelText.Text = snapshot.ProviderModel == "-" ? "" : snapshot.ProviderModel;
-        providerContextLengthText.Text = snapshot.ProviderContextLength.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        ShellUiHelpers.SelectComboTag(providerReasoningPicker, ModelProviderReasoningModes.Normalize(snapshot.ProviderReasoning));
-        providerNativeStatefulChatCheckBox.IsChecked = snapshot.ProviderNativeStatefulChat;
-        providerNativeIdleTtlText.Text = snapshot.ProviderNativeIdleTtlSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        UpdateNativeLifecycleControls();
-        if (!ModelProviderApiModes.IsLmStudioNative(snapshot.ProviderApiMode))
+            providerBaseUrlText.Text = snapshot.ProviderBaseUrl;
+            ShellUiHelpers.SelectComboTag(providerApiModePicker, ModelProviderApiModes.Normalize(snapshot.ProviderApiMode));
+            providerApiTokenBox.Password = snapshot.ProviderApiToken;
+            UpdateProviderCapabilityHint(snapshot.ProviderApiMode);
+            providerModelText.Text = snapshot.ProviderModel == "-" ? "" : snapshot.ProviderModel;
+            providerContextLengthText.Text = snapshot.ProviderContextLength.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            ShellUiHelpers.SelectComboTag(providerReasoningPicker, ModelProviderReasoningModes.Normalize(snapshot.ProviderReasoning));
+            providerNativeStatefulChatCheckBox.IsChecked = snapshot.ProviderNativeStatefulChat;
+            providerNativeIdleTtlText.Text = snapshot.ProviderNativeIdleTtlSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            UpdateNativeLifecycleControls();
+            if (!ModelProviderApiModes.IsLmStudioNative(snapshot.ProviderApiMode))
+            {
+                lastLmStudioCatalog = LmStudioModelCatalog.Empty;
+            }
+
+            if (!ModelProviderApiModes.IsOllamaNative(snapshot.ProviderApiMode))
+            {
+                lastOllamaCatalog = OllamaModelCatalog.Empty;
+            }
+
+            roleModels["alpha"] = snapshot.AlphaModel;
+            roleModels["beta"] = snapshot.BetaModel;
+            roleModels["gamma"] = snapshot.GammaModel;
+            roleModels["delta"] = snapshot.DeltaModel;
+            roleModels["narrator"] = snapshot.NarratorModel;
+            UpdateRoleModelEditors();
+            UpdateRoleModelSummary();
+        }
+        finally
         {
-            lastLmStudioCatalog = LmStudioModelCatalog.Empty;
+            isApplyingProviderSelection = wasApplyingProviderSelection;
         }
-
-        if (!ModelProviderApiModes.IsOllamaNative(snapshot.ProviderApiMode))
-        {
-            lastOllamaCatalog = OllamaModelCatalog.Empty;
-        }
-
-        roleModels["alpha"] = snapshot.AlphaModel;
-        roleModels["beta"] = snapshot.BetaModel;
-        roleModels["gamma"] = snapshot.GammaModel;
-        roleModels["delta"] = snapshot.DeltaModel;
-        roleModels["narrator"] = snapshot.NarratorModel;
-        UpdateRoleModelEditors();
-        UpdateRoleModelSummary();
     }
 
     public void RecordProviderReachabilityCheck(DateTimeOffset checkedAt, int? modelCount)
@@ -302,27 +323,6 @@ internal sealed class ProviderSettingsCoordinator
         {
             lastProviderModelCount = modelCount.Value;
         }
-    }
-
-    public async Task ApplyProviderPresetAsync(CancellationToken cancellationToken = default)
-    {
-        var preset = ShellUiHelpers.SelectedComboTag(providerPresetPicker, "lm_studio");
-        var url = ProviderPresetBaseUrl(preset);
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            providerPresetStatusText.Foreground = resourceBrush("MutedTextBrush");
-            providerPresetStatusText.Text = "Manual provider selected. Open Custom connection, type a server address, then press Enter.";
-            providerBaseUrlText.Focus();
-            return;
-        }
-
-        providerBaseUrlText.Text = url;
-        ShellUiHelpers.SelectComboTag(
-            providerApiModePicker,
-            ApiModeForProviderPreset(preset));
-        providerPresetStatusText.Foreground = resourceBrush("AlphaAccentBrush");
-        providerPresetStatusText.Text = $"Provider preset in use: {url}";
-        await PersistModelRoutingAsync("Provider preset saved.", refreshModels: true, cancellationToken);
     }
 
     public async Task TestProviderAsync(Control busyControl, CancellationToken cancellationToken = default)
@@ -426,7 +426,8 @@ internal sealed class ProviderSettingsCoordinator
                     refreshModels: true,
                     cancellationToken,
                     suppressOperationStatus: true,
-                    parentOperationStatus: status);
+                    parentOperationStatus: status,
+                    persistConnection: true);
                 if (status.IsTerminal)
                 {
                     return;
@@ -767,215 +768,148 @@ internal sealed class ProviderSettingsCoordinator
 
     public async Task DownloadModelAsync(CancellationToken cancellationToken = default)
     {
-        await RunBusyAsync(downloadModelButton, async () =>
+        await RunNativeBusyAsync(downloadModelButton, async () =>
         {
             var model = downloadModelText.Text.Trim();
-            if (string.IsNullOrWhiteSpace(model))
+            var context = CaptureLifecycleContext(CurrentProviderApiTokenText());
+            if (context is null || string.IsNullOrWhiteSpace(model))
             {
-                downloadModelStatusText.Foreground = resourceBrush("DangerTextBrush");
-                downloadModelStatusText.Text = "Model ID is required.";
+                downloadModelStatusText.Text = context is null ? "No active session." : "Model ID is required.";
                 return;
             }
-
-            var apiMode = CurrentApiMode();
-            if (!ModelProviderApiModes.IsOllamaNative(apiMode)
-                && !ModelProviderApiModes.IsLmStudioNative(apiMode))
+            if (!ModelProviderApiModes.IsOllamaNative(context.ApiMode)
+                && !ModelProviderApiModes.IsLmStudioNative(context.ApiMode))
             {
-                downloadModelStatusText.Foreground = resourceBrush("DangerTextBrush");
-                downloadModelStatusText.Text = "Switch API mode to LM Studio native or Ollama native before downloading.";
+                downloadModelStatusText.Text = "Connect to a detected LM Studio or Ollama server before downloading.";
                 return;
             }
-
-            await RunProviderOperationAsync(
-                "provider.model.download",
-                ModelProviderApiModes.IsOllamaNative(apiMode)
-                    ? $"Pulling {model} with Ollama..."
-                    : $"Starting download for {model}...",
-                "Model download ended without a confirmed result.",
-                async status =>
+            var quantization = ShellUiHelpers.SelectedComboTag(downloadQuantizationPicker, "");
+            ClearDownloadJob();
+            await RunProviderOperationAsync("provider.model.download", $"Downloading {model}...",
+                "Model download ended without a confirmed result.", async status =>
                 {
-                    if (ModelProviderApiModes.IsOllamaNative(apiMode))
-                    {
-                        ClearDownloadJob();
-                        downloadModelStatusText.Foreground = resourceBrush("MutedTextBrush");
-                        downloadModelStatusText.Text = $"Pulling {model} with Ollama...";
-
-                        var pullResult = await ollamaModelPullService.PullAsync(
-                            providerBaseUrlText.Text.Trim(),
-                            model,
-                            await CurrentProviderApiTokenAsync(),
-                            cancellationToken);
-                        downloadModelStatusText.Foreground = pullResult.Ok
-                            ? resourceBrush("AlphaAccentBrush")
-                            : resourceBrush("DangerTextBrush");
-                        downloadModelStatusText.Text = FormatOllamaPullStatusText(pullResult);
-                        providerTestStatus.Text = downloadModelStatusText.Text;
-                        if (activeSession() is { } ollamaSession)
-                        {
-                            await eventLogStore.AppendAsync(ollamaSession.Id, "ollama_model_pull_requested", new
-                            {
-                                pullResult.Model,
-                                pullResult.Status,
-                                pullResult.Digest,
-                                pullResult.CompletedBytes,
-                                pullResult.TotalBytes,
-                                pullResult.Ok
-                            }, cancellationToken);
-                        }
-
-                        if (pullResult.Ok)
-                        {
-                            await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
-                            UpdateModelStateLabels();
-                            status.Complete("Ollama model pull complete.", $"{model} is ready.");
-                        }
-                        else
-                        {
-                            status.Fail("Ollama model pull failed.", pullResult.Error);
-                        }
-
-                        return;
-                    }
-
-                    var quantization = ShellUiHelpers.SelectedComboTag(downloadQuantizationPicker, "");
-                    ClearDownloadJob();
                     downloadModelStatusText.Foreground = resourceBrush("MutedTextBrush");
-                    downloadModelStatusText.Text = $"Starting download for {model}...";
-
-                    var apiToken = await CurrentProviderApiTokenAsync();
-                    var result = await modelDownloadService.StartDownloadAsync(
-                        providerBaseUrlText.Text.Trim(),
-                        model,
-                        quantization,
-                        CurrentApiMode(),
-                        apiToken,
-                        cancellationToken);
-                    if (!result.Ok)
+                    downloadModelStatusText.Text = $"Downloading {model}...";
+                    if (ModelProviderApiModes.IsOllamaNative(context.ApiMode))
                     {
-                        downloadModelStatusText.Foreground = resourceBrush("DangerTextBrush");
-                        downloadModelStatusText.Text = $"Download failed: {result.Error}";
+                        var result = await ollamaModelPullService.PullAsync(
+                            context.BaseUrl, model, context.ApiToken, cancellationToken);
+                        var pullEvidence = await AppPostCommitEvidence.TryAppendAsync(eventLogStore, context.SessionId,
+                            "ollama_model_pull_requested", new
+                            {
+                                result.Model, result.Status, result.Digest, result.CompletedBytes, result.TotalBytes, result.Ok
+                            }, AppErrorContext.Provider);
+                        if (!LifecycleContextMatches(context)) return;
+                        downloadModelStatusText.Foreground = resourceBrush(result.Ok ? "AlphaAccentBrush" : "DangerTextBrush");
+                        downloadModelStatusText.Text = result.Ok ? pullEvidence.AppendTo(FormatOllamaPullStatusText(result)) : FormatOllamaPullStatusText(result);
                         providerTestStatus.Text = downloadModelStatusText.Text;
-                        status.Fail("Model download failed.", result.Error);
-                        return;
-                    }
-
-                    var displayed = result;
-                    RememberDownloadJob(result);
-                    if (!result.IsComplete && !string.IsNullOrWhiteSpace(result.JobId))
-                    {
-                        status.Update($"Checking download for {model}...");
-                        var downloadStatus = await modelDownloadService.GetStatusAsync(
-                            providerBaseUrlText.Text.Trim(),
-                            result.JobId,
-                            result.Model,
-                            result.Quantization,
-                            apiToken,
-                            cancellationToken);
-                        if (downloadStatus.Ok)
+                        if (result.Ok)
                         {
-                            displayed = downloadStatus;
-                            RememberDownloadJob(downloadStatus);
+                            var refreshWarning = cancellationToken.IsCancellationRequested ? ""
+                                : await AppPostCommitEvidence.TryCompleteAsync(
+                                    () => RefreshAdvertisedModelsAsync(force: true, cancellationToken),
+                                    "the provider catalog could not be refreshed", AppErrorContext.Provider);
+                            if (!LifecycleContextMatches(context)) return;
+                            downloadModelStatusText.Text = AppPostCommitEvidence.AppendWarning(downloadModelStatusText.Text, refreshWarning);
+                            providerTestStatus.Text = downloadModelStatusText.Text;
+                            status.Complete("Ollama model pull complete.", downloadModelStatusText.Text);
                         }
+                        else status.Fail("Ollama model pull failed.", result.Error);                        return;
                     }
-
-                    downloadModelStatusText.Foreground = displayed.IsComplete
-                        ? resourceBrush("AlphaAccentBrush")
-                        : resourceBrush("BetaAccentBrush");
-                    downloadModelStatusText.Text = FormatDownloadStatusText(displayed);
-                    providerTestStatus.Text = downloadModelStatusText.Text;
-                    if (activeSession() is { } session)
+                    LmStudioModelDownloadResult? accepted = null;
+                    AppPostCommitEvidenceResult? evidence = null;
+                    LmStudioModelDownloadResult displayed;
+                    try
                     {
-                        await eventLogStore.AppendAsync(session.Id, "native_model_download_requested", new
-                        {
-                            displayed.Model,
-                            displayed.Quantization,
-                            displayed.JobId,
-                            displayed.Status,
-                            displayed.IsComplete
-                        }, cancellationToken);
+                        displayed = await downloadWorkflow.StartAsync(context, model, quantization, cancellationToken,
+                            async receipt =>
+                            {
+                                accepted = receipt;
+                                // The accepted receipt precedes both secondary audit I/O and cancellable polling.
+                                if (LifecycleContextMatches(context)) RememberDownloadJob(receipt, context);
+                                evidence = await AppPostCommitEvidence.TryAppendAsync(eventLogStore, context.SessionId,
+                                    "native_model_download_requested", new
+                                    {
+                                        receipt.Model, receipt.Quantization, receipt.JobId, receipt.Status, receipt.IsComplete, receipt.Ok
+                                    }, AppErrorContext.Provider);
+                            });
                     }
-
-                    await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
-                    UpdateModelStateLabels();
-                    status.Complete(
-                        displayed.IsComplete ? "Model download complete." : "Model download started.",
-                        downloadModelStatusText.Text);
-                });
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && accepted is not null)
+                    {
+                        if (LifecycleContextMatches(context))
+                            ApplyDownloadResult(LmStudioModelDownloadResult.ObservationUnavailable(accepted.Model,
+                                accepted.Quantization, accepted.JobId, "Download was accepted; the status observation was cancelled."),
+                                context, status, evidence?.Warning);
+                        throw;
+                    }
+                    if (!LifecycleContextMatches(context)) return;
+                    ApplyDownloadResult(displayed, context, status, evidence?.Warning);
+                    if (displayed.Ok && !cancellationToken.IsCancellationRequested)
+                    {
+                        var warning = await AppPostCommitEvidence.TryCompleteAsync(
+                            () => RefreshAdvertisedModelsAsync(force: true, cancellationToken),
+                            "the provider catalog could not be refreshed", AppErrorContext.Provider);
+                        if (LifecycleContextMatches(context) && warning.Length > 0)
+                        {
+                            downloadModelStatusText.Text = AppPostCommitEvidence.AppendWarning(downloadModelStatusText.Text, warning);
+                            providerTestStatus.Text = downloadModelStatusText.Text;
+                        }
+                    }                }, StatusIdentity(context));
         });
     }
 
     public async Task CheckDownloadStatusAsync(CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(lastDownloadJobId))
+        var context = lastDownloadContext;
+        if (context is null || string.IsNullOrWhiteSpace(lastDownloadJobId))
         {
-            downloadModelStatusText.Foreground = resourceBrush("DangerTextBrush");
             downloadModelStatusText.Text = "No LM Studio download job has been started in this session.";
             return;
         }
-
-        if (ShouldClearDownloadJob(
-            lastDownloadJobId,
-            lastDownloadProviderBaseUrl,
-            lastDownloadApiMode,
-            lastDownloadApiToken,
-            providerBaseUrlText.Text,
-            CurrentApiMode(),
-            CurrentProviderApiTokenText()))
+        if (!LifecycleContextMatches(context))
         {
             ClearDownloadJob();
-            downloadModelStatusText.Foreground = resourceBrush("DangerTextBrush");
-            downloadModelStatusText.Text = "Provider changed since the last download job. Start a new download for this provider.";
+            downloadModelStatusText.Text = "Provider or session changed since the last download job. Start a new download for this provider.";
             providerTestStatus.Text = downloadModelStatusText.Text;
             return;
         }
-
-        await RunBusyAsync(
-            checkDownloadStatusButton,
-            () => RunProviderOperationAsync(
-                "provider.model.download-status",
-                $"Checking download for {lastDownloadModel}...",
-                "Download status check ended without a confirmed result.",
-                async operationStatus =>
+        var jobId = lastDownloadJobId;
+        var model = lastDownloadModel;
+        var quantization = lastDownloadQuantization;
+        await RunNativeBusyAsync(checkDownloadStatusButton, () => RunProviderOperationAsync(
+            "provider.model.download-status", $"Checking download for {model}...",
+            "Download status check ended without a confirmed result.", async operationStatus =>
+            {
+                LmStudioModelDownloadResult result;
+                try { result = await downloadWorkflow.ObserveAsync(context, jobId, model, quantization, cancellationToken); }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    downloadModelStatusText.Foreground = resourceBrush("MutedTextBrush");
-                    downloadModelStatusText.Text = $"Checking download job {lastDownloadJobId}...";
-                    var status = await modelDownloadService.GetStatusAsync(
-                        providerBaseUrlText.Text.Trim(),
-                        lastDownloadJobId,
-                        lastDownloadModel,
-                        lastDownloadQuantization,
-                        await CurrentProviderApiTokenAsync(),
-                        cancellationToken);
-                    if (!status.Ok)
-                    {
-                        downloadModelStatusText.Foreground = resourceBrush("DangerTextBrush");
-                        downloadModelStatusText.Text = $"Download status failed: {status.Error}";
-                        providerTestStatus.Text = downloadModelStatusText.Text;
-                        operationStatus.Fail("Download status check failed.", status.Error);
-                        return;
-                    }
-
-                    RememberDownloadJob(status);
-                    downloadModelStatusText.Foreground = status.IsComplete
-                        ? resourceBrush("AlphaAccentBrush")
-                        : resourceBrush("BetaAccentBrush");
-                    downloadModelStatusText.Text = FormatDownloadStatusText(status);
-                    providerTestStatus.Text = downloadModelStatusText.Text;
-                    if (status.IsComplete)
-                    {
-                        await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
-                        UpdateModelStateLabels();
-                    }
-
-                    operationStatus.Complete(
-                        status.IsComplete ? "Model download complete." : "Model download is still running.",
-                        downloadModelStatusText.Text);
-                }));
+                    if (LifecycleContextMatches(context) && lastDownloadJobId == jobId)
+                        ApplyDownloadResult(LmStudioModelDownloadResult.ObservationUnavailable(model, quantization, jobId,
+                            "The status observation was cancelled."), context, operationStatus);
+                    throw;
+                }
+                if (!LifecycleContextMatches(context) || lastDownloadJobId != jobId) return;
+                ApplyDownloadResult(result, context, operationStatus);
+                if (result.Ok && result.IsComplete) await RefreshAdvertisedModelsAsync(force: true, cancellationToken);
+            }, StatusIdentity(context)));
     }
 
+    private void ApplyDownloadResult(LmStudioModelDownloadResult result, ProviderOperationContext context, ProviderOperationStatus status, string? evidenceWarning = null)
+    {
+        // Both initial and manual observations consume terminal failure before returning.
+        RememberDownloadJob(result, context);
+        downloadModelStatusText.Foreground = resourceBrush(!result.Ok ? "DangerTextBrush" : result.IsComplete ? "AlphaAccentBrush" : "BetaAccentBrush");
+        downloadModelStatusText.Text = AppPostCommitEvidence.AppendWarning(FormatDownloadStatusText(result), evidenceWarning ?? "");
+        providerTestStatus.Text = downloadModelStatusText.Text;
+        if (!result.ObservationAvailable) status.MarkUnconfirmed("Download status is unknown; retry the status check.", downloadModelStatusText.Text);
+        else if (!result.Ok) status.Fail("Model download failed.", result.Error);
+        else status.Complete(result.IsComplete ? "Model download complete." : "Model download is still running.", downloadModelStatusText.Text);
+    }
     internal static string FormatDownloadStatusText(LmStudioModelDownloadResult result)
     {
         var model = string.IsNullOrWhiteSpace(result.Model) ? "model" : result.Model;
+        if (!result.ObservationAvailable) return $"Download status unknown for {model}. {result.Error} Use Check status to retry the existing job.";
         if (!result.Ok)
         {
             return $"Download failed: {result.Error}";
@@ -1013,10 +947,10 @@ internal sealed class ProviderSettingsCoordinator
 
     internal static bool ShouldRetainDownloadJob(LmStudioModelDownloadResult result)
     {
-        return result.Ok && !result.IsComplete && !string.IsNullOrWhiteSpace(result.JobId);
+        return !result.IsComplete && (result.Ok || !result.ObservationAvailable) && !string.IsNullOrWhiteSpace(result.JobId);
     }
 
-    private void RememberDownloadJob(LmStudioModelDownloadResult result)
+    private void RememberDownloadJob(LmStudioModelDownloadResult result, ProviderOperationContext context)
     {
         if (!ShouldRetainDownloadJob(result))
         {
@@ -1027,9 +961,10 @@ internal sealed class ProviderSettingsCoordinator
         if (!string.IsNullOrWhiteSpace(result.JobId))
         {
             lastDownloadJobId = result.JobId.Trim();
-            lastDownloadProviderBaseUrl = providerBaseUrlText.Text.Trim();
-            lastDownloadApiMode = CurrentApiMode();
-            lastDownloadApiToken = CurrentProviderApiTokenText();
+            lastDownloadProviderBaseUrl = context.BaseUrl;
+            lastDownloadApiMode = context.ApiMode;
+            lastDownloadApiToken = context.ApiToken;
+            lastDownloadContext = context;
         }
 
         if (!string.IsNullOrWhiteSpace(result.Model))
@@ -1053,13 +988,14 @@ internal sealed class ProviderSettingsCoordinator
         lastDownloadProviderBaseUrl = "";
         lastDownloadApiMode = "";
         lastDownloadApiToken = "";
+        lastDownloadContext = null;
         UpdateNativeLifecycleControls();
     }
 
     public void UpdateNativeLifecycleControls()
     {
         var apiMode = CurrentApiMode();
-        var state = NativeLifecycleControlStateFor(apiMode, lastDownloadJobId, isArenaBusy());
+        var state = NativeLifecycleControlStateFor(apiMode, lastDownloadJobId, isArenaBusy() || isDownloadOperationRunning);
         preloadSelectedModelsButton.IsEnabled = state.LifecycleControlsEnabled;
         unloadSelectedModelsButton.IsEnabled = state.LifecycleControlsEnabled;
         downloadModelButton.IsEnabled = state.DownloadControlsEnabled;
@@ -1081,35 +1017,35 @@ internal sealed class ProviderSettingsCoordinator
             ? "Use the llama.cpp runtime card above; lifecycle controls appear only after router support is inspected."
             : nativeAvailable
             ? NativeLifecycleHint(apiMode)
-            : "Switch API mode to LM Studio native or Ollama native to use model lifecycle controls.";
+            : "Connect to a detected LM Studio or Ollama server to load and unload models.";
         var downloadHint = state.IsBusy
             ? busyHint
             : ModelProviderApiModes.IsLmStudioNative(apiMode)
             ? "Uses LM Studio native model download endpoints."
             : ModelProviderApiModes.IsOllamaNative(apiMode)
             ? "Uses Ollama native /api/pull. Pulls finish in this request; Status remains for LM Studio jobs."
-            : "Switch API mode to LM Studio native to use model downloads.";
+            : "Connect to a detected LM Studio or Ollama server to download models.";
         var quantizationHint = state.IsBusy
             ? busyHint
             : ModelProviderApiModes.IsLmStudioNative(apiMode)
             ? "Optional LM Studio quantization selector. Auto lets LM Studio choose."
             : ModelProviderApiModes.IsOllamaNative(apiMode)
             ? "Ollama quantization is part of the model tag, for example qwen3:8b or llama3.2:latest."
-            : "Switch API mode to LM Studio native to choose a quantization.";
+            : "Connect to a detected LM Studio server to select a quantization.";
         var nativeOptionsHint = state.IsBusy
             ? busyHint
             : ModelProviderApiModes.IsLlamaCppNative(apiMode)
             ? "llama.cpp context and GPU-layer values are startup-time server settings; inspect their read-only runtime evidence above."
             : nativeAvailable
             ? NativeOptionsHint(apiMode)
-            : "Switch API mode to LM Studio native or Ollama native to edit native-only options.";
+            : "Connect to a detected LM Studio or Ollama server to edit these options.";
         var statefulHint = state.IsBusy
             ? busyHint
             : ModelProviderApiModes.IsLmStudioNative(apiMode)
             ? "Use LM Studio native response_id and previous_response_id for continuity across turns."
             : ModelProviderApiModes.IsOllamaNative(apiMode)
             ? "Ollama native chat does not use LM Studio response_id continuity."
-            : "Switch API mode to LM Studio native to use response_id continuity.";
+            : "Connect to a detected LM Studio server to use stateful chat.";
         preloadSelectedModelsButton.ToolTip = modeHint;
         unloadSelectedModelsButton.ToolTip = modeHint;
         downloadModelButton.ToolTip = downloadHint;
@@ -1320,7 +1256,8 @@ internal sealed class ProviderSettingsCoordinator
                         refreshModels: true,
                         cancellationToken,
                         suppressOperationStatus: true,
-                        parentOperationStatus: status);
+                        parentOperationStatus: status,
+                        persistConnection: true);
                     if (status.IsTerminal)
                     {
                         return;
@@ -1338,12 +1275,12 @@ internal sealed class ProviderSettingsCoordinator
 
     public async Task ProviderBaseUrlCommittedAsync(CancellationToken cancellationToken = default)
     {
-        await PersistModelRoutingAsync("Server address saved.", refreshModels: true, cancellationToken);
+        await PersistModelRoutingAsync("Server address saved.", refreshModels: true, cancellationToken, persistConnection: true);
     }
 
     public async Task ProviderModelSelectionChangedAsync(CancellationToken cancellationToken = default)
     {
-        if (isRenderingSnapshot() || isUpdatingRoleModelEditor)
+        if (isRenderingSnapshot() || isApplyingProviderSelection || isUpdatingRoleModelEditor)
         {
             return;
         }
@@ -1364,7 +1301,7 @@ internal sealed class ProviderSettingsCoordinator
 
     public async Task ParticipantModelSelectionChangedAsync(ComboBox comboBox, CancellationToken cancellationToken = default)
     {
-        if (isRenderingSnapshot() || isUpdatingRoleModelEditor)
+        if (isRenderingSnapshot() || isApplyingProviderSelection || isUpdatingRoleModelEditor)
         {
             return;
         }
@@ -1388,9 +1325,10 @@ internal sealed class ProviderSettingsCoordinator
         IReadOnlyDictionary<string, string>? profileRoleModelsByKey = null,
         IReadOnlyList<WpfProviderModelSettings>? profileModelSettings = null,
         bool suppressOperationStatus = false,
-        ProviderOperationStatus? parentOperationStatus = null)
+        ProviderOperationStatus? parentOperationStatus = null,
+        bool persistConnection = false)
     {
-        if (isRenderingSnapshot() || isUpdatingRoleModelEditor)
+        if (isRenderingSnapshot() || isApplyingProviderSelection || isUpdatingRoleModelEditor)
         {
             return;
         }
@@ -1423,10 +1361,10 @@ internal sealed class ProviderSettingsCoordinator
                 return;
             }
 
-            var baseUrl = providerBaseUrlText.Text.Trim();
-            var apiMode = CurrentApiMode();
+            var baseUrl = persistConnection ? providerBaseUrlText.Text.Trim() : "";
+            var apiMode = persistConnection ? CurrentApiMode() : "";
             UpdateNativeLifecycleControls();
-            var apiToken = CurrentProviderApiTokenText();
+            var apiToken = persistConnection ? CurrentProviderApiTokenText() : "";
             var defaultModel = providerModelText.Text.Trim();
             SaveRoleModelDrafts();
             UpdateRoleModelSummary();
@@ -1434,19 +1372,7 @@ internal sealed class ProviderSettingsCoordinator
                 .ToDictionary(key => key, RoleModel, StringComparer.OrdinalIgnoreCase);
             var roleOverridesToSave = RoleModelKeys()
                 .ToDictionary(key => key, roleGenerationOverride, StringComparer.OrdinalIgnoreCase);
-            if (ShouldClearDownloadJob(
-                lastDownloadJobId,
-                lastDownloadProviderBaseUrl,
-                lastDownloadApiMode,
-                lastDownloadApiToken,
-                baseUrl,
-                apiMode,
-                apiToken))
-            {
-                ClearDownloadJob();
-            }
-
-            if (string.IsNullOrWhiteSpace(baseUrl))
+            if (persistConnection && string.IsNullOrWhiteSpace(baseUrl))
             {
                 providerTestStatus.Text = "Server address is required.";
                 FailRouting("Provider routing was not saved.", providerTestStatus.Text);
@@ -1484,6 +1410,25 @@ internal sealed class ProviderSettingsCoordinator
             var existingShared = snapshot.Configs.TryGetValue("shared", out var shared)
                 ? shared
                 : new CoreModelProviderConfig();
+            if (!persistConnection)
+            {
+                // Advanced contains an unconnected address/token draft. Saving
+                // model behavior or routing must not implicitly connect that draft.
+                baseUrl = existingShared.BaseUrl;
+                apiMode = existingShared.ApiMode;
+                apiToken = existingShared.ApiToken;
+            }
+            if ((lastDownloadContext is not null && lastDownloadContext.SessionId != activeSession()?.Id) || ShouldClearDownloadJob(
+                lastDownloadJobId,
+                lastDownloadProviderBaseUrl,
+                lastDownloadApiMode,
+                lastDownloadApiToken,
+                baseUrl,
+                apiMode,
+                apiToken))
+            {
+                ClearDownloadJob();
+            }
             var normalizedBaseUrl = ModelProviderHealthService.NormalizeBaseUrl(baseUrl);
             var updatedShared = ModelRoutingSharedConfig(
                 existingShared,
@@ -1531,6 +1476,14 @@ internal sealed class ProviderSettingsCoordinator
                 var (temperatureOverride, maxOutputTokensOverride) = roleOverridesToSave.TryGetValue(roleKey, out var knownOverride)
                     ? knownOverride
                     : roleGenerationOverride(roleKey);
+                if (profileRoleModelsByKey is null && snapshot.Configs.TryGetValue(roleKey, out var existingRole)
+                    && existingRole.Model.Trim().Equals(modelToSave, StringComparison.Ordinal)
+                    && modelToSave.Length > 0
+                    && (!ProviderServerInventory.SameEndpoint(existingRole.BaseUrl, existingShared.BaseUrl)
+                        || !ProviderServerInventory.SameEndpoint(existingShared.BaseUrl, updatedShared.BaseUrl)))
+                {
+                    continue;
+                }
                 SaveRoleModelConfig(snapshot.Configs, roleKey, modelToSave, updatedShared, temperatureOverride, maxOutputTokensOverride);
             }
 
@@ -1640,198 +1593,109 @@ internal sealed class ProviderSettingsCoordinator
         }
     }
 
-    public async Task RefreshAdvertisedModelsAsync(
-        bool force = false,
-        CancellationToken cancellationToken = default)
+    public Task RefreshAdvertisedModelsAsync(bool force = false, CancellationToken cancellationToken = default)
     {
-        if (!force && !appSettingsVisible())
+        cancellationToken.ThrowIfCancellationRequested();
+        if ((!force && !appSettingsVisible()) || activeSession() is null) return Task.CompletedTask;
+        if (settingsRefreshTask is { IsCompleted: false })
         {
-            return;
-        }
-
-        if (isRefreshingModels)
-        {
-            return;
-        }
-
-        isRefreshingModels = true;
-        try
-        {
-            var config = new CoreModelProviderConfig
+            if (activeSettingsRefreshLease is null || !SettingsCatalogContextMatches(activeSettingsRefreshLease))
             {
-                BaseUrl = providerBaseUrlText.Text.Trim(),
-                ApiMode = CurrentApiMode(),
-                ApiToken = CurrentProviderApiTokenText(),
-                Model = providerModelText.Text.Trim(),
-                Timeout = int.TryParse(providerTimeoutText.Text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var timeout)
-                    ? Math.Clamp(timeout, 1, 30)
-                    : 5,
-                Temperature = 0,
-                MaxOutputTokens = 16
-            };
-            var apiToken = await CurrentProviderApiTokenAsync();
-            var nativeCatalogError = "";
-            if (config.ApiMode.Equals(ModelProviderApiModes.LmStudioNative, StringComparison.OrdinalIgnoreCase))
-            {
-                var nativeCatalog = await lmStudioModelCatalogService.TryLoadAsync(config.BaseUrl, apiToken, cancellationToken);
-                if (nativeCatalog.Ok && nativeCatalog.Models.Count > 0)
-                {
-                    lastModelListCheckedAt = DateTimeOffset.Now;
-                    lastLmStudioCatalog = nativeCatalog;
-                    lastOllamaCatalog = OllamaModelCatalog.Empty;
-                    advertisedModels = AdvertisedModelNames([], lastLmStudioCatalog, lastOllamaCatalog);
-                    lastProviderModelCount = advertisedModels.Count;
-                    providerModelsStatus.Text = FormatProviderModelsStatus(advertisedModels.Count, lastLmStudioCatalog, lastOllamaCatalog);
-                    providerModelsStatus.ToolTip = FormatProviderModelsTooltip(
-                        lastLmStudioCatalog,
-                        lastOllamaCatalog,
-                        "",
-                        CurrentProviderApiTokenText());
-                    isUpdatingRoleModelEditor = true;
-                    try
-                    {
-                        UpdateModelComboItems(providerModelText);
-                        foreach (var comboBox in RoleModelComboBoxes())
-                        {
-                            UpdateModelComboItems(comboBox);
-                        }
-
-                        UpdateModelStateLabels();
-                    }
-                    finally
-                    {
-                        isUpdatingRoleModelEditor = false;
-                    }
-
-                    updateProviderHealthPopup();
-                    return;
-                }
-
-                nativeCatalogError = nativeCatalog.Error;
+                settingsRefreshQueued = true;
+                queuedSettingsRefreshToken = cancellationToken;
             }
+            return settingsRefreshTask.WaitAsync(cancellationToken);
+        }
+        settingsRefreshTask = RefreshSettingsCatalogLoopAsync(cancellationToken);
+        return settingsRefreshTask.WaitAsync(cancellationToken);
+    }
 
-            if (config.ApiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
+    private async Task RefreshSettingsCatalogLoopAsync(CancellationToken cancellationToken)
+    {
+        do
+        {
+            settingsRefreshQueued = false;
+            try { await RefreshSettingsCatalogOnceAsync(cancellationToken); }
+            catch (OperationCanceledException) when (settingsRefreshQueued)
             {
-                var ollamaCatalog = await ollamaModelCatalogService.TryLoadAsync(config.BaseUrl, apiToken, cancellationToken);
-                if (ollamaCatalog.Ok)
-                {
-                    lastModelListCheckedAt = DateTimeOffset.Now;
-                    lastLmStudioCatalog = LmStudioModelCatalog.Empty;
-                    lastOllamaCatalog = ollamaCatalog;
-                    advertisedModels = AdvertisedModelNames([], lastLmStudioCatalog, lastOllamaCatalog);
-                    lastProviderModelCount = advertisedModels.Count;
-                    providerModelsStatus.Text = FormatProviderModelsStatus(advertisedModels.Count, lastLmStudioCatalog, lastOllamaCatalog);
-                    providerModelsStatus.ToolTip = FormatProviderModelsTooltip(
-                        lastLmStudioCatalog,
-                        lastOllamaCatalog,
-                        "",
-                        CurrentProviderApiTokenText());
-                    isUpdatingRoleModelEditor = true;
-                    try
-                    {
-                        UpdateModelComboItems(providerModelText);
-                        foreach (var comboBox in RoleModelComboBoxes())
-                        {
-                            UpdateModelComboItems(comboBox);
-                        }
-
-                        UpdateModelStateLabels();
-                    }
-                    finally
-                    {
-                        isUpdatingRoleModelEditor = false;
-                    }
-
-                    updateProviderHealthPopup();
-                    return;
-                }
-
-                nativeCatalogError = ollamaCatalog.Error;
+                // A cancelled old request must not discard a newer context's queued refresh.
             }
+            if (!settingsRefreshQueued) return;
+            cancellationToken = queuedSettingsRefreshToken;
+        } while (true);
+    }
 
-            // LM Studio/Ollama native discovery already ran above. If it is
-            // unavailable, make one explicit compatible fallback. llama.cpp must
-            // keep its mode so ModelProviderClient can probe router /models first.
+    private async Task RefreshSettingsCatalogOnceAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (activeSession() is not { } session) return;
+        var config = CaptureRuntimeConfig();
+        var lease = settingsCatalog.BeginRefresh(session.Id, config);
+        activeSettingsRefreshLease = lease;
+        var lmCatalog = LmStudioModelCatalog.Empty;
+        var ollamaCatalog = OllamaModelCatalog.Empty;
+        var nativeError = "";
+        ProviderModelCatalogSnapshot? candidate = null;
+        if (ModelProviderApiModes.IsLmStudioNative(config.ApiMode))
+        {
+            lmCatalog = await lmStudioModelCatalogService.TryLoadAsync(config.BaseUrl, config.ApiToken, cancellationToken);
+            if (lmCatalog.Ok)
+                candidate = ProviderModelCatalogProjectionService.FromLmStudio(lease, lmCatalog, config.Model, DateTimeOffset.Now);
+            else nativeError = lmCatalog.Error;
+        }
+        else if (ModelProviderApiModes.IsOllamaNative(config.ApiMode))
+        {
+            ollamaCatalog = await ollamaModelCatalogService.TryLoadAsync(config.BaseUrl, config.ApiToken, cancellationToken);
+            if (ollamaCatalog.Ok)
+                candidate = ProviderModelCatalogProjectionService.FromOllama(lease, ollamaCatalog, config.Model, DateTimeOffset.Now);
+            else nativeError = ollamaCatalog.Error;
+        }
+        if (!SettingsCatalogContextMatches(lease)) return;
+        if (candidate is null)
+        {
+            // Native inventory was attempted once. Only the compatible fallback is needed now.
             var listConfig = ShouldUseCompatibleModelListFallback(config.ApiMode)
                 ? new CoreModelProviderConfig
                 {
-                    BaseUrl = config.BaseUrl,
-                    ApiMode = ModelProviderApiModes.OpenAiCompatible,
-                    ApiToken = config.ApiToken,
-                    Model = config.Model,
-                    Timeout = config.Timeout,
-                    Temperature = config.Temperature,
-                    MaxOutputTokens = config.MaxOutputTokens
-                }
-                : config;
+                    BaseUrl = config.BaseUrl, ApiMode = ModelProviderApiModes.OpenAiCompatible,
+                    ApiToken = config.ApiToken, Model = config.Model, Timeout = config.Timeout
+                } : config;
             var result = await providerHealth.ListModelsAsync(listConfig, cancellationToken);
-            lastModelListCheckedAt = result.CheckedAt;
-            if (result.Ok)
-            {
-                lastLmStudioCatalog = LmStudioModelCatalog.Empty;
-                lastOllamaCatalog = OllamaModelCatalog.Empty;
-                advertisedModels = AdvertisedModelNames(result.Models, lastLmStudioCatalog, lastOllamaCatalog);
-                lastProviderModelCount = advertisedModels.Count;
-                providerModelsStatus.Text = FormatProviderModelsStatus(advertisedModels.Count, lastLmStudioCatalog, lastOllamaCatalog);
-                providerModelsStatus.ToolTip = FormatProviderModelsTooltip(
-                    lastLmStudioCatalog,
-                    lastOllamaCatalog,
-                    nativeCatalogError,
-                    CurrentProviderApiTokenText());
-                isUpdatingRoleModelEditor = true;
-                try
-                {
-                    UpdateModelComboItems(providerModelText);
-                    foreach (var comboBox in RoleModelComboBoxes())
-                    {
-                        UpdateModelComboItems(comboBox);
-                    }
+            var error = ProviderErrorSanitizer.Sanitize(string.Join(" ", new[] { nativeError, result.Error }
+                .Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.Ordinal)), config.ApiToken);
+            candidate = ProviderModelCatalogProjectionService.FromCompatible(
+                lease, result.Models, result.Ok, error, config.Model, result.CheckedAt);
+        }
+        if (!SettingsCatalogContextMatches(lease) || !settingsCatalog.TryPublish(lease, candidate, out var published)) return;
+        PublishSettingsCatalog(published, lmCatalog, ollamaCatalog, nativeError, config.ApiToken);
 
-                    UpdateModelStateLabels();
-                }
-                finally
-                {
-                    isUpdatingRoleModelEditor = false;
-                }
-        }
-        else
-        {
-            lastLmStudioCatalog = LmStudioModelCatalog.Empty;
-            lastOllamaCatalog = OllamaModelCatalog.Empty;
-            advertisedModels = [];
-            lastProviderModelCount = 0;
-            var modelListError = string.Join(
-                " ",
-                new[] { nativeCatalogError, result.Error }
-                    .Where(value => !string.IsNullOrWhiteSpace(value))
-                    .Distinct(StringComparer.Ordinal));
-            providerModelsStatus.Text = $"Model list unavailable: {modelListError}";
-            providerModelsStatus.ToolTip = modelListError;
-            isUpdatingRoleModelEditor = true;
-            try
-            {
-                UpdateModelComboItems(providerModelText);
-                foreach (var comboBox in RoleModelComboBoxes())
-                {
-                    UpdateModelComboItems(comboBox);
-                }
-
-                UpdateModelStateLabels();
-            }
-            finally
-            {
-                isUpdatingRoleModelEditor = false;
-            }
-        }
-
-            updateProviderHealthPopup();
-        }
-        finally
-        {
-            isRefreshingModels = false;
-        }
     }
 
+    private bool SettingsCatalogContextMatches(ProviderModelCatalogRefreshLease lease) =>
+        lease.SessionId == activeSession()?.Id
+        && lease.ProviderFingerprint == ProviderModelCatalogProjectionService.ProviderFingerprint(lease.SessionId, CaptureRuntimeConfig());
+
+    private void PublishSettingsCatalog(ProviderModelCatalogSnapshot published, LmStudioModelCatalog lmCatalog,
+        OllamaModelCatalog ollamaCatalog, string nativeError, string apiToken)
+    {
+        lastLmStudioCatalog = lmCatalog.Ok ? lmCatalog : LmStudioModelCatalog.Empty;
+        lastOllamaCatalog = ollamaCatalog.Ok ? ollamaCatalog : OllamaModelCatalog.Empty;
+        advertisedModels = published.Models.Where(model => !model.IsConfiguredOnly)
+            .Select(model => model.Id).ToArray();
+        lastProviderModelCount = advertisedModels.Count;
+        lastModelListCheckedAt = published.CheckedAt;
+        providerModelsStatus.Text = published.Status;
+        providerModelsStatus.ToolTip = FormatProviderModelsTooltip(lastLmStudioCatalog, lastOllamaCatalog, nativeError, apiToken);
+        isUpdatingRoleModelEditor = true;
+        try
+        {
+            UpdateModelComboItems(providerModelText);
+            foreach (var comboBox in RoleModelComboBoxes()) UpdateModelComboItems(comboBox);
+            UpdateModelStateLabels();
+        }
+        finally { isUpdatingRoleModelEditor = false; }
+        updateProviderHealthPopup();
+    }
     internal static bool ShouldUseCompatibleModelListFallback(string apiMode)
     {
         var normalized = ModelProviderApiModes.Normalize(apiMode);
@@ -1924,64 +1788,103 @@ internal sealed class ProviderSettingsCoordinator
             cancellationToken: cancellationToken,
             defaultForUnassignedAgentsEnabled: defaultForUnassignedAgentsEnabled,
             profileRoleModelsByKey: roleModelsByKey,
-            profileModelSettings: modelSettings);
+            profileModelSettings: modelSettings,
+            persistConnection: true);
     }
 
     public async Task TestAllRolesAsync(CancellationToken cancellationToken = default)
     {
         SaveRoleModelDrafts();
-        var defaultModel = providerModelText.Text.Trim();
-        var defaultForUnassignedAgentsEnabled = lastRenderedSnapshot()?.DefaultForUnassignedAgentsEnabled ?? true;
-        var resultsByModel = new Dictionary<string, ModelProviderTestResult>(StringComparer.OrdinalIgnoreCase);
+        var context = CaptureLifecycleContext(CurrentProviderApiTokenText());
+        if (context is null) { providerTestStatus.Text = "No active session."; return; }
+        var snapshot = await sessionStore.LoadSnapshotAsync(context.SessionId, cancellationToken);
+        if (snapshot is null || !LifecycleContextMatches(context)) return;
+        var draft = CaptureDiagnosticDraft(snapshot);
+        var capturedPlans = ModelProviderProbePlan.Build(draft, allRoles: true);
         providerTestStatus.Text = "Testing all role models...";
-        foreach (var key in RoleModelKeys())
+        var results = await providerRuntime.ProbeSnapshotAsync(draft, allRoles: true, cancellationToken);
+        if (!LifecycleContextMatches(context)) return;
+        SaveRoleModelDrafts();
+        var currentPlans = ModelProviderProbePlan.Build(CaptureDiagnosticDraft(snapshot), allRoles: true);
+        if (capturedPlans.Count != currentPlans.Count || !capturedPlans.Zip(currentPlans).All(pair =>
+            pair.First.Roles.SequenceEqual(pair.Second.Roles, StringComparer.Ordinal)
+            && ModelProviderProbePlan.SameRequest(pair.First.Config, pair.Second.Config))) return;
+        foreach (var result in results)
         {
-            if (!roleModelStatusByKey.TryGetValue(key, out var label))
+            foreach (var role in result.Roles)
             {
-                continue;
+                if (!roleModelStatusByKey.TryGetValue(role, out var label)) continue;
+                SetModelState(label, string.IsNullOrWhiteSpace(result.Model) ? "no model" : result.Ok ? $"ok {result.LatencyMs} ms" : "failed",
+                    resourceBrush(result.Ok ? "PrimaryBorderBrush" : "DangerTextBrush"),
+                    result.Ok ? $"{result.Model}: completed in {result.LatencyMs} ms" : result.Error);
             }
-
-            var model = RoleModel(key);
-            var effectiveModel = ResolveRoleModelForDiagnostic(
-                model,
-                defaultModel,
-                defaultForUnassignedAgentsEnabled);
-            if (string.IsNullOrWhiteSpace(effectiveModel))
-            {
-                SetModelState(label, "no model", resourceBrush("MutedTextBrush"));
-                continue;
-            }
-
-            SetModelState(label, "testing...", resourceBrush("MutedTextBrush"));
-            if (!resultsByModel.TryGetValue(effectiveModel, out var result))
-            {
-                var config = new CoreModelProviderConfig
-                {
-                    BaseUrl = providerBaseUrlText.Text.Trim(),
-                    ApiMode = CurrentApiMode(),
-                    ApiToken = CurrentProviderApiTokenText(),
-                    Model = effectiveModel,
-                    Timeout = 120,
-                    Temperature = 0,
-                    MaxOutputTokens = 16
-                };
-                result = await providerHealth.TestCompletionAsync(config, cancellationToken);
-                resultsByModel[effectiveModel] = result;
-            }
-
-            SetModelState(
-                label,
-                result.Ok ? $"ok {result.LatencyMs.ToString(System.Globalization.CultureInfo.InvariantCulture)} ms" : "failed",
-                resourceBrush(result.Ok ? "PrimaryBorderBrush" : "DangerTextBrush"),
-                result.Ok ? $"{effectiveModel}: completed in {result.LatencyMs} ms" : $"{effectiveModel}: {result.Error}");
         }
-
-        var failures = resultsByModel.Values.Count(result => !result.Ok);
-        providerTestStatus.Text = failures == 0
-            ? $"All {resultsByModel.Count} role model{(resultsByModel.Count == 1 ? "" : "s")} completed."
-            : $"{failures} of {resultsByModel.Count} role model{(resultsByModel.Count == 1 ? "" : "s")} failed; hover a role status for the error.";
+        var failures = results.Count(result => !result.Ok);
+        providerTestStatus.Text = failures == 0 ? $"All {results.Count} distinct role models completed."
+            : $"{failures} role-model test groups failed or have no assigned model; hover a role status for details.";
     }
 
+    internal AIArena.Core.Models.ArenaSnapshot CaptureDiagnosticDraft(AIArena.Core.Models.ArenaSnapshot persisted)
+    {
+        var previousShared = persisted.Configs.GetValueOrDefault(ModelProviderRouting.SharedConfigKey) ?? new CoreModelProviderConfig();
+        var controls = CaptureRuntimeConfig(maximumTimeout: 3600);
+        var shared = CopyDiagnosticConfig(previousShared, controls.Model, previousShared.ExplicitModelAssignment, controls);
+        var draft = new AIArena.Core.Models.ArenaSnapshot
+        {
+            Configs = new(persisted.Configs),
+            ModelSettings = new(persisted.ModelSettings),
+            ModelSettingsVersion = persisted.ModelSettingsVersion,
+            Engine = new EngineSnapshot
+            {
+                Agents = persisted.Engine.Agents.ToList(),
+                FactoryMode = persisted.Engine.FactoryMode,
+                DefaultForUnassignedAgentsEnabled = lastRenderedSnapshot()?.DefaultForUnassignedAgentsEnabled
+                    ?? persisted.Engine.DefaultForUnassignedAgentsEnabled
+            }
+        };
+        draft.Configs[ModelProviderRouting.SharedConfigKey] = shared;
+        foreach (var role in RoleModelKeys())
+        {
+            var model = RoleModel(role);
+            if (persisted.Configs.TryGetValue(role, out var existing))
+            {
+                var assigned = existing.ExplicitModelAssignment
+                    || !existing.Model.Trim().Equals(previousShared.Model.Trim(), StringComparison.Ordinal);
+                var displayedModel = assigned ? existing.Model.Trim() : "";
+                if (model.Equals(displayedModel, StringComparison.Ordinal))
+                {
+                    // Retain role-specific endpoints, credentials, timeout, and runtime settings.
+                    if (!assigned && existing.Model.Length > 0 && existing.Model != shared.Model)
+                        draft.Configs[role] = CopyDiagnosticConfig(existing, shared.Model, false);
+                    else if (assigned && !existing.ExplicitModelAssignment && existing.Model == shared.Model)
+                        draft.Configs[role] = CopyDiagnosticConfig(existing, model, true);
+                    continue;
+                }
+                draft.Configs[role] = CopyDiagnosticConfig(existing, model, model.Length > 0);
+            }
+            else if (model.Length > 0)
+                draft.Configs[role] = CopyDiagnosticConfig(shared, model, true);
+        }
+        return draft;
+    }
+
+    private static CoreModelProviderConfig CopyDiagnosticConfig(CoreModelProviderConfig source, string model,
+        bool explicitlyAssigned, CoreModelProviderConfig? controls = null)
+    {
+        var editable = controls ?? source;
+        return new CoreModelProviderConfig
+        {
+            BaseUrl = editable.BaseUrl, ApiMode = editable.ApiMode, ApiToken = editable.ApiToken,
+            Model = model, ExplicitModelAssignment = explicitlyAssigned, Timeout = editable.Timeout,
+            Temperature = source.Temperature, MaxOutputTokens = source.MaxOutputTokens,
+            ContextLength = editable.ContextLength, ConfiguredContextWindow = source.ConfiguredContextWindow,
+            HistoryPolicy = source.HistoryPolicy, ResponseTone = source.ResponseTone, CustomTone = source.CustomTone,
+            Reasoning = editable.Reasoning, NativeStatefulChat = editable.NativeStatefulChat,
+            NativeIdleTtlSeconds = editable.NativeIdleTtlSeconds,
+            PreviousResponseId = source.PreviousResponseId, PreserveNativeInputWhitespace = source.PreserveNativeInputWhitespace,
+            RequestInspectionContext = source.RequestInspectionContext, Extra = source.Extra
+        };
+    }
     public async Task UseDefaultModelForAllRolesAsync(CancellationToken cancellationToken = default)
     {
         var model = providerModelText.Text.Trim();
@@ -2027,14 +1930,14 @@ internal sealed class ProviderSettingsCoordinator
         return ModelProviderApiModes.Normalize(ShellUiHelpers.SelectedComboTag(providerApiModePicker, ModelProviderApiModes.OpenAiCompatible));
     }
 
-    public CoreModelProviderConfig CaptureRuntimeConfig()
+    public CoreModelProviderConfig CaptureRuntimeConfig(int maximumTimeout = 30)
     {
         var timeout = int.TryParse(
             providerTimeoutText.Text.Trim(),
             System.Globalization.NumberStyles.Integer,
             System.Globalization.CultureInfo.InvariantCulture,
             out var parsedTimeout)
-            ? Math.Clamp(parsedTimeout, 1, 30)
+            ? Math.Clamp(parsedTimeout, 1, maximumTimeout)
             : 5;
         return new CoreModelProviderConfig
         {
@@ -2339,24 +2242,6 @@ internal sealed class ProviderSettingsCoordinator
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(model => model, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-    }
-
-    private static string FormatProviderModelsStatus(int advertisedCount, LmStudioModelCatalog catalog, OllamaModelCatalog ollamaCatalog)
-    {
-        if (catalog.Ok && catalog.Models.Count > 0)
-        {
-            return $"LM Studio catalog: {catalog.ChatModels.Count} chat, {catalog.EmbeddingModels.Count} embedding, {catalog.LoadedCount} loaded. Refreshes every 5s.";
-        }
-
-        if (ollamaCatalog.Ok)
-        {
-            var psDetail = ollamaCatalog.RunningModelsOk
-                ? $"{ollamaCatalog.LoadedCount} loaded"
-                : "running state unavailable";
-            return $"Ollama catalog: {ollamaCatalog.Models.Count} local, {psDetail}. Refreshes every 5s.";
-        }
-
-        return $"{advertisedCount} advertised models found. Refreshes every 5s while settings are open.";
     }
 
     private static string FormatProviderModelsTooltip(
@@ -2754,17 +2639,19 @@ internal sealed class ProviderSettingsCoordinator
         }
     }
 
-    private static string ProviderPresetBaseUrl(string preset)
+    private void UpdateProviderCapabilityHint(string apiMode)
     {
-        return preset switch
-        {
-            "ollama" => "http://127.0.0.1:11434/v1",
-            "llama_cpp" => "http://127.0.0.1:8080/v1",
-            "local_8000" => "http://127.0.0.1:8000/v1",
-            "lm_studio" => "http://127.0.0.1:1234/v1",
-            _ => ""
-        };
+        providerPresetStatusText.Foreground = resourceBrush("MutedTextBrush");
+        providerPresetStatusText.Text = $"{ProviderCapabilityHint(apiMode)} · {ProviderConfigurationControlService.SanitizeBaseUrl(providerBaseUrlText.Text)}";
     }
+
+    internal static string ProviderCapabilityHint(string apiMode) => ModelProviderApiModes.Normalize(apiMode) switch
+    {
+        ModelProviderApiModes.LmStudioNative => "LM Studio",
+        ModelProviderApiModes.OllamaNative => "Ollama",
+        ModelProviderApiModes.LlamaCppNative => "llama.cpp",
+        _ => "Compatible server"
+    };
 
     private static string ApiModeForProviderPreset(string preset)
     {
@@ -2805,7 +2692,7 @@ internal sealed class ProviderSettingsCoordinator
         {
             ModelProviderApiModes.OllamaNative => "Uses Ollama native keep-alive lifecycle requests.",
             ModelProviderApiModes.LmStudioNative => "Uses LM Studio native model lifecycle endpoints.",
-            _ => "Switch API mode to LM Studio native or Ollama native to use model lifecycle controls."
+            _ => "Connect to a detected LM Studio or Ollama server to load and unload models."
         };
     }
 
@@ -2815,7 +2702,7 @@ internal sealed class ProviderSettingsCoordinator
         {
             ModelProviderApiModes.OllamaNative => "Sent through Ollama native /api/chat options such as num_ctx, think, and keep_alive.",
             ModelProviderApiModes.LmStudioNative => "Sent through LM Studio native /api/v1 chat and lifecycle requests.",
-            _ => "Switch API mode to LM Studio native or Ollama native to edit native-only options."
+            _ => "Connect to a detected LM Studio or Ollama server to edit these options."
         };
     }
 
@@ -2930,7 +2817,7 @@ internal sealed class ProviderSettingsCoordinator
         };
     }
 
-    private ProviderSettingsLifecycleContext? CaptureLifecycleContext(string apiToken)
+    private ProviderOperationContext? CaptureLifecycleContext(string apiToken)
     {
         var session = activeSession();
         if (session is null)
@@ -2944,9 +2831,7 @@ internal sealed class ProviderSettingsCoordinator
             ApiMode = CurrentApiMode(),
             ApiToken = apiToken
         };
-        return new ProviderSettingsLifecycleContext(
-            session.Id,
-            ProviderModelCatalogProjectionService.ConnectionFingerprint(session.Id, config));
+        return new ProviderOperationContext(session.Id, config);
     }
 
     private ApplicationStatusIdentity CurrentStatusIdentity()
@@ -2962,7 +2847,7 @@ internal sealed class ProviderSettingsCoordinator
             ? new ApplicationStatusIdentity(session.Id)
             : ApplicationStatusIdentity.Empty;
 
-    private static ApplicationStatusIdentity StatusIdentity(ProviderSettingsLifecycleContext context) =>
+    private static ApplicationStatusIdentity StatusIdentity(ProviderOperationContext context) =>
         new(context.SessionId, context.ConnectionIdentity);
 
     private async Task RunProviderOperationAsync(
@@ -2996,15 +2881,13 @@ internal sealed class ProviderSettingsCoordinator
         }
     }
 
-    private bool LifecycleContextMatches(ProviderSettingsLifecycleContext expected)
+    private bool LifecycleContextMatches(ProviderOperationContext expected)
     {
         var current = CaptureLifecycleContext(CurrentProviderApiTokenText());
-        return current is not null
-            && current.SessionId.Equals(expected.SessionId, StringComparison.Ordinal)
-            && current.ConnectionIdentity.Equals(expected.ConnectionIdentity, StringComparison.Ordinal);
+        return expected.Matches(current);
     }
 
-    private void EnsureLifecycleContext(ProviderSettingsLifecycleContext expected)
+    private void EnsureLifecycleContext(ProviderOperationContext expected)
     {
         if (!LifecycleContextMatches(expected))
         {
@@ -3062,6 +2945,18 @@ internal sealed class ProviderSettingsCoordinator
         }
     }
 
+    private async Task RunNativeBusyAsync(Control control, Func<Task> action)
+    {
+        if (isDownloadOperationRunning) return;
+        isDownloadOperationRunning = true;
+        UpdateNativeLifecycleControls();
+        try { await RunBusyAsync(control, action); }
+        finally
+        {
+            isDownloadOperationRunning = false;
+            UpdateNativeLifecycleControls();
+        }
+    }
     private static async Task RunBusyAsync(Control control, Func<Task> action)
     {
         control.IsEnabled = false;
@@ -3079,10 +2974,6 @@ internal sealed class ProviderSettingsCoordinator
     {
         return ShellUiHelpers.BlendBrush(baseBrush, accentBrush, accentAmount);
     }
-
-    private sealed record ProviderSettingsLifecycleContext(
-        string SessionId,
-        string ConnectionIdentity);
 
     private sealed class ProviderSettingsLifecycleContextChangedException : InvalidOperationException
     {

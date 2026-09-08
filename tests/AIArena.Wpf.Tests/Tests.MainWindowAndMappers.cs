@@ -1918,22 +1918,10 @@ static void MainWindowFactoryModeToggleExposesAutomationAndControlState()
             DrainInput();
             Require(hostedToggle.IsChecked == true && hostedToggle.Focus(),
                 "hosted production Factory toggle could not be restored and focused for keyboard input");
-            var inputSource = PresentationSource.FromVisual(hostedToggle)
-                ?? PresentationSource.FromVisual(host)
-                ?? throw new InvalidOperationException("Hosted production Factory toggle did not create a presentation source.");
-            var spaceDown = new KeyEventArgs(Keyboard.PrimaryDevice, inputSource, Environment.TickCount, Key.Space)
-            {
-                RoutedEvent = Keyboard.KeyDownEvent
-            };
-            var spaceUp = new KeyEventArgs(Keyboard.PrimaryDevice, inputSource, Environment.TickCount, Key.Space)
-            {
-                RoutedEvent = Keyboard.KeyUpEvent
-            };
-            hostedToggle.RaiseEvent(spaceDown);
-            hostedToggle.RaiseEvent(spaceUp);
+            var keyboardReceipt = PressHostedSpaceKey(hostedToggle, host);
             DrainInput();
-            Require(spaceDown.Handled && spaceUp.Handled && hostedToggle.IsChecked == false,
-                "Space did not operate the focused production Factory toggle through its WPF keyboard contract");
+            Require(keyboardReceipt.DownHandled && keyboardReceipt.UpHandled && hostedToggle.IsChecked == false,
+                $"Space did not operate the focused production Factory toggle through its WPF keyboard contract ({keyboardReceipt.Diagnostic})");
 
             var statusHeights = new Dictionary<double, double>();
             foreach (var width in new[] { 960d, 1500d })
@@ -2169,11 +2157,11 @@ static void MainWindowVoiceTtsSettingsExposeAutomation()
     Require(MainWindow.IsGenuineSessionChange(null, "session-a"), "loading the first active session should reset any in-flight global voice operation");
 
     var mainWindowSource = ReadMainWindowSource();
-    var loadSessionStart = mainWindowSource.IndexOf("private async Task LoadSessionAsync(", StringComparison.Ordinal);
-    var stopForSwitch = mainWindowSource.IndexOf("StopVoicePlaybackForSessionChange(session.Id);", loadSessionStart, StringComparison.Ordinal);
-    var snapshotRead = mainWindowSource.IndexOf("LoadSnapshotAsync(session.Id, cancellationToken)", loadSessionStart, StringComparison.Ordinal);
+    var loadSession = CSharpMethodBlock(mainWindowSource, "private async Task<bool> LoadSessionCoreAsync");
+    var stopForSwitch = loadSession.IndexOf("StopVoicePlaybackForSessionChange(session.Id);", StringComparison.Ordinal);
+    var snapshotRead = loadSession.IndexOf("LoadSnapshotAsync(session.Id, token)", StringComparison.Ordinal);
     Require(
-        loadSessionStart >= 0 && stopForSwitch > loadSessionStart && snapshotRead > stopForSwitch,
+        stopForSwitch >= 0 && snapshotRead > stopForSwitch,
         "a genuine session change should invalidate old narration before reading or rendering the next session");
 }
 
@@ -2929,28 +2917,34 @@ static void MainWindowRightRailAdaptsWithoutChangingPreferences()
 static void MainWindowSnapshotRefreshSkipsUnchangedSessionScans()
 {
     var root = Path.Combine(Path.GetTempPath(), "ai-arena-refresh-stamp", Guid.NewGuid().ToString("N"));
+    var snapshotPath = Path.Combine(root, "snapshot.json");
+    var siblingPath = Path.Combine(root, "evidence.txt");
     try
     {
         Directory.CreateDirectory(root);
-        var snapshotPath = Path.Combine(root, "snapshot.json");
         File.WriteAllText(snapshotPath, "{}");
-        var observed = MainWindow.TryGetSessionDirectoryLastModified(snapshotPath);
-
-        Require(observed is not null, "an existing session directory should expose its refresh stamp");
-        var observedValue = observed.GetValueOrDefault();
-        Require(!MainWindow.SnapshotRefreshRequiresSessionScan(observedValue, observed), "an unchanged session directory should skip the expensive summary scan");
-        Require(MainWindow.SnapshotRefreshRequiresSessionScan(observedValue.AddSeconds(-1), observed), "a changed session directory should trigger a summary refresh");
-        Require(MainWindow.SnapshotRefreshRequiresSessionScan(observedValue, null), "a missing session directory should trigger recovery through the session list");
+        var reader = new SnapshotStampReader(forceContentHashGeneration: true);
+        var observed = reader.Capture(snapshotPath);
+        Require(observed is not null, "An existing snapshot must expose its own file stamp");
+        Require(!MainWindow.SnapshotRefreshRequiresSessionScan(observed, reader.Capture(snapshotPath)),
+            "An unchanged snapshot should skip the expensive summary scan");
+        File.WriteAllText(siblingPath, "unrelated evidence");
+        Directory.SetLastWriteTimeUtc(root, DateTime.UtcNow.AddDays(-1));
+        Require(!MainWindow.SnapshotRefreshRequiresSessionScan(observed, reader.Capture(snapshotPath)),
+            "Directory and sibling evidence changes must not repeatedly reload an unchanged snapshot");
+        File.WriteAllText(snapshotPath, "{\"changed\":true}");
+        Require(MainWindow.SnapshotRefreshRequiresSessionScan(observed, reader.Capture(snapshotPath)),
+            "A changed snapshot file should trigger a refresh");
+        Require(MainWindow.SnapshotRefreshRequiresSessionScan(observed, null),
+            "A missing snapshot should trigger recovery through the session list");
     }
     finally
     {
-        if (Directory.Exists(root))
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        File.Delete(snapshotPath);
+        File.Delete(siblingPath);
+        if (Directory.Exists(root)) Directory.Delete(root);
     }
 }
-
 static void MainWindowDebugControlsRemainDiscoverable()
 {
     var document = XDocument.Load(FindWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml"));
@@ -3028,7 +3022,6 @@ static void MainWindowModelProviderUsesProgressiveDisclosure()
     var subsectionNames = new[]
     {
         "ProviderSavedSetupsExpander",
-        "ProviderCustomConnectionExpander",
         "ProviderRoleRoutingExpander",
         "ProviderRecommendationsExpander",
         "ProviderLocalModelToolsExpander",
@@ -3046,12 +3039,25 @@ static void MainWindowModelProviderUsesProgressiveDisclosure()
         .Ancestors()
         .Any(ancestor => subsectionNames.Contains((string?)ancestor.Attribute(xamlNamespace + "Name"), StringComparer.Ordinal));
 
-    foreach (var essentialName in new[] { "ProviderPresetPicker", "TestProviderButton", "OpenModelsSurfaceButton" })
+    foreach (var essentialName in new[] { "TestProviderButton", "OpenModelsSurfaceButton" })
     {
         var essential = Named(essentialName);
         Require(essential.Ancestors().Contains(provider), $"{essentialName} should stay in Provider connection");
         Require(!IsInsideOptionalSubsection(essential), $"{essentialName} should remain on the short primary setup path");
     }
+
+    Require((string?)Named("ProviderApiModePicker").Attribute("Visibility") == "Collapsed",
+        "the provider choice should own connection mode without exposing a second conflicting picker");
+    Require((string?)Named("ProviderServerPicker").Attribute("SelectionChanged") == "ProviderServerPicker_SelectionChanged",
+        "choosing a provider should immediately save through its guarded selection handler");
+    Require(!document.Descendants().Any(element => (string?)element.Attribute(xamlNamespace + "Name") == "ApplyProviderPresetButton"),
+        "provider selection should not require a second Use preset action");
+
+    foreach (var hiddenSection in new[] { "ProviderSavedSetupsExpander", "ProviderRecommendationsExpander", "ProviderLocalModelToolsExpander" })
+        Require((string?)Named(hiddenSection).Attribute("Visibility") == "Collapsed",
+            "connection setup should not require profile, recommendation, or provider-specific tool menus");
+    Require(!document.Descendants().Any(element => (string?)element.Attribute(xamlNamespace + "Name") == "ProviderPresetPicker"),
+        "server types should be detected instead of requiring a manual provider choice");
 
     var compatibilityModelPickerHost = Named("ProviderModelText").Ancestors().First(element => element.Name.LocalName == "Grid");
     Require((string?)compatibilityModelPickerHost.Attribute("Visibility") == "Collapsed", "Settings should not expose a second model selector");
@@ -3061,7 +3067,9 @@ static void MainWindowModelProviderUsesProgressiveDisclosure()
     var expectedGroups = new Dictionary<string, string>
     {
         ["ProviderProfilePicker"] = "ProviderSavedSetupsExpander",
-        ["ProviderApiModePicker"] = "ProviderCustomConnectionExpander",
+        ["ProviderServerPicker"] = "ProviderAdvancedCallsExpander",
+        ["ProviderApiTokenBox"] = "ProviderAdvancedCallsExpander",
+        ["ProviderBaseUrlText"] = "ProviderAdvancedCallsExpander",
         ["AlphaRoleModelText"] = "ProviderRoleRoutingExpander",
         ["TestAllRolesButton"] = "ProviderRoleRoutingExpander",
         ["AutoConfigureButton"] = "ProviderRecommendationsExpander",
@@ -3144,25 +3152,60 @@ static void SettingsSearchExpandsNestedDisclosuresAndRestoresState()
         Content = new TextBlock { Text = "Download model" },
         IsExpanded = true
     };
+    var token = new Expander
+    {
+        Header = "Access token (optional)",
+        Content = new TextBlock { Text = "Token for providers that require authentication" },
+        IsExpanded = false
+    };
+    var hiddenRouting = new Expander
+    {
+        Header = "Legacy model routing",
+        Content = new TextBlock { Text = "Provider connection and role assignments" },
+        Visibility = Visibility.Collapsed,
+        IsExpanded = false
+    };
     var root = new StackPanel();
     root.Children.Add(reasoning);
     root.Children.Add(downloads);
+    root.Children.Add(token);
+    root.Children.Add(hiddenRouting);
 
     Require(MainWindow.SettingsNodeMatches(reasoning, "REASONING"), "settings search should match nested text case-insensitively");
     Require(!MainWindow.SettingsNodeMatches(reasoning, "download"), "settings search should reject unrelated nested text");
 
     var expanders = new List<Expander>();
     MainWindow.CollectSettingsExpanders(root, expanders);
-    Require(expanders.SequenceEqual(new[] { reasoning, downloads }), "settings search should discover nested disclosure controls in visual order");
-    var priorExpansion = expanders.ToDictionary(expander => expander, expander => expander.IsExpanded);
+    Require(expanders.SequenceEqual(new[] { reasoning, downloads, token, hiddenRouting }), "settings search should discover nested disclosure controls in visual order");
+    var priorExpansion = expanders
+        .Where(expander => expander.Visibility == Visibility.Visible)
+        .ToDictionary(expander => expander, expander => expander.IsExpanded);
 
-    MainWindow.ApplyNestedSettingsSearch(root, "reasoning");
+    MainWindow.ApplyNestedSettingsSearch(root, "reasoning", priorExpansion);
     Require(reasoning.Visibility == Visibility.Visible && reasoning.IsExpanded, "a matching nested subsection should be shown and expanded");
     Require(downloads.Visibility == Visibility.Collapsed && !downloads.IsExpanded, "a nonmatching nested subsection should be hidden during search");
 
     MainWindow.RestoreSettingsExpansion(expanders, priorExpansion);
     Require(reasoning.Visibility == Visibility.Visible && !reasoning.IsExpanded, "clearing search should restore a previously collapsed subsection");
     Require(downloads.Visibility == Visibility.Visible && downloads.IsExpanded, "clearing search should restore a previously expanded subsection");
+    Require(hiddenRouting.Visibility == Visibility.Collapsed, "clearing search must not reveal the intentionally hidden legacy model settings");
+
+    var provider = new Expander { Header = "Provider connection", Content = root };
+    priorExpansion[provider] = false;
+    MainWindow.ApplyNestedSettingsSearch(root, "reasoning", priorExpansion);
+    MainWindow.ApplyNestedSettingsSearch(provider, "Provider connection", priorExpansion);
+    Require(provider.IsExpanded, "matching a section header should open the section");
+    Require(token.Visibility == Visibility.Visible && !token.IsExpanded, "a parent-header search should retain the optional token disclosure without expanding it");
+    Require(reasoning.Visibility == Visibility.Visible && !reasoning.IsExpanded, "switching from a leaf search to its parent should restore collapsed advanced fields");
+    Require(downloads.Visibility == Visibility.Visible && downloads.IsExpanded, "a parent-header search should preserve previously open disclosures");
+    Require(hiddenRouting.Visibility == Visibility.Collapsed, "a parent-header search must not reveal legacy controls that repeat the visible connection settings");
+
+    MainWindow.ApplyNestedSettingsSearch(provider, "authentication", priorExpansion);
+    Require(token.Visibility == Visibility.Visible && token.IsExpanded, "a leaf query should still open the matching optional token disclosure");
+    Require(reasoning.Visibility == Visibility.Collapsed, "a leaf query should still hide unrelated advanced fields");
+    MainWindow.RestoreSettingsExpansion(expanders.Append(provider), priorExpansion);
+    Require(token.Visibility == Visibility.Visible && !token.IsExpanded && hiddenRouting.Visibility == Visibility.Collapsed,
+        "clearing a leaf query should restore optional disclosures without exposing hidden legacy settings");
     var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     Require(xaml.Contains("x:Name=\"SettingsSearchFeedbackText\"", StringComparison.Ordinal)
         && xaml.Contains("AutomationProperties.LiveSetting=\"Polite\"", StringComparison.Ordinal), "settings search should announce its visible result count or empty state");

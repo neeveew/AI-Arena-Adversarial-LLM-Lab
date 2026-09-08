@@ -5,12 +5,14 @@
 #define MyAppName "AI Arena"
 #define MyAppShortDisplayName "AI Arena - Lite"
 #define MyAppDisplayName "AI Arena - Lite: Adversarial LLM Lab"
-#define MyAppVersion "0.4.137-beta"
+#define MyAppVersion "0.4.140-beta"
 #define MyAppPublisher "Dominik Fiala"
 #define MyAppExeName "AI Arena.exe"
 #define MyAppIconName "ai-arena-lite-icon.ico"
 #define MyPerUserMigrationSha256 "0F75A6496F52DAD96E08B86C20BF4287AB76F62B325110CE6E460EB9CFC2087E"
-#define MyReleaseDir "..\..\dist\AI Arena - 0.4.137-beta"
+#ifndef MyReleaseDir
+#define MyReleaseDir "..\..\dist\AI Arena - 0.4.140-beta"
+#endif
 #define MyReleaseUrl "https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases"
 
 [Setup]
@@ -28,7 +30,11 @@ DisableDirPage=yes
 DisableProgramGroupPage=yes
 UsePreviousAppDir=no
 UsePreviousGroup=no
+#ifdef MyInstallerOutputDir
+OutputDir={#MyInstallerOutputDir}
+#else
 OutputDir=..\..\dist\installer\AI Arena - {#MyAppVersion}
+#endif
 OutputBaseFilename=AI Arena Setup {#MyAppVersion}
 SetupIconFile=..\..\src\AIArena.Wpf\Assets\ai-arena-icon.ico
 Compression=lzma
@@ -50,7 +56,9 @@ Name: "custom"; Description: "Custom installation"; Flags: iscustom
 
 [Components]
 Name: "app"; Description: "{#MyAppShortDisplayName} application"; Types: full compact custom; Flags: fixed
+#ifndef MyOmitSearxng
 Name: "searxng"; Description: "Local web search engine (SearXNG, AGPL-3.0)"; Types: full custom
+#endif
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
@@ -58,8 +66,10 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "migrate-ai-arena-per-user.ps1"; Flags: dontcopy noencryption
 Source: "{#MyReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "searxng\*"; Components: app
+#ifndef MyOmitSearxng
 Source: "{#MyReleaseDir}\searxng\*"; DestDir: "{app}\searxng"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: searxng
 Source: "{#MyReleaseDir}\searxng\LICENSE"; DestDir: "{tmp}"; DestName: "SEARXNG-LICENSE.txt"; Flags: dontcopy
+#endif
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion; Components: app
 Source: "..\..\NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion; Components: app
 Source: "..\..\docs\USER_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion; Components: app
@@ -84,6 +94,7 @@ Filename: "{app}\USER_GUIDE.md"; Description: "Open user guide"; Flags: shellexe
 Type: filesandordirs; Name: "{app}\searxng"
 
 [Code]
+#ifndef MyOmitSearxng
 var
   SearxngLicensePage: TWizardPage;
   SearxngLicenseMemo: TNewMemo;
@@ -132,6 +143,8 @@ begin
     WizardSilent and
     (Lowercase(Trim(ExpandConstant('{param:SEARXNGLICENSE|}'))) = 'accept');
 end;
+
+#endif
 
 function EscapePowerShellSingleQuoted(Value: string): string;
 begin
@@ -217,6 +230,7 @@ begin
   end;
 end;
 
+#ifndef MyOmitSearxng
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
@@ -238,6 +252,8 @@ begin
     end;
   end;
 end;
+
+#endif
 
 procedure StopBundledSearxng;
 var

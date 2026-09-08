@@ -1,0 +1,6 @@
+AI Arena - Lite 0.4.138-beta
+
+- Add a Settings-opened Native Services window for native app discovery, health, model and operation inventory, diagnostic bundle creation, observation, cancellation, and final-state reconciliation through the bounded Protobuf client.
+- Support configured native model preflight, load and unload, explicit capacity confirmation, bounded inference output, and dedicated inference cancellation. Retain durable command identities for uncertain retries and keep unconfirmed process-local inference starts locked.
+- Verify the real load, inference, cancel and eject workflow with matching JSON/Protobuf states and results. Existing LM Studio/provider workflows and JSON control behavior remain available.
+- Provide an unsigned, self-contained Windows x64 preview for use with the compatible native app and separate writable profiles. This preview includes the .NET Desktop Runtime and offline Help; optional SearXNG is not bundled. No installer or published GitHub release is created by the preview workflow.

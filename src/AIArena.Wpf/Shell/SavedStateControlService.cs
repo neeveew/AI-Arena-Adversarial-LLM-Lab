@@ -39,7 +39,7 @@ internal sealed record AIArenaSavedStatePostCommitProjection(
 /// UI-independent saved-state command facade. MainWindow supplies only the active-session
 /// boundary and refresh delegates; persistence and validation remain testable here.
 /// </summary>
-internal sealed class SavedStateControlService
+internal sealed class SavedStateControlService : IDisposable
 {
     private readonly SessionStore sessionStore;
     private readonly EventLogStore eventLogStore;
@@ -47,6 +47,9 @@ internal sealed class SavedStateControlService
     private readonly Func<SessionSummary, bool, CancellationToken, Task> loadSessionAsync;
     private readonly Func<string?, CancellationToken, Task> loadSessionsAsync;
     private readonly Func<string, CancellationToken, Task> refreshActiveSessionAsync;
+    private readonly Func<string, CancellationToken, Task<SessionSelectionOutcome>>? selectSessionByIdAsync;
+    private readonly Func<CancellationToken, Task<IReadOnlyList<SessionSummary>>> listSelectionSessionsAsync;
+    private readonly SessionLoadCoordinator fallbackSelections = new();
 
     public SavedStateControlService(
         SessionStore sessionStore,
@@ -54,7 +57,9 @@ internal sealed class SavedStateControlService
         Func<SessionSummary?> activeSession,
         Func<SessionSummary, bool, CancellationToken, Task> loadSessionAsync,
         Func<string?, CancellationToken, Task> loadSessionsAsync,
-        Func<string, CancellationToken, Task> refreshActiveSessionAsync)
+        Func<string, CancellationToken, Task> refreshActiveSessionAsync,
+        Func<string, CancellationToken, Task<SessionSelectionOutcome>>? selectSessionByIdAsync = null,
+        Func<CancellationToken, Task<IReadOnlyList<SessionSummary>>>? listSelectionSessionsAsync = null)
     {
         this.sessionStore = sessionStore;
         this.eventLogStore = eventLogStore;
@@ -62,6 +67,8 @@ internal sealed class SavedStateControlService
         this.loadSessionAsync = loadSessionAsync;
         this.loadSessionsAsync = loadSessionsAsync;
         this.refreshActiveSessionAsync = refreshActiveSessionAsync;
+        this.selectSessionByIdAsync = selectSessionByIdAsync;
+        this.listSelectionSessionsAsync = listSelectionSessionsAsync ?? (token => sessionStore.ListSessionsAsync(token));
     }
 
     public async Task<AIArenaSavedStateControlState> CaptureAsync(CancellationToken cancellationToken = default)
@@ -99,22 +106,46 @@ internal sealed class SavedStateControlService
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(sessionId))
-        {
             return Failure("missing_argument", "session.select requires args.id.", await CaptureAsync(cancellationToken));
-        }
 
         var normalizedId = SessionStore.SafeSessionId(sessionId);
-        var sessions = await sessionStore.ListSessionsAsync(cancellationToken);
-        var selected = sessions.FirstOrDefault(session =>
-            session.Id.Equals(normalizedId, StringComparison.OrdinalIgnoreCase));
-        if (selected is null)
-        {
-            return Failure("not_found", $"Session '{sessionId}' was not found.", await CaptureAsync(cancellationToken));
-        }
-
-        await loadSessionAsync(selected, true, cancellationToken);
-        return Success($"Selected session: {selected.Id}.", await CaptureAsync(cancellationToken));
+        // The shell callback acquires its shared lease before resolving this ID. Standalone
+        // callers retain the same ordering through a local lease and cancellable load callback.
+        var outcome = selectSessionByIdAsync is not null
+            ? await selectSessionByIdAsync(normalizedId, cancellationToken)
+            : await SelectSessionFallbackAsync(normalizedId, cancellationToken);
+        var state = await CaptureAsync(cancellationToken);
+        if (!outcome.Loaded) return Failure(outcome.ErrorCode, outcome.Message, state);
+        return state.ActiveSessionId.Equals(normalizedId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(activeSession()?.Id, normalizedId, StringComparison.OrdinalIgnoreCase)
+            ? Success(outcome.Message, state)
+            : Failure("selection_superseded", "A newer session selection replaced this request.", state);
     }
+
+    private async Task<SessionSelectionOutcome> SelectSessionFallbackAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        using var request = fallbackSelections.BeginSelection(sessionId, cancellationToken);
+        try
+        {
+            var sessions = await listSelectionSessionsAsync(request.Token).WaitAsync(request.Token);
+            if (!request.IsCurrent) return SupersededSelection();
+            var selected = sessions.FirstOrDefault(session => session.Id.Equals(sessionId, StringComparison.OrdinalIgnoreCase));
+            if (selected is null) return new(false, "not_found", $"Session '{sessionId}' was not found.");
+            await loadSessionAsync(selected, true, request.Token);
+            return request.IsCurrent
+                ? new(true, "", $"Selected session: {selected.Id}.") : SupersededSelection();
+        }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return SupersededSelection();
+        }
+    }
+
+    private static SessionSelectionOutcome SupersededSelection() =>
+        new(false, "selection_superseded", "A newer session selection replaced this request.");
+
+    public void Dispose() => fallbackSelections.Dispose();
 
     public async Task<AIArenaSavedStateControlResult> CreateSessionAsync(
         string name,

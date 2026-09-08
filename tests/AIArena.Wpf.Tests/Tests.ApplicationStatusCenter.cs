@@ -287,7 +287,7 @@ internal static partial class Program
                 && renderSnapshot.IndexOf("StatusCenter.SetContext", StringComparison.Ordinal)
                     < renderSnapshot.IndexOf("PreserveCurrentSessionSettingsDraft", StringComparison.Ordinal),
             "a rendered session must synchronously advance the causal status scope before new-session operations can publish");
-        var loadSession = CSharpMethodBlock(mainWindowSource, "private async Task LoadSessionAsync");
+        var loadSession = CSharpMethodBlock(mainWindowSource, "private async Task<bool> LoadSessionCoreAsync");
         Require(loadSession.Contains("StatusCenter.SetContext(new ApplicationStatusIdentity(session.Id))", StringComparison.Ordinal)
                 && loadSession.Contains("new ApplicationStatusIdentity(session.Id),", StringComparison.Ordinal),
             "a failed session switch must still replace the old status scope and bind its failure to the requested session");
@@ -327,9 +327,9 @@ internal static partial class Program
         Require(mainWindowSource.Contains("SetProviderProfileStatus", StringComparison.Ordinal)
                 && mainWindowSource.Contains("\"provider.profile\"", StringComparison.Ordinal),
             "provider profile save, delete, and validation outcomes should publish typed status history");
-        Require(CSharpMethodBlock(mainWindowSource, "private async void ApplyProviderPresetButton_Click")
-                .Contains("\"provider.preset\"", StringComparison.Ordinal),
-            "the non-persisting manual provider preset guidance should still reach the universal status center");
+        Require(CSharpMethodBlock(mainWindowSource, "private async void TestProviderButton_Click")
+                .Contains("RunTrackedBackgroundOperationSafelyAsync", StringComparison.Ordinal),
+            "server discovery should run through the tracked background operation workflow");
         var transcriptMutationStatus = CSharpMethodBlock(mainWindowSource, "private void SetTranscriptMutationStatus");
         Require(mainWindowSource.Contains("SetTranscriptMutationStatus);", StringComparison.Ordinal)
                 && mainWindowSource.Contains("RefreshActiveSessionForTranscriptMutationAsync", StringComparison.Ordinal)

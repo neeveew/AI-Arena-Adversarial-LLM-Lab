@@ -3,9 +3,9 @@ Provider Online, Model Loaded, and Arena Ready are different claims. Diagnose th
 ## Connection checklist
 
 1. Confirm the provider process is running.
-2. Match connection type to API: OpenAI-compatible `/v1`, LM Studio native `/api/v1`, Ollama native `/api`, or llama.cpp native `/v1`.
-3. Verify host and port.
-4. Test the connection from Provider Settings.
+2. Use **Settings → Provider connection → Find servers**. The app detects the supported API automatically.
+3. For a server at a custom address, enter its host and port in **Advanced** and choose **Connect to address**.
+4. Check the discovered server summary. A running server may have no models installed yet.
 5. Refresh Models and verify the exact provider model ID.
 6. Confirm provider-observed residency where lifecycle evidence is supported.
 7. Confirm the scheduled Arena role resolves to an explicit route or enabled Default fallback.

@@ -1,0 +1,12 @@
+AI Arena - Lite 0.4.139-beta
+
+- Automatically discover running LM Studio, Ollama, llama.cpp, and other compatible model servers, and select the supported communication and model-management APIs.
+- Use models from multiple servers in one arena. Keep each model assignment tied to its serving endpoint, distinguish identical model names across servers, and retain independent model settings.
+- Simplify Provider connection to discovered server status, Find servers, Manage models, and one Advanced section. Remove saved setup, recommendation, and provider-specific tool menus from the connection flow.
+- Remember the last selected session and its connection configuration automatically. Preserve explicit agent routes when changing the default connection or generation settings.
+- Prevent stale discovery results, model catalogs, assignment receipts, and rotated or cleared credentials from overwriting newer settings. Keep unfinished custom connection drafts out of unrelated settings saves.
+- Use shared session-loading and snapshot-change detection for startup, navigation, refresh, and search. Keep cross-session searches cancellable and discard superseded results.
+- Consolidate provider diagnostics and error sanitization. Keep accepted download operations trackable through observation failures and report uncertain lifecycle outcomes accurately.
+- Improve Agent and Collaborate conversation persistence and operation ownership. Retain drafts on save failures and preserve reader position and live response state during theme refresh.
+- Report committed checkpoint, session-copy, and template saves accurately when follow-up logging or refresh fails.
+- Provide a self-contained Windows x64 local installer with the .NET Desktop Runtime and offline Help. This installer is unsigned; optional SearXNG remains separate, as in the previous local preview.

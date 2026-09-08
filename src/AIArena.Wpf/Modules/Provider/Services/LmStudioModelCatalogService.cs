@@ -56,10 +56,10 @@ public class LmStudioModelCatalogService
             if (!response.IsSuccessStatusCode)
             {
                 return LmStudioModelCatalog.Failed(ProviderConfigurationControlService.SanitizeError(
-                    ProviderHttpHelpers.FriendlyBody(
+                    ProviderHttpHelpers.FriendlyError(
                         Encoding.UTF8.GetString(body.Memory.Span),
                         response.ReasonPhrase,
-                        "LM Studio native model catalog request failed.",
+                        "LM Studio native model catalog request failed.", apiToken,
                         "message",
                         "error",
                         "detail"),

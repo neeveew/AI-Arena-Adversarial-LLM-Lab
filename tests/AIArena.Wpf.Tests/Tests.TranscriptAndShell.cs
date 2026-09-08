@@ -5126,39 +5126,31 @@ static async Task CrossSessionSearchCachesCompactEquivalentProjectionsAsync()
 {
     static JsonElement Json(string value) => JsonDocument.Parse(value).RootElement.Clone();
 
-    Require(!CrossSessionSearchService.ShouldTrustNativeChangeTime(0),
+    Require(!SnapshotStampReader.ShouldTrustNativeChangeTime(0),
         "a filesystem that reports no change-time evidence must use the content-hash fallback");
-    Require(CrossSessionSearchService.ShouldTrustNativeChangeTime(1),
+    Require(SnapshotStampReader.ShouldTrustNativeChangeTime(1),
         "a positive Windows file change time should remain eligible for the metadata fast path");
     var generationNow = new DateTimeOffset(2040, 5, 6, 7, 8, 9, TimeSpan.Zero);
     var generationFileTime = generationNow.UtcDateTime.ToFileTimeUtc();
-    Require(CrossSessionSearchService.ShouldHashRecentNativeChangeTime(generationFileTime, generationNow),
+    Require(SnapshotStampReader.ShouldHashRecentNativeChangeTime(generationFileTime, generationNow),
         "a just-observed native change time must carry content evidence while clock ticks can collide");
     Require(
-        CrossSessionSearchService.ShouldHashRecentNativeChangeTime(
+        SnapshotStampReader.ShouldHashRecentNativeChangeTime(
             generationFileTime,
-            generationNow + CrossSessionSearchService.RecentNativeChangeHashWindow - TimeSpan.FromTicks(1)),
+            generationNow + SnapshotStampReader.RecentNativeChangeHashWindow - TimeSpan.FromTicks(1)),
         "native change evidence should stay guarded throughout the ambiguity window");
     Require(
-        !CrossSessionSearchService.ShouldHashRecentNativeChangeTime(
+        !SnapshotStampReader.ShouldHashRecentNativeChangeTime(
             generationFileTime,
-            generationNow + CrossSessionSearchService.RecentNativeChangeHashWindow),
+            generationNow + SnapshotStampReader.RecentNativeChangeHashWindow),
         "an aged native change time should return to the metadata-only fast path");
     Require(
-        CrossSessionSearchService.ShouldHashRecentNativeChangeTime(
+        SnapshotStampReader.ShouldHashRecentNativeChangeTime(
             generationNow.AddMilliseconds(1).UtcDateTime.ToFileTimeUtc(),
             generationNow),
         "future-skewed native change evidence must fail safe to content hashing");
-    Require(CrossSessionSearchService.ShouldHashRecentNativeChangeTime(long.MaxValue, generationNow),
+    Require(SnapshotStampReader.ShouldHashRecentNativeChangeTime(long.MaxValue, generationNow),
         "an invalid native change time must fail safe to content hashing");
-    Require(CrossSessionSearchService.ContentHashEvidenceMatches("", "")
-            && CrossSessionSearchService.ContentHashEvidenceMatches("HASH-A", "HASH-A"),
-        "equivalent absent or present content evidence should identify the same generation");
-    Require(!CrossSessionSearchService.ContentHashEvidenceMatches("HASH-A", "")
-            && !CrossSessionSearchService.ContentHashEvidenceMatches("", "HASH-B")
-            && !CrossSessionSearchService.ContentHashEvidenceMatches("HASH-A", "HASH-B"),
-        "missing or different content evidence must not match a cached hashed generation");
-
     var metadata = new Dictionary<string, JsonElement>
     {
         ["reasoning_content"] = Json("\"reasoning-marker\""),
@@ -5831,9 +5823,10 @@ static void ShellNavigationCoordinatorSelectsThemes()
 
 static void AppSettingsCoordinatorSelectsProviderFocus()
 {
-    Require(AppSettingsCoordinator.ShouldFocusModelPicker(""), "blank model should focus the model picker");
-    Require(AppSettingsCoordinator.ShouldFocusModelPicker("   "), "whitespace model should focus the model picker");
-    Require(!AppSettingsCoordinator.ShouldFocusModelPicker("model-a"), "configured model should focus the test button");
+    var source = ReadWorkspaceFile("src/AIArena.Wpf/Shell/AppSettingsCoordinator.cs");
+    var openProvider = CSharpMethodBlock(source, "public void OpenModelProviderSettings(");
+    Require(openProvider.Contains("providerPresetPicker.Focus()", StringComparison.Ordinal), "provider connection should focus the visible provider selector, including when no model is configured");
+    Require(!openProvider.Contains("providerModelText.Focus()", StringComparison.Ordinal), "provider connection must not focus the hidden compatibility model picker");
     Require(AppSettingsCoordinator.ShouldAnimateSettingsGear(systemAnimationsEnabled: true), "settings affordance may animate when Windows animations are enabled");
     Require(!AppSettingsCoordinator.ShouldAnimateSettingsGear(systemAnimationsEnabled: false), "Windows reduced-motion preference should suppress the settings gear animation");
 }

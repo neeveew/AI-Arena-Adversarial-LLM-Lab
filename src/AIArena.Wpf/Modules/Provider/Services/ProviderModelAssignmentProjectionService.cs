@@ -41,7 +41,8 @@ internal static class ProviderModelAssignmentProjectionService
             IsNarrator: false,
             ConfiguredModel: defaultEnabled ? shared.Model.Trim() : "",
             InheritsDefault: false,
-            AssignmentFingerprint(shared.Model, defaultEnabled)));
+            AssignmentFingerprint(shared.Model, defaultEnabled),
+            ServerIdentity(shared)));
 
         foreach (var id in ActiveParticipantIds(snapshot))
         {
@@ -56,7 +57,9 @@ internal static class ProviderModelAssignmentProjectionService
                 IsNarrator: false,
                 ConfiguredModel: configuredModel,
                 InheritsDefault: inheritsDefault,
-                AssignmentFingerprint(configuredModel, configuredModel.Length > 0)));
+                AssignmentFingerprint(configuredModel, configuredModel.Length > 0,
+                    snapshot.Configs.GetValueOrDefault(id)),
+                ServerIdentity(snapshot.Configs.GetValueOrDefault(id) ?? shared)));
         }
 
         var narratorModel = ConfiguredRoleModel(snapshot.Configs, "narrator", shared);
@@ -68,7 +71,9 @@ internal static class ProviderModelAssignmentProjectionService
             IsNarrator: true,
             ConfiguredModel: narratorModel,
             InheritsDefault: narratorInheritsDefault,
-            AssignmentFingerprint(narratorModel, narratorModel.Length > 0)));
+            AssignmentFingerprint(narratorModel, narratorModel.Length > 0,
+                snapshot.Configs.GetValueOrDefault("narrator")),
+            ServerIdentity(snapshot.Configs.GetValueOrDefault("narrator") ?? shared)));
 
         return new ProviderModelAssignmentProjectionBatch(
             normalizedSessionId,
@@ -95,9 +100,11 @@ internal static class ProviderModelAssignmentProjectionService
             .ToArray();
     }
 
-    internal static string AssignmentFingerprint(string configuredModel, bool explicitlyAssigned)
+    internal static string AssignmentFingerprint(string configuredModel, bool explicitlyAssigned, ModelProviderConfig? config = null)
     {
         var identity = $"{(explicitlyAssigned ? "explicit" : "inherit")}\n{(configuredModel ?? "").Trim()}";
+        if (explicitlyAssigned && config is not null)
+            identity += "\n" + ProviderModelCatalogProjectionService.ConnectionFingerprint("", config);
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(identity));
         return Convert.ToHexString(bytes);
     }
@@ -119,9 +126,13 @@ internal static class ProviderModelAssignmentProjectionService
         var model = config.Model.Trim();
         return config.ExplicitModelAssignment
             || !model.Equals(shared.Model.Trim(), StringComparison.Ordinal)
+            || !ServerIdentity(config).Equals(ServerIdentity(shared), StringComparison.Ordinal)
                 ? model
                 : "";
     }
+
+    internal static string ServerIdentity(ModelProviderConfig config) =>
+        ProviderServerInventory.ServerIdentity(config);
 
     private static IReadOnlyList<string> ActiveParticipantIds(ArenaSnapshot snapshot)
     {
@@ -147,7 +158,8 @@ internal sealed class ProviderModelAssignmentProjectionBatch(
 
     public ProviderModelAssignmentProjection Project(
         string model,
-        IEnumerable<string>? aliases = null)
+        IEnumerable<string>? aliases = null,
+        ModelProviderConfig? sourceConfig = null)
     {
         var requestedModel = (model ?? "").Trim();
         var equivalentModels = (aliases ?? [])
@@ -165,7 +177,9 @@ internal sealed class ProviderModelAssignmentProjectionBatch(
             target.DisplayName,
             target.IsDefault,
             target.IsNarrator,
-            Assigned: target.ConfiguredModel.Length > 0
+            Assigned: (sourceConfig is null || target.ServerIdentity.Equals(
+                ProviderModelAssignmentProjectionService.ServerIdentity(sourceConfig), StringComparison.Ordinal))
+                && target.ConfiguredModel.Length > 0
                 && (equivalentModels.Contains(target.ConfiguredModel)
                     || equivalentModels.Contains(ProviderModelCatalogProjectionService.SafeModelIdentifier(
                         target.ConfiguredModel))),
@@ -193,4 +207,5 @@ internal sealed record ProviderModelAssignmentTargetTemplate(
     bool IsNarrator,
     string ConfiguredModel,
     bool InheritsDefault,
-    string AssignmentFingerprint);
+    string AssignmentFingerprint,
+    string ServerIdentity);

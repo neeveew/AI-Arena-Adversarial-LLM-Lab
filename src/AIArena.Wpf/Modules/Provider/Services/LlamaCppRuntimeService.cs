@@ -237,24 +237,27 @@ public sealed partial class LlamaCppRuntimeService
     public Task<LlamaCppRuntimeActionResult> LoadAsync(
         ModelProviderConfig config,
         string model,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? mutationStarting = null)
     {
-        return RunLifecycleAsync(config, model, "load", cancellationToken);
+        return RunLifecycleAsync(config, model, "load", cancellationToken, mutationStarting);
     }
 
     public Task<LlamaCppRuntimeActionResult> UnloadAsync(
         ModelProviderConfig config,
         string model,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? mutationStarting = null)
     {
-        return RunLifecycleAsync(config, model, "unload", cancellationToken);
+        return RunLifecycleAsync(config, model, "unload", cancellationToken, mutationStarting);
     }
 
     private async Task<LlamaCppRuntimeActionResult> RunLifecycleAsync(
         ModelProviderConfig config,
         string model,
         string action,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? mutationStarting)
     {
         ArgumentNullException.ThrowIfNull(config);
         var checkedAt = DateTimeOffset.Now;
@@ -283,6 +286,7 @@ public sealed partial class LlamaCppRuntimeService
                 Content = JsonContent.Create(new { model = lifecycleModel })
             };
             ProviderHttpHelpers.ApplyAuthorization(request, config.ApiToken);
+            mutationStarting?.Invoke();
             using var response = await httpClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
@@ -305,8 +309,9 @@ public sealed partial class LlamaCppRuntimeService
                     action,
                     displayModel,
                     $"{action} failed",
-                    SafeError(ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, $"llama.cpp model {action} failed.", "error", "message", "detail"), config.ApiToken),
-                    checkedAt);
+                    SafeError(ProviderHttpHelpers.FriendlyError(body, response.ReasonPhrase, $"llama.cpp model {action} failed.", config.ApiToken, "error", "message", "detail"), config.ApiToken),
+                    checkedAt,
+                    MutationOutcomeUnknown: (int)response.StatusCode >= 500 || response.StatusCode == HttpStatusCode.RequestTimeout);
             }
 
             var ok = ParseSuccess(body);
@@ -317,7 +322,8 @@ public sealed partial class LlamaCppRuntimeService
                 displayModel,
                 ok ? $"model {action}ed" : $"{action} was not confirmed",
                 ok ? "" : "llama-server returned success HTTP status without confirming the lifecycle action.",
-                checkedAt);
+                checkedAt,
+                MutationOutcomeUnknown: !ok);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -325,7 +331,7 @@ public sealed partial class LlamaCppRuntimeService
         }
         catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException or InvalidDataException or JsonException or UriFormatException)
         {
-            return new LlamaCppRuntimeActionResult(true, false, action, displayModel, $"{action} failed", SafeError(FriendlyException(ex), config.ApiToken), checkedAt);
+            return new LlamaCppRuntimeActionResult(true, false, action, displayModel, $"{action} failed", SafeError(FriendlyException(ex), config.ApiToken), checkedAt, MutationOutcomeUnknown: true);
         }
     }
 
@@ -348,7 +354,7 @@ public sealed partial class LlamaCppRuntimeService
             return new ProbeResponse(true, true, response.StatusCode, body, "");
         }
 
-        var error = ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "llama.cpp runtime request failed.", "error", "message", "detail");
+        var error = ProviderHttpHelpers.FriendlyError(body, response.ReasonPhrase, "llama.cpp runtime request failed.", config.ApiToken, "error", "message", "detail");
         return new ProbeResponse(false, true, response.StatusCode, body, SafeError(error, config.ApiToken));
     }
 
@@ -417,8 +423,13 @@ public sealed partial class LlamaCppRuntimeService
             {
                 foundRouterStatus = true;
                 model.Status = ProviderHttpHelpers.FirstString(status, "value", "status");
-                model.Loaded = model.Status.Equals("loaded", StringComparison.OrdinalIgnoreCase)
-                    || model.Status.Equals("sleeping", StringComparison.OrdinalIgnoreCase);
+                model.HasRouterStatus = true;
+                model.Loaded = model.Status.ToLowerInvariant() switch
+                {
+                    "loaded" or "sleeping" => true,
+                    "unloaded" => false,
+                    _ => null
+                };
                 if (status.TryGetProperty("args", out var args) && args.ValueKind == JsonValueKind.Array)
                 {
                     var values = args.EnumerateArray()
@@ -431,7 +442,7 @@ public sealed partial class LlamaCppRuntimeService
                     model.ParallelSlots ??= ParseIntArgument(values, "-np", "--parallel");
                 }
             }
-            else if (assumeLoaded)
+            else if (assumeLoaded && !model.HasRouterStatus)
             {
                 model.Status = string.IsNullOrWhiteSpace(model.Status) ? "loaded" : model.Status;
                 model.Loaded = true;
@@ -903,6 +914,7 @@ public sealed partial class LlamaCppRuntimeService
         public int? GpuLayers { get; set; }
         public int? ParallelSlots { get; set; }
         public bool? Loaded { get; set; }
+        public bool HasRouterStatus { get; set; }
         public long? ModelSizeBytes { get; set; }
         public long? ParameterCount { get; set; }
 
@@ -1013,7 +1025,8 @@ public sealed record LlamaCppRuntimeActionResult(
     string Model,
     string Status,
     string Error,
-    DateTimeOffset CheckedAt)
+    DateTimeOffset CheckedAt,
+    bool MutationOutcomeUnknown = false)
 {
     public static LlamaCppRuntimeActionResult Unsupported(string action, string model, string error, DateTimeOffset checkedAt)
     {

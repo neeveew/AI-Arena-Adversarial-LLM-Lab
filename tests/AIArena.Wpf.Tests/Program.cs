@@ -23,18 +23,84 @@ internal static partial class Program
 {
     private static int Main(string[] args)
     {
+if (args.Length == 2 && args[0].Equals("--native-services-window-smoke", StringComparison.Ordinal))
+{
+    return RunNativeServicesWindowSmoke(args[1]);
+}
+
+if (args.Length > 0 && args[0].Equals("--native-inference-integration", StringComparison.Ordinal))
+{
+    return RunNativeInferenceIntegration(args);
+}
+
+if (args.Length > 0 && args[0].Equals("--native-services-integration", StringComparison.Ordinal))
+{
+    return RunNativeServicesIntegration(args);
+}
+
 if (args.Length == 2 && args[0].Equals("--control-plane-owner-fixture", StringComparison.Ordinal))
 {
     return RunControlPlaneOwnerFixture(args[1]);
 }
 
-if (args.Length == 1 && args[0].Equals("--shared-popup-theme-fixture", StringComparison.Ordinal))
+if (args.Length is 1 or 2 && args[0].Equals("--shared-popup-theme-fixture", StringComparison.Ordinal))
 {
-    return RunSharedPopupThemeFixture();
+    return RunSharedPopupThemeFixture(args.Length == 2 && args[1].Equals("--inject-dispatcher-failure", StringComparison.Ordinal));
 }
 
 var tests = new List<(string Name, Action Test)>
 {
+    ("optimization provider settings catalog queues replacement refresh", ProviderSettingsCatalogQueuesReplacementRefresh),
+    ("optimization provider settings and control preserve role specific probe settings", ProviderSettingsAndControlPreserveRoleSpecificProbeSettings),
+    ("optimization saved state selection rejects deferred older enumeration", SavedStateSelectionRejectsDeferredOlderEnumeration),
+    ("optimization saved state selection uses owned shell outcome", SavedStateSelectionUsesOwnedShellOutcome),
+    ("optimization provider settings download preserves unknown observations", ProviderSettingsDownloadPreservesUnknownObservations),
+    ("optimization provider settings accepted download survives cancellation and audit failure", ProviderSettingsAcceptedDownloadSurvivesCancellationAndAuditFailure),
+    ("optimization provider error policy preserves successful digest and job metadata", ProviderErrorPolicyPreservesSuccessfulDigestAndJobMetadata),
+    ("optimization provider errors share bounded credential policy", ProviderErrorsShareBoundedCredentialPolicy),
+    ("optimization provider download and pull sanitize http and structured failures", ProviderDownloadAndPullSanitizeHttpAndStructuredFailures),
+    ("optimization cross session search rejects late results and errors", CrossSessionSearchRejectsLateResultsAndErrors),
+    ("optimization session load selection rejects late success and failure", SessionLoadSelectionRejectsLateSuccessAndFailure),
+    ("optimization session load refresh cannot supersede selection", SessionLoadRefreshCannotSupersedeSelection),
+    ("optimization session load cancellation and disposal reject projection", SessionLoadCancellationAndDisposalRejectProjection),
+    ("optimization session load scan lease covers enumeration and fallback", SessionLoadScanLeaseCoversEnumerationAndFallback),
+    ("optimization snapshot stamp ignores directory changes and detects rewrites", SnapshotStampIgnoresDirectoryChangesAndDetectsRewrites),
+    ("optimization snapshot stamp stable read retries changes and rejects unstable input", SnapshotStampStableReadRetriesChangesAndRejectsUnstableInput),
+    ("optimization snapshot stamp retains hash diagnostics and cancellation", SnapshotStampRetainsHashDiagnosticsAndCancellation),
+    ("optimization saved state checkpoint save retains committed outcome", SavedStateCheckpointSaveRetainsCommittedOutcome),
+    ("optimization saved state session copy retains committed outcome", SavedStateSessionCopyRetainsCommittedOutcome),
+    ("optimization saved state template mutations retain committed outcome", SavedStateTemplateMutationsRetainCommittedOutcome),
+    ("optimization saved state post commit completion ignores caller cancellation", SavedStatePostCommitCompletionIgnoresCallerCancellation),
+    ("optimization saved state failed commit skips secondary completion", SavedStateFailedCommitSkipsSecondaryCompletion),
+    ("optimization provider settings download keeps captured session and credentials", ProviderSettingsDownloadKeepsCapturedSessionAndCredentials),
+    ("optimization provider settings download retires initial and polled failures", ProviderSettingsDownloadRetiresInitialAndPolledFailures),
+    ("optimization provider settings catalog rejects stale session provider and selection", ProviderSettingsCatalogRejectsStaleSessionProviderAndSelection),
+    ("optimization provider role probes respect unassigned routes and runtime settings", ProviderRoleProbesRespectUnassignedRoutesAndRuntimeSettings),
+    ("optimization agent conversation save failures restore composer", AgentConversationSaveFailuresRestoreComposer),
+    ("optimization agent theme refresh preserves live response and status", AgentThemeRefreshPreservesLiveResponseAndStatus),
+    ("optimization collaborate theme refresh preserves pending rows and status", CollaborateThemeRefreshPreservesPendingRowsAndStatus),
+    ("optimization conversation cancellation retains draft and typed status", ConversationCancellationRetainsDraftAndTypedStatus),
+    ("native services endpoint matches the native principal namespace", NativeControlEndpointMatchesCppPrincipalNamespace),
+    ("native services endpoint rejects invalid principal inputs", NativeControlEndpointRejectsInvalidPrincipalInputs),
+    ("native services endpoint ignores LOCALAPPDATA environment overrides", NativeControlEndpointIgnoresLocalAppDataEnvironmentOverride),
+    ("native services protobuf framing writes compatible requests", NativeProtobufFramingWritesCompatibleRequests),
+    ("native services protobuf framing reads fragmented additive responses", NativeProtobufFramingReadsFragmentedAdditiveResponses),
+    ("native services protobuf framing rejects invalid responses", NativeProtobufFramingRejectsInvalidResponses),
+    ("native services protobuf framing propagates cancellation", NativeProtobufFramingPropagatesCallerCancellation),
+    ("native services client discovers typed capabilities", NativeControlClientDiscoversTypedCapabilities),
+    ("native services client preserves retry identity and reconciles cancellation", NativeControlClientRetryIdentityAndCancellationReconcile),
+    ("native services client rejects uncorrelated operation evidence", NativeControlClientRejectsUncorrelatedOperationEvidence),
+    ("native services client protects token fixtures and cancellation", NativeControlClientProtectsTokenFixturesAndCancellation),
+    ("native services coordinator retains uncertain identity", NativeServicesCoordinatorRetainsUncertainIdentity),
+    ("native services coordinator separates observation and cancellation", NativeServicesCoordinatorSeparatesObservationAndCancellation),
+    ("native services window renders accessible actions", NativeServicesWindowRendersAccessibleActions),
+    ("native services client reconciles missing state cursor", NativeClientReconcilesMissingStateCursor),
+    ("native services model client projects lifecycle and exact confirmation", NativeModelClientProjectsLifecycleAndExactConfirmation),
+    ("native services inference client enforces bounds and dedicated snapshots", NativeInferenceClientEnforcesBoundsAndDedicatedSnapshots),
+    ("native services model coordinator confirms load and observes residency", NativeModelCoordinatorConfirmsLoadAndObservesResidency),
+    ("native services inference coordinator retains identity and replaces output", NativeInferenceCoordinatorRetainsIdentityAndReplacesOutput),
+    ("native services inference coordinator separates observation and cancellation", NativeInferenceCoordinatorSeparatesObservationAndCancellation),
+    ("native services inference coordinator preserves terminal state and survives disposal during cancel", NativeInferenceCoordinatorPreservesTerminalAndDisposesDuringCancel),
     ("saves and reloads visual generation settings", SaveReloadVisualGenerationSettings),
     ("agent workspace defaults on and persists its settings toggle", AgentWorkspaceDefaultsOnAndPersistsSettingsToggle),
     ("agent workspace resolves canonical model settings and tone", AgentWorkspaceResolvesCanonicalModelSettingsAndTone),
@@ -72,6 +138,30 @@ var tests = new List<(string Name, Action Test)>
     ("provider optional Default preserves explicit routes and dormant overrides", ProviderOptionalDefaultPreservesExplicitRoutesAndDormantOverrides),
     ("provider model assignment rejects stale and inactive targets", ProviderModelAssignmentRejectsStaleAndInactiveTargets),
     ("provider Models Default assignment survives host refresh", ProviderModelsDefaultAssignmentSurvivesHostRefresh),
+    ("session restoration remembers existing configuration", SessionRestorationRemembersExistingConfiguration),
+    ("session generation settings preserve explicit provider routes", SessionGenerationSettingsPreserveExplicitProviderRoutes),
+    ("session restoration preserves preference after write failure", SessionRestorationPreservesPreferenceAfterWriteFailure),
+    ("provider configuration rejects stale discovery context", ProviderConfigurationRejectsStaleDiscoveryContext),
+    ("provider configuration applies current discovery and preserves assignments", ProviderConfigurationAppliesCurrentDiscoveryAndPreservesAssignments),
+    ("provider configuration rechecks busy after waiting", ProviderConfigurationRechecksBusyAfterWaiting),
+    ("provider connection discovery identifies native without port guesses", ProviderConnectionDiscoveryIdentifiesNativeWithoutPortGuesses),
+    ("provider connection discovery identifies Ollama and llama catalogs", ProviderConnectionDiscoveryIdentifiesOllamaAndLlamaCatalogs),
+    ("provider connection discovery rejects errors and honors cancellation", ProviderConnectionDiscoveryRejectsErrorsAndHonorsCancellation),
+    ("provider connection discovery local scan separates credentials", ProviderConnectionDiscoveryLocalScanSeparatesCredentials),
+    ("provider connection discovery bounds concurrent local probes", ProviderConnectionDiscoveryBoundsConcurrentLocalProbes),
+    ("provider server inventory merges detected and configured servers", ProviderServerInventoryMergesDetectedAndConfiguredServers),
+    ("provider server inventory qualifies models and restricts credential origins", ProviderServerInventoryQualifiesModelsAndRestrictsCredentialOrigins),
+    ("provider discovery keeps current server without guessing between others", ProviderDiscoveryKeepsCurrentServerWithoutGuessingBetweenOthers),
+    ("provider discovery keeps credentials within saved origin", ProviderDiscoveryKeepsCredentialsWithinTheSavedOrigin),
+    ("provider multi-server projection disambiguates identical model names", ProviderMultiServerProjectionDisambiguatesIdenticalModelNames),
+    ("provider multi-server assignments preserve independent connections", ProviderMultiServerAssignmentsPreserveIndependentConnections),
+    ("provider server picker uses current saved credentials", ProviderServerPickerUsesCurrentSavedCredentials),
+    ("provider non-connection saves keep unconnected drafts out of configuration", ProviderNonConnectionSavesKeepUnconnectedDraftsOutOfConfiguration),
+    ("provider multi-server rejects stale source credentials", ProviderMultiServerRejectsStaleSourceCredentials),
+    ("provider multi-server model settings stay on their source server", ProviderMultiServerModelSettingsStayOnTheirSourceServer),
+    ("provider multi-server core routing retains same-named role servers", ProviderMultiServerCoreRoutingRetainsSameNamedRoleServers),
+    ("provider Models native lifecycle uses detected adapters", ProviderModelsNativeLifecycleUsesDetectedAdapters),
+    ("provider Models multi-server catalog keeps assignment and lifecycle sources", ProviderModelsMultiServerCatalogKeepsSources),
     ("provider Models lifecycle uses confirmed LM Studio heartbeat", ProviderModelsLifecycleUsesConfirmedLmStudioHeartbeat),
     ("provider Models configuration reload handles provider default and uncertain mutations", ProviderModelsConfigurationReloadHandlesProviderDefaultAndUncertainMutations),
     ("provider Models stale residency merge remains bounded and provider neutral", ProviderModelsStaleResidencyMergeRemainsBoundedAndProviderNeutral),
@@ -414,6 +504,7 @@ var tests = new List<(string Name, Action Test)>
     ("main window export button switches context", MainWindowExportButtonSwitchesContext),
     ("main window match setup controls expose automation", MainWindowMatchSetupControlsExposeAutomation),
     ("main window factory mode toggle exposes automation and control state", MainWindowFactoryModeToggleExposesAutomationAndControlState),
+    ("hosted Space keyboard fixture isolates thread input", HostedSpaceKeyboardFixtureIsolatesThreadInput),
     ("AI Lab header avoids duplicate match setup action", AiLabHeaderAvoidsDuplicateMatchSetupAction),
     ("main window voice tts settings expose automation", MainWindowVoiceTtsSettingsExposeAutomation),
     ("main window debug controls remain discoverable", MainWindowDebugControlsRemainDiscoverable),
@@ -482,6 +573,7 @@ var tests = new List<(string Name, Action Test)>
     ("provider Models configuration saves rolls back and reloads causally", ProviderModelsConfigurationSavesRollsBackAndReloadsCausally),
     ("provider Models configuration reload identity switches stay causal", ProviderModelsConfigurationReloadIdentitySwitchesStayCausal),
     ("shared menu popup hosts theme focus and disabled contracts", SharedMenuPopupHostsThemeFocusAndDisabledContracts),
+    ("shared popup fixture reports dispatcher failure without app startup", SharedPopupFixtureReportsDispatcherFailureWithoutAppStartup),
     ("QA screenshot render DPI preserves DIP viewport and bounds raster scale", QaScreenshotRenderDpiPreservesDipViewportAndBoundsRasterScale),
     ("real WPF automation artifact passes authoritative evidence CLI", RealWpfAutomationArtifactPassesAuthoritativeEvidenceCli),
     ("provider control handler routes commands and publishes events", ProviderControlHandlerRoutesCommandsAndPublishesEvents),

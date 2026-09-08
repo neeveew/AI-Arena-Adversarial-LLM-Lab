@@ -138,7 +138,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     private CoreSessionSummary? _activeSession;
     private string _statusCenterSessionId = "";
     private DateTimeOffset _activeSnapshotWriteUtc;
-    private bool _snapshotRefreshInProgress;
+    private readonly SessionLoadCoordinator _sessionLoads = new();
+    private readonly SnapshotStampReader _snapshotStamps = new();
+    private SnapshotStamp? _activeSnapshotStamp;
     private bool _isRenderingSnapshot;
     private bool _arenaBusy;
     private bool _isUpdatingVoiceTtsSettings = true;
@@ -397,7 +399,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             ResourceBrush,
             status => SetApplicationStatus("app.saved-state", "App", status, "arena"),
             SetLoadStatus,
-            SavedStateShowEmptyCheckBox);
+            SavedStateShowEmptyCheckBox,
+            tryLoadSessionAsync: (session, force) => LoadSessionAsync(session, force));
         _crossSessionSearchService = new CrossSessionSearchService(_coreSessionStore);
         _savedStateControlService = new SavedStateControlService(
             _coreSessionStore,
@@ -405,7 +408,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             () => _activeSession,
             LoadSessionAsync,
             LoadSessionsAsync,
-            RefreshActiveSessionForProviderAsync);
+            RefreshActiveSessionForProviderAsync,
+            selectSessionByIdAsync: SelectSessionByIdAsync);
         _scenarioGenerationControlService = new ScenarioGenerationControlService(
             _matchGeneration,
             _coreSessionStore,
@@ -490,7 +494,6 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             new LmStudioModelDownloadService(),
             new ProviderAutoConfigureService(_providerHealth),
             _arenaOperationLock,
-            ProviderPresetPicker,
             ProviderPresetStatusText,
             ProviderApiModePicker,
             ProviderBaseUrlText,
@@ -558,7 +561,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             _arenaOperationLock,
             () => _activeSession,
             () => _arenaBusy,
-            statusCenter: ShellTopBar.Presentation.StatusCenter);
+            statusCenter: ShellTopBar.Presentation.StatusCenter,
+            serverInventory: _providerServerInventory);
         _llamaCppRuntimeCoordinator = new LlamaCppRuntimeCoordinator(
             new LlamaCppRuntimeService(),
             new LlamaCppRuntimeControls(
@@ -778,7 +782,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             AgentOutputItems,
             (type, message, data) => _controlPlaneEvents.Publish(type, message, data),
             runbookMetaText: AgentRunbookMetaText,
-            composerDraftStore: _composerDraftStore);
+            composerDraftStore: _composerDraftStore,
+            operationStatus: new WorkspaceOperationStatus(ShellTopBar.Presentation.StatusCenter,
+                "agent", "Agent", "agent", () => new ApplicationStatusIdentity(_activeSession?.Id ?? "")));
         _agentImpactExplorerCoordinator = new AgentImpactExplorerCoordinator(
             AgentImpactExplorerExpander,
             AgentImpactStatusText,
@@ -1040,7 +1046,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             () => _lastRenderedSnapshot,
             ResourceBrush,
             status => SetApplicationStatus("collaborate.run", "Collaborate", status, "collaborate"),
-            composerDraftStore: _composerDraftStore);
+            composerDraftStore: _composerDraftStore,
+            operationStatus: new WorkspaceOperationStatus(ShellTopBar.Presentation.StatusCenter,
+                "collaborate", "Collaborate", "collaborate", () => new ApplicationStatusIdentity(_activeSession?.Id ?? "")));
         _collaborateCoordinator.Initialize();
         _refreshTimer = new DispatcherTimer
         {
@@ -1537,6 +1545,10 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         Closing += MainWindow_Closing;
         Closed += (_, _) =>
         {
+            CancelProviderServerDiscovery();
+            _sessionLoads.Dispose();
+            _savedStateControlService.Dispose();
+            nativeServices?.Dispose();
             _appControlHandler.ResetProcessOverrides();
             SystemThemePreferences.PreferenceChanged -= OnSystemThemePreferenceChanged;
             SystemMotionPreferences.PreferenceChanged -= OnSystemMotionPreferenceChanged;
@@ -1728,6 +1740,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
 
         _shutdownInProgress = true;
+        _sessionLoads.Dispose();
         IsEnabled = false;
         AgentWorkspaceCommand.BeginApplicationShutdown();
         _refreshTimer.Stop();
@@ -2509,44 +2522,84 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private async void LoadSessions(string? preferredSessionId = null)
     {
-        await LoadSessionsAsync(preferredSessionId);
+        if (_shutdownInProgress || _shutdownReady) return;
+        using var request = _sessionLoads.TryBeginInitialization();
+        if (request is null) return;
+        try { await LoadSessionsCoreAsync(preferredSessionId, request); }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested) { }
+        catch (Exception exception) { PublishSessionListFailure(request, exception); }
     }
 
     private async Task LoadSessionsAsync(
         string? preferredSessionId = null,
         CancellationToken cancellationToken = default)
     {
+        if (_shutdownInProgress || _shutdownReady) return;
+        using var request = _sessionLoads.BeginSelection(preferredSessionId, cancellationToken);
+        try { await LoadSessionsCoreAsync(preferredSessionId, request); }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (Exception exception) { PublishSessionListFailure(request, exception); }
+    }
+
+    private async Task<bool> LoadSessionsCoreAsync(string? preferredSessionId, SessionLoadLease request)
+    {
+        var cancellationToken = request.Token;
         var sessions = await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Messages, cancellationToken);
+        if (!request.IsCurrent) return false;
         if (sessions.Count == 0)
         {
             await _coreSessionStore.EnsureDefaultSessionAsync(cancellationToken);
             sessions = await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Messages, cancellationToken);
+            if (!request.IsCurrent) return false;
         }
-
+        // Preserve this same lease through enumeration, recovery and snapshot loading.
+        // Starting another selection after either await would revive a stale startup/refresh.
         SavedStateCoordinator.SetSessions(sessions);
-        await SavedStateCoordinator.RehydratePendingDeletionAsync(cancellationToken);
-
-        var defaultSession = sessions.FirstOrDefault(session => session.Id.Equals(preferredSessionId, StringComparison.OrdinalIgnoreCase))
-            ?? sessions.FirstOrDefault(session => session.Id.Equals(_activeSession?.Id, StringComparison.OrdinalIgnoreCase))
-            ?? sessions.FirstOrDefault(session => session.Id.Equals("default", StringComparison.OrdinalIgnoreCase))
-            ?? sessions.FirstOrDefault();
-
+        await SavedStateCoordinator.RehydratePendingDeletionAsync(cancellationToken, () => request.IsCurrent);
+        if (!request.IsCurrent) return false;
+        var defaultSession = SessionLoadCoordinator.ResolveSession(
+            sessions, preferredSessionId, _activeSession?.Id, _wpfSettings.LastSessionId);
         if (defaultSession is null)
         {
-            // A data root with no sessions is where every first run starts, not
-            // a failure. This ran during startup rather than in response to
-            // anything the reader did, so the danger tone told them something
-            // had gone wrong before they had touched the app.
-            LoadStatus.Text = $"No sessions found in {Path.Combine(_coreSessionStore.DataRoot, "sessions")}";
-            SavedStateCoordinator.SetStatus("No saved sessions yet. Run a turn to create one.");
-            SavedStateCoordinator.ApplyForkLineage(null);
-            SavedStateCoordinator.UpdatePicker();
-            PopulateFallbackState("No AI Arena - Lite sessions found.");
-            return;
+            request.TryApply(null, () =>
+            {
+                _activeSession = null;
+                _activeSnapshotStamp = null;
+                _activeSnapshotWriteUtc = default;
+                _statusCenterSessionId = "";
+                ShellTopBar.Presentation.StatusCenter.SetContext(new ApplicationStatusIdentity(""));
+                LoadStatus.Text = $"No sessions found in {Path.Combine(_coreSessionStore.DataRoot, "sessions")}";
+                SavedStateCoordinator.SetStatus("No saved sessions yet. Run a turn to create one.");
+                SavedStateCoordinator.ApplyForkLineage(null);
+                SavedStateCoordinator.UpdatePicker();
+                PopulateFallbackState("No AI Arena - Lite sessions found.");
+            });
+            return request.IsCurrent;
         }
+        var loaded = await LoadSessionCoreAsync(defaultSession, request);
+        request.TryApply(defaultSession.Id, () =>
+        {
+            var loadOutcome = LoadStatus.Text;
+            SavedStateCoordinator.UpdatePicker(defaultSession.Id);
+            LoadStatus.Text = loadOutcome;
+        });
+        return loaded && request.IsCurrent;
+    }
 
-        await LoadSessionAsync(defaultSession, force: true, cancellationToken);
-        SavedStateCoordinator.UpdatePicker(defaultSession.Id);
+    private void PublishSessionListFailure(SessionLoadLease request, Exception exception)
+    {
+        var presentation = AppErrorPresenter.Present(exception, AppErrorContext.SavedState);
+        request.TryApply(_activeSession?.Id, () =>
+        {
+            LoadStatus.Text = presentation.DisplayText;
+            ShellTopBar.Presentation.StatusCenter.PublishNotice(
+                "app.session-load", "App", ApplicationStatusState.Failed, presentation.Summary, presentation.CopyDetails,
+                "arena", new ApplicationStatusIdentity(_activeSession?.Id ?? ""), background: false,
+                lifetime: ApplicationStatusLifetime.UntilResolved);
+        });
     }
 
     private void ShowStoreLoadWarningIfAny()
@@ -2564,97 +2617,51 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private async void RefreshIfSnapshotChanged()
     {
-        if (_snapshotRefreshInProgress)
-        {
-            return;
-        }
-
-        _snapshotRefreshInProgress = true;
+        if (_shutdownInProgress || _shutdownReady) return;
+        var session = _activeSession;
+        using var request = _sessionLoads.TryBeginRefresh(session?.Id);
+        if (request is null) return;
         var refreshedSafely = false;
         try
         {
-            if (_activeSession is null)
+            if (session is null)
             {
-                await LoadSessionsAsync();
+                refreshedSafely = await LoadSessionsCoreAsync(null, request);
+                return;
+            }
+            var observed = _snapshotStamps.Capture(session.SnapshotPath,
+                () => _coreSessionStore.SnapshotMutationGeneration(session.Id), request.Token);
+            if (!SnapshotRefreshRequiresSessionScan(_activeSnapshotStamp, observed))
+            {
                 refreshedSafely = true;
                 return;
             }
-
-            var observedWriteTime = TryGetSessionDirectoryLastModified(_activeSession.SnapshotPath);
-            if (!SnapshotRefreshRequiresSessionScan(_activeSnapshotWriteUtc, observedWriteTime))
-            {
-                refreshedSafely = true;
-                return;
-            }
-
-            if (observedWriteTime is not null)
-            {
-                await LoadSessionAsync(_activeSession with { LastModified = observedWriteTime.Value }, force: true);
-                refreshedSafely = true;
-                return;
-            }
-
-            var latestSession = (await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Identity))
-                .FirstOrDefault(session => session.Id == _activeSession.Id);
-            if (latestSession is null)
-            {
-                await LoadSessionsAsync();
-                refreshedSafely = true;
-                return;
-            }
-
-            if (latestSession.LastModified != _activeSnapshotWriteUtc)
-            {
-                await LoadSessionAsync(latestSession, force: true);
-            }
-
-            refreshedSafely = true;
+            refreshedSafely = observed is { } stamp
+                ? await LoadSessionCoreAsync(session with { LastModified = stamp.LastWriteTimeUtc, HasSnapshot = true }, request)
+                : await LoadSessionsCoreAsync(session.Id, request);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested) { }
+        catch (Exception exception)
         {
-            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.SavedState);
-            LoadStatus.Text = presentation.DisplayText;
-            ShellTopBar.Presentation.StatusCenter.PublishNotice(
-                "app.snapshot-refresh",
-                "App",
-                ApplicationStatusState.Warning,
-                presentation.Summary,
-                presentation.CopyDetails,
-                "arena",
-                new ApplicationStatusIdentity(_activeSession?.Id ?? ""),
-                background: true,
-                lifetime: ApplicationStatusLifetime.UntilResolved);
+            var presentation = AppErrorPresenter.Present(exception, AppErrorContext.SavedState);
+            request.TryApply(_activeSession?.Id, () =>
+            {
+                LoadStatus.Text = presentation.DisplayText;
+                ShellTopBar.Presentation.StatusCenter.PublishNotice(
+                    "app.snapshot-refresh", "App", ApplicationStatusState.Warning, presentation.Summary, presentation.CopyDetails,
+                    "arena", new ApplicationStatusIdentity(_activeSession?.Id ?? ""), background: true,
+                    lifetime: ApplicationStatusLifetime.UntilResolved);
+            });
         }
         finally
         {
-            if (refreshedSafely)
-            {
+            if (refreshedSafely && request.IsCurrent)
                 ShellTopBar.Presentation.StatusCenter.Resolve("app.snapshot-refresh");
-            }
-
-            _snapshotRefreshInProgress = false;
         }
     }
 
-    internal static bool SnapshotRefreshRequiresSessionScan(DateTimeOffset knownWriteTime, DateTimeOffset? observedWriteTime)
-    {
-        return observedWriteTime is null || observedWriteTime.Value != knownWriteTime;
-    }
-
-    internal static DateTimeOffset? TryGetSessionDirectoryLastModified(string snapshotPath)
-    {
-        try
-        {
-            var directory = Path.GetDirectoryName(snapshotPath);
-            return string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)
-                ? null
-                : new DateTimeOffset(Directory.GetLastWriteTime(directory));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            return null;
-        }
-    }
+    internal static bool SnapshotRefreshRequiresSessionScan(SnapshotStamp? knownStamp, SnapshotStamp? observedStamp) =>
+        observedStamp is null || knownStamp is null || observedStamp.Value != knownStamp.Value;
 
     private void CompactTranscriptCheckBox_Changed(object sender, RoutedEventArgs e)
     {
@@ -3458,11 +3465,6 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         {
             SettingsSearchFeedbackPanel.Visibility = Visibility.Collapsed;
             SettingsSearchFeedbackText.Text = "";
-            foreach (var expander in allExpanders)
-            {
-                expander.Visibility = Visibility.Visible;
-            }
-
             if (_settingsSearchActive)
             {
                 RestoreSettingsExpansion(allExpanders, _settingsExpansionBeforeSearch);
@@ -3477,7 +3479,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         if (!_settingsSearchActive)
         {
             _settingsExpansionBeforeSearch.Clear();
-            foreach (var expander in allExpanders)
+            foreach (var expander in allExpanders.Where(expander => expander.Visibility == Visibility.Visible))
             {
                 _settingsExpansionBeforeSearch[expander] = expander.IsExpanded;
             }
@@ -3488,7 +3490,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         var matchCount = 0;
         foreach (var child in SettingsSectionsPanel.Children)
         {
-            if (child is not Expander expander)
+            if (child is not Expander expander || !_settingsExpansionBeforeSearch.ContainsKey(expander))
             {
                 continue;
             }
@@ -3499,7 +3501,10 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             if (matches)
             {
                 matchCount++;
-                ApplyNestedSettingsSearch(expander.Content, query);
+                ApplyNestedSettingsSearch(
+                    expander.Content,
+                    SettingsNodeMatches(expander.Header, query) ? "" : query,
+                    _settingsExpansionBeforeSearch);
             }
         }
 
@@ -3522,41 +3527,59 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         return texts.Any(text => text.Contains(query, StringComparison.OrdinalIgnoreCase));
     }
 
-    internal static void ApplyNestedSettingsSearch(object? node, string query)
+    internal static void ApplyNestedSettingsSearch(
+        object? node,
+        string query,
+        IReadOnlyDictionary<Expander, bool>? priorExpansion = null)
     {
         switch (node)
         {
             case null:
                 return;
             case Expander expander:
-                var matches = SettingsNodeMatches(expander, query);
+                // A section hidden before filtering is an implementation detail,
+                // not a search result or an optional disclosure to reveal.
+                if (priorExpansion is not null && !priorExpansion.ContainsKey(expander))
+                {
+                    return;
+                }
+
+                var sectionHeaderMatched = query.Length == 0;
+                var matches = sectionHeaderMatched || SettingsNodeMatches(expander, query);
                 expander.Visibility = matches ? Visibility.Visible : Visibility.Collapsed;
-                expander.IsExpanded = matches;
+                expander.IsExpanded = sectionHeaderMatched
+                    ? priorExpansion is not null && priorExpansion.TryGetValue(expander, out var wasExpanded)
+                        ? wasExpanded
+                        : expander.IsExpanded
+                    : matches;
                 if (matches)
                 {
-                    ApplyNestedSettingsSearch(expander.Content, query);
+                    ApplyNestedSettingsSearch(
+                        expander.Content,
+                        sectionHeaderMatched || SettingsNodeMatches(expander.Header, query) ? "" : query,
+                        priorExpansion);
                 }
 
                 return;
             case Panel panel:
                 foreach (var child in panel.Children)
                 {
-                    ApplyNestedSettingsSearch(child, query);
+                    ApplyNestedSettingsSearch(child, query, priorExpansion);
                 }
 
                 return;
             case ItemsControl items:
                 foreach (var item in items.Items)
                 {
-                    ApplyNestedSettingsSearch(item, query);
+                    ApplyNestedSettingsSearch(item, query, priorExpansion);
                 }
 
                 return;
             case ContentControl content:
-                ApplyNestedSettingsSearch(content.Content, query);
+                ApplyNestedSettingsSearch(content.Content, query, priorExpansion);
                 return;
             case Decorator decorator:
-                ApplyNestedSettingsSearch(decorator.Child, query);
+                ApplyNestedSettingsSearch(decorator.Child, query, priorExpansion);
                 return;
         }
     }
@@ -3600,9 +3623,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     {
         foreach (var expander in expanders)
         {
-            expander.Visibility = Visibility.Visible;
             if (priorExpansion.TryGetValue(expander, out var wasExpanded))
             {
+                expander.Visibility = Visibility.Visible;
                 expander.IsExpanded = wasExpanded;
             }
         }
@@ -3760,126 +3783,185 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         _transcriptViewCoordinator?.ApplyReviewPreset();
     }
 
-    private async Task LoadSessionAsync(
+    private async Task<bool> LoadSessionAsync(
         CoreSessionSummary session,
         bool force,
         CancellationToken cancellationToken = default)
     {
-        if (!force
-            && string.Equals(_activeSession?.Id, session.Id, StringComparison.Ordinal)
-            && session.LastModified == _activeSnapshotWriteUtc)
+        if (_shutdownInProgress || _shutdownReady) return false;
+        using var request = _sessionLoads.BeginSelection(session.Id, cancellationToken);
+        try
         {
-            return;
+            if (!force && string.Equals(_activeSession?.Id, session.Id, StringComparison.Ordinal)
+                && !SnapshotRefreshRequiresSessionScan(_activeSnapshotStamp,
+                    _snapshotStamps.Capture(session.SnapshotPath, () => _coreSessionStore.SnapshotMutationGeneration(session.Id), request.Token)))
+            {
+                request.TryApply(session.Id, () =>
+                {
+                    _statusCenterSessionId = session.Id;
+                    if (_lastRenderedSnapshot is { } rendered)
+                        ShellTopBar.Presentation.StatusCenter.SetContext(ProviderStatusIdentity(session.Id, rendered));
+                });
+                return request.IsCurrent;
+            }
+            return await LoadSessionCoreAsync(session, request);
         }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return false;
+        }
+    }
 
+    private async Task<SessionSelectionOutcome> SelectSessionByIdAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        if (_shutdownInProgress || _shutdownReady)
+            return new(false, "shutting_down", "The application is closing.");
+        using var request = _sessionLoads.BeginSelection(sessionId, cancellationToken);
+        try
+        {
+            var sessions = await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Messages, request.Token);
+            if (!request.IsCurrent) return new(false, "selection_superseded", "A newer session selection replaced this request.");
+            var selected = sessions.FirstOrDefault(item => item.Id.Equals(sessionId, StringComparison.OrdinalIgnoreCase));
+            if (selected is null) return new(false, "not_found", $"Session '{sessionId}' was not found.");
+            SavedStateCoordinator.SetSessions(sessions);
+            var loaded = await LoadSessionCoreAsync(selected, request);
+            if (!request.IsCurrent) return new(false, "selection_superseded", "A newer session selection replaced this request.");
+            if (!loaded) return new(false, "load_failed", "The session snapshot could not be loaded.");
+            request.TryApply(selected.Id, () =>
+            {
+                var loadOutcome = LoadStatus.Text;
+                SavedStateCoordinator.UpdatePicker(selected.Id);
+                LoadStatus.Text = loadOutcome;
+            });
+            return new(true, "", $"Selected session: {selected.Id}.");
+        }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return new(false, "selection_superseded", "A newer session selection replaced this request.");
+        }
+        catch (Exception exception)
+        {
+            PublishSessionListFailure(request, exception);
+            return new(false, "load_failed", "The session snapshot could not be loaded.");
+        }
+    }
+    private async Task<bool> LoadSessionCoreAsync(CoreSessionSummary session, SessionLoadLease request)
+    {
+        if (!request.IsCurrent) return false;
+        var connectionSessionChanged = IsGenuineSessionChange(_activeSession?.Id, session.Id);
+        if (connectionSessionChanged) CancelProviderServerDiscovery();
         StopVoicePlaybackForSessionChange(session.Id);
-
-        // A session switch owns status causality immediately, even if reading its
-        // snapshot later fails. Preserve the provider scope for same-session
-        // refreshes; RenderSnapshot will refine a successful switch with the new
-        // provider fingerprint.
+        // Selection owns status causality immediately; every later result/error still needs its original lease.
         if (!string.Equals(_statusCenterSessionId, session.Id, StringComparison.Ordinal))
         {
             _statusCenterSessionId = session.Id;
             ShellTopBar.Presentation.StatusCenter.SetContext(new ApplicationStatusIdentity(session.Id));
         }
-
+        var loadedSuccessfully = true;
         try
         {
             ArenaSnapshot? coreSnapshot = null;
+            SnapshotStamp? loadedStamp = null;
             var currentSession = session;
             ArenaViewSnapshot snapshot;
-            if (session.HasSnapshot)
+            if (File.Exists(session.SnapshotPath))
             {
-                var sessionInstanceId = await _coreSessionStore.EnsureSessionInstanceIdAsync(
-                    session.Id,
-                    cancellationToken);
-                coreSnapshot = await _coreSessionStore.LoadSnapshotAsync(session.Id, cancellationToken);
-                if (coreSnapshot is null
-                    || !coreSnapshot.SessionInstanceId.Equals(sessionInstanceId, StringComparison.Ordinal))
-                {
+                var sessionInstanceId = await _coreSessionStore.EnsureSessionInstanceIdAsync(session.Id, request.Token);
+                if (!request.IsCurrent) return false;
+                var loaded = await _snapshotStamps.ReadStableAsync(session.SnapshotPath,
+                    token => _coreSessionStore.LoadSnapshotAsync(session.Id, token),
+                    () => _coreSessionStore.SnapshotMutationGeneration(session.Id), request.Token);
+                coreSnapshot = loaded.Value;
+                if (coreSnapshot is null || !coreSnapshot.SessionInstanceId.Equals(sessionInstanceId, StringComparison.Ordinal))
                     throw new InvalidDataException("The live session identity could not be established safely.");
-                }
-
-                var persistedWriteTime = new DateTimeOffset(
-                    File.GetLastWriteTimeUtc(session.SnapshotPath),
-                    TimeSpan.Zero);
+                loadedStamp = loaded.Stamp;
                 currentSession = session with
                 {
                     MessageCount = coreSnapshot.Engine.Messages.Count,
-                    LastModified = persistedWriteTime
+                    LastModified = loaded.Stamp.LastWriteTimeUtc,
+                    HasSnapshot = true
                 };
                 snapshot = SnapshotViewMapper.FromCore(currentSession, coreSnapshot);
             }
             else
             {
+                currentSession = session with { HasSnapshot = false };
                 snapshot = SnapshotViewMapper.Empty(currentSession, "No snapshot file.");
             }
-
-            _activeSession = currentSession;
-            _experimentLabCoordinator?.NotifyActiveSessionChanged(currentSession.Id);
-            _activeSnapshotWriteUtc = currentSession.LastModified;
-            SavedStateCoordinator.ApplyForkLineage(coreSnapshot?.ForkLineage);
-            RenderSnapshot(snapshot);
-            SavedStateCoordinator.RefreshCheckpoints();
-            LoadStatus.Text = $"Loaded session: {snapshot.SnapshotPath}\nExternal-change refresh: 1.2s";
-            ShellTopBar.Presentation.StatusCenter.Resolve("app.session-load");
+            if (!request.TryApply(currentSession.Id, () =>
+            {
+                _activeSession = currentSession;
+                _experimentLabCoordinator?.NotifyActiveSessionChanged(currentSession.Id);
+                _activeSnapshotStamp = loadedStamp;
+                _activeSnapshotWriteUtc = loadedStamp?.LastWriteTimeUtc ?? currentSession.LastModified;
+                SavedStateCoordinator.ApplyForkLineage(coreSnapshot?.ForkLineage);
+                RenderSnapshot(snapshot);
+                if (coreSnapshot is not null)
+                {
+                    try { _wpfSettingsStore.RememberSession(_wpfSettings, currentSession.Id); }
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                    {
+                        ShellTopBar.Presentation.StatusCenter.PublishNotice(
+                            "app.session-preference", "App", ApplicationStatusState.Warning,
+                            "Session loaded; remembering it for next launch failed.",
+                            "Your session configuration remains saved.", "settings",
+                            lifetime: ApplicationStatusLifetime.UntilResolved);
+                    }
+                }
+                SavedStateCoordinator.RefreshCheckpoints();
+                LoadStatus.Text = $"Loaded session: {snapshot.SnapshotPath}\nExternal-change refresh: 1.2s";
+                ShellTopBar.Presentation.StatusCenter.Resolve("app.session-load");
+            })) return false;
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.SavedState);
-            _activeSession = session;
-            _experimentLabCoordinator?.NotifyActiveSessionChanged(session.Id);
-            _activeSnapshotWriteUtc = session.LastModified;
-            SavedStateCoordinator.ApplyForkLineage(null);
-            PopulateFallbackState(presentation.DisplayText);
-            SavedStateCoordinator.ClearCheckpoints("No checkpoint data.");
-            LoadStatus.Text = presentation.DisplayText;
-            ShellTopBar.Presentation.StatusCenter.PublishNotice(
-                "app.session-load",
-                "App",
-                ApplicationStatusState.Failed,
-                presentation.Summary,
-                presentation.CopyDetails,
-                "arena",
-                new ApplicationStatusIdentity(session.Id),
-                background: false,
-                lifetime: ApplicationStatusLifetime.UntilResolved);
-        }
-
-        _collaborateCoordinator?.PublishPendingRecoveryWarning(PublishCollaborateRecoveryWarning);
-        await RefreshAgentInspectionForSessionSafelyAsync(cancellationToken);
-    }
-
-    private async Task RefreshAgentInspectionForSessionSafelyAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            await _agentInspectionLabCoordinator.InitializeAsync(cancellationToken);
-            ShellTopBar.Presentation.StatusCenter.Resolve("agent.inspection-refresh");
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
-            // The coordinator clears the prior private-memory view before a
-            // session switch. A failed reload therefore remains default-deny.
+            loadedSuccessfully = false;
+            var presentation = AppErrorPresenter.Present(exception, AppErrorContext.SavedState);
+            if (!request.TryApply(session.Id, () =>
+            {
+                _activeSession = session;
+                _experimentLabCoordinator?.NotifyActiveSessionChanged(session.Id);
+                _activeSnapshotStamp = null;
+                _activeSnapshotWriteUtc = session.LastModified;
+                SavedStateCoordinator.ApplyForkLineage(null);
+                PopulateFallbackState(presentation.DisplayText);
+                SavedStateCoordinator.ClearCheckpoints("No checkpoint data.");
+                LoadStatus.Text = presentation.DisplayText;
+                ShellTopBar.Presentation.StatusCenter.PublishNotice(
+                    "app.session-load", "App", ApplicationStatusState.Failed, presentation.Summary, presentation.CopyDetails,
+                    "arena", new ApplicationStatusIdentity(session.Id), background: false,
+                    lifetime: ApplicationStatusLifetime.UntilResolved);
+            })) return false;
+        }
+        if (!request.IsCurrent) return false;
+        _collaborateCoordinator?.PublishPendingRecoveryWarning(PublishCollaborateRecoveryWarning);
+        await RefreshAgentInspectionForSessionSafelyAsync(request);
+        if (loadedSuccessfully && request.IsCurrent && connectionSessionChanged)
+            _ = RunTrackedBackgroundOperationSafelyAsync("server discovery", DiscoverProviderServersAsync);
+        return loadedSuccessfully && request.IsCurrent;
+    }
+
+    private async Task RefreshAgentInspectionForSessionSafelyAsync(SessionLoadLease request)
+    {
+        if (!request.IsCurrent) return;
+        try
+        {
+            await _agentInspectionLabCoordinator.InitializeAsync(request.Token);
+            if (request.IsCurrent) ShellTopBar.Presentation.StatusCenter.Resolve("agent.inspection-refresh");
+        }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested) { throw; }
+        catch (Exception exception)
+        {
+            if (!request.IsCurrent) return;
             Debug.WriteLine($"Agent inspection session refresh failed safely: {exception.GetType().Name}");
             ShellTopBar.Presentation.StatusCenter.PublishNotice(
-                "agent.inspection-refresh",
-                "Agent",
-                ApplicationStatusState.Warning,
+                "agent.inspection-refresh", "Agent", ApplicationStatusState.Warning,
                 "Agent inspection refresh failed.",
                 $"Private inspection remains unavailable ({exception.GetType().Name}).",
-                "agent",
-                background: true,
-                lifetime: ApplicationStatusLifetime.UntilResolved);
+                "agent", background: true, lifetime: ApplicationStatusLifetime.UntilResolved);
         }
     }
 
@@ -3907,6 +3989,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             var activeCount = snapshot.Agents.Count(agent => agent.Active);
             AgentRoster.ApplySnapshot(activeCount);
             ProviderSettings.ApplySnapshot(snapshot);
+            RefreshDetectedProviderServersPresentation();
             _llamaCppRuntimeCoordinator?.ConfigurationChanged();
             ApplyRoleOverrideFields(snapshot);
             ProviderTimeoutText.Text = snapshot.ProviderTimeout.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -4139,30 +4222,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private async void TestProviderButton_Click(object sender, RoutedEventArgs e)
     {
-        await RunProviderCommitSafelyAsync(
-            (coordinator, cancellationToken) => coordinator.TestProviderAsync(TestProviderButton, cancellationToken));
-    }
-
-    private async void ApplyProviderPresetButton_Click(object sender, RoutedEventArgs e)
-    {
-        await RunProviderCommitSafelyAsync(
-            (coordinator, cancellationToken) => coordinator.ApplyProviderPresetAsync(cancellationToken));
-        if (ProviderPresetStatusText.Text.StartsWith("Manual provider selected.", StringComparison.Ordinal))
-        {
-            ShellTopBar.Presentation.StatusCenter.PublishNotice(
-                "provider.preset",
-                "Provider",
-                ApplicationStatusState.Warning,
-                ProviderPresetStatusText.Text,
-                navigationTarget: "settings",
-                identity: new ApplicationStatusIdentity(_activeSession?.Id ?? ""),
-                lifetime: ApplicationStatusLifetime.UntilResolved);
-        }
-        else
-        {
-            ShellTopBar.Presentation.StatusCenter.Resolve("provider.preset");
-        }
-        _llamaCppRuntimeCoordinator?.ConfigurationChanged();
+        await RunTrackedBackgroundOperationSafelyAsync("server discovery", DiscoverProviderServersAsync);
     }
 
     private async void LlamaCppInspectButton_Click(object sender, RoutedEventArgs e)
@@ -5860,25 +5920,29 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         CancellationToken cancellationToken = default,
         bool setArenaStatus = true)
     {
-        if (_activeSession is null)
+        var session = _activeSession;
+        if (session is null || _shutdownInProgress || _shutdownReady) return;
+        // Mutation completion may replace an older periodic refresh, never an explicit selection.
+        using var request = _sessionLoads.TryBeginRefresh(session.Id, cancellationToken, supersedeRefresh: true);
+        if (request is null) return;
+        try
         {
-            return;
+            var observed = _snapshotStamps.Capture(session.SnapshotPath,
+                () => _coreSessionStore.SnapshotMutationGeneration(session.Id), request.Token);
+            var loaded = observed is { } stamp
+                ? await LoadSessionCoreAsync(session with { LastModified = stamp.LastWriteTimeUtc, HasSnapshot = true }, request)
+                : await LoadSessionsCoreAsync(session.Id, request);
+            if (loaded && request.IsCurrent && string.Equals(_activeSession?.Id, session.Id, StringComparison.Ordinal))
+            {
+                LoadStatus.Text = status;
+                if (setArenaStatus) ArenaRunStatus.Text = status;
+            }
         }
-
-        var observedWriteTime = TryGetSessionDirectoryLastModified(_activeSession.SnapshotPath);
-        var latest = observedWriteTime is null
-            ? (await _coreSessionStore.ListSessionsAsync(SessionListingDetail.Identity, cancellationToken)).FirstOrDefault(session => session.Id == _activeSession.Id)
-            : _activeSession with { LastModified = observedWriteTime.Value };
-        if (latest is not null)
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
         {
-            await LoadSessionAsync(latest, force: true, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
-
-        LoadStatus.Text = status;
-        if (setArenaStatus)
-        {
-            ArenaRunStatus.Text = status;
-        }
+        catch (Exception exception) { PublishSessionListFailure(request, exception); }
     }
 
     private Task RefreshActiveSessionForTranscriptMutationAsync(string status) =>
@@ -6699,24 +6763,9 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private async void SearchAllSessionsButton_Click(object sender, RoutedEventArgs e)
     {
-        var query = TranscriptSearchText.Text?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(query))
-        {
-            TranscriptSearch.ShowCrossSessionMessage("Type a query first, then search all sessions.");
-            return;
-        }
-
-        TranscriptSearch.ShowCrossSessionMessage($"Searching every session for \"{query}\"...");
-        try
-        {
-            var hits = await _crossSessionSearchService.SearchAsync(query);
-            TranscriptSearch.ShowCrossSessionResults(query, hits, sessionId => _ = SelectSessionFromSearchAsync(sessionId));
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            TranscriptSearch.ShowCrossSessionMessage(
-                AppErrorPresenter.Present(exception, AppErrorContext.SavedState).DisplayText);
-        }
+        await TranscriptSearch.SearchAllSessionsAsync(
+            (query, token) => _crossSessionSearchService.SearchAsync(query, cancellationToken: token),
+            sessionId => _ = SelectSessionFromSearchAsync(sessionId));
     }
 
     private async Task SelectSessionFromSearchAsync(string sessionId)
@@ -7512,41 +7561,16 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private async void ProviderBaseUrlText_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter)
-        {
-            return;
-        }
-
+        if (e.Key != Key.Enter) return;
         e.Handled = true;
-        _llamaCppRuntimeCoordinator?.ConfigurationChanged();
-        await RunProviderCommitSafelyAsync(
-            (coordinator, cancellationToken) => coordinator.ProviderBaseUrlCommittedAsync(cancellationToken));
-    }
-
-    private async void ProviderApiTokenBox_Commit(object sender, KeyboardFocusChangedEventArgs e)
-    {
-        _llamaCppRuntimeCoordinator?.ConfigurationChanged();
-        await RunProviderCommitSafelyAsync(
-            (coordinator, cancellationToken) => coordinator.PersistModelRoutingAsync(
-                "Provider API token saved.",
-                refreshModels: true,
-                cancellationToken));
+        await RunTrackedBackgroundOperationSafelyAsync("custom server connection", ConnectCustomProviderAsync);
     }
 
     private async void ProviderApiTokenBox_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter)
-        {
-            return;
-        }
-
+        if (e.Key != Key.Enter) return;
         e.Handled = true;
-        _llamaCppRuntimeCoordinator?.ConfigurationChanged();
-        await RunProviderCommitSafelyAsync(
-            (coordinator, cancellationToken) => coordinator.PersistModelRoutingAsync(
-                "Provider API token saved.",
-                refreshModels: true,
-                cancellationToken));
+        await RunTrackedBackgroundOperationSafelyAsync("custom server connection", ConnectCustomProviderAsync);
     }
 
     private async void ProviderModelText_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -7558,6 +7582,12 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private async void ProviderApiModePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_isRenderingSnapshot || _providerSettingsCoordinator is null
+            || _providerSettingsCoordinator.IsApplyingProviderSelection)
+        {
+            return;
+        }
+
         _llamaCppRuntimeCoordinator?.ConfigurationChanged();
         await RunProviderCommitSafelyAsync(async (coordinator, cancellationToken) =>
         {
@@ -7577,8 +7607,8 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         }
 
         await RunTrackedBackgroundOperationSafelyAsync(
-            "provider model refresh",
-            cancellationToken => RefreshAdvertisedModelsAsync(force: true, cancellationToken));
+            "server discovery",
+            DiscoverProviderServersAsync);
     }
 
     private async void ProviderModelText_Commit(object sender, KeyboardFocusChangedEventArgs e)

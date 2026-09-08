@@ -61,6 +61,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private readonly Window owner;
     private readonly Dispatcher dispatcher;
     private readonly WpfSettingsStore settingsStore;
+    private readonly Action<WpfSettings> persistSettings;
     private readonly Func<WpfSettings> settings;
     private readonly IModelProviderClient modelClient;
     private readonly TextBox workspacePathText;
@@ -131,6 +132,9 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private readonly Func<ArenaViewSnapshot?> snapshot;
     private readonly Func<string, Brush> resourceBrush;
     private readonly Action<string> setShellStatus;
+    private readonly WorkspaceOperationStatus? operationStatus;
+    private ApplicationStatusReceipt? chatStatusReceipt;
+    private ApplicationStatusReceipt? commandStatusReceipt;
     private readonly Action<string, string, object?> publishControlEvent;
     private readonly Func<string, CancellationToken, Task<string>> buildWorkspaceProfileAsync;
     private readonly Func<string, CancellationToken, Task<DotNetWorkspaceSnapshot>> discoverDotNetWorkspaceAsync;
@@ -659,12 +663,16 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         Func<string, CancellationToken, Task<string>>? buildWorkspaceProfileAsync = null,
         TextBlock? runbookMetaText = null,
         Func<string, CancellationToken, Task<DotNetWorkspaceSnapshot>>? discoverDotNetWorkspaceAsync = null,
-        ComposerDraftStore? composerDraftStore = null)
+        ComposerDraftStore? composerDraftStore = null,
+        Action<WpfSettings>? persistSettings = null,
+        WorkspaceOperationStatus? operationStatus = null)
     {
         this.owner = owner;
         this.dispatcher = dispatcher;
         this.settingsStore = settingsStore;
+        this.persistSettings = persistSettings ?? settingsStore.Save;
         this.settings = settings;
+        this.operationStatus = operationStatus;
         this.modelClient = modelClient ?? new ModelProviderClient();
         this.workspacePathText = workspacePathText;
         this.workspaceBrowseButton = workspaceBrowseButton;
@@ -922,9 +930,10 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
 
         if (virtualMessageItems is not null)
         {
-            virtualMessageItems.ReplaceRows(MessageRowDefinitions(messages), refreshRealizedRows: true);
+            // Refresh the existing keyed rows, including a response still streaming.
+            virtualMessageItems.RefreshRealizedRows();
         }
-        else
+        else if (!isRunningChat)
         {
             messageItems.Children.Clear();
             foreach (var message in messages)
@@ -1164,7 +1173,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         {
             var currentSettings = settings();
             currentSettings.AgentWorkspacePath = normalized;
-            settingsStore.Save(currentSettings);
+            persistSettings(currentSettings);
         }
 
         UpdateWorkspaceDisplays(normalized, $"Working dir: {normalized}");
@@ -1383,64 +1392,65 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             return false;
         }
 
-        if (!isInternalPrompt && (!runbook.HasActiveRun || !AgentRunbookService.IsGeneratedContinuationPrompt(prompt)))
-        {
-            runbook.Begin(workspacePath, prompt, builderOnlyForSession, DateTimeOffset.Now);
-            runbookVerificationPending = false;
-            PersistRunbook();
-            publishControlEvent("agent.runbook.started", "Agent runbook started.", runbook.ControlState);
-        }
-        else if (!runbook.HasActiveRun)
-        {
-            runbook.Begin(workspacePath, string.IsNullOrWhiteSpace(lastOperatorPrompt) ? prompt : lastOperatorPrompt, builderOnlyForSession, DateTimeOffset.Now);
-            PersistRunbook();
-        }
-
-        isRunningChat = true;
-        currentPromptRequiresCommand = PromptLikelyRequiresCommand(prompt);
         var isRescuePrompt = PromptIsAutoRescue(prompt);
-        if (!isRescuePrompt || string.IsNullOrWhiteSpace(lastOperatorPrompt))
-        {
-            lastOperatorPrompt = prompt;
-        }
-
-        if (currentPromptRequiresCommand && !isRescuePrompt)
-        {
-            autoRescueAttemptsRemaining = MaxAutoRescueAttempts;
-        }
-
         var autoRunAfterChat = false;
         var autoRescueAfterChat = false;
         var internalRescuePromptAfterChat = "";
         var logicalSendSucceeded = false;
-        announcedLiveResponseRoles.Clear();
         var previousRescueCommandReplacement = allowRescueCommandReplacement;
-        chatCancellation?.Dispose();
-        chatCancellation = new CancellationTokenSource();
-        var cancellationToken = chatCancellation.Token;
-        SetChatControlsEnabled(false);
-        RefreshCommandActionState();
-        RefreshProviderState();
-
-        if (messages.Count == 0)
-        {
-            ClearMessagePresentation();
-        }
-
-        var userMessage = isInternalPrompt
-            ? new AgentWorkspaceMessage("system", "Agent Rescue", prompt, "Action", "", DateTimeOffset.Now)
-            : new AgentWorkspaceMessage("operator", "Operator", prompt, "User", "", DateTimeOffset.Now);
-        messages.Add(userMessage);
-        AddMessagePresentation(userMessage, announceAsNew: false);
-        PersistConversation();
-        AddActivity(isInternalPrompt ? "Auto Rescue" : "Prompt", isInternalPrompt ? "Builder is being retried for a runnable command." : "Software task sent to Agent team.");
-        SetBuildEvidenceSummary(currentPromptRequiresCommand
-            ? "App-work evidence started."
-            : "Consultation task; command may be optional.");
-        ScrollToEnd();
-
         try
         {
+            isRunningChat = true;
+            chatStatusReceipt = operationStatus?.Begin("Agent collaboration is starting...");
+            if (!isInternalPrompt && (!runbook.HasActiveRun || !AgentRunbookService.IsGeneratedContinuationPrompt(prompt)))
+            {
+                runbook.Begin(workspacePath, prompt, builderOnlyForSession, DateTimeOffset.Now);
+                runbookVerificationPending = false;
+                PersistRunbook();
+                publishControlEvent("agent.runbook.started", "Agent runbook started.", runbook.ControlState);
+            }
+            else if (!runbook.HasActiveRun)
+            {
+                runbook.Begin(workspacePath, string.IsNullOrWhiteSpace(lastOperatorPrompt) ? prompt : lastOperatorPrompt, builderOnlyForSession, DateTimeOffset.Now);
+                PersistRunbook();
+            }
+
+            currentPromptRequiresCommand = PromptLikelyRequiresCommand(prompt);
+            if (!isRescuePrompt || string.IsNullOrWhiteSpace(lastOperatorPrompt))
+            {
+                lastOperatorPrompt = prompt;
+            }
+
+            if (currentPromptRequiresCommand && !isRescuePrompt)
+            {
+                autoRescueAttemptsRemaining = MaxAutoRescueAttempts;
+            }
+
+            announcedLiveResponseRoles.Clear();
+            chatCancellation?.Dispose();
+            chatCancellation = new CancellationTokenSource();
+            var cancellationToken = chatCancellation.Token;
+            SetChatControlsEnabled(false);
+            RefreshCommandActionState();
+            RefreshProviderState();
+
+            if (messages.Count == 0)
+            {
+                ClearMessagePresentation();
+            }
+
+            var userMessage = isInternalPrompt
+                ? new AgentWorkspaceMessage("system", "Agent Rescue", prompt, "Action", "", DateTimeOffset.Now)
+                : new AgentWorkspaceMessage("operator", "Operator", prompt, "User", "", DateTimeOffset.Now);
+            messages.Add(userMessage);
+            AddMessagePresentation(userMessage, announceAsNew: false);
+            PersistConversation();
+            AddActivity(isInternalPrompt ? "Auto Rescue" : "Prompt", isInternalPrompt ? "Builder is being retried for a runnable command." : "Software task sent to Agent team.");
+            SetBuildEvidenceSummary(currentPromptRequiresCommand
+                ? "App-work evidence started."
+                : "Consultation task; command may be optional.");
+            ScrollToEnd();
+
             allowRescueCommandReplacement = isRescuePrompt;
             latestSteps.Clear();
             heldCommandSuggestion = null;
@@ -1455,7 +1465,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             else
             {
                 ResetPhases("Planner is starting...");
-                UpdateStatus("Planner is reading the workspace request...");
+                UpdateChatProgress("Planner is reading the workspace request...");
                 SetPhase("planner", "Running", "Planner is reading the request.");
                 var planner = await CompleteRoleAsync(
                     current,
@@ -1464,7 +1474,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                     cancellationToken);
                 AddStep(planner);
 
-                UpdateStatus("Reviewer is checking risks and tests...");
+                UpdateChatProgress("Reviewer is checking risks and tests...");
                 SetPhase("reviewer", "Running", "Reviewer is checking risks and tests.");
                 var reviewer = await CompleteRoleAsync(
                     current,
@@ -1474,7 +1484,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 AddStep(reviewer);
             }
 
-            UpdateStatus(currentPromptRequiresCommand
+            UpdateChatProgress(currentPromptRequiresCommand
                 ? "Builder is creating a previewable command..."
                 : "Builder is answering the workspace request...");
             SetPhase("builder", "Running", currentPromptRequiresCommand
@@ -1502,11 +1512,11 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 if (autoApproveCommandsForSession)
                 {
                     autoRunAfterChat = true;
-                    UpdateStatus("Command proposal staged; Full Access will run it.");
+                    UpdateChatProgress("Command proposal staged; Full Access will run it.");
                 }
                 else
                 {
-                    UpdateStatus("Command proposal staged for approval.");
+                    UpdateChatProgress("Command proposal staged for approval.");
                 }
             }
             else if (latestSteps.All(step => step.Ok) && currentPromptRequiresCommand)
@@ -1534,7 +1544,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                     AddActivity("Auto Rescue", $"{autoRescueAttemptsRemaining.ToString(CultureInfo.InvariantCulture)} retry attempt{(autoRescueAttemptsRemaining == 1 ? "" : "s")} remain.");
                     phaseSummaryText.Text = "Auto Rescue: asking for a runnable command.";
                     SetBuildEvidenceSummary("Auto Rescue is retrying prose-only app output.");
-                    UpdateStatus("No command staged. Asking Builder for a command...");
+                    UpdateChatProgress("No command staged. Asking Builder for a command...");
                 }
                 else
                 {
@@ -1543,7 +1553,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                     AddActivity("Rescue available", "Use Rescue to retry Builder without replacing the operator draft.");
                     phaseSummaryText.Text = "Needs command: no runnable Builder proposal.";
                     SetBuildEvidenceSummary("Needs command: Rescue is available.");
-                    UpdateStatus("No command staged. Use Rescue to retry.");
+                    UpdateChatProgress("No command staged. Use Rescue to retry.");
                 }
 
                 PersistRunbook();
@@ -1553,7 +1563,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             {
                 phaseSummaryText.Text = latestSteps.All(step => step.Ok) ? "Agent loop complete." : "Agent loop completed with warnings.";
                 SetBuildEvidenceSummary(latestSteps.All(step => step.Ok) ? "Agent loop complete." : "Agent loop completed with warnings.");
-                UpdateStatus(latestSteps.All(step => step.Ok) ? "Ready." : "Agent completed with model warnings.");
+                UpdateChatProgress(latestSteps.All(step => step.Ok) ? "Ready." : "Agent completed with model warnings.");
                 if (runbook.HasActiveRun)
                 {
                     if (latestSteps.All(step => step.Ok) && !currentPromptRequiresCommand)
@@ -1579,50 +1589,65 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             {
                 ClearComposerAfterSuccessfulSend(draftScopeAtSend, visibleComposerAtSend);
             }
+            if (chatStatusReceipt is { } receipt)
+            {
+                if (logicalSendSucceeded)
+                {
+                    operationStatus?.Complete(receipt, statusText.Text == "Ready." ? "Agent collaboration completed." : statusText.Text);
+                }
+                else
+                {
+                    operationStatus?.Fail(receipt, autoRescueAfterChat ? "Agent response needs another attempt." : statusText.Text);
+                }
+            }
         }
         catch (OperationCanceledException)
         {
+            logicalSendSucceeded = false;
+            autoRunAfterChat = false;
+            autoRescueAfterChat = false;
             var stopped = new AgentWorkspaceMessage("system", "Agent", "Collaboration stopped.", "Status", "", DateTimeOffset.Now);
             messages.Add(stopped);
             AddMessagePresentation(stopped, announceAsNew: announcedLiveResponseRoles.Count == 0);
             announcedLiveResponseRoles.Clear();
-            PersistConversation();
             AddActivity("Stopped", "Agent collaboration cancelled.");
             phaseSummaryText.Text = "Agent collaboration stopped.";
             SetBuildEvidenceSummary("Agent collaboration stopped.");
             if (runbook.HasActiveRun)
             {
                 runbook.MarkInterrupted("Agent collaboration was stopped by the operator.", DateTimeOffset.Now);
-                PersistRunbook();
                 RenderPhases();
             }
 
-            UpdateStatus("Collaboration stopped.");
+            var persistence = ConversationPersistenceResult.TrySave(PersistConversation, AppErrorContext.Agent);
+            SetChatOutcome(persistence.WithOutcome("Collaboration stopped."), ApplicationStatusState.Cancelled);
+            if (!persistence.Ok)
+            {
+                operationStatus?.PublishNotice(persistence.Message, ApplicationStatusState.Warning);
+            }
         }
         catch (Exception ex)
         {
-            var failed = new AgentWorkspaceMessage(
-                "system",
-                "Agent",
-                "Agent collaboration failed before completion. Your draft is still available to retry.",
-                "Error",
-                "",
-                DateTimeOffset.Now);
+            logicalSendSucceeded = false;
+            autoRunAfterChat = false;
+            autoRescueAfterChat = false;
+            var presentation = AppErrorPresenter.Present(ex, AppErrorContext.Agent);
+            var failureStatus = $"{presentation.DisplayText} Draft retained for retry.";
+            var failed = new AgentWorkspaceMessage("system", "Agent", failureStatus, "Error", "", DateTimeOffset.Now);
             messages.Add(failed);
             AddMessagePresentation(failed, announceAsNew: announcedLiveResponseRoles.Count == 0);
             announcedLiveResponseRoles.Clear();
-            PersistConversation();
-            AddActivity("Agent failed", ex.GetType().Name);
+            AddActivity("Agent failed", presentation.Code);
             phaseSummaryText.Text = "Agent collaboration failed.";
             SetBuildEvidenceSummary("Agent collaboration failed before completion.");
             if (runbook.HasActiveRun)
             {
-                runbook.MarkInterrupted("A model step failed before completion.", DateTimeOffset.Now);
-                PersistRunbook();
+                runbook.MarkInterrupted("Agent collaboration failed before completion.", DateTimeOffset.Now);
                 RenderPhases();
             }
 
-            UpdateStatus("Agent collaboration failed. Draft retained for retry.");
+            var persistence = ConversationPersistenceResult.TrySave(PersistConversation, AppErrorContext.Agent);
+            SetChatOutcome(persistence.WithOutcome(failureStatus), ApplicationStatusState.Failed);
         }
         finally
         {
@@ -1636,26 +1661,28 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             });
             chatCancellation?.Dispose();
             chatCancellation = null;
-            if (autoRescueAfterChat && !string.IsNullOrWhiteSpace(internalRescuePromptAfterChat))
-            {
-                var rescueSucceeded = await SendAsync(internalRescuePromptAfterChat);
-                logicalSendSucceeded = rescueSucceeded;
-                if (usesVisibleComposer && rescueSucceeded)
-                {
-                    ClearComposerAfterSuccessfulSend(draftScopeAtSend, visibleComposerAtSend);
-                }
-            }
-            else if (autoRunAfterChat || (autoApproveCommandsForSession && pendingPreview is not null))
-            {
-                await TryAutoRunPendingPreviewAsync("Full Access is active for this session.");
-            }
-
-            RunOnUiThread(() =>
-            {
-                RefreshProviderState();
-                ScrollToEnd();
-            });
+            chatStatusReceipt = null;
         }
+
+        if (autoRescueAfterChat && !string.IsNullOrWhiteSpace(internalRescuePromptAfterChat))
+        {
+            var rescueSucceeded = await SendAsync(internalRescuePromptAfterChat);
+            logicalSendSucceeded = rescueSucceeded;
+            if (usesVisibleComposer && rescueSucceeded)
+            {
+                ClearComposerAfterSuccessfulSend(draftScopeAtSend, visibleComposerAtSend);
+            }
+        }
+        else if (logicalSendSucceeded && (autoRunAfterChat || (autoApproveCommandsForSession && pendingPreview is not null)))
+        {
+            await TryAutoRunPendingPreviewAsync("Full Access is active for this session.");
+        }
+
+        RunOnUiThread(() =>
+        {
+            RefreshProviderState();
+            ScrollToEnd();
+        });
 
         return logicalSendSucceeded;
     }
@@ -1805,7 +1832,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             PauseAutoContinue("User stopped Agent collaboration.");
             TryCancel(chatCancellation);
             stopButton.IsEnabled = false;
-            UpdateStatus("Stopping Agent collaboration...");
+            UpdateChatProgress("Stopping Agent collaboration...");
             return;
         }
 
@@ -1826,7 +1853,15 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         commandStatusText.Text = "Stopping command...";
         AddActivity("Stop command", "Cancellation requested for active command.");
         SetBuildEvidenceSummary("Stopping approved command.");
-        UpdateStatus("Stopping Agent command...");
+        statusText.Text = "Stopping Agent command...";
+        if (commandStatusReceipt is { } receipt)
+        {
+            operationStatus?.Update(receipt, statusText.Text);
+        }
+        else
+        {
+            setShellStatus(statusText.Text);
+        }
     }
 
     private void PreviewCommand(bool allowWhileChat = false)
@@ -2022,25 +2057,10 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         var commandWorkspaceGeneration = Volatile.Read(ref workspaceGeneration);
         var commandDotNetSnapshot = dotNetWorkspaceSnapshot;
         var runningArtifactSuggestion = ArtifactSuggestionForPreview(preview);
-        isRunningCommand = true;
         commandCancellation?.Dispose();
         var activeCancellation = new CancellationTokenSource();
         commandCancellation = activeCancellation;
         var commandToken = activeCancellation.Token;
-        SetCommandControlsEnabled(false);
-        RefreshProviderState();
-        commandStatusText.Text = AgentCommandRailViewModel.RunningStatus(preview.Shell);
-        outputText.Text = FormatCommandHeader(preview);
-        AddActivity("Command", $"{preview.Shell}: {preview.Command}");
-        SetBuildEvidenceSummary("Approved command is running.");
-        if (runbook.HasActiveRun)
-        {
-            runbook.MarkExecutionStarted($"{preview.Shell}: {preview.Command}", DateTimeOffset.Now);
-            PersistRunbook();
-            RenderPhases();
-        }
-
-        StartCommandHistory(preview);
 
         AgentCommandResult? completedResult = null;
         AgentWorkspaceFileReceipt? completedReceipt = null;
@@ -2049,14 +2069,34 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             new Dictionary<string, AgentWorkspaceFileStamp>(StringComparer.OrdinalIgnoreCase),
             ScannedLimit: true);
         var beforeCaptured = false;
+        var commandStarted = false;
         try
         {
+            isRunningCommand = true;
+            commandStatusReceipt = operationStatus?.Begin("Approved Agent command is running...", "command");
+            SetCommandControlsEnabled(false);
+            RefreshProviderState();
+            commandStatusText.Text = AgentCommandRailViewModel.RunningStatus(preview.Shell);
+            outputText.Text = FormatCommandHeader(preview);
+            AddActivity("Command", $"{preview.Shell}: {preview.Command}");
+            SetBuildEvidenceSummary("Approved command is running.");
+            if (runbook.HasActiveRun)
+            {
+                runbook.MarkExecutionStarted($"{preview.Shell}: {preview.Command}", DateTimeOffset.Now);
+                PersistRunbook();
+                RenderPhases();
+            }
+
+            StartCommandHistory(preview);
+
             beforeFiles = await CaptureWorkspaceFilesAsync(preview.WorkspacePath, commandToken);
             beforeCaptured = true;
+            commandStarted = true;
             var result = await AgentWorkspaceCommand.RunAsync(
                 preview,
                 AgentWorkspaceCommand.TimeoutFor(preview, TimeSpan.FromSeconds(Math.Clamp(settings().AgentCommandTimeoutSeconds, 10, 3600))),
                 commandToken);
+            completedResult = result;
             // A cancelled command still needs a final receipt. Reusing its cancelled
             // token here used to throw out of the async WPF click handler and could
             // terminate the application.
@@ -2064,7 +2104,7 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
             beforeFiles = ExcludeInternalStateFiles(preview.WorkspacePath, beforeFiles);
             afterFiles = ExcludeInternalStateFiles(preview.WorkspacePath, afterFiles);
             var receipt = BuildFileReceipt(beforeFiles, afterFiles);
-            resultApplied = ApplyCompletedCommand(
+            resultApplied = ApplyCompletedCommandSafely(
                 preview,
                 commandWorkspaceGeneration,
                 commandDotNetSnapshot,
@@ -2102,7 +2142,8 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 false,
                 true,
                 "Command cancelled.");
-            resultApplied = ApplyCompletedCommand(
+            completedResult = result;
+            resultApplied = ApplyCompletedCommandSafely(
                 preview,
                 commandWorkspaceGeneration,
                 commandDotNetSnapshot,
@@ -2115,11 +2156,43 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
                 completedReceipt = receipt;
             }
         }
+        catch (Exception exception)
+        {
+            var presentation = AppErrorPresenter.Present(exception, AppErrorContext.Agent);
+            UpdateStatus(presentation.DisplayText);
+            if (completedResult is null && commandStatusReceipt is { } receipt)
+            {
+                if (commandStarted)
+                {
+                    operationStatus?.MarkUnconfirmed(receipt, "Agent command completion could not be confirmed.", presentation.DisplayText);
+                }
+                else
+                {
+                    operationStatus?.Fail(receipt, presentation.DisplayText);
+                }
+            }
+        }
         finally
         {
             RunOnUiThread(() =>
             {
                 isRunningCommand = false;
+                if (commandStatusReceipt is { } receipt && completedResult is { } result)
+                {
+                    if (result.Canceled)
+                    {
+                        operationStatus?.Cancel(receipt, "Agent command cancelled.");
+                    }
+                    else if (EffectiveOutcome(result).Succeeded)
+                    {
+                        operationStatus?.Complete(receipt, "Agent command completed.");
+                    }
+                    else
+                    {
+                        operationStatus?.Fail(receipt, "Agent command failed.");
+                    }
+                }
+                commandStatusReceipt = null;
                 if (ReferenceEquals(commandCancellation, activeCancellation))
                 {
                     commandCancellation = null;
@@ -2140,6 +2213,27 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         {
             await TryAutoContinueAfterCommandAsync(completedResult, completedReceipt);
         }
+    }
+
+    private bool ApplyCompletedCommandSafely(
+        AgentCommandPreview preview,
+        long commandWorkspaceGeneration,
+        DotNetWorkspaceSnapshot? commandDotNetSnapshot,
+        AgentCommandResult result,
+        AgentWorkspaceFileReceipt receipt,
+        AgentArtifactSuggestion? runningArtifactSuggestion)
+    {
+        var applied = false;
+        var completion = ConversationPersistenceResult.TrySave(() =>
+            applied = ApplyCompletedCommand(preview, commandWorkspaceGeneration, commandDotNetSnapshot,
+                result, receipt, runningArtifactSuggestion), AppErrorContext.Agent);
+        if (!completion.Ok)
+        {
+            UpdateStatus($"The command finished, but its result could not be fully saved. {completion.Message}");
+            operationStatus?.PublishNotice(completion.Message, ApplicationStatusState.Warning);
+        }
+
+        return completion.Ok && applied;
     }
 
     private bool ApplyCompletedCommand(
@@ -3329,14 +3423,14 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
         currentSettings.AgentWorkspaceSessionWorkspacePath = workspacePath;
         currentSettings.AgentWorkspaceMessages = AgentWorkspaceConversationStore.PersistedMessages(messages);
         currentSettings.AgentRunbook = runbook.State;
-        settingsStore.Save(currentSettings);
+        persistSettings(currentSettings);
     }
 
     private void PersistRunbook()
     {
         var currentSettings = settings();
         currentSettings.AgentRunbook = runbook.State;
-        settingsStore.Save(currentSettings);
+        persistSettings(currentSettings);
     }
 
     private Border CreateMessageCard(AgentWorkspaceMessage message)
@@ -4428,9 +4522,45 @@ internal sealed class AgentWorkspaceCoordinator : IDisposable
     private void UpdateStatus(string status)
     {
         statusText.Text = status;
-        setShellStatus(status);
+        if (operationStatus is null)
+        {
+            setShellStatus(status);
+        }
+        else
+        {
+            operationStatus.PublishNotice(status);
+        }
     }
 
+    private void UpdateChatProgress(string status)
+    {
+        statusText.Text = status;
+        if (chatStatusReceipt is { } receipt)
+        {
+            operationStatus?.Update(receipt, status);
+        }
+        else
+        {
+            setShellStatus(status);
+        }
+    }
+
+    private void SetChatOutcome(string summary, ApplicationStatusState state)
+    {
+        statusText.Text = summary;
+        if (chatStatusReceipt is not { } receipt)
+        {
+            setShellStatus(summary);
+        }
+        else if (state == ApplicationStatusState.Cancelled)
+        {
+            operationStatus?.Cancel(receipt, summary);
+        }
+        else
+        {
+            operationStatus?.Fail(receipt, summary);
+        }
+    }
     private void RunOnUiThread(Action action)
     {
         if (dispatcher.CheckAccess())

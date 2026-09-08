@@ -14,6 +14,7 @@ using AIArena.Core.Models;
 using AIArena.Core.Providers;
 using AIArena.Wpf.Models;
 using AIArena.Wpf.Controls;
+using AIArena.Wpf.Services;
 using Microsoft.Win32;
 
 namespace AIArena.Wpf;
@@ -101,6 +102,8 @@ internal sealed class CollaborateCoordinator
     private readonly Func<ArenaViewSnapshot?> snapshot;
     private readonly Func<string, Brush> resourceBrush;
     private readonly Action<string> setShellStatus;
+    private readonly WorkspaceOperationStatus? operationStatus;
+    private ApplicationStatusReceipt? runStatusReceipt;
     private readonly CollaborateHistoryStore historyStore;
     private readonly Func<string, CancellationToken, Task<Stream>> toolDocumentStreamFactory;
     private readonly ComposerDraftStore? composerDraftStore;
@@ -203,7 +206,8 @@ internal sealed class CollaborateCoordinator
         Action<string> setShellStatus,
         CollaborateHistoryStore? historyStore = null,
         Func<string, CancellationToken, Task<Stream>>? toolDocumentStreamFactory = null,
-        ComposerDraftStore? composerDraftStore = null)
+        ComposerDraftStore? composerDraftStore = null,
+        WorkspaceOperationStatus? operationStatus = null)
     {
         this.modelClient = modelClient ?? new ModelProviderClient();
         this.dispatcher = dispatcher;
@@ -251,6 +255,7 @@ internal sealed class CollaborateCoordinator
         this.historyStore = historyStore ?? new CollaborateHistoryStore();
         this.toolDocumentStreamFactory = toolDocumentStreamFactory ?? OpenToolDocumentStreamAsync;
         this.composerDraftStore = composerDraftStore;
+        this.operationStatus = operationStatus;
         addDocumentIdleContent = addDocumentButton.Content;
         addDocumentIdleAutomationName = AutomationProperties.GetName(addDocumentButton);
         this.promptText.TextChanged += (_, _) => OnComposerTextChanged();
@@ -319,6 +324,18 @@ internal sealed class CollaborateCoordinator
         RefreshProviderState();
         RefreshRecentItems();
         RefreshToolItems();
+        if (virtualMessageItems is not null)
+        {
+            // Saved exchanges exclude the in-flight answer and its trace controls.
+            virtualMessageItems.RefreshRealizedRows();
+            return;
+        }
+
+        if (isRunning)
+        {
+            return;
+        }
+
         if (currentConversationId is Guid id)
         {
             var conversation = conversations.FirstOrDefault(item => item.Id == id);
@@ -358,14 +375,12 @@ internal sealed class CollaborateCoordinator
         if (isRunning)
         {
             UpdateStatus("Stop the current collaboration before exporting.");
-            setShellStatus("Stop the current collaboration before exporting.");
             return;
         }
 
         if (history.Count == 0)
         {
             UpdateStatus("No AI Collaborate chat to export.");
-            setShellStatus("No AI Collaborate chat to export.");
             return;
         }
 
@@ -387,13 +402,11 @@ internal sealed class CollaborateCoordinator
         {
             var status = $"Exported AI Collaborate chat to {Path.GetFileName(dialog.FileName)}.";
             UpdateStatus(status);
-            setShellStatus(status);
             return;
         }
 
         var failureStatus = $"AI Collaborate export failed: {exportError}";
         UpdateStatus(failureStatus);
-        setShellStatus(failureStatus);
     }
 
     internal string ControlBuildCurrentExport()
@@ -767,7 +780,7 @@ internal sealed class CollaborateCoordinator
         if (!ConversationMutationAllowed(isRunning))
         {
             statusText.Text = "Stop the current collaboration before switching chats.";
-            setShellStatus(statusText.Text);
+            PublishStatusNotice(statusText.Text);
             return false;
         }
 
@@ -861,8 +874,7 @@ internal sealed class CollaborateCoordinator
 
         runCancellation?.Cancel();
         stopButton.IsEnabled = false;
-        statusText.Text = "Stopping collaboration...";
-        setShellStatus(statusText.Text);
+        UpdateRunProgress("Stopping collaboration...");
     }
 
     internal async Task ControlSendAsync(string prompt)
@@ -1014,8 +1026,8 @@ internal sealed class CollaborateCoordinator
         try
         {
             var rounds = EffectiveRounds(mode, SelectedRounds());
-            statusText.Text = $"Running {ModeLabel(mode)} ({RoundLabel(rounds)})...";
-            setShellStatus(statusText.Text);
+            runStatusReceipt = operationStatus?.Begin($"Running {ModeLabel(mode)} ({RoundLabel(rounds)})...");
+            UpdateRunProgress($"Running {ModeLabel(mode)} ({RoundLabel(rounds)})...");
 
             var result = mode switch
             {
@@ -1036,7 +1048,7 @@ internal sealed class CollaborateCoordinator
             logicallySuccessful = result.Ok && persistenceResult.Ok;
             ApplyRunStatusAfterSave(
                 persistenceResult,
-                result.Ok ? "Ready." : "Answer completed with model errors.");
+                result.Ok ? "Ready." : "Answer completed with model errors.", result.Ok ? ApplicationStatusState.Succeeded : ApplicationStatusState.Failed);
         }
         catch (OperationCanceledException)
         {
@@ -1045,7 +1057,7 @@ internal sealed class CollaborateCoordinator
             RenderRunReview(runReviewItems, prompt, stoppedAnswer, [], stoppedAnswer);
             history.Add(InterruptedExchange(prompt, stoppedAnswer));
             TrimHistory();
-            ApplyRunStatusAfterSave(SaveCurrentConversation(), stoppedAnswer);
+            ApplyRunStatusAfterSave(SaveCurrentConversation(), stoppedAnswer, ApplicationStatusState.Cancelled);
         }
         catch (Exception ex)
         {
@@ -1055,7 +1067,7 @@ internal sealed class CollaborateCoordinator
             RenderRunReview(runReviewItems, prompt, failureAnswer, [], presentation.DisplayText);
             history.Add(InterruptedExchange(prompt, failureAnswer));
             TrimHistory();
-            ApplyRunStatusAfterSave(SaveCurrentConversation(), presentation.DisplayText);
+            ApplyRunStatusAfterSave(SaveCurrentConversation(), presentation.DisplayText, ApplicationStatusState.Failed);
         }
         finally
         {
@@ -1072,6 +1084,7 @@ internal sealed class CollaborateCoordinator
             SetPromptAssistControlsEnabled(true);
             runCancellation?.Dispose();
             runCancellation = null;
+            runStatusReceipt = null;
             RenderCompletedVirtualConversation();
             RefreshProviderState();
             RefreshRecentItems();
@@ -1123,7 +1136,7 @@ internal sealed class CollaborateCoordinator
             foreach (var roleId in new[] { "alpha", "beta", "gamma" })
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                statusText.Text = $"{RoleName(roleId)} round {round}/{rounds}...";
+                UpdateRunProgress($"{RoleName(roleId)} round {round}/{rounds}...");
                 var step = await CompleteRoleAsync(
                     current,
                     roleId,
@@ -1144,7 +1157,7 @@ internal sealed class CollaborateCoordinator
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        statusText.Text = "Narrator synthesizing...";
+        UpdateRunProgress("Narrator synthesizing...");
         var final = await CompleteRoleAsync(
             current,
             "narrator",
@@ -1168,7 +1181,7 @@ internal sealed class CollaborateCoordinator
             cancellationToken.ThrowIfCancellationRequested();
             if (round == 1)
             {
-                statusText.Text = $"Alpha round {round}/{rounds}...";
+                UpdateRunProgress($"Alpha round {round}/{rounds}...");
                 var draft = await CompleteRoleAsync(
                     current,
                     "alpha",
@@ -1178,7 +1191,7 @@ internal sealed class CollaborateCoordinator
                 steps.Add(draft);
                 AddTraceStep(traceItems, draft);
 
-                statusText.Text = $"Beta round {round}/{rounds}...";
+                UpdateRunProgress($"Beta round {round}/{rounds}...");
                 var critique = await CompleteRoleAsync(
                     current,
                     "beta",
@@ -1188,7 +1201,7 @@ internal sealed class CollaborateCoordinator
                 steps.Add(critique);
                 AddTraceStep(traceItems, critique);
 
-                statusText.Text = $"Gamma round {round}/{rounds}...";
+                UpdateRunProgress($"Gamma round {round}/{rounds}...");
                 var refinement = await CompleteRoleAsync(
                     current,
                     "gamma",
@@ -1208,7 +1221,7 @@ internal sealed class CollaborateCoordinator
                      })
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                statusText.Text = $"{RoleName(role.Item1)} round {round}/{rounds}...";
+                UpdateRunProgress($"{RoleName(role.Item1)} round {round}/{rounds}...");
                 var step = await CompleteRoleAsync(
                     current,
                     role.Item1,
@@ -1221,7 +1234,7 @@ internal sealed class CollaborateCoordinator
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        statusText.Text = "Narrator synthesizing...";
+        UpdateRunProgress("Narrator synthesizing...");
         var final = await CompleteRoleAsync(
             current,
             "narrator",
@@ -1250,7 +1263,7 @@ internal sealed class CollaborateCoordinator
                      })
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                statusText.Text = $"{RoleName(role.Item1)} red-team round {round}/{rounds}...";
+                UpdateRunProgress($"{RoleName(role.Item1)} red-team round {round}/{rounds}...");
                 var step = await CompleteRoleAsync(
                     current,
                     role.Item1,
@@ -1263,7 +1276,7 @@ internal sealed class CollaborateCoordinator
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        statusText.Text = "Narrator synthesizing hardened answer...";
+        UpdateRunProgress("Narrator synthesizing hardened answer...");
         var final = await CompleteRoleAsync(
             current,
             "narrator",
@@ -2028,10 +2041,35 @@ internal sealed class CollaborateCoordinator
         explainPromptButton.IsEnabled = enabled;
     }
 
-    private void UpdateStatus(string message)
+    private void UpdateStatus(string message, ApplicationStatusState state = ApplicationStatusState.Info)
     {
         statusText.Text = message;
-        setShellStatus(message);
+        PublishStatusNotice(message, state);
+    }
+
+    private void PublishStatusNotice(string message, ApplicationStatusState state = ApplicationStatusState.Info)
+    {
+        if (operationStatus is null)
+        {
+            setShellStatus(message);
+        }
+        else
+        {
+            operationStatus.PublishNotice(message, state);
+        }
+    }
+
+    private void UpdateRunProgress(string message)
+    {
+        statusText.Text = message;
+        if (runStatusReceipt is { } receipt)
+        {
+            operationStatus?.Update(receipt, message);
+        }
+        else
+        {
+            setShellStatus(message);
+        }
     }
 
     private async Task<ToolDocumentLoadResult> LoadToolDocumentAsync(
@@ -3331,11 +3369,11 @@ internal sealed class CollaborateCoordinator
         }
     }
 
-    private CollaboratePersistenceResult SaveCurrentConversation()
+    private ConversationPersistenceResult SaveCurrentConversation()
     {
         if (history.Count == 0)
         {
-            return CollaboratePersistenceResult.Success;
+            return ConversationPersistenceResult.Success;
         }
 
         currentConversationId = UpsertConversationSnapshot(conversations, currentConversationId, history, DateTimeOffset.Now, memoryNotes);
@@ -3345,14 +3383,33 @@ internal sealed class CollaborateCoordinator
         return result;
     }
 
-    private CollaboratePersistenceResult SaveToolContextForCurrentConversation()
+    private ConversationPersistenceResult SaveToolContextForCurrentConversation()
     {
-        return history.Count == 0 ? CollaboratePersistenceResult.Success : SaveCurrentConversation();
+        return history.Count == 0 ? ConversationPersistenceResult.Success : SaveCurrentConversation();
     }
 
-    private void ApplyRunStatusAfterSave(CollaboratePersistenceResult persistenceResult, string successStatus)
+    private void ApplyRunStatusAfterSave(
+        ConversationPersistenceResult persistenceResult,
+        string successStatus,
+        ApplicationStatusState outcome)
     {
-        UpdateStatus(persistenceResult.Ok ? successStatus : persistenceResult.Message);
+        statusText.Text = persistenceResult.Ok ? successStatus : persistenceResult.Message;
+        if (runStatusReceipt is not { } receipt)
+        {
+            setShellStatus(statusText.Text);
+        }
+        else if (!persistenceResult.Ok || outcome == ApplicationStatusState.Failed)
+        {
+            operationStatus?.Fail(receipt, statusText.Text);
+        }
+        else if (outcome == ApplicationStatusState.Cancelled)
+        {
+            operationStatus?.Cancel(receipt, statusText.Text);
+        }
+        else
+        {
+            operationStatus?.Complete(receipt, "Collaboration completed.");
+        }
     }
 
     internal static Guid UpsertConversationSnapshot(
@@ -3947,7 +4004,7 @@ internal sealed class CollaborateCoordinator
         RefreshToolItems();
         RenderConversation(conversation);
         statusText.Text = $"Loaded: {conversation.Title}";
-        setShellStatus(statusText.Text);
+        PublishStatusNotice(statusText.Text);
         RefreshRecentItems();
         JumpToLatest();
     }
@@ -3957,7 +4014,7 @@ internal sealed class CollaborateCoordinator
         if (!ConversationMutationAllowed(isRunning))
         {
             statusText.Text = "Stop the current collaboration before deleting chats.";
-            setShellStatus(statusText.Text);
+            PublishStatusNotice(statusText.Text);
             return;
         }
 
@@ -3991,12 +4048,12 @@ internal sealed class CollaborateCoordinator
             ResetToolContext();
             RenderEmptyState();
             statusText.Text = conversation is null ? "Chat deleted." : $"Deleted: {conversation.Title}";
-            setShellStatus(statusText.Text);
+            PublishStatusNotice(statusText.Text);
         }
         else if (conversation is not null)
         {
             statusText.Text = $"Deleted: {conversation.Title}";
-            setShellStatus(statusText.Text);
+            PublishStatusNotice(statusText.Text);
         }
 
         RefreshRecentItems();
@@ -4034,19 +4091,10 @@ internal sealed class CollaborateCoordinator
         }
     }
 
-    private CollaboratePersistenceResult PersistConversations()
-    {
-        try
-        {
-            historyStore.Save(conversations.Select(ToHistoryConversation).ToList());
-            return CollaboratePersistenceResult.Success;
-        }
-        catch (Exception ex)
-        {
-            return CollaboratePersistenceResult.Failure(
-                AppErrorPresenter.Present(ex, AppErrorContext.Collaborate).DisplayText);
-        }
-    }
+    private ConversationPersistenceResult PersistConversations() =>
+        ConversationPersistenceResult.TrySave(
+            () => historyStore.Save(conversations.Select(ToHistoryConversation).ToList()),
+            AppErrorContext.Collaborate);
 
     internal static CollaborateExchange InterruptedExchange(string prompt, string answer)
     {
@@ -5831,16 +5879,6 @@ internal sealed class CollaborateCoordinator
         public int TotalTokens { get; set; }
 
         public bool HasErrors { get; set; }
-    }
-
-    private readonly record struct CollaboratePersistenceResult(bool Ok, string Message)
-    {
-        public static CollaboratePersistenceResult Success { get; } = new(true, "");
-
-        public static CollaboratePersistenceResult Failure(string message)
-        {
-            return new CollaboratePersistenceResult(false, message);
-        }
     }
 
     internal sealed record CollaborateStep(

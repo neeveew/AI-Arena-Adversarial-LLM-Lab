@@ -1511,7 +1511,7 @@ static void LlamaCppSettingsSurfaceStaysCapabilityDrivenAndAccessible()
     var xaml = ReadWorkspaceFile("src/AIArena.Wpf/Shell/MainWindow.xaml");
     var coordinator = ReadWorkspaceFile("src/AIArena.Wpf/Shell/LlamaCppRuntimeCoordinator.cs");
     var providerSettings = ReadWorkspaceFile("src/AIArena.Wpf/Shell/ProviderSettingsCoordinator.cs");
-    Require(xaml.Contains("Content=\"llama.cpp\" Tag=\"llama_cpp\"", StringComparison.Ordinal), "provider presets should expose llama.cpp");
+    Require(ReadWorkspaceFile("src/AIArena.Wpf/Modules/Provider/Services/ProviderConnectionDiscoveryService.cs").Contains("LlamaCppNative", StringComparison.Ordinal), "server discovery should recognize llama.cpp capabilities");
     Require(xaml.Contains("Tag=\"llamacpp_native\"", StringComparison.Ordinal), "API modes should expose llama.cpp native mode");
     Require(providerSettings.Contains("http://127.0.0.1:8080/v1", StringComparison.Ordinal), "llama.cpp preset should use the documented local llama-server port");
 
@@ -3343,8 +3343,10 @@ static void ProviderRuntimeCapsAndRedactsModelCatalogs()
         var modelNames = Enumerable.Range(0, 300)
             .Select(index => $"catalog-{index:000}")
             .ToList();
-        modelNames[0] = $"aaa-{apiToken}";
+        modelNames[0] = "aaa-regular";
         modelNames[1] = "aab-" + new string('x', 260);
+        modelNames.Add("catalog-002");
+        modelNames.Add("CATALOG-002");
         var catalogBody = JsonSerializer.Serialize(new
         {
             data = modelNames.Select(model => new { id = model }).ToArray()
@@ -3362,12 +3364,31 @@ static void ProviderRuntimeCapsAndRedactsModelCatalogs()
 
         var result = runtime.RefreshModelsAsync("default").GetAwaiter().GetResult();
         Require(result.Available && result.Ok, "provider runtime model discovery should complete against the configured endpoint");
-        Require(result.ModelCount == 300 && result.Models.Count == 256 && result.Truncated, "provider runtime should report the full safe count while capping returned models at 256");
+        Require(result.ModelCount == 300 && result.Models.Count == 256 && result.Truncated, "provider runtime should deduplicate the full catalog before capping returned models at 256");
         Require(result.Models.All(model => model.Length <= 192), "provider runtime should bound every advertised model name");
-        Require(result.Models.Contains("aaa-[redacted]", StringComparer.Ordinal), "provider runtime should redact the exact configured token from advertised model names");
         Require(result.Models.Single(model => model.StartsWith("aab-", StringComparison.Ordinal)).Length == 192, "provider runtime should truncate oversized advertised model names");
         Require(!AIArenaControlPlaneProtocol.Serialize(result).Contains(apiToken, StringComparison.Ordinal), "provider model discovery results must not serialize the configured token");
         Require(httpHandler.AuthorizationHeaders.Single() == $"Bearer {apiToken}", "provider model discovery should authenticate without exposing the token in its result");
+
+        // The disclosure placeholder sorts after ordinary catalog names and may
+        // legitimately be omitted by the cap. Test redaction independently.
+        var secretBody = JsonSerializer.Serialize(new { data = new[] { new { id = $"secret-model-{apiToken}" } } });
+        var secretHandler = new TestHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(secretBody, System.Text.Encoding.UTF8, "application/json")
+        });
+        using var secretClient = new HttpClient(secretHandler);
+        var secretHealth = new ModelProviderHealthService(secretClient);
+        var secretRuntime = new ProviderRuntimeService(sessionStore, secretHealth,
+            new ProviderReachabilityService(sessionStore, eventLogStore, secretHealth));
+        var secretResult = secretRuntime.RefreshModelsAsync("default").GetAwaiter().GetResult();
+        Require(secretResult.Available && secretResult.Ok && secretResult.ModelCount == 1 && !secretResult.Truncated
+            && secretResult.Models.SequenceEqual(new[] { ProviderErrorSanitizer.SensitiveError }),
+            "a credential-bearing model label must use the shared disclosure policy when retained in the response");
+        Require(secretResult.Models.All(model => model.Length <= 192)
+            && !AIArenaControlPlaneProtocol.Serialize(secretResult).Contains(apiToken, StringComparison.Ordinal)
+            && secretHandler.AuthorizationHeaders.Single() == $"Bearer {apiToken}",
+            "single-model discovery must remain bounded and private while authenticating the provider request");
     }
     finally
     {

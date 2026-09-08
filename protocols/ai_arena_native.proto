@@ -1,0 +1,204 @@
+syntax = "proto3";
+
+package aiarena.native.v1;
+option csharp_namespace = "AIArena.Native.Protocol";
+option optimize_for = LITE_RUNTIME;
+
+// Protocol v1: APB1 + uint32 little-endian byte length + protobuf payload.
+// One request/response per connection on the existing authenticated native pipe.
+// Request <= 256 KiB; response <= 1 MiB. Tokens never enter logs or responses.
+// Preserve field numbers. Reserve removed numbers/names; add optional fields.
+// Wire serialization is NOT canonical command identity: the native adapter maps
+// these typed arguments to the existing service command and canonical JSON.
+message Request {
+  string request_id = 1;
+  string correlation_id = 2;
+  string token = 3;
+  string idempotency_key = 4;
+  reserved 5 to 9;
+  oneof action {
+    DiscoverRequest discover = 10;
+    HealthRequest health = 11;
+    ModelsRequest models = 12;
+    CreateDiagnosticBundleRequest create_diagnostic_bundle = 13;
+    OperationStateRequest operation_state = 14;
+    OperationWaitRequest operation_wait = 15;
+    OperationCancelRequest operation_cancel = 16;
+    OperationListRequest operation_list = 17;
+    ModelPreflightRequest model_preflight = 18;
+    ModelLoadRequest model_load = 19;
+    ModelEjectRequest model_eject = 20;
+    ModelLoadConfirmRequest model_load_confirm = 21;
+    GenerationStartRequest generation_start = 22;
+    GenerationReadRequest generation_read = 23;
+    GenerationCancelRequest generation_cancel = 24;
+  }
+}
+
+message DiscoverRequest {}
+message HealthRequest { optional string component = 1; }
+message ModelsRequest {}
+message CreateDiagnosticBundleRequest {
+  string destination = 1;
+  repeated string categories = 2;
+  optional uint64 maximum_bytes = 3;
+  optional uint32 maximum_members = 4;
+}
+message OperationStateRequest { string operation_id = 1; }
+message OperationWaitRequest {
+  string operation_id = 1;
+  uint64 after_transition = 2;
+  repeated string terminal_states = 3;
+  uint32 timeout_milliseconds = 4;
+}
+message OperationCancelRequest { string operation_id = 1; }
+message OperationListRequest {
+  optional string state = 1;
+  optional uint32 limit = 2;
+  optional string after_operation_id = 3;
+}
+
+message Response {
+  string request_id = 1;
+  string correlation_id = 2;
+  bool ok = 3;
+  string status = 4;
+  string message = 5;
+  string error_code = 6;
+  string command = 7;
+  reserved 8, 9;
+  oneof result {
+    Capabilities capabilities = 10;
+    Health health = 11;
+    Models models = 12;
+    Operation operation = 13;
+    OperationList operations = 14;
+    ModelPreflight model_preflight = 15;
+    Generation generation = 16;
+  }
+}
+
+message Capability {
+  string command = 1;
+  string capability = 2;
+  string mutability = 3;
+  bool idempotency_key_required = 4;
+}
+message Capabilities {
+  uint32 protocol_version = 1;
+  string schema = 2;
+  repeated Capability commands = 3;
+  uint32 maximum_request_bytes = 4;
+  uint32 maximum_response_bytes = 5;
+}
+message Health {
+  string state = 1;
+  string freshness = 2;
+  repeated string blocked_capabilities = 3;
+  uint64 component_count = 4;
+}
+message Models {
+  repeated string model_instance_ids = 1;
+  repeated string generation_ids = 2;
+  uint64 running_count = 3;
+  uint64 needs_attention_count = 4;
+  repeated ModelDeployment deployments = 5;
+  string default_deployment_id = 6;
+}
+
+// States retain the existing service vocabulary; unknown future values must
+// remain visible as unknown, never be inferred to mean success or cancellation.
+// Optional fields distinguish an acceptance acknowledgement from a state/wait.
+message Operation {
+  string operation_id = 1;
+  string correlation_id = 2;
+  string state = 3;
+  optional bool terminal = 4;
+  optional uint64 transition_ordinal = 5;
+  optional bool timed_out = 6;
+  optional uint64 warning_count = 7;
+  optional bool replayed = 8;
+  optional bool background_job_started = 9;
+  optional bool confirmation_required = 10;
+  string plan_digest = 11;
+  string capacity_sample_id = 12;
+}
+message OperationList {
+  repeated string operation_ids = 1;
+  bool truncated = 2;
+  optional string next_operation_id = 3;
+}
+
+message ModelPreflightRequest { string deployment_id = 1; }
+message ModelLoadRequest { string deployment_id = 1; }
+message ModelEjectRequest { string deployment_id = 1; }
+message ModelLoadConfirmRequest {
+  string operation_id = 1;
+  string plan_digest = 2;
+  string capacity_sample_id = 3;
+  string decision = 4;
+}
+message ModelPreflight {
+  string deployment_id = 1;
+  string target = 2;
+  string quality = 3;
+  string plan_digest = 4;
+  uint64 required_ram_bytes = 5;
+  uint64 required_vram_bytes = 6;
+  bool ram_capacity_known = 7;
+  bool vram_capacity_known = 8;
+  uint64 admissible_ram_bytes = 9;
+  uint64 admissible_vram_bytes = 10;
+  uint64 ram_shortfall_bytes = 11;
+  uint64 vram_shortfall_bytes = 12;
+  string admission_status = 13;
+  bool confirmation_required = 14;
+}
+message ModelAdmission {
+  string status = 1;
+  string operation_id = 2;
+  string plan_digest = 3;
+  string capacity_sample_id = 4;
+}
+message ModelDeployment {
+  string deployment_id = 1;
+  string model_instance_id = 2;
+  string generation_id = 3;
+  string state = 4;
+  optional string configured_target = 5;
+  optional string resident_target = 6;
+  bool resident = 7;
+  bool serviceable = 8;
+  string health = 9;
+  string operation_id = 10;
+  string phase = 11;
+  optional double progress_fraction = 12;
+  bool needs_attention = 13;
+  string error_code = 14;
+  ModelAdmission latest_admission = 15;
+  bool lifecycle_historical = 16;
+}
+
+message GenerationStartRequest {
+  string deployment_id = 1;
+  string prompt = 2;
+  uint32 maximum_tokens = 3;
+  double temperature = 4;
+}
+message GenerationReadRequest { string operation_id = 1; }
+message GenerationCancelRequest { string operation_id = 1; }
+// Output is an accumulated UTF-8 snapshot, capped at 256 KiB by the service.
+// Replace displayed output when sequence advances; do not append this snapshot.
+// These jobs live in the native process. Use generation_read/cancel, not the
+// durable operation state/wait/cancel commands. Restart means unavailable.
+message Generation {
+  string operation_id = 1;
+  string deployment_id = 2;
+  string state = 3;
+  bool terminal = 4;
+  uint64 sequence = 5;
+  string output_text = 6;
+  string error_code = 7;
+  bool replayed = 8;
+  string lifetime = 9;
+}

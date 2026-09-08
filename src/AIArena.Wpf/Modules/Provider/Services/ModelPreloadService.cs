@@ -329,7 +329,7 @@ public sealed class ModelPreloadService
                     model,
                     "failed",
                     ProviderModelCatalogProjectionService.SafeStatusForDisplay(
-                        ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Native model lifecycle request failed.", "message", "error", "detail"),
+                        ProviderHttpHelpers.FriendlyError(body, response.ReasonPhrase, "Native model lifecycle request failed.", apiToken, "message", "error", "detail"),
                         apiToken),
                     true,
                     MutationOutcomeUnknown: IsMutationOutcomeUnknown(response.StatusCode));
@@ -353,7 +353,8 @@ public sealed class ModelPreloadService
                 model,
                 "failed",
                 ProviderModelCatalogProjectionService.SafeStatusForDisplay(FriendlyException(ex), apiToken),
-                true);
+                true,
+                MutationOutcomeUnknown: true);
         }
     }
 
@@ -400,7 +401,7 @@ public sealed class ModelPreloadService
                     selectedModel,
                     "failed",
                     ProviderModelCatalogProjectionService.SafeStatusForDisplay(
-                        ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "Native model lifecycle request failed.", "message", "error", "detail"),
+                        ProviderHttpHelpers.FriendlyError(body, response.ReasonPhrase, "Native model lifecycle request failed.", apiToken, "message", "error", "detail"),
                         apiToken),
                     true,
                     MutationOutcomeUnknown: IsMutationOutcomeUnknown(response.StatusCode));
@@ -448,10 +449,10 @@ public sealed class ModelPreloadService
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                var detail = ProviderHttpHelpers.FriendlyBody(
+                var detail = ProviderHttpHelpers.FriendlyError(
                     body,
                     response.ReasonPhrase,
-                    "Native model lifecycle request failed.",
+                    "Native model lifecycle request failed.", apiToken,
                     "message",
                     "error",
                     "detail");

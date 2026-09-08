@@ -134,10 +134,10 @@ public class OllamaModelCatalogService
         return response.IsSuccessStatusCode
             ? new TransportResult(true, body.Memory, "")
             : new TransportResult(false, ReadOnlyMemory<byte>.Empty, ProviderConfigurationControlService.SanitizeError(
-                ProviderHttpHelpers.FriendlyBody(
+                ProviderHttpHelpers.FriendlyError(
                     Encoding.UTF8.GetString(body.Memory.Span),
                     response.ReasonPhrase,
-                    $"Ollama native {responseName} request failed.",
+                    $"Ollama native {responseName} request failed.", apiToken,
                     "message",
                     "error",
                     "detail"),

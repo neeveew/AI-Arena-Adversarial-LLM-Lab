@@ -65,6 +65,7 @@ internal sealed class SavedStateWorkflowCoordinator
     private readonly Func<bool> isArenaBusy;
     private readonly Func<string, Func<Task>, Task> runArenaBusyAsync;
     private readonly Func<CoreSessionSummary, bool, Task> loadSessionAsync;
+    private readonly Func<CoreSessionSummary, bool, Task<bool>>? tryLoadSessionAsync;
     private readonly Func<string?, Task> loadSessionsAsync;
     private readonly Func<string, Task> refreshActiveSessionAsync;
     private readonly Func<string, Brush> resourceBrush;
@@ -78,6 +79,7 @@ internal sealed class SavedStateWorkflowCoordinator
     private PendingSavedStateDeletion? pendingDeletion;
     private bool pendingDeletionUndoArmed;
     private bool isUpdating;
+    private long selectionVersion;
 
     /// <summary>
     /// When true the picker also lists sessions that never received a turn.
@@ -118,7 +120,8 @@ internal sealed class SavedStateWorkflowCoordinator
         Func<string, Brush> resourceBrush,
         Action<string> setArenaRunStatus,
         Action<string> setLoadStatus,
-        CheckBox? showEmptySessionsCheckBox = null)
+        CheckBox? showEmptySessionsCheckBox = null,
+        Func<CoreSessionSummary, bool, Task<bool>>? tryLoadSessionAsync = null)
     {
         this.owner = owner;
         this.sessionStore = sessionStore;
@@ -146,6 +149,7 @@ internal sealed class SavedStateWorkflowCoordinator
         this.isArenaBusy = isArenaBusy;
         this.runArenaBusyAsync = runArenaBusyAsync;
         this.loadSessionAsync = loadSessionAsync;
+        this.tryLoadSessionAsync = tryLoadSessionAsync;
         this.loadSessionsAsync = loadSessionsAsync;
         _ = saveSnapshotWithFeedbackAsync;
         this.refreshActiveSessionAsync = refreshActiveSessionAsync;
@@ -267,6 +271,7 @@ internal sealed class SavedStateWorkflowCoordinator
             return;
         }
 
+        selectionVersion++;
         pendingDeletionUndoArmed = false;
         UpdatePicker();
         UpdateActionButtons();
@@ -279,6 +284,7 @@ internal sealed class SavedStateWorkflowCoordinator
             return;
         }
 
+        selectionVersion++;
         pendingDeletionUndoArmed = false;
         UpdateSelectionDetails();
         UpdateActionButtons();
@@ -375,6 +381,7 @@ internal sealed class SavedStateWorkflowCoordinator
         }
 
         var sessionId = session.Id;
+        var requestedSelectionVersion = selectionVersion;
         var summaries = await sessionStore.ListCheckpointsAsync(sessionId);
         if (!ShouldApplyCheckpointRefresh(sessionId, activeSession()?.Id))
         {
@@ -384,7 +391,8 @@ internal sealed class SavedStateWorkflowCoordinator
         checkpointSummaries = summaries;
         if (CurrentMode().Equals("checkpoint", StringComparison.OrdinalIgnoreCase))
         {
-            UpdatePicker(selectedCheckpointId);
+            UpdatePicker(selectionVersion == requestedSelectionVersion
+                ? selectedCheckpointId : (itemPicker.SelectedItem as CheckpointSummary)?.Id);
             if (checkpointSummaries.Count == 0)
             {
                 SetStatus("No checkpoints saved for this session.");
@@ -589,9 +597,13 @@ internal sealed class SavedStateWorkflowCoordinator
         AutomationProperties.SetHelpText(openParentButton, parentHelpText);
     }
 
-    public async Task RehydratePendingDeletionAsync(CancellationToken cancellationToken = default)
+    public Task RehydratePendingDeletionAsync(CancellationToken cancellationToken = default) =>
+        RehydratePendingDeletionAsync(cancellationToken, () => true);
+
+    internal async Task RehydratePendingDeletionAsync(CancellationToken cancellationToken, Func<bool> canApply)
     {
         var receipts = await sessionStore.ListRestorableDeletedStatesAsync(cancellationToken);
+        if (!canApply()) return;
         var newest = receipts.FirstOrDefault();
         if (newest is null)
         {
@@ -669,6 +681,27 @@ internal sealed class SavedStateWorkflowCoordinator
         itemPicker.SelectedIndex = itemPicker.Items.Count > 0 ? 0 : -1;
     }
 
+    private SavedRequestContext CaptureSavedRequest(string sessionId) =>
+        new(selectionVersion, sessionId, CurrentMode(), nameText.Text);
+
+    private bool SavedRequestIsCurrent(SavedRequestContext request, string? additionalSessionId = null) =>
+        selectionVersion == request.SelectionVersion
+        && CurrentMode().Equals(request.Mode, StringComparison.Ordinal)
+        && (string.Equals(activeSession()?.Id ?? "", request.SessionId, StringComparison.OrdinalIgnoreCase)
+            || additionalSessionId is not null && string.Equals(activeSession()?.Id, additionalSessionId, StringComparison.OrdinalIgnoreCase));
+
+    private void ConsumeSavedName(SavedRequestContext request)
+    {
+        if (SavedRequestIsCurrent(request) && string.Equals(nameText.Text, request.Name, StringComparison.Ordinal)) nameText.Clear();
+    }
+
+    private void PublishSavedOutcome(SavedRequestContext request, string outcome, string? additionalSessionId = null, bool isDanger = false)
+    {
+        if (!SavedRequestIsCurrent(request, additionalSessionId)) return;
+        SetStatus(outcome, isDanger);
+        setArenaRunStatus(statusText.Text);
+    }
+
     private async Task SaveSessionCopyAsync()
     {
         var session = activeSession();
@@ -677,35 +710,25 @@ internal sealed class SavedStateWorkflowCoordinator
             SetStatus("No active session to copy.", isDanger: true);
             return;
         }
-
-        var newSessionId = SessionStore.SafeSessionId(nameText.Text);
+        var request = CaptureSavedRequest(session.Id);
+        var newSessionId = SessionStore.SafeSessionId(request.Name);
         if (string.IsNullOrWhiteSpace(newSessionId))
         {
             SetStatus("Enter a new session name.", isDanger: true);
             return;
         }
-
         if (sessionSummaries.Any(item => item.Id.Equals(newSessionId, StringComparison.OrdinalIgnoreCase)))
         {
             SetStatus($"Session already exists: {newSessionId}. Choose a different name.", isDanger: true);
             return;
         }
-
         await runArenaBusyAsync($"Creating session {newSessionId}...", async () =>
         {
-            var snapshot = await sessionStore.LoadSnapshotAsync(session.Id);
-            if (snapshot is null)
-            {
-                SetStatus($"No snapshot found for session {session.Id}.", isDanger: true);
-                return;
-            }
-
-            await sessionStore.CreateSessionAsync(newSessionId, snapshot);
-            await eventLogStore.AppendAsync(newSessionId, "native_session_created", new { source = session.Id });
-            nameText.Clear();
-            await loadSessionsAsync(newSessionId);
-            SetStatus($"Saved session: {newSessionId}.");
-            setArenaRunStatus($"Session: {newSessionId}.");
+            var completion = await CreateSessionCopyAndReportAsync(
+                sessionStore, eventLogStore, session.Id, newSessionId,
+                () => ConsumeSavedName(request),
+                (createdId, _) => SavedRequestIsCurrent(request) ? loadSessionsAsync(createdId) : Task.CompletedTask);
+            PublishSavedOutcome(request, completion.Outcome, newSessionId);
         });
     }
 
@@ -717,7 +740,14 @@ internal sealed class SavedStateWorkflowCoordinator
             return;
         }
 
-        await loadSessionAsync(session, true);
+        var requestedSelectionVersion = selectionVersion;
+        if (tryLoadSessionAsync is not null)
+        {
+            if (!await tryLoadSessionAsync(session, true)) return;
+        }
+        else await loadSessionAsync(session, true);
+        if (selectionVersion != requestedSelectionVersion || CurrentMode() != "session"
+            || !string.Equals(activeSession()?.Id, session.Id, StringComparison.OrdinalIgnoreCase)) return;
         UpdatePicker(session.Id);
         SetStatus($"Loaded session: {session.Id}.");
     }
@@ -802,42 +832,33 @@ internal sealed class SavedStateWorkflowCoordinator
             SetStatus("No active session.", isDanger: true);
             return;
         }
-
-        var requestedName = nameText.Text.Trim();
+        var request = CaptureSavedRequest(session.Id);
+        var requestedName = request.Name.Trim();
         var existingTemplate = string.IsNullOrWhiteSpace(requestedName)
             ? null
             : scenarioTemplates.FirstOrDefault(template => template.Name.Equals(requestedName, StringComparison.OrdinalIgnoreCase));
         if (existingTemplate is not null)
         {
-            var replace = ConfirmDialog.Show(
-                owner,
-                theme(),
-                "Replace Template",
+            var replace = ConfirmDialog.Show(owner, theme(), "Replace Template",
                 $"Replace template \"{existingTemplate.Name}\"?\n\nThe saved match setup will be overwritten. Transcript data is never stored in templates.",
-                "Replace",
-                tone: ConfirmDialogTone.Normal);
+                "Replace", tone: ConfirmDialogTone.Normal);
             if (!replace)
             {
                 SetStatus("Template save cancelled.");
                 return;
             }
         }
-
         await runArenaBusyAsync("Saving match template...", async () =>
         {
-            var snapshot = await sessionStore.LoadSnapshotAsync(session.Id);
-            if (snapshot is null)
-            {
-                SetStatus($"No snapshot found for session {session.Id}.", isDanger: true);
-                return;
-            }
-
-            var template = scenarioTemplateStore.Save(nameText.Text, snapshot);
-            nameText.Clear();
-            LoadScenarioTemplates(template.Id);
-            SetStatus($"Saved template: {template.Name}.");
-            setArenaRunStatus(statusText.Text);
-            await eventLogStore.AppendAsync(session.Id, "native_scenario_template_saved", new { template.Id, template.Name });
+            var completion = await SaveTemplateAndReportAsync(
+                sessionStore, eventLogStore, scenarioTemplateStore, session.Id, request.Name,
+                () => ConsumeSavedName(request),
+                (templateId, _) =>
+                {
+                    LoadScenarioTemplates(SavedRequestIsCurrent(request) ? templateId : (itemPicker.SelectedItem as ScenarioTemplate)?.Id);
+                    return Task.CompletedTask;
+                });
+            PublishSavedOutcome(request, completion.Outcome);
         });
     }
 
@@ -953,30 +974,23 @@ internal sealed class SavedStateWorkflowCoordinator
             SetStatus("Choose a template to delete.", isDanger: true);
             return;
         }
-
-        var confirm = ConfirmDialog.Show(
-            owner,
-            theme(),
-            "Delete Template",
+        var request = CaptureSavedRequest(activeSession()?.Id ?? "");
+        var confirm = ConfirmDialog.Show(owner, theme(), "Delete Template",
             $"Delete template \"{template.Name}\"?\n\nThis removes only the reusable match setup. The current arena state is not changed.",
-            "Delete",
-            tone: ConfirmDialogTone.Danger);
+            "Delete", tone: ConfirmDialogTone.Danger);
         if (!confirm)
         {
             SetStatus("Template delete cancelled.");
             return;
         }
-
-        var deleted = scenarioTemplateStore.Delete(template.Id);
-        var session = activeSession();
-        if (deleted && session is not null)
-        {
-            await eventLogStore.AppendAsync(session.Id, "native_scenario_template_deleted", new { template.Id, template.Name });
-        }
-
-        LoadScenarioTemplates();
-        SetStatus(deleted ? $"Deleted template: {template.Name}." : "Template delete failed.", isDanger: !deleted);
-        setArenaRunStatus(statusText.Text);
+        var completion = await DeleteTemplateAndReportAsync(
+            scenarioTemplateStore, eventLogStore, request.SessionId, template,
+            (_, _) =>
+            {
+                LoadScenarioTemplates(SavedRequestIsCurrent(request) ? null : (itemPicker.SelectedItem as ScenarioTemplate)?.Id);
+                return Task.CompletedTask;
+            });
+        PublishSavedOutcome(request, completion.Outcome, isDanger: !completion.Deleted);
     }
 
     private async Task SaveCheckpointAsync()
@@ -987,16 +1001,93 @@ internal sealed class SavedStateWorkflowCoordinator
             SetStatus("No active session.", isDanger: true);
             return;
         }
-
+        var request = CaptureSavedRequest(session.Id);
         await runArenaBusyAsync("Saving checkpoint...", async () =>
         {
-            var checkpoint = await sessionStore.SaveCheckpointAsync(session.Id, nameText.Text);
-            await eventLogStore.AppendAsync(session.Id, "native_checkpoint_saved", new { checkpoint.Id, checkpoint.Name });
-            nameText.Clear();
-            await RefreshCheckpointsAsync(checkpoint.Id);
-            SetStatus($"Saved checkpoint: {checkpoint.Name}.");
-            setArenaRunStatus(statusText.Text);
+            var completion = await SaveCheckpointAndReportAsync(
+                sessionStore, eventLogStore, session.Id, request.Name,
+                () => ConsumeSavedName(request),
+                (checkpointId, _) => SavedRequestIsCurrent(request)
+                    ? RefreshCheckpointsAsync(checkpointId) : Task.CompletedTask);
+            PublishSavedOutcome(request, completion.Outcome);
         });
+    }
+
+    internal sealed record CheckpointSaveCompletion(CheckpointSummary Checkpoint, string Outcome, bool EventRecorded);
+    internal sealed record SessionCreateCompletion(string SessionId, string Outcome, bool EventRecorded);
+    internal sealed record TemplateSaveCompletion(ScenarioTemplate Template, string Outcome, bool EventRecorded);
+    internal sealed record TemplateDeleteCompletion(bool Deleted, string Outcome, bool EventRecorded);
+    private sealed record SavedRequestContext(long SelectionVersion, string SessionId, string Mode, string Name);
+
+    internal static async Task<CheckpointSaveCompletion> SaveCheckpointAndReportAsync(
+        SessionStore sessionStore, EventLogStore eventLogStore, string sessionId, string name,
+        Action consumeName, Func<string?, CancellationToken, Task> refreshCheckpointsAsync,
+        CancellationToken cancellationToken = default)
+    {
+        var checkpoint = await sessionStore.SaveCheckpointAsync(sessionId, name, cancellationToken);
+        var completion = await CompleteSavedMutationAsync(
+            $"Saved checkpoint: {checkpoint.Name}.", eventLogStore, sessionId, "native_checkpoint_saved",
+            new { checkpoint.Id, checkpoint.Name }, consumeName,
+            () => refreshCheckpointsAsync(checkpoint.Id, CancellationToken.None), "the checkpoint list could not be refreshed");
+        return new(checkpoint, completion.Outcome, completion.EventRecorded);
+    }
+
+    internal static async Task<SessionCreateCompletion> CreateSessionCopyAndReportAsync(
+        SessionStore sessionStore, EventLogStore eventLogStore, string sourceSessionId, string newSessionId,
+        Action consumeName, Func<string?, CancellationToken, Task> loadSessionsAsync,
+        CancellationToken cancellationToken = default)
+    {
+        var snapshot = await sessionStore.LoadSnapshotAsync(sourceSessionId, cancellationToken)
+            ?? throw new InvalidOperationException("The source session snapshot is unavailable.");
+        await sessionStore.CreateSessionAsync(newSessionId, snapshot, cancellationToken);
+        var completion = await CompleteSavedMutationAsync(
+            $"Saved session: {newSessionId}.", eventLogStore, newSessionId, "native_session_created",
+            new { source = sourceSessionId }, consumeName,
+            () => loadSessionsAsync(newSessionId, CancellationToken.None), "the session list could not be refreshed");
+        return new(newSessionId, completion.Outcome, completion.EventRecorded);
+    }
+
+    internal static async Task<TemplateSaveCompletion> SaveTemplateAndReportAsync(
+        SessionStore sessionStore, EventLogStore eventLogStore, ScenarioTemplateStore templateStore,
+        string sessionId, string name, Action consumeName,
+        Func<string?, CancellationToken, Task> refreshTemplatesAsync, CancellationToken cancellationToken = default)
+    {
+        var snapshot = await sessionStore.LoadSnapshotAsync(sessionId, cancellationToken)
+            ?? throw new InvalidOperationException("The source session snapshot is unavailable.");
+        cancellationToken.ThrowIfCancellationRequested();
+        var template = templateStore.Save(name, snapshot);
+        var completion = await CompleteSavedMutationAsync(
+            $"Saved template: {template.Name}.", eventLogStore, sessionId, "native_scenario_template_saved",
+            new { template.Id, template.Name }, consumeName,
+            () => refreshTemplatesAsync(template.Id, CancellationToken.None), "the template list could not be refreshed");
+        return new(template, completion.Outcome, completion.EventRecorded);
+    }
+
+    internal static async Task<TemplateDeleteCompletion> DeleteTemplateAndReportAsync(
+        ScenarioTemplateStore templateStore, EventLogStore eventLogStore, string? sessionId, ScenarioTemplate template,
+        Func<string?, CancellationToken, Task> refreshTemplatesAsync, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!templateStore.Delete(template.Id)) return new(false, "Template delete failed.", false);
+        var completion = await CompleteSavedMutationAsync(
+            $"Deleted template: {template.Name}.", eventLogStore, sessionId, "native_scenario_template_deleted",
+            new { template.Id, template.Name }, () => { },
+            () => refreshTemplatesAsync(null, CancellationToken.None), "the template list could not be refreshed");
+        return new(true, completion.Outcome, completion.EventRecorded);
+    }
+
+    private static async Task<(string Outcome, bool EventRecorded)> CompleteSavedMutationAsync(
+        string committedOutcome, EventLogStore eventLogStore, string? sessionId, string eventType, object payload,
+        Action consumeName, Func<Task> refresh, string refreshFailure)
+    {
+        // These are independent secondary steps. None can turn a committed mutation into a reported failure.
+        var consumeWarning = await TryCompletePostCommitAsync(
+            () => { consumeName(); return Task.CompletedTask; }, "the consumed name could not be cleared");
+        var refreshWarning = await TryCompletePostCommitAsync(refresh, refreshFailure);
+        var outcome = AppendCompletionWarning(AppendCompletionWarning(committedOutcome, consumeWarning), refreshWarning);
+        if (string.IsNullOrWhiteSpace(sessionId)) return (outcome, false);
+        var evidence = await AppPostCommitEvidence.TryAppendAsync(eventLogStore, sessionId, eventType, payload, AppErrorContext.SavedState);
+        return (evidence.AppendTo(outcome), evidence.Recorded);
     }
 
     private async Task RestoreSelectedCheckpointAsync()

@@ -11,7 +11,7 @@
              SizeChanged="ProviderModelAssignmentsControl_SizeChanged"
              PreviewKeyDown="ProviderModelAssignmentsControl_PreviewKeyDown"
              AutomationProperties.Name="Models and assignments"
-             AutomationProperties.HelpText="Browse pinned loaded models and a collapsible available catalog, request confirmed LM Studio residency changes, then turn routing targets on or off.">
+             AutomationProperties.HelpText="Browse pinned loaded models and a collapsible available catalog, request confirmed provider residency changes, then turn routing targets on or off.">
     <UserControl.Resources>
         <Style x:Key="ModelsSurfacePane" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource PanelBrush}" />
@@ -755,7 +755,7 @@
 
                         <StackPanel Grid.Row="2"
                                     Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}">
-                            <TextBlock Text="LM Studio residency"
+                            <TextBlock Text="Model loading"
                                        Foreground="{DynamicResource TextBrush}"
                                        FontWeight="SemiBold"
                                        AutomationProperties.HeadingLevel="Level3" />
@@ -772,7 +772,7 @@
                                     IsEnabled="False"
                                     Click="LifecycleButton_Click"
                                     AutomationProperties.Name="Load state unavailable"
-                                    AutomationProperties.HelpText="Select a model with LM Studio lifecycle evidence."
+                                    AutomationProperties.HelpText="Select a model with provider lifecycle evidence."
                                     AutomationProperties.ItemStatus="Unavailable" />
                             <ProgressBar x:Name="LifecycleProgressBar"
                                          Height="3"
@@ -780,7 +780,7 @@
                                          IsIndeterminate="True"
                                          Visibility="Collapsed"
                                          IsTabStop="False"
-                                         AutomationProperties.Name="LM Studio model residency request progress" />
+                                         AutomationProperties.Name="Model loading request progress" />
                         </StackPanel>
 
                         <Border Grid.Row="3"

@@ -291,7 +291,7 @@ internal sealed partial class ProviderModelCatalogProjectionService
         var residencyAvailable = source.RouterMode || source.Capabilities.OpenAiModels;
         var items = source.Models.Select(model =>
         {
-            var loadState = residencyAvailable
+            var loadState = residencyAvailable && model.Loaded.HasValue
                 ? model.Loaded == true ? ProviderModelLoadState.Loaded : ProviderModelLoadState.NotLoaded
                 : ProviderModelLoadState.Unavailable;
             return new ProviderModelCatalogItem(
@@ -312,7 +312,8 @@ internal sealed partial class ProviderModelCatalogProjectionService
             lease,
             items,
             ProviderCatalogEvidenceState.Ready,
-            residencyAvailable ? ProviderCatalogEvidenceState.Ready : ProviderCatalogEvidenceState.Unavailable,
+            !residencyAvailable ? ProviderCatalogEvidenceState.Unavailable
+                : source.Models.All(model => model.Loaded.HasValue) ? ProviderCatalogEvidenceState.Ready : ProviderCatalogEvidenceState.Partial,
             configuredModel,
             source.RouterMode ? "llama.cpp router inventory available." : "llama.cpp live-model inventory available.",
             source.CheckedAt,
@@ -726,10 +727,6 @@ internal sealed partial class ProviderModelCatalogProjectionService
     internal static string SafeStatusForDisplay(string value, string apiToken = "")
     {
         var normalized = ProviderConfigurationControlService.SanitizeError(value, apiToken);
-        normalized = AuthorizationCredentialRegex().Replace(normalized, "$1[redacted]");
-        normalized = StandaloneCredentialSchemeRegex().Replace(normalized, "[credential redacted]");
-        normalized = StandaloneCredentialValueRegex().Replace(normalized, "[credential redacted]");
-        normalized = SensitiveValueRegex().Replace(normalized, "$1[redacted]");
         normalized = InstanceIdentifierRegex().Replace(normalized, "$1[redacted]");
         normalized = HttpUrlRegex().Replace(normalized, "[remote URL]");
         normalized = FileUriRegex().Replace(normalized, "[local path]");
@@ -780,18 +777,6 @@ internal sealed partial class ProviderModelCatalogProjectionService
 
     [GeneratedRegex(@"(?i)file:///?[^\s]+", RegexOptions.CultureInvariant)]
     private static partial Regex FileUriRegex();
-
-    [GeneratedRegex("""(?i)(\bauthorization\b["']?\s*[:=]\s*["']?)(?:basic|bearer|\[redacted\])\s+[^"'\s,;}\]]+""", RegexOptions.CultureInvariant)]
-    private static partial Regex AuthorizationCredentialRegex();
-
-    [GeneratedRegex(@"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9+/_=.-]{6,}", RegexOptions.CultureInvariant)]
-    private static partial Regex StandaloneCredentialSchemeRegex();
-
-    [GeneratedRegex(@"(?i)\b(?:sk-(?:proj-)?|sk_|hf_|github_pat_|ghp_)[A-Za-z0-9_-]{8,}\b", RegexOptions.CultureInvariant)]
-    private static partial Regex StandaloneCredentialValueRegex();
-
-    [GeneratedRegex("""(?i)(["']?\b(?:api[\s_-]?key|access[\s_-]?token|refresh[\s_-]?token|token|password|secret)["']?\s*(?::|=|\s)\s*["']?)[^"'\s,;}\]]+""", RegexOptions.CultureInvariant)]
-    private static partial Regex SensitiveValueRegex();
 
     [GeneratedRegex("""(?i)(\b"?instance(?:_id)?"?\s*[:=]\s*"?)[^"\s,;}\]]+""", RegexOptions.CultureInvariant)]
     private static partial Regex InstanceIdentifierRegex();

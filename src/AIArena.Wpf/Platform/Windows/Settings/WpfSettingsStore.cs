@@ -70,8 +70,41 @@ public sealed class WpfSettingsStore
         JsonFileRecovery.WriteTextReplacing(SettingsPath, json);
     }
 
+    public bool RememberSession(WpfSettings settings, string sessionId)
+    {
+        var normalized = NormalizeLastSessionId(sessionId);
+        if (normalized.Length == 0 || string.Equals(settings.LastSessionId, normalized, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var previous = settings.LastSessionId;
+        settings.LastSessionId = normalized;
+        try
+        {
+            Save(settings);
+            return true;
+        }
+        catch
+        {
+            settings.LastSessionId = previous;
+            throw;
+        }
+    }
+
+    internal static string NormalizeLastSessionId(string? sessionId)
+    {
+        var candidate = sessionId?.Trim() ?? "";
+        // This is a reference to an existing session, not a request to create one.
+        // Do not turn an invalid or imported value into a different valid identity.
+        return candidate.Length > 0 && SessionStore.SafeSessionId(candidate).Equals(candidate, StringComparison.Ordinal)
+            ? candidate
+            : "";
+    }
+
     private static WpfSettings Normalize(WpfSettings settings)
     {
+        settings.LastSessionId = NormalizeLastSessionId(settings.LastSessionId);
         settings.ThemeId = ThemePalette.NormalizeId(settings.ThemeId);
         settings.AvatarStyle = NormalizeChoice(settings.AvatarStyle, "pack");
         settings.TopStripMode = NormalizeChoice(settings.TopStripMode, "hidden");
@@ -306,6 +339,7 @@ public sealed class WpfSettingsStore
 
 public sealed class WpfSettings
 {
+    public string LastSessionId { get; set; } = "";
     public string ThemeId { get; set; } = "dark-blue";
     public string AvatarStyle { get; set; } = "pack";
     public bool ChampionAvatars { get; set; } = true;

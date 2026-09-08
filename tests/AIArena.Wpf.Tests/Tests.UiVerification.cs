@@ -1707,6 +1707,27 @@ internal static partial class Program
 
     private static void SharedMenuPopupHostsThemeFocusAndDisabledContracts()
     {
+        var result = RunSharedPopupFixtureProcess(injectDispatcherFailure: false);
+        Require(result.ExitCode == 0,
+            $"shared popup theme fixture failed with exit code {result.ExitCode}:{Environment.NewLine}{result.Output}{result.Error}");
+    }
+
+    private static void SharedPopupFixtureReportsDispatcherFailureWithoutAppStartup()
+    {
+        var result = RunSharedPopupFixtureProcess(injectDispatcherFailure: true);
+        Require(result.ExitCode == 1
+                && result.Error.Contains("injected popup dispatcher failure", StringComparison.Ordinal)
+                && result.Error.Contains(nameof(SharedPopupThemeFixtureCore), StringComparison.Ordinal)
+                && result.Output.Contains("popup fixture startup isolated; windows=1", StringComparison.Ordinal)
+                && !result.Output.Contains("PASS hosted shared popup theme fixture", StringComparison.Ordinal),
+            $"Injected dispatcher failure did not fail the isolated fixture with its original stack: "
+            + $"exit={result.ExitCode}{Environment.NewLine}{result.Output}{result.Error}");
+        Console.WriteLine($"popup dispatcher failure proof: child exit={result.ExitCode}; original exception retained; fixture-only startup");
+        Console.WriteLine(result.Error);
+    }
+
+    private static (int ExitCode, string Output, string Error) RunSharedPopupFixtureProcess(bool injectDispatcherFailure)
+    {
         var processPath = Environment.ProcessPath
             ?? throw new InvalidOperationException("The test process executable path is unavailable.");
         var startInfo = new ProcessStartInfo
@@ -1723,6 +1744,12 @@ internal static partial class Program
             startInfo.ArgumentList.Add(System.Reflection.Assembly.GetExecutingAssembly().Location);
         }
         startInfo.ArgumentList.Add("--shared-popup-theme-fixture");
+        if (injectDispatcherFailure) startInfo.ArgumentList.Add("--inject-dispatcher-failure");
+        // The resource fixture does not start app services, but keep any future
+        // accidental persistence scoped to a fresh fixture-owned data root.
+        startInfo.Environment["AI_ARENA_DATA_DIR"] = Path.Combine(Path.GetTempPath(), $"ai-arena-popup-fixture-{Guid.NewGuid():N}");
+        startInfo.Environment["AI_ARENA_CONTROL_OWNER"] = Guid.NewGuid().ToString("N");
+        startInfo.Environment.Remove("AI_ARENA_CONTROL_TOKEN");
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("The shared popup theme fixture did not start.");
@@ -1734,17 +1761,14 @@ internal static partial class Program
             throw new InvalidOperationException("The shared popup theme fixture timed out.");
         }
 
-        var output = standardOutput.GetAwaiter().GetResult();
-        var error = standardError.GetAwaiter().GetResult();
-        Require(process.ExitCode == 0,
-            $"shared popup theme fixture failed with exit code {process.ExitCode}:{Environment.NewLine}{output}{error}");
+        return (process.ExitCode, standardOutput.GetAwaiter().GetResult(), standardError.GetAwaiter().GetResult());
     }
 
-    private static int RunSharedPopupThemeFixture()
+    private static int RunSharedPopupThemeFixture(bool injectDispatcherFailure)
     {
         try
         {
-            RunStaTest(SharedPopupThemeFixtureCore);
+            RunStaTest(() => SharedPopupThemeFixtureCore(injectDispatcherFailure));
             Console.WriteLine("PASS hosted shared popup theme fixture");
             return 0;
         }
@@ -1755,11 +1779,15 @@ internal static partial class Program
         }
     }
 
-    private static void SharedPopupThemeFixtureCore()
+    private static void SharedPopupThemeFixtureCore(bool injectDispatcherFailure)
     {
         Require(Application.Current is null,
             "the isolated popup fixture should own the only WPF Application in its process");
-        var application = new App();
+        var fixture = new SharedPopupFixtureApplication();
+        var application = fixture.Application;
+        // Use the compiled production App.xaml, including its implicit styles.
+        // Startup has already been isolated before loading these resources;
+        // the production StartupUri remains intact but cannot be dispatched.
         application.InitializeComponent();
 
         var target = new Button { Content = "Open menu", Width = 120, Height = 36 };
@@ -1824,9 +1852,22 @@ internal static partial class Program
             Top = -10000
         };
 
-        host.Show();
         try
         {
+            host.Show();
+            host.Activate();
+            // Finish owner-window activation before opening native popups. An
+            // outstanding activation can otherwise dismiss the first ContextMenu.
+            FlushSharedPopupDispatcher(host, fixture);
+            fixture.AssertIsolatedStartup(host);
+            Console.WriteLine("popup fixture startup isolated; windows=1");
+            if (injectDispatcherFailure)
+            {
+                host.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
+                    throw new InvalidOperationException("injected popup dispatcher failure")));
+                FlushSharedPopupDispatcher(host, fixture);
+                throw new InvalidOperationException("The injected dispatcher failure was lost.");
+            }
             Require(menu.ReadLocalValue(FrameworkElement.StyleProperty) == DependencyProperty.UnsetValue
                     && toolTip.ReadLocalValue(FrameworkElement.StyleProperty) == DependencyProperty.UnsetValue
                     && combo.ReadLocalValue(FrameworkElement.StyleProperty) == DependencyProperty.UnsetValue,
@@ -1849,7 +1890,7 @@ internal static partial class Program
                 }
 
                 menu.IsOpen = true;
-                FlushSharedPopupDispatcher(host);
+                FlushSharedPopupDispatcher(host, fixture);
                 menu.ApplyTemplate();
                 foreach (var item in new[] { enabled, checkedItem, iconItem, nested, disabled })
                 {
@@ -1866,14 +1907,14 @@ internal static partial class Program
                         && ExperimentBrushMatches(disabledChrome.BorderBrush, theme.DisabledBorder)
                         && ExperimentBrushMatches(disabled.Foreground, theme.DisabledText),
                     $"shared disabled menu item fell through the {themeId} palette");
-                Require(enabled.Focus(), $"shared menu item was not keyboard focusable under {themeId}");
-                FlushSharedPopupDispatcher(host);
+                Require(enabled.Focus(), $"shared menu item was not keyboard focusable under {themeId} (menuOpen={menu.IsOpen}, loaded={enabled.IsLoaded}, visible={enabled.IsVisible}, enabled={enabled.IsEnabled}, focusable={enabled.Focusable}, source={PresentationSource.FromVisual(enabled) is not null})");
+                FlushSharedPopupDispatcher(host, fixture);
                 Require(ExperimentBrushMatches(enabledChrome.Background, theme.NavActive)
                         && ExperimentBrushMatches(enabledChrome.BorderBrush, theme.PrimaryBorder),
                     $"shared menu item focus was not visible under {themeId}");
 
                 nested.IsSubmenuOpen = true;
-                FlushSharedPopupDispatcher(host);
+                FlushSharedPopupDispatcher(host, fixture);
                 var nestedPopup = RequireSharedPopupPart<System.Windows.Controls.Primitives.Popup>(nested, "PART_Popup");
                 var nestedChrome = RequireSharedPopupPart<Border>(nested, "SubmenuChrome");
                 nestedChild.ApplyTemplate();
@@ -1886,10 +1927,10 @@ internal static partial class Program
                 Require(nestedChild.Focus(), $"nested menu item was not keyboard focusable under {themeId}");
                 nested.IsSubmenuOpen = false;
                 menu.IsOpen = false;
-                FlushSharedPopupDispatcher(host);
+                FlushSharedPopupDispatcher(host, fixture);
 
                 combo.IsDropDownOpen = true;
-                FlushSharedPopupDispatcher(host);
+                FlushSharedPopupDispatcher(host, fixture);
                 combo.ApplyTemplate();
                 var dropDown = RequireSharedPopupPart<Border>(combo, "DropDown");
                 var selectedComboItem = combo.ItemContainerGenerator.ContainerFromIndex(0) as ComboBoxItem
@@ -1910,10 +1951,10 @@ internal static partial class Program
                             setter.TargetName == "ItemChrome" && setter.Property == Border.BorderBrushProperty),
                     "ComboBoxItem highlight did not retain a concrete hover-border contract in the hosted template");
                 combo.IsDropDownOpen = false;
-                FlushSharedPopupDispatcher(host);
+                FlushSharedPopupDispatcher(host, fixture);
 
                 toolTip.IsOpen = true;
-                FlushSharedPopupDispatcher(host);
+                FlushSharedPopupDispatcher(host, fixture);
                 toolTip.ApplyTemplate();
                 var toolTipChrome = RequireSharedPopupPart<Border>(toolTip, "ToolTipChrome");
                 Require(ExperimentBrushMatches(toolTipChrome.Background, theme.Card)
@@ -1921,11 +1962,11 @@ internal static partial class Program
                         && ExperimentBrushMatches(toolTip.Foreground, theme.Text),
                     $"shared ToolTip fell through the {themeId} application palette");
                 toolTip.IsOpen = false;
-                FlushSharedPopupDispatcher(host);
+                FlushSharedPopupDispatcher(host, fixture);
             }
 
             menu.IsOpen = true;
-            FlushSharedPopupDispatcher(host);
+            FlushSharedPopupDispatcher(host, fixture);
             foreach (var item in new[] { checkedItem, iconItem, nested })
             {
                 item.ApplyTemplate();
@@ -1946,7 +1987,7 @@ internal static partial class Program
 
             menu.IsOpen = false;
             topLevelHeader.IsSubmenuOpen = true;
-            FlushSharedPopupDispatcher(host);
+            FlushSharedPopupDispatcher(host, fixture);
             topLevelHeader.ApplyTemplate();
             topLevelItem.ApplyTemplate();
             var topLevelPopup = RequireSharedPopupPart<System.Windows.Controls.Primitives.Popup>(topLevelHeader, "PART_Popup");
@@ -1958,22 +1999,24 @@ internal static partial class Program
                 "shared MenuItem template did not preserve top-level header/item roles and bottom submenu placement");
             topLevelHeader.IsSubmenuOpen = false;
 
-            FlushSharedPopupDispatcher(host);
+            FlushSharedPopupDispatcher(host, fixture);
             var listItem = list.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem
                 ?? throw new InvalidOperationException("Hosted ListBox did not realize its first item.");
             AssertSharedPointerMotion(target, host, "Arena.Button.Base");
             AssertSharedPointerMotion(listItem, host, "Arena.ListBoxItem");
 
             combo.IsDropDownOpen = true;
-            FlushSharedPopupDispatcher(host);
+            FlushSharedPopupDispatcher(host, fixture);
             var comboItem = combo.ItemContainerGenerator.ContainerFromIndex(0) as ComboBoxItem
                 ?? throw new InvalidOperationException("Hosted ComboBox did not realize its first popup item for pointer feedback.");
             AssertSharedPointerMotion(comboItem, host, "Arena.ComboBoxItem");
             combo.IsDropDownOpen = false;
 
             menu.IsOpen = true;
-            FlushSharedPopupDispatcher(host);
+            FlushSharedPopupDispatcher(host, fixture);
             AssertSharedPointerMotion(enabled, host, "Arena.MenuItem");
+            fixture.AssertIsolatedStartup(host);
+            fixture.ThrowDispatcherFailure();
         }
         finally
         {
@@ -1983,6 +2026,7 @@ internal static partial class Program
             combo.IsDropDownOpen = false;
             host.Close();
             application.Shutdown();
+            fixture.ThrowDispatcherFailure();
         }
     }
 
@@ -1995,8 +2039,15 @@ internal static partial class Program
                 $"{control.GetType().Name} did not realize shared template part '{name}'.");
     }
 
-    private static void FlushSharedPopupDispatcher(Window host)
+    private static void FlushSharedPopupDispatcher(Window host, SharedPopupFixtureApplication fixture)
     {
+        host.UpdateLayout();
+        // Popup HWNDs have their own presentation sources. Updating the owner
+        // window's layout alone does not finish their queued Loaded/focus work.
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+            System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+            new Action(() => { }));
+        fixture.ThrowDispatcherFailure();
         host.UpdateLayout();
     }
 

@@ -17,7 +17,7 @@ internal sealed class AppSettingsCoordinator
     private readonly Expander modelProviderSettingsExpander;
     private readonly TextBox providerBaseUrlText;
     private readonly ComboBox providerModelText;
-    private readonly Button testProviderButton;
+    private readonly Control providerPresetPicker;
     private readonly RotateTransform settingsGearRotate;
     private readonly Func<bool> animationsEnabled;
 
@@ -30,7 +30,7 @@ internal sealed class AppSettingsCoordinator
         Expander modelProviderSettingsExpander,
         TextBox providerBaseUrlText,
         ComboBox providerModelText,
-        Button testProviderButton,
+        Control providerPresetPicker,
         RotateTransform settingsGearRotate,
         Func<bool>? animationsEnabled = null)
     {
@@ -42,7 +42,7 @@ internal sealed class AppSettingsCoordinator
         this.modelProviderSettingsExpander = modelProviderSettingsExpander;
         this.providerBaseUrlText = providerBaseUrlText;
         this.providerModelText = providerModelText;
-        this.testProviderButton = testProviderButton;
+        this.providerPresetPicker = providerPresetPicker;
         this.settingsGearRotate = settingsGearRotate;
         this.animationsEnabled = animationsEnabled ?? (() => SystemMotionPreferences.AnimationsEnabled);
     }
@@ -111,13 +111,8 @@ internal sealed class AppSettingsCoordinator
         dispatcher.BeginInvoke(() =>
         {
             modelProviderSettingsExpander.BringIntoView();
-            FocusProviderTarget(providerModelText.Text).Focus();
+            providerPresetPicker.Focus();
         }, DispatcherPriority.Background);
-    }
-
-    internal static bool ShouldFocusModelPicker(string model)
-    {
-        return string.IsNullOrWhiteSpace(model);
     }
 
     internal static bool ShouldAnimateSettingsGear(bool systemAnimationsEnabled)
@@ -131,11 +126,6 @@ internal sealed class AppSettingsCoordinator
         {
             settingsGearRotate.BeginAnimation(RotateTransform.AngleProperty, null);
         }
-    }
-
-    private Control FocusProviderTarget(string model)
-    {
-        return ShouldFocusModelPicker(model) ? providerModelText : testProviderButton;
     }
 
     private void AnimateSettingsGear()

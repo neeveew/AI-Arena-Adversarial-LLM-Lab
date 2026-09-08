@@ -1,6 +1,7 @@
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
+using AIArena.Core.Providers;
 using AIArena.Core.Models;
 
 namespace AIArena.Wpf.Services;
@@ -60,10 +61,10 @@ public sealed class LmStudioModelDownloadService
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return LmStudioModelDownloadResult.Failed(normalizedModel, normalizedQuantization, "", ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "LM Studio request failed.", "error", "message", "detail"));
+                return LmStudioModelDownloadResult.Failed(normalizedModel, normalizedQuantization, "", ProviderHttpHelpers.FriendlyError(body, response.ReasonPhrase, "LM Studio request failed.", apiToken, "error", "message", "detail"));
             }
 
-            return ParseStartResponse(body, normalizedModel, normalizedQuantization);
+            return ParseStartResponse(body, normalizedModel, normalizedQuantization, apiToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -102,10 +103,10 @@ public sealed class LmStudioModelDownloadService
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return LmStudioModelDownloadResult.Failed(normalizedModel, normalizedQuantization, normalizedJobId, ProviderHttpHelpers.FriendlyBody(body, response.ReasonPhrase, "LM Studio request failed.", "error", "message", "detail"));
+                return LmStudioModelDownloadResult.ObservationUnavailable(normalizedModel, normalizedQuantization, normalizedJobId, ProviderHttpHelpers.FriendlyError(body, response.ReasonPhrase, "LM Studio request failed.", apiToken, "error", "message", "detail"));
             }
 
-            return ParseStatusResponse(body, normalizedModel, normalizedQuantization, normalizedJobId);
+            return ParseStatusResponse(body, normalizedModel, normalizedQuantization, normalizedJobId, apiToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -113,22 +114,22 @@ public sealed class LmStudioModelDownloadService
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or UriFormatException)
         {
-            return LmStudioModelDownloadResult.Failed(normalizedModel, normalizedQuantization, normalizedJobId, FriendlyException(ex));
+            return LmStudioModelDownloadResult.ObservationUnavailable(normalizedModel, normalizedQuantization, normalizedJobId, FriendlyException(ex));
         }
     }
 
-    public static LmStudioModelDownloadResult ParseStartResponse(string json, string model, string quantization)
+    public static LmStudioModelDownloadResult ParseStartResponse(string json, string model, string quantization, string apiToken = "")
     {
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
         var root = doc.RootElement;
         var status = ProviderHttpHelpers.FirstString(root, "status", "state");
         var jobId = ProviderHttpHelpers.FirstString(root, "job_id", "jobId", "id");
         var responseModel = ProviderHttpHelpers.FirstString(root, "model", "model_key", "key");
-        var error = LmStudioJsonMessageExtractor.ExtractMessage(root, "error", "message", "detail", "reason");
+        var error = ProviderHttpHelpers.ResponseMessage(json, apiToken, "error", "message", "detail", "reason");
         var effectiveModel = string.IsNullOrWhiteSpace(responseModel) ? model : responseModel;
         var normalizedStatus = string.IsNullOrWhiteSpace(status) ? "started" : status.Trim();
-        var isComplete = IsCompleteStatus(normalizedStatus);
-        var ok = !normalizedStatus.Equals("failed", StringComparison.OrdinalIgnoreCase)
+        var isComplete = IsCompleteStatus(normalizedStatus) || IsFailedStatus(normalizedStatus);
+        var ok = !IsFailedStatus(normalizedStatus)
             && string.IsNullOrWhiteSpace(error);
         if (ok && !isComplete && string.IsNullOrWhiteSpace(jobId))
         {
@@ -139,27 +140,40 @@ public sealed class LmStudioModelDownloadService
         var detail = ok
             ? FormatDetail(normalizedStatus, jobId, root)
             : (string.IsNullOrWhiteSpace(error) ? "LM Studio reported download failure." : error);
+        detail = ProviderErrorSanitizer.Sanitize(detail, apiToken);
         return new LmStudioModelDownloadResult(ok, effectiveModel, quantization, jobId, normalizedStatus, detail, isComplete, ok ? "" : detail);
     }
 
-    public static LmStudioModelDownloadResult ParseStatusResponse(string json, string model, string quantization, string jobId)
+    public static LmStudioModelDownloadResult ParseStatusResponse(string json, string model, string quantization, string jobId, string apiToken = "")
     {
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
         var root = doc.RootElement;
         var status = ProviderHttpHelpers.FirstString(root, "status", "state");
         var responseModel = ProviderHttpHelpers.FirstString(root, "model", "model_key", "key");
-        var error = LmStudioJsonMessageExtractor.ExtractMessage(root, "error", "message", "detail", "reason");
+        var error = ProviderHttpHelpers.ResponseMessage(json, apiToken, "error", "message", "detail", "reason");
         var effectiveModel = string.IsNullOrWhiteSpace(responseModel) ? model : responseModel;
         var normalizedStatus = string.IsNullOrWhiteSpace(status) ? "unknown" : status.Trim();
-        var isComplete = IsCompleteStatus(normalizedStatus);
-        var ok = !normalizedStatus.Equals("failed", StringComparison.OrdinalIgnoreCase)
-            && string.IsNullOrWhiteSpace(error);
-        var detail = ok
-            ? FormatDetail(normalizedStatus, jobId, root)
-            : (string.IsNullOrWhiteSpace(error) ? "LM Studio reported download failure." : error);
-        return new LmStudioModelDownloadResult(ok, effectiveModel, quantization, jobId, normalizedStatus, detail, isComplete, ok ? "" : detail);
+        if (IsFailedStatus(normalizedStatus))
+        {
+            var detail = ProviderErrorSanitizer.Sanitize(string.IsNullOrWhiteSpace(error)
+                ? "LM Studio reported download failure." : error, apiToken);
+            return new LmStudioModelDownloadResult(false, effectiveModel, quantization, jobId, normalizedStatus, detail, true, detail);
+        }
+        var complete = IsCompleteStatus(normalizedStatus);
+        if ((!complete && !IsRunningStatus(normalizedStatus)) || !string.IsNullOrWhiteSpace(error))
+        {
+            return LmStudioModelDownloadResult.ObservationUnavailable(effectiveModel, quantization, jobId,
+                string.IsNullOrWhiteSpace(error) ? "The provider did not return a recognized download state." : error);
+        }
+        return new LmStudioModelDownloadResult(true, effectiveModel, quantization, jobId, normalizedStatus,
+            ProviderErrorSanitizer.Sanitize(FormatDetail(normalizedStatus, jobId, root), apiToken), complete, "");
     }
 
+    private static bool IsFailedStatus(string status) => status.Trim().ToLowerInvariant() is
+        "failed" or "error" or "cancelled" or "canceled";
+
+    private static bool IsRunningStatus(string status) => status.Trim().ToLowerInvariant() is
+        "queued" or "pending" or "starting" or "started" or "downloading" or "running" or "in_progress" or "in-progress" or "processing" or "paused";
     private static string FormatDetail(string status, string jobId, JsonElement root)
     {
         var percent = FirstDouble(root, "progress", "progress_percent", "percent");
@@ -174,11 +188,6 @@ public sealed class LmStudioModelDownloadService
         {
             $"Status: {status}"
         };
-        if (!string.IsNullOrWhiteSpace(jobId))
-        {
-            parts.Add($"job {jobId}");
-        }
-
         if (percent > 0)
         {
             parts.Add($"{percent:0.#}%");
@@ -303,6 +312,10 @@ public sealed record LmStudioModelDownloadResult(
     bool IsComplete,
     string Error)
 {
+    public bool ObservationAvailable { get; init; } = true;
+
+    public static LmStudioModelDownloadResult ObservationUnavailable(string model, string quantization, string jobId, string error) =>
+        new(false, model, quantization, jobId, "unknown", error, false, error) { ObservationAvailable = false };
     public static LmStudioModelDownloadResult Failed(string model, string quantization, string jobId, string error)
     {
         return new LmStudioModelDownloadResult(false, model, quantization, jobId, "failed", error, true, error);

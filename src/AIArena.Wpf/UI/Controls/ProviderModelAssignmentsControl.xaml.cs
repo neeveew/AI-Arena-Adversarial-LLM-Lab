@@ -115,7 +115,9 @@ public sealed record ProviderModelAssignmentPresentation(
     bool CanUnload = false,
     string LifecycleHelp = "",
     bool IsResidencyStale = false,
-    ProviderModelConfigurationPresentation? Configuration = null);
+    ProviderModelConfigurationPresentation? Configuration = null,
+    string ProviderName = "",
+    string ModelIdentifier = "");
 
 public sealed record ProviderModelConfigurationPresentation(
     int ContextWindow = 0,
@@ -241,7 +243,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
     private string lastSaveMessage = "Ready to assign.";
     private string lastLifecycleModelId = "";
     private ProviderModelLifecycleActionState lastLifecycleState = ProviderModelLifecycleActionState.Ready;
-    private string lastLifecycleMessage = "Ready to manage LM Studio residency.";
+    private string lastLifecycleMessage = "Ready to manage model loading.";
+    private string LifecycleProviderName => DisplayOrFallback(selectedModel?.ProviderName, DisplayOrFallback(currentPresentation?.ProviderName, "The provider"));
     private bool? lastLifecycleDesiredLoaded;
     private string lastLifecycleConnectionIdentity = "";
     private ProviderModelAssignmentPresentation? unconfirmedLifecycleReceipt;
@@ -323,7 +326,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         LifecycleStatusText.Text = lastLifecycleMessage;
         ConfigurationStatusText.Text = lastConfigurationMessage;
         AutomationProperties.SetName(AssignmentSaveStatusText, "Assignment save state");
-        AutomationProperties.SetName(LifecycleStatusText, "LM Studio lifecycle state");
+        AutomationProperties.SetName(LifecycleStatusText, $"{LifecycleProviderName} lifecycle state");
         AutomationProperties.SetName(ConfigurationStatusText, "Model configuration save state");
         AutomationProperties.SetLiveSetting(AssignmentSaveStatusText, AutomationLiveSetting.Off);
         AutomationProperties.SetLiveSetting(LifecycleStatusText, AutomationLiveSetting.Off);
@@ -606,13 +609,13 @@ public partial class ProviderModelAssignmentsControl : UserControl
             ProviderModelLifecycleActionState.Unconfirmed => DisplayOrFallback(
                 message,
                 pending.Load
-                    ? "LM Studio accepted the load request, but loaded residency is not yet confirmed."
-                    : "LM Studio accepted the unload request, but unloaded residency is not yet confirmed."),
+                    ? $"{LifecycleProviderName} accepted the load request, but loaded residency is not yet confirmed."
+                    : $"{LifecycleProviderName} accepted the unload request, but unloaded residency is not yet confirmed."),
             ProviderModelLifecycleActionState.Succeeded => DisplayOrFallback(
                 message,
                 pending.Load ? "Load request succeeded." : "Unload request succeeded."),
-            ProviderModelLifecycleActionState.Failed => $"Failed: {DisplayOrFallback(message, "LM Studio could not change model residency.")}",
-            _ => DisplayOrFallback(message, "Ready to manage LM Studio residency.")
+            ProviderModelLifecycleActionState.Failed => $"Failed: {DisplayOrFallback(message, $"{LifecycleProviderName} could not change model residency.")}",
+            _ => DisplayOrFallback(message, $"Ready to manage {LifecycleProviderName} residency.")
         };
         unconfirmedLifecycleReceipt = state == ProviderModelLifecycleActionState.Unconfirmed
             ? CreateUnconfirmedLifecycleReceipt(pending)
@@ -1061,7 +1064,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             SetLifecycleState(
                 operationId,
                 ProviderModelLifecycleActionState.Failed,
-                "No LM Studio lifecycle handler is connected.");
+                $"No {LifecycleProviderName} lifecycle handler is connected.");
             return;
         }
 
@@ -1076,7 +1079,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             SetLifecycleState(
                 operationId,
                 ProviderModelLifecycleActionState.Failed,
-                "The LM Studio lifecycle handler could not accept the request.");
+                $"The {LifecycleProviderName} lifecycle handler could not accept the request.");
         }
     }
 
@@ -1509,8 +1512,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
         }
 
         SelectedModelNameText.Text = model.DisplayName;
-        SelectedModelIdentifierText.Text = model.Id;
-        SelectedModelIdentifierText.ToolTip = model.Id;
+        SelectedModelIdentifierText.Text = model.ModelIdentifier;
+        SelectedModelIdentifierText.ToolTip = model.ModelIdentifier;
         SelectedModelMetadataText.Text = model.Metadata;
         SelectedModelMetadataText.ToolTip = model.AutomationHelp;
         SelectedModelAssignmentsText.Text = model.AssignmentSummary;
@@ -2000,8 +2003,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
             AutomationProperties.SetName(
                 LifecycleButton,
                 pendingLifecycle.Load
-                    ? $"Loading {pendingLifecycle.ModelDisplayName} in LM Studio"
-                    : $"Unloading {pendingLifecycle.ModelDisplayName} from LM Studio");
+                    ? $"Loading {pendingLifecycle.ModelDisplayName} in {LifecycleProviderName}"
+                    : $"Unloading {pendingLifecycle.ModelDisplayName} from {LifecycleProviderName}");
             AutomationProperties.SetHelpText(
                 LifecycleButton,
                 $"{lastLifecycleMessage} You can continue browsing models while provider-changing controls remain unavailable.");
@@ -2009,7 +2012,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             LifecycleProgressBar.Visibility = Visibility.Visible;
             SetLifecycleStatus(
                 ProviderModelLifecycleActionState.Running,
-                $"{lastLifecycleMessage} Request sent; waiting for authoritative LM Studio load-state evidence. Browsing remains available.");
+                $"{lastLifecycleMessage} Request sent; waiting for authoritative {LifecycleProviderName} load-state evidence. Browsing remains available.");
             return;
         }
 
@@ -2019,10 +2022,10 @@ public partial class ProviderModelAssignmentsControl : UserControl
             LifecycleButton.SetResourceReference(FrameworkElement.StyleProperty, "Arena.Button.Secondary");
             AutomationProperties.SetName(
                 LifecycleButton,
-                $"Awaiting LM Studio confirmation for {model.DisplayName}");
+                $"Awaiting {LifecycleProviderName} confirmation for {model.DisplayName}");
             AutomationProperties.SetHelpText(
                 LifecycleButton,
-                $"{lastLifecycleMessage} Refresh or wait for the next LM Studio residency check. Assignments remain unchanged.");
+                $"{lastLifecycleMessage} Refresh or wait for the next {LifecycleProviderName} residency check. Assignments remain unchanged.");
             AutomationProperties.SetItemStatus(LifecycleButton, "Unconfirmed");
             SetLifecycleStatus(ProviderModelLifecycleActionState.Unconfirmed, lastLifecycleMessage);
             return;
@@ -2042,8 +2045,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
             AutomationProperties.SetName(
                 LifecycleButton,
                 load
-                    ? $"Load {model.DisplayName} in LM Studio"
-                    : $"Unload {model.DisplayName} from LM Studio");
+                    ? $"Load {model.DisplayName} in {LifecycleProviderName}"
+                    : $"Unload {model.DisplayName} from {LifecycleProviderName}");
             AutomationProperties.SetHelpText(
                 LifecycleButton,
                 string.Join(
@@ -2052,8 +2055,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
                     {
                         model.LifecycleHelp,
                         load
-                            ? "Request that LM Studio load this model. Assignments remain unchanged."
-                            : "Request that LM Studio unload this model. Assignments remain unchanged.",
+                            ? $"Request that {LifecycleProviderName} load this model. Assignments remain unchanged."
+                            : $"Request that {LifecycleProviderName} unload this model. Assignments remain unchanged.",
                         canRun
                             ? ""
                             : currentPresentation?.IsRefreshing == true
@@ -2074,7 +2077,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
                     new[]
                     {
                         model.LifecycleHelp,
-                        "LM Studio did not report an actionable loaded or available state for this model."
+                        $"{LifecycleProviderName} did not report an actionable loaded or available state for this model."
                     }.Where(value => !string.IsNullOrWhiteSpace(value))));
             AutomationProperties.SetItemStatus(LifecycleButton, "Unavailable");
         }
@@ -2088,10 +2091,10 @@ public partial class ProviderModelAssignmentsControl : UserControl
             SetLifecycleStatus(
                 ProviderModelLifecycleActionState.Ready,
                 TryLifecycleAction(model, out _) && currentPresentation?.CanRunLifecycle == true
-                    ? "Ready to manage LM Studio residency."
+                    ? $"Ready to manage {LifecycleProviderName} residency."
                     : TryLifecycleAction(model, out _)
-                        ? "LM Studio residency actions are temporarily unavailable."
-                        : "LM Studio load state is unavailable for this model.");
+                        ? $"{LifecycleProviderName} residency actions are temporarily unavailable."
+                        : $"{LifecycleProviderName} load state is unavailable for this model.");
         }
 
         if (backgroundLifecycle && pendingLifecycle is not null)
@@ -2099,7 +2102,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             var activity = pendingLifecycle.Load ? "Loading" : "Unloading";
             SetLifecycleStatus(
                 ProviderModelLifecycleActionState.Running,
-                $"{activity} {pendingLifecycle.ModelDisplayName} in the background. You can inspect this model; provider-changing controls remain unavailable until LM Studio confirms the request.");
+                $"{activity} {pendingLifecycle.ModelDisplayName} in the background. You can inspect this model; provider-changing controls remain unavailable until {LifecycleProviderName} confirms the request.");
             AutomationProperties.SetItemStatus(LifecycleButton, "Unavailable");
             AutomationProperties.SetHelpText(
                 LifecycleButton,
@@ -2165,7 +2168,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             ? ProviderModelLifecycleActionState.Unconfirmed
             : ProviderModelLifecycleActionState.Failed;
         lastLifecycleMessage = mutationStarted
-            ? "The provider or session changed after the lifecycle request started. The LM Studio load state is unknown; refresh the original connection to verify it."
+            ? "The provider or session changed after the lifecycle request started. The model load state is unknown; refresh the original connection to verify it."
             : "Failed: The provider or session changed before the lifecycle request finished.";
         lastLifecycleDesiredLoaded = mutationStarted
             ? pending.Load
@@ -2318,7 +2321,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
         lastLifecycleModelId = "";
         lastLifecycleState = ProviderModelLifecycleActionState.Ready;
-        lastLifecycleMessage = "LM Studio residency evidence changed with the provider connection.";
+        lastLifecycleMessage = $"{LifecycleProviderName} residency evidence changed with the provider connection.";
         lastLifecycleDesiredLoaded = null;
         lastLifecycleConnectionIdentity = "";
         unconfirmedLifecycleReceipt = null;
@@ -2337,10 +2340,10 @@ public partial class ProviderModelAssignmentsControl : UserControl
             "Awaiting confirmation",
             current?.Metadata ?? "Provider model metadata unavailable.",
             current?.AssignedTargetIds ?? [],
-            $"Lifecycle request receipt awaiting authoritative LM Studio evidence. {current?.AutomationHelp}",
+            $"Lifecycle request receipt awaiting authoritative {LifecycleProviderName} evidence. {current?.AutomationHelp}",
             CanLoad: false,
             CanUnload: false,
-            LifecycleHelp: $"LM Studio has not yet confirmed that this model is {desiredState}. Refresh or wait for the next residency check.",
+            LifecycleHelp: $"{LifecycleProviderName} has not yet confirmed that this model is {desiredState}. Refresh or wait for the next residency check.",
             IsResidencyStale: true,
             Configuration: current?.Configuration);
     }
@@ -2387,8 +2390,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
         {
             lastLifecycleState = ProviderModelLifecycleActionState.Succeeded;
             lastLifecycleMessage = desiredLoaded
-                ? $"LM Studio now confirms {model.DisplayName} is loaded."
-                : $"LM Studio now confirms {model.DisplayName} is unloaded.";
+                ? $"{LifecycleProviderName} now confirms {model.DisplayName} is loaded."
+                : $"{LifecycleProviderName} now confirms {model.DisplayName} is unloaded.";
             lastLifecycleDesiredLoaded = null;
             lastLifecycleConnectionIdentity = "";
             unconfirmedLifecycleReceipt = null;
@@ -2407,8 +2410,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
         lastLifecycleState = ProviderModelLifecycleActionState.Unconfirmed;
         lastLifecycleMessage = desiredLoaded
-            ? $"Request not yet confirmed. LM Studio still reports {model.DisplayName} is unloaded. Retry Load or refresh."
-            : $"Request not yet confirmed. LM Studio still reports {model.DisplayName} is loaded. Retry Unload or refresh.";
+            ? $"Request not yet confirmed. {LifecycleProviderName} still reports {model.DisplayName} is unloaded. Retry Load or refresh."
+            : $"Request not yet confirmed. {LifecycleProviderName} still reports {model.DisplayName} is loaded. Retry Unload or refresh.";
         unconfirmedLifecycleReceipt = null;
         lifecycleReceiptOrphanedByConnectionChange = false;
     }
@@ -2475,21 +2478,21 @@ public partial class ProviderModelAssignmentsControl : UserControl
             AutomationProperties.SetItemStatus(LifecycleButton, "Unavailable");
             AutomationProperties.SetHelpText(
                 LifecycleButton,
-                $"Wait for the assignment for {pendingAssignment.ModelDisplayName} to finish before changing LM Studio residency.");
+                $"Wait for the assignment for {pendingAssignment.ModelDisplayName} to finish before changing {LifecycleProviderName} residency.");
         }
         else if (pendingConfiguration is not null)
         {
             AutomationProperties.SetItemStatus(LifecycleButton, "Unavailable");
             AutomationProperties.SetHelpText(
                 LifecycleButton,
-                $"Wait for the configuration for {pendingConfiguration.ModelDisplayName} to finish saving before changing LM Studio residency.");
+                $"Wait for the configuration for {pendingConfiguration.ModelDisplayName} to finish saving before changing {LifecycleProviderName} residency.");
         }
         else if (pendingConfigurationReload is not null)
         {
             AutomationProperties.SetItemStatus(LifecycleButton, "Unavailable");
             AutomationProperties.SetHelpText(
                 LifecycleButton,
-                $"Wait for the configuration reload for {pendingConfigurationReload.ModelDisplayName} to finish before changing LM Studio residency.");
+                $"Wait for the configuration reload for {pendingConfigurationReload.ModelDisplayName} to finish before changing {LifecycleProviderName} residency.");
         }
     }
 
@@ -3182,7 +3185,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         if (pendingLifecycle is not null)
         {
             var activity = pendingLifecycle.Load ? "loads" : "unloads";
-            return $"Assignments are paused while LM Studio {activity} {pendingLifecycle.ModelDisplayName}. You can keep browsing models.";
+            return $"Assignments are paused while {LifecycleProviderName} {activity} {pendingLifecycle.ModelDisplayName}. You can keep browsing models.";
         }
 
         if (pendingConfiguration is not null)
@@ -3441,6 +3444,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
         private bool canUnload;
         private bool isResidencyStale;
         private string lifecycleHelp = "";
+        public string ProviderName { get; private set; } = "";
+        public string ModelIdentifier { get; private set; } = "";
         private string lifecycleActivity = "";
         private string assignmentSummary = "Not assigned";
         private string automationHelp = "";
@@ -3545,6 +3550,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 DisplayOrFallback(source.Metadata, source.Id),
                 nameof(Metadata));
             suppliedAutomationHelp = source.AutomationHelp;
+            ProviderName = source.ProviderName;
+            ModelIdentifier = DisplayOrFallback(source.ModelIdentifier, source.Id);
             SetField(ref canLoad, source.CanLoad, nameof(CanLoad));
             SetField(ref canUnload, source.CanUnload, nameof(CanUnload));
             SetField(ref isResidencyStale, source.IsResidencyStale, nameof(IsResidencyStale));
@@ -3552,7 +3559,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
                 ref lifecycleHelp,
                 DisplayOrFallback(
                     source.LifecycleHelp,
-                    "LM Studio residency changes do not change model assignments."),
+                    "Model loading changes do not change model assignments."),
                 nameof(LifecycleHelp));
             SetConfiguration(source.Configuration ?? UnavailableConfiguration());
 

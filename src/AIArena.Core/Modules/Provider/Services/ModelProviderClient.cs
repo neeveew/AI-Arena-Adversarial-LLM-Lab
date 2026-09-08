@@ -30,7 +30,6 @@ public interface IStreamingModelProviderClient
 
 public class ModelProviderClient : IModelProviderClient, IStreamingModelProviderClient
 {
-    private const int MaxProviderErrorLength = 360;
     internal const int MaximumModelCatalogBytes = 4 * 1024 * 1024;
     // Provider inventories are untrusted input. Inspect no more than this many
     // source-array entries even when a highly compressed inventory remains
@@ -222,7 +221,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         }
         catch (JsonException)
         {
-            return (false, Array.Empty<string>(), $"Provider returned an unreadable model inventory at {SafeProviderEndpoint(endpoint.AbsoluteUri, config.ApiToken)}.", 0);
+            return (false, Array.Empty<string>(), $"Provider returned an unreadable model inventory at {ProviderErrorSanitizer.Endpoint(endpoint.AbsoluteUri, config.ApiToken)}.", 0);
         }
     }
 
@@ -246,7 +245,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             return (
                 false,
                 Array.Empty<string>(),
-                $"llama.cpp model inventory probe timed out after {LlamaCppModelProbeTimeoutSeconds(config.Timeout)}s at {SafeProviderEndpoint(endpoint.AbsoluteUri, config.ApiToken)}.",
+                $"llama.cpp model inventory probe timed out after {LlamaCppModelProbeTimeoutSeconds(config.Timeout)}s at {ProviderErrorSanitizer.Endpoint(endpoint.AbsoluteUri, config.ApiToken)}.",
                 0);
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException)
@@ -790,7 +789,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         terminalResult?.PromptTokens ?? 0,
                         terminalResult?.CompletionTokens ?? 0,
                         terminalResult?.TotalTokens ?? 0,
-                        SanitizeProviderError(acceptedStreamError, config.ApiToken),
+                        ProviderErrorSanitizer.Sanitize(acceptedStreamError, config.ApiToken),
                         DateTimeOffset.Now,
                         terminalResult?.TokensPerSecond ?? 0,
                         terminalResult?.TimeToFirstTokenMs ?? 0,
@@ -1148,7 +1147,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         acceptedUsage.PromptTokens,
                         acceptedUsage.CompletionTokens,
                         acceptedUsage.TotalTokens,
-                        SanitizeProviderError(streamError, config.ApiToken),
+                        ProviderErrorSanitizer.Sanitize(streamError, config.ApiToken),
                         DateTimeOffset.Now,
                         acceptedTelemetry.TokensPerSecond,
                         acceptedFirstTokenMs,
@@ -2423,7 +2422,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         string apiToken)
     {
         var error = !string.IsNullOrWhiteSpace(streamError)
-            ? SanitizeProviderError(streamError, apiToken)
+            ? ProviderErrorSanitizer.Sanitize(streamError, apiToken)
             : sawMalformedEvent
                 ? "Provider stream contained malformed LM Studio event data; any partial response was preserved."
                 : "Provider stream ended after acceptance; any partial response was preserved.";
@@ -2485,7 +2484,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         string apiMode,
         string apiToken)
     {
-        var safeBaseUrl = SafeProviderEndpoint(baseUrl, apiToken);
+        var safeBaseUrl = ProviderErrorSanitizer.Endpoint(baseUrl, apiToken);
         if (ex is UriFormatException)
         {
             return $"Invalid provider base URL '{safeBaseUrl}'. Enter a full URL such as http://127.0.0.1:1234/v1.";
@@ -2502,7 +2501,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             return $"Provider returned an unreadable response at {safeBaseUrl}. Check that the server is returning valid {apiLabel} JSON.";
         }
 
-        var message = SanitizeProviderError(ex.Message, apiToken);
+        var message = ProviderErrorSanitizer.Sanitize(ex.Message, apiToken);
         if (message.Contains("actively refused", StringComparison.OrdinalIgnoreCase)
             || message.Contains("connection refused", StringComparison.OrdinalIgnoreCase)
             || message.Contains("No connection could be made", StringComparison.OrdinalIgnoreCase))
@@ -2528,13 +2527,15 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
 
     private static string FriendlyProviderHttpError(string body, string? reasonPhrase, string baseUrl, string apiToken)
     {
-        var message = ExtractProviderErrorMessage(body);
+        var safeBody = ProviderErrorSanitizer.Sanitize(body, apiToken);
+        var message = body.Length > ProviderErrorSanitizer.MaximumInputLength || safeBody == ProviderErrorSanitizer.SensitiveError
+            ? safeBody : ExtractProviderErrorMessage(body);
         if (string.IsNullOrWhiteSpace(message))
         {
             message = string.IsNullOrWhiteSpace(reasonPhrase) ? "HTTP request failed." : reasonPhrase.Trim();
         }
 
-        return $"Provider request failed at {SafeProviderEndpoint(baseUrl, apiToken)}: {SanitizeProviderError(message, apiToken)}";
+        return $"Provider request failed at {ProviderErrorSanitizer.Endpoint(baseUrl, apiToken)}: {ProviderErrorSanitizer.Sanitize(message, apiToken)}";
     }
 
     public static string ExtractProviderErrorMessage(string body)
@@ -2551,7 +2552,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         }
         catch (JsonException)
         {
-            return ShortenProviderError(body.Trim());
+            return body.Trim();
         }
     }
 
@@ -2593,7 +2594,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             {
                 return code.ValueKind switch
                 {
-                    JsonValueKind.String => ShortenProviderError(code.GetString()?.Trim() ?? ""),
+                    JsonValueKind.String => ProviderErrorSanitizer.Compact(code.GetString()?.Trim() ?? ""),
                     JsonValueKind.Number => code.GetRawText(),
                     _ => ""
                 };
@@ -2668,56 +2669,6 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         }
     }
 
-    private static string ShortenProviderError(string message)
-    {
-        var normalized = string.Join(" ", message.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return normalized.Length <= MaxProviderErrorLength
-            ? normalized
-            : normalized[..(MaxProviderErrorLength - 3)] + "...";
-    }
-
-    private static string SanitizeProviderError(string message, string apiToken)
-    {
-        var rawMessage = message ?? "";
-        if ((!string.IsNullOrWhiteSpace(apiToken)
-                && rawMessage.Contains(apiToken.Trim(), StringComparison.Ordinal))
-            || InternetRequestSafety.ContainsSensitivePayload(rawMessage))
-        {
-            return "Provider returned an error containing sensitive data; details were hidden.";
-        }
-
-        return ShortenProviderError(rawMessage);
-    }
-
-    private static string SafeProviderEndpoint(string baseUrl, string apiToken)
-    {
-        if (!string.IsNullOrWhiteSpace(apiToken)
-            && baseUrl.Contains(apiToken.Trim(), StringComparison.Ordinal))
-        {
-            return "configured endpoint";
-        }
-
-        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
-        {
-            return InternetRequestSafety.ContainsSensitivePayload(baseUrl)
-                ? "configured endpoint"
-                : ShortenProviderError(baseUrl);
-        }
-
-        var builder = new UriBuilder(uri)
-        {
-            UserName = "",
-            Password = "",
-            Query = "",
-            Fragment = ""
-        };
-        if (InternetRequestSafety.ContainsSensitivePayload(builder.Path))
-        {
-            builder.Path = "/";
-        }
-
-        return builder.Uri.AbsoluteUri.TrimEnd('/');
-    }
 }
 
 public sealed record ModelTokenUsage(int PromptTokens, int CompletionTokens, int TotalTokens);

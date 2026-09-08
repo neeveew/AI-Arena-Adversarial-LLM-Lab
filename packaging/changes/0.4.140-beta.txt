@@ -1,0 +1,20 @@
+AI Arena - Lite 0.4.140-beta
+
+Changes since the last published release, 0.4.134-beta:
+
+- Discover running LM Studio, Ollama, llama.cpp, and compatible model servers automatically, and choose supported communication and model-management APIs from server evidence.
+- Use models from multiple servers in one arena. Keep assignments and model settings tied to their serving endpoint, including models with identical names on different servers.
+- Simplify Provider connection to server status, Find servers, Manage models, and one Advanced section. Remember the last session and configuration without requiring saved connection profiles.
+- Preserve explicit model routes and unfinished connection drafts. Reject stale discovery, catalog, assignment, and credential results so newer settings and cleared tokens stay authoritative.
+- Add optional Native Services communication with a separately installed, compatible AI Arena C++ app for diagnostics, model operations, and bounded inference. Keep cancellation, uncertain submissions, and operation receipts explicit; each app retains its own data profile.
+- Carry forward the Lite identity, green emblem, refreshed Help, and distinct shortcut icon. Install in Program Files\AI Arena Lite, safely migrate only the verified legacy per-user installation, and retain local user data and the sibling AI Arena shortcut.
+- Make the Universal Status Center the shared owner of Arena readiness warnings and blockers, with prerequisites available from disabled controls.
+- Preserve reader position and selection in Agent and AI Collaborate, count unseen messages, and provide Jump to latest. Keep live response state stable during theme refresh.
+- Make AI Collaborate document import asynchronous, cancellable, and bounded, with supported text encodings, duplicate handling, and partial-success receipts.
+- Validate numeric Advanced settings before saving, show accessible field errors, and focus the first invalid field.
+- Protect and restore unsent Operator, Agent, and AI Collaborate drafts. Improve conversation persistence and retain drafts after save failures, cancellation, or in-flight edits.
+- Add bounded Trash with confirmation and Undo for sessions and restore points. Create safety checkpoints before replacing live Arena state, and report committed saves accurately when later logging or refresh fails.
+- Share session loading and snapshot-change detection across startup, navigation, refresh, and search. Cancel superseded cross-session searches and stop narration when the active session changes.
+- Consolidate privacy-safe workflow and provider errors with stable support codes. Retain accepted download receipts through observation failures and report uncertain model lifecycle outcomes accurately.
+- Restrict automatic completion retries to eligible transient rejections with an explicit end-to-end idempotency contract. Reuse the same request and key, and never replay accepted, partial, ambiguous, timed-out, or canceled completions automatically.
+- Package the self-contained Windows x64 app, required .NET Desktop Runtime, offline Help, and optional local SearXNG search component. Release metadata, dependency inventory, signing reports, and checksums accompany the installer.

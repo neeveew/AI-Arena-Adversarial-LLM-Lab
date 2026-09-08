@@ -811,10 +811,10 @@ internal static partial class Program
                     "Failed lifecycle state reintroduced a local visual or live-announcement surface");
 
                 lifecycle = null;
-                InvokeProviderModelsButtonByKeyboard(control.LifecycleAction, host);
+                var keyboardReceipt = InvokeProviderModelsButtonByKeyboard(control.LifecycleAction, host);
                 FlushProviderModelsDispatcher(host);
                 Require(lifecycle is not null && lifecycle.Load && control.HasPendingLifecycle,
-                    "Space did not invoke the focused LM Studio lifecycle button");
+                    $"Space did not invoke the focused LM Studio lifecycle button ({keyboardReceipt})");
                 var unconfirmedLoad = lifecycle!;
                 Require(control.SetLifecycleState(
                             unconfirmedLoad.OperationId,
@@ -895,7 +895,7 @@ internal static partial class Program
                 });
                 FlushProviderModelsDispatcher(host);
                 Require(AutomationProperties.GetItemStatus(control.LifecycleStatus) == "Succeeded"
-                        && control.LifecycleStatus.Text.Contains("LM Studio now confirms", StringComparison.Ordinal)
+                        && control.LifecycleStatus.Text.Contains("Local provider now confirms", StringComparison.Ordinal)
                         && control.LifecycleStatus.Text.Contains("is loaded", StringComparison.Ordinal)
                         && control.LifecycleAction.Content?.ToString() == "Unload model"
                         && control.LifecycleAction.IsEnabled,
@@ -956,7 +956,7 @@ internal static partial class Program
                 });
                 FlushProviderModelsDispatcher(host);
                 Require(AutomationProperties.GetItemStatus(control.LifecycleStatus) == "Succeeded"
-                        && control.LifecycleStatus.Text.Contains("LM Studio now confirms", StringComparison.Ordinal)
+                        && control.LifecycleStatus.Text.Contains("Local provider now confirms", StringComparison.Ordinal)
                         && control.LifecycleStatus.Text.Contains("is loaded", StringComparison.Ordinal)
                         && control.LifecycleAction.Content?.ToString() == "Unload model"
                         && control.LifecycleAction.IsEnabled,
@@ -1037,7 +1037,7 @@ internal static partial class Program
                 });
                 FlushProviderModelsDispatcher(host);
                 Require(AutomationProperties.GetItemStatus(control.LifecycleStatus) == "Succeeded"
-                        && control.LifecycleStatus.Text.Contains("LM Studio now confirms", StringComparison.Ordinal)
+                        && control.LifecycleStatus.Text.Contains("Local provider now confirms", StringComparison.Ordinal)
                         && control.LifecycleStatus.Text.Contains("is unloaded", StringComparison.Ordinal)
                         && control.LifecycleAction.Content?.ToString() == "Load model"
                         && control.LifecycleAction.IsEnabled
@@ -1221,22 +1221,8 @@ internal static partial class Program
             && bounds.Bottom <= ancestor.ActualHeight + 1;
     }
 
-    static void InvokeProviderModelsButtonByKeyboard(Button button, Window host)
-    {
-        Require(button.Focus(), "LM Studio lifecycle button could not receive keyboard focus.");
-        var source = PresentationSource.FromVisual(host)
-            ?? throw new InvalidOperationException("Hosted Models surface had no presentation source.");
-        var down = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, Key.Space)
-        {
-            RoutedEvent = Keyboard.KeyDownEvent
-        };
-        button.RaiseEvent(down);
-        var up = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, Key.Space)
-        {
-            RoutedEvent = Keyboard.KeyUpEvent
-        };
-        button.RaiseEvent(up);
-    }
+    static string InvokeProviderModelsButtonByKeyboard(Button button, Window host) =>
+        PressHostedSpaceKey(button, host).Diagnostic;
 
     static void RaiseProviderModelsPreviewKey(UIElement target, Window host, Key key)
     {
