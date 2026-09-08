@@ -4,7 +4,7 @@
 
 # AI Arena - Lite: Adversarial LLM Lab
 
-Bring AI models together to debate ideas, collaborate on answers, and help build software—all in one Windows app. Choose the models and roles, guide the conversation, and explore how their answers develop.
+Bring AI models together to debate ideas, collaborate on answers, and help build software, all in one Windows app. Choose the models and roles, guide the conversation, and explore how their answers develop.
 
 **[Get the Windows installer](https://aiarena.me/downloads/)** · [User guide](docs/USER_GUIDE.md) · [Website](https://aiarena.me/)
 
