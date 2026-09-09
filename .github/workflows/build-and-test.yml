@@ -48,6 +48,10 @@ jobs:
       - name: Run the WPF test suite
         run: dotnet run --project tests/AIArena.Wpf.Tests/AIArena.Wpf.Tests.csproj --no-build
 
+      - name: Test dependency index source boundaries
+        shell: pwsh
+        run: ./scripts/tests/dependency-index.tests.ps1
+
       - name: Check the dependency index is current
         shell: pwsh
         run: ./scripts/dependency-index.ps1 -Check

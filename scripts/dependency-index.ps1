@@ -154,9 +154,13 @@ $projectRows = @(foreach ($project in $projects) {
     }
 })
 
-$sourceFiles = @(Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.cs" -File |
-    Where-Object { $_.FullName -notmatch $excludedPathPattern } |
-    Sort-Object FullName)
+# Use the same durable roots for types and projects. Archived designs and
+# nested checkouts under artifacts must not change the committed index.
+$sourceFiles = @(
+    foreach ($projectSearchRoot in $projectSearchRoots) {
+        Get-ChildItem -LiteralPath $projectSearchRoot -Recurse -Filter "*.cs" -File
+    }
+) | Where-Object { $_.FullName -notmatch $excludedPathPattern } | Sort-Object FullName
 
 $typeRows = [System.Collections.Generic.List[object]]::new()
 $typePattern = '(?m)^\s*(?:(?:public|internal|private|protected|sealed|static|abstract|partial|readonly)\s+)*(class|record(?:\s+class|\s+struct)?|interface|struct)\s+([A-Za-z_][A-Za-z0-9_]*)'
