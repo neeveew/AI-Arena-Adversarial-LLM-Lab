@@ -5,6 +5,7 @@ namespace AIArena.Core.Models;
 /// <summary>Provider-neutral completion outcome normalization.</summary>
 public static class ModelCompletionOutcomeClassifier
 {
+    public const string EmptyPublicContentError = "Provider returned a successful response without assistant content.";
     private static readonly string[] ContextMarkers =
     [
         "context_length_exceeded", "context length exceeded", "maximum context length",
@@ -16,24 +17,32 @@ public static class ModelCompletionOutcomeClassifier
     public static ModelCompletionResult Normalize(ModelCompletionResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
-        var failureKind = result.Ok
-            ? ModelCompletionFailureKind.None
-            : result.FailureKind == ModelCompletionFailureKind.None
-                ? ClassifyFailure(result.Error, result.ProviderStatusCode, result.ProviderErrorCode)
-                : result.FailureKind;
+        var missingPublicContent = result.Ok && string.IsNullOrWhiteSpace(result.Text);
+        var ok = result.Ok && !missingPublicContent;
+        var failureKind = missingPublicContent
+            ? ModelCompletionFailureKind.EmptyPublicContent
+            : ok
+                ? ModelCompletionFailureKind.None
+                : result.FailureKind == ModelCompletionFailureKind.None
+                    ? ClassifyFailure(result.Error, result.ProviderStatusCode, result.ProviderErrorCode)
+                    : result.FailureKind;
         var stopReason = result.StopReason != ModelCompletionStopReason.Unknown
             ? result.StopReason
-            : result.Ok
+            : ok
                 ? ModelCompletionStopReason.Completed
-                : ModelCompletionStopReason.ProviderError;
+                : failureKind == ModelCompletionFailureKind.EmptyPublicContent
+                    ? ModelCompletionStopReason.Unknown
+                    : ModelCompletionStopReason.ProviderError;
         return result with
         {
+            Ok = ok,
+            Error = missingPublicContent ? EmptyPublicContentError : result.Error,
             FailureKind = failureKind,
             StopReason = stopReason,
-            ProviderErrorCode = PrivacySafeProviderErrorCode(result.ProviderErrorCode)
+            ProviderErrorCode = PrivacySafeProviderErrorCode(result.ProviderErrorCode),
+            ProviderStopReason = PrivacySafeProviderErrorCode(result.ProviderStopReason)
         };
     }
-
     /// <summary>
     /// Provider codes are durable diagnostic metadata, not provider error bodies.
     /// Admit only a short code-shaped value so credentials, URLs, paths, and
@@ -97,9 +106,11 @@ public static class ModelCompletionOutcomeClassifier
             return ModelCompletionFailureKind.Capacity;
         }
 
-        if (combined.Contains("returned no public content", StringComparison.Ordinal)
-            || combined.Contains("empty public response", StringComparison.Ordinal)
-            || combined.Contains("empty model response", StringComparison.Ordinal))
+        if ((providerStatusCode is null or >= 200 and < 300)
+            && (combined.Contains("returned no public content", StringComparison.Ordinal)
+                || combined.Contains("empty public response", StringComparison.Ordinal)
+                || combined.Contains("empty model response", StringComparison.Ordinal)
+                || combined.Contains("successful response without assistant content", StringComparison.Ordinal)))
         {
             return ModelCompletionFailureKind.EmptyPublicContent;
         }
@@ -148,18 +159,61 @@ public static class ModelCompletionOutcomeClassifier
 
     public static ModelCompletionStopReason ExtractStopReason(JsonElement root)
     {
+        var reported = ClassifyStopReason(ExtractProviderStopReason(root));
+        // A structured tool response is not a reasoning-only answer. Keep its
+        // raw terminal code separately, and never interpret tool arguments.
+        return reported is not (ModelCompletionStopReason.ProviderError or ModelCompletionStopReason.ContentFiltered)
+            && HasToolOutput(root)
+                ? ModelCompletionStopReason.ToolCall
+                : reported;
+    }
+
+    /// <summary>Preserves a short terminal code verbatim; arbitrary provider payloads are not metadata.</summary>
+    public static string ExtractProviderStopReason(JsonElement root, string? apiToken = null)
+    {
+        string firstUnknown = "";
         foreach (var property in new[] { "finish_reason", "stop_reason", "done_reason", "status" })
         {
-            var value = FindString(root, property, 0);
-            var classified = ClassifyStopReason(value);
-            if (classified != ModelCompletionStopReason.Unknown)
+            var value = PrivacySafeProviderErrorCode(FindTerminalString(root, property, 0));
+            if (value.Length == 0
+                || (!string.IsNullOrEmpty(apiToken) && value.Contains(apiToken, StringComparison.Ordinal))) continue;
+            if (ClassifyStopReason(value) != ModelCompletionStopReason.Unknown) return value;
+            if (firstUnknown.Length == 0) firstUnknown = value;
+        }
+        return firstUnknown;
+    }
+
+    private static bool HasToolOutput(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return false;
+        if (root.TryGetProperty("output", out var output) && output.ValueKind == JsonValueKind.Array
+            && output.EnumerateArray().Any(item => item.ValueKind == JsonValueKind.Object
+                && item.TryGetProperty("type", out var type) && type.ValueKind == JsonValueKind.String
+                && type.GetString() is "tool_call" or "invalid_tool_call" or "function_call"))
+        {
+            return true;
+        }
+        if (HasMessageToolCall(root)) return true;
+        if (root.TryGetProperty("message", out var message) && HasMessageToolCall(message)) return true;
+        if (root.TryGetProperty("choices", out var choices) && choices.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var choice in choices.EnumerateArray())
             {
-                return classified;
+                if (choice.ValueKind != JsonValueKind.Object) continue;
+                foreach (var field in new[] { "message", "delta" })
+                {
+                    if (choice.TryGetProperty(field, out var part) && HasMessageToolCall(part)) return true;
+                }
             }
         }
-
-        return ModelCompletionStopReason.Unknown;
+        return false;
     }
+
+    private static bool HasMessageToolCall(JsonElement message) =>
+        message.ValueKind == JsonValueKind.Object
+        && ((message.TryGetProperty("tool_calls", out var tools) && tools.ValueKind == JsonValueKind.Array
+                && tools.GetArrayLength() > 0)
+            || (message.TryGetProperty("function_call", out var function) && function.ValueKind == JsonValueKind.Object));
 
     public static string FailureKindWire(ModelCompletionFailureKind value) => value switch
     {
@@ -187,41 +241,31 @@ public static class ModelCompletionOutcomeClassifier
         _ => "unknown"
     };
 
-    private static string FindString(JsonElement element, string name, int depth)
+    private static string FindTerminalString(JsonElement element, string name, int depth)
     {
-        if (depth > 5)
+        if (depth > 3 || element.ValueKind != JsonValueKind.Object) return "";
+        if (element.TryGetProperty(name, out var direct) && direct.ValueKind == JsonValueKind.String)
         {
-            return "";
+            return direct.GetString() ?? "";
         }
 
-        if (element.ValueKind == JsonValueKind.Object)
+        // Only documented response envelopes may carry terminal metadata.
+        // Do not descend into generated output, tool arguments, or usage.
+        if (element.TryGetProperty("choices", out var choices) && choices.ValueKind == JsonValueKind.Array)
         {
-            if (element.TryGetProperty(name, out var direct) && direct.ValueKind == JsonValueKind.String)
+            var first = choices.EnumerateArray().FirstOrDefault();
+            if (first.ValueKind == JsonValueKind.Object
+                && first.TryGetProperty(name, out var choiceValue) && choiceValue.ValueKind == JsonValueKind.String)
             {
-                return direct.GetString() ?? "";
-            }
-
-            foreach (var property in element.EnumerateObject())
-            {
-                var nested = FindString(property.Value, name, depth + 1);
-                if (nested.Length > 0)
-                {
-                    return nested;
-                }
+                return choiceValue.GetString() ?? "";
             }
         }
-        else if (element.ValueKind == JsonValueKind.Array)
+        foreach (var envelope in new[] { "result", "response" })
         {
-            foreach (var item in element.EnumerateArray())
-            {
-                var nested = FindString(item, name, depth + 1);
-                if (nested.Length > 0)
-                {
-                    return nested;
-                }
-            }
+            if (!element.TryGetProperty(envelope, out var nested)) continue;
+            var value = FindTerminalString(nested, name, depth + 1);
+            if (value.Length > 0) return value;
         }
-
         return "";
     }
 }

@@ -10,9 +10,9 @@
     <Product>AI Arena - Lite: Adversarial LLM Lab</Product>
     <AssemblyTitle>AI Arena - Lite</AssemblyTitle>
     <Description>Lite edition of the native Windows adversarial multi-agent LLM lab.</Description>
-    <Version>0.4.140-beta</Version>
-    <InformationalVersion>0.4.140-beta</InformationalVersion>
-    <FileVersion>0.4.140.0</FileVersion>
+    <Version>0.4.141-beta</Version>
+    <InformationalVersion>0.4.141-beta</InformationalVersion>
+    <FileVersion>0.4.141.0</FileVersion>
     <ApplicationIcon>Assets\ai-arena-icon.ico</ApplicationIcon>
     <!-- Profile-guided tiering costs nothing at build time and improves steady-state JIT. -->
     <TieredPGO>true</TieredPGO>

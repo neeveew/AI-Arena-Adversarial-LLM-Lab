@@ -17,6 +17,8 @@ internal static partial class Program
             try
             {
                 FlushProviderModelsDispatcher(host);
+                control.AdvancedSettings.IsExpanded = true;
+                FlushProviderModelsDispatcher(host);
 
                 var targets = FindProviderModelsDescendants<ProviderAssignmentCheckBox>(control.AssignmentTargets)
                     .ToArray();
@@ -31,7 +33,7 @@ internal static partial class Program
                         && targetNames[3].EndsWith("Beta", StringComparison.Ordinal)
                         && targetNames[4].EndsWith("Gamma", StringComparison.Ordinal)
                         && targetNames[5].EndsWith("Delta", StringComparison.Ordinal),
-                    "the normal 360-DIP details rail did not render Default, Narrator, then the active roster in an ordered three-column grid");
+                    "the expanded model editor did not render Default, Narrator, then the active roster in an ordered three-column grid");
 
                 var firstRowTop = targets[0].TranslatePoint(new Point(), control.AssignmentTargets).Y;
                 var secondRowTop = targets[3].TranslatePoint(new Point(), control.AssignmentTargets).Y;
@@ -46,25 +48,26 @@ internal static partial class Program
                     .ToArray();
                 Require(defaultLabels.Contains("Default")
                         && !defaultLabels.Contains("Default for unassigned agents")
-                        && targets.All(target => target.MinHeight >= 44
+                        && targets.All(target => target.MinHeight >= 32
                             && target.FocusVisualStyle is not null
                             && new CheckBoxAutomationPeer(target).GetPattern(PatternInterface.Toggle) is IToggleProvider),
-                    "assignment switches did not preserve the compact Default label, 44-DIP target, focus ring, and UIA TogglePattern contract");
+                    "assignment switches did not preserve the compact Default label, 32-DIP desktop target, focus ring, and UIA TogglePattern contract");
 
                 Require(control.CustomToneInput.MaxLength == 240
-                        && control.ContextWindowInput.MinHeight >= 44
-                        && control.HistoryPolicySelector.MinHeight >= 44
-                        && control.ResponseToneSelector.MinHeight >= 44
-                        && control.ConfigurationReloadAction.MinHeight >= 44,
+                        && control.ContextWindowInput.MinHeight >= 32
+                        && control.HistoryPolicySelector.MinHeight >= 32
+                        && control.ResponseToneSelector.MinHeight >= 32
+                        && control.ConfigurationReloadAction.MinHeight >= 32,
                     "model configuration inputs did not preserve their bounded custom-tone and accessible target-size contracts");
                 var chaptered = control.HistoryPolicySelector.Items[2];
                 Require(chaptered.ToString()?.Contains("Coming later", StringComparison.Ordinal) == true
                         && chaptered.GetType().GetProperty("IsEnabled")?.GetValue(chaptered) is false,
                     "Chaptered history was not visibly present as a disabled future option");
-                Require(control.ConfiguredContextEvidence.Text == "8,192 tokens"
+                Require(control.ConfiguredContextEvidence.Text == "Configured: 8,192 tokens"
                         && control.EffectiveContextEvidence.Text.Contains("4,096 tokens", StringComparison.Ordinal)
-                        && control.EffectiveContextEvidence.Text.Contains("LM Studio runtime", StringComparison.Ordinal),
-                    "the details rail did not distinguish configured context from provider-observed effective evidence");
+                        && control.EffectiveContextEvidence.ToolTip?.ToString()?.Contains("LM Studio runtime", StringComparison.Ordinal) == true
+                        && AutomationProperties.GetHelpText(control.EffectiveContextEvidence).Contains("LM Studio runtime", StringComparison.Ordinal),
+                    "the expanded model editor did not distinguish configured context from provider-observed effective evidence");
 
                 control.SearchBox.Text = "loaded only";
                 Require(control.SelectModel("available-alias", focusConfiguration: true),
@@ -84,7 +87,7 @@ internal static partial class Program
                     var theme = ThemePalette.Resolve(themeId);
                     ApplyExperimentSurfaceTheme(control, theme);
                     FlushProviderModelsDispatcher(host);
-                    Require(ExperimentBrushMatches(control.DetailSurface.Background, theme.Panel)
+                    Require(ExperimentBrushMatches(control.DetailSurface.Background, theme.Input)
                             && control.ContextWindowInput.FocusVisualStyle is not null
                             && control.HistoryPolicySelector.FocusVisualStyle is not null
                             && control.ResponseToneSelector.FocusVisualStyle is not null,
@@ -93,24 +96,21 @@ internal static partial class Program
 
                 host.Width = 960;
                 FlushProviderModelsDispatcher(host);
-                Require(control.UsesCompactLayout && control.AssignmentGridColumns == 3,
-                    "the 960-DIP stacked surface did not retain a usable three-column assignment grid");
+                var availableAssignmentWidth = ((FrameworkElement)control.AssignmentTargets.Parent).ActualWidth;
+                Require(control.UsesCompactLayout
+                        && control.AssignmentGridColumns == (availableAssignmentWidth >= 600 ? 3 : availableAssignmentWidth >= 380 ? 2 : 1),
+                    "the 960-DIP inline surface did not size assignment columns to their available width");
 
                 host.Width = 1500;
                 control.LayoutTransform = new ScaleTransform(2, 2);
                 FlushProviderModelsDispatcher(host);
                 Require(control.UsesCompactLayout
                         && control.AssignmentGridColumns == 1
-                        && control.DetailScroller.VerticalScrollBarVisibility == ScrollBarVisibility.Auto
-                        && control.WorkspaceScroller.ScrollableHeight > 0,
-                    "the 200% layout did not collapse assignments to one column with a reachable scrolling details surface");
-                control.ConfigurationReloadAction.BringIntoView();
-                FlushProviderModelsDispatcher(host);
-                var reloadBounds = control.ConfigurationReloadAction.TransformToAncestor(control.WorkspaceScroller)
-                    .TransformBounds(new Rect(new Point(), control.ConfigurationReloadAction.RenderSize));
-                Require(reloadBounds.Bottom >= 0
-                        && reloadBounds.Top <= control.WorkspaceScroller.ViewportHeight + 1,
-                    "the configuration reload action was not reachable at 200% scaling");
+                        && control.DetailBody is not ScrollViewer
+                        && control.WorkspaceViewportElement is not ScrollViewer,
+                    "the 200% layout did not collapse assignments to one column within the scrolling model list");
+                AssertProviderModelsInlineEditor(control);
+                AssertProviderModelsInlineElementReachable(control, host, control.ConfigurationReloadAction);
             }
             finally
             {
@@ -126,6 +126,8 @@ internal static partial class Program
             var control = HostProviderModelsConfigurationSurface(out var host);
             try
             {
+                FlushProviderModelsDispatcher(host);
+                control.AdvancedSettings.IsExpanded = true;
                 FlushProviderModelsDispatcher(host);
                 ProviderModelConfigurationChangedEventArgs? change = null;
                 ProviderModelConfigurationReloadRequestedEventArgs? reload = null;
@@ -154,7 +156,7 @@ internal static partial class Program
                 Require(control.CatalogList.IsEnabled
                         && control.LoadedList.IsEnabled
                         && control.SearchBox.IsEnabled
-                        && control.DetailScroller.IsEnabled
+                        && control.DetailBody.IsEnabled
                         && !control.ContextWindowInput.IsEnabled
                         && !control.LifecycleAction.IsEnabled,
                     "configuration saving disabled browsing or left a competing model mutation enabled");

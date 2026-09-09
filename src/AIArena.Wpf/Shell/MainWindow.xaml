@@ -1466,7 +1466,15 @@
                         </UniformGrid>
                     </Border>
                 </Grid>
-            </Grid>
+
+<Border x:Name="ConversationStartPanel" Grid.Row="2" Panel.ZIndex="2" Visibility="Collapsed" MaxWidth="760" VerticalAlignment="Center" HorizontalAlignment="Stretch" Style="{StaticResource WorkflowPanel}">
+    <StackPanel>
+        <TextBlock Text="Start the conversation" Style="{StaticResource PanelTitle}" />
+        <TextBlock x:Name="ConversationStartHintText" Text="Send the first message for all agents to respond to." Style="{StaticResource HintText}" Margin="{DynamicResource Arena.Gap.Section}" AutomationProperties.Name="Conversation starting instructions" AutomationProperties.LiveSetting="Polite" />
+        <ContentControl x:Name="ConversationStartComposerHost" HorizontalContentAlignment="Stretch" />
+    </StackPanel>
+</Border>
+</Grid>
 
             <Border x:Name="CustomMatchPanel"
                     Visibility="Collapsed"
@@ -3050,7 +3058,8 @@
                 <StackPanel>
                 <StackPanel x:Name="ArenaRightRailPanel">
 
-                <Border Style="{StaticResource RightRailCard}">
+                <ContentControl x:Name="OperatorComposerDock" HorizontalContentAlignment="Stretch">
+<Border x:Name="OperatorComposerCard" Style="{StaticResource RightRailCard}">
                     <StackPanel>
                         <Grid Margin="{DynamicResource Arena.Gap.Stack.After.Comfortable}">
                             <Grid.ColumnDefinitions>
@@ -3123,7 +3132,7 @@
                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Tight}"
                                        Text="Writes private memory notes; no public transcript turn." />
                         </Grid>
-                        <Expander Header="Steering aids"
+                        <Expander x:Name="OperatorSteeringAids" Header="Steering aids"
                                   Style="{StaticResource Arena.Expander.Section}"
                                   IsExpanded="False"
                                   Margin="{DynamicResource Arena.Gap.Stack}"
@@ -3235,6 +3244,7 @@
                                      KeyDown="OperatorTurnText_KeyDown"
                                      TextChanged="OperatorTurnText_TextChanged" />
                         </Grid>
+                        <Button x:Name="SendAndStartConversationButton" Content="Send and start Auto Chat" Click="SendAndStartConversationButton_Click" Style="{StaticResource PrimaryButton}" Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" Visibility="Collapsed" AutomationProperties.Name="Send first message and start Auto Chat" AutomationProperties.HelpText="Save your public opening message, then start the agents." />
                         <Button x:Name="SendTurnButton"
                                 Content="Send Turn"
                                 Click="SendTurnButton_Click"
@@ -3243,6 +3253,7 @@
                                 Margin="{DynamicResource Arena.Gap.Stack.Before.Default}" />
                     </StackPanel>
                 </Border>
+</ContentControl>
 
                 <Expander x:Name="AgentPerformanceExpander"
                           Header="Agent Performance"

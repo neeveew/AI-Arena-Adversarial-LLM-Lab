@@ -35,6 +35,14 @@ The Universal Status Center may identify the latest failure, but Models, Provide
 
 GPU telemetry can be unavailable while chat still works. Missing telemetry is not a provider failure.
 
+## Reasoning but no public answer
+
+A successful server response can contain reasoning without a visible answer. This is distinct from a connection failure. It can happen when reasoning consumes the response allowance; reaching the configured token count suggests this, but only a provider stop code confirms why generation ended.
+
+Arena preserves the reported stop code and token counts. When the model advertises a supported off/low reasoning setting, Arena tries it once on the same model and exact conversation. If no answer follows, or that setting is unavailable, it explains the result and pauses instead of looping. Increase the response allowance if context permits, or choose a model that can answer within the available space. Do not reduce the output limit further for this particular failure.
+
+The live card distinguishes waiting, observed model loading, context processing, thinking, and public writing. A waiting label by itself does not establish that a server is stalled.
+
 ## LM Studio lifecycle
 
 A successful load/unload HTTP response is provisional until the native catalog confirms residency. **Awaiting confirmation** keeps the last confirmed row. Do not repeat an ambiguous mutation until refresh resolves its state.
@@ -45,7 +53,7 @@ If changed context differs from the live process, use Reload to apply and verify
 
 AI Arena - Lite does not download, launch, stop, or replace a user-owned `llama-server`. Inspect/Reconnect capability-detects optional health, props, slots, router models, and lifecycle endpoints. **Not reported** means the server did not expose that field; it does not prove chat is broken.
 
-`Retry-After` is delay guidance, not proof that a provider did no work. Compatible, LM Studio, Ollama, and llama.cpp routes are replayed only when an explicitly configured end-to-end idempotency contract can reuse one key and the exact payload; a requested delay beyond the five-second local policy is surfaced instead of shortened. Loopback location and busy/loading text are not replay proof on their own. After any 2xx acceptance, partial or incomplete stream, ambiguous send/read failure, timeout, or cancellation, AI Arena - Lite preserves available evidence and never replays the completion automatically.
+`Retry-After` is delay guidance, not proof that a provider did no work. Compatible, LM Studio, Ollama, and llama.cpp routes are replayed only when an explicitly configured end-to-end idempotency contract can reuse one key and the exact payload; a requested delay beyond the five-second local policy is surfaced instead of shortened. Loopback location and busy/loading text are not replay proof on their own. After a partial or incomplete stream, ambiguous send/read failure, timeout, or cancellation, AI Arena - Lite preserves available evidence and never replays the completion automatically. A fully completed reasoning-only response has the separate, single reduced-reasoning recovery described above; it is not treated as a transport retry.
 
 ## Credentials
 

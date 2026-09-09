@@ -28,6 +28,36 @@ if (args.Length > 0 && args[0].Equals("--abandon-experiment-definition", StringC
 
 var tests = new List<(string Name, Action Test)>
 {
+    ("provider reasoning KeepsReportedStopOnAcceptedTransportFailure", ProviderReasoningOutcomeTests.KeepsReportedStopOnAcceptedTransportFailure),
+    ("context recovery ReasoningOnlyFactoryRetryPreservesExactConversation", ArenaTurnStreamingTests.ReasoningOnlyFactoryRetryPreservesExactConversation),
+    ("context recovery ReasoningOnlyRecoveryHonorsCapabilitiesAndTerminalFailures", ArenaTurnStreamingTests.ReasoningOnlyRecoveryHonorsCapabilitiesAndTerminalFailures),
+    ("context recovery NarratorAndContinuationShareBoundedReasoningRecovery", ArenaTurnStreamingTests.NarratorAndContinuationShareBoundedReasoningRecovery),
+    ("context recovery ActiveContextFitsRequestsWithoutChangingSavedPreferences", ArenaTurnStreamingTests.ActiveContextFitsRequestsWithoutChangingSavedPreferences),
+    ("context recovery FactoryActiveBudgetRetainsCriticalMessagesAndFrozenRetry", ArenaTurnStreamingTests.FactoryActiveBudgetRetainsCriticalMessagesAndFrozenRetry),
+    ("context recovery NeverTreatsPreviouslyStreamedPublicTextAsAnEmptyAnswer", ProviderReasoningOutcomeTests.NeverTreatsPreviouslyStreamedPublicTextAsAnEmptyAnswer),
+    ("provider reasoning IncludesExplicitNativeReasoningOffInBothPayloads", ProviderReasoningOutcomeTests.IncludesExplicitNativeReasoningOffInBothPayloads),
+    ("provider reasoning NormalizesReasoningOnlyResponsesWithoutInventingOutputLimits", ProviderReasoningOutcomeTests.NormalizesReasoningOnlyResponsesWithoutInventingOutputLimits),
+    ("provider reasoning ExcludesStructuredToolOutputAndProtectsTerminalMetadata", ProviderReasoningOutcomeTests.ExcludesStructuredToolOutputAndProtectsTerminalMetadata),
+    ("provider reasoning PreservesNativeReasoningEvidenceAndFailureBoundaries", ProviderReasoningOutcomeTests.PreservesNativeReasoningEvidenceAndFailureBoundaries),
+    ("provider reasoning ReportsNativeStagesBeforeCompletionWithoutContentExposure", ProviderActivityTests.ReportsNativeStagesBeforeCompletionWithoutContentExposure),
+    ("provider reasoning MapsReasoningAliasesToThinkingAndMixedDeltasToWriting", ProviderActivityTests.MapsReasoningAliasesToThinkingAndMixedDeltasToWriting),
+    ("provider reasoning IsolatesThrowingActivityObserversFromGeneration", ProviderActivityTests.IsolatesThrowingActivityObserversFromGeneration),
+    ("transcript activity ObservedStagesRemainContentFreeAndPublicDeltasExact", ArenaTurnActivityTests.ObservedStagesRemainContentFreeAndPublicDeltasExact),
+    ("transcript activity WithheldToolChoiceNeverClaimsVisibleWriting", ArenaTurnActivityTests.WithheldToolChoiceNeverClaimsVisibleWriting),
+    ("transcript activity ReducedReasoningRecoverySeparatesAttemptActivity", ArenaTurnActivityTests.ReducedReasoningRecoverySeparatesAttemptActivity),
+    ("transcript activity ActivityCallbacksAfterCancellationAreRejected", ArenaTurnActivityTests.ActivityCallbacksAfterCancellationAreRejected),
+    ("transcript activity ActivityObserverFailuresDoNotAlterCompletion", ArenaTurnActivityTests.ActivityObserverFailuresDoNotAlterCompletion),
+    ("transcript activity UnobservedActivityClientKeepsBufferedContract", ArenaTurnActivityTests.UnobservedActivityClientKeepsBufferedContract),
+    ("Arena streaming reports committed turns and retries", ArenaTurnStreamingTests.TurnsAndRetryReportOnlyCommittedFinalMessages),
+    ("Arena streaming separates fallback and repair attempts", ArenaTurnStreamingTests.FallbackAndRepairSeparateAttemptsAndDiscardLateDeltas),
+    ("Arena streaming isolates cancellation errors and observers", ArenaTurnStreamingTests.CancellationErrorsAndObserverFailuresPreservePersistence),
+    ("Arena streaming reports narration and continuation", ArenaTurnStreamingTests.NarrationAndContinuationReportCommittedIdentity),
+    ("Arena streaming protects tool requests and buffered clients", ArenaTurnStreamingTests.ToolRequestsStayPrivateAndBufferedClientsRemainCompatible),
+    ("Ollama streams incrementally and keeps terminal evidence", OllamaStreamingTests.StreamsIncrementallyAndKeepsTerminalEvidence),
+    ("Ollama preserves partial accepted stream failures", OllamaStreamingTests.PreservesPartialOutputAcrossAcceptedStreamFailures),
+    ("Ollama propagates cancellation without replay", OllamaStreamingTests.PropagatesCallerCancellationWithoutReplay),
+    ("Ollama rejects empty terminal completion", OllamaStreamingTests.RejectsEmptyTerminalCompletion),
+    ("Ollama bounds oversized stream frames", OllamaStreamingTests.BoundsOversizedFramesWithoutLosingPartialOutput),
     ("experimentation contracts declare every v1 schema exactly once", ExperimentationContractTests.DeclaresEveryV1SchemaExactlyOnce),
     ("experimentation contracts serialize canonically and round trip strictly", ExperimentationContractTests.SerializesCanonicallyAndRoundTripsStrictly),
     ("experimentation contracts enforce explicit evidence states", ExperimentationContractTests.EnforcesObservedInferredAndUnavailableEvidence),
@@ -1122,8 +1152,9 @@ static void OmitsDisabledReasoningFromLmStudioNativeChat()
 
     Require(result.Ok, $"native chat with reasoning disabled failed: {result.Error}");
     using var payload = JsonDocument.Parse(handler.Body);
-    Require(!payload.RootElement.TryGetProperty("reasoning", out _),
-        "LM Studio native reasoning=off must omit the optional reasoning field");
+    Require(payload.RootElement.TryGetProperty("reasoning", out var reasoning)
+            && reasoning.GetString() == "off",
+        "LM Studio native reasoning=off must explicitly disable server-default reasoning");
 }
 
 static void ContinuesLmStudioNativeChatByResponseId()
@@ -5645,7 +5676,8 @@ static void RepairEmptyNativeOneTurnContent()
     var snapshot = JsonSerializer.Deserialize<ArenaSnapshot>(SampleSnapshot())!;
     store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
     var client = new FakeModelProviderClient(["", "repaired public reply"], "native reasoning");
-    var service = new TurnRunnerService(client, store, log);
+    var service = new TurnRunnerService(client, store, log,
+        runtimeEvidenceResolver: new ArenaTurnStreamingTests.FixedRuntimeEvidence(16384, canDisable: true));
 
     var result = service.RunOneTurnAsync().GetAwaiter().GetResult();
     Require(result.Ok, $"turn failed: {result.Error}");
@@ -5654,7 +5686,10 @@ static void RepairEmptyNativeOneTurnContent()
     var message = loaded.Engine.Messages.Last();
     Require(message.Text == "repaired public reply", "repair response should become public message");
     Require(message.Status == "ok", "repaired response should be ok");
-    Require(File.ReadAllText(log.EventPath()).Contains("native_one_turn_empty_content_retry"), "empty content retry event missing");
+    Require(client.Configs[1].Reasoning == "off" && client.Requests[0].SequenceEqual(client.Requests[1]),
+        "supported reasoning-only recovery must reduce reasoning on the exact original prompt");
+    Require(message.Metadata.TryGetValue(ArenaCompletionExecutor.RecoveryMetadataKey, out var recovery)
+        && recovery.GetProperty("attempted").GetBoolean(), "reasoning-only recovery receipt missing from the final message");
     Directory.Delete(root, recursive: true);
 }
 
@@ -5690,13 +5725,16 @@ static void RetryRepairIgnoresReplacedLmStudioResponseId()
     snapshot.Engine.TurnIndex = 1;
     store.SaveSnapshotAsync(snapshot).GetAwaiter().GetResult();
     var client = new FakeModelProviderClient(["", "retry repair reply"], "native reasoning");
-    var service = new TurnRunnerService(client, store, log);
+    var service = new TurnRunnerService(client, store, log,
+        runtimeEvidenceResolver: new ArenaTurnStreamingTests.FixedRuntimeEvidence(16384, canDisable: true));
 
     var result = service.RetryTurnAsync("default", turn: 2, speakerId: "beta", createdAt: 2).GetAwaiter().GetResult();
 
     Require(result.Ok, $"retry failed: {result.Error}");
     Require(client.Configs.Count == 2, "empty retry should trigger one repair provider call");
     Require(client.Configs.All(config => config.PreviousResponseId == ""), "retry repair should not continue from the replaced response id");
+    Require(client.Configs[1].Reasoning == "off" && client.Requests[0].SequenceEqual(client.Requests[1]),
+        "retry recovery must preserve the original retry prompt and use its supported reasoning reduction");
     Require(client.Configs[1].RequestInspectionContext?.Explanations.Any(item => item.Subject == "reasoning_override" && item.EvidenceState == "observed") == true,
         "retry repair did not explain its reasoning-off transformation at the provider boundary");
     var loaded = store.LoadSnapshotAsync().GetAwaiter().GetResult()!;

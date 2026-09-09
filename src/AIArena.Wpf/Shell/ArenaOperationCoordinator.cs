@@ -48,6 +48,7 @@ internal sealed class ArenaOperationCoordinator
     private int activeOperationCount;
     private bool shutdownRequested;
     private bool arenaReady;
+    private bool requiresConversationStart;
     private string readinessMessage = "Load a session to enable arena actions.";
 
     public ArenaOperationCoordinator(
@@ -319,7 +320,7 @@ internal sealed class ArenaOperationCoordinator
         var focusReturnsToStart = !stopEnabled && stopButton.IsKeyboardFocusWithin;
         autoChatButton.Visibility = stopEnabled ? Visibility.Collapsed : Visibility.Visible;
         stopButton.Visibility = stopEnabled ? Visibility.Visible : Visibility.Collapsed;
-        autoChatButton.IsEnabled = !busy && arenaReady;
+        autoChatButton.IsEnabled = !busy && (arenaReady || requiresConversationStart);
         oneTurnButton.IsEnabled = !busy && arenaReady;
         resetButton.IsEnabled = !busy;
         updateScenarioBusyState(busy, autoChatRunning);
@@ -361,10 +362,11 @@ internal sealed class ArenaOperationCoordinator
     public void UpdateReadiness(ArenaActionReadiness readiness)
     {
         arenaReady = readiness.CanRun;
+        requiresConversationStart = readiness.RequiresConversationStart;
         readinessMessage = readiness.Message;
         var busy = isBusy();
         var autoChatRunning = isAutoChatRunning();
-        autoChatButton.IsEnabled = !busy && arenaReady;
+        autoChatButton.IsEnabled = !busy && (arenaReady || requiresConversationStart);
         oneTurnButton.IsEnabled = !busy && arenaReady;
         narrateNowButton.IsEnabled = (!busy || autoChatRunning) && arenaReady && readiness.CanNarrate;
 
@@ -409,6 +411,12 @@ internal sealed class ArenaOperationCoordinator
                 NarrationMessage: "Narration is unavailable after End Match. Reset or fork the session to continue.");
         }
 
+        if (snapshot.HasUnresolvedContextFailure)
+        {
+            return new ArenaActionReadiness(false, TurnRunnerService.ContextRecoveryRequiredError,
+                CanNarrate: false, NarrationMessage: TurnRunnerService.ContextRecoveryRequiredError);
+        }
+
         var providerReachable = snapshot.ProviderOnline;
         var activeAgentsWithoutRoute = snapshot.Agents
             .Where(agent => agent.Active && !HasEffectiveModelRoute(snapshot, agent))
@@ -441,7 +449,8 @@ internal sealed class ArenaOperationCoordinator
 
         if (snapshot.FactoryMode && factoryInput == FactoryConversationInputState.None)
         {
-            return Readiness(false, "Factory mode needs a public Operator turn to start its shared group conversation. Send one from AI Lab before running a model.");
+            return Readiness(false, "Send the first public message to start the shared group conversation.")
+                with { RequiresConversationStart = true };
         }
 
         if (snapshot.FactoryMode)
@@ -705,7 +714,8 @@ internal sealed record ArenaActionReadiness(
     bool CanRun,
     string Message,
     bool CanNarrate = true,
-    string NarrationMessage = "");
+    string NarrationMessage = "",
+    bool RequiresConversationStart = false);
 
 internal enum FactoryConversationInputState
 {

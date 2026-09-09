@@ -114,6 +114,12 @@ public sealed record ArenaViewSnapshot(
     public string MatchEndReason { get; init; } = "";
 
     /// <summary>
+    /// Authoritative Core evidence that a context-limit failure still requires
+    /// an explicit recovery action before Arena turns may continue.
+    /// </summary>
+    public bool HasUnresolvedContextFailure { get; init; }
+
+    /// <summary>
     /// Per-role generation overrides keyed by role id (alpha..delta, narrator).
     /// A role appears here only when its persisted config differs from the shared
     /// temperature or max output tokens; absent roles inherit shared values.

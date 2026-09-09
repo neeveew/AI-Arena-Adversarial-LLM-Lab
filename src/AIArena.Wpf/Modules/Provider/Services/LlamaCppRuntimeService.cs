@@ -222,7 +222,10 @@ public sealed partial class LlamaCppRuntimeService
                 Warnings: Array.AsReadOnly(warnings.Select(SafeText).Where(value => value.Length > 0).Distinct(StringComparer.Ordinal).ToArray()),
                 Error: error,
                 CheckedAt: checkedAt,
-                OmittedModelCount: omittedModelCount);
+                OmittedModelCount: omittedModelCount)
+            {
+                OperationalContextLength = propsInfo.ContextLength
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -988,6 +991,8 @@ public sealed record LlamaCppRuntimeSnapshot(
     DateTimeOffset CheckedAt,
     int OmittedModelCount = 0)
 {
+    public int? OperationalContextLength { get; init; }
+
     public static LlamaCppRuntimeSnapshot Unavailable(string error, DateTimeOffset checkedAt)
     {
         return new LlamaCppRuntimeSnapshot(

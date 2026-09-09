@@ -477,10 +477,11 @@ internal static class PromptInspectorTests
             progress: null).GetAwaiter().GetResult();
         Require(ollamaResult.Ok, $"Ollama streaming adapter path failed: {ollamaResult.Error}");
         var ollamaTrace = ollamaStore.Snapshot().Single();
-        Require(ollamaTrace.RequestedStreaming && !ollamaTrace.PayloadStreaming,
-            "Ollama trace conflated requested streaming with the actual non-streaming payload");
-        Require(ollamaTrace.Context.Any(item => item.Subject == "streaming" && item.EvidenceState == "observed"),
-            "Ollama non-streaming adapter behavior was not explained");
+        Require(ollamaTrace.RequestedStreaming && ollamaTrace.PayloadStreaming,
+            "Ollama stream flag did not correspond to serialized bytes");
+        Require(!ollamaTrace.Context.Any(item => item.Subject == "streaming"
+                && item.Explanation.Contains("non-streaming", StringComparison.Ordinal)),
+            "Ollama trace retained an obsolete non-streaming adapter explanation");
     }
 
     internal static void BoundsTracesAndIsolatesObserverFailuresAndCancellation()
@@ -626,7 +627,7 @@ internal static class PromptInspectorTests
         "{\"model_instance_id\":\"test-model\",\"response_id\":\"resp_result\",\"output\":[{\"type\":\"message\",\"content\":\"ok\"}],\"stats\":{\"input_tokens\":4,\"total_output_tokens\":2}}";
 
     private static string OllamaResponse() =>
-        "{\"model\":\"test-model\",\"message\":{\"content\":\"ok\"},\"prompt_eval_count\":5,\"eval_count\":2}";
+        "{\"model\":\"test-model\",\"message\":{\"content\":\"ok\"},\"done\":true,\"done_reason\":\"stop\",\"prompt_eval_count\":5,\"eval_count\":2}";
 
     private static HttpResponseMessage JsonResponse(HttpStatusCode status, string json) => new(status)
     {

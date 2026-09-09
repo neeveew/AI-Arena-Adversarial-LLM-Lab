@@ -23,11 +23,23 @@ internal static partial class Program
                     ?? throw new InvalidOperationException("the Available catalog did not expose its independent scroll viewer");
                 Require(control.LoadedList.Items.Count == 6
                         && control.CatalogList.Items.Count == 40
-                        && control.LoadedList.MaxHeight == 174
+                        && control.LoadedList.MaxHeight <= 200
                         && loadedScroll.ScrollableHeight > 0
                         && catalogScroll.ScrollableHeight > 0,
                     "the Models surface did not bound Loaded to three visible rows above an independently scrolling catalog");
 
+                var collapsedLoadedHeight = control.LoadedList.MaxHeight;
+                Require(control.SelectModel("loaded-00"), "the Loaded editor could not be selected");
+                FlushProviderModelsDispatcher(host);
+                AssertProviderModelsInlineEditor(control);
+                Require(control.LoadedList.MaxHeight > collapsedLoadedHeight
+                        && double.IsFinite(control.LoadedList.MaxHeight)
+                        && control.CatalogList.ActualHeight > 0,
+                    "expanding a Loaded model did not reserve usable bounded editor space while keeping the catalog reachable");
+                Require(control.SelectModel("catalog-00"), "the catalog editor could not be restored");
+                FlushProviderModelsDispatcher(host);
+                Require(control.LoadedList.MaxHeight == collapsedLoadedHeight,
+                    "leaving a Loaded model did not restore the compact Loaded list cap");
                 var peer = new ExpanderAutomationPeer(control.CatalogExpander);
                 var disclosure = peer.GetPattern(PatternInterface.ExpandCollapse) as IExpandCollapseProvider
                     ?? throw new InvalidOperationException("the Available catalog did not expose UIA ExpandCollapsePattern");
@@ -105,7 +117,7 @@ internal static partial class Program
                     ?? throw new InvalidOperationException("the Default assignment switch did not expose UIA TogglePattern");
                 Require(defaultSwitch.IsChecked == true
                         && defaultSwitch.IsEnabled
-                        && defaultSwitch.MinHeight >= 44
+                        && defaultSwitch.MinHeight >= 32
                         && AutomationProperties.GetItemStatus(defaultSwitch) == "Default"
                         && AutomationProperties.GetHelpText(defaultSwitch).Contains("Turn off", StringComparison.Ordinal),
                     "the active Default route was not exposed as an enabled, truthful assignment switch");

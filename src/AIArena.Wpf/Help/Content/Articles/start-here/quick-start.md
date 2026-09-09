@@ -40,7 +40,9 @@ The visible state tells the truth: **Default**, **Explicit**, **Uses default**, 
 4. Resolve every blocking readiness item. Warnings may remain when you understand them.
 5. Close Match Setup.
 
-For Factory mode, turn Match Setup application off and send a non-empty **Public Operator** turn before running a participant.
+For Factory mode, turn **Apply Match Setup to models** off. The Public Operator composer appears in the center of the transcript. Enter the opening message and choose **Send only**, then continue with **1 Turn** below. The composer returns to the right rail after the message is saved.
+
+If you choose **Auto Chat** while only the opening message is missing, it focuses the composer. Its **Send and start Auto Chat** action saves your first Public message before beginning repeated turns; use **Send only** for this single-turn walkthrough.
 
 ## 6. Run one turn
 

@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace AIArena.Wpf.Controls;
 
@@ -32,6 +33,19 @@ public sealed class TranscriptListBox : ListBox
         }
 
         base.ClearContainerForItemOverride(element, item);
+    }
+
+    internal bool IsAtStart => FindScrollViewer(this)?.VerticalOffset is not > 0.5;
+
+    private static ScrollViewer? FindScrollViewer(DependencyObject parent)
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is ScrollViewer viewer) return viewer;
+            if (FindScrollViewer(child) is { } nested) return nested;
+        }
+        return null;
     }
 
     public void ScrollToTop()

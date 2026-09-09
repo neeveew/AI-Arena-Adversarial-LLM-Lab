@@ -28,14 +28,24 @@ public interface IStreamingModelProviderClient
         CancellationToken cancellationToken = default);
 }
 
-public class ModelProviderClient : IModelProviderClient, IStreamingModelProviderClient
+/// <summary>Optional richer progress; existing streaming clients remain supported.</summary>
+public interface IActivityStreamingModelProviderClient : IStreamingModelProviderClient
+{
+    Task<ModelCompletionResult> CompleteChatStreamingWithActivityAsync(
+        ModelProviderConfig config,
+        IReadOnlyList<ModelChatMessage> messages,
+        IProgress<string>? publicProgress,
+        IProgress<ModelProviderActivity>? activity,
+        CancellationToken cancellationToken = default);
+}
+public class ModelProviderClient : IModelProviderClient, IActivityStreamingModelProviderClient
 {
     internal const int MaximumModelCatalogBytes = 4 * 1024 * 1024;
     // Provider inventories are untrusted input. Inspect no more than this many
     // source-array entries even when a highly compressed inventory remains
     // below the independent four-MiB response bound.
     internal const int MaximumModelCatalogEntries = 1024;
-    private const string EmptyCompletionError = "Provider returned a successful response without assistant content.";
+    private const string EmptyCompletionError = ModelCompletionOutcomeClassifier.EmptyPublicContentError;
     internal const int MaximumCompletionAttempts = 3;
     internal static readonly TimeSpan MaximumRetryDelay = TimeSpan.FromSeconds(5);
     private const int InitialRetryDelayMilliseconds = 150;
@@ -410,7 +420,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     telemetry.TimeToFirstTokenMs,
                     telemetry.ResponseId,
                     telemetry.ModelLoadTimeMs,
-                    StopReason: ModelCompletionOutcomeClassifier.ExtractStopReason(completionRoot));
+                    StopReason: ModelCompletionOutcomeClassifier.ExtractStopReason(completionRoot),
+                    ProviderStopReason: ModelCompletionOutcomeClassifier.ExtractProviderStopReason(completionRoot, config.ApiToken));
                 return CompleteObservation(
                     activeObservationId,
                     completed,
@@ -519,7 +530,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 }
 
                 watch.Stop();
-                var completed = NativeCompletionFromBody(body, baseUrl, model, (int)watch.ElapsedMilliseconds);
+                var completed = NativeCompletionFromBody(body, baseUrl, model, (int)watch.ElapsedMilliseconds, config.ApiToken);
                 return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
             }
         }
@@ -540,7 +551,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         }
     }
 
-    private static ModelCompletionResult NativeCompletionFromBody(string body, string baseUrl, string fallbackModel, int latencyMs)
+    private static ModelCompletionResult NativeCompletionFromBody(string body, string baseUrl, string fallbackModel, int latencyMs, string apiToken)
     {
         using var completionDocument = JsonDocument.Parse(body);
         var completionRoot = completionDocument.RootElement;
@@ -563,24 +574,35 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             telemetry.TimeToFirstTokenMs,
             telemetry.ResponseId,
             telemetry.ModelLoadTimeMs,
-            StopReason: ModelCompletionOutcomeClassifier.ExtractStopReason(completionRoot));
+            StopReason: ModelCompletionOutcomeClassifier.ExtractStopReason(completionRoot),
+            ProviderStopReason: ModelCompletionOutcomeClassifier.ExtractProviderStopReason(completionRoot, apiToken));
     }
 
-    public async Task<ModelCompletionResult> CompleteChatStreamingAsync(
+    public Task<ModelCompletionResult> CompleteChatStreamingAsync(
         ModelProviderConfig config,
         IReadOnlyList<ModelChatMessage> messages,
         IProgress<string>? progress,
+        CancellationToken cancellationToken = default) =>
+        CompleteChatStreamingWithActivityAsync(config, messages, progress, activity: null, cancellationToken);
+
+    public async Task<ModelCompletionResult> CompleteChatStreamingWithActivityAsync(
+        ModelProviderConfig config,
+        IReadOnlyList<ModelChatMessage> messages,
+        IProgress<string>? publicProgress,
+        IProgress<ModelProviderActivity>? activity,
         CancellationToken cancellationToken = default)
     {
+        var progress = publicProgress;
+        var activityReporter = activity is null ? null : new ProviderActivityReporter(activity);
         var apiMode = ModelProviderApiModes.Normalize(config.ApiMode);
         ModelCompletionResult result;
         if (apiMode.Equals(ModelProviderApiModes.LmStudioNative, StringComparison.OrdinalIgnoreCase))
         {
-            result = await CompleteNativeChatStreamingAsync(config, messages, progress, cancellationToken);
+            result = await CompleteNativeChatStreamingAsync(config, messages, progress, cancellationToken, activityReporter);
         }
         else if (apiMode.Equals(ModelProviderApiModes.OllamaNative, StringComparison.OrdinalIgnoreCase))
         {
-            result = await CompleteOllamaNativeChatAsync(config, messages, requestedStreaming: true, cancellationToken);
+            result = await CompleteOllamaNativeChatAsync(config, messages, requestedStreaming: true, cancellationToken, progress, activityReporter);
         }
         else
         {
@@ -589,7 +611,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 messages,
                 progress,
                 retryLlamaCppTransientFailures: apiMode.Equals(ModelProviderApiModes.LlamaCppNative, StringComparison.OrdinalIgnoreCase),
-                cancellationToken);
+                cancellationToken,
+                activityReporter);
         }
 
         return ModelCompletionOutcomeClassifier.Normalize(result);
@@ -599,7 +622,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         ModelProviderConfig config,
         IReadOnlyList<ModelChatMessage> messages,
         IProgress<string>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ProviderActivityReporter? activity = null)
     {
         var baseUrl = NormalizeBaseUrl(config.BaseUrl);
         var model = string.IsNullOrWhiteSpace(config.Model) ? "" : config.Model;
@@ -716,6 +740,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     {
                         using var doc = JsonDocument.Parse(data);
                         var type = FirstString(doc.RootElement, "type");
+                        activity?.NativeStage(type, doc.RootElement);
                         if (type.Equals("message.delta", StringComparison.OrdinalIgnoreCase))
                         {
                             var delta = FirstString(doc.RootElement, "content");
@@ -723,11 +748,14 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                             {
                                 content.Append(delta);
                                 progress?.Report(delta);
+                                activity?.PublicDelta(delta.Length);
                             }
                         }
                         else if (type.Equals("reasoning.delta", StringComparison.OrdinalIgnoreCase))
                         {
-                            reasoning.Append(FirstString(doc.RootElement, "content"));
+                            var delta = FirstString(doc.RootElement, "content");
+                            reasoning.Append(delta);
+                            activity?.ReasoningDelta(delta.Length);
                         }
                         else if (type.Equals("chat.end", StringComparison.OrdinalIgnoreCase))
                         {
@@ -765,7 +793,11 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 ModelCompletionResult? terminalResult = null;
                 if (!string.IsNullOrWhiteSpace(resultJson))
                 {
-                    terminalResult = NativeCompletionFromBody(resultJson, baseUrl, model, (int)watch.ElapsedMilliseconds);
+                    terminalResult = NativeCompletionFromBody(resultJson, baseUrl, model, (int)watch.ElapsedMilliseconds, config.ApiToken);
+                    if (string.IsNullOrWhiteSpace(terminalResult.Reasoning) && reasoning.Length > 0)
+                    {
+                        terminalResult = terminalResult with { Reasoning = reasoning.ToString().Trim() };
+                    }
                 }
 
                 // LM Studio documents error -> chat.end as a normal failure
@@ -795,7 +827,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         terminalResult?.TimeToFirstTokenMs ?? 0,
                         terminalResult?.ResponseId ?? "",
                         terminalResult?.ModelLoadTimeMs ?? 0,
-                        StopReason: ModelCompletionStopReason.ProviderError);
+                        StopReason: ModelCompletionStopReason.ProviderError,
+                        ProviderStopReason: terminalResult?.ProviderStopReason ?? "");
                     return CompleteObservation(activeObservationId, failed, "provider_stream_error");
                 }
 
@@ -823,12 +856,30 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         terminalResult?.TimeToFirstTokenMs ?? 0,
                         terminalResult?.ResponseId ?? "",
                         terminalResult?.ModelLoadTimeMs ?? 0,
-                        StopReason: ModelCompletionStopReason.ProviderError);
+                        StopReason: ModelCompletionStopReason.ProviderError,
+                        ProviderStopReason: terminalResult?.ProviderStopReason ?? "");
                     return CompleteObservation(activeObservationId, failed, "provider_stream_error");
                 }
 
                 if (terminalResult is not null)
                 {
+                    var streamedText = content.ToString().Trim();
+                    if (streamedText.Length > 0
+                        && !string.Equals(streamedText, terminalResult.Text, StringComparison.Ordinal))
+                    {
+                        // Accepted public output is never an empty-answer
+                        // retry candidate, even if the terminal body loses it.
+                        var inconsistent = terminalResult with
+                        {
+                            Ok = false,
+                            Text = streamedText,
+                            Error = "Provider terminal response did not match the public text already streamed; the partial response was preserved.",
+                            FailureKind = ModelCompletionFailureKind.InvalidResponse,
+                            StopReason = ModelCompletionStopReason.ProviderError
+                        };
+                        return CompleteObservation(activeObservationId, inconsistent, "provider_stream_error");
+                    }
+
                     return CompleteObservation(
                         activeObservationId,
                         terminalResult,
@@ -849,7 +900,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     sawTerminalEvent
                         ? "Provider stream ended without a terminal LM Studio result; any partial response was preserved."
                         : "Provider stream ended before the required LM Studio chat.end event; any partial response was preserved.",
-                    DateTimeOffset.Now);
+                    DateTimeOffset.Now,
+                    FailureKind: ModelCompletionFailureKind.InvalidResponse);
                 return CompleteObservation(activeObservationId, incomplete, "provider_stream_incomplete");
             }
         }
@@ -921,7 +973,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         IReadOnlyList<ModelChatMessage> messages,
         IProgress<string>? progress,
         bool retryLlamaCppTransientFailures,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ProviderActivityReporter? activity = null)
     {
         var baseUrl = NormalizeBaseUrl(config.BaseUrl);
         var model = string.IsNullOrWhiteSpace(config.Model) ? "" : config.Model;
@@ -949,6 +1002,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         var acceptedUsage = new ModelTokenUsage(0, 0, 0);
         var acceptedTelemetry = new ModelProviderTelemetry(0, 0, "");
         var acceptedStopReason = ModelCompletionStopReason.Unknown;
+        var acceptedProviderStopReason = "";
+        var acceptedSawTerminalStop = false;
         var acceptedFirstTokenMs = 0;
         try
         {
@@ -1028,6 +1083,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 acceptedUsage = new ModelTokenUsage(0, 0, 0);
                 acceptedTelemetry = new ModelProviderTelemetry(0, 0, "");
                 acceptedStopReason = ModelCompletionStopReason.Unknown;
+                acceptedProviderStopReason = "";
+                acceptedSawTerminalStop = false;
                 acceptedFirstTokenMs = 0;
                 var sawDone = false;
                 var sawMalformedEvent = false;
@@ -1072,8 +1129,14 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                             acceptedResponseModel = FirstString(doc.RootElement, "model");
                         }
 
+                        var rawStopReason = ModelCompletionOutcomeClassifier.ExtractProviderStopReason(doc.RootElement, config.ApiToken);
+                        if (rawStopReason.Length > 0) acceptedProviderStopReason = rawStopReason;
+                        acceptedSawTerminalStop |= ModelCompletionOutcomeClassifier.ClassifyStopReason(rawStopReason)
+                            != ModelCompletionStopReason.Unknown;
                         var chunkStopReason = ModelCompletionOutcomeClassifier.ExtractStopReason(doc.RootElement);
-                        if (chunkStopReason != ModelCompletionStopReason.Unknown)
+                        if (chunkStopReason != ModelCompletionStopReason.Unknown
+                            && (acceptedStopReason != ModelCompletionStopReason.ToolCall
+                                || chunkStopReason is ModelCompletionStopReason.ProviderError or ModelCompletionStopReason.ContentFiltered))
                         {
                             acceptedStopReason = chunkStopReason;
                         }
@@ -1112,19 +1175,20 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         }
 
                         var contentDelta = FirstString(delta, "content");
-                        var reasoningDelta = FirstString(delta, "reasoning_content", "reasoning");
+                        var reasoningDelta = FirstString(delta, "reasoning_content", "reasoning", "thinking");
                         if (acceptedFirstTokenMs <= 0 && (contentDelta.Length > 0 || reasoningDelta.Length > 0))
                         {
                             acceptedFirstTokenMs = Math.Max(1, (int)watch.ElapsedMilliseconds);
                         }
 
+                        reasoning.Append(reasoningDelta);
+                        activity?.ReasoningDelta(reasoningDelta.Length);
                         if (contentDelta.Length > 0)
                         {
                             content.Append(contentDelta);
                             progress?.Report(contentDelta);
+                            activity?.PublicDelta(contentDelta.Length);
                         }
-
-                        reasoning.Append(reasoningDelta);
                     }
                     catch (JsonException)
                     {
@@ -1153,7 +1217,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         acceptedFirstTokenMs,
                         acceptedTelemetry.ResponseId,
                         acceptedTelemetry.ModelLoadTimeMs,
-                        StopReason: ModelCompletionStopReason.ProviderError);
+                        StopReason: ModelCompletionStopReason.ProviderError,
+                        ProviderStopReason: acceptedProviderStopReason);
                     return CompleteObservation(activeObservationId, failed, "provider_stream_error");
                 }
 
@@ -1175,11 +1240,12 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         acceptedFirstTokenMs,
                         acceptedTelemetry.ResponseId,
                         acceptedTelemetry.ModelLoadTimeMs,
-                        StopReason: ModelCompletionStopReason.ProviderError);
+                        StopReason: ModelCompletionStopReason.ProviderError,
+                        ProviderStopReason: acceptedProviderStopReason);
                     return CompleteObservation(activeObservationId, failed, "provider_stream_error");
                 }
 
-                if (!sawDone && acceptedStopReason == ModelCompletionStopReason.Unknown)
+                if (!sawDone && !acceptedSawTerminalStop)
                 {
                     var incomplete = new ModelCompletionResult(
                         false,
@@ -1197,7 +1263,9 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                         acceptedFirstTokenMs,
                         acceptedTelemetry.ResponseId,
                         acceptedTelemetry.ModelLoadTimeMs,
-                        StopReason: ModelCompletionStopReason.ProviderError);
+                        FailureKind: ModelCompletionFailureKind.InvalidResponse,
+                        StopReason: ModelCompletionStopReason.ProviderError,
+                        ProviderStopReason: acceptedProviderStopReason);
                     return CompleteObservation(activeObservationId, incomplete, "provider_stream_incomplete");
                 }
 
@@ -1217,7 +1285,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     acceptedFirstTokenMs,
                     acceptedTelemetry.ResponseId,
                     acceptedTelemetry.ModelLoadTimeMs,
-                    StopReason: acceptedStopReason);
+                    StopReason: acceptedStopReason,
+                    ProviderStopReason: acceptedProviderStopReason);
                 return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
             }
         }
@@ -1266,7 +1335,8 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     acceptedFirstTokenMs,
                     (int)watch.ElapsedMilliseconds,
                     FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken));
-            return CompleteObservation(activeObservationId, failed, FailureObservationOutcome(ex));
+            return CompleteObservation(activeObservationId,
+                failed with { ProviderStopReason = acceptedProviderStopReason }, FailureObservationOutcome(ex));
         }
     }
 
@@ -1274,7 +1344,9 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         ModelProviderConfig config,
         IReadOnlyList<ModelChatMessage> messages,
         bool requestedStreaming,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<string>? progress = null,
+        ProviderActivityReporter? activity = null)
     {
         var baseUrl = NormalizeBaseUrl(config.BaseUrl);
         var model = string.IsNullOrWhiteSpace(config.Model) ? "" : config.Model;
@@ -1284,10 +1356,13 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         }
 
         var payload = OllamaChatPayload(config, messages);
+        payload["stream"] = requestedStreaming;
         var payloadBytes = SerializePayload(payload);
 
         var watch = Stopwatch.StartNew();
         var activeObservationId = "";
+        StringBuilder? acceptedContent = null;
+        StringBuilder? acceptedReasoning = null;
         try
         {
             var endpoint = new Uri(new Uri(NormalizeOllamaApiBase(config.BaseUrl) + "/"), "chat");
@@ -1307,10 +1382,13 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                 };
                 ApplyAuthorization(request, config);
                 ApplyCompletionIdempotencyKey(request, idempotencyKey);
-                using var response = await _httpClient.SendAsync(request, timeout.Token);
-                var body = await response.Content.ReadAsStringAsync(timeout.Token);
+                using var response = await _httpClient.SendAsync(
+                    request,
+                    requestedStreaming ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead,
+                    timeout.Token);
                 if (!response.IsSuccessStatusCode)
                 {
+                    var body = await response.Content.ReadAsStringAsync(timeout.Token);
                     if (attempt < MaximumCompletionAttempts - 1
                         && TryAuthorizeCompletionRetry(
                             config,
@@ -1355,29 +1433,32 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
                     return CompleteObservation(activeObservationId, failed, "provider_error");
                 }
 
+                if (requestedStreaming)
+                {
+                    // Successful headers are the acceptance boundary. Never
+                    // replay this request, including empty or interrupted streams.
+                    acceptedContent = new StringBuilder();
+                    acceptedReasoning = new StringBuilder();
+                    var streamed = await ReadOllamaNativeStreamAsync(
+                        response.Content,
+                        config,
+                        baseUrl,
+                        model,
+                        watch,
+                        acceptedContent,
+                        acceptedReasoning,
+                        progress,
+                        timeout.Token,
+                        activity);
+                    watch.Stop();
+                    return CompleteObservation(activeObservationId, streamed.Result, streamed.Outcome);
+                }
+
+                var completionBody = await response.Content.ReadAsStringAsync(timeout.Token);
                 watch.Stop();
-                using var completionDocument = JsonDocument.Parse(body);
-                var completionRoot = completionDocument.RootElement;
-                var usage = ExtractOllamaUsage(completionRoot);
-                var telemetry = ExtractOllamaTelemetry(completionRoot);
-                var text = ExtractOllamaChatContent(completionRoot).Trim();
-                var completed = new ModelCompletionResult(
-                    !string.IsNullOrWhiteSpace(text),
-                    baseUrl,
-                    ExtractOllamaModel(completionRoot, model),
-                    text,
-                    ExtractOllamaReasoning(completionRoot).Trim(),
-                    (int)watch.ElapsedMilliseconds,
-                    usage.PromptTokens,
-                    usage.CompletionTokens,
-                    usage.TotalTokens,
-                    string.IsNullOrWhiteSpace(text) ? EmptyCompletionError : "",
-                    DateTimeOffset.Now,
-                    telemetry.TokensPerSecond,
-                    telemetry.TimeToFirstTokenMs,
-                    telemetry.ResponseId,
-                    telemetry.ModelLoadTimeMs,
-                    StopReason: ModelCompletionOutcomeClassifier.ExtractStopReason(completionRoot));
+                using var completionDocument = JsonDocument.Parse(completionBody);
+                var completed = OllamaCompletionFromJson(
+                    completionDocument.RootElement, baseUrl, model, (int)watch.ElapsedMilliseconds, apiToken: config.ApiToken);
                 return CompleteObservation(activeObservationId, completed, completed.Ok ? "succeeded" : "empty_response");
             }
         }
@@ -1387,17 +1468,288 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             ObserveUnavailableCompletion(
                 activeObservationId,
                 "caller_cancelled",
-                "The caller cancelled before provider token evidence was available.");
+                acceptedContent is { Length: > 0 }
+                    ? "The caller cancelled after provider acceptance and partial progress; the accepted stream was not replayed."
+                    : "The caller cancelled before provider token evidence was available.");
             throw;
         }
         catch (Exception ex) when (ex is UriFormatException or HttpRequestException or OperationCanceledException or IOException or JsonException)
         {
             watch.Stop();
-            var failed = new ModelCompletionResult(false, baseUrl, model, "", "", (int)watch.ElapsedMilliseconds, 0, 0, 0, FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken), DateTimeOffset.Now);
-            return CompleteObservation(activeObservationId, failed, FailureObservationOutcome(ex));
+            var invalidStream = acceptedContent is not null && ex is JsonException;
+            var failed = new ModelCompletionResult(
+                false,
+                baseUrl,
+                model,
+                acceptedContent?.ToString().Trim() ?? "",
+                acceptedReasoning?.ToString().Trim() ?? "",
+                (int)watch.ElapsedMilliseconds,
+                0,
+                0,
+                0,
+                invalidStream
+                    ? "Provider stream contained malformed or oversized Ollama event data; any partial response was preserved."
+                    : FriendlyProviderError(ex, baseUrl, config.Timeout, config.ApiMode, config.ApiToken),
+                DateTimeOffset.Now,
+                FailureKind: invalidStream ? ModelCompletionFailureKind.InvalidResponse : ModelCompletionFailureKind.None);
+            return CompleteObservation(activeObservationId, failed,
+                invalidStream ? "provider_stream_error" : FailureObservationOutcome(ex));
         }
     }
 
+    private static ModelCompletionResult OllamaCompletionFromJson(
+        JsonElement root,
+        string baseUrl,
+        string model,
+        int latencyMs,
+        string? content = null,
+        string? reasoning = null,
+        string apiToken = "")
+    {
+        var usage = ExtractOllamaUsage(root);
+        var telemetry = ExtractOllamaTelemetry(root);
+        var text = (content ?? ExtractOllamaChatContent(root)).Trim();
+        return new ModelCompletionResult(
+            !string.IsNullOrWhiteSpace(text),
+            baseUrl,
+            ExtractOllamaModel(root, model),
+            text,
+            (reasoning ?? ExtractOllamaReasoning(root)).Trim(),
+            latencyMs,
+            usage.PromptTokens,
+            usage.CompletionTokens,
+            usage.TotalTokens,
+            string.IsNullOrWhiteSpace(text) ? EmptyCompletionError : "",
+            DateTimeOffset.Now,
+            telemetry.TokensPerSecond,
+            telemetry.TimeToFirstTokenMs,
+            telemetry.ResponseId,
+            telemetry.ModelLoadTimeMs,
+            StopReason: ModelCompletionOutcomeClassifier.ExtractStopReason(root),
+            ProviderStopReason: ModelCompletionOutcomeClassifier.ExtractProviderStopReason(root, apiToken));
+    }
+
+    private static async Task<(ModelCompletionResult Result, string Outcome)> ReadOllamaNativeStreamAsync(
+        HttpContent responseContent,
+        ModelProviderConfig config,
+        string baseUrl,
+        string model,
+        Stopwatch watch,
+        StringBuilder content,
+        StringBuilder reasoning,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken,
+        ProviderActivityReporter? activity)
+    {
+        await using var stream = await responseContent.ReadAsStreamAsync(cancellationToken);
+        using var reader = new StreamReader(stream);
+        var firstTokenMs = 0;
+        var sawToolOutput = false;
+        await foreach (var line in ReadBoundedOllamaLinesAsync(reader, cancellationToken))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object)
+                {
+                    throw new JsonException();
+                }
+
+                if (root.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null)
+                {
+                    var message = ExtractProviderErrorMessage(error);
+                    var failed = OllamaCompletionFromJson(
+                        root, baseUrl, model, (int)watch.ElapsedMilliseconds, content.ToString(), reasoning.ToString(), config.ApiToken) with
+                    {
+                        Ok = false,
+                        Error = ProviderErrorSanitizer.Sanitize(
+                            string.IsNullOrWhiteSpace(message)
+                                ? "Provider stream returned an Ollama error."
+                                : message,
+                            config.ApiToken),
+                        StopReason = ModelCompletionStopReason.ProviderError,
+                        ProviderErrorCode = ExtractProviderErrorCode(line, config.ApiToken)
+                    };
+                    return (failed, "provider_stream_error");
+                }
+
+                if (!root.TryGetProperty("done", out var done)
+                    || done.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
+                    || (root.TryGetProperty("message", out var messageElement)
+                        && messageElement.ValueKind != JsonValueKind.Object))
+                {
+                    throw new JsonException();
+                }
+
+                sawToolOutput |= ModelCompletionOutcomeClassifier.ExtractStopReason(root) == ModelCompletionStopReason.ToolCall;
+                var reasoningDelta = ExtractOllamaReasoning(root, preserveWhitespace: true);
+                reasoning.Append(reasoningDelta);
+                activity?.ReasoningDelta(reasoningDelta.Length);
+                var delta = ExtractOllamaChatContent(root, preserveWhitespace: true);
+                if (delta.Length > 0)
+                {
+                    if (firstTokenMs == 0)
+                    {
+                        firstTokenMs = Math.Max(1, (int)watch.ElapsedMilliseconds);
+                    }
+
+                    content.Append(delta);
+                    progress?.Report(delta);
+                    activity?.PublicDelta(delta.Length);
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                if (done.GetBoolean())
+                {
+                    var completed = OllamaCompletionFromJson(
+                        root, baseUrl, model, (int)watch.ElapsedMilliseconds, content.ToString(), reasoning.ToString(), config.ApiToken);
+                    if (sawToolOutput && completed.StopReason is not (ModelCompletionStopReason.ProviderError or ModelCompletionStopReason.ContentFiltered))
+                    {
+                        completed = completed with { StopReason = ModelCompletionStopReason.ToolCall };
+                    }
+                    if (completed.TimeToFirstTokenMs == 0 && firstTokenMs > 0)
+                    {
+                        completed = completed with { TimeToFirstTokenMs = firstTokenMs };
+                    }
+
+                    return (completed, completed.Ok ? "succeeded" : "empty_response");
+                }
+            }
+            catch (JsonException)
+            {
+                return (Failure(
+                    "Provider stream contained malformed Ollama event data; any partial response was preserved."),
+                    "provider_stream_error");
+            }
+        }
+
+        return (Failure(
+            "Provider stream ended before the required Ollama done event; any partial response was preserved."),
+            "provider_stream_incomplete");
+
+        ModelCompletionResult Failure(string error) => new(
+            false,
+            baseUrl,
+            model,
+            content.ToString().Trim(),
+            reasoning.ToString().Trim(),
+            (int)watch.ElapsedMilliseconds,
+            0,
+            0,
+            0,
+            error,
+            DateTimeOffset.Now,
+            FailureKind: ModelCompletionFailureKind.InvalidResponse,
+            StopReason: ModelCompletionStopReason.ProviderError);
+    }
+
+    private static async IAsyncEnumerable<string> ReadBoundedOllamaLinesAsync(
+        StreamReader reader,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        // A faulty server must not grow an unterminated NDJSON frame without
+        // bound. Read small blocks so complete lines reach progress immediately.
+        const int maximumLineCharacters = 1024 * 1024;
+        var buffer = new char[4096];
+        var line = new StringBuilder();
+        int read;
+        while ((read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken)) > 0)
+        {
+            for (var index = 0; index < read; index++)
+            {
+                var character = buffer[index];
+                if (character == '\n')
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    yield return line.ToString().TrimEnd('\r');
+                    line.Clear();
+                }
+                else
+                {
+                    if (line.Length >= maximumLineCharacters)
+                    {
+                        throw new JsonException("Provider stream contained an oversized Ollama JSON line.");
+                    }
+
+                    line.Append(character);
+                }
+            }
+        }
+
+        if (line.Length > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return line.ToString().TrimEnd('\r');
+        }
+    }
+    private sealed class ProviderActivityReporter(IProgress<ModelProviderActivity> observer)
+    {
+        private readonly Stopwatch watch = Stopwatch.StartNew();
+        private int publicCharacters;
+        private int reasoningCharacters;
+
+        internal void PublicDelta(int length)
+        {
+            if (length <= 0) return;
+            publicCharacters = (int)Math.Min(int.MaxValue, (long)publicCharacters + length);
+            Report(ModelProviderActivityStage.Writing);
+        }
+
+        internal void ReasoningDelta(int length)
+        {
+            if (length <= 0) return;
+            reasoningCharacters = (int)Math.Min(int.MaxValue, (long)reasoningCharacters + length);
+            Report(ModelProviderActivityStage.Thinking);
+        }
+
+        internal void NativeStage(string type, JsonElement data)
+        {
+            if (type is "model_load.start" or "model_load.progress" or "model_load.end")
+            {
+                Report(ModelProviderActivityStage.Loading, StageProgress(type, data));
+            }
+            else if (type is "prompt_processing.start" or "prompt_processing.progress" or "prompt_processing.end")
+            {
+                Report(ModelProviderActivityStage.ReadingContext, StageProgress(type, data));
+            }
+            else if (type is "reasoning.start" or "reasoning.end")
+            {
+                Report(ModelProviderActivityStage.Thinking);
+            }
+        }
+
+        private static double? StageProgress(string type, JsonElement data)
+        {
+            if (type.EndsWith(".start", StringComparison.Ordinal)) return 0;
+            if (type.EndsWith(".end", StringComparison.Ordinal)) return 1;
+            return data.TryGetProperty("progress", out var value)
+                && value.ValueKind == JsonValueKind.Number
+                && value.TryGetDouble(out var progress)
+                && double.IsFinite(progress)
+                    ? Math.Clamp(progress, 0, 1)
+                    : null;
+        }
+
+        private void Report(ModelProviderActivityStage stage, double? progress = null)
+        {
+            try
+            {
+                observer.Report(new ModelProviderActivity(
+                    stage, DateTimeOffset.UtcNow, watch.ElapsedMilliseconds,
+                    publicCharacters, reasoningCharacters, progress));
+            }
+            catch
+            {
+                // Optional activity observers cannot change generation or retry behavior.
+            }
+        }
+    }
     private static byte[] SerializePayload<T>(T payload) =>
         JsonSerializer.SerializeToUtf8Bytes(payload, ProviderPayloadJsonOptions);
 
@@ -1688,9 +2040,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
             return reasoningContent.GetString() ?? "";
         }
 
-        return message.Value.TryGetProperty("reasoning", out var reasoning) && reasoning.ValueKind == JsonValueKind.String
-            ? reasoning.GetString() ?? ""
-            : "";
+        return FirstString(message.Value, "reasoning", "thinking");
     }
 
     public static ModelTokenUsage ExtractUsage(string json)
@@ -1831,12 +2181,12 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         return ExtractOllamaChatContent(doc.RootElement);
     }
 
-    private static string ExtractOllamaChatContent(JsonElement root)
+    private static string ExtractOllamaChatContent(JsonElement root, bool preserveWhitespace = false)
     {
         if (root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object)
         {
             var content = FirstString(message, "content");
-            if (!string.IsNullOrWhiteSpace(content))
+            if (preserveWhitespace ? content.Length > 0 : !string.IsNullOrWhiteSpace(content))
             {
                 return content;
             }
@@ -1851,12 +2201,12 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         return ExtractOllamaReasoning(doc.RootElement);
     }
 
-    private static string ExtractOllamaReasoning(JsonElement root)
+    private static string ExtractOllamaReasoning(JsonElement root, bool preserveWhitespace = false)
     {
         if (root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object)
         {
             var thinking = FirstString(message, "thinking", "reasoning", "reasoning_content");
-            if (!string.IsNullOrWhiteSpace(thinking))
+            if (preserveWhitespace ? thinking.Length > 0 : !string.IsNullOrWhiteSpace(thinking))
             {
                 return thinking;
             }
@@ -1945,8 +2295,7 @@ public class ModelProviderClient : IModelProviderClient, IStreamingModelProvider
         }
 
         var reasoning = ModelProviderReasoningModes.Normalize(config.Reasoning);
-        if (!string.IsNullOrWhiteSpace(reasoning)
-            && !reasoning.Equals("off", StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(reasoning))
         {
             payload["reasoning"] = reasoning;
         }

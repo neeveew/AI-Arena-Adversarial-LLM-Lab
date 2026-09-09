@@ -266,6 +266,11 @@ public sealed class TranscriptService
             ModelCompletionOutcomeClassifier.FailureKindWire(normalizedOutcome.FailureKind));
         metadata["completion_stop_reason"] = JsonSerializer.SerializeToElement(
             ModelCompletionOutcomeClassifier.StopReasonWire(normalizedOutcome.StopReason));
+        if (!string.IsNullOrWhiteSpace(normalizedOutcome.ProviderStopReason))
+        {
+            metadata["provider_stop_reason"] = JsonSerializer.SerializeToElement(normalizedOutcome.ProviderStopReason);
+        }
+
         if (normalizedOutcome.ProviderStatusCode is { } statusCode)
         {
             metadata["provider_status_code"] = JsonSerializer.SerializeToElement(statusCode);

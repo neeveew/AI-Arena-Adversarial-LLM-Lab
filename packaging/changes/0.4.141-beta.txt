@@ -1,0 +1,12 @@
+AI Arena - Lite 0.4.141-beta
+
+Changes since 0.4.140-beta:
+
+- Stream Arena participant and Narrator answers into one live transcript card, then commit the same card when the turn completes. Preserve reader position and keep canceled or interrupted previews separate from saved history.
+- Show provider-observed Loading model, Reading context, Thinking, and Writing stages, with a clear waiting state when the server does not report its activity.
+- Budget requests using the loaded model's current native server context allocation instead of a catalog maximum. Preserve Strict history; let Rolling 80% omit older whole entries while retaining required conversation text.
+- Recover completed reasoning-only responses with at most one supported off/low reasoning retry on the same model and exact conversation. Send LM Studio reasoning off explicitly and preserve the original native conversation anchor.
+- Distinguish empty public answers from provider rejection. Preserve reported stop codes and token counts, keep output-cap inference separate, and never treat partial public output, incomplete streams, or tool output as reasoning-only recovery candidates.
+- Keep Factory retries tied to their original retained public entries and causal fingerprint. Show the opening Public Operator composer in the empty transcript with Send only and Send and start Auto Chat actions.
+- Expand each selected model's compact settings beneath its catalog row. Keep context length and agent assignment immediately visible, give expanded content a clear boundary, and prevent competing nested scrolling.
+- Update the offline Help Center for model configuration, streamed responses, context fitting, and reasoning-only recovery. Continue saving configuration automatically.

@@ -118,10 +118,17 @@ internal sealed class TranscriptListCoordinator
         this.openMatchSetup = openMatchSetup;
         this.openProviderSettings = openProviderSettings;
         this.clearFilters = clearFilters;
+        Streams = new ArenaTranscriptStreamCoordinator(dispatcher,
+            () => (lastRenderedSnapshot()?.SessionId ?? "", lastRenderedSnapshot()?.SessionInstanceId ?? ""),
+            transcriptCards.CreateLiveCard,
+            () => Populate(lastRenderedSnapshot()?.Messages ?? []));
     }
+
+    internal ArenaTranscriptStreamCoordinator Streams { get; }
 
     public void Populate(IReadOnlyList<TranscriptMessage> messages)
     {
+        Streams.SynchronizeSession();
         setLastRenderedMessages(messages);
         transcriptActions.Prune();
         transcriptInsight.ClearTimelineFilterIfMissing(messages);
@@ -139,7 +146,7 @@ internal sealed class TranscriptListCoordinator
         var rows = new List<object>();
         if (messages.Count == 0)
         {
-            rows.Add(new AdjunctRow(CreateArenaReadyCard(snapshot)));
+            if (!Streams.HasUncommittedCard) rows.Add(new AdjunctRow(CreateArenaReadyCard(snapshot)));
             AddMemoryRowIfNeeded(rows, currentSettings, snapshot);
             SetRows(rows, follow: false);
             return;
@@ -201,10 +208,17 @@ internal sealed class TranscriptListCoordinator
             transcriptItems.ItemsSource = rowItems;
         }
 
+        var followFromStart = follow && transcriptItems.IsAtStart;
+        Streams.MergeRows(rows, row => (row as CardRow)?.Message, BuildRowContent,
+            lastRenderedSnapshot()?.Messages ?? []);
         SyncRows(rows);
-        if (follow)
+        if (followFromStart)
         {
-            dispatcher.BeginInvoke(() => transcriptItems.ScrollToTop(), DispatcherPriority.Background);
+            dispatcher.BeginInvoke(() =>
+            {
+                if (followChatCheckBox.IsChecked == true && transcriptItems.IsAtStart)
+                    transcriptItems.ScrollToTop();
+            }, DispatcherPriority.Background);
         }
     }
 

@@ -1,7 +1,7 @@
 {
   "schemaVersion": "ai_arena.help_manifest.v1",
-  "guideVersion": "0.4.140-beta",
-  "reviewedUtc": "2026-09-08T00:00:00Z",
+  "guideVersion": "0.4.141-beta",
+  "reviewedUtc": "2026-09-09T00:00:00Z",
   "journeys": [
     {
       "id": "connect-provider", "title": "Connect a provider", "order": 10, "iconGlyph": "\uE968",
@@ -58,7 +58,7 @@
       "summary": "Choose a task and follow the shortest safe path through AI Arena - Lite.",
       "keywords": ["home", "overview", "tasks", "help center", "new user"],
       "aliases": ["overview", "welcome"], "iconGlyph": "\uE80F", "route": "help/home", "order": 10,
-      "introducedVersion": "0.4.132-beta", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/start-here/home.md",
+      "introducedVersion": "0.4.132-beta", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/start-here/home.md",
       "relatedArticleIds": ["quick-start", "context-recovery", "provider-troubleshooting"],
       "actions": [{ "label": "Open Models", "route": "app/models" }, { "label": "Open Match Setup", "route": "app/match-setup" }]
     },
@@ -67,7 +67,7 @@
       "summary": "Connect a provider, load and assign a model, prepare AI Lab, and run one turn.",
       "keywords": ["first turn", "provider", "connection", "loaded", "assigned", "1 turn", "auto chat"],
       "aliases": ["getting started", "setup"], "iconGlyph": "\uE7C1", "route": "help/quick-start", "order": 20,
-      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/start-here/quick-start.md",
+      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/start-here/quick-start.md",
       "relatedArticleIds": ["models-routing", "match-setup", "arena-mode", "provider-troubleshooting"],
       "actions": [{ "label": "Open Provider Settings", "route": "app/settings/provider" }, { "label": "Open Models", "route": "app/models" }]
     },
@@ -76,7 +76,7 @@
       "summary": "Understand Loaded versus Available, shared fallback, explicit assignments, and safe lifecycle actions.",
       "keywords": ["models", "loaded", "available", "catalog", "residency", "routing", "default", "explicit", "unassigned", "switches"],
       "aliases": ["assign models", "model catalog", "default for unassigned agents"], "iconGlyph": "\uE8B7", "route": "help/models-routing", "order": 10,
-      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/models-routing/models-routing.md",
+      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/models-routing/models-routing.md",
       "relatedArticleIds": ["model-behavior", "quick-start", "provider-troubleshooting"],
       "actions": [{ "label": "Open Models", "route": "app/models" }, { "label": "Open Provider Settings", "route": "app/settings/provider" }]
     },
@@ -85,7 +85,7 @@
       "summary": "Configure a model's context budget, Arena history policy, and response tone without changing its persona.",
       "keywords": ["context", "configured", "effective", "strict", "rolling 80", "history", "tone", "custom tone", "reload"],
       "aliases": ["context window", "model tone", "80 percent"], "iconGlyph": "\uE8D2", "route": "help/model-behavior", "order": 20,
-      "introducedVersion": "0.4.131-beta", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/models-routing/model-behavior.md",
+      "introducedVersion": "0.4.131-beta", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/models-routing/model-behavior.md",
       "relatedArticleIds": ["models-routing", "context-recovery", "factory-mode"],
       "actions": [{ "label": "Open Models", "route": "app/models" }]
     },
@@ -94,7 +94,7 @@
       "summary": "Run structured turns with Match Setup, personas, private memory, tools, and narrator guidance.",
       "keywords": ["arena", "match", "auto chat", "one turn", "narrator", "transcript", "persona"],
       "aliases": ["ai lab", "structured match"], "iconGlyph": "\uE768", "route": "help/arena-mode", "order": 10,
-      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/run-ai-lab/arena-mode.md",
+      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/run-ai-lab/arena-mode.md",
       "relatedArticleIds": ["match-setup", "operator-controls", "status-center", "context-recovery"],
       "actions": [{ "label": "Open AI Lab", "route": "app/view/arena" }, { "label": "Open Match Setup", "route": "app/match-setup" }]
     },
@@ -103,7 +103,7 @@
       "summary": "Test models with attributed public group history while keeping Arena guidance out of provider prompts.",
       "keywords": ["factory", "public operator root", "group history", "raw", "match setup off", "50 entries"],
       "aliases": ["factory conversation", "model inspection"], "iconGlyph": "\uE950", "route": "help/factory-mode", "order": 20,
-      "introducedVersion": "0.4.120-beta", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/run-ai-lab/factory-mode.md",
+      "introducedVersion": "0.4.120-beta", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/run-ai-lab/factory-mode.md",
       "relatedArticleIds": ["arena-mode", "operator-controls", "model-behavior", "context-recovery"],
       "actions": [{ "label": "Open Match Setup", "route": "app/match-setup" }, { "label": "Open AI Lab", "route": "app/view/arena" }]
     },
@@ -112,7 +112,7 @@
       "summary": "Create, tune, validate, import, and replay scenarios and casts.",
       "keywords": ["match setup", "scenario", "cast", "persona", "voice", "pressure", "relationship", "random", "wild", "ai choice"],
       "aliases": ["scenario setup", "role pack"], "iconGlyph": "\uE713", "route": "help/match-setup", "order": 30,
-      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/run-ai-lab/match-setup.md",
+      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/run-ai-lab/match-setup.md",
       "relatedArticleIds": ["arena-mode", "factory-mode", "sessions-setups"],
       "actions": [{ "label": "Open Match Setup", "route": "app/match-setup" }]
     },
@@ -121,7 +121,7 @@
       "summary": "Run, pause, narrate, reset, and steer a match through public, private, or narrator routes.",
       "keywords": ["operator", "auto chat", "1 turn", "narrate", "speak", "reset", "public", "private", "steer"],
       "aliases": ["arena controls", "operator message"], "iconGlyph": "\uE90F", "route": "help/operator-controls", "order": 40,
-      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/run-ai-lab/operator-controls.md",
+      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/run-ai-lab/operator-controls.md",
       "relatedArticleIds": ["arena-mode", "factory-mode", "status-center"],
       "actions": [{ "label": "Open AI Lab", "route": "app/view/arena" }]
     },
@@ -130,7 +130,7 @@
       "summary": "Read the newest cross-app activity, open bounded history, and return to the affected surface.",
       "keywords": ["status", "warning", "failed", "running", "history", "dashboard", "four rows"],
       "aliases": ["notifications", "activity center"], "iconGlyph": "\uE9D9", "route": "help/status-center", "order": 50,
-      "introducedVersion": "0.4.131-beta", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/run-ai-lab/status-center.md",
+      "introducedVersion": "0.4.131-beta", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/run-ai-lab/status-center.md",
       "relatedArticleIds": ["operator-controls", "context-recovery", "provider-troubleshooting"],
       "actions": [{ "label": "Open Status Center", "route": "app/status-center" }]
     },
@@ -139,7 +139,7 @@
       "summary": "Inspect per-agent telemetry and compare model runs only when the causal setup is compatible.",
       "keywords": ["agent performance", "model comparison", "qa", "baseline", "telemetry", "quality", "evidence"],
       "aliases": ["comparison", "run qa"], "iconGlyph": "\uE9D2", "route": "help/model-comparison", "order": 60,
-      "introducedVersion": "0.3.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/run-ai-lab/model-comparison.md",
+      "introducedVersion": "0.3.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/run-ai-lab/model-comparison.md",
       "relatedArticleIds": ["arena-mode", "factory-mode", "sessions-setups"],
       "actions": [{ "label": "Open AI Lab", "route": "app/view/arena" }]
     },
@@ -148,7 +148,7 @@
       "summary": "Plan, review, build, approve commands, inspect receipts, and verify work inside a selected folder.",
       "keywords": ["agent", "planner", "reviewer", "builder", "workspace", "command", "approval", "full access", "runbook"],
       "aliases": ["coding agent", "software workspace"], "iconGlyph": "\uE77B", "route": "help/agent", "order": 10,
-      "introducedVersion": "0.4.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/other-workspaces/agent.md",
+      "introducedVersion": "0.4.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/other-workspaces/agent.md",
       "relatedArticleIds": ["powershell-control", "provider-troubleshooting", "status-center"],
       "actions": [{ "label": "Open Agent", "route": "app/view/agent" }]
     },
@@ -157,7 +157,7 @@
       "summary": "Ask a model team for drafts, critiques, refinements, and a traceable final answer.",
       "keywords": ["collaborate", "team draft", "critique", "red team", "rounds", "team debate", "run review"],
       "aliases": ["team chat", "collaboration"], "iconGlyph": "\uE716", "route": "help/collaborate", "order": 20,
-      "introducedVersion": "0.3.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/other-workspaces/collaborate.md",
+      "introducedVersion": "0.3.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/other-workspaces/collaborate.md",
       "relatedArticleIds": ["models-routing", "internet-privacy", "sessions-setups"],
       "actions": [{ "label": "Open AI Collaborate", "route": "app/view/collaborate" }]
     },
@@ -166,7 +166,7 @@
       "summary": "Run evidence-backed experiments, forks, rubrics, fault probes, inspection, and local QA.",
       "keywords": ["experiment", "matrix", "fork", "rubric", "claim ledger", "prompt inspector", "fault injection", "qa inspector"],
       "aliases": ["inspection lab", "resilience lab"], "iconGlyph": "\uE9CA", "route": "help/experiment-lab", "order": 30,
-      "introducedVersion": "0.4.128-beta", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/other-workspaces/experiment-lab.md",
+      "introducedVersion": "0.4.128-beta", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/other-workspaces/experiment-lab.md",
       "relatedArticleIds": ["model-comparison", "sessions-setups", "ai-world-debug"],
       "actions": [{ "label": "Open Experiment Lab", "route": "app/view/experiment" }, { "label": "Open Debug Settings", "route": "app/settings/debug" }]
     },
@@ -175,7 +175,7 @@
       "summary": "Opt in to experimental visualization and diagnostics without changing normal Arena behavior.",
       "keywords": ["ai world", "3d", "debug", "diagnostics", "decision card", "style fit", "camera"],
       "aliases": ["world", "debug controls"], "iconGlyph": "\uE909", "route": "help/ai-world-debug", "order": 40,
-      "introducedVersion": "0.4.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/other-workspaces/ai-world-debug.md",
+      "introducedVersion": "0.4.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/other-workspaces/ai-world-debug.md",
       "relatedArticleIds": ["experiment-lab", "arena-mode"],
       "actions": [{ "label": "Open Debug Settings", "route": "app/settings/debug" }]
     },
@@ -184,7 +184,7 @@
       "summary": "Choose the right local save, branch, restore, portability, and export operation.",
       "keywords": ["session", "checkpoint", "fork", "template", "setup", "import", "export", "match setup v4"],
       "aliases": ["saved state", "restore point", "portable setup"], "iconGlyph": "\uE74E", "route": "help/sessions-setups", "order": 10,
-      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/save-automate/sessions-setups.md",
+      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/save-automate/sessions-setups.md",
       "relatedArticleIds": ["match-setup", "model-comparison", "powershell-control"],
       "actions": [{ "label": "Open Match Setup", "route": "app/match-setup" }]
     },
@@ -193,7 +193,7 @@
       "summary": "Control optional search/fetch tools and understand what AI Arena - Lite stores or sends.",
       "keywords": ["internet", "searxng", "search", "fetch", "privacy", "local data", "sources", "citations"],
       "aliases": ["web access", "data storage"], "iconGlyph": "\uE774", "route": "help/internet-privacy", "order": 20,
-      "introducedVersion": "0.2.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/save-automate/internet-privacy.md",
+      "introducedVersion": "0.2.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/save-automate/internet-privacy.md",
       "relatedArticleIds": ["collaborate", "arena-mode", "licensing"],
       "actions": [{ "label": "Open Internet Settings", "route": "app/settings/internet" }]
     },
@@ -202,7 +202,7 @@
       "summary": "Automate the local app through authenticated, state-returning commands that preserve UI safety rules.",
       "keywords": ["powershell", "control plane", "automation", "named pipe", "token", "screenshot", "provider config"],
       "aliases": ["cli", "script", "api"], "iconGlyph": "\uE756", "route": "help/powershell-control", "order": 30,
-      "introducedVersion": "0.4.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/save-automate/powershell-control.md",
+      "introducedVersion": "0.4.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/save-automate/powershell-control.md",
       "relatedArticleIds": ["agent", "sessions-setups", "experiment-lab"],
       "actions": [{ "label": "Open Debug Settings", "route": "app/settings/debug" }]
     },
@@ -211,7 +211,7 @@
       "summary": "Identify the typed failure, preserve evidence, and choose a recovery without silent trimming or model switching.",
       "keywords": ["context limit", "output limit", "native state", "capacity", "continue", "fork", "skip turn", "reset", "end match"],
       "aliases": ["context overflow", "out of context", "recovery"], "iconGlyph": "\uE7BA", "route": "help/context-recovery", "order": 10,
-      "introducedVersion": "0.4.131-beta", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/troubleshooting-reference/context-recovery.md",
+      "introducedVersion": "0.4.131-beta", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/troubleshooting-reference/context-recovery.md",
       "relatedArticleIds": ["model-behavior", "provider-troubleshooting", "sessions-setups"],
       "actions": [{ "label": "Open Status Center", "route": "app/status-center" }, { "label": "Open Models", "route": "app/models" }]
     },
@@ -220,7 +220,7 @@
       "summary": "Diagnose connection, model identity, residency, timeout, lifecycle, and capability problems.",
       "keywords": ["provider", "offline", "lm studio", "llama.cpp", "ollama", "timeout", "503", "model not loaded", "connection"],
       "aliases": ["connection troubleshooting", "provider error"], "iconGlyph": "\uE814", "route": "help/provider-troubleshooting", "order": 20,
-      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/troubleshooting-reference/provider-troubleshooting.md",
+      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/troubleshooting-reference/provider-troubleshooting.md",
       "relatedArticleIds": ["quick-start", "models-routing", "context-recovery"],
       "actions": [{ "label": "Open Provider Settings", "route": "app/settings/provider" }, { "label": "Open Models", "route": "app/models" }]
     },
@@ -229,7 +229,7 @@
       "summary": "Find keyboard behavior, installation paths, local-data locations, packaging, and licence terms.",
       "keywords": ["reference", "keyboard", "installation", "installer", "license", "licence", "copyright", "data paths"],
       "aliases": ["about", "legal"], "iconGlyph": "\uE8D7", "route": "help/licensing", "order": 30,
-      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.140-beta", "contentFile": "Articles/troubleshooting-reference/licensing.md",
+      "introducedVersion": "0.1.0", "reviewedVersion": "0.4.141-beta", "contentFile": "Articles/troubleshooting-reference/licensing.md",
       "relatedArticleIds": ["internet-privacy", "powershell-control"],
       "actions": []
     }

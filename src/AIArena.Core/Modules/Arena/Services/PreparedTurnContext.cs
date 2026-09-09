@@ -516,6 +516,7 @@ internal sealed class PreparedTurnContext
         MaxOutputTokens = config.MaxOutputTokens,
         ContextLength = config.ContextLength,
         ConfiguredContextWindow = config.ConfiguredContextWindow,
+        RuntimeEvidence = config.RuntimeEvidence,
         HistoryPolicy = config.HistoryPolicy,
         ResponseTone = config.ResponseTone,
         CustomTone = config.CustomTone,

@@ -65,6 +65,9 @@ public sealed class ModelProviderConfig
     public int NativeIdleTtlSeconds { get; init; }
 
     [JsonIgnore]
+    public ModelRuntimeEvidence? RuntimeEvidence { get; init; }
+
+    [JsonIgnore]
     public string PreviousResponseId { get; init; } = "";
 
     [JsonIgnore]
@@ -250,4 +253,5 @@ public sealed record ModelCompletionResult(
     ModelCompletionFailureKind FailureKind = ModelCompletionFailureKind.None,
     ModelCompletionStopReason StopReason = ModelCompletionStopReason.Unknown,
     int? ProviderStatusCode = null,
-    string ProviderErrorCode = "");
+    string ProviderErrorCode = "",
+    string ProviderStopReason = "");

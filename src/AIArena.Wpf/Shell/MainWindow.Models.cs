@@ -306,12 +306,14 @@ public partial class MainWindow
             operationButton: null,
             async cancellationToken =>
             {
+                using var progress = TranscriptList.Streams.Begin();
                 var result = await _contextRecoveryService.ContinueOutputAsync(
                     session.Id,
                     message.Turn,
                     message.SpeakerId,
                     message.CreatedAt,
-                    cancellationToken);
+                    cancellationToken, progress);
+                progress.Flush();
                 if (!result.Ok)
                 {
                     throw new InvalidOperationException(result.Error);

@@ -332,15 +332,11 @@ internal static class ProviderRetryTests
                 progress).GetAwaiter().GetResult();
 
             var adapterPath = item.Mode == ModelProviderApiModes.OllamaNative
-                ? "buffered Ollama adapter"
+                ? "NDJSON adapter"
                 : "SSE adapter";
             Require(result.Ok, $"{item.Mode} {adapterPath} did not recover from a capability-authorized availability response: {result.Error}");
             AssertTwoAttemptReceipt(item.Mode, handler, observer);
-            // Ollama's current adapter intentionally buffers its response even
-            // when the caller requested streaming; this proves retry admission
-            // only, not incremental Ollama progress semantics.
-            var expectedProgressCount = item.Mode == ModelProviderApiModes.OllamaNative ? 0 : 1;
-            Require(progress.Values.Count == expectedProgressCount,
+            Require(progress.Values.Count == 1,
                 $"{item.Mode} replay duplicated or lost accepted progress");
             Require(observer.Completions.Count == observer.Requests.Count,
                 $"{item.Mode} did not emit exactly one completion per physical attempt");
@@ -789,7 +785,11 @@ internal static class ProviderRetryTests
             "data: {\"type\":\"message.delta\",\"content\":\"streamed\"}\n\n"
                 + "data: {\"type\":\"chat.end\",\"result\":{\"model_instance_id\":\"retry-model\",\"output\":[{\"type\":\"message\",\"content\":\"streamed\"}]}}\n\n",
             "text/event-stream"),
-        ModelProviderApiModes.OllamaNative => Response(HttpStatusCode.OK, SuccessBody(mode)),
+        ModelProviderApiModes.OllamaNative => Response(
+            HttpStatusCode.OK,
+            "{\"model\":\"retry-model\",\"message\":{\"content\":\"streamed\"},\"done\":false}\n"
+                + "{\"model\":\"retry-model\",\"message\":{\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\"}\n",
+            "application/x-ndjson"),
         _ => Response(
             HttpStatusCode.OK,
             "data: {\"model\":\"retry-model\",\"choices\":[{\"delta\":{\"content\":\"streamed\"}}]}\n\ndata: [DONE]\n\n",

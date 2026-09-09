@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AIArena.Core.Services;
 
 namespace AIArena.Core.Models;
 
@@ -60,6 +61,7 @@ public sealed record ArenaBudgetedPrompt(
     ModelCompletionFailureKind FailureKind = ModelCompletionFailureKind.None)
 {
     public bool Ok => string.IsNullOrWhiteSpace(Error);
+    public int OutputTokenLimit { get; init; }
 }
 
 /// <summary>
@@ -82,8 +84,8 @@ public enum ArenaHistoryPromptSelectionContract
 }
 
 /// <summary>
-/// Deterministic Arena-only whole-entry retention. Factory callers never invoke
-/// this service and retain the public_group_v1 root-plus-49 contract unchanged.
+/// Deterministic Arena whole-entry retention. Factory uses its separate public
+/// contract and shares estimation/fitting when fresh loaded-context evidence exists.
 /// </summary>
 public static class ArenaHistoryBudgetService
 {
@@ -113,10 +115,14 @@ public static class ArenaHistoryBudgetService
         }
 
         var policy = ModelHistoryPolicies.NormalizeHistoryPolicy(config.HistoryPolicy);
-        var contextWindow = ModelRuntimeSettingsRegistry.EffectiveConfiguredContextWindow(config);
+        var contextWindow = ArenaRequestBudget.ContextWindow(config);
         if (frozenReceipt is null && (policy != ModelHistoryPolicies.Rolling80 || contextWindow <= 0))
         {
-            return new ArenaBudgetedPrompt(promptFactory(null), null, "");
+            // Strict never silently drops history. Confirmed capacity still
+            // constrains generation and can reject an oversized exact prompt.
+            return config.RuntimeEvidence?.ContextWindow > 0
+                ? ArenaRequestBudget.FitUnchanged(config, promptFactory(null))
+                : new ArenaBudgetedPrompt(promptFactory(null), null, "");
         }
 
         var causalBeforeTurn = beforeTurn ?? checked((preparedTurnCount ?? snapshot.Engine.TurnCount) + 1);
@@ -202,6 +208,18 @@ public static class ArenaHistoryBudgetService
                 promptFactory);
         }
 
+        if (selection.EstimatedTokens > inputBudget && config.RuntimeEvidence?.ContextWindow > 0)
+        {
+            // Only after whole-entry retention reaches its required text may
+            // unused generation allowance be reduced; fixed text stays exact.
+            var fittedOutput = ArenaRequestBudget.FittedOutput(config, selection.EstimatedTokens);
+            if (fittedOutput > 0)
+            {
+                outputReserve = fittedOutput;
+                inputBudget = Math.Max(1, targetTotal - outputReserve);
+            }
+        }
+
         var retainedSet = selection.IncludedIds.ToHashSet(StringComparer.Ordinal);
         var retained = identities.Where(item => retainedSet.Contains(item.Id)).ToList();
         var messages = selection.Messages;
@@ -229,7 +247,7 @@ public static class ArenaHistoryBudgetService
                 ModelCompletionFailureKind.ContextLimitExceeded);
         }
 
-        return new ArenaBudgetedPrompt(messages, receipt, "");
+        return new ArenaBudgetedPrompt(messages, receipt, "") { OutputTokenLimit = outputReserve };
     }
 
     /// <summary>

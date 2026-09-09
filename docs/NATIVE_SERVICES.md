@@ -127,7 +127,7 @@ cancellation followed observed nonterminal text. Both processes exited 0 normall
 
 ## Production installer
 
-The `0.4.140-beta` Lite installer includes the Native Services client and offers
+The `0.4.141-beta` Lite installer includes the Native Services client and offers
 bundled SearXNG as an optional installation component. Native Services requires a
 separately installed, compatible AI Arena C++ app running under the same Windows
 logon. The Lite installer does not include or start that native app.

@@ -5,13 +5,13 @@
 #define MyAppName "AI Arena"
 #define MyAppShortDisplayName "AI Arena - Lite"
 #define MyAppDisplayName "AI Arena - Lite: Adversarial LLM Lab"
-#define MyAppVersion "0.4.140-beta"
+#define MyAppVersion "0.4.141-beta"
 #define MyAppPublisher "Dominik Fiala"
 #define MyAppExeName "AI Arena.exe"
 #define MyAppIconName "ai-arena-lite-icon.ico"
 #define MyPerUserMigrationSha256 "0F75A6496F52DAD96E08B86C20BF4287AB76F62B325110CE6E460EB9CFC2087E"
 #ifndef MyReleaseDir
-#define MyReleaseDir "..\..\dist\AI Arena - 0.4.140-beta"
+#define MyReleaseDir "..\..\dist\AI Arena - 0.4.141-beta"
 #endif
 #define MyReleaseUrl "https://github.com/neeveew/AI-Arena-Adversarial-LLM-Lab/releases"
 

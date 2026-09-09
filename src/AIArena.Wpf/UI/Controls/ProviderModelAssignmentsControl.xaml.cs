@@ -252,6 +252,13 @@ public partial class ProviderModelAssignmentsControl : UserControl
     private bool applyingPresentation;
     private bool synchronizingSelection;
     private ModelRowState? selectedModel;
+    private readonly HashSet<ContentControl> inlineEditorHosts = [];
+    private ContentControl? inlineEditorHost;
+    private bool movingInlineEditor;
+    private bool inlineEditorExpanded = true;
+    private string configurationEditorModelId = "";
+    private string configurationEditorConnectionIdentity = "";
+    private ProviderModelConfigurationPresentation? configurationEditorBaseline;
     private bool usesCompactLayout;
     private Window? layoutHostWindow;
     private string committedSearchQuery = "";
@@ -274,6 +281,15 @@ public partial class ProviderModelAssignmentsControl : UserControl
     public ProviderModelAssignmentsControl()
     {
         InitializeComponent();
+        EditorParkingHost.Content = null;
+        DetailPane.AddHandler(Keyboard.KeyDownEvent, new KeyEventHandler(InlineEditor_KeyDown));
+        DetailPane.PreviewMouseWheel += InlineEditor_PreviewMouseWheel;
+        ModelDetailBody.SizeChanged += (_, _) => ApplyEditorLayout();
+        AssignmentSettingsPanel.SizeChanged += (_, _) => ApplyEditorLayout();
+        LoadedModelsList.AddHandler(VirtualizingStackPanel.CleanUpVirtualizedItemEvent,
+            new CleanUpVirtualizedItemEventHandler(ModelList_CleanUpVirtualizedItem));
+        ModelsList.AddHandler(VirtualizingStackPanel.CleanUpVirtualizedItemEvent,
+            new CleanUpVirtualizedItemEventHandler(ModelList_CleanUpVirtualizedItem));
         InitializeDetachedStatusProbes();
         AssignmentTargetsItems.ItemsSource = selectedTargetRows;
         HistoryPolicyCombo.ItemsSource = HistoryPolicyOption.Options;
@@ -364,7 +380,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
     internal TextBox SearchBox => ModelSearchText;
     internal Border MasterSurface => MasterPane;
     internal Border DetailSurface => DetailPane;
-    internal ScrollViewer WorkspaceScroller => WorkspaceScrollViewer;
+    internal FrameworkElement WorkspaceViewportElement => WorkspaceViewport;
     internal int CatalogContinuityLayoutCount => catalogContinuityLayoutCount;
     internal int CatalogAnchorInspectionCount => catalogAnchorInspectionCount;
     internal int CatalogContinuityScheduleCount => catalogContinuityScheduleCount;
@@ -398,7 +414,9 @@ public partial class ProviderModelAssignmentsControl : UserControl
     internal Button ConfigurationReloadAction => ConfigurationReloadButton;
     internal TextBlock ConfiguredContextEvidence => ConfiguredContextText;
     internal TextBlock EffectiveContextEvidence => EffectiveContextText;
-    internal ScrollViewer DetailScroller => ModelDetailScrollViewer;
+    internal FrameworkElement DetailBody => ModelDetailBody;
+    internal ContentControl? InlineEditorHost => inlineEditorHost;
+    internal Expander AdvancedSettings => AdvancedModelSettingsExpander;
     internal int AssignmentGridColumns => AssignmentColumnCount;
     internal bool UsesIncrementalLiveShaping => usesIncrementalLiveShaping;
     internal int CatalogRowCount => modelRows.Count;
@@ -443,8 +461,9 @@ public partial class ProviderModelAssignmentsControl : UserControl
             var priorCatalogOffset = catalogScrollViewer?.VerticalOffset ?? 0;
             var priorViewportAnchor = cachedCatalogViewportAnchor
                 ?? CaptureRealizedCatalogViewportAnchor(catalogScrollViewer);
-            var catalogHadKeyboardFocus = ModelsList.IsKeyboardFocusWithin
-                || LoadedModelsList.IsKeyboardFocusWithin;
+            var editorFocus = DetailPane.IsKeyboardFocusWithin ? Keyboard.FocusedElement as FrameworkElement : null;
+            var catalogHadKeyboardFocus = editorFocus is null
+                && (ModelsList.IsKeyboardFocusWithin || LoadedModelsList.IsKeyboardFocusWithin);
             var catalogViewChanged = false;
             ProviderNameText.Text = DisplayOrFallback(presentation.ProviderName, "Provider");
             ConnectionStatusText.Text = DisplayOrFallback(presentation.ConnectionStatus, "Unavailable");
@@ -517,7 +536,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
                     priorViewportAnchor,
                     catalogHadKeyboardFocus,
                     restoreViewport: catalogViewChanged,
-                    ++catalogContinuityGeneration);
+                    ++catalogContinuityGeneration,
+                    editorFocus);
             }
         }
         finally
@@ -798,6 +818,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             }
         }
 
+        inlineEditorExpanded = true;
         SelectModel(model);
         RebuildSelectedDetail();
         var list = model.Availability == ProviderModelAvailability.Loaded
@@ -847,48 +868,13 @@ public partial class ProviderModelAssignmentsControl : UserControl
             return 3;
         }
 
-        return contentWidth >= 720 ? 3 : contentWidth >= 480 ? 2 : 1;
+        return contentWidth >= 600 ? 3 : contentWidth >= 380 ? 2 : 1;
     }
 
     internal void ApplyResponsiveLayout(bool compact)
     {
         usesCompactLayout = compact;
-        if (compact)
-        {
-            WorkspaceScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-            MasterColumn.Width = new GridLength(1, GridUnitType.Star);
-            WorkspaceGapColumn.Width = new GridLength(0);
-            DetailColumn.Width = new GridLength(0);
-            MasterRow.Height = GridLength.Auto;
-            CompactWorkspaceGapRow.Height = new GridLength(12);
-            DetailRow.Height = new GridLength(1, GridUnitType.Star);
-            Grid.SetRow(MasterPane, 0);
-            Grid.SetColumn(MasterPane, 0);
-            Grid.SetColumnSpan(MasterPane, 3);
-            Grid.SetRow(DetailPane, 2);
-            Grid.SetColumn(DetailPane, 0);
-            Grid.SetColumnSpan(DetailPane, 3);
-            MasterPane.MaxHeight = 360;
-            DetailPane.ClearValue(MaxWidthProperty);
-        }
-        else
-        {
-            WorkspaceScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
-            MasterColumn.Width = new GridLength(1, GridUnitType.Star);
-            WorkspaceGapColumn.Width = new GridLength(12);
-            DetailColumn.Width = new GridLength(380);
-            MasterRow.Height = new GridLength(1, GridUnitType.Star);
-            CompactWorkspaceGapRow.Height = new GridLength(0);
-            DetailRow.Height = new GridLength(0);
-            Grid.SetRow(MasterPane, 0);
-            Grid.SetColumn(MasterPane, 0);
-            Grid.SetColumnSpan(MasterPane, 1);
-            Grid.SetRow(DetailPane, 0);
-            Grid.SetColumn(DetailPane, 2);
-            Grid.SetColumnSpan(DetailPane, 1);
-            MasterPane.ClearValue(MaxHeightProperty);
-            DetailPane.MaxWidth = 380;
-        }
+        UpdateLoadedListHeight();
 
         var compactHeader = ActualWidth > 0 && ActualWidth <= CompactHeaderThreshold;
         CompactHeaderActionsRow.Height = compactHeader ? GridLength.Auto : new GridLength(0);
@@ -903,7 +889,36 @@ public partial class ProviderModelAssignmentsControl : UserControl
         HeaderActionsPanel.Margin = compactHeader
             ? new Thickness(0, 10, 0, 0)
             : new Thickness(0);
-        AssignmentColumnCount = AssignmentColumnsAt(compact, ActualWidth, HasScaledLayoutTransform());
+        ApplyEditorLayout();
+    }
+
+    private void ApplyEditorLayout()
+    {
+        if (ModelDetailBody is null || AssignmentSettingsPanel is null)
+        {
+            return;
+        }
+        var sideBySide = ModelDetailBody.ActualWidth >= 700;
+        ContextSettingsColumn.Width = sideBySide ? new GridLength(240) : new GridLength(1, GridUnitType.Star);
+        EssentialGapColumn.Width = new GridLength(sideBySide ? 12 : 0);
+        AssignmentSettingsColumn.Width = sideBySide ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        EssentialBottomRow.Height = sideBySide ? new GridLength(0) : GridLength.Auto;
+        Grid.SetRow(AssignmentSettingsPanel, sideBySide ? 0 : 1);
+        Grid.SetColumn(AssignmentSettingsPanel, sideBySide ? 2 : 0);
+        AssignmentSettingsPanel.Margin = sideBySide ? new Thickness(0) : new Thickness(0, 6, 0, 0);
+        AssignmentColumnCount = AssignmentColumnsAt(true, Math.Min(840, AssignmentSettingsPanel.ActualWidth), HasScaledLayoutTransform());
+    }
+
+    private void ModelList_CleanUpVirtualizedItem(object sender, CleanUpVirtualizedItemEventArgs e)
+    {
+        // Keep the one expanded row measured while it scrolls out of view. Recycling
+        // its shared editor would briefly collapse its height and move the viewport.
+        var selectedList = selectedModel?.Availability == ProviderModelAvailability.Loaded
+            ? LoadedModelsList : ModelsList;
+        var containsEditor = ReferenceEquals(e.Value, selectedModel)
+            || (e.Value is CollectionViewGroup group && selectedModel is not null
+                && string.Equals(group.Name?.ToString(), selectedModel.GroupName, StringComparison.Ordinal));
+        e.Cancel = inlineEditorExpanded && containsEditor && ReferenceEquals(sender, selectedList);
     }
 
     private void ProviderModelAssignmentsControl_Loaded(object sender, RoutedEventArgs e)
@@ -994,7 +1009,18 @@ public partial class ProviderModelAssignmentsControl : UserControl
             return;
         }
 
+        if (e.Key is Key.Space or Key.Enter
+            && Keyboard.Modifiers == ModifierKeys.None
+            && Keyboard.FocusedElement is ListBoxItem { DataContext: ModelRowState focusedRow } item
+            && ReferenceEquals(focusedRow, selectedModel))
+        {
+            e.Handled = true;
+            ToggleInlineEditor(item);
+            return;
+        }
+
         if (e.Key == Key.Down
+            && !DetailPane.IsKeyboardFocusWithin
             && LoadedModelsList.IsKeyboardFocusWithin
             && ReferenceEquals(selectedModel, LoadedRows().LastOrDefault())
             && AvailableCatalogExpander.IsExpanded
@@ -1005,6 +1031,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         }
 
         if (e.Key == Key.Up
+            && !DetailPane.IsKeyboardFocusWithin
             && ModelsList.IsKeyboardFocusWithin
             && ReferenceEquals(selectedModel, VisibleCatalogRows().FirstOrDefault())
             && LoadedRows().LastOrDefault() is { } lastLoadedModel)
@@ -1116,13 +1143,19 @@ public partial class ProviderModelAssignmentsControl : UserControl
             return;
         }
 
-        ModelContextWindowText.IsEnabled = UseProviderDefaultContextCheckBox.IsChecked != true
-            && CanEditConfiguration();
-        ModelContextWindowText.Text = UseProviderDefaultContextCheckBox.IsChecked == true
-            ? "Provider default"
-            : SelectedConfiguration().ContextWindow > 0
-                ? SelectedConfiguration().ContextWindow.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                : Math.Max(SelectedConfiguration().MinimumContextWindow, 512).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        ModelContextWindowText.IsEnabled = CanEditConfiguration();
+        applyingConfigurationControls = true;
+        try
+        {
+            var configuration = SelectedConfiguration();
+            ModelContextWindowText.Text = UseProviderDefaultContextCheckBox.IsChecked == true
+                ? ContextInputText(configuration, true)
+                : ContextOverrideSeed(configuration).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        finally
+        {
+            applyingConfigurationControls = false;
+        }
         UpdateConfigurationValidation();
         _ = TryRequestConfigurationChange();
     }
@@ -1158,11 +1191,39 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
     private void ModelConfigurationInput_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (!applyingConfigurationControls)
+        if (applyingConfigurationControls)
         {
-            UpdateConfigurationValidation();
+            return;
         }
+        if (ReferenceEquals(sender, ModelContextWindowText)
+            && UseProviderDefaultContextCheckBox.IsChecked == true && CanEditConfiguration()
+            && !applyingPresentation && !movingInlineEditor)
+        {
+            // Typing a value is an explicit override; switching the mode here stays
+            // local until the usual Enter/blur save, so incomplete input remains editable.
+            applyingConfigurationControls = true;
+            try
+            {
+                UseProviderDefaultContextCheckBox.IsChecked = false;
+            }
+            finally
+            {
+                applyingConfigurationControls = false;
+            }
+        }
+        UpdateConfigurationValidation();
     }
+
+    private static int ContextOverrideSeed(ProviderModelConfigurationPresentation configuration) =>
+        Math.Clamp(configuration.ContextWindow > 0 ? configuration.ContextWindow
+            : configuration.EffectiveContextWindow > 0 ? configuration.EffectiveContextWindow : 4096,
+            configuration.MinimumContextWindow, configuration.MaximumContextWindow);
+
+    private static string ContextInputText(ProviderModelConfigurationPresentation configuration, bool providerDefault) =>
+        !providerDefault ? configuration.ContextWindow.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : configuration.EffectiveContextWindow > 0
+                ? configuration.EffectiveContextWindow.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : "Automatic";
 
     private void ConfigurationReloadButton_Click(object sender, RoutedEventArgs e)
     {
@@ -1508,6 +1569,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             selectedTargetRows.Clear();
             ModelDetailContent.Visibility = Visibility.Collapsed;
             ModelDetailEmptyState.Visibility = Visibility.Visible;
+            UpdateInlineEditorHost();
             return;
         }
 
@@ -1525,6 +1587,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
         ModelDetailContent.Visibility = Visibility.Visible;
         ModelDetailEmptyState.Visibility = Visibility.Collapsed;
         AssignmentAvailabilityText.Text = AssignmentAvailabilityMessage();
+        UpdateInlineEditorHost();
 
         if (pendingAssignment is not null)
         {
@@ -1568,20 +1631,34 @@ public partial class ProviderModelAssignmentsControl : UserControl
     private void ApplyConfigurationDetail(ModelRowState model)
     {
         var configuration = model.Configuration;
+        // Refresh evidence independently of the inputs. A stable heartbeat must not
+        // overwrite an unfinished edit, including an invalid value awaiting correction.
+        var updateInputs = configurationEditorBaseline is null
+            || !string.Equals(configurationEditorModelId, model.Id, StringComparison.Ordinal)
+            || !string.Equals(configurationEditorConnectionIdentity, EffectiveConnectionIdentity(currentPresentation), StringComparison.Ordinal)
+            || !string.Equals(configurationEditorBaseline.ConfigurationIdentity, configuration.ConfigurationIdentity, StringComparison.Ordinal)
+            || !ConfigurationEquivalent(configurationEditorBaseline, configuration)
+            || (UseProviderDefaultContextCheckBox.IsChecked == true
+                && configuration.ContextWindow == 0
+                && configurationEditorBaseline.EffectiveContextWindow != configuration.EffectiveContextWindow);
         applyingConfigurationControls = true;
         try
         {
-            var providerDefault = configuration.ContextWindow == 0;
-            UseProviderDefaultContextCheckBox.IsChecked = providerDefault;
-            ModelContextWindowText.Text = providerDefault
-                ? "Provider default"
-                : configuration.ContextWindow.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            SelectHistoryPolicy(configuration.HistoryPolicy, configuration.ChapteredAvailable);
-            SelectResponseTone(configuration.ResponseTone);
-            CustomToneText.Text = configuration.CustomTone;
-            CustomTonePanel.Visibility = configuration.ResponseTone == ProviderModelResponseTone.Custom
-                ? Visibility.Visible
-                : Visibility.Collapsed;
+            if (updateInputs)
+            {
+                var providerDefault = configuration.ContextWindow == 0;
+                UseProviderDefaultContextCheckBox.IsChecked = providerDefault;
+                ModelContextWindowText.Text = ContextInputText(configuration, providerDefault);
+                SelectHistoryPolicy(configuration.HistoryPolicy, configuration.ChapteredAvailable);
+                SelectResponseTone(configuration.ResponseTone);
+                CustomToneText.Text = configuration.CustomTone;
+                CustomTonePanel.Visibility = configuration.ResponseTone == ProviderModelResponseTone.Custom
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+            configurationEditorModelId = model.Id;
+            configurationEditorConnectionIdentity = EffectiveConnectionIdentity(currentPresentation);
+            configurationEditorBaseline = configuration;
         }
         finally
         {
@@ -1590,16 +1667,18 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
         var editable = CanEditConfiguration();
         UseProviderDefaultContextCheckBox.IsEnabled = editable;
-        ModelContextWindowText.IsEnabled = editable && configuration.ContextWindow != 0;
+        ModelContextWindowText.IsEnabled = editable;
         HistoryPolicyCombo.IsEnabled = editable;
         ResponseToneCombo.IsEnabled = editable;
-        CustomToneText.IsEnabled = editable && configuration.ResponseTone == ProviderModelResponseTone.Custom;
+        CustomToneText.IsEnabled = editable && SelectedResponseTone() == ProviderModelResponseTone.Custom;
         ConfiguredContextText.Text = configuration.ContextWindow == 0
-            ? "Provider default"
-            : $"{configuration.ContextWindow:n0} tokens";
+            ? "Using server default"
+            : $"Configured: {configuration.ContextWindow:n0} tokens";
         EffectiveContextText.Text = configuration.EffectiveContextWindow > 0
-            ? $"{configuration.EffectiveContextWindow:n0} tokens. {DisplayOrFallback(configuration.ContextEvidence, "Provider-reported evidence.")}"
-            : DisplayOrFallback(configuration.ContextEvidence, "Effective context is not reported.");
+            ? $"Active: {configuration.EffectiveContextWindow:n0} tokens"
+            : "Active context not reported by server";
+        EffectiveContextText.ToolTip = DisplayOrFallback(configuration.ContextEvidence, "Effective context is not reported.");
+        AutomationProperties.SetHelpText(EffectiveContextText, EffectiveContextText.ToolTip.ToString());
         AutomationProperties.SetItemStatus(
             EffectiveContextText,
             configuration.EffectiveContextWindow > 0 ? "Observed" : "Unavailable");
@@ -1745,6 +1824,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
     private bool TryRequestConfigurationChange()
     {
         if (applyingConfigurationControls
+            || applyingPresentation
+            || movingInlineEditor
             || selectedModel is not { } model
             || !CanEditConfiguration()
             || !TryConfigurationDraft(out var draft, out _))
@@ -1877,6 +1958,9 @@ public partial class ProviderModelAssignmentsControl : UserControl
             && state is ProviderModelConfigurationReloadState.Required or ProviderModelConfigurationReloadState.Failed;
         ConfigurationReloadButton.Content = label;
         ConfigurationReloadButton.IsEnabled = enabled;
+        ConfigurationReloadButton.Visibility = state == ProviderModelConfigurationReloadState.NotRequired
+            ? Visibility.Collapsed
+            : Visibility.Visible;
         AutomationProperties.SetName(ConfigurationReloadButton, model is null ? label : $"{label} for {model.DisplayName}");
         AutomationProperties.SetHelpText(ConfigurationReloadButton, NormalizeStatus(message));
         AutomationProperties.SetItemStatus(ConfigurationReloadButton, state.ToString());
@@ -2670,8 +2754,143 @@ public partial class ProviderModelAssignmentsControl : UserControl
 
     private void SelectModel(ModelRowState? model)
     {
+        if (!ReferenceEquals(selectedModel, model))
+        {
+            // Detach while the previous identity is still selected. Losing focus while
+            // moving this shared editor must never save its old text to another model.
+            MoveInlineEditor(null);
+            inlineEditorExpanded = true;
+            AdvancedModelSettingsExpander.IsExpanded = false;
+        }
         selectedModel = model;
         SynchronizeSelection(model);
+    }
+
+    private void ModelRow_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is ListBoxItem { DataContext: ModelRowState model } item
+            && ReferenceEquals(model, selectedModel)
+            && e.OriginalSource is FrameworkElement source
+            && !DetailPane.IsAncestorOf(source))
+        {
+            e.Handled = true;
+            ToggleInlineEditor(item);
+        }
+    }
+
+    private void ToggleInlineEditor(ListBoxItem item)
+    {
+        item.Focus();
+        inlineEditorExpanded = !inlineEditorExpanded;
+        UpdateInlineEditorHost();
+    }
+
+    private void InlineEditor_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        for (var source = e.OriginalSource as DependencyObject; source is Visual;
+             source = VisualTreeHelper.GetParent(source))
+        {
+            var closedSelector = source is ComboBox { IsDropDownOpen: false };
+            var singleLineContext = ReferenceEquals(source, ModelContextWindowText);
+            var toneWithoutOverflow = ReferenceEquals(source, CustomToneText)
+                && FindVisualDescendant<ScrollViewer>(CustomToneText) is { ScrollableHeight: <= 0 };
+            if (!closedSelector && !singleLineContext && !toneWithoutOverflow)
+            {
+                continue;
+            }
+            // A closed selector must not change a saved setting while the user scrolls
+            // the expanded model. Let the owning list perform its normal wheel action.
+            e.Handled = true;
+            var list = selectedModel?.Availability == ProviderModelAvailability.Loaded ? LoadedModelsList : ModelsList;
+            FindVisualDescendant<ScrollViewer>(list)?.RaiseEvent(new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+            {
+                RoutedEvent = Mouse.MouseWheelEvent
+            });
+            return;
+        }
+    }
+
+    private void InlineEditor_KeyDown(object sender, KeyEventArgs e)
+    {
+        // Let each input handle navigation first, then keep unused arrow/page keys
+        // from bubbling into the parent ListBox and selecting another model.
+        if (e.Key is Key.Up or Key.Down or Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown)
+        {
+            e.Handled = true;
+        }
+    }
+
+    private void InlineEditorHost_Loaded(object sender, RoutedEventArgs e)
+    {
+        inlineEditorHosts.Add((ContentControl)sender);
+        UpdateInlineEditorHost();
+    }
+
+    private void InlineEditorHost_Unloaded(object sender, RoutedEventArgs e)
+    {
+        var host = (ContentControl)sender;
+        inlineEditorHosts.Remove(host);
+        if (ReferenceEquals(inlineEditorHost, host))
+        {
+            MoveInlineEditor(null);
+        }
+    }
+
+    private void InlineEditorHost_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (ReferenceEquals(inlineEditorHost, sender) && !ReferenceEquals(e.NewValue, selectedModel))
+        {
+            MoveInlineEditor(null);
+        }
+        UpdateInlineEditorHost();
+    }
+
+    private void UpdateInlineEditorHost()
+    {
+        if (DetailPane is null || LoadedModelsList is null)
+        {
+            return;
+        }
+        var selectedList = selectedModel?.Availability == ProviderModelAvailability.Loaded
+            ? LoadedModelsList : ModelsList;
+        var host = selectedModel is null || !inlineEditorExpanded ? null : inlineEditorHosts.FirstOrDefault(candidate =>
+            candidate.IsLoaded && ReferenceEquals(candidate.DataContext, selectedModel)
+            && selectedList.IsAncestorOf(candidate));
+        MoveInlineEditor(host);
+        UpdateLoadedListHeight();
+    }
+
+    private void MoveInlineEditor(ContentControl? host)
+    {
+        if (ReferenceEquals(inlineEditorHost, host))
+        {
+            return;
+        }
+        movingInlineEditor = true;
+        try
+        {
+            if (inlineEditorHost is not null)
+            {
+                inlineEditorHost.Content = null;
+            }
+            inlineEditorHost = host;
+            if (host is not null)
+            {
+                host.Content = DetailPane;
+            }
+        }
+        finally
+        {
+            movingInlineEditor = false;
+        }
+    }
+
+    private void UpdateLoadedListHeight()
+    {
+        // Leave room for the catalog while letting a loaded model reveal its editor.
+        LoadedModelsList.MaxHeight = inlineEditorExpanded && selectedModel?.Availability == ProviderModelAvailability.Loaded
+            ? Math.Clamp(WorkspaceViewport.ActualHeight - 240, 174, 520)
+            : 174;
     }
 
     private void SynchronizeSelection(ModelRowState? model)
@@ -2697,6 +2916,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
     private bool MoveKeyboardSelection(ModelRowState model, ListBox destination)
     {
         SelectModel(model);
+        RebuildSelectedDetail();
         destination.ScrollIntoView(model);
         destination.UpdateLayout();
         destination.Focus();
@@ -2908,7 +3128,8 @@ public partial class ProviderModelAssignmentsControl : UserControl
         CatalogViewportAnchor? priorViewportAnchor,
         bool restoreKeyboardFocus,
         bool restoreViewport,
-        int continuityGeneration)
+        int continuityGeneration,
+        FrameworkElement? editorFocus)
     {
         catalogContinuityScheduleCount++;
         _ = Dispatcher.BeginInvoke(
@@ -2955,6 +3176,18 @@ public partial class ProviderModelAssignmentsControl : UserControl
                     }
                 }
 
+                UpdateInlineEditorHost();
+                if (editorFocus is not null && string.Equals(requestedSelection, SelectedModelId, StringComparison.Ordinal))
+                {
+                    var selectedList = selectedModel?.Availability == ProviderModelAvailability.Loaded
+                        ? LoadedModelsList : ModelsList;
+                    selectedList.ScrollIntoView(selectedModel);
+                    selectedList.UpdateLayout();
+                    if (editorFocus.IsVisible && editorFocus.IsEnabled)
+                    {
+                        editorFocus.Focus();
+                    }
+                }
                 if (restoreKeyboardFocus
                     && !ModelsList.IsKeyboardFocusWithin
                     && !LoadedModelsList.IsKeyboardFocusWithin)
@@ -3208,7 +3441,7 @@ public partial class ProviderModelAssignmentsControl : UserControl
             return "Assignments are unavailable for the current provider or arena state.";
         }
 
-        return "Changes save immediately. Turn routing targets on or off without changing model residency.";
+        return "Changes save automatically. Default covers agents without their own model.";
     }
 
     private string SelectedFacetName() =>

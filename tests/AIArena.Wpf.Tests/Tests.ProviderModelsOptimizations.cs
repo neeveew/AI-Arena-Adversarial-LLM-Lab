@@ -222,6 +222,8 @@ internal static partial class Program
                 var states = assignmentChecks
                     .Select(AutomationProperties.GetItemStatus)
                     .ToHashSet(StringComparer.Ordinal);
+                control.LoadedList.ScrollIntoView(ProviderModelsOptimizationRow(control, "facet-01"));
+                FlushProviderModelsDispatcher(host);
                 var unassignedRow = FindProviderModelsDescendants<ListBoxItem>(control.LoadedList)
                     .Single(item => AutomationProperties.GetName(item)
                         .StartsWith("Catalog model 01", StringComparison.Ordinal));
@@ -233,6 +235,8 @@ internal static partial class Program
                 }
                 Require(states.SetEquals(["Default", "Explicit", "Uses default", "Unassigned"]),
                     "assignment controls did not distinguish Default, Explicit, inherited-default, and Unassigned states through UI Automation");
+                control.LoadedList.ScrollIntoView(ProviderModelsOptimizationRow(control, "facet-00"));
+                FlushProviderModelsDispatcher(host);
                 unassignedRow = FindProviderModelsDescendants<ListBoxItem>(control.LoadedList)
                     .Single(item => AutomationProperties.GetName(item)
                         .StartsWith("Special model 00", StringComparison.Ordinal));
@@ -289,47 +293,32 @@ internal static partial class Program
             {
                 ArrangeProviderModelsViewport(host, logicalViewport, control, 1500);
                 Require(!control.UsesCompactLayout
-                        && control.DetailSurface.ActualWidth is >= 340 and <= 380
-                        && control.MasterSurface.ActualWidth > control.DetailSurface.ActualWidth * 2,
-                    "the 1500-DIP Models surface did not preserve its catalog-first wide layout");
+                        && control.MasterSurface.ActualWidth >= control.ActualWidth - 40,
+                    "the 1500-DIP Models surface did not provide a full-width model list");
+                AssertProviderModelsInlineEditor(control);
 
                 ArrangeProviderModelsViewport(host, logicalViewport, control, 960);
-                Require(control.UsesCompactLayout
-                        && Grid.GetRow(control.MasterSurface) == 0
-                        && Grid.GetColumnSpan(control.MasterSurface) == 3
-                        && Grid.GetRow(control.DetailSurface) == 2
-                        && Grid.GetColumnSpan(control.DetailSurface) == 3,
-                    "the 960-DIP Models surface did not stack the catalog and details panes");
+                Require(control.UsesCompactLayout,
+                    "the 960-DIP Models surface did not apply compact spacing");
+                AssertProviderModelsInlineEditor(control);
 
                 control.LayoutTransform = new ScaleTransform(2, 2);
                 ArrangeProviderModelsViewport(host, logicalViewport, control, 1500);
                 Require(control.ActualWidth <= 750
                         && control.UsesCompactLayout
-                        && Grid.GetRow(control.DetailSurface) == 2
-                        && control.WorkspaceScroller.VerticalScrollBarVisibility == ScrollBarVisibility.Auto
-                        && control.WorkspaceScroller.ScrollableHeight > 0,
-                    $"the 2x layout transform did not reflow through the compact policy (content width {control.ActualWidth:0.#} DIP)");
-
-                control.WorkspaceScroller.ScrollToEnd();
-                control.DetailScroller.ScrollToTop();
-                var assignmentScroller = FindProviderModelsDescendants<ScrollViewer>(control.DetailSurface)
-                    .Single(scroll => AutomationProperties.GetName(scroll) == "Assignment targets");
-                assignmentScroller.BringIntoView();
-                assignmentScroller.ScrollToEnd();
-                FlushProviderModelsDispatcher(host);
+                        && control.DetailBody is not ScrollViewer
+                        && control.WorkspaceViewportElement is not ScrollViewer,
+                    $"the 2x layout transform did not keep the selected editor inline without its own vertical scroll (content width {control.ActualWidth:0.#} DIP)");
+                AssertProviderModelsInlineEditor(control);
                 var lastAssignment = FindProviderModelsDescendants<ProviderAssignmentCheckBox>(control.AssignmentTargets)
                     .Last();
-                var targetBounds = lastAssignment.TransformToAncestor(control.WorkspaceScroller)
-                    .TransformBounds(new Rect(0, 0, lastAssignment.ActualWidth, lastAssignment.ActualHeight));
-                Require(targetBounds.Top >= -1
-                        && targetBounds.Bottom <= control.WorkspaceScroller.ViewportHeight + 1,
-                    $"the bottom assignment target was not reachable at 200% ({targetBounds.Top:0.#}..{targetBounds.Bottom:0.#} of {control.WorkspaceScroller.ViewportHeight:0.#})");
+                AssertProviderModelsInlineElementReachable(control, host, lastAssignment);
 
                 control.LayoutTransform = Transform.Identity;
                 ArrangeProviderModelsViewport(host, logicalViewport, control, 1500);
-                Require(!control.UsesCompactLayout
-                        && Grid.GetColumn(control.DetailSurface) == 2,
-                    "the Models surface did not restore its wide layout after removing the 2x transform");
+                Require(!control.UsesCompactLayout,
+                    "the Models surface did not restore full-width spacing after removing the 2x transform");
+                AssertProviderModelsInlineEditor(control);
             }
             finally
             {

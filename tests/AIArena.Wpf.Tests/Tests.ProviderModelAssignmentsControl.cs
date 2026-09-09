@@ -45,17 +45,12 @@ internal static partial class Program
             {
                 ArrangeProviderModelsViewport(host, logicalViewport, control, 1500);
                 Require(!control.UsesCompactLayout
-                        && Grid.GetRow(control.MasterSurface) == 0
-                        && Grid.GetColumn(control.MasterSurface) == 0
-                        && Grid.GetRow(control.DetailSurface) == 0
-                        && Grid.GetColumn(control.DetailSurface) == 2
                         && control.FacetFilter.Text == "All catalog",
-                    "1500-DIP hosted Models surface did not preserve the wide master/detail layout");
-                var paneWidth = control.MasterSurface.ActualWidth + control.DetailSurface.ActualWidth;
-                var masterShare = paneWidth <= 0 ? 0 : control.MasterSurface.ActualWidth / paneWidth;
-                Require(masterShare is >= 0.74 and <= 0.80
-                        && control.DetailSurface.ActualWidth <= 380,
-                    $"wide Models surface did not preserve the catalog-first fixed detail rail (master share {masterShare:P1}, detail {control.DetailSurface.ActualWidth:0.#} DIP)");
+                    "1500-DIP hosted Models surface did not retain its full-width catalog policy");
+                AssertProviderModelsInlineEditor(control);
+                Require(control.MasterSurface.ActualWidth >= control.ActualWidth - 40
+                        && control.DetailSurface.ActualWidth > 900,
+                    "wide Models surface did not give the selected inline editor the catalog width");
 
                 var view = CollectionViewSource.GetDefaultView(control.CatalogList.ItemsSource);
                 var groups = view.Groups?.Cast<CollectionViewGroup>().Select(group => group.Name?.ToString()).ToArray() ?? [];
@@ -89,7 +84,7 @@ internal static partial class Program
                         && control.LifecycleStatus.Parent is null
                         && control.AssignmentStatus.Parent is null
                         && control.ConfigurationStatus.Parent is null,
-                    "Models surface did not preserve master/detail semantics while removing duplicate local status cards and live announcements");
+                    "Models surface did not preserve catalog and selected-editor semantics while removing duplicate local status cards and live announcements");
                 Require(control.LifecycleAction.Content?.ToString() == "Unload model"
                         && control.LifecycleAction.IsEnabled
                         && AutomationProperties.GetName(control.LifecycleAction).StartsWith("Unload ", StringComparison.Ordinal)
@@ -135,7 +130,7 @@ internal static partial class Program
                     ApplyExperimentSurfaceTheme(control, theme);
                     FlushProviderModelsDispatcher(host);
                     Require(ExperimentBrushMatches(control.MasterSurface.Background, theme.Panel)
-                            && ExperimentBrushMatches(control.DetailSurface.Background, theme.Panel)
+                            && ExperimentBrushMatches(control.DetailSurface.Background, theme.Input)
                             && ExperimentBrushMatches(control.ConnectionStatusSurface.BorderBrush, theme.StatusSuccess)
                             && ExperimentBrushMatches(control.ConnectionStatusLabel.Foreground, theme.StatusSuccess)
                             && control.CatalogList.FocusVisualStyle is not null,
@@ -146,18 +141,15 @@ internal static partial class Program
                 try
                 {
                     ArrangeProviderModelsViewport(host, logicalViewport, control, 960);
-                    Require(control.UsesCompactLayout
-                            && Grid.GetRow(control.MasterSurface) == 0
-                            && Grid.GetColumnSpan(control.MasterSurface) == 3
-                            && Grid.GetRow(control.DetailSurface) == 2
-                            && Grid.GetColumnSpan(control.DetailSurface) == 3,
-                        "960-DIP hosted Models surface did not stack master before detail under reduced motion");
+                    Require(control.UsesCompactLayout,
+                        "960-DIP hosted Models surface did not apply compact presentation under reduced motion");
+                    AssertProviderModelsInlineEditor(control);
                     Require(ProviderModelsElementFits(control.LifecycleAction, control.DetailSurface),
-                        "stacked Models lifecycle action clipped outside the compact detail pane");
+                        "inline Models lifecycle action clipped outside the compact editor");
                     var scrollHost = RequireExperimentTemplatePart<ScrollViewer>(control.CatalogList, "ScrollHost");
                     Require(scrollHost.ViewportWidth > 0
                             && scrollHost.ExtentWidth <= scrollHost.ViewportWidth + 1,
-                        "stacked Models surface introduced avoidable horizontal overflow");
+                        "inline Models surface introduced avoidable horizontal overflow");
                 }
                 finally
                 {
@@ -166,7 +158,7 @@ internal static partial class Program
 
                 ArrangeProviderModelsViewport(host, logicalViewport, control, 1500);
                 Require(!control.UsesCompactLayout,
-                    "explicit 1500-DIP layout viewport did not restore the 72/28 Models layout");
+                    "explicit 1500-DIP layout viewport did not restore the full-width Models presentation");
                 Require(control.FocusSearch() && control.SearchBox.IsKeyboardFocusWithin,
                     "Models search was not keyboard focusable");
                 Require(control.FocusCatalog()

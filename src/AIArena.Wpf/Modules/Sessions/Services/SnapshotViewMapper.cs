@@ -89,6 +89,7 @@ public static class SnapshotViewMapper
             FactoryConversationEntryCount = factoryGroup.EligibleEntryCount,
             FactoryConversationOmittedCount = factoryGroup.OmittedEntryCount,
             MatchEnded = snapshot.Engine.MatchEnded,
+            HasUnresolvedContextFailure = TurnRunnerService.UnresolvedContextFailure(snapshot) is not null,
             MatchEndReason = PrivacySafeText(snapshot.Engine.MatchEndReason, 240),
             RoleOverrides = RoleOverridesFrom(snapshot, sharedConfig),
             ProviderLastLatencyMs = sharedConfig.LastLatencyMs,

@@ -32,6 +32,7 @@ public sealed class TurnRunnerService
     private readonly TranscriptService _transcriptService;
     private readonly InternetToolService _internetToolService;
     private readonly FactoryConversationService _factoryConversationService;
+    private readonly IModelRuntimeEvidenceResolver? _runtimeEvidenceResolver;
 
     public TurnRunnerService(
         IModelProviderClient? modelClient = null,
@@ -39,7 +40,8 @@ public sealed class TurnRunnerService
         EventLogStore? eventLogStore = null,
         TranscriptService? transcriptService = null,
         InternetToolService? internetToolService = null,
-        FactoryConversationService? factoryConversationService = null)
+        FactoryConversationService? factoryConversationService = null,
+        IModelRuntimeEvidenceResolver? runtimeEvidenceResolver = null)
     {
         _modelClient = modelClient ?? new ModelProviderClient();
         _sessionStore = sessionStore ?? new SessionStore();
@@ -47,6 +49,7 @@ public sealed class TurnRunnerService
         _transcriptService = transcriptService ?? new TranscriptService();
         _internetToolService = internetToolService ?? new InternetToolService(eventLogStore: _eventLogStore);
         _factoryConversationService = factoryConversationService ?? new FactoryConversationService();
+        _runtimeEvidenceResolver = runtimeEvidenceResolver;
     }
 
     public OneTurnPlan PlanOneTurn(ArenaSnapshot snapshot)
@@ -108,12 +111,12 @@ public sealed class TurnRunnerService
         return new OneTurnPlan(true, agent.Id, agent.Name, config, fallbackConfig, "");
     }
 
-    public async Task<OneTurnResult> RunOneTurnAsync(string sessionId = "default", CancellationToken cancellationToken = default)
+    public async Task<OneTurnResult> RunOneTurnAsync(string sessionId = "default", CancellationToken cancellationToken = default, IProgress<ArenaTurnProgress>? progress = null)
     {
-        return await RunOneTurnAsync(sessionId, enforceVoiceDrift: false, cancellationToken);
+        return await RunOneTurnAsync(sessionId, enforceVoiceDrift: false, cancellationToken, progress);
     }
 
-    public async Task<OneTurnResult> RunOneTurnAsync(string sessionId, bool enforceVoiceDrift, CancellationToken cancellationToken = default)
+    public async Task<OneTurnResult> RunOneTurnAsync(string sessionId, bool enforceVoiceDrift, CancellationToken cancellationToken = default, IProgress<ArenaTurnProgress>? progress = null)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
@@ -127,15 +130,15 @@ public sealed class TurnRunnerService
             return OneTurnResult.Failed(plan.Error);
         }
 
-        return await RunPlannedTurnAsync(sessionId, snapshot, plan, advanceTurnIndex: true, "native_one_turn", enforceVoiceDrift, cancellationToken);
+        return await RunPlannedTurnAsync(sessionId, snapshot, plan, advanceTurnIndex: true, "native_one_turn", enforceVoiceDrift, cancellationToken, progress);
     }
 
-    public async Task<OneTurnResult> RunAgentTurnAsync(string sessionId, string agentId, CancellationToken cancellationToken = default)
+    public async Task<OneTurnResult> RunAgentTurnAsync(string sessionId, string agentId, CancellationToken cancellationToken = default, IProgress<ArenaTurnProgress>? progress = null)
     {
-        return await RunAgentTurnAsync(sessionId, agentId, enforceVoiceDrift: false, cancellationToken);
+        return await RunAgentTurnAsync(sessionId, agentId, enforceVoiceDrift: false, cancellationToken, progress);
     }
 
-    public async Task<OneTurnResult> RunAgentTurnAsync(string sessionId, string agentId, bool enforceVoiceDrift, CancellationToken cancellationToken = default)
+    public async Task<OneTurnResult> RunAgentTurnAsync(string sessionId, string agentId, bool enforceVoiceDrift, CancellationToken cancellationToken = default, IProgress<ArenaTurnProgress>? progress = null)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
@@ -149,15 +152,15 @@ public sealed class TurnRunnerService
             return OneTurnResult.Failed(plan.Error);
         }
 
-        return await RunPlannedTurnAsync(sessionId, snapshot, plan, advanceTurnIndex: false, "native_agent_turn", enforceVoiceDrift, cancellationToken);
+        return await RunPlannedTurnAsync(sessionId, snapshot, plan, advanceTurnIndex: false, "native_agent_turn", enforceVoiceDrift, cancellationToken, progress);
     }
 
-    public async Task<OneTurnResult> RetryTurnAsync(string sessionId, int turn, string speakerId, double createdAt, CancellationToken cancellationToken = default)
+    public async Task<OneTurnResult> RetryTurnAsync(string sessionId, int turn, string speakerId, double createdAt, CancellationToken cancellationToken = default, IProgress<ArenaTurnProgress>? progress = null)
     {
-        return await RetryTurnAsync(sessionId, turn, speakerId, createdAt, enforceVoiceDrift: false, cancellationToken);
+        return await RetryTurnAsync(sessionId, turn, speakerId, createdAt, enforceVoiceDrift: false, cancellationToken, progress);
     }
 
-    public async Task<OneTurnResult> RetryTurnAsync(string sessionId, int turn, string speakerId, double createdAt, bool enforceVoiceDrift, CancellationToken cancellationToken = default)
+    public async Task<OneTurnResult> RetryTurnAsync(string sessionId, int turn, string speakerId, double createdAt, bool enforceVoiceDrift, CancellationToken cancellationToken = default, IProgress<ArenaTurnProgress>? progress = null)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
@@ -183,7 +186,7 @@ public sealed class TurnRunnerService
             return OneTurnResult.Failed(plan.Error);
         }
 
-        return await ReplaceMessageWithRetryAsync(sessionId, snapshot, original, plan, enforceVoiceDrift, cancellationToken);
+        return await ReplaceMessageWithRetryAsync(sessionId, snapshot, original, plan, enforceVoiceDrift, cancellationToken, progress);
     }
 
     private static bool CanRequestInternetTool(ArenaSnapshot snapshot, string requesterId)
@@ -198,7 +201,8 @@ public sealed class TurnRunnerService
         bool advanceTurnIndex,
         string eventPrefix,
         bool enforceVoiceDrift,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<ArenaTurnProgress>? progress)
     {
         var agent = snapshot.Engine.Agents.FirstOrDefault(item => string.Equals(item.Id, plan.AgentId, StringComparison.OrdinalIgnoreCase));
         if (agent is null)
@@ -206,17 +210,23 @@ public sealed class TurnRunnerService
             return OneTurnResult.Failed($"No agent found for {plan.AgentId}.");
         }
 
+        plan = await ResolveRuntimePlanAsync(plan, cancellationToken);
         var factoryMode = snapshot.Engine.FactoryMode;
         FactoryPromptContext? factoryPromptContext = null;
         if (factoryMode)
         {
             factoryPromptContext = _factoryConversationService.BuildPromptContext(snapshot, plan.AgentId);
+            factoryPromptContext = _factoryConversationService.FitToActiveContext(
+                snapshot, plan.AgentId, plan.Config!, factoryPromptContext);
             if (!factoryPromptContext.Ok)
             {
                 return OneTurnResult.Failed(factoryPromptContext.Error);
             }
         }
 
+        using var progressScope = new ArenaTurnProgressScope(progress, sessionId, snapshot.SessionInstanceId,
+            plan.AgentId, plan.AgentName, snapshot.Engine.TurnCount + 1);
+        var completionExecutor = new ArenaCompletionExecutor(_modelClient, progressScope);
         try
         {
             await MarkAgentThinkingAsync(snapshot, sessionId, agent, cancellationToken);
@@ -266,7 +276,7 @@ public sealed class TurnRunnerService
             factoryPromptContext: factoryPromptContext,
             historyBudgetCapture: historyBudget,
             routeCapture: completionRoute,
-            preparedTurnContextCapture: preparedTurn);
+            preparedTurnContextCapture: preparedTurn, completionExecutor: completionExecutor);
         var toolRequest = new InternetToolRequest();
         var parsedToolRequest = !factoryMode
             && result.Ok
@@ -329,11 +339,11 @@ public sealed class TurnRunnerService
                 compactForInternetEvidence: true,
                 historyBudgetCapture: historyBudget,
                 routeCapture: completionRoute,
-                preparedTurnContextCapture: preparedTurn);
+                preparedTurnContextCapture: preparedTurn, completionExecutor: completionExecutor);
         }
         if (!factoryMode)
         {
-            result = await RepairEmptyContentAsync(sessionId, snapshot, plan, result, eventPrefix, enforceVoiceDrift, null, internetContextMessage, cancellationToken, historyBudgetCapture: historyBudget, routeCapture: completionRoute, preparedTurnContextCapture: preparedTurn);
+            result = await RepairEmptyContentAsync(sessionId, snapshot, plan, result, eventPrefix, enforceVoiceDrift, null, internetContextMessage, cancellationToken, historyBudgetCapture: historyBudget, routeCapture: completionRoute, preparedTurnContextCapture: preparedTurn, completionExecutor: completionExecutor);
         }
 
         var text = result.Ok
@@ -359,6 +369,7 @@ public sealed class TurnRunnerService
             CompletionRouteReceipt.Stamp(message, completionRoute.Receipt);
             _factoryConversationService.StampPublicParticipant(snapshot, message);
         }
+        completionExecutor.StampEvidence(message);
         snapshot.Engine.Messages.Add(message);
         snapshot.Engine.TurnCount = message.Turn;
         if (result.Ok && !factoryMode)
@@ -374,6 +385,7 @@ public sealed class TurnRunnerService
         snapshot.Engine.LastError = result.Ok ? "" : result.Error;
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
+        progressScope.Complete(message);
         await _eventLogStore.AppendAsync(
             sessionId,
             result.Ok ? $"{eventPrefix}_completed" : $"{eventPrefix}_failed",
@@ -389,11 +401,13 @@ public sealed class TurnRunnerService
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            progressScope.Interrupt("canceled");
             await TryRecoverInterruptedAgentAsync(sessionId, plan.AgentId, canceled: true, null);
             throw;
         }
         catch (Exception ex)
         {
+            progressScope.Interrupt("failed");
             await TryRecoverInterruptedAgentAsync(sessionId, plan.AgentId, canceled: false, ex);
             throw;
         }
@@ -405,7 +419,8 @@ public sealed class TurnRunnerService
         DialogueMessage original,
         OneTurnPlan plan,
         bool enforceVoiceDrift,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<ArenaTurnProgress>? progress)
     {
         var agent = snapshot.Engine.Agents.FirstOrDefault(item => string.Equals(item.Id, plan.AgentId, StringComparison.OrdinalIgnoreCase));
         if (agent is null)
@@ -413,18 +428,24 @@ public sealed class TurnRunnerService
             return OneTurnResult.Failed($"No agent found for {plan.AgentId}.");
         }
 
+        plan = await ResolveRuntimePlanAsync(plan, cancellationToken);
         var configuredFactoryMode = snapshot.Engine.FactoryMode;
         var factoryMode = RetryUsesFactoryPrompt(original);
         FactoryPromptContext? factoryPromptContext = null;
         if (factoryMode)
         {
             factoryPromptContext = _factoryConversationService.BuildRetryPromptContext(snapshot, plan.AgentId, original);
+            factoryPromptContext = _factoryConversationService.FitToActiveContext(
+                snapshot, plan.AgentId, plan.Config!, factoryPromptContext, original.Turn, frozen: true);
             if (!factoryPromptContext.Ok)
             {
                 return OneTurnResult.Failed(factoryPromptContext.Error);
             }
         }
 
+        using var progressScope = new ArenaTurnProgressScope(progress, sessionId, snapshot.SessionInstanceId,
+            plan.AgentId, plan.AgentName, original.Turn);
+        var completionExecutor = new ArenaCompletionExecutor(_modelClient, progressScope);
         try
         {
             await _eventLogStore.AppendAsync(
@@ -456,10 +477,10 @@ public sealed class TurnRunnerService
                 frozenHistoryReceipt: frozenHistoryReceipt,
                 historyBudgetCapture: historyBudget,
                 routeCapture: completionRoute,
-                preparedTurnContextCapture: preparedTurn);
+                preparedTurnContextCapture: preparedTurn, completionExecutor: completionExecutor);
             if (!factoryMode)
             {
-                result = await RepairEmptyContentAsync(sessionId, snapshot, plan, result, "native_retry_message", enforceVoiceDrift, original.Turn, null, cancellationToken, frozenHistoryReceipt, historyBudget, completionRoute, preparedTurn);
+                result = await RepairEmptyContentAsync(sessionId, snapshot, plan, result, "native_retry_message", enforceVoiceDrift, original.Turn, null, cancellationToken, frozenHistoryReceipt, historyBudget, completionRoute, preparedTurn, completionExecutor);
             }
         }
         finally
@@ -471,6 +492,7 @@ public sealed class TurnRunnerService
             ? result.Text
             : $"Model call failed: {result.Error}";
         var replacement = _transcriptService.CreateAssistantReplacement(original, agent, text, result);
+        completionExecutor.StampEvidence(replacement);
         if (factoryMode)
         {
             replacement.Metadata.Remove("voice_style");
@@ -511,6 +533,7 @@ public sealed class TurnRunnerService
         snapshot.Engine.LastError = result.Ok ? "" : result.Error;
 
         await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
+        progressScope.Complete(replacement);
         await _eventLogStore.AppendAsync(
             sessionId,
             result.Ok ? "native_retry_message_replaced" : "native_retry_message_failed",
@@ -526,11 +549,13 @@ public sealed class TurnRunnerService
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            progressScope.Interrupt("canceled");
             await TryRecoverInterruptedAgentAsync(sessionId, plan.AgentId, canceled: true, null);
             throw;
         }
         catch (Exception ex)
         {
+            progressScope.Interrupt("failed");
             await TryRecoverInterruptedAgentAsync(sessionId, plan.AgentId, canceled: false, ex);
             throw;
         }
@@ -1603,7 +1628,8 @@ public sealed class TurnRunnerService
         ArenaHistoryBudgetReceipt? frozenHistoryReceipt = null,
         HistoryBudgetCapture? historyBudgetCapture = null,
         CompletionRouteCapture? routeCapture = null,
-        PreparedTurnContextCapture? preparedTurnContextCapture = null)
+        PreparedTurnContextCapture? preparedTurnContextCapture = null,
+        ArenaCompletionExecutor? completionExecutor = null)
     {
         if (!result.Ok
             || result.StopReason == ModelCompletionStopReason.OutputLimitReached
@@ -1630,7 +1656,8 @@ public sealed class TurnRunnerService
             frozenHistoryReceipt: frozenHistoryReceipt,
             historyBudgetCapture: historyBudgetCapture,
             routeCapture: routeCapture,
-            preparedTurnContextCapture: preparedTurnContextCapture);
+            preparedTurnContextCapture: preparedTurnContextCapture,
+            completionExecutor: completionExecutor);
         if (!repaired.Ok || !string.IsNullOrWhiteSpace(repaired.Text))
         {
             return repaired;
@@ -1769,8 +1796,10 @@ public sealed class TurnRunnerService
         ArenaHistoryBudgetReceipt? frozenHistoryReceipt = null,
         HistoryBudgetCapture? historyBudgetCapture = null,
         CompletionRouteCapture? routeCapture = null,
-        PreparedTurnContextCapture? preparedTurnContextCapture = null)
+        PreparedTurnContextCapture? preparedTurnContextCapture = null,
+        ArenaCompletionExecutor? completionExecutor = null)
     {
+        completionExecutor ??= new ArenaCompletionExecutor(_modelClient, null);
         var preparedTurnContext = preparedTurnContextCapture?.Context
             ?? PreparedTurnContext.Create(snapshot, plan, beforeTurn, DateTimeOffset.UtcNow, cancellationToken);
         preparedTurnContext.EnsureScope(snapshot, beforeTurn);
@@ -1838,6 +1867,7 @@ public sealed class TurnRunnerService
         }
 
         var messages = prompt.Messages;
+        primaryConfig = ArenaRequestBudget.Apply(primaryConfig, prompt);
         primaryConfig.RequestInspectionContext = BuildProviderRequestInspectionContext(
             inspectionCorrelationId,
             "primary",
@@ -1847,14 +1877,16 @@ public sealed class TurnRunnerService
             beforeTurn,
             messages,
             extraUserMessage is not null,
-            disableReasoning,
+            disableReasoning && !string.Equals(primaryConfig.Reasoning,
+                preparedTurnContext.PrimaryConfig.Reasoning, StringComparison.OrdinalIgnoreCase),
             primaryFastModeApplied,
             factoryPromptContext,
             preparedTurnContext);
-        var result = ModelCompletionOutcomeClassifier.Normalize(
-            await _modelClient.CompleteChatAsync(primaryConfig, messages, cancellationToken));
+        var result = await completionExecutor.CompleteAsync(primaryConfig, messages, cancellationToken,
+            publishText: !allowInternetTool);
         if (result.Ok
-            || result.FailureKind == ModelCompletionFailureKind.ContextLimitExceeded
+            || result.FailureKind is ModelCompletionFailureKind.ContextLimitExceeded or ModelCompletionFailureKind.EmptyPublicContent
+            || completionExecutor.RecoveryUsed
             || preparedTurnContext.FallbackConfig is null
             || preparedTurnContext.FactoryMode)
         {
@@ -1924,6 +1956,7 @@ public sealed class TurnRunnerService
         }
 
         var fallbackMessages = fallbackPrompt.Messages;
+        fallbackConfig = ArenaRequestBudget.Apply(fallbackConfig, fallbackPrompt);
         fallbackConfig.RequestInspectionContext = BuildProviderRequestInspectionContext(
             inspectionCorrelationId,
             "fallback",
@@ -1933,12 +1966,13 @@ public sealed class TurnRunnerService
             beforeTurn,
             fallbackMessages,
             extraUserMessage is not null,
-            disableReasoning,
+            disableReasoning && !string.Equals(fallbackConfig.Reasoning,
+                preparedTurnContext.FallbackConfig!.Reasoning, StringComparison.OrdinalIgnoreCase),
             fallbackFastModeApplied,
             factoryPromptContext,
             preparedTurnContext);
-        return ModelCompletionOutcomeClassifier.Normalize(
-            await _modelClient.CompleteChatAsync(fallbackConfig, fallbackMessages, cancellationToken));
+        return await completionExecutor.CompleteAsync(fallbackConfig, fallbackMessages, cancellationToken,
+            publishText: !allowInternetTool);
     }
 
     private static ProviderRequestInspectionContext BuildProviderRequestInspectionContext(
@@ -2052,7 +2086,7 @@ public sealed class TurnRunnerService
             explanations.Add(new ProviderContextExplanation(
                 "reasoning_override",
                 "observed",
-                "Reasoning was explicitly changed to off for this request before provider serialization."));
+                $"Reasoning was explicitly changed to {config.Reasoning} for this request before provider serialization."));
         }
 
         if (fastModeApplied)
@@ -2068,6 +2102,9 @@ public sealed class TurnRunnerService
 
     private static ModelProviderConfig WithReasoningDisabled(ModelProviderConfig config)
     {
+        if (config.RuntimeEvidence?.CanDisableReasoning != true)
+            return config.RuntimeEvidence?.ReducedReasoning == "low"
+                ? ArenaRequestBudget.Copy(config, reasoning: "low") : config;
         return new ModelProviderConfig
         {
             BaseUrl = config.BaseUrl,
@@ -2080,6 +2117,7 @@ public sealed class TurnRunnerService
             MaxOutputTokens = config.MaxOutputTokens,
             ContextLength = config.ContextLength,
             ConfiguredContextWindow = config.ConfiguredContextWindow,
+            RuntimeEvidence = config.RuntimeEvidence,
             HistoryPolicy = config.HistoryPolicy,
             ResponseTone = config.ResponseTone,
             CustomTone = config.CustomTone,
@@ -2130,6 +2168,7 @@ public sealed class TurnRunnerService
             MaxOutputTokens = cappedOutput,
             ContextLength = config.ContextLength,
             ConfiguredContextWindow = config.ConfiguredContextWindow,
+            RuntimeEvidence = config.RuntimeEvidence,
             HistoryPolicy = config.HistoryPolicy,
             ResponseTone = config.ResponseTone,
             CustomTone = config.CustomTone,
@@ -2165,7 +2204,8 @@ public sealed class TurnRunnerService
                 throw new InvalidOperationException("Factory provider messages cannot be extended after causal fingerprinting.");
             }
 
-            return new ArenaBudgetedPrompt(factoryPromptContext.ProviderMessages, null, "");
+            return new ArenaBudgetedPrompt(factoryPromptContext.ProviderMessages, null, "")
+            { OutputTokenLimit = factoryPromptContext.OutputTokenLimit };
         }
 
         var transcriptAfterTurn = NativeContinuationTranscriptAfterTurn(
@@ -2211,6 +2251,14 @@ public sealed class TurnRunnerService
             preparedFactoryMode: preparedTurnContext?.FactoryMode);
     }
 
+    private async Task<OneTurnPlan> ResolveRuntimePlanAsync(OneTurnPlan plan, CancellationToken cancellationToken)
+    {
+        var primary = await ArenaRequestBudget.ResolveAsync(plan.Config!, _runtimeEvidenceResolver, cancellationToken);
+        var fallback = plan.FallbackConfig is null ? null
+            : await ArenaRequestBudget.ResolveAsync(plan.FallbackConfig, _runtimeEvidenceResolver, cancellationToken);
+        return plan with { Config = primary, FallbackConfig = fallback };
+    }
+
     private sealed class HistoryBudgetCapture
     {
         public ArenaHistoryBudgetReceipt? Receipt { get; set; }
@@ -2253,6 +2301,7 @@ public sealed class TurnRunnerService
             MaxOutputTokens = config.MaxOutputTokens,
             ContextLength = config.ContextLength,
             ConfiguredContextWindow = config.ConfiguredContextWindow,
+            RuntimeEvidence = config.RuntimeEvidence,
             HistoryPolicy = config.HistoryPolicy,
             ResponseTone = config.ResponseTone,
             CustomTone = config.CustomTone,

@@ -571,8 +571,9 @@ static void StaleProviderProjectionCannotUndoFactoryOperatorReadiness()
 
         var renderedSnapshot = noRootSnapshot;
         arenaOperations.UpdateReadiness(ArenaOperationCoordinator.EvaluateReadiness(renderedSnapshot));
-        Require(!autoChatButton.IsEnabled && !oneTurnButton.IsEnabled,
-            "Factory actions should preserve the intentional no-root gate before public Operator input is saved");
+        Require(autoChatButton.IsEnabled && !oneTurnButton.IsEnabled
+            && ArenaOperationCoordinator.EvaluateReadiness(renderedSnapshot).RequiresConversationStart,
+            "Auto Chat should offer the opening composer while 1 Turn remains gated until the public message is saved");
 
         // First, the Operator save completes and its authoritative refresh renders.
         var providerReadStartedAt = new DateTimeOffset(2026, 8, 12, 17, 44, 29, TimeSpan.Zero).AddTicks(10);
@@ -816,7 +817,7 @@ static void FactoryModeUiActionsRemainUnavailableAndHonest()
             var missingRun = DescendantButtons(agentPanel).Single(button => AutomationProperties.GetName(button) == "Run one turn for Alpha");
             var missingNarrator = DescendantButtons(agentPanel).Single(button => AutomationProperties.GetName(button) == "Narrate now");
             Require(!missingRun.IsEnabled, "the per-agent Factory action should be gated before public Operator input exists");
-            Require(AutomationProperties.GetHelpText(missingRun).Contains("public Operator turn", StringComparison.Ordinal), "the gated per-agent action should expose the missing-input prerequisite");
+            Require(AutomationProperties.GetHelpText(missingRun).Contains("first public message", StringComparison.Ordinal), "the gated per-agent action should expose the missing-input prerequisite");
             Require(!missingNarrator.IsEnabled, "the agent-board narrator action should be unavailable in Factory mode");
             Require(AutomationProperties.GetHelpText(missingNarrator).Contains("unavailable in Factory mode", StringComparison.Ordinal), "the agent-board narrator action should expose honest help");
 
@@ -1900,15 +1901,17 @@ static TranscriptCardRenderer CreateTranscriptCardRendererForTest(
     bool turnCompare = false,
     bool compact = false,
     bool selectedForCompare = false,
-    bool showInternetDetails = false)
+    bool showInternetDetails = false,
+    Func<string, Brush>? resourceBrush = null)
 {
-    var actionCoordinator = new TranscriptActionCoordinator(() => compact, () => false, AccentResourceBrush);
+    var brushes = resourceBrush ?? AccentResourceBrush;
+    var actionCoordinator = new TranscriptActionCoordinator(() => compact, () => false, brushes);
     return new TranscriptCardRenderer(
         () => compact,
         actionCoordinator,
-        AccentResourceBrush,
+        brushes,
         ShellUiHelpers.BlendBrush,
-        _ => AccentResourceBrush("AlphaAccentBrush"),
+        _ => brushes("AlphaAccentBrush"),
         _ => "persona",
         () => "default",
         () => false,

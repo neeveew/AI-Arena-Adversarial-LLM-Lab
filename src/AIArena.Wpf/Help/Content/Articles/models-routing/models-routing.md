@@ -1,4 +1,6 @@
-The Models surface deliberately separates provider lifecycle from app routing. Search and filters affect only the catalog; loaded models stay visible.
+Select a model in **Models** to expand its settings directly beneath the row. Set its **Context window (tokens)**, choose the agents under **Assign to**, or load or unload the model. Changes save automatically. Click the selected row again to close its settings, or press Space or Enter when the row is focused. **Advanced settings** contains history policy, response tone, and provider details.
+
+Search and filters affect only the catalog; loaded models stay visible.
 
 ## Understand the four states
 
@@ -9,9 +11,15 @@ The Models surface deliberately separates provider lifecycle from app routing. S
 | **Configured** | AI Arena - Lite stores behavior settings for that model identity | The provider has applied those settings to a live process |
 | **Assigned** | A shared or explicit route points to the model | The model is loaded |
 
-**Loaded Models (N)** is pinned above the catalog and is always rendered, including when empty. Up to three loaded rows display before that region gets its own scrollbar. **Available catalog (N)** is collapsible, starts expanded, remembers its fold state for the current app run, and retains the larger virtualized scrolling area.
+**Loaded Models (N)** is pinned above the catalog and is always rendered, including when empty. The loaded region expands to make room for the selected model's settings and scrolls when needed. **Available catalog (N)** is collapsible, starts expanded, remembers its fold state for the current app run, and retains the larger virtualized scrolling area.
 
 Search and facets apply only to Available and load-state-unavailable entries. One selected-model ID is shared across both regions, so a confirmed lifecycle move preserves selection and details.
+
+## Set context length
+
+The **Context window (tokens)** input and active token count are always in the main expanded settings. Keep **Server default** checked to let the server choose; the input shows its reported active value when available. Type a token count to set your own value, then press Enter or leave the field to save. If a loaded model needs to apply the new value, use **Reload to apply**. **Advanced settings** contains history, tone, and technical details.
+
+Before an Arena turn, native servers are queried for the loaded model's current context allocation. **Server default** still lets Arena budget against that observed value; a catalog's advertised maximum is not treated as the loaded allocation. **Rolling 80%** omits older whole entries as needed, while **Strict** preserves its retained history. The response allowance may be lowered for that request; saved settings are unchanged. If required input cannot fit, Arena pauses with a context explanation. Strict requests that use native server conversation state can only estimate the input they send; the provider still enforces the size of its retained state.
 
 ## Load and unload safely
 

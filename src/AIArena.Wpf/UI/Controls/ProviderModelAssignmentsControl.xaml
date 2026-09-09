@@ -11,7 +11,7 @@
              SizeChanged="ProviderModelAssignmentsControl_SizeChanged"
              PreviewKeyDown="ProviderModelAssignmentsControl_PreviewKeyDown"
              AutomationProperties.Name="Models and assignments"
-             AutomationProperties.HelpText="Browse pinned loaded models and a collapsible available catalog, request confirmed provider residency changes, then turn routing targets on or off.">
+             AutomationProperties.HelpText="Select a model to expand context length and agent assignments beneath its catalog row.">
     <UserControl.Resources>
         <Style x:Key="ModelsSurfacePane" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource PanelBrush}" />
@@ -47,6 +47,7 @@
         </Style>
         <Style x:Key="ModelsSurfaceListItem"
                TargetType="{x:Type ListBoxItem}">
+            <EventSetter Event="PreviewMouseLeftButtonDown" Handler="ModelRow_PreviewMouseLeftButtonDown" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="BorderThickness" Value="1" />
@@ -138,11 +139,37 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock Foreground="{DynamicResource TextBrush}"
-                           FontWeight="SemiBold"
-                           Text="{Binding DisplayName}"
-                           TextTrimming="CharacterEllipsis"
-                           ToolTip="{Binding DisplayName}" />
+                <DockPanel LastChildFill="True">
+                    <Path DockPanel.Dock="Left"
+                          Width="10"
+                          Height="6"
+                          Margin="{DynamicResource Arena.Gap.Inline.After.Default}"
+                          VerticalAlignment="Center"
+                          Stroke="{DynamicResource MutedTextBrush}"
+                          StrokeThickness="1.7"
+                          StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round">
+                        <Path.Style>
+                            <Style TargetType="{x:Type Path}">
+                                <Setter Property="Data" Value="M 0,0 L 5,5 L 10,0" />
+                                <Setter Property="AutomationProperties.Name" Value="Model settings collapsed" />
+                                <Setter Property="ToolTip" Value="Select this model to open its settings." />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasContent, ElementName=InlineModelEditorHost}" Value="True">
+                                        <Setter Property="Data" Value="M 0,5 L 5,0 L 10,5" />
+                                        <Setter Property="AutomationProperties.Name" Value="Model settings expanded" />
+                                        <Setter Property="ToolTip" Value="Settings for the selected model are shown below." />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Path.Style>
+                    </Path>
+                    <TextBlock Foreground="{DynamicResource TextBrush}"
+                               FontWeight="SemiBold"
+                               Text="{Binding DisplayName}"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding DisplayName}" />
+                </DockPanel>
                 <Border x:Name="StatusChip"
                         Grid.Column="1"
                         Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
@@ -181,6 +208,17 @@
                                TextTrimming="CharacterEllipsis"
                                ToolTip="{Binding AssignmentSummary}" />
                 </Grid>
+                <ContentControl x:Name="InlineModelEditorHost"
+                                Grid.Row="2"
+                                Grid.ColumnSpan="2"
+                                HorizontalAlignment="Stretch"
+                                VerticalAlignment="Stretch"
+                                HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Stretch"
+                                Focusable="False"
+                                Loaded="InlineEditorHost_Loaded"
+                                Unloaded="InlineEditorHost_Unloaded"
+                                DataContextChanged="InlineEditorHost_DataContextChanged" />
             </Grid>
         </DataTemplate>
         <Style x:Key="ModelsSurfaceCatalogGroupItem" TargetType="{x:Type GroupItem}">
@@ -429,22 +467,16 @@
                        AutomationProperties.Name="Provider model catalog status" />
         </Border>
 
-        <ScrollViewer x:Name="WorkspaceScrollViewer"
-                      Grid.Row="2"
-                      HorizontalScrollBarVisibility="Disabled"
-                      VerticalScrollBarVisibility="Disabled"
-                      AutomationProperties.Name="Models workspace">
+        <Border x:Name="WorkspaceViewport"
+                Grid.Row="2"
+                AutomationProperties.Name="Models workspace">
         <Grid x:Name="WorkspaceGrid"
               Margin="{DynamicResource Arena.Layout.WorkspaceBodyMargin}">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="MasterColumn" Width="*" />
-                <ColumnDefinition x:Name="WorkspaceGapColumn" Width="12" />
-                <ColumnDefinition x:Name="DetailColumn" Width="360" />
+                <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
-                <RowDefinition x:Name="MasterRow" Height="*" />
-                <RowDefinition x:Name="CompactWorkspaceGapRow" Height="0" />
-                <RowDefinition x:Name="DetailRow" Height="0" />
+                <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
             <Border x:Name="MasterPane"
@@ -707,300 +739,271 @@
                 </Grid>
             </Border>
 
+
+        </Grid>
+        </Border>
+        <ContentControl x:Name="EditorParkingHost"
+                        Grid.Row="2"
+                        Visibility="Collapsed"
+                        HorizontalContentAlignment="Stretch"
+                        VerticalContentAlignment="Stretch">
             <Border x:Name="DetailPane"
-                    Grid.Column="2"
-                    Style="{StaticResource ModelsSurfacePane}"
+                    Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                    Padding="{DynamicResource Arena.Inset.Compact}"
+                    Background="{DynamicResource InputBrush}"
+                    BorderBrush="{DynamicResource PrimaryBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{DynamicResource Arena.Radius.Small}"
                     AutomationProperties.Name="Selected model residency and assignment details">
                 <Grid>
-                    <ScrollViewer x:Name="ModelDetailScrollViewer"
-                                  HorizontalScrollBarVisibility="Disabled"
-                                  VerticalScrollBarVisibility="Auto"
-                                  AutomationProperties.Name="Selected model details">
-                    <Grid x:Name="ModelDetailContent" Visibility="Collapsed">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <TextBlock Text="Model details"
-                                   Style="{StaticResource ModelsSurfaceSectionLabel}"
-                                   AutomationProperties.HeadingLevel="Level2" />
-                        <StackPanel Grid.Row="1"
-                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
-                            <TextBlock x:Name="SelectedModelNameText"
-                                       Foreground="{DynamicResource TextBrush}"
-                                       FontSize="{DynamicResource Arena.Type.TitleSize}"
-                                       FontWeight="SemiBold"
-                                       TextWrapping="Wrap"
-                                       AutomationProperties.HeadingLevel="Level2" />
-                            <TextBlock x:Name="SelectedModelIdentifierText"
-                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Nano}"
-                                       Style="{StaticResource ModelsSurfaceCaption}"
-                                       TextTrimming="CharacterEllipsis" />
-                            <TextBlock x:Name="SelectedModelMetadataText"
-                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                       Style="{StaticResource ModelsSurfaceCaption}" />
-                            <TextBlock x:Name="SelectedModelAssignmentsText"
-                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                       Foreground="{DynamicResource Arena.Brush.Info}"
-                                       FontSize="{DynamicResource Arena.Type.LabelSize}"
-                                       TextWrapping="Wrap" />
-                        </StackPanel>
-
-                        <StackPanel Grid.Row="2"
-                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}">
-                            <TextBlock Text="Model loading"
-                                       Foreground="{DynamicResource TextBrush}"
-                                       FontWeight="SemiBold"
-                                       AutomationProperties.HeadingLevel="Level3" />
-                            <TextBlock x:Name="SelectedModelLifecycleHelpText"
-                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                       Style="{StaticResource ModelsSurfaceFineCaption}"
-                                       Text="Loading changes provider residency only; assignments remain unchanged." />
-                            <Button x:Name="LifecycleButton"
-                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
-                                    Padding="{DynamicResource Arena.Inset.Action}"
-                                    HorizontalAlignment="Stretch"
-                                    Style="{DynamicResource Arena.Button.Secondary}"
-                                    Content="Load state unavailable"
-                                    IsEnabled="False"
-                                    Click="LifecycleButton_Click"
-                                    AutomationProperties.Name="Load state unavailable"
-                                    AutomationProperties.HelpText="Select a model with provider lifecycle evidence."
-                                    AutomationProperties.ItemStatus="Unavailable" />
-                            <ProgressBar x:Name="LifecycleProgressBar"
-                                         Height="3"
-                                         Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                         IsIndeterminate="True"
-                                         Visibility="Collapsed"
-                                         IsTabStop="False"
-                                         AutomationProperties.Name="Model loading request progress" />
-                        </StackPanel>
-
-                        <Border Grid.Row="3"
-                                Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}"
-                                BorderBrush="{DynamicResource DisabledBorderBrush}"
-                                BorderThickness="0,1,0,0" />
-                        <StackPanel Grid.Row="4"
-                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}">
-                            <TextBlock Text="Assign to"
-                                       Foreground="{DynamicResource TextBrush}"
-                                       FontWeight="SemiBold"
-                                       AutomationProperties.HeadingLevel="Level3" />
-                             <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                        x:Name="AssignmentAvailabilityText"
-                                        Style="{StaticResource ModelsSurfaceCaption}"
-                                        Text="Changes save immediately. Turn routing targets on or off without changing model residency." />
-                        </StackPanel>
-
-                        <ScrollViewer x:Name="AssignmentTargetsScrollViewer"
-                                       Grid.Row="6"
-                                      MaxHeight="236"
-                                      Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
-                                      HorizontalScrollBarVisibility="Disabled"
-                                      VerticalScrollBarVisibility="Auto"
-                                      AutomationProperties.Name="Assignment targets">
-                            <controls:StableAutomationItemsControl x:Name="AssignmentTargetsItems">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <UniformGrid Columns="{Binding AssignmentColumnCount, RelativeSource={RelativeSource AncestorType={x:Type controls:ProviderModelAssignmentsControl}}}" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                         <controls:ProviderAssignmentCheckBox MinHeight="44"
-                                                                               Margin="{DynamicResource Arena.Gap.Stack.After.Compact}"
-                                                                               Style="{DynamicResource Arena.CheckBox.Toggle}"
-                                                                               IsChecked="{Binding IsAssigned, Mode=TwoWay}"
-                                                                              IsEnabled="{Binding CanAssign}"
-                                                                              ToggleRequested="AssignmentTargetCheckBox_ToggleRequested"
-                                                                              AutomationProperties.Name="{Binding AutomationName}"
-                                                                              AutomationProperties.HelpText="{Binding AutomationHelp}"
-                                                                              AutomationProperties.ItemStatus="{Binding ItemStatus}">
-                                            <StackPanel VerticalAlignment="Center">
-                                                <TextBlock Foreground="{DynamicResource TextBrush}"
-                                                           Text="{Binding DisplayName}"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           TextWrapping="NoWrap" />
-                                                <TextBlock Foreground="{DynamicResource MutedTextBrush}"
-                                                           FontSize="{DynamicResource Arena.Type.CaptionSize}"
-                                                           Text="{Binding AssignmentStateLabel}"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           TextWrapping="NoWrap" />
-                                            </StackPanel>
-                                        </controls:ProviderAssignmentCheckBox>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </controls:StableAutomationItemsControl>
-                        </ScrollViewer>
-
-                        <Border Grid.Row="7"
-                                Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}"
-                                BorderBrush="{DynamicResource DisabledBorderBrush}"
-                                BorderThickness="0,1,0,0" />
-
-                        <StackPanel Grid.Row="8"
-                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Comfortable}">
-                            <TextBlock Text="Model configuration"
-                                       Foreground="{DynamicResource TextBrush}"
-                                       FontWeight="SemiBold"
-                                       AutomationProperties.HeadingLevel="Level3" />
-                            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                       Style="{StaticResource ModelsSurfaceFineCaption}"
-                                       Text="These settings belong to this model across its arena assignments. Changes save immediately; changing loaded context requires an explicit reload."
-                                       TextWrapping="Wrap" />
-
-                            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
-                                       Text="Context window"
-                                       Style="{StaticResource ModelsSurfaceSectionLabel}" />
-                            <TextBox x:Name="ModelContextWindowText"
-                                     MinHeight="44"
-                                     Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                     Style="{DynamicResource Arena.TextBox}"
-                                     LostKeyboardFocus="ModelContextWindowText_LostKeyboardFocus"
-                                     PreviewKeyDown="ModelContextWindowText_PreviewKeyDown"
-                                     TextChanged="ModelConfigurationInput_TextChanged"
-                                     AutomationProperties.Name="Configured model context window"
-                                     AutomationProperties.HelpText="Enter a whole number from 512 through 1,048,576 tokens, or turn on Provider default below." />
-                            <CheckBox x:Name="UseProviderDefaultContextCheckBox"
-                                      MinHeight="44"
-                                      Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                      Content="Provider default"
-                                      Style="{DynamicResource Arena.CheckBox.Toggle}"
-                                      Checked="UseProviderDefaultContextCheckBox_Changed"
-                                      Unchecked="UseProviderDefaultContextCheckBox_Changed"
-                                      AutomationProperties.Name="Use provider default context window"
-                                      AutomationProperties.HelpText="Turn on to send no explicit context-window override for this model." />
-                            <TextBlock x:Name="ConfigurationValidationText"
-                                       Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                       Foreground="{DynamicResource DangerTextBrush}"
-                                       FontSize="{DynamicResource Arena.Type.CaptionSize}"
-                                       TextWrapping="Wrap"
-                                       Visibility="Collapsed"
-                                       AutomationProperties.Name="Model configuration validation"
-                                       AutomationProperties.LiveSetting="Polite" />
-
-                            <Grid Margin="{DynamicResource Arena.Gap.Stack.Before.Default}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Border Style="{StaticResource ModelsSurfaceStatusCard}">
-                                    <StackPanel>
-                                        <TextBlock Text="Configured"
-                                                   Style="{StaticResource ModelsSurfaceSectionLabel}" />
+                    <Border x:Name="ModelDetailBody"
+                            AutomationProperties.Name="Selected model details">
+                        <Grid x:Name="ModelDetailContent" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="Model settings"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           FontSize="{DynamicResource Arena.Type.DenseLabelSize}"
+                                           FontWeight="SemiBold"
+                                           AutomationProperties.HeadingLevel="Level2" />
+                                <Grid x:Name="ModelEssentialsGrid"
+                                      Margin="{DynamicResource Arena.Gap.Stack.Before.Compact}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition x:Name="ContextSettingsColumn" Width="240" />
+                                        <ColumnDefinition x:Name="EssentialGapColumn" Width="12" />
+                                        <ColumnDefinition x:Name="AssignmentSettingsColumn" Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition x:Name="EssentialTopRow" Height="Auto" />
+                                        <RowDefinition x:Name="EssentialBottomRow" Height="0" />
+                                    </Grid.RowDefinitions>
+                                    <StackPanel x:Name="ContextSettingsPanel">
+                                        <TextBlock Text="Context window (tokens)"
+                                                   Foreground="{DynamicResource TextBrush}"
+                                                   FontWeight="SemiBold"
+                                                   AutomationProperties.HeadingLevel="Level3" />
+                                        <WrapPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                   VerticalAlignment="Center">
+                                            <TextBox x:Name="ModelContextWindowText"
+                                                     Width="120" MinHeight="{DynamicResource Arena.Target.Minimum}"
+                                                     Padding="{DynamicResource Arena.Inset.Control}"
+                                                     Style="{DynamicResource Arena.TextBox}"
+                                                     LostKeyboardFocus="ModelContextWindowText_LostKeyboardFocus"
+                                                     PreviewKeyDown="ModelContextWindowText_PreviewKeyDown"
+                                                     TextChanged="ModelConfigurationInput_TextChanged"
+                                                     AutomationProperties.Name="Configured model context window"
+                                                     AutomationProperties.HelpText="Enter a whole number from 512 through 1,048,576 tokens, or turn on Server default." />
+                                            <CheckBox x:Name="UseProviderDefaultContextCheckBox"
+                                                      MinHeight="{DynamicResource Arena.Target.Minimum}"
+                                                      Margin="{DynamicResource Arena.Gap.Stack.Before.Nano}"
+                                                      Content="Server default"
+                                                      Style="{DynamicResource Arena.CheckBox.Standard}"
+                                                      Checked="UseProviderDefaultContextCheckBox_Changed"
+                                                      Unchecked="UseProviderDefaultContextCheckBox_Changed"
+                                                      AutomationProperties.Name="Use provider default context window"
+                                                      AutomationProperties.HelpText="Turn on to send no explicit context-window override for this model." />
+                                        </WrapPanel>
                                         <TextBlock x:Name="ConfiguredContextText"
                                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Nano}"
                                                    Foreground="{DynamicResource TextBrush}"
                                                    FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                                    TextWrapping="Wrap"
                                                    AutomationProperties.Name="Configured context evidence" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="1"
-                                        Margin="{DynamicResource Arena.Gap.Inline.Before.Default}"
-                                        Style="{StaticResource ModelsSurfaceStatusCard}">
-                                    <StackPanel>
-                                        <TextBlock Text="Effective"
-                                                   Style="{StaticResource ModelsSurfaceSectionLabel}" />
                                         <TextBlock x:Name="EffectiveContextText"
                                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Nano}"
                                                    Foreground="{DynamicResource TextBrush}"
                                                    FontSize="{DynamicResource Arena.Type.CaptionSize}"
                                                    TextWrapping="Wrap"
                                                    AutomationProperties.Name="Effective context evidence" />
+                                        <TextBlock x:Name="ConfigurationValidationText"
+                                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                   Foreground="{DynamicResource DangerTextBrush}"
+                                                   FontSize="{DynamicResource Arena.Type.CaptionSize}"
+                                                   TextWrapping="Wrap"
+                                                   Visibility="Collapsed"
+                                                   AutomationProperties.Name="Model configuration validation"
+                                                   AutomationProperties.LiveSetting="Polite" />
                                     </StackPanel>
-                                </Border>
-                            </Grid>
+                                    <StackPanel x:Name="AssignmentSettingsPanel" Grid.Column="2">
+                                        <TextBlock Text="Assign to"
+                                                   Foreground="{DynamicResource TextBrush}"
+                                                   FontWeight="SemiBold"
+                                                   AutomationProperties.HeadingLevel="Level3" />
+                                        <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                   x:Name="AssignmentAvailabilityText"
+                                                   Style="{StaticResource ModelsSurfaceCaption}"
+                                                   Text="Changes save automatically. Default covers agents without their own model." />
+                                        <Border x:Name="AssignmentTargetsHost"
+                                                Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                AutomationProperties.Name="Assignment targets">
+                                            <controls:StableAutomationItemsControl x:Name="AssignmentTargetsItems" MaxWidth="840" HorizontalAlignment="Left" HorizontalContentAlignment="Stretch">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <UniformGrid Columns="{Binding AssignmentColumnCount, RelativeSource={RelativeSource AncestorType={x:Type controls:ProviderModelAssignmentsControl}}}" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                         <controls:ProviderAssignmentCheckBox MinHeight="{DynamicResource Arena.Target.Minimum}"
+                                                                                              Margin="{DynamicResource Arena.Gap.Stack.After.Nano}"
+                                                                                              Style="{DynamicResource Arena.CheckBox.Toggle}"
+                                                                                              IsChecked="{Binding IsAssigned, Mode=TwoWay}"
+                                                                                              IsEnabled="{Binding CanAssign}"
+                                                                                              ToggleRequested="AssignmentTargetCheckBox_ToggleRequested"
+                                                                                              AutomationProperties.Name="{Binding AutomationName}"
+                                                                                              AutomationProperties.HelpText="{Binding AutomationHelp}"
+                                                                                              AutomationProperties.ItemStatus="{Binding ItemStatus}">
+                                                            <StackPanel VerticalAlignment="Center">
+                                                                <TextBlock Foreground="{DynamicResource TextBrush}"
+                                                                           Text="{Binding DisplayName}"
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           TextWrapping="NoWrap" />
+                                                                <TextBlock Foreground="{DynamicResource MutedTextBrush}"
+                                                                           FontSize="{DynamicResource Arena.Type.CaptionSize}"
+                                                                           Text="{Binding AssignmentStateLabel}"
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           TextWrapping="NoWrap" />
+                                                            </StackPanel>
+                                                        </controls:ProviderAssignmentCheckBox>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </controls:StableAutomationItemsControl>
+                                        </Border>
+                                    </StackPanel>
+                                </Grid>
 
-                            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
-                                       Text="History policy"
-                                       Style="{StaticResource ModelsSurfaceSectionLabel}" />
-                            <ComboBox x:Name="HistoryPolicyCombo"
-                                      MinHeight="44"
-                                      Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                      Style="{DynamicResource Arena.ComboBox}"
-                                      DisplayMemberPath="DisplayName"
-                                      SelectionChanged="HistoryPolicyCombo_SelectionChanged"
-                                      AutomationProperties.Name="Model history policy"
-                                      AutomationProperties.HelpText="Strict fails when exact retained history cannot fit. Rolling 80% keeps recent whole entries within a bounded budget. Chaptered is shown for future availability." />
+                                <WrapPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}">
+                                    <Button MinHeight="{DynamicResource Arena.Target.Minimum}" x:Name="LifecycleButton"
+                                            Margin="{DynamicResource Arena.Gap.Wrap.After.Compact}"
+                                            Padding="{DynamicResource Arena.Inset.CompactAction}"
+                                            HorizontalAlignment="Left"
+                                            Style="{DynamicResource Arena.Button.Secondary}"
+                                            Content="Load state unavailable"
+                                            IsEnabled="False"
+                                            Click="LifecycleButton_Click"
+                                            AutomationProperties.Name="Load state unavailable"
+                                            AutomationProperties.HelpText="Select a model with provider lifecycle evidence."
+                                            AutomationProperties.ItemStatus="Unavailable" />
+                                    <Button x:Name="ConfigurationReloadButton"
+                                            MinHeight="{DynamicResource Arena.Target.Minimum}"
+                                            Margin="{DynamicResource Arena.Gap.Wrap.After.Compact}"
+                                            Padding="{DynamicResource Arena.Inset.CompactAction}"
+                                            HorizontalAlignment="Left"
+                                            Style="{DynamicResource Arena.Button.Secondary}"
+                                            Content="Configuration is active"
+                                            IsEnabled="False"
+                                            Click="ConfigurationReloadButton_Click"
+                                            AutomationProperties.Name="Model configuration is active"
+                                            AutomationProperties.HelpText="No model reload is required."
+                                            AutomationProperties.ItemStatus="Not required" />
+                                </WrapPanel>
+                                <ProgressBar x:Name="LifecycleProgressBar"
+                                             Height="3"
+                                             Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                             IsIndeterminate="True"
+                                             Visibility="Collapsed"
+                                             IsTabStop="False"
+                                             AutomationProperties.Name="Model loading request progress" />
 
-                            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
-                                       Text="Response tone"
-                                       Style="{StaticResource ModelsSurfaceSectionLabel}" />
-                            <ComboBox x:Name="ResponseToneCombo"
-                                      MinHeight="44"
-                                      Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                      Style="{DynamicResource Arena.ComboBox}"
-                                      DisplayMemberPath="DisplayName"
-                                      SelectionChanged="ResponseToneCombo_SelectionChanged"
-                                      AutomationProperties.Name="Model response tone"
-                                      AutomationProperties.HelpText="Choose the model's default response tone across arena assignments." />
-                            <StackPanel x:Name="CustomTonePanel"
-                                        Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
-                                        Visibility="Collapsed">
-                                <TextBlock Text="Custom tone instruction"
-                                           Style="{StaticResource ModelsSurfaceSectionLabel}" />
-                                <TextBox x:Name="CustomToneText"
-                                         MinHeight="64"
-                                         Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                         MaxLength="240"
-                                         AcceptsReturn="True"
-                                         TextWrapping="Wrap"
-                                         VerticalScrollBarVisibility="Auto"
-                                         Style="{DynamicResource Arena.TextBox}"
-                                         LostKeyboardFocus="CustomToneText_LostKeyboardFocus"
-                                         PreviewKeyDown="CustomToneText_PreviewKeyDown"
-                                         TextChanged="ModelConfigurationInput_TextChanged"
-                                         AutomationProperties.Name="Custom response tone instruction"
-                                         AutomationProperties.HelpText="Enter a concise custom tone instruction, up to 240 characters." />
+                                <Expander x:Name="AdvancedModelSettingsExpander"
+                                          Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                          Header="Advanced settings"
+                                          IsExpanded="False"
+                                          Style="{DynamicResource Arena.Expander.Section}"
+                                          AutomationProperties.Name="Advanced model settings"
+                                          AutomationProperties.HelpText="History policy, response tone, and model information.">
+                                    <StackPanel Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}">
+                                        <Grid MaxWidth="520" HorizontalAlignment="Left">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="100" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="History policy"
+                                                       VerticalAlignment="Center"
+                                                       Style="{StaticResource ModelsSurfaceSectionLabel}" />
+                                            <ComboBox Grid.Column="1" MaxWidth="420" x:Name="HistoryPolicyCombo"
+                                                      MinHeight="{DynamicResource Arena.Target.Minimum}"
+                                                      Style="{DynamicResource Arena.ComboBox}"
+                                                      DisplayMemberPath="DisplayName"
+                                                      SelectionChanged="HistoryPolicyCombo_SelectionChanged"
+                                                      AutomationProperties.Name="Model history policy"
+                                                      AutomationProperties.HelpText="Strict fails when exact retained history cannot fit. Rolling 80% keeps recent whole entries within a bounded budget. Chaptered is shown for future availability." />
+                                        </Grid>
+                                        <Grid MaxWidth="520"
+                                              Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                              HorizontalAlignment="Left">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="100" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="Response tone"
+                                                       VerticalAlignment="Center"
+                                                       Style="{StaticResource ModelsSurfaceSectionLabel}" />
+                                            <ComboBox Grid.Column="1" MaxWidth="420" x:Name="ResponseToneCombo"
+                                                      MinHeight="{DynamicResource Arena.Target.Minimum}"
+                                                      Style="{DynamicResource Arena.ComboBox}"
+                                                      DisplayMemberPath="DisplayName"
+                                                      SelectionChanged="ResponseToneCombo_SelectionChanged"
+                                                      AutomationProperties.Name="Model response tone"
+                                                      AutomationProperties.HelpText="Choose the model's default response tone across arena assignments." />
+                                        </Grid>
+                                        <StackPanel MaxWidth="420" HorizontalAlignment="Left" x:Name="CustomTonePanel"
+                                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
+                                                    Visibility="Collapsed">
+                                            <TextBlock Text="Custom tone instruction"
+                                                       Style="{StaticResource ModelsSurfaceSectionLabel}" />
+                                            <TextBox x:Name="CustomToneText"
+                                                     MinHeight="64"
+                                                     Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                     MaxLength="240"
+                                                     AcceptsReturn="True"
+                                                     TextWrapping="Wrap"
+                                                     VerticalScrollBarVisibility="Auto"
+                                                     Style="{DynamicResource Arena.TextBox}"
+                                                     LostKeyboardFocus="CustomToneText_LostKeyboardFocus"
+                                                     PreviewKeyDown="CustomToneText_PreviewKeyDown"
+                                                     TextChanged="ModelConfigurationInput_TextChanged"
+                                                     AutomationProperties.Name="Custom response tone instruction"
+                                                     AutomationProperties.HelpText="Enter a concise custom tone instruction, up to 240 characters." />
+                                        </StackPanel>
+
+                                        <TextBlock Visibility="Collapsed" x:Name="SelectedModelNameText"
+                                                   Foreground="{DynamicResource TextBrush}"
+                                                   FontSize="{DynamicResource Arena.Type.TitleSize}"
+                                                   FontWeight="SemiBold"
+                                                   TextWrapping="Wrap"
+                                                   AutomationProperties.HeadingLevel="Level2" />
+                                        <TextBlock x:Name="SelectedModelIdentifierText"
+                                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Nano}"
+                                                   Style="{StaticResource ModelsSurfaceCaption}"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock x:Name="SelectedModelMetadataText"
+                                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                   Style="{StaticResource ModelsSurfaceCaption}" />
+                                        <TextBlock x:Name="SelectedModelAssignmentsText"
+                                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                   Foreground="{DynamicResource Arena.Brush.Info}"
+                                                   FontSize="{DynamicResource Arena.Type.LabelSize}"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock x:Name="SelectedModelLifecycleHelpText"
+                                                   Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
+                                                   Style="{StaticResource ModelsSurfaceFineCaption}"
+                                                   Text="Loading changes provider residency only; assignments remain unchanged." />
+                                    </StackPanel>
+                                </Expander>
                             </StackPanel>
-
-                            <Button x:Name="ConfigurationReloadButton"
-                                    MinHeight="44"
-                                    Margin="{DynamicResource Arena.Gap.Stack.Before.Default}"
-                                    Padding="{DynamicResource Arena.Inset.Action}"
-                                    HorizontalAlignment="Stretch"
-                                    Style="{DynamicResource Arena.Button.Secondary}"
-                                    Content="Configuration is active"
-                                    IsEnabled="False"
-                                    Click="ConfigurationReloadButton_Click"
-                                    AutomationProperties.Name="Model configuration is active"
-                                    AutomationProperties.HelpText="No model reload is required."
-                                    AutomationProperties.ItemStatus="Not required" />
-                        </StackPanel>
-                    </Grid>
-                    </ScrollViewer>
+                        </Grid>
+                    </Border>
 
                     <Border x:Name="ModelDetailEmptyState"
-                            Padding="{DynamicResource Arena.Inset.Section}"
-                            Background="{DynamicResource InputBrush}"
-                            BorderBrush="{DynamicResource DisabledBorderBrush}"
-                            BorderThickness="1"
-                            CornerRadius="{DynamicResource Arena.Radius.Small}"
+                            Padding="{DynamicResource Arena.Inset.Compact}"
+                            Background="Transparent"
                             AutomationProperties.Name="No model selected">
-                        <StackPanel HorizontalAlignment="Center"
-                                    VerticalAlignment="Center">
-                            <TextBlock HorizontalAlignment="Center"
-                                       Foreground="{DynamicResource TextBrush}"
-                                       FontWeight="SemiBold"
-                                       Text="Select a model" />
-                            <TextBlock Margin="{DynamicResource Arena.Gap.Stack.Before.Micro}"
-                                       Foreground="{DynamicResource MutedTextBrush}"
-                                       Text="Choose a model to inspect its residency evidence and target assignments."
-                                       TextAlignment="Center"
-                                       TextWrapping="Wrap" />
-                        </StackPanel>
+                        <TextBlock Foreground="{DynamicResource MutedTextBrush}"
+                                   Text="Select a model to open its settings."
+                                   TextWrapping="Wrap" />
                     </Border>
                 </Grid>
             </Border>
-        </Grid>
-        </ScrollViewer>
+        </ContentControl>
     </Grid>
 </UserControl>

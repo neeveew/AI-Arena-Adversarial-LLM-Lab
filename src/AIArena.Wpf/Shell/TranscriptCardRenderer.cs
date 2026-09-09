@@ -133,6 +133,23 @@ internal sealed class TranscriptCardRenderer
         this.openOutputSettingsAsync = openOutputSettingsAsync;
     }
 
+    internal sealed record LiveCard(Border Element, TextBlock Body, TextBlock Status);
+
+    internal LiveCard CreateLiveCard(TranscriptMessage message)
+    {
+        var status = new TextBlock
+        {
+            Text = "Generating…",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = resourceBrush("MutedTextBrush")
+        };
+        AutomationProperties.SetName(status, "Response progress");
+        TextBlock? body = null;
+        var card = CreateCardLayout(message with { Status = "ok" }, "", accentForSpeaker(message.SpeakerId),
+            false, false, true, false, status, block => body = block);
+        return new LiveCard(card, body!, status);
+    }
+
     public Border CreateCard(TranscriptMessage message, bool retryable, bool searchMatch, bool isLatest)
     {
         var hasInternetDetails = HasInternetDetails(message);
@@ -882,7 +899,7 @@ internal sealed class TranscriptCardRenderer
                 || !string.IsNullOrWhiteSpace(message.VoiceStyle));
     }
 
-    private Border CreateCardLayout(TranscriptMessage message, string body, Brush accent, bool isInternet, bool searchMatch, bool isLatest, bool isSystemEvent, UIElement? extraContent)
+    private Border CreateCardLayout(TranscriptMessage message, string body, Brush accent, bool isInternet, bool searchMatch, bool isLatest, bool isSystemEvent, UIElement? extraContent, Action<TextBlock>? captureBody = null)
     {
         var compact = compactTranscriptMode();
         var isError = message.Status.Equals("error", StringComparison.OrdinalIgnoreCase);
@@ -1021,6 +1038,7 @@ internal sealed class TranscriptCardRenderer
             MaxWidth = 940,
             HorizontalAlignment = HorizontalAlignment.Left
         };
+        captureBody?.Invoke(bodyBlock);
         if (isError)
         {
             bodyStack.Children.Add(new Border

@@ -23,6 +23,7 @@ public sealed class NarratorService : IDisposable
     private readonly TranscriptService _transcriptService;
     private readonly InternetToolService _internetToolService;
     private readonly bool _ownsInternetToolService;
+    private readonly IModelRuntimeEvidenceResolver? _runtimeEvidenceResolver;
     private int _disposed;
 
     public NarratorService(
@@ -30,13 +31,15 @@ public sealed class NarratorService : IDisposable
         SessionStore? sessionStore = null,
         EventLogStore? eventLogStore = null,
         TranscriptService? transcriptService = null,
-        InternetToolService? internetToolService = null)
+        InternetToolService? internetToolService = null,
+        IModelRuntimeEvidenceResolver? runtimeEvidenceResolver = null)
     {
         _modelClient = modelClient ?? new ModelProviderClient();
         _sessionStore = sessionStore ?? new SessionStore();
         _eventLogStore = eventLogStore ?? EventLogStore.ForSessionStore(_sessionStore);
         _transcriptService = transcriptService ?? new TranscriptService();
         _ownsInternetToolService = internetToolService is null;
+        _runtimeEvidenceResolver = runtimeEvidenceResolver;
         _internetToolService = internetToolService ?? new InternetToolService(eventLogStore: _eventLogStore);
     }
 
@@ -48,19 +51,19 @@ public sealed class NarratorService : IDisposable
         }
     }
 
-    public async Task<NarratorResult> NarrateNowAsync(string sessionId, CancellationToken cancellationToken = default)
+    public async Task<NarratorResult> NarrateNowAsync(string sessionId, CancellationToken cancellationToken = default, IProgress<ArenaTurnProgress>? progress = null)
     {
-        return await RunNarratorAsync(sessionId, operatorRequest: "", cancellationToken);
+        return await RunNarratorAsync(sessionId, operatorRequest: "", cancellationToken, progress);
     }
 
-    public async Task<NarratorResult> AskNarratorAsync(string sessionId, string operatorRequest, CancellationToken cancellationToken = default)
+    public async Task<NarratorResult> AskNarratorAsync(string sessionId, string operatorRequest, CancellationToken cancellationToken = default, IProgress<ArenaTurnProgress>? progress = null)
     {
         if (string.IsNullOrWhiteSpace(operatorRequest))
         {
             return NarratorResult.Failed("Operator request is empty.");
         }
 
-        return await RunNarratorAsync(sessionId, operatorRequest.Trim(), cancellationToken);
+        return await RunNarratorAsync(sessionId, operatorRequest.Trim(), cancellationToken, progress);
     }
 
     public async Task<DecisionCardResult> GenerateDecisionCardAsync(string sessionId, CancellationToken cancellationToken = default)
@@ -144,7 +147,7 @@ public sealed class NarratorService : IDisposable
         }
     }
 
-    private async Task<NarratorResult> RunNarratorAsync(string sessionId, string operatorRequest, CancellationToken cancellationToken)
+    private async Task<NarratorResult> RunNarratorAsync(string sessionId, string operatorRequest, CancellationToken cancellationToken, IProgress<ArenaTurnProgress>? progress)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
@@ -168,6 +171,9 @@ public sealed class NarratorService : IDisposable
             return NarratorResult.Failed("No provider config for narrator.");
         }
 
+        using var progressScope = new ArenaTurnProgressScope(progress, sessionId, snapshot.SessionInstanceId,
+            "narrator", "Narrator", snapshot.Engine.TurnCount + 1);
+        var completionExecutor = new ArenaCompletionExecutor(_modelClient, progressScope);
         var thinkingCommitted = false;
         try
         {
@@ -189,7 +195,7 @@ public sealed class NarratorService : IDisposable
                     additionalMessage),
                 "native_narrator",
                 "public narrator note",
-                cancellationToken);
+                cancellationToken, completionExecutor);
             var result = completion.Result;
             var text = result.Ok
                 ? result.Text
@@ -211,6 +217,7 @@ public sealed class NarratorService : IDisposable
                 completion.Request,
                 completion.ToolResult);
             ArenaHistoryBudgetService.Stamp(message, completion.Receipt);
+            completionExecutor.StampEvidence(message);
             snapshot.Engine.Messages.Add(message);
             snapshot.Engine.TurnCount = message.Turn;
             snapshot.Engine.Narrator.Status = result.Ok ? "spoke" : "error";
@@ -218,6 +225,7 @@ public sealed class NarratorService : IDisposable
             snapshot.Engine.LastError = result.Ok ? "" : result.Error;
 
             await _sessionStore.SaveSnapshotAsync(snapshot, sessionId, cancellationToken);
+            progressScope.Complete(message);
             await _eventLogStore.AppendAsync(
                 sessionId,
                 result.Ok
@@ -231,6 +239,7 @@ public sealed class NarratorService : IDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            progressScope.Interrupt("canceled");
             if (thinkingCommitted)
             {
                 await TryRecoverInterruptedNarratorAsync(sessionId, "Narrator", canceled: true, null);
@@ -239,6 +248,7 @@ public sealed class NarratorService : IDisposable
         }
         catch (Exception ex)
         {
+            progressScope.Interrupt("failed");
             if (thinkingCommitted)
             {
                 await TryRecoverInterruptedNarratorAsync(sessionId, "Narrator", canceled: false, ex);
@@ -324,8 +334,13 @@ public sealed class NarratorService : IDisposable
         NarratorPromptFactory promptFactory,
         string eventPrefix,
         string responseKind,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ArenaCompletionExecutor? completionExecutor = null)
     {
+        completionExecutor ??= new ArenaCompletionExecutor(_modelClient, null);
+        config = await ArenaRequestBudget.ResolveAsync(config, _runtimeEvidenceResolver, cancellationToken);
+        if (fallbackConfig is not null)
+            fallbackConfig = await ArenaRequestBudget.ResolveAsync(fallbackConfig, _runtimeEvidenceResolver, cancellationToken);
         var attempt = await CompleteWithFallbackAsync(
             sessionId,
             snapshot,
@@ -334,7 +349,7 @@ public sealed class NarratorService : IDisposable
             promptFactory,
             additionalMessage: null,
             $"{eventPrefix}_fallback_to_default",
-            cancellationToken);
+            cancellationToken, completionExecutor);
         var result = attempt.Result;
         if (!result.Ok
             || !InternetToolService.CanExecute(snapshot.Engine.Internet, "narrator", out _))
@@ -417,7 +432,7 @@ public sealed class NarratorService : IDisposable
             promptFactory,
             BuildInternetEvidenceMessage(persistedRequest, toolResult, responseKind),
             $"{eventPrefix}_fallback_to_default",
-            cancellationToken);
+            cancellationToken, completionExecutor);
         return new NarratorCompletion(attempt.Result, persistedRequest, toolResult, attempt.Receipt);
     }
 
@@ -429,18 +444,24 @@ public sealed class NarratorService : IDisposable
         NarratorPromptFactory promptFactory,
         ModelChatMessage? additionalMessage,
         string fallbackEvent,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ArenaCompletionExecutor? completionExecutor = null)
     {
+        completionExecutor ??= new ArenaCompletionExecutor(_modelClient, null);
         var primaryPrompt = BuildBudgetedNarratorPrompt(snapshot, config, promptFactory, additionalMessage);
         if (!primaryPrompt.Ok)
         {
             return new NarratorAttempt(HistoryPreflightFailure(config, primaryPrompt), primaryPrompt.Receipt);
         }
 
-        var result = await _modelClient.CompleteChatAsync(config, primaryPrompt.Messages, cancellationToken);
+        var publishText = additionalMessage is not null
+            || !InternetToolService.CanExecute(snapshot.Engine.Internet, "narrator", out _);
+        config = ArenaRequestBudget.Apply(config, primaryPrompt);
+        var result = await completionExecutor.CompleteAsync(config, primaryPrompt.Messages, cancellationToken, publishText);
         result = ModelCompletionOutcomeClassifier.Normalize(result);
         if (result.Ok
-            || result.FailureKind == ModelCompletionFailureKind.ContextLimitExceeded
+            || result.FailureKind is ModelCompletionFailureKind.ContextLimitExceeded or ModelCompletionFailureKind.EmptyPublicContent
+            || completionExecutor.RecoveryUsed
             || fallbackConfig is null)
         {
             return new NarratorAttempt(result, primaryPrompt.Receipt);
@@ -457,8 +478,9 @@ public sealed class NarratorService : IDisposable
             return new NarratorAttempt(HistoryPreflightFailure(fallbackConfig, fallbackPrompt), fallbackPrompt.Receipt);
         }
 
-        var fallbackResult = ModelCompletionOutcomeClassifier.Normalize(
-            await _modelClient.CompleteChatAsync(fallbackConfig, fallbackPrompt.Messages, cancellationToken));
+        fallbackConfig = ArenaRequestBudget.Apply(fallbackConfig, fallbackPrompt);
+        var fallbackResult = await completionExecutor.CompleteAsync(
+            fallbackConfig, fallbackPrompt.Messages, cancellationToken, publishText);
         return new NarratorAttempt(fallbackResult, fallbackPrompt.Receipt);
     }
 

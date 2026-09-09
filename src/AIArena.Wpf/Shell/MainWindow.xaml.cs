@@ -342,17 +342,22 @@ public partial class MainWindow : Window, IAIArenaControlTarget
                 () => ExperimentLabPanel.SelectedFeatureKey));
         _providerRequestTraceStore = new ProviderRequestTraceStore();
         _modelClient = CreateObservedModelProviderClient(_providerRequestTraceStore);
+        var lmStudioCatalog = new LmStudioModelCatalogService();
+        var ollamaCatalog = new OllamaModelCatalogService();
+        var llamaCppRuntime = new LlamaCppRuntimeService();
+        var runtimeEvidence = new ProviderModelRuntimeEvidenceResolver(lmStudioCatalog, ollamaCatalog, llamaCppRuntime);
         _contextRecoveryService = new ContextRecoveryService(
             _coreSessionStore,
             _modelClient,
             _transcriptService,
-            _eventLogStore);
+            _eventLogStore,
+            runtimeEvidenceResolver: runtimeEvidence);
         _internetToolService = new InternetToolService(
             new LocalInternetToolProvider(ensureSearchBackendAsync: EnsureInternetBackendForSearchAsync),
             _eventLogStore);
-        _turnRunner = new TurnRunnerService(_modelClient, _coreSessionStore, _eventLogStore, _transcriptService, _internetToolService);
+        _turnRunner = new TurnRunnerService(_modelClient, _coreSessionStore, _eventLogStore, _transcriptService, _internetToolService, runtimeEvidenceResolver: runtimeEvidence);
         _matchGeneration = new MatchGenerationService(_modelClient, _coreSessionStore, _eventLogStore, _internetToolService);
-        _narratorService = new NarratorService(_modelClient, _coreSessionStore, _eventLogStore, _transcriptService, _internetToolService);
+        _narratorService = new NarratorService(_modelClient, _coreSessionStore, _eventLogStore, _transcriptService, _internetToolService, runtimeEvidenceResolver: runtimeEvidence);
         _sessionForkWorkflowService = new SessionForkWorkflowService(
             _coreSessionStore,
             _eventLogStore,
@@ -561,10 +566,13 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             _arenaOperationLock,
             () => _activeSession,
             () => _arenaBusy,
+            lmStudioCatalog: lmStudioCatalog,
+            ollamaCatalog: ollamaCatalog,
+            llamaCppRuntime: llamaCppRuntime,
             statusCenter: ShellTopBar.Presentation.StatusCenter,
             serverInventory: _providerServerInventory);
         _llamaCppRuntimeCoordinator = new LlamaCppRuntimeCoordinator(
-            new LlamaCppRuntimeService(),
+            llamaCppRuntime,
             new LlamaCppRuntimeControls(
                 LlamaCppRuntimeStatusCard,
                 LlamaCppRuntimeStatusText,
@@ -883,7 +891,10 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             SetLoadStatus,
             SetArenaRunStatus,
             SpeakNarratorMessage,
-            _composerDraftStore);
+            _composerDraftStore)
+        {
+            BeginTranscriptStream = () => TranscriptList.Streams.Begin()
+        };
         _internetWorkflowCoordinator = new InternetWorkflowCoordinator(
             UseInternetCheckBox,
             InternetHintText,
@@ -985,7 +996,10 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             SetArenaRunStatus,
             IsAgentSpeaker,
             SpeakNarratorMessage,
-            RunArenaBusyForCoordinatorAsync);
+            RunArenaBusyForCoordinatorAsync)
+        {
+            BeginTranscriptStream = () => TranscriptList.Streams.Begin()
+        };
         _agentBoardCoordinator = new AgentBoardCoordinator(
             _coreSessionStore,
             _eventLogStore,
@@ -1348,6 +1362,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             RefreshActiveSessionForCoordinatorAsync,
             SetLoadStatus,
             SetArenaRunStatus);
+        InitializeConversationStart();
         _customMatchSummaryCoordinator = new CustomMatchSummaryCoordinator(
             ScenarioPreviewItems,
             CastPreviewItems,
@@ -1410,7 +1425,10 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             SaveSnapshotForCoordinatorAsync,
             RefreshActiveSessionForCoordinatorAsync,
             SetLoadStatus,
-            SetArenaRunStatus);
+            SetArenaRunStatus)
+        {
+            ResetCommitted = () => TranscriptList.Streams.Clear()
+        };
         _arenaOperationCoordinator = new ArenaOperationCoordinator(
             _arenaOperationLock,
             LoadStatus,
@@ -1473,7 +1491,11 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             {
                 InternetWorkflow.UpdateBusyState(busy, autoChatRunning);
             },
-            (busy, autoChatRunning) => OperatorTurn.UpdateBusyState(busy, autoChatRunning),
+            (busy, autoChatRunning) =>
+            {
+                OperatorTurn.UpdateBusyState(busy, autoChatRunning);
+                _conversationStartCoordinator?.UpdateBusyState(busy, autoChatRunning);
+            },
             busy => AgentRoster.UpdateBusyState(busy),
             () => SavedStateCoordinator.UpdateActionButtons(),
             busy => AgentBoard.UpdateBusyState(busy),
@@ -4005,6 +4027,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
             ContextSummaryText.Text = string.IsNullOrWhiteSpace(snapshot.Summary) ? "No summary has been generated for this session." : snapshot.Summary;
             InternetWorkflow.ApplySnapshot(snapshot);
             OperatorTurn.ApplySnapshot(snapshot);
+        _conversationStartCoordinator?.ApplySnapshot(snapshot);
             ApplyWorldSnapshotIfVisible(snapshot);
         }
         finally
@@ -4359,6 +4382,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
 
     private async void AutoChatButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_conversationStartCoordinator?.FocusIfOnlyStartingMessageMissing() == true) return;
         await ArenaRun.StartAutoChatAsync();
     }
 
@@ -5504,6 +5528,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
     {
         _lastRenderedSnapshot = snapshot;
         OperatorTurn.ApplySnapshot(snapshot);
+        _conversationStartCoordinator?.ApplySnapshot(snapshot);
         var arenaReadiness = ArenaOperationCoordinator.EvaluateReadiness(snapshot);
         ArenaOperations.UpdateReadiness(arenaReadiness);
         PublishArenaReadiness(snapshot, arenaReadiness);
@@ -5628,7 +5653,7 @@ public partial class MainWindow : Window, IAIArenaControlTarget
         ArenaViewSnapshot snapshot,
         ArenaActionReadiness readiness) =>
         !readiness.CanRun
-        && (snapshot.MatchEnded
+        && (snapshot.HasUnresolvedContextFailure || snapshot.MatchEnded
             || (snapshot.FactoryMode
                 && ArenaOperationCoordinator.FactoryInputState(snapshot)
                     == FactoryConversationInputState.MissingRoot))

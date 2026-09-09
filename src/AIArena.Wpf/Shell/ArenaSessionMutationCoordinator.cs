@@ -397,6 +397,8 @@ internal sealed class ArenaSessionMutationCoordinator
             explicitAssignment: explicitModel.Length > 0);
     }
 
+    internal Action? ResetCommitted { get; set; }
+
     public async Task ResetArenaAsync()
     {
         await ResetArenaAsync(requireConfirmation: true);
@@ -434,7 +436,11 @@ internal sealed class ArenaSessionMutationCoordinator
                 sessionStore,
                 eventLogStore,
                 session.Id,
-                refreshActiveSessionAsync);
+                async status =>
+                {
+                    ResetCommitted?.Invoke();
+                    await refreshActiveSessionAsync(status);
+                });
             if (completion is null)
             {
                 setArenaRunStatus($"No snapshot found for session {session.Id}.");

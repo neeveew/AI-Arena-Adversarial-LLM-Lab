@@ -23,6 +23,8 @@ public sealed class FactoryConversationService
     public const string ContextFingerprintMetadataKey = "factory_context_fingerprint";
     public const string ContextEntryCountMetadataKey = "factory_context_entry_count";
     public const string ContextOmittedCountMetadataKey = "factory_context_omitted_count";
+    public const string RetainedMessageIdsMetadataKey = "factory_retained_message_ids";
+    public const string BudgetReceiptMetadataKey = "factory_request_budget";
     public const string PromptEncodingMetadataKey = "factory_prompt_encoding";
     public const string AlternatingRunsPromptEncoding = "alternating_runs_v1";
     internal const string LegacyPerEntryPromptEncoding = "legacy_per_entry_v1";
@@ -71,7 +73,8 @@ public sealed class FactoryConversationService
         ArenaSnapshot snapshot,
         string targetAgentId,
         int? beforeTurn = null,
-        string promptEncoding = AlternatingRunsPromptEncoding)
+        string promptEncoding = AlternatingRunsPromptEncoding,
+        IReadOnlyList<string>? retainedMessageIds = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var normalizedEncoding = NormalizePromptEncoding(promptEncoding);
@@ -88,8 +91,15 @@ public sealed class FactoryConversationService
             return FactoryPromptContext.Failed(inspection.Error, normalizedEncoding);
         }
 
-        var messages = new List<ModelChatMessage>(inspection.IncludedMessages.Count);
-        foreach (var entry in inspection.IncludedMessages)
+        var selected = retainedMessageIds is null
+            ? inspection.IncludedMessages
+            : inspection.AllEligibleMessages.Where(entry => retainedMessageIds.Contains(
+                DialogueMessageIdentity.Resolve(entry), StringComparer.Ordinal)).ToArray();
+        if (retainedMessageIds is not null && (selected.Count != retainedMessageIds.Count
+            || !selected.Any(entry => SameIdentity(entry, inspection.RootMessage))))
+            return FactoryPromptContext.Failed(RetryContextValidationError, normalizedEncoding);
+        var messages = new List<ModelChatMessage>(selected.Count);
+        foreach (var entry in selected)
         {
             if (ReferenceEquals(entry, inspection.RootMessage)
                 || SameIdentity(entry, inspection.RootMessage))
@@ -125,10 +135,13 @@ public sealed class FactoryConversationService
             normalizedEncoding,
             PromptContextFingerprint(providerMessages, normalizedEncoding),
             inspection.EligibleEntryCount,
-            inspection.IncludedEntryCount,
-            inspection.OmittedEntryCount,
+            selected.Count,
+            Math.Max(0, inspection.EligibleEntryCount - selected.Count),
             messages,
-            providerMessages);
+            providerMessages)
+        {
+            RetainedMessageIds = selected.Select(entry => DialogueMessageIdentity.Resolve(entry)).ToArray()
+        };
     }
 
     /// <summary>
@@ -152,7 +165,16 @@ public sealed class FactoryConversationService
             return FactoryPromptContext.Failed(RetryContextValidationError, storedEncoding);
         }
 
-        var context = BuildPromptContext(snapshot, targetAgentId, original.Turn, retryEncoding);
+        IReadOnlyList<string>? retainedIds = null;
+        if (original.Metadata.TryGetValue(RetainedMessageIdsMetadataKey, out var retainedElement))
+        {
+            try { retainedIds = retainedElement.Deserialize<string[]>(); }
+            catch (JsonException) { return FactoryPromptContext.Failed(RetryContextValidationError, retryEncoding); }
+            if (retainedIds is null || retainedIds.Count == 0 || retainedIds.Any(string.IsNullOrWhiteSpace)
+                || retainedIds.Distinct(StringComparer.Ordinal).Count() != retainedIds.Count)
+                return FactoryPromptContext.Failed(RetryContextValidationError, retryEncoding);
+        }
+        var context = BuildPromptContext(snapshot, targetAgentId, original.Turn, retryEncoding, retainedIds);
         if (!context.Ok)
         {
             return context;
@@ -168,13 +190,71 @@ public sealed class FactoryConversationService
         return context;
     }
 
+    /// <summary>Fits only whole public entries; the root and latest directions remain byte-exact.</summary>
+    internal FactoryPromptContext FitToActiveContext(ArenaSnapshot snapshot, string targetAgentId,
+        ModelProviderConfig config, FactoryPromptContext context, int? beforeTurn = null, bool frozen = false)
+    {
+        if (!context.Ok || config.RuntimeEvidence?.ContextWindow is not > 0) return context;
+        var inspection = Resolve(snapshot, beforeTurn);
+        if (!inspection.HasUsableRoot || inspection.RootMessage is null)
+            return FactoryPromptContext.Failed(inspection.Error, context.PromptEncoding);
+        var rolling = ModelHistoryPolicies.NormalizeHistoryPolicy(config.HistoryPolicy) == ModelHistoryPolicies.Rolling80;
+        var selectedIds = context.RetainedMessageIds.ToList();
+        var mandatoryIds = new HashSet<string>(StringComparer.Ordinal) { inspection.RootMessageId };
+        foreach (var required in new[]
+        {
+            inspection.AllEligibleMessages.LastOrDefault(IsOperator),
+            inspection.AllEligibleMessages.LastOrDefault(entry => !IsOperator(entry))
+        })
+            if (required is not null) mandatoryIds.Add(DialogueMessageIdentity.Resolve(required));
+        if (rolling && !frozen)
+        {
+            selectedIds = inspection.AllEligibleMessages
+                .Where(entry => selectedIds.Contains(DialogueMessageIdentity.Resolve(entry), StringComparer.Ordinal)
+                    || mandatoryIds.Contains(DialogueMessageIdentity.Resolve(entry)))
+                .Select(entry => DialogueMessageIdentity.Resolve(entry)).ToList();
+            while (selectedIds.Count > MaxContextEntries)
+            {
+                var removable = selectedIds.FindIndex(id => !mandatoryIds.Contains(id));
+                if (removable < 0) break;
+                selectedIds.RemoveAt(removable);
+            }
+            context = BuildPromptContext(snapshot, targetAgentId, beforeTurn, context.PromptEncoding, selectedIds);
+            var inputBudget = Math.Max(1, ArenaRequestBudget.TargetTokens(ArenaRequestBudget.ContextWindow(config))
+                - Math.Max(0, config.MaxOutputTokens));
+            while (ArenaHistoryBudgetService.EstimateTokens(context.ProviderMessages) > inputBudget)
+            {
+                var removable = selectedIds.FindIndex(id => !mandatoryIds.Contains(id));
+                if (removable < 0) break;
+                selectedIds.RemoveAt(removable);
+                context = BuildPromptContext(snapshot, targetAgentId, beforeTurn, context.PromptEncoding, selectedIds);
+            }
+        }
+        var fit = ArenaRequestBudget.FitUnchanged(config, context.ProviderMessages);
+        var receipt = new ArenaHistoryBudgetReceipt
+        {
+            HistoryPolicy = ModelHistoryPolicies.NormalizeHistoryPolicy(config.HistoryPolicy),
+            ConfiguredContextWindow = ArenaRequestBudget.ContextWindow(config),
+            InputTokenBudget = Math.Max(0, ArenaRequestBudget.TargetTokens(ArenaRequestBudget.ContextWindow(config)) - fit.OutputTokenLimit),
+            OutputTokenReserve = fit.OutputTokenLimit,
+            EstimatedPromptTokens = ArenaHistoryBudgetService.EstimateTokens(context.ProviderMessages),
+            EligibleEntryCount = inspection.EligibleEntryCount,
+            IncludedEntryCount = context.IncludedEntryCount,
+            OmittedEntryCount = context.OmittedEntryCount,
+            IncludedMessageIds = context.RetainedMessageIds.ToList(),
+            ContextFingerprint = context.ContextFingerprint,
+            BeforeTurn = beforeTurn ?? snapshot.Engine.TurnCount + 1
+        };
+        return context with { Ok = fit.Ok, Error = fit.Error, BudgetReceipt = receipt, OutputTokenLimit = fit.OutputTokenLimit };
+    }
+
     /// <summary>
     /// Produces an alternating Factory request for providers whose chat
     /// templates reject adjacent messages with the same role. Public entries
     /// keep their chronological order, exact text, attribution envelopes, and
     /// self/peer role mapping; only adjacent wire blocks with an equal role are
-    /// joined with a fixed boundary. The semantic context and its 50-entry cap
-    /// remain represented by <see cref="FactoryPromptContext"/>.
+    /// joined with a fixed boundary. Logical entry counts and any active-context
+    /// selection remain represented by <see cref="FactoryPromptContext"/>.
     /// </summary>
     internal static IReadOnlyList<ModelChatMessage> NormalizeProviderRequestMessages(
         IReadOnlyList<ModelChatMessage> messages)
@@ -279,6 +359,10 @@ public sealed class FactoryConversationService
         message.Metadata[ContextFingerprintMetadataKey] = JsonSerializer.SerializeToElement(context.ContextFingerprint);
         message.Metadata[ContextEntryCountMetadataKey] = JsonSerializer.SerializeToElement(context.IncludedEntryCount);
         message.Metadata[ContextOmittedCountMetadataKey] = JsonSerializer.SerializeToElement(context.OmittedEntryCount);
+        if (context.RetainedMessageIds.Count > 0)
+            message.Metadata[RetainedMessageIdsMetadataKey] = JsonSerializer.SerializeToElement(context.RetainedMessageIds);
+        if (context.BudgetReceipt is not null)
+            message.Metadata[BudgetReceiptMetadataKey] = JsonSerializer.SerializeToElement(context.BudgetReceipt);
     }
 
     public static bool HasFactoryPromptContract(DialogueMessage message)
@@ -456,7 +540,7 @@ public sealed class FactoryConversationService
             included.Count,
             omitted,
             fingerprint,
-            included);
+            included) { AllEligibleMessages = eligible };
     }
 
     private static bool IsAtOrAfter(IndexedMessage candidate, IndexedMessage root)
@@ -629,6 +713,7 @@ public sealed record FactoryConversationInspection(
     string ContextFingerprint,
     IReadOnlyList<DialogueMessage> IncludedMessages)
 {
+    internal IReadOnlyList<DialogueMessage> AllEligibleMessages { get; init; } = [];
     internal static FactoryConversationInspection Failed(
         string error,
         bool isAnchored = false,
@@ -663,6 +748,9 @@ public sealed record FactoryPromptContext(
     IReadOnlyList<ModelChatMessage> LogicalMessages,
     IReadOnlyList<ModelChatMessage> ProviderMessages)
 {
+    internal IReadOnlyList<string> RetainedMessageIds { get; init; } = [];
+    internal ArenaHistoryBudgetReceipt? BudgetReceipt { get; init; }
+    internal int OutputTokenLimit { get; init; }
     internal static FactoryPromptContext Failed(string error, string promptEncoding = FactoryConversationService.AlternatingRunsPromptEncoding) =>
         new(false, error, FactoryConversationService.ContractVersion, "", "", promptEncoding, "", 0, 0, 0, [], []);
 }

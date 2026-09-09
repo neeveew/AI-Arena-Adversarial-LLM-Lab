@@ -72,6 +72,8 @@ internal sealed class ArenaRunCoordinator
         this.speakNarratorMessage = speakNarratorMessage ?? (_ => { });
     }
 
+    internal Func<ArenaTranscriptStreamCoordinator.StreamOperation?>? BeginTranscriptStream { get; set; }
+
     public bool IsAutoChatRunning => autoChatCancellation is not null;
     public bool LastTurnSucceeded { get; private set; }
     public bool LastNarrationSucceeded { get; private set; }
@@ -107,7 +109,9 @@ internal sealed class ArenaRunCoordinator
                 OneTurnResult result;
                 try
                 {
-                    result = await turnRunner.RunOneTurnAsync(session.Id, shouldEnforceVoiceDrift(), token);
+                    using var progress = BeginTranscriptStream?.Invoke();
+                    result = await turnRunner.RunOneTurnAsync(session.Id, shouldEnforceVoiceDrift(), token, progress);
+                    progress?.Flush();
                 }
                 finally
                 {
@@ -213,7 +217,9 @@ internal sealed class ArenaRunCoordinator
 
         var ran = await runCancelableArenaBusyAsync("Narrator thinking...", narrateNowButton, async cancellationToken =>
         {
-            var result = await narratorService.NarrateNowAsync(session.Id, cancellationToken);
+            using var progress = BeginTranscriptStream?.Invoke();
+            var result = await narratorService.NarrateNowAsync(session.Id, cancellationToken, progress);
+            progress?.Flush();
             cancellationToken.ThrowIfCancellationRequested();
             LastNarrationSucceeded = result.Ok && result.Message is not null;
             var status = NarratorStatus(result);
@@ -248,7 +254,9 @@ internal sealed class ArenaRunCoordinator
 
         var ran = await runCancelableArenaBusyAsync("Running native 1 TURN...", oneTurnButton, async cancellationToken =>
         {
-            var result = await turnRunner.RunOneTurnAsync(session.Id, shouldEnforceVoiceDrift(), cancellationToken);
+            using var progress = BeginTranscriptStream?.Invoke();
+            var result = await turnRunner.RunOneTurnAsync(session.Id, shouldEnforceVoiceDrift(), cancellationToken, progress);
+            progress?.Flush();
             cancellationToken.ThrowIfCancellationRequested();
             LastTurnSucceeded = ModelTurnSucceeded(result);
             var status = OneTurnStatus(result);
@@ -275,7 +283,9 @@ internal sealed class ArenaRunCoordinator
 
         await runCancelableArenaBusyAsync($"Running {agent.Name} once...", null, async cancellationToken =>
         {
-            var result = await turnRunner.RunAgentTurnAsync(session.Id, agent.Id, shouldEnforceVoiceDrift(), cancellationToken);
+            using var progress = BeginTranscriptStream?.Invoke();
+            var result = await turnRunner.RunAgentTurnAsync(session.Id, agent.Id, shouldEnforceVoiceDrift(), cancellationToken, progress);
+            progress?.Flush();
             cancellationToken.ThrowIfCancellationRequested();
             await refreshActiveSessionAsync(AgentTurnStatus(agent, result));
         }, false);
@@ -291,13 +301,15 @@ internal sealed class ArenaRunCoordinator
 
         await runCancelableArenaBusyAsync($"Retrying turn {message.Turn} with {message.Speaker}...", null, async cancellationToken =>
         {
+            using var progress = BeginTranscriptStream?.Invoke();
             var result = await turnRunner.RetryTurnAsync(
                 session.Id,
                 message.Turn,
                 message.SpeakerId,
                 message.CreatedAt,
                 shouldEnforceVoiceDrift(),
-                cancellationToken);
+                cancellationToken, progress);
+            progress?.Flush();
             cancellationToken.ThrowIfCancellationRequested();
             await refreshActiveSessionAsync(RetryStatus(message, result));
         }, false);

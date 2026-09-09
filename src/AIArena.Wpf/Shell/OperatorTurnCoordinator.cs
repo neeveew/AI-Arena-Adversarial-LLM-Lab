@@ -28,6 +28,9 @@ internal sealed record OperatorDraftAnalysis(
     int TokenEstimate,
     string MeterText);
 
+internal sealed record OperatorTurnSendReceipt(
+    string SessionId, string SessionInstanceId, bool FactoryMode, bool Completed = true);
+
 internal sealed class OperatorTurnCoordinator
 {
     private const int QuickInterventionCount = 4;
@@ -78,6 +81,7 @@ internal sealed class OperatorTurnCoordinator
     private bool lastBusy;
     private bool lastAutoChatRunning;
     private bool factoryMode;
+    private bool openingConversationPresentation;
 
     public OperatorTurnCoordinator(
         SessionStore sessionStore,
@@ -180,7 +184,7 @@ internal sealed class OperatorTurnCoordinator
 
     public void SetRouteMode(string mode)
     {
-        var normalizedRoute = NormalizeOperatorRoute(mode);
+        var normalizedRoute = openingConversationPresentation ? "public" : NormalizeOperatorRoute(mode);
         if (!routeMode.Equals(normalizedRoute, StringComparison.OrdinalIgnoreCase))
         {
             CaptureVisibleDraft();
@@ -297,11 +301,61 @@ internal sealed class OperatorTurnCoordinator
 
     public async Task SendOperatorTurnAsync()
     {
+        if (openingConversationPresentation && lastRenderedSnapshot() is { } snapshot)
+        {
+            await SendConversationStartAsync(snapshot.SessionId, snapshot.SessionInstanceId);
+            return;
+        }
+        await SendVisibleOperatorTurnAsync(SendOperatorPromptAsync);
+    }
+
+    public async Task<OperatorTurnSendReceipt?> SendConversationStartAsync(string sessionId, string sessionInstanceId)
+    {
+        if (sendInProgress)
+        {
+            setArenaRunStatus("Operator turn is already sending.");
+            return null;
+        }
+        if (!SessionStore.IsValidSessionInstanceId(sessionInstanceId)
+            || !CurrentConversationStartMatches(sessionId, sessionInstanceId))
+        {
+            setArenaRunStatus("The conversation changed. Review the current session before sending; your draft is retained.");
+            return null;
+        }
+        SetRouteMode("public");
+        OperatorTurnSendReceipt? receipt = null;
+        var expected = new OperatorTurnSendReceipt(sessionId, sessionInstanceId, FactoryMode: true);
+        await SendVisibleOperatorTurnAsync((session, text, _) =>
+            SendPublicOperatorTurnAsync(session, text, expected, saved => receipt = saved));
+        return receipt;
+    }
+
+    public void SetOpeningConversationPresentation(bool opening)
+    {
+        if (openingConversationPresentation == opening) return;
+        openingConversationPresentation = opening;
+        if (opening) SetRouteMode("public");
+        UpdateRouteUi();
+    }
+
+    private bool CurrentConversationStartMatches(string sessionId, string sessionInstanceId)
+    {
+        var current = lastRenderedSnapshot();
+        return string.Equals(activeSession()?.Id, sessionId, StringComparison.OrdinalIgnoreCase)
+            && current is not null
+            && current.SessionId.Equals(sessionId, StringComparison.OrdinalIgnoreCase)
+            && current.SessionInstanceId.Equals(sessionInstanceId, StringComparison.Ordinal)
+            && current.FactoryMode && !current.MatchEnded
+            && ArenaOperationCoordinator.FactoryInputState(current) == FactoryConversationInputState.None;
+    }
+
+    private async Task<bool> SendVisibleOperatorTurnAsync(Func<CoreSessionSummary, string, string, Task<bool>> send)
+    {
         var session = activeSession();
         if (session is null)
         {
             setLoadStatus("No active session.");
-            return;
+            return false;
         }
 
         var mode = routeMode;
@@ -313,20 +367,20 @@ internal sealed class OperatorTurnCoordinator
         if (string.IsNullOrWhiteSpace(text))
         {
             setArenaRunStatus("Operator turn is empty.");
-            return;
+            return false;
         }
-
         if (sendInProgress)
         {
             setArenaRunStatus("Operator turn is already sending.");
-            return;
+            return false;
         }
 
-        var sent = await RunOperatorSendAsync(() => SendOperatorPromptAsync(session, text, mode));
+        var sent = await RunOperatorSendAsync(() => send(session, text, mode));
         if (sent)
         {
             ClearVisibleDraftAfterSuccessfulSend(session.Id, sessionInstanceId, mode, rawText);
         }
+        return sent;
     }
 
     internal async Task ControlSendAsync(string prompt, string route)
@@ -388,7 +442,11 @@ internal sealed class OperatorTurnCoordinator
         };
     }
 
-    private async Task<bool> SendPublicOperatorTurnAsync(CoreSessionSummary session, string text)
+    private async Task<bool> SendPublicOperatorTurnAsync(
+        CoreSessionSummary session,
+        string text,
+        OperatorTurnSendReceipt? expectedOpening = null,
+        Action<OperatorTurnSendReceipt>? committed = null)
     {
         var sent = false;
         await runArenaBusyAsync("Injecting operator turn...", sendButton, async () =>
@@ -398,6 +456,24 @@ internal sealed class OperatorTurnCoordinator
             {
                 setArenaRunStatus($"No snapshot found for session {session.Id}.");
                 return;
+            }
+
+            if (expectedOpening is not null)
+            {
+                if (TurnRunnerService.UnresolvedContextFailure(snapshot) is not null)
+                {
+                    setArenaRunStatus(TurnRunnerService.ContextRecoveryRequiredError);
+                    return;
+                }
+                var conversation = factoryConversationService.Inspect(snapshot);
+                if (!CurrentConversationStartMatches(expectedOpening.SessionId, expectedOpening.SessionInstanceId)
+                    || !snapshot.SessionInstanceId.Equals(expectedOpening.SessionInstanceId, StringComparison.Ordinal)
+                    || !snapshot.Engine.FactoryMode || snapshot.Engine.MatchEnded
+                    || conversation.HasUsableRoot || conversation.IsAnchored || conversation.IsOrphaned)
+                {
+                    setArenaRunStatus("The conversation changed. Review the current session before sending; your draft is retained.");
+                    return;
+                }
             }
 
             var message = transcriptService.CreateOperatorMessage(
@@ -412,12 +488,14 @@ internal sealed class OperatorTurnCoordinator
             factoryConversationService.StampPublicOperator(snapshot, message);
             snapshot.Engine.TurnCount = message.Turn;
             await saveSnapshotWithFeedbackAsync(snapshot, session.Id);
+            committed?.Invoke(new OperatorTurnSendReceipt(session.Id, snapshot.SessionInstanceId, snapshot.Engine.FactoryMode, Completed: false));
             await eventLogStore.AppendAsync(
                 session.Id,
                 "native_operator_turn_added",
                 new { message.Turn, TextLength = message.Text.Length, Route = "public" });
             await refreshActiveSessionAsync("Public operator turn added.");
             sent = true;
+            committed?.Invoke(new OperatorTurnSendReceipt(session.Id, snapshot.SessionInstanceId, snapshot.Engine.FactoryMode));
         }, true);
         return sent;
     }
@@ -549,12 +627,16 @@ internal sealed class OperatorTurnCoordinator
         return sent;
     }
 
+    internal Func<ArenaTranscriptStreamCoordinator.StreamOperation?>? BeginTranscriptStream { get; set; }
+
     private async Task<bool> AskNarratorFromOperatorAsync(CoreSessionSummary session, string text)
     {
         var sent = false;
         await runArenaBusyAsync("Asking narrator...", sendButton, async () =>
         {
-            var result = await narratorService.AskNarratorAsync(session.Id, text);
+            using var progress = BeginTranscriptStream?.Invoke();
+            var result = await narratorService.AskNarratorAsync(session.Id, text, progress: progress);
+            progress?.Flush();
             var status = result.Ok && result.Message is not null
                 ? $"Narrator answered operator request at turn {result.Message.Turn}."
                 : $"Narrator request failed: {result.Error}";
@@ -669,10 +751,13 @@ internal sealed class OperatorTurnCoordinator
         StyleOperatorRouteButton(privateRouteButton, routeMode.Equals("private", StringComparison.OrdinalIgnoreCase), "BetaAccentBrush", "Private route");
         StyleOperatorRouteButton(narratorRouteButton, routeMode.Equals("narrator", StringComparison.OrdinalIgnoreCase), "AssistBorderBrush", "Narrator route");
 
-        privateTargetRow.Visibility = routeMode.Equals("private", StringComparison.OrdinalIgnoreCase)
+        publicRouteButton.Visibility = openingConversationPresentation ? Visibility.Collapsed : Visibility.Visible;
+        privateRouteButton.Visibility = openingConversationPresentation ? Visibility.Collapsed : Visibility.Visible;
+        narratorRouteButton.Visibility = openingConversationPresentation ? Visibility.Collapsed : Visibility.Visible;
+        privateTargetRow.Visibility = !openingConversationPresentation && routeMode.Equals("private", StringComparison.OrdinalIgnoreCase)
             ? Visibility.Visible
             : Visibility.Collapsed;
-        var sendLabel = routeMode.Equals("narrator", StringComparison.OrdinalIgnoreCase)
+        var sendLabel = openingConversationPresentation ? "Send only" : routeMode.Equals("narrator", StringComparison.OrdinalIgnoreCase)
             ? "Ask Narrator"
             : routeMode.Equals("private", StringComparison.OrdinalIgnoreCase)
                 ? "Send Private"
@@ -683,6 +768,9 @@ internal sealed class OperatorTurnCoordinator
                 ? CreateCommandContent("\uE72E", sendLabel, 12)
                 : CreateCommandContent("\uE724", sendLabel, 12);
         AutomationProperties.SetName(sendButton, sendLabel);
+        sendButton.SetResourceReference(FrameworkElement.StyleProperty,
+            openingConversationPresentation ? "SecondaryButton" : "PrimaryButton");
+        routeHintText.Visibility = openingConversationPresentation ? Visibility.Collapsed : Visibility.Visible;
         var sendHelp = routeMode switch
         {
             "private" => factoryMode
@@ -694,7 +782,7 @@ internal sealed class OperatorTurnCoordinator
                 : OperatorVisibilitySummary(routeMode)
         };
         AutomationProperties.SetHelpText(sendButton, $"{sendHelp} Session: {DraftSessionLabel()}.");
-        turnText.Tag = routeMode switch
+        turnText.Tag = openingConversationPresentation ? "Write the first message for all agents..." : routeMode switch
         {
             "private" => "Private guidance for agent memory...",
             "narrator" => "Ask narrator...",

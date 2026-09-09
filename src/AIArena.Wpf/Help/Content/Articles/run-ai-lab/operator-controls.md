@@ -11,9 +11,19 @@ Arena Controls run the match. Operator Turn changes or supplements its public an
 | **Pause** | Requests the current repeatable/stoppable operation to stop |
 | **Reset** | Clears transcript/live turn state while preserving setup, routing policy, and saved configuration |
 
-Disabled controls expose their current prerequisite in accessible help. Common blockers are provider offline, scheduled role unassigned, match busy/ended, or Factory mode missing a public root.
+Disabled controls expose their current prerequisite in accessible help. Common blockers are provider offline, scheduled role unassigned, match busy/ended, or an unresolved context failure. In Factory mode, when only the first Public message is missing, **Auto Chat** focuses the opening composer instead of starting a run.
 
 Voice playback is bound to the active session. Loading a genuinely different session stops current or still-starting speech before that session is read and rendered; a same-session background refresh does not interrupt playback.
+
+## Live responses
+
+Agent and Narrator turns appear immediately and fill in as the server sends their answer. The same card becomes the saved transcript entry when the response finishes. The card starts with **Waiting for response…**. When the server reports its activity, it shows **Loading model…**, **Reading context…**, or **Thinking…**; **Writing…** appears when public answer text arrives. Internal tool requests and reasoning stay separate from the public answer. Servers that do not report a stage leave the waiting label in place.
+
+Stopping or interrupting a response leaves any received text labeled as an unsaved partial response. It is not passed to the next agent as a completed turn. Starting another response replaces that preview. A server that does not stream still returns its answer in the same waiting card.
+
+If a completed response contains reasoning but no public answer, Arena can make one **Retrying with reduced reasoning…** attempt when the server advertises a supported setting. It uses the same model and conversation and saves only the final turn. A second empty result is explained instead of repeatedly retrying.
+
+You can scroll through earlier messages during generation without token updates pulling you away. **Follow Chat** follows new cards when you are already at the top of the transcript.
 
 ## Operator routes
 
@@ -27,7 +37,11 @@ Unsent Operator text is protected for the current Windows user and restored inde
 
 ## Factory rules
 
-Only a non-empty Public Operator turn can establish Factory's stable group root. Narrator routing is unavailable in Factory mode. After the root exists, later Public Operator turns join group history but do not silently replace the root.
+Only a non-empty Public Operator turn can establish Factory's stable group root. Before that message exists, the Operator composer appears in the center of the transcript. **Send and start Auto Chat** saves the Public message first, then starts the agents if the same session is still ready. **Send only** saves it without starting a run. The composer then returns to the right rail with the usual Operator controls.
+
+Selecting **Auto Chat** focuses the opening composer when that message is the only missing prerequisite. It never sends an unsent draft automatically. Failed sends retain the draft; a session or mode change during sending prevents the combined action from starting Auto Chat in a different context.
+
+Narrator routing is unavailable in Factory mode. After the root exists, later Public Operator turns join group history but do not silently replace the root.
 
 ## Reset, fork, skip, or end
 

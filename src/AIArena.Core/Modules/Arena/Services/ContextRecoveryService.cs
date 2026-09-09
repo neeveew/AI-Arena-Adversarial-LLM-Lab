@@ -27,17 +27,20 @@ public sealed class ContextRecoveryService
     private readonly IModelProviderClient _modelClient;
     private readonly TranscriptService _transcriptService;
     private readonly EventLogStore _eventLogStore;
+    private readonly IModelRuntimeEvidenceResolver? _runtimeEvidenceResolver;
 
     public ContextRecoveryService(
         SessionStore? sessionStore = null,
         IModelProviderClient? modelClient = null,
         TranscriptService? transcriptService = null,
-        EventLogStore? eventLogStore = null)
+        EventLogStore? eventLogStore = null,
+        IModelRuntimeEvidenceResolver? runtimeEvidenceResolver = null)
     {
         _sessionStore = sessionStore ?? new SessionStore();
         _modelClient = modelClient ?? new ModelProviderClient();
         _transcriptService = transcriptService ?? new TranscriptService();
         _eventLogStore = eventLogStore ?? EventLogStore.ForSessionStore(_sessionStore);
+        _runtimeEvidenceResolver = runtimeEvidenceResolver;
     }
 
     public async Task<ContextRecoveryResult> SkipBlockedTurnAsync(
@@ -96,7 +99,8 @@ public sealed class ContextRecoveryService
         int turn,
         string speakerId,
         double createdAt,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<ArenaTurnProgress>? progress = null)
     {
         var snapshot = await _sessionStore.LoadSnapshotAsync(sessionId, cancellationToken);
         if (snapshot is null)
@@ -153,6 +157,7 @@ public sealed class ContextRecoveryService
             return ContextRecoveryResult.Failed("The provider/model route that produced this response is no longer available or has changed.");
         }
 
+        config = await ArenaRequestBudget.ResolveAsync(config, _runtimeEvidenceResolver, cancellationToken);
         var attemptId = Guid.NewGuid().ToString("N");
         original.Metadata["output_continuation_attempt"] = JsonSerializer.SerializeToElement(attemptId);
         original.Metadata["output_continuation_state"] = JsonSerializer.SerializeToElement("in_progress");
@@ -166,6 +171,9 @@ public sealed class ContextRecoveryService
             return ContextRecoveryResult.Failed("Another continuation or session change won the causal save; no provider call was made.");
         }
         var expectedPersistenceRevision = snapshot.PersistenceRevision;
+        using var progressScope = new ArenaTurnProgressScope(progress, sessionId, snapshot.SessionInstanceId,
+            agent.Id, agent.Name, original.Turn);
+        var completionExecutor = new ArenaCompletionExecutor(_modelClient, progressScope);
         var continuationCommitted = false;
         try
         {
@@ -210,9 +218,8 @@ public sealed class ContextRecoveryService
                 return ContextRecoveryResult.Failed(budgeted.Error);
             }
 
-            var continuationConfig = WithoutNativeContinuation(config);
-            var completion = ModelCompletionOutcomeClassifier.Normalize(
-                await _modelClient.CompleteChatAsync(continuationConfig, budgeted.Messages, cancellationToken));
+            var continuationConfig = ArenaRequestBudget.Apply(WithoutNativeContinuation(config), budgeted);
+            var completion = await completionExecutor.CompleteAsync(continuationConfig, budgeted.Messages, cancellationToken);
             if (!completion.Ok || string.IsNullOrWhiteSpace(completion.Text))
             {
                 var error = string.IsNullOrWhiteSpace(completion.Error)
@@ -250,6 +257,7 @@ public sealed class ContextRecoveryService
             {
                 replacement.Metadata.TryAdd(pair.Key, pair.Value);
             }
+            completionExecutor.StampEvidence(replacement);
             replacement.Metadata.Remove("output_continuation_attempt");
             replacement.Metadata["output_continuation_state"] = JsonSerializer.SerializeToElement("completed");
             replacement.Metadata[ContinuationCountMetadataKey] = JsonSerializer.SerializeToElement(
@@ -270,6 +278,7 @@ public sealed class ContextRecoveryService
             current.Engine.LastError = "";
             await _sessionStore.SaveSnapshotAsync(current, sessionId, cancellationToken);
             continuationCommitted = true;
+            progressScope.Complete(replacement);
             try
             {
                 await _eventLogStore.AppendAsync(
@@ -294,10 +303,12 @@ public sealed class ContextRecoveryService
         }
         catch (OperationCanceledException)
         {
+            progressScope.Interrupt("canceled");
             throw;
         }
         catch
         {
+            progressScope.Interrupt("failed");
             await AppendContinuationFailedEventAsync(sessionId, original, attemptId, "continuation_exception");
             throw;
         }
@@ -442,6 +453,7 @@ public sealed class ContextRecoveryService
         MaxOutputTokens = config.MaxOutputTokens,
         ContextLength = config.ContextLength,
         ConfiguredContextWindow = config.ConfiguredContextWindow,
+        RuntimeEvidence = config.RuntimeEvidence,
         HistoryPolicy = config.HistoryPolicy,
         ResponseTone = config.ResponseTone,
         CustomTone = config.CustomTone,
